@@ -46,6 +46,15 @@
       "enabled": true,
       "block_on_high": true,
       "profile_path": "examples/policy/security-scan-medium-balanced.json",
+      "profile_sha256": null,
+      "profile_signature": null,
+      "siem_export": {
+        "enabled": false,
+        "path": "target/security/security-scan.siem.jsonl",
+        "include_findings": true,
+        "max_findings_per_record": 200,
+        "fail_on_error": false
+      },
       "high_risk_metadata_keywords": [
         "rm -rf",
         "shell",

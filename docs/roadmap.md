@@ -59,6 +59,8 @@ Delivered:
 - plugin bridge support matrix and checksum integrity lock
 - plugin security scan with `block_on_high`
 - external profile integrity lock (`security_scan.profile_sha256`) with fail-closed behavior
+- external profile signature verification (`security_scan.profile_signature`, ed25519)
+- JSONL SIEM export lane (`security_scan.siem_export`) with optional fail-closed mode
 - WASM static scan controls:
   - allowed artifact paths
   - module size cap
@@ -69,8 +71,8 @@ Delivered:
 
 Remaining:
 
-- optional profile signature verification beyond hash pin (for centralized key-based trust)
-- SIEM-native export adapter for security findings stream
+- profile signing key lifecycle (rotation/revocation) and trust anchor management
+- SIEM transport adapters beyond file JSONL (HTTP/syslog/event bus)
 
 Exit criteria:
 

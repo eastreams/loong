@@ -21,3 +21,5 @@ thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
 sha2 = "0.10"
 wasmparser = "0.240"
+base64 = "0.22"
+ed25519-dalek = "2.2"

@@ -9,7 +9,9 @@ use std::{
 };
 
 use async_trait::async_trait;
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use clap::{Parser, Subcommand};
+use ed25519_dalek::{Signature as Ed25519Signature, Verifier, VerifyingKey};
 use kernel::{
     ArchitectureBoundaryPolicy, ArchitectureGuardReport, AuditEvent, AuditEventKind, AuditSink,
     AutoProvisionAgent, AutoProvisionRequest, BootstrapPolicy, BootstrapReport,
@@ -374,6 +376,10 @@ struct SecurityScanSpec {
     #[serde(default)]
     profile_sha256: Option<String>,
     #[serde(default)]
+    profile_signature: Option<SecurityProfileSignatureSpec>,
+    #[serde(default)]
+    siem_export: Option<SecuritySiemExportSpec>,
+    #[serde(default)]
     high_risk_metadata_keywords: Vec<String>,
     #[serde(default)]
     wasm: WasmSecurityScanSpec,
@@ -386,10 +392,47 @@ impl Default for SecurityScanSpec {
             block_on_high: true,
             profile_path: None,
             profile_sha256: None,
+            profile_signature: None,
+            siem_export: None,
             high_risk_metadata_keywords: Vec::new(),
             wasm: WasmSecurityScanSpec::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SecurityProfileSignatureSpec {
+    #[serde(default = "default_security_profile_signature_algorithm")]
+    algorithm: String,
+    public_key_base64: String,
+    signature_base64: String,
+}
+
+fn default_security_profile_signature_algorithm() -> String {
+    "ed25519".to_owned()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SecuritySiemExportSpec {
+    enabled: bool,
+    path: String,
+    #[serde(default = "default_true")]
+    include_findings: bool,
+    #[serde(default)]
+    max_findings_per_record: Option<usize>,
+    #[serde(default)]
+    fail_on_error: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SecuritySiemExportReport {
+    enabled: bool,
+    path: String,
+    success: bool,
+    exported_records: usize,
+    exported_findings: usize,
+    truncated_findings: usize,
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -461,6 +504,7 @@ struct SecurityScanReport {
     low_findings: usize,
     blocked: bool,
     block_reason: Option<String>,
+    siem_export: Option<SecuritySiemExportReport>,
     findings: Vec<SecurityFinding>,
 }
 
@@ -475,6 +519,7 @@ impl Default for SecurityScanReport {
             low_findings: 0,
             blocked: false,
             block_reason: None,
+            siem_export: None,
             findings: Vec::new(),
         }
     }
@@ -1806,6 +1851,35 @@ async fn execute_spec(spec: RunnerSpec, include_audit: bool) -> SpecRunReport {
         }
     }
 
+    if let (Some(policy), Some(report)) =
+        (security_scan_policy.as_ref(), security_scan_report.as_mut())
+    {
+        if let Some(export_spec) = policy.siem_export.as_ref().filter(|value| value.enabled) {
+            match emit_security_scan_siem_record(
+                &spec.pack.pack_id,
+                &spec.agent_id,
+                report,
+                export_spec,
+            ) {
+                Ok(export_report) => report.siem_export = Some(export_report),
+                Err(error) => {
+                    report.siem_export = Some(SecuritySiemExportReport {
+                        enabled: true,
+                        path: export_spec.path.clone(),
+                        success: false,
+                        exported_records: 0,
+                        exported_findings: 0,
+                        truncated_findings: 0,
+                        error: Some(error.clone()),
+                    });
+                    if export_spec.fail_on_error && blocked_reason.is_none() {
+                        blocked_reason = Some(format!("security scan siem export failed: {error}"));
+                    }
+                }
+            }
+        }
+    }
+
     if let Some(report) = security_scan_report.as_ref() {
         if let Err(error) =
             emit_security_scan_audit_event(&kernel, &spec.pack.pack_id, &spec.agent_id, report)
@@ -1949,6 +2023,8 @@ fn security_scan_policy(spec: &RunnerSpec) -> Result<Option<SecurityScanSpec>, S
         return Ok(None);
     }
 
+    validate_security_scan_policy(&policy)?;
+
     let profile = resolve_security_scan_profile(&policy)?;
 
     if policy.high_risk_metadata_keywords.is_empty() {
@@ -1974,13 +2050,39 @@ fn security_scan_policy(spec: &RunnerSpec) -> Result<Option<SecurityScanSpec>, S
     Ok(Some(policy))
 }
 
-fn resolve_security_scan_profile(policy: &SecurityScanSpec) -> Result<SecurityScanProfile, String> {
+fn validate_security_scan_policy(policy: &SecurityScanSpec) -> Result<(), String> {
     if policy.profile_sha256.is_some() && policy.profile_path.is_none() {
         return Err(
             "security scan profile_sha256 requires security_scan.profile_path to be set".to_owned(),
         );
     }
+    if policy.profile_signature.is_some() && policy.profile_path.is_none() {
+        return Err(
+            "security scan profile_signature requires security_scan.profile_path to be set"
+                .to_owned(),
+        );
+    }
+    if let Some(signature) = policy.profile_signature.as_ref() {
+        if signature.public_key_base64.trim().is_empty() {
+            return Err(
+                "security scan profile_signature.public_key_base64 cannot be empty".to_owned(),
+            );
+        }
+        if signature.signature_base64.trim().is_empty() {
+            return Err(
+                "security scan profile_signature.signature_base64 cannot be empty".to_owned(),
+            );
+        }
+    }
+    if let Some(export) = policy.siem_export.as_ref().filter(|value| value.enabled) {
+        if export.path.trim().is_empty() {
+            return Err("security scan siem_export.path cannot be empty when enabled".to_owned());
+        }
+    }
+    Ok(())
+}
 
+fn resolve_security_scan_profile(policy: &SecurityScanSpec) -> Result<SecurityScanProfile, String> {
     if let Some(path) = policy.profile_path.as_deref() {
         let profile = load_security_scan_profile_from_path(path);
         match profile {
@@ -1993,11 +2095,18 @@ fn resolve_security_scan_profile(policy: &SecurityScanSpec) -> Result<SecuritySc
                         ));
                     }
                 }
+                if let Some(signature) = policy.profile_signature.as_ref() {
+                    verify_security_scan_profile_signature(&profile, signature).map_err(|error| {
+                        format!(
+                            "security scan profile signature verification failed for {path}: {error}"
+                        )
+                    })?;
+                }
                 return Ok(profile);
             }
-            Err(error) if policy.profile_sha256.is_some() => {
+            Err(error) if policy.profile_sha256.is_some() || policy.profile_signature.is_some() => {
                 return Err(format!(
-                    "failed to load security scan profile at {path} while profile_sha256 is pinned: {error}",
+                    "failed to load security scan profile at {path} while profile integrity is pinned: {error}",
                 ));
             }
             Err(_) => {}
@@ -2023,6 +2132,42 @@ fn bundled_security_scan_profile() -> SecurityScanProfile {
             })
         })
         .clone()
+}
+
+fn verify_security_scan_profile_signature(
+    profile: &SecurityScanProfile,
+    signature: &SecurityProfileSignatureSpec,
+) -> Result<(), String> {
+    let algorithm = signature.algorithm.trim().to_ascii_lowercase();
+    if algorithm != "ed25519" {
+        return Err(format!(
+            "unsupported profile signature algorithm: {algorithm} (expected ed25519)"
+        ));
+    }
+
+    let public_key_bytes = BASE64_STANDARD
+        .decode(signature.public_key_base64.trim())
+        .map_err(|error| format!("invalid public_key_base64: {error}"))?;
+    let public_key_bytes: [u8; 32] = public_key_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| "invalid ed25519 public key length (expected 32 bytes)".to_owned())?;
+    let verifying_key = VerifyingKey::from_bytes(&public_key_bytes)
+        .map_err(|error| format!("invalid ed25519 public key bytes: {error}"))?;
+
+    let signature_bytes = BASE64_STANDARD
+        .decode(signature.signature_base64.trim())
+        .map_err(|error| format!("invalid signature_base64: {error}"))?;
+    let signature_bytes: [u8; 64] = signature_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| "invalid ed25519 signature length (expected 64 bytes)".to_owned())?;
+    let signature = Ed25519Signature::from_bytes(&signature_bytes);
+
+    let message = security_scan_profile_message(profile);
+    verifying_key
+        .verify(&message, &signature)
+        .map_err(|error| format!("ed25519 verification failed: {error}"))
 }
 
 fn security_scan_process_allowlist(spec: &RunnerSpec) -> BTreeSet<String> {
@@ -2098,6 +2243,91 @@ fn emit_security_scan_audit_event(
             },
         )
         .map_err(|error| format!("failed to record security scan audit event: {error}"))
+}
+
+fn emit_security_scan_siem_record(
+    pack_id: &str,
+    agent_id: &str,
+    report: &SecurityScanReport,
+    export: &SecuritySiemExportSpec,
+) -> Result<SecuritySiemExportReport, String> {
+    let mut findings = report.findings.clone();
+    let mut truncated_findings = 0usize;
+
+    if export.include_findings {
+        if let Some(limit) = export.max_findings_per_record {
+            if findings.len() > limit {
+                truncated_findings = findings.len().saturating_sub(limit);
+                findings.truncate(limit);
+            }
+        }
+    } else {
+        truncated_findings = report.findings.len();
+        findings.clear();
+    }
+
+    let categories: Vec<String> = report
+        .findings
+        .iter()
+        .map(|finding| finding.category.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let finding_ids: Vec<String> = report
+        .findings
+        .iter()
+        .map(|finding| finding.correlation_id.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    let record = json!({
+        "event_type": "security_scan_report",
+        "ts_epoch_s": current_epoch_s(),
+        "pack_id": pack_id,
+        "agent_id": agent_id,
+        "blocked": report.blocked,
+        "block_reason": report.block_reason.clone(),
+        "counts": {
+            "scanned_plugins": report.scanned_plugins,
+            "total_findings": report.total_findings,
+            "high_findings": report.high_findings,
+            "medium_findings": report.medium_findings,
+            "low_findings": report.low_findings,
+        },
+        "categories": categories,
+        "finding_ids": finding_ids,
+        "truncated_findings": truncated_findings,
+        "findings": findings,
+    });
+
+    let path = Path::new(&export.path);
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("create siem export directory failed: {error}"))?;
+        }
+    }
+
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| format!("open siem export file failed: {error}"))?;
+    serde_json::to_writer(&mut file, &record)
+        .map_err(|error| format!("serialize siem export record failed: {error}"))?;
+    file.write_all(b"\n")
+        .map_err(|error| format!("flush siem export record failed: {error}"))?;
+
+    Ok(SecuritySiemExportReport {
+        enabled: true,
+        path: export.path.clone(),
+        success: true,
+        exported_records: 1,
+        exported_findings: findings.len(),
+        truncated_findings,
+        error: None,
+    })
 }
 
 fn build_security_finding(
@@ -3269,12 +3499,17 @@ fn canonical_security_scan_value(security_scan: Option<&SecurityScanSpec>) -> Va
         .iter()
         .map(|(plugin, digest)| (plugin.clone(), digest.clone()))
         .collect::<BTreeMap<_, _>>();
+    let profile_signature =
+        canonical_security_scan_profile_signature_value(scan.profile_signature.as_ref());
+    let siem_export = canonical_security_scan_siem_export_value(scan.siem_export.as_ref());
 
     json!({
         "enabled": scan.enabled,
         "block_on_high": scan.block_on_high,
         "profile_path": scan.profile_path,
         "profile_sha256": scan.profile_sha256,
+        "profile_signature": profile_signature,
+        "siem_export": siem_export,
         "high_risk_metadata_keywords": keywords,
         "wasm": {
             "enabled": scan.wasm.enabled,
@@ -3285,6 +3520,32 @@ fn canonical_security_scan_value(security_scan: Option<&SecurityScanSpec>) -> Va
             "require_hash_pin": scan.wasm.require_hash_pin,
             "required_sha256_by_plugin": required_sha256_by_plugin,
         },
+    })
+}
+
+fn canonical_security_scan_profile_signature_value(
+    signature: Option<&SecurityProfileSignatureSpec>,
+) -> Value {
+    let Some(signature) = signature else {
+        return Value::Null;
+    };
+    json!({
+        "algorithm": signature.algorithm.trim().to_ascii_lowercase(),
+        "public_key_base64": signature.public_key_base64,
+        "signature_base64": signature.signature_base64,
+    })
+}
+
+fn canonical_security_scan_siem_export_value(export: Option<&SecuritySiemExportSpec>) -> Value {
+    let Some(export) = export else {
+        return Value::Null;
+    };
+    json!({
+        "enabled": export.enabled,
+        "path": export.path,
+        "include_findings": export.include_findings,
+        "max_findings_per_record": export.max_findings_per_record,
+        "fail_on_error": export.fail_on_error,
     })
 }
 
@@ -3320,11 +3581,14 @@ fn canonical_security_scan_profile_value(profile: &SecurityScanProfile) -> Value
 }
 
 fn security_scan_profile_sha256(profile: &SecurityScanProfile) -> String {
-    let canonical = canonical_security_scan_profile_value(profile);
-    let encoded =
-        serde_json::to_vec(&canonical).expect("serialize security scan profile canonical payload");
+    let encoded = security_scan_profile_message(profile);
     let digest = Sha256::digest(&encoded);
     hex_lower(&digest)
+}
+
+fn security_scan_profile_message(profile: &SecurityScanProfile) -> Vec<u8> {
+    let canonical = canonical_security_scan_profile_value(profile);
+    serde_json::to_vec(&canonical).expect("serialize security scan profile canonical payload")
 }
 
 fn fnv1a64_hex(bytes: &[u8]) -> String {
@@ -3798,6 +4062,16 @@ mod tests {
         fs::write(path, body).expect("write temp risk profile");
     }
 
+    fn sign_security_scan_profile_for_test(profile: &SecurityScanProfile) -> (String, String) {
+        use ed25519_dalek::{Signer, SigningKey};
+
+        let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
+        let signature = signing_key.sign(&security_scan_profile_message(profile));
+        let public_key_base64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
+        let signature_base64 = BASE64_STANDARD.encode(signature.to_bytes());
+        (public_key_base64, signature_base64)
+    }
+
     #[test]
     fn template_spec_is_json_roundtrip_stable() {
         let spec = RunnerSpec::template();
@@ -3963,6 +4237,8 @@ mod tests {
                     block_on_high: true,
                     profile_path: Some(path.display().to_string()),
                     profile_sha256: None,
+                    profile_signature: None,
+                    siem_export: None,
                     high_risk_metadata_keywords: Vec::new(),
                     wasm: WasmSecurityScanSpec {
                         enabled: true,
@@ -4067,6 +4343,8 @@ mod tests {
                     block_on_high: true,
                     profile_path: Some(path.display().to_string()),
                     profile_sha256: Some(profile_sha256),
+                    profile_signature: None,
+                    siem_export: None,
                     high_risk_metadata_keywords: Vec::new(),
                     wasm: WasmSecurityScanSpec {
                         enabled: true,
@@ -4164,6 +4442,8 @@ mod tests {
                     block_on_high: true,
                     profile_path: Some(path.display().to_string()),
                     profile_sha256: Some("deadbeef".repeat(8)),
+                    profile_signature: None,
+                    siem_export: None,
                     high_risk_metadata_keywords: Vec::new(),
                     wasm: WasmSecurityScanSpec {
                         enabled: true,
@@ -4193,6 +4473,224 @@ mod tests {
             .blocked_reason
             .expect("blocked reason should exist")
             .contains("profile sha256 mismatch"));
+    }
+
+    #[test]
+    fn security_scan_profile_signature_accepts_matching_signature() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "chumos-security-profile-signature-match-{unique}.json"
+        ));
+        fs::write(
+            &path,
+            r#"{
+  "high_risk_metadata_keywords": ["signed-danger"],
+  "wasm": {
+    "enabled": true,
+    "max_module_bytes": 2048,
+    "allow_wasi": false,
+    "blocked_import_prefixes": ["wasi"],
+    "allowed_path_prefixes": [],
+    "require_hash_pin": false,
+    "required_sha256_by_plugin": {}
+  }
+}"#,
+        )
+        .expect("write signed profile");
+
+        let profile = load_security_scan_profile_from_path(path.to_str().expect("utf8 path"))
+            .expect("profile should load");
+        let (public_key_base64, signature_base64) = sign_security_scan_profile_for_test(&profile);
+
+        let spec = RunnerSpec {
+            pack: VerticalPackManifest {
+                pack_id: "spec-security-signature-pin".to_owned(),
+                domain: "ops".to_owned(),
+                version: "0.1.0".to_owned(),
+                default_route: ExecutionRoute {
+                    harness_kind: HarnessKind::EmbeddedPi,
+                    adapter: Some("pi-local".to_owned()),
+                },
+                allowed_connectors: BTreeSet::new(),
+                granted_capabilities: BTreeSet::new(),
+                metadata: BTreeMap::new(),
+            },
+            agent_id: "agent-security-signature-pin".to_owned(),
+            ttl_s: 120,
+            approval: None,
+            defaults: None,
+            self_awareness: None,
+            plugin_scan: None,
+            bridge_support: Some(BridgeSupportSpec {
+                enabled: true,
+                supported_bridges: vec![PluginBridgeKind::WasmComponent],
+                supported_adapter_families: Vec::new(),
+                enforce_supported: true,
+                policy_version: None,
+                expected_checksum: None,
+                expected_sha256: None,
+                execute_process_stdio: false,
+                execute_http_json: false,
+                allowed_process_commands: Vec::new(),
+                enforce_execution_success: false,
+                security_scan: Some(SecurityScanSpec {
+                    enabled: true,
+                    block_on_high: true,
+                    profile_path: Some(path.display().to_string()),
+                    profile_sha256: None,
+                    profile_signature: Some(SecurityProfileSignatureSpec {
+                        algorithm: "ed25519".to_owned(),
+                        public_key_base64,
+                        signature_base64,
+                    }),
+                    siem_export: None,
+                    high_risk_metadata_keywords: Vec::new(),
+                    wasm: WasmSecurityScanSpec {
+                        enabled: true,
+                        max_module_bytes: 0,
+                        allow_wasi: false,
+                        blocked_import_prefixes: Vec::new(),
+                        allowed_path_prefixes: Vec::new(),
+                        require_hash_pin: false,
+                        required_sha256_by_plugin: BTreeMap::new(),
+                    },
+                }),
+            }),
+            bootstrap: None,
+            auto_provision: None,
+            hotfixes: Vec::new(),
+            operation: OperationSpec::Task {
+                task_id: "t-security-signature-pin".to_owned(),
+                objective: "verify profile signature pin".to_owned(),
+                required_capabilities: BTreeSet::new(),
+                payload: json!({}),
+            },
+        };
+
+        let policy = security_scan_policy(&spec)
+            .expect("security scan policy should resolve")
+            .expect("security scan policy should be enabled");
+        assert_eq!(
+            policy.high_risk_metadata_keywords,
+            vec!["signed-danger".to_owned()]
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_spec_blocks_when_security_scan_profile_signature_mismatches() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "chumos-security-profile-signature-mismatch-{unique}.json"
+        ));
+        fs::write(
+            &path,
+            r#"{
+  "high_risk_metadata_keywords": ["signed-mismatch"],
+  "wasm": {
+    "enabled": true,
+    "max_module_bytes": 1024,
+    "allow_wasi": false,
+    "blocked_import_prefixes": [],
+    "allowed_path_prefixes": [],
+    "require_hash_pin": false,
+    "required_sha256_by_plugin": {}
+  }
+}"#,
+        )
+        .expect("write signed mismatch profile");
+
+        let profile = load_security_scan_profile_from_path(path.to_str().expect("utf8 path"))
+            .expect("profile should load");
+        let (public_key_base64, mut signature_base64) =
+            sign_security_scan_profile_for_test(&profile);
+        let replacement = if signature_base64.starts_with('A') {
+            "B"
+        } else {
+            "A"
+        };
+        signature_base64.replace_range(0..1, replacement);
+
+        let spec = RunnerSpec {
+            pack: VerticalPackManifest {
+                pack_id: "spec-security-signature-mismatch".to_owned(),
+                domain: "ops".to_owned(),
+                version: "0.1.0".to_owned(),
+                default_route: ExecutionRoute {
+                    harness_kind: HarnessKind::EmbeddedPi,
+                    adapter: Some("pi-local".to_owned()),
+                },
+                allowed_connectors: BTreeSet::new(),
+                granted_capabilities: BTreeSet::new(),
+                metadata: BTreeMap::new(),
+            },
+            agent_id: "agent-security-signature-mismatch".to_owned(),
+            ttl_s: 120,
+            approval: None,
+            defaults: None,
+            self_awareness: None,
+            plugin_scan: None,
+            bridge_support: Some(BridgeSupportSpec {
+                enabled: true,
+                supported_bridges: vec![PluginBridgeKind::WasmComponent],
+                supported_adapter_families: Vec::new(),
+                enforce_supported: true,
+                policy_version: None,
+                expected_checksum: None,
+                expected_sha256: None,
+                execute_process_stdio: false,
+                execute_http_json: false,
+                allowed_process_commands: Vec::new(),
+                enforce_execution_success: false,
+                security_scan: Some(SecurityScanSpec {
+                    enabled: true,
+                    block_on_high: true,
+                    profile_path: Some(path.display().to_string()),
+                    profile_sha256: None,
+                    profile_signature: Some(SecurityProfileSignatureSpec {
+                        algorithm: "ed25519".to_owned(),
+                        public_key_base64,
+                        signature_base64,
+                    }),
+                    siem_export: None,
+                    high_risk_metadata_keywords: Vec::new(),
+                    wasm: WasmSecurityScanSpec {
+                        enabled: true,
+                        max_module_bytes: 0,
+                        allow_wasi: false,
+                        blocked_import_prefixes: Vec::new(),
+                        allowed_path_prefixes: Vec::new(),
+                        require_hash_pin: false,
+                        required_sha256_by_plugin: BTreeMap::new(),
+                    },
+                }),
+            }),
+            bootstrap: None,
+            auto_provision: None,
+            hotfixes: Vec::new(),
+            operation: OperationSpec::Task {
+                task_id: "t-security-signature-mismatch".to_owned(),
+                objective: "signature mismatch should block".to_owned(),
+                required_capabilities: BTreeSet::new(),
+                payload: json!({}),
+            },
+        };
+
+        let report = execute_spec(spec, true).await;
+        assert_eq!(report.operation_kind, "blocked");
+        assert!(report
+            .blocked_reason
+            .expect("blocked reason should exist")
+            .contains("profile signature verification failed"));
     }
 
     #[tokio::test]
@@ -5456,6 +5954,8 @@ mod tests {
                     block_on_high: true,
                     profile_path: None,
                     profile_sha256: None,
+                    profile_signature: None,
+                    siem_export: None,
                     high_risk_metadata_keywords: vec!["shell".to_owned()],
                     wasm: WasmSecurityScanSpec {
                         enabled: true,
@@ -5593,6 +6093,8 @@ mod tests {
                     block_on_high: true,
                     profile_path: None,
                     profile_sha256: None,
+                    profile_signature: None,
+                    siem_export: None,
                     high_risk_metadata_keywords: vec!["shell".to_owned()],
                     wasm: WasmSecurityScanSpec {
                         enabled: true,
@@ -5715,6 +6217,8 @@ mod tests {
                     block_on_high: false,
                     profile_path: None,
                     profile_sha256: None,
+                    profile_signature: None,
+                    siem_export: None,
                     high_risk_metadata_keywords: Vec::new(),
                     wasm: WasmSecurityScanSpec {
                         enabled: false,
@@ -5781,6 +6285,277 @@ mod tests {
             .any(|value| value == "process_command_not_allowlisted"));
         assert!(!finding_ids.is_empty());
         assert!(finding_ids.iter().all(|value| value.starts_with("sf-")));
+    }
+
+    #[tokio::test]
+    async fn execute_spec_security_scan_exports_siem_record_with_truncation() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let plugin_root = std::env::temp_dir().join(format!("chumos-security-siem-pass-{unique}"));
+        let siem_path =
+            std::env::temp_dir().join(format!("chumos-security-siem-pass-{unique}.jsonl"));
+        fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+        fs::write(
+            plugin_root.join("plugin.py"),
+            r#"
+# CHUMOS_PLUGIN_START
+# {
+#   "plugin_id": "stdio-siem",
+#   "provider_id": "stdio-siem",
+#   "connector_name": "stdio-siem",
+#   "channel_id": "primary",
+#   "endpoint": "local://stdio-siem/invoke",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {
+#     "bridge_kind":"process_stdio",
+#     "command":"python3",
+#     "note":"shell-enabled",
+#     "version":"1.0.0"
+#   }
+# }
+# CHUMOS_PLUGIN_END
+"#,
+        )
+        .expect("write plugin manifest");
+
+        let spec = RunnerSpec {
+            pack: VerticalPackManifest {
+                pack_id: "spec-security-siem-pass".to_owned(),
+                domain: "ops".to_owned(),
+                version: "0.1.0".to_owned(),
+                default_route: ExecutionRoute {
+                    harness_kind: HarnessKind::EmbeddedPi,
+                    adapter: Some("pi-local".to_owned()),
+                },
+                allowed_connectors: BTreeSet::new(),
+                granted_capabilities: BTreeSet::new(),
+                metadata: BTreeMap::new(),
+            },
+            agent_id: "agent-security-siem-pass".to_owned(),
+            ttl_s: 120,
+            approval: None,
+            defaults: None,
+            self_awareness: None,
+            plugin_scan: Some(PluginScanSpec {
+                enabled: true,
+                roots: vec![plugin_root.display().to_string()],
+            }),
+            bridge_support: Some(BridgeSupportSpec {
+                enabled: true,
+                supported_bridges: vec![PluginBridgeKind::ProcessStdio],
+                supported_adapter_families: Vec::new(),
+                enforce_supported: true,
+                policy_version: None,
+                expected_checksum: None,
+                expected_sha256: None,
+                execute_process_stdio: false,
+                execute_http_json: false,
+                allowed_process_commands: vec!["cat".to_owned()],
+                enforce_execution_success: false,
+                security_scan: Some(SecurityScanSpec {
+                    enabled: true,
+                    block_on_high: false,
+                    profile_path: None,
+                    profile_sha256: None,
+                    profile_signature: None,
+                    siem_export: Some(SecuritySiemExportSpec {
+                        enabled: true,
+                        path: siem_path.display().to_string(),
+                        include_findings: true,
+                        max_findings_per_record: Some(1),
+                        fail_on_error: true,
+                    }),
+                    high_risk_metadata_keywords: vec!["shell".to_owned()],
+                    wasm: WasmSecurityScanSpec {
+                        enabled: false,
+                        max_module_bytes: 0,
+                        allow_wasi: false,
+                        blocked_import_prefixes: Vec::new(),
+                        allowed_path_prefixes: Vec::new(),
+                        require_hash_pin: false,
+                        required_sha256_by_plugin: BTreeMap::new(),
+                    },
+                }),
+            }),
+            bootstrap: Some(BootstrapSpec {
+                enabled: true,
+                allow_http_json_auto_apply: Some(false),
+                allow_process_stdio_auto_apply: Some(true),
+                allow_native_ffi_auto_apply: Some(false),
+                allow_wasm_component_auto_apply: Some(false),
+                allow_mcp_server_auto_apply: Some(false),
+                enforce_ready_execution: Some(false),
+                max_tasks: Some(5),
+            }),
+            auto_provision: None,
+            hotfixes: Vec::new(),
+            operation: OperationSpec::Task {
+                task_id: "t-security-siem-pass".to_owned(),
+                objective: "security scan should export siem record".to_owned(),
+                required_capabilities: BTreeSet::new(),
+                payload: json!({}),
+            },
+        };
+
+        let report = execute_spec(spec, true).await;
+        assert_eq!(report.operation_kind, "task");
+        let security = report
+            .security_scan_report
+            .expect("security scan report should exist");
+        let siem = security
+            .siem_export
+            .expect("siem export report should exist");
+        assert!(siem.success);
+        assert_eq!(siem.exported_records, 1);
+        assert_eq!(siem.exported_findings, 1);
+        assert!(siem.truncated_findings >= 1);
+
+        let siem_body = fs::read_to_string(&siem_path).expect("read siem record");
+        let first_line = siem_body.lines().next().expect("one siem line");
+        let record: Value = serde_json::from_str(first_line).expect("parse siem json");
+        assert_eq!(record["event_type"], "security_scan_report");
+        assert_eq!(record["pack_id"], "spec-security-siem-pass");
+        assert_eq!(record["agent_id"], "agent-security-siem-pass");
+        assert!(record["findings"].as_array().map_or(0, Vec::len) == 1);
+        assert!(record["truncated_findings"].as_u64().unwrap_or_default() >= 1);
+        assert!(record["finding_ids"].as_array().map_or(0, Vec::len) >= 2);
+    }
+
+    #[tokio::test]
+    async fn execute_spec_security_scan_siem_fail_closed_blocks_execution() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let plugin_root = std::env::temp_dir().join(format!("chumos-security-siem-block-{unique}"));
+        let invalid_parent =
+            std::env::temp_dir().join(format!("chumos-security-siem-parent-file-{unique}.tmp"));
+        let invalid_siem_path = invalid_parent.join("events.jsonl");
+        fs::create_dir_all(&plugin_root).expect("create plugin root");
+        fs::write(&invalid_parent, "not-a-directory").expect("create invalid parent marker file");
+
+        fs::write(
+            plugin_root.join("plugin.py"),
+            r#"
+# CHUMOS_PLUGIN_START
+# {
+#   "plugin_id": "stdio-siem-block",
+#   "provider_id": "stdio-siem-block",
+#   "connector_name": "stdio-siem-block",
+#   "channel_id": "primary",
+#   "endpoint": "local://stdio-siem-block/invoke",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {
+#     "bridge_kind":"process_stdio",
+#     "command":"python3",
+#     "version":"1.0.0"
+#   }
+# }
+# CHUMOS_PLUGIN_END
+"#,
+        )
+        .expect("write plugin manifest");
+
+        let spec = RunnerSpec {
+            pack: VerticalPackManifest {
+                pack_id: "spec-security-siem-block".to_owned(),
+                domain: "ops".to_owned(),
+                version: "0.1.0".to_owned(),
+                default_route: ExecutionRoute {
+                    harness_kind: HarnessKind::EmbeddedPi,
+                    adapter: Some("pi-local".to_owned()),
+                },
+                allowed_connectors: BTreeSet::new(),
+                granted_capabilities: BTreeSet::new(),
+                metadata: BTreeMap::new(),
+            },
+            agent_id: "agent-security-siem-block".to_owned(),
+            ttl_s: 120,
+            approval: None,
+            defaults: None,
+            self_awareness: None,
+            plugin_scan: Some(PluginScanSpec {
+                enabled: true,
+                roots: vec![plugin_root.display().to_string()],
+            }),
+            bridge_support: Some(BridgeSupportSpec {
+                enabled: true,
+                supported_bridges: vec![PluginBridgeKind::ProcessStdio],
+                supported_adapter_families: Vec::new(),
+                enforce_supported: true,
+                policy_version: None,
+                expected_checksum: None,
+                expected_sha256: None,
+                execute_process_stdio: false,
+                execute_http_json: false,
+                allowed_process_commands: vec!["cat".to_owned()],
+                enforce_execution_success: false,
+                security_scan: Some(SecurityScanSpec {
+                    enabled: true,
+                    block_on_high: false,
+                    profile_path: None,
+                    profile_sha256: None,
+                    profile_signature: None,
+                    siem_export: Some(SecuritySiemExportSpec {
+                        enabled: true,
+                        path: invalid_siem_path.display().to_string(),
+                        include_findings: true,
+                        max_findings_per_record: None,
+                        fail_on_error: true,
+                    }),
+                    high_risk_metadata_keywords: Vec::new(),
+                    wasm: WasmSecurityScanSpec {
+                        enabled: false,
+                        max_module_bytes: 0,
+                        allow_wasi: false,
+                        blocked_import_prefixes: Vec::new(),
+                        allowed_path_prefixes: Vec::new(),
+                        require_hash_pin: false,
+                        required_sha256_by_plugin: BTreeMap::new(),
+                    },
+                }),
+            }),
+            bootstrap: Some(BootstrapSpec {
+                enabled: true,
+                allow_http_json_auto_apply: Some(false),
+                allow_process_stdio_auto_apply: Some(true),
+                allow_native_ffi_auto_apply: Some(false),
+                allow_wasm_component_auto_apply: Some(false),
+                allow_mcp_server_auto_apply: Some(false),
+                enforce_ready_execution: Some(false),
+                max_tasks: Some(5),
+            }),
+            auto_provision: None,
+            hotfixes: Vec::new(),
+            operation: OperationSpec::Task {
+                task_id: "t-security-siem-block".to_owned(),
+                objective: "siem fail closed should block".to_owned(),
+                required_capabilities: BTreeSet::new(),
+                payload: json!({}),
+            },
+        };
+
+        let report = execute_spec(spec, true).await;
+        assert_eq!(report.operation_kind, "blocked");
+        assert!(report
+            .blocked_reason
+            .expect("blocked reason should exist")
+            .contains("siem export failed"));
+        let security = report
+            .security_scan_report
+            .expect("security scan report should exist");
+        let siem = security
+            .siem_export
+            .expect("siem export report should exist");
+        assert!(!siem.success);
+        assert!(siem.error.is_some());
     }
 
     #[tokio::test]
@@ -5878,6 +6653,8 @@ mod tests {
                     block_on_high: true,
                     profile_path: None,
                     profile_sha256: None,
+                    profile_signature: None,
+                    siem_export: None,
                     high_risk_metadata_keywords: Vec::new(),
                     wasm: WasmSecurityScanSpec {
                         enabled: false,

@@ -48,8 +48,12 @@ Rules:
   so risky community plugins never silently enter the runtime catalog.
 - External security scan profiles should support optional checksum pinning
   (`security_scan.profile_sha256`) so profile tampering fails closed.
+- External security scan profiles should support optional signature verification
+  (`security_scan.profile_signature`) for key-based integrity validation.
 - Security scan evaluation must be emitted as a typed audit event (`SecurityScanEvaluated`) so
   governance systems can consume findings without parsing ad-hoc report text.
+- Security scan findings should support deterministic correlation IDs and optional JSONL SIEM export
+  (`security_scan.siem_export`) with configurable fail-closed behavior.
 - WASM plugin path should be treated as the preferred untrusted-extension lane, with static checks
   for artifact path scope, module size, hash pin, and import policy before absorb/hotplug.
 - Denylist must have highest precedence over allowlist/full-access grants.

@@ -65,7 +65,7 @@ The repository is intentionally test-first for architecture safety:
 Current status:
 
 - `kernel` tests: 39 passing unit tests
-- `daemon` tests: 39 passing unit tests
+- `daemon` tests: 43 passing unit tests
 - `daemon` smoke: command-level demo + spec runner execution verified
 
 Roadmap:
@@ -185,12 +185,17 @@ Security scan evaluates all activation-ready plugins before bootstrap budget fil
 ready plugins are still risk-scanned in the same run.
 When audit output is enabled (`--print-audit`), security scan also emits a typed
 `SecurityScanEvaluated` event into `audit_events`, including finding counts, block reason, and
-deduplicated finding categories for deterministic post-run governance.
+deduplicated finding categories + finding correlation IDs for deterministic post-run governance.
 Security scan defaults are profile-driven from
 `crates/daemon/config/security-scan-medium-balanced.json`; for runtime customization, set
 `bridge_support.security_scan.profile_path` to a JSON profile file. For tamper resistance,
 optionally pin `bridge_support.security_scan.profile_sha256`; when pinned, profile load/parse/hash
 mismatch will fail closed and block execution.
+For stronger supply-chain integrity, optionally configure
+`bridge_support.security_scan.profile_signature` (ed25519): signature verification failure also
+fails closed.
+Security scan can export JSONL records for SIEM ingestion via
+`bridge_support.security_scan.siem_export` with optional fail-closed mode (`fail_on_error=true`).
 WASM-focused checks include artifact path constraints (`allowed_path_prefixes`), module size cap
 (`max_module_bytes`), SHA256 pin enforcement (`require_hash_pin` + `required_sha256_by_plugin`),
 and import policy (`allow_wasi`, `blocked_import_prefixes`).
