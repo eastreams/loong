@@ -1,0 +1,65 @@
+{
+  "pack": {
+    "pack_id": "process-stdio-exec-pack",
+    "domain": "platform",
+    "version": "0.1.0",
+    "default_route": {
+      "harness_kind": "EmbeddedPi",
+      "adapter": "pi-local"
+    },
+    "allowed_connectors": [],
+    "granted_capabilities": [],
+    "metadata": {
+      "owner": "platform-team",
+      "stage": "bridge-runtime"
+    }
+  },
+  "agent_id": "agent-process-stdio-exec",
+  "ttl_s": 120,
+  "defaults": null,
+  "self_awareness": null,
+  "plugin_scan": {
+    "enabled": true,
+    "roots": [
+      "examples/plugins-process"
+    ]
+  },
+  "bridge_support": {
+    "enabled": true,
+    "supported_bridges": [
+      "process_stdio"
+    ],
+    "supported_adapter_families": [],
+    "enforce_supported": true,
+    "policy_version": "v1",
+    "execute_process_stdio": true,
+    "execute_http_json": false,
+    "allowed_process_commands": [
+      "cat"
+    ],
+    "enforce_execution_success": true
+  },
+  "bootstrap": {
+    "enabled": true,
+    "allow_http_json_auto_apply": false,
+    "allow_process_stdio_auto_apply": true,
+    "allow_native_ffi_auto_apply": false,
+    "allow_wasm_component_auto_apply": false,
+    "allow_mcp_server_auto_apply": false,
+    "enforce_ready_execution": true,
+    "max_tasks": 8
+  },
+  "auto_provision": null,
+  "hotfixes": [],
+  "operation": {
+    "kind": "connector_legacy",
+    "connector_name": "stdio-echo",
+    "operation": "echo",
+    "required_capabilities": [
+      "InvokeConnector"
+    ],
+    "payload": {
+      "message": "hello-from-stdio-bridge"
+    }
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "pack": {
+    "pack_id": "ops-autoprov",
+    "domain": "ops",
+    "version": "0.1.0",
+    "default_route": {
+      "harness_kind": "EmbeddedPi",
+      "adapter": "pi-local"
+    },
+    "allowed_connectors": [],
+    "granted_capabilities": [],
+    "metadata": {
+      "owner": "ops-team",
+      "stage": "bootstrap"
+    }
+  },
+  "agent_id": "agent-ops-01",
+  "ttl_s": 300,
+  "defaults": {
+    "connector": "http-core",
+    "runtime": "native-core",
+    "tool": "core-tools",
+    "memory": "kv-core"
+  },
+  "auto_provision": {
+    "enabled": true,
+    "provider_id": "openrouter",
+    "channel_id": "primary",
+    "connector_name": "openrouter",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "required_capabilities": [
+      "InvokeConnector"
+    ]
+  },
+  "hotfixes": [],
+  "operation": {
+    "kind": "connector_legacy",
+    "connector_name": "openrouter",
+    "operation": "chat",
+    "required_capabilities": [
+      "InvokeConnector"
+    ],
+    "payload": {
+      "model": "auto"
+    }
+  }
+}

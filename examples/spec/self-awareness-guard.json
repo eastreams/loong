@@ -1,0 +1,49 @@
+{
+  "pack": {
+    "pack_id": "guard-demo-pack",
+    "domain": "platform",
+    "version": "0.1.0",
+    "default_route": {
+      "harness_kind": "EmbeddedPi",
+      "adapter": "pi-local"
+    },
+    "allowed_connectors": [],
+    "granted_capabilities": [],
+    "metadata": {
+      "owner": "platform-team",
+      "stage": "guard-demo"
+    }
+  },
+  "agent_id": "agent-guard-demo",
+  "ttl_s": 120,
+  "defaults": null,
+  "self_awareness": {
+    "enabled": true,
+    "roots": [
+      "crates",
+      "examples",
+      "docs",
+      "README.md"
+    ],
+    "plugin_roots": [
+      "examples/plugins"
+    ],
+    "proposed_mutations": [
+      "crates/kernel/src/kernel.rs",
+      "examples/spec/runtime-extension.json"
+    ],
+    "enforce_guard": true,
+    "immutable_core_paths": [],
+    "mutable_extension_paths": []
+  },
+  "plugin_scan": null,
+  "auto_provision": null,
+  "hotfixes": [],
+  "operation": {
+    "kind": "task",
+    "task_id": "guard-demo-task",
+    "objective": "this should be blocked by architecture guard",
+    "required_capabilities": [],
+    "payload": {}
+  }
+}

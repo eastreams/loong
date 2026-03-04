@@ -1,0 +1,90 @@
+{
+  "pack": {
+    "pack_id": "plugin-wasm-security-pack",
+    "domain": "platform",
+    "version": "0.1.0",
+    "default_route": {
+      "harness_kind": "EmbeddedPi",
+      "adapter": "pi-local"
+    },
+    "allowed_connectors": [],
+    "granted_capabilities": [
+      "InvokeConnector",
+      "ObserveTelemetry"
+    ],
+    "metadata": {
+      "owner": "platform-team",
+      "stage": "security-demo"
+    }
+  },
+  "agent_id": "agent-wasm-security-demo",
+  "ttl_s": 120,
+  "approval": null,
+  "defaults": null,
+  "self_awareness": null,
+  "plugin_scan": {
+    "enabled": true,
+    "roots": [
+      "examples/plugins-wasm"
+    ]
+  },
+  "bridge_support": {
+    "enabled": true,
+    "supported_bridges": [
+      "wasm_component"
+    ],
+    "supported_adapter_families": [],
+    "enforce_supported": true,
+    "policy_version": "v1",
+    "expected_checksum": null,
+    "expected_sha256": null,
+    "execute_process_stdio": false,
+    "execute_http_json": false,
+    "allowed_process_commands": [],
+    "enforce_execution_success": false,
+    "security_scan": {
+      "enabled": true,
+      "block_on_high": true,
+      "profile_path": "examples/policy/security-scan-medium-balanced.json",
+      "high_risk_metadata_keywords": [
+        "rm -rf",
+        "shell",
+        "exec"
+      ],
+      "wasm": {
+        "enabled": true,
+        "max_module_bytes": 131072,
+        "allow_wasi": false,
+        "blocked_import_prefixes": [
+          "wasi"
+        ],
+        "allowed_path_prefixes": [
+          "examples/plugins-wasm"
+        ],
+        "require_hash_pin": true,
+        "required_sha256_by_plugin": {
+          "wasm-secure-echo": "93a44bbb96c751218e4c00d479e4c14358122a389acca16205b1e4d0dc5f9476"
+        }
+      }
+    }
+  },
+  "bootstrap": {
+    "enabled": true,
+    "allow_http_json_auto_apply": false,
+    "allow_process_stdio_auto_apply": false,
+    "allow_native_ffi_auto_apply": false,
+    "allow_wasm_component_auto_apply": true,
+    "allow_mcp_server_auto_apply": false,
+    "enforce_ready_execution": true,
+    "max_tasks": 10
+  },
+  "auto_provision": null,
+  "hotfixes": [],
+  "operation": {
+    "kind": "task",
+    "task_id": "t-wasm-security-demo",
+    "objective": "validate wasm security scan and continue execution",
+    "required_capabilities": [],
+    "payload": {}
+  }
+}

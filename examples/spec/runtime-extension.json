@@ -1,0 +1,46 @@
+{
+  "pack": {
+    "pack_id": "sales-intel-local",
+    "domain": "sales",
+    "version": "0.1.0",
+    "default_route": {
+      "harness_kind": "EmbeddedPi",
+      "adapter": "pi-local"
+    },
+    "allowed_connectors": [
+      "crm",
+      "webhook"
+    ],
+    "granted_capabilities": [
+      "InvokeTool",
+      "InvokeConnector",
+      "MemoryRead",
+      "MemoryWrite",
+      "ObserveTelemetry"
+    ],
+    "metadata": {
+      "owner": "platform-team",
+      "stage": "prototype"
+    }
+  },
+  "agent_id": "agent-spec-01",
+  "ttl_s": 300,
+  "defaults": {
+    "connector": "http-core",
+    "runtime": "native-core",
+    "tool": "core-tools",
+    "memory": "kv-core"
+  },
+  "operation": {
+    "kind": "runtime_extension",
+    "action": "start-session",
+    "required_capabilities": [
+      "ObserveTelemetry"
+    ],
+    "payload": {
+      "session_id": "s-42"
+    },
+    "extension": "acp-bridge",
+    "core": null
+  }
+}

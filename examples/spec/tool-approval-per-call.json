@@ -1,0 +1,53 @@
+{
+  "pack": {
+    "pack_id": "tool-approval-pack",
+    "domain": "platform",
+    "version": "0.1.0",
+    "default_route": {
+      "harness_kind": "EmbeddedPi",
+      "adapter": "pi-local"
+    },
+    "allowed_connectors": [],
+    "granted_capabilities": [
+      "InvokeTool"
+    ],
+    "metadata": {
+      "owner": "platform-team",
+      "stage": "approval-demo"
+    }
+  },
+  "agent_id": "agent-approval-demo",
+  "ttl_s": 120,
+  "approval": {
+    "mode": "medium_balanced",
+    "strategy": "per_call",
+    "scope": "tool_calls",
+    "one_time_full_access_granted": false,
+    "approved_calls": [
+      "tool_core:delete-file"
+    ],
+    "denied_calls": [],
+    "risk_profile_path": "examples/policy/approval-medium-balanced.json",
+    "one_time_full_access_expires_at_epoch_s": null,
+    "one_time_full_access_remaining_uses": null
+  },
+  "defaults": null,
+  "self_awareness": null,
+  "plugin_scan": null,
+  "bridge_support": null,
+  "bootstrap": null,
+  "auto_provision": null,
+  "hotfixes": [],
+  "operation": {
+    "kind": "tool_core",
+    "tool_name": "delete-file",
+    "required_capabilities": [
+      "InvokeTool"
+    ],
+    "payload": {
+      "path": "/tmp/demo.txt",
+      "reason": "cleanup demo"
+    },
+    "core": null
+  }
+}
