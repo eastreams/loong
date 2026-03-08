@@ -1,0 +1,108 @@
+use std::{fs, path::PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+use crate::CliResult;
+
+use super::{
+    channels::{CliChannelConfig, FeishuChannelConfig, TelegramChannelConfig},
+    provider::ProviderConfig,
+    shared::{
+        default_loongclaw_home as shared_default_loongclaw_home, expand_path, DEFAULT_CONFIG_FILE,
+    },
+    tools_memory::{MemoryConfig, ToolConfig},
+};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoongClawConfig {
+    #[serde(default)]
+    pub provider: ProviderConfig,
+    #[serde(default)]
+    pub cli: CliChannelConfig,
+    #[serde(default)]
+    pub telegram: TelegramChannelConfig,
+    #[serde(default)]
+    pub feishu: FeishuChannelConfig,
+    #[serde(default)]
+    pub tools: ToolConfig,
+    #[serde(default)]
+    pub memory: MemoryConfig,
+}
+
+impl Default for LoongClawConfig {
+    fn default() -> Self {
+        Self {
+            provider: ProviderConfig::default(),
+            cli: CliChannelConfig::default(),
+            telegram: TelegramChannelConfig::default(),
+            feishu: FeishuChannelConfig::default(),
+            tools: ToolConfig::default(),
+            memory: MemoryConfig::default(),
+        }
+    }
+}
+
+pub fn load(path: Option<&str>) -> CliResult<(PathBuf, LoongClawConfig)> {
+    let config_path = path.map(expand_path).unwrap_or_else(default_config_path);
+    let raw = fs::read_to_string(&config_path).map_err(|error| {
+        format!(
+            "failed to read config {}: {error}. run `loongclawd setup` first",
+            config_path.display()
+        )
+    })?;
+    parse_toml_config(&raw).map(|config| (config_path, config))
+}
+
+pub fn write_template(path: Option<&str>, force: bool) -> CliResult<PathBuf> {
+    let output_path = path.map(expand_path).unwrap_or_else(default_config_path);
+    if output_path.exists() && !force {
+        return Err(format!(
+            "config {} already exists (use --force to overwrite)",
+            output_path.display()
+        ));
+    }
+
+    if let Some(parent) = output_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("failed to create config directory: {error}"))?;
+        }
+    }
+
+    let encoded = encode_toml_config(&LoongClawConfig::default())?;
+    fs::write(&output_path, encoded).map_err(|error| {
+        format!(
+            "failed to write config file {}: {error}",
+            output_path.display()
+        )
+    })?;
+    Ok(output_path)
+}
+
+pub fn default_config_path() -> PathBuf {
+    default_loongclaw_home().join(DEFAULT_CONFIG_FILE)
+}
+
+pub fn default_loongclaw_home() -> PathBuf {
+    shared_default_loongclaw_home()
+}
+
+#[cfg(feature = "config-toml")]
+fn parse_toml_config(raw: &str) -> CliResult<LoongClawConfig> {
+    toml::from_str(raw).map_err(|error| format!("failed to parse TOML config: {error}"))
+}
+
+#[cfg(not(feature = "config-toml"))]
+fn parse_toml_config(_raw: &str) -> CliResult<LoongClawConfig> {
+    Err("config-toml feature is disabled for this build".to_owned())
+}
+
+#[cfg(feature = "config-toml")]
+fn encode_toml_config(config: &LoongClawConfig) -> CliResult<String> {
+    toml::to_string_pretty(config).map_err(|error| format!("failed to encode TOML config: {error}"))
+}
+
+#[cfg(not(feature = "config-toml"))]
+fn encode_toml_config(_config: &LoongClawConfig) -> CliResult<String> {
+    Err("config-toml feature is disabled for this build".to_owned())
+}
