@@ -30,7 +30,10 @@ use kernel::{
     ToolCoreRequest, ToolExtensionAdapter, ToolExtensionOutcome, ToolExtensionRequest,
     VerticalPackManifest,
 };
-use loongclaw_protocol::{JsonLineTransport, OutboundFrame, Transport, TransportInfo};
+use loongclaw_protocol::{
+    JsonLineTransport, OutboundFrame, ProtocolRouter, RouteAuthorizationRequest, Transport,
+    TransportInfo,
+};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -38,7 +41,7 @@ use sha2::{Digest, Sha256};
 use tokio::{
     io::AsyncReadExt,
     process::Command as TokioCommand,
-    time::{sleep, Instant as TokioInstant},
+    time::{sleep, timeout, Instant as TokioInstant},
 };
 use wasmparser::{Parser as WasmParser, Payload as WasmPayload};
 use wasmtime::{

@@ -1548,6 +1548,7 @@ async fn execute_process_stdio_bridge(
     }
 
     let args = parse_process_args(provider);
+    let timeout_ms = parse_process_timeout_ms(provider);
     let envelope = json!({
         "provider_id": provider.provider_id,
         "channel_id": channel.channel_id,
@@ -1555,10 +1556,59 @@ async fn execute_process_stdio_bridge(
         "payload": command.payload,
     });
     let request_method = "tools/call".to_owned();
-    let request_id = Some(format!("{}:{}:{}", provider.provider_id, channel.channel_id, command.operation));
+    let request_id = Some(format!(
+        "{}:{}:{}",
+        provider.provider_id, channel.channel_id, command.operation
+    ));
+    let router = ProtocolRouter::default();
+    let resolved_route = match router.resolve(&request_method) {
+        Ok(route) => route,
+        Err(error) => {
+            execution["status"] = Value::String("blocked".to_owned());
+            execution["reason"] = Value::String(format!(
+                "process_stdio protocol method {request_method} is invalid: {error}"
+            ));
+            execution["runtime"] = json!({
+                "executor": "process_stdio_local",
+                "transport_kind": "json_line",
+                "command": program,
+                "args": args,
+                "request_method": request_method,
+                "request_id": request_id,
+                "timeout_ms": timeout_ms,
+            });
+            return execution;
+        }
+    };
+    let protocol_capabilities = protocol_capabilities_for_connector_command(command);
+    if let Err(error) = router.authorize(
+        &resolved_route,
+        &RouteAuthorizationRequest {
+            authenticated: true,
+            capabilities: protocol_capabilities.clone(),
+        },
+    ) {
+        execution["status"] = Value::String("blocked".to_owned());
+        execution["reason"] = Value::String(format!(
+            "process_stdio protocol route authorization failed: {error}"
+        ));
+        execution["runtime"] = json!({
+            "executor": "process_stdio_local",
+            "transport_kind": "json_line",
+            "command": program,
+            "args": args,
+            "request_method": request_method,
+            "request_id": request_id,
+            "timeout_ms": timeout_ms,
+            "protocol_capabilities": protocol_capabilities.iter().cloned().collect::<Vec<_>>(),
+        });
+        return execution;
+    }
+
     let exchange_result = run_process_stdio_json_line_exchange(
         &program,
         &args,
+        timeout_ms,
         OutboundFrame {
             method: request_method.clone(),
             id: request_id.clone(),
@@ -1591,6 +1641,8 @@ async fn execute_process_stdio_bridge(
                 "stdout_json": outcome.stdout_json,
                 "request_method": request_method,
                 "request_id": request_id,
+                "timeout_ms": timeout_ms,
+                "protocol_capabilities": protocol_capabilities.iter().cloned().collect::<Vec<_>>(),
                 "response_method": outcome.response_method,
                 "response_id": outcome.response_id,
             });
@@ -1606,6 +1658,8 @@ async fn execute_process_stdio_bridge(
                 "args": args,
                 "request_method": request_method,
                 "request_id": request_id,
+                "timeout_ms": timeout_ms,
+                "protocol_capabilities": protocol_capabilities.iter().cloned().collect::<Vec<_>>(),
             });
             execution
         }
@@ -1625,6 +1679,7 @@ struct ProcessStdioExchangeOutcome {
 async fn run_process_stdio_json_line_exchange(
     program: &str,
     args: &[String],
+    timeout_ms: u64,
     frame: OutboundFrame,
 ) -> Result<ProcessStdioExchangeOutcome, String> {
     let mut child = TokioCommand::new(program)
@@ -1662,40 +1717,87 @@ async fn run_process_stdio_json_line_exchange(
         stdin,
     );
 
-    if let Err(error) = transport.send(frame).await {
+    let expected_method = frame.method.clone();
+    let expected_id = frame.id.clone();
+
+    if let Err(error) = timeout(Duration::from_millis(timeout_ms), transport.send(frame))
+        .await
+        .map_err(|_| format!("process_stdio transport send timed out after {timeout_ms}ms"))?
+    {
         let _ = child.start_kill();
         let _ = child.wait().await;
         let _ = stderr_task.await;
         return Err(format!("process_stdio transport send failed: {error}"));
     }
-    if let Err(error) = transport.close().await {
+    if let Err(error) = timeout(Duration::from_millis(timeout_ms), transport.close())
+        .await
+        .map_err(|_| format!("process_stdio transport close timed out after {timeout_ms}ms"))?
+    {
         let _ = child.start_kill();
         let _ = child.wait().await;
         let _ = stderr_task.await;
         return Err(format!("process_stdio transport close failed: {error}"));
     }
 
-    let response = match transport.recv().await {
-        Ok(Some(frame)) => frame,
-        Ok(None) => {
+    let response = match timeout(Duration::from_millis(timeout_ms), transport.recv()).await {
+        Ok(Ok(Some(frame))) => frame,
+        Ok(Ok(None)) => {
             drop(transport);
             let _ = child.wait().await;
             let _ = stderr_task.await;
             return Err("process_stdio transport closed before response frame".to_owned());
         }
-        Err(error) => {
+        Ok(Err(error)) => {
             let _ = child.start_kill();
             let _ = child.wait().await;
             let _ = stderr_task.await;
             return Err(format!("process_stdio transport recv failed: {error}"));
         }
+        Err(_) => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            let _ = stderr_task.await;
+            return Err(format!(
+                "process_stdio transport recv timed out after {timeout_ms}ms"
+            ));
+        }
     };
 
+    if response.method != expected_method {
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+        let _ = stderr_task.await;
+        return Err(format!(
+            "process_stdio response method mismatch: expected `{expected_method}`, got `{}`",
+            response.method
+        ));
+    }
+    if response.id != expected_id {
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+        let _ = stderr_task.await;
+        return Err(format!(
+            "process_stdio response id mismatch: expected `{:?}`, got `{:?}`",
+            expected_id, response.id
+        ));
+    }
+
     drop(transport);
-    let status = child
-        .wait()
-        .await
-        .map_err(|error| format!("failed to wait process output: {error}"))?;
+    let status = match timeout(Duration::from_millis(timeout_ms), child.wait()).await {
+        Ok(Ok(status)) => status,
+        Ok(Err(error)) => {
+            let _ = stderr_task.await;
+            return Err(format!("failed to wait process output: {error}"));
+        }
+        Err(_) => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            let _ = stderr_task.await;
+            return Err(format!(
+                "process command timed out after {timeout_ms}ms waiting for exit"
+            ));
+        }
+    };
     let stderr_bytes = stderr_task
         .await
         .map_err(|error| format!("failed to collect process stderr: {error}"))?;
@@ -1912,6 +2014,36 @@ fn parse_process_args(provider: &kernel::ProviderConfig) -> Vec<String> {
         .get("args")
         .map(|value| value.split_whitespace().map(str::to_owned).collect())
         .unwrap_or_default()
+}
+
+fn parse_process_timeout_ms(provider: &kernel::ProviderConfig) -> u64 {
+    provider
+        .metadata
+        .get("process_timeout_ms")
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(|value| value.min(300_000))
+        .unwrap_or(5_000)
+}
+
+fn protocol_capabilities_for_connector_command(command: &ConnectorCommand) -> BTreeSet<String> {
+    let mut capabilities = BTreeSet::new();
+    for capability in &command.required_capabilities {
+        match capability {
+            Capability::MemoryRead
+            | Capability::FilesystemRead
+            | Capability::ObserveTelemetry => {
+                capabilities.insert("discover".to_owned());
+            }
+            _ => {
+                capabilities.insert("invoke".to_owned());
+            }
+        }
+    }
+    if capabilities.is_empty() {
+        capabilities.insert("invoke".to_owned());
+    }
+    capabilities
 }
 
 fn provider_allowed_callers(provider: &kernel::ProviderConfig) -> BTreeSet<String> {
