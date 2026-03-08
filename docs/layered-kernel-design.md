@@ -166,6 +166,8 @@ Rules:
   support optional strict method/id response contract validation.
 - Shared protocol-context construction should be reused across bridge executors
   to avoid policy drift between transport implementations.
+- Shared protocol runtime-evidence field appending should be reused across
+  bridge executors to keep telemetry schema stable and comparable.
 
 ### L6. Integration Control Plane (Autonomous Provisioning)
 

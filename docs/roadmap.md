@@ -148,6 +148,8 @@ Delivered in current baseline:
     - bounded HTTP timeout parsing with deterministic clamp (`http_timeout_ms`)
   - shared protocol context builder for bridge executors to keep
     authorization/route semantics consistent across transport lanes
+  - shared runtime evidence appender for protocol request/route/capability
+    fields to keep bridge telemetry schemas aligned across executors
   - strict/lenient custom route control to avoid ad-hoc string dispatch at call sites
   - linked in-memory `ChannelTransport` primitive with:
     - bounded queue backpressure
