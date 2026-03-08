@@ -136,6 +136,10 @@ Delivered in current baseline:
     (request/response method + payload envelope), with runtime evidence
     (`transport_kind`, request/response frame metadata) and deterministic
     failure surfacing for malformed frame responses
+  - daemon `process_stdio` bridge hardening:
+    - protocol route authorization gate before process execution
+    - response contract checks (method/id must match request)
+    - bounded send/close/recv/exit timeouts (`process_timeout_ms`)
   - strict/lenient custom route control to avoid ad-hoc string dispatch at call sites
   - linked in-memory `ChannelTransport` primitive with:
     - bounded queue backpressure

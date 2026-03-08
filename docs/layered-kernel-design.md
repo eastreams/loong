@@ -160,6 +160,8 @@ Rules:
 - Bounded queues must preserve backpressure instead of unbounded buffering.
 - Runtime process stdio execution should consume protocol transport primitives
   (json-line frame contract) instead of ad-hoc stdin/stdout JSON handling.
+- Runtime process stdio execution should enforce protocol-route authorization,
+  request/response method+id consistency, and bounded timeout controls.
 
 ### L6. Integration Control Plane (Autonomous Provisioning)
 

@@ -1581,6 +1581,7 @@ async fn execute_process_stdio_bridge(
         }
     };
     let protocol_capabilities = protocol_capabilities_for_connector_command(command);
+    let required_route_capability = resolved_route.policy.required_capability.clone();
     if let Err(error) = router.authorize(
         &resolved_route,
         &RouteAuthorizationRequest {
@@ -1600,6 +1601,8 @@ async fn execute_process_stdio_bridge(
             "request_method": request_method,
             "request_id": request_id,
             "timeout_ms": timeout_ms,
+            "protocol_route": resolved_route.method(),
+            "protocol_required_capability": required_route_capability.clone(),
             "protocol_capabilities": protocol_capabilities.iter().cloned().collect::<Vec<_>>(),
         });
         return execution;
@@ -1642,6 +1645,8 @@ async fn execute_process_stdio_bridge(
                 "request_method": request_method,
                 "request_id": request_id,
                 "timeout_ms": timeout_ms,
+                "protocol_route": resolved_route.method(),
+                "protocol_required_capability": required_route_capability.clone(),
                 "protocol_capabilities": protocol_capabilities.iter().cloned().collect::<Vec<_>>(),
                 "response_method": outcome.response_method,
                 "response_id": outcome.response_id,
@@ -1659,6 +1664,8 @@ async fn execute_process_stdio_bridge(
                 "request_method": request_method,
                 "request_id": request_id,
                 "timeout_ms": timeout_ms,
+                "protocol_route": resolved_route.method(),
+                "protocol_required_capability": required_route_capability.clone(),
                 "protocol_capabilities": protocol_capabilities.iter().cloned().collect::<Vec<_>>(),
             });
             execution

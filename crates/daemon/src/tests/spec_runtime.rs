@@ -2081,6 +2081,225 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_id_mismatch() {
 
 #[cfg(not(target_os = "windows"))]
 #[tokio::test]
+async fn execute_spec_process_stdio_bridge_fails_on_response_method_mismatch() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root = std::env::temp_dir().join(format!(
+        "loongclaw-plugin-process-stdio-mismatch-method-{unique}"
+    ));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    fs::write(
+        plugin_root.join("stdio_plugin.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "stdio-mismatch-method-plugin",
+#   "provider_id": "stdio-mismatch-method-provider",
+#   "connector_name": "stdio-mismatch-method-provider",
+#   "channel_id": "primary",
+#   "endpoint": "local://stdio-mismatch-method-provider",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {
+#     "bridge_kind":"process_stdio",
+#     "command":"printf",
+#     "args_json":"[\"{\\\"method\\\":\\\"tools/list\\\",\\\"id\\\":\\\"stdio-mismatch-method-provider:primary:invoke\\\",\\\"payload\\\":{\\\"ok\\\":true}}\\n\"]",
+#     "version":"1.0.0"
+#   }
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write stdio plugin");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-process-stdio-mismatch-method".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::new(),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-process-stdio-mismatch-method".to_owned(),
+        ttl_s: 120,
+        approval: None,
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: Some(BridgeSupportSpec {
+            enabled: true,
+            supported_bridges: vec![PluginBridgeKind::ProcessStdio],
+            supported_adapter_families: Vec::new(),
+            enforce_supported: true,
+            policy_version: None,
+            expected_checksum: None,
+            expected_sha256: None,
+            execute_process_stdio: true,
+            execute_http_json: false,
+            allowed_process_commands: vec!["printf".to_owned()],
+            enforce_execution_success: false,
+            security_scan: None,
+        }),
+        bootstrap: Some(BootstrapSpec {
+            enabled: true,
+            allow_http_json_auto_apply: Some(false),
+            allow_process_stdio_auto_apply: Some(true),
+            allow_native_ffi_auto_apply: Some(false),
+            allow_wasm_component_auto_apply: Some(false),
+            allow_mcp_server_auto_apply: Some(false),
+            enforce_ready_execution: Some(true),
+            max_tasks: Some(10),
+        }),
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        operation: OperationSpec::ConnectorLegacy {
+            connector_name: "stdio-mismatch-method-provider".to_owned(),
+            operation: "invoke".to_owned(),
+            required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+            payload: json!({"question":"ping"}),
+        },
+    };
+
+    let report = execute_spec(spec, true).await;
+    assert_eq!(report.operation_kind, "connector_legacy");
+    assert_eq!(report.outcome["outcome"]["status"], "ok");
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["status"],
+        "failed"
+    );
+    assert!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["reason"]
+            .as_str()
+            .expect("failed reason should be string")
+            .contains("response method mismatch")
+    );
+}
+
+#[tokio::test]
+async fn execute_spec_process_stdio_bridge_blocks_when_protocol_authorization_fails() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root = std::env::temp_dir().join(format!(
+        "loongclaw-plugin-process-stdio-authz-block-{unique}"
+    ));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    fs::write(
+        plugin_root.join("stdio_plugin.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "stdio-authz-block-plugin",
+#   "provider_id": "stdio-authz-block-provider",
+#   "connector_name": "stdio-authz-block-provider",
+#   "channel_id": "primary",
+#   "endpoint": "local://stdio-authz-block-provider",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {
+#     "bridge_kind":"process_stdio",
+#     "command":"cat",
+#     "version":"1.0.0"
+#   }
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write stdio plugin");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-process-stdio-authz-block".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::MemoryRead]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-process-stdio-authz-block".to_owned(),
+        ttl_s: 120,
+        approval: None,
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: Some(BridgeSupportSpec {
+            enabled: true,
+            supported_bridges: vec![PluginBridgeKind::ProcessStdio],
+            supported_adapter_families: Vec::new(),
+            enforce_supported: true,
+            policy_version: None,
+            expected_checksum: None,
+            expected_sha256: None,
+            execute_process_stdio: true,
+            execute_http_json: false,
+            allowed_process_commands: vec!["cat".to_owned()],
+            enforce_execution_success: false,
+            security_scan: None,
+        }),
+        bootstrap: Some(BootstrapSpec {
+            enabled: true,
+            allow_http_json_auto_apply: Some(false),
+            allow_process_stdio_auto_apply: Some(true),
+            allow_native_ffi_auto_apply: Some(false),
+            allow_wasm_component_auto_apply: Some(false),
+            allow_mcp_server_auto_apply: Some(false),
+            enforce_ready_execution: Some(true),
+            max_tasks: Some(10),
+        }),
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        operation: OperationSpec::ConnectorLegacy {
+            connector_name: "stdio-authz-block-provider".to_owned(),
+            operation: "invoke".to_owned(),
+            required_capabilities: BTreeSet::from([Capability::MemoryRead]),
+            payload: json!({"question":"ping"}),
+        },
+    };
+
+    let report = execute_spec(spec, true).await;
+    assert_eq!(report.operation_kind, "connector_legacy");
+    assert_eq!(report.outcome["outcome"]["status"], "ok");
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["status"],
+        "blocked"
+    );
+    assert!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["reason"]
+            .as_str()
+            .expect("blocked reason should be string")
+            .contains("protocol route authorization failed")
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]
+            ["protocol_required_capability"],
+        "invoke"
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tokio::test]
 async fn execute_spec_process_stdio_bridge_fails_on_recv_timeout() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
