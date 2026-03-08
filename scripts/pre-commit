@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Pre-commit hook: runs cargo fmt and clippy (a subset of CI checks) before push.
+# Install: cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+# Or:      git config core.hooksPath scripts
+
+set -e
+
+echo "[pre-commit] cargo fmt --check"
+cargo fmt --all -- --check
+
+echo "[pre-commit] cargo clippy"
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+echo "[pre-commit] all checks passed"

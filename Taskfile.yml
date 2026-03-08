@@ -38,18 +38,32 @@ tasks:
     cmds:
       - ./scripts/benchmark_programmatic_pressure.sh
 
+  check:docs:
+    desc: Validate doc governance (mirror, dead links, stale plans)
+    cmds:
+      - scripts/check-docs.sh
+
+  check:deny:
+    desc: Run cargo-deny (advisories, bans, sources)
+    preconditions:
+      - sh: command -v cargo-deny
+        msg: "cargo-deny not installed. Run: cargo install cargo-deny"
+    cmds:
+      - cargo deny check advisories bans sources
+
   verify:
-    desc: Canonical local verification gate
+    desc: Canonical local verification gate (strict superset of CI checks)
     cmds:
       - task: fmt
-      - task: lint
+      - task: lint:strict
       - task: test
+      - task: test:all-features
+      - task: check:docs
+      - task: check:deny
 
   verify:full:
     desc: Extended verification including smoke and benchmark gates
     cmds:
       - task: verify
-      - task: lint:strict
-      - task: test:all-features
       - task: smoke
       - task: benchmark:pressure

@@ -4,25 +4,10 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 3
-    groups:
-      cargo-minor-and-patch:
-        patterns:
-          - "*"
-        update-types:
-          - minor
-          - patch
-    ignore:
-      - dependency-name: "*"
-        update-types:
-          - "version-update:semver-major"
+    open-pull-requests-limit: 10
 
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: monthly
-    open-pull-requests-limit: 1
-    groups:
-      github-actions-all:
-        patterns:
-          - "*"
+      interval: weekly
+    open-pull-requests-limit: 10
