@@ -176,7 +176,9 @@ struct ProgrammaticPressureGateSummary {
 #[derive(Debug, Clone, Serialize)]
 struct ProgrammaticPressureBaselinePreflight {
     strict: bool,
+    fail_on_warnings: bool,
     passed: bool,
+    gate_passed: bool,
     error_count: usize,
     warning_count: usize,
     issue_count: usize,
@@ -274,6 +276,7 @@ pub(super) async fn run_programmatic_pressure_benchmark_cli(
     baseline_path: Option<&str>,
     output_path: &str,
     enforce_gate: bool,
+    preflight_fail_on_warnings: bool,
 ) -> CliResult<()> {
     let matrix: ProgrammaticPressureMatrix = read_json_file(matrix_path)?;
 
@@ -296,21 +299,17 @@ pub(super) async fn run_programmatic_pressure_benchmark_cli(
         .map(|value| lint_programmatic_pressure_baseline(&matrix, value));
     let preflight = baseline_lint
         .as_ref()
-        .map(|lint| ProgrammaticPressureBaselinePreflight {
-            strict: enforce_gate,
-            passed: lint.passed(),
-            error_count: lint.error_count(),
-            warning_count: lint.warning_count(),
-            issue_count: lint.issues.len(),
-            issues: lint.issues.clone(),
-        });
+        .map(|lint| build_baseline_preflight(lint, enforce_gate, preflight_fail_on_warnings));
     if enforce_gate {
-        if let Some(lint) = baseline_lint.as_ref() {
-            let errors = lint.errors();
-            if !errors.is_empty() {
+        if let Some(preflight_summary) = preflight.as_ref() {
+            if !preflight_summary.gate_passed {
+                let gate_issues = preflight_gate_issues(
+                    &preflight_summary.issues,
+                    preflight_summary.fail_on_warnings,
+                );
                 return Err(format!(
                     "programmatic pressure strict preflight failed: {}",
-                    format_baseline_issue_list(&errors)
+                    format_baseline_issue_list(&gate_issues)
                 ));
             }
         }
@@ -421,15 +420,7 @@ pub(super) fn run_programmatic_pressure_baseline_lint_cli(
     }
 
     if enforce_gate && !report.gate_passed {
-        let gate_issues: Vec<ProgrammaticPressureBaselineIssue> = report
-            .issues
-            .iter()
-            .filter(|issue| match issue.severity {
-                ProgrammaticPressureBaselineIssueSeverity::Error => true,
-                ProgrammaticPressureBaselineIssueSeverity::Warning => fail_on_warnings,
-            })
-            .cloned()
-            .collect();
+        let gate_issues = preflight_gate_issues(&report.issues, fail_on_warnings);
         return Err(format!(
             "programmatic pressure baseline lint failed: {}",
             format_baseline_issue_list(&gate_issues)
@@ -502,14 +493,37 @@ impl ProgrammaticPressureBaselineLintResult {
             .filter(|issue| issue.severity == ProgrammaticPressureBaselineIssueSeverity::Warning)
             .count()
     }
+}
 
-    fn errors(&self) -> Vec<ProgrammaticPressureBaselineIssue> {
-        self.issues
-            .iter()
-            .filter(|issue| issue.severity == ProgrammaticPressureBaselineIssueSeverity::Error)
-            .cloned()
-            .collect()
+fn build_baseline_preflight(
+    lint: &ProgrammaticPressureBaselineLintResult,
+    strict: bool,
+    fail_on_warnings: bool,
+) -> ProgrammaticPressureBaselinePreflight {
+    ProgrammaticPressureBaselinePreflight {
+        strict,
+        fail_on_warnings,
+        passed: lint.passed(),
+        gate_passed: lint_gate_passed(lint, fail_on_warnings),
+        error_count: lint.error_count(),
+        warning_count: lint.warning_count(),
+        issue_count: lint.issues.len(),
+        issues: lint.issues.clone(),
     }
+}
+
+fn preflight_gate_issues(
+    issues: &[ProgrammaticPressureBaselineIssue],
+    fail_on_warnings: bool,
+) -> Vec<ProgrammaticPressureBaselineIssue> {
+    issues
+        .iter()
+        .filter(|issue| match issue.severity {
+            ProgrammaticPressureBaselineIssueSeverity::Error => true,
+            ProgrammaticPressureBaselineIssueSeverity::Warning => fail_on_warnings,
+        })
+        .cloned()
+        .collect()
 }
 
 fn lint_gate_passed(lint: &ProgrammaticPressureBaselineLintResult, fail_on_warnings: bool) -> bool {
@@ -1803,6 +1817,55 @@ mod tests {
 
         assert!(lint_gate_passed(&lint, false));
         assert!(!lint_gate_passed(&lint, true));
+    }
+
+    #[test]
+    fn build_preflight_distinguishes_passed_and_gate_passed() {
+        let lint = ProgrammaticPressureBaselineLintResult {
+            issues: vec![ProgrammaticPressureBaselineIssue {
+                severity: ProgrammaticPressureBaselineIssueSeverity::Warning,
+                kind: ProgrammaticPressureBaselineIssueKind::UnknownBaselineScenario,
+                scenario_name: "unknown-extra-scenario".to_owned(),
+                message: "baseline scenario does not exist in matrix".to_owned(),
+            }],
+        };
+
+        let preflight_without_warning_block = build_baseline_preflight(&lint, true, false);
+        assert!(preflight_without_warning_block.passed);
+        assert!(preflight_without_warning_block.gate_passed);
+        assert_eq!(preflight_without_warning_block.warning_count, 1);
+        assert_eq!(preflight_without_warning_block.error_count, 0);
+        assert!(!preflight_without_warning_block.fail_on_warnings);
+
+        let preflight_with_warning_block = build_baseline_preflight(&lint, true, true);
+        assert!(preflight_with_warning_block.passed);
+        assert!(!preflight_with_warning_block.gate_passed);
+        assert!(preflight_with_warning_block.fail_on_warnings);
+    }
+
+    #[test]
+    fn preflight_gate_issue_filter_respects_warning_policy() {
+        let issues = vec![
+            ProgrammaticPressureBaselineIssue {
+                severity: ProgrammaticPressureBaselineIssueSeverity::Error,
+                kind: ProgrammaticPressureBaselineIssueKind::MissingSpecRunSchemaFingerprint,
+                scenario_name: "spec-a".to_owned(),
+                message: "missing fingerprint".to_owned(),
+            },
+            ProgrammaticPressureBaselineIssue {
+                severity: ProgrammaticPressureBaselineIssueSeverity::Warning,
+                kind: ProgrammaticPressureBaselineIssueKind::UnknownBaselineScenario,
+                scenario_name: "warning-only".to_owned(),
+                message: "unknown scenario".to_owned(),
+            },
+        ];
+
+        let errors_only = preflight_gate_issues(&issues, false);
+        assert_eq!(errors_only.len(), 1);
+        assert_eq!(errors_only[0].scenario_name, "spec-a");
+
+        let include_warnings = preflight_gate_issues(&issues, true);
+        assert_eq!(include_warnings.len(), 2);
     }
 
     #[test]

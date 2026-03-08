@@ -105,6 +105,7 @@ cargo run -p loongclaw-daemon -- benchmark-programmatic-pressure \
   --matrix examples/benchmarks/programmatic-pressure-matrix.json \
   --baseline examples/benchmarks/programmatic-pressure-baseline.json \
   --enforce-gate \
+  --preflight-fail-on-warnings \
   --output target/benchmarks/programmatic-pressure-report.json
 ```
 
@@ -112,6 +113,16 @@ Run via unified helper script:
 
 ```bash
 ./scripts/benchmark_programmatic_pressure.sh
+```
+
+Enable warning-level preflight blocking:
+
+```bash
+./scripts/benchmark_programmatic_pressure.sh \
+  examples/benchmarks/programmatic-pressure-matrix.json \
+  examples/benchmarks/programmatic-pressure-baseline.json \
+  target/benchmarks/programmatic-pressure-report.json \
+  true
 ```
 
 Lint baseline coverage without running pressure scenarios:
@@ -155,5 +166,6 @@ The report includes:
 - structured gate checks and pass/fail status
 - structured `gate.preflight` baseline-coverage audit output
 - baseline lint report includes both `passed` (error-only) and `gate_passed` (respects `--fail-on-warnings`)
+- benchmark preflight includes both `passed` (error-only) and `gate_passed` (respects `--preflight-fail-on-warnings`)
 
 Use the report as the machine-readable artifact for performance regression audits.

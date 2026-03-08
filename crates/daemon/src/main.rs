@@ -124,6 +124,8 @@ enum Commands {
         output: String,
         #[arg(long, default_value_t = false)]
         enforce_gate: bool,
+        #[arg(long, default_value_t = false)]
+        preflight_fail_on_warnings: bool,
     },
     /// Lint pressure baseline coverage without running benchmark scenarios
     BenchmarkProgrammaticPressureLint {
@@ -206,12 +208,14 @@ async fn main() {
             baseline,
             output,
             enforce_gate,
+            preflight_fail_on_warnings,
         } => {
             run_programmatic_pressure_benchmark_cli(
                 &matrix,
                 baseline.as_deref(),
                 &output,
                 enforce_gate,
+                preflight_fail_on_warnings,
             )
             .await
         }
