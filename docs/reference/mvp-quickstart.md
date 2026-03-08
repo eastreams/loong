@@ -110,7 +110,7 @@ api_key_env = "OPENAI_API_KEY"
 # Optional model preferences when model="auto".
 # preferred_models = ["<model-id-1>", "<model-id-2>", "<model-id-3>"]
 # Optional reasoning effort for providers that support reasoning controls.
-# reasoning_effort = "medium" # low | medium | high
+# reasoning_effort = "medium" # none | minimal | low | medium | high | xhigh
 temperature = 0.2
 request_timeout_ms = 30000
 retry_max_attempts = 3
@@ -183,6 +183,7 @@ When `model = "auto"`:
 - LoongClaw fetches provider model list from `models_endpoint` (or inferred default)
 - if `preferred_models` is set, first matched model is used
 - otherwise first model from provider catalog order (newest-first when timestamp exists)
+- if selected model rejects chat endpoint or token/reasoning params, LoongClaw auto-adapts payload and can fall back to next model candidate
 - recommended flow: run `list-models --json`, then copy model IDs into `preferred_models`
 
 Backward compatibility aliases are accepted for older configs:

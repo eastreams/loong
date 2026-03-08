@@ -12,17 +12,23 @@ pub struct ProviderProfile {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReasoningEffort {
+    None,
+    Minimal,
     Low,
     Medium,
     High,
+    Xhigh,
 }
 
 impl ReasoningEffort {
     pub const fn as_str(self) -> &'static str {
         match self {
+            ReasoningEffort::None => "none",
+            ReasoningEffort::Minimal => "minimal",
             ReasoningEffort::Low => "low",
             ReasoningEffort::Medium => "medium",
             ReasoningEffort::High => "high",
+            ReasoningEffort::Xhigh => "xhigh",
         }
     }
 }

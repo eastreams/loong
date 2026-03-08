@@ -85,8 +85,16 @@ Model selection model:
 
 Reasoning controls:
 
-- optional `provider.reasoning_effort = low|medium|high`
-- serialized into provider payload as `reasoning.effort` when configured
+- optional `provider.reasoning_effort = none|minimal|low|medium|high|xhigh`
+- serialized with compatibility negotiation (`reasoning_effort` first, fallback to
+  `reasoning.effort`, and omitted when endpoint rejects both)
+
+Compatibility negotiation:
+
+- token limit field is negotiated per request (`max_completion_tokens` and
+  `max_tokens` fallback paths)
+- when `provider.model = "auto"`, incompatible endpoint-model combinations can
+  trigger next-candidate fallback without hardcoded model allowlists
 
 Design principle:
 
