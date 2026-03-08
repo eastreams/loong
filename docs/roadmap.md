@@ -150,6 +150,8 @@ Delivered in current baseline:
     authorization/route semantics consistent across transport lanes
   - shared runtime evidence appender for protocol request/route/capability
     fields to keep bridge telemetry schemas aligned across executors
+  - bridge protocol helpers split into a dedicated module include
+    (`spec_bridge_protocol.inc.rs`) to reduce spec runtime file growth
   - strict/lenient custom route control to avoid ad-hoc string dispatch at call sites
   - linked in-memory `ChannelTransport` primitive with:
     - bounded queue backpressure

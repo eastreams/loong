@@ -1,5 +1,32 @@
 use super::*;
 
+fn assert_bridge_runtime_protocol_context(
+    runtime: &Value,
+    expected_request_id: &str,
+    expected_required_capability: &str,
+    expected_granted_capability: &str,
+) {
+    assert_eq!(runtime["request_method"], "tools/call");
+    assert_eq!(runtime["request_id"], expected_request_id);
+    assert_eq!(runtime["protocol_route"], "tools/call");
+    assert_eq!(
+        runtime["protocol_required_capability"],
+        expected_required_capability
+    );
+    let capabilities = runtime["protocol_capabilities"]
+        .as_array()
+        .expect("protocol_capabilities should be an array")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    assert!(
+        capabilities
+            .iter()
+            .any(|capability| *capability == expected_granted_capability),
+        "protocol_capabilities should include {expected_granted_capability}, got {capabilities:?}",
+    );
+}
+
 #[test]
 fn template_spec_is_json_roundtrip_stable() {
     let spec = RunnerSpec::template();
@@ -1754,6 +1781,12 @@ async fn execute_spec_process_stdio_bridge_executes_when_enabled_and_allowed() {
             ["operation"],
         "invoke"
     );
+    assert_bridge_runtime_protocol_context(
+        &report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"],
+        "stdio-provider:primary:invoke",
+        "invoke",
+        "invoke",
+    );
 }
 
 #[tokio::test]
@@ -2294,10 +2327,11 @@ async fn execute_spec_process_stdio_bridge_blocks_when_protocol_authorization_fa
             .expect("blocked reason should be string")
             .contains("protocol route authorization failed")
     );
-    assert_eq!(
-        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]
-            ["protocol_required_capability"],
-        "invoke"
+    assert_bridge_runtime_protocol_context(
+        &report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"],
+        "stdio-authz-block-provider:primary:invoke",
+        "invoke",
+        "discover",
     );
     assert_eq!(
         report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["timeout_ms"],
@@ -4981,6 +5015,12 @@ async fn execute_spec_http_json_bridge_executes_against_local_server() {
             ["reply"],
         "pong"
     );
+    assert_bridge_runtime_protocol_context(
+        &report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"],
+        "http-runtime:primary:invoke",
+        "invoke",
+        "invoke",
+    );
 }
 
 #[tokio::test]
@@ -5079,10 +5119,11 @@ async fn execute_spec_http_json_bridge_blocks_when_protocol_authorization_fails(
             .expect("blocked reason should be string")
             .contains("protocol route authorization failed")
     );
-    assert_eq!(
-        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]
-            ["protocol_required_capability"],
-        "invoke"
+    assert_bridge_runtime_protocol_context(
+        &report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"],
+        "http-authz-block:primary:invoke",
+        "invoke",
+        "discover",
     );
     assert_eq!(
         report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["timeout_ms"],

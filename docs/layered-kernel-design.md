@@ -168,6 +168,8 @@ Rules:
   to avoid policy drift between transport implementations.
 - Shared protocol runtime-evidence field appending should be reused across
   bridge executors to keep telemetry schema stable and comparable.
+- Bridge protocol helper logic should be isolated in a dedicated module include
+  to avoid unchecked line-count growth in the runtime orchestration file.
 
 ### L6. Integration Control Plane (Autonomous Provisioning)
 
