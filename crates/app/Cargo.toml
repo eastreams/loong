@@ -1,0 +1,37 @@
+[package]
+name = "loongclaw-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+default = ["channel-cli", "channel-telegram", "channel-feishu", "config-toml", "memory-sqlite", "tool-shell", "tool-file", "provider-openai", "provider-volcengine"]
+channel-cli = []
+channel-telegram = []
+channel-feishu = ["dep:axum", "dep:aes", "dep:cbc"]
+provider-openai = []
+provider-volcengine = []
+config-toml = ["dep:toml"]
+memory-sqlite = ["dep:rusqlite"]
+tool-shell = []
+tool-file = []
+
+[dependencies]
+loongclaw-contracts = { path = "../contracts" }
+loongclaw-kernel = { path = "../kernel" }
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml = { workspace = true, optional = true }
+reqwest.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+base64.workspace = true
+rusqlite = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+aes = { version = "0.8", optional = true }
+cbc = { version = "0.1", optional = true }
+
+[lints]
+workspace = true

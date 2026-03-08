@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+loongclaw-contracts = { path = "../contracts" }
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -15,3 +16,6 @@ thiserror.workspace = true
 [dev-dependencies]
 proptest = "1"
 tokio.workspace = true
+
+[lints]
+workspace = true

@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use proptest::prelude::*;
 use serde_json::json;
 
+use crate::task_supervisor::TaskSupervisor;
 use crate::{
     audit::{AuditEventKind, ExecutionPlane, InMemoryAuditSink, PlaneTier},
     clock::FixedClock,
@@ -33,6 +34,7 @@ use crate::{
         CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter,
         ToolExtensionOutcome, ToolExtensionRequest,
     },
+    Fault, TaskState,
 };
 
 struct MockEmbeddedPiHarness {
@@ -1612,6 +1614,76 @@ async fn tool_extension_call_reports_approval_required_when_policy_requires_huma
     ));
 }
 
+#[tokio::test]
+async fn generation_revoke_below_threshold_denies_old_tokens() {
+    let clock = Arc::new(FixedClock::new(1_000_000));
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    kernel.register_pack(sample_pack()).unwrap();
+    kernel.register_harness_adapter(MockEmbeddedPiHarness {
+        seen_tasks: Mutex::new(Vec::new()),
+    });
+
+    let token_gen1 = kernel.issue_token("sales-intel", "agent-1", 3600).unwrap();
+    assert_eq!(token_gen1.generation, 1);
+
+    // Revoke all tokens at or below generation 1
+    kernel.revoke_generation(1);
+
+    let token_gen2 = kernel.issue_token("sales-intel", "agent-2", 3600).unwrap();
+    assert_eq!(token_gen2.generation, 2);
+
+    // Old token should fail
+    let caps = BTreeSet::from([Capability::InvokeTool]);
+    let task = TaskIntent {
+        task_id: "t-1".to_owned(),
+        objective: "test".to_owned(),
+        required_capabilities: caps.clone(),
+        payload: json!({}),
+    };
+    let err = kernel
+        .execute_task("sales-intel", &token_gen1, task)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        KernelError::Policy(PolicyError::RevokedToken { .. })
+    ));
+
+    // New token should work
+    let task2 = TaskIntent {
+        task_id: "t-2".to_owned(),
+        objective: "test2".to_owned(),
+        required_capabilities: caps,
+        payload: json!({}),
+    };
+    let result = kernel.execute_task("sales-intel", &token_gen2, task2).await;
+    assert!(result.is_ok());
+}
+
+#[test]
+fn token_membrane_is_none_by_default() {
+    let engine = StaticPolicyEngine::default();
+    let pack = sample_pack();
+    let token = engine
+        .issue_token(&pack, "agent-1", 1_000_000, 3600)
+        .unwrap();
+    assert_eq!(token.membrane, None);
+    assert!(token.generation > 0);
+}
+
+#[test]
+fn token_generation_increments_on_each_issue() {
+    let engine = StaticPolicyEngine::default();
+    let pack = sample_pack();
+    let t1 = engine.issue_token(&pack, "a1", 1_000_000, 3600).unwrap();
+    let t2 = engine.issue_token(&pack, "a2", 1_000_000, 3600).unwrap();
+    let t3 = engine.issue_token(&pack, "a3", 1_000_000, 3600).unwrap();
+    assert_eq!(t1.generation, 1);
+    assert_eq!(t2.generation, 2);
+    assert_eq!(t3.generation, 3);
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
@@ -1657,4 +1729,249 @@ proptest! {
             prop_assert!(boundary_error);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Fault enum tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fault_display_is_human_readable() {
+    let fault = Fault::CapabilityViolation {
+        token_id: "tok-1".to_owned(),
+        capability: Capability::InvokeTool,
+    };
+    let msg = fault.to_string();
+    assert!(msg.contains("tok-1"));
+    assert!(msg.contains("InvokeTool"));
+}
+
+#[test]
+fn fault_from_policy_error_maps_expired_token() {
+    let policy_err = PolicyError::ExpiredToken {
+        token_id: "tok-2".to_owned(),
+        expires_at_epoch_s: 1000,
+    };
+    let fault = Fault::from_policy_error(policy_err);
+    assert!(
+        matches!(fault, Fault::TokenExpired { token_id, expires_at_epoch_s } if token_id == "tok-2" && expires_at_epoch_s == 1000)
+    );
+}
+
+#[test]
+fn fault_from_policy_error_maps_missing_capability() {
+    let policy_err = PolicyError::MissingCapability {
+        token_id: "tok-3".to_owned(),
+        capability: Capability::MemoryWrite,
+    };
+    let fault = Fault::from_policy_error(policy_err);
+    assert!(matches!(fault, Fault::CapabilityViolation { .. }));
+}
+
+#[test]
+fn fault_from_kernel_error_maps_policy() {
+    let kernel_err = KernelError::Policy(PolicyError::RevokedToken {
+        token_id: "tok-4".to_owned(),
+    });
+    let fault = Fault::from_kernel_error(kernel_err);
+    assert!(matches!(fault, Fault::PolicyDenied { .. }));
+}
+
+#[test]
+fn fault_from_kernel_error_maps_pack_boundary() {
+    let kernel_err = KernelError::PackCapabilityBoundary {
+        pack_id: "my-pack".to_owned(),
+        capability: Capability::NetworkEgress,
+    };
+    let fault = Fault::from_kernel_error(kernel_err);
+    assert!(matches!(fault, Fault::CapabilityViolation { .. }));
+}
+
+#[test]
+fn fault_panic_carries_message() {
+    let fault = Fault::Panic {
+        message: "unexpected state".to_owned(),
+    };
+    assert!(fault.to_string().contains("unexpected state"));
+}
+
+// ── TaskState FSM tests ──────────────────────────────────────────────
+
+#[test]
+fn task_state_transitions_runnable_to_in_send() {
+    let intent = TaskIntent {
+        task_id: "t-1".to_owned(),
+        objective: "test".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::InvokeTool]),
+        payload: json!({}),
+    };
+    let state = TaskState::Runnable(intent);
+    let next = state.transition_to_in_send();
+    assert!(next.is_ok());
+    assert!(matches!(next.unwrap(), TaskState::InSend { .. }));
+}
+
+#[test]
+fn task_state_rejects_invalid_transition_from_completed() {
+    let state = TaskState::Completed(HarnessOutcome {
+        status: "ok".to_owned(),
+        output: json!({}),
+    });
+    let err = state.transition_to_in_send();
+    assert!(err.is_err());
+}
+
+#[test]
+fn task_state_faulted_carries_fault() {
+    let fault = Fault::Panic {
+        message: "boom".to_owned(),
+    };
+    let state = TaskState::Faulted(fault.clone());
+    if let TaskState::Faulted(f) = state {
+        assert_eq!(f, fault);
+    } else {
+        panic!("expected Faulted");
+    }
+}
+
+#[test]
+fn task_state_full_transition_chain() {
+    let intent = TaskIntent {
+        task_id: "t-chain".to_owned(),
+        objective: "chain test".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::InvokeTool]),
+        payload: json!({}),
+    };
+    let state = TaskState::Runnable(intent);
+    let state = state.transition_to_in_send().unwrap();
+    assert!(matches!(state, TaskState::InSend { .. }));
+    let state = state.transition_to_in_reply().unwrap();
+    assert!(matches!(state, TaskState::InReply { .. }));
+    let outcome = HarnessOutcome {
+        status: "ok".to_owned(),
+        output: json!({"result": "done"}),
+    };
+    let state = state.transition_to_completed(outcome).unwrap();
+    assert!(matches!(state, TaskState::Completed(_)));
+    assert!(state.is_terminal());
+}
+
+#[test]
+fn task_state_faulted_from_non_terminal_succeeds() {
+    let state = TaskState::InSend {
+        task_id: "t-fault".to_owned(),
+    };
+    let fault = Fault::Panic {
+        message: "oops".to_owned(),
+    };
+    let state = state.transition_to_faulted(fault);
+    assert!(matches!(state, TaskState::Faulted(_)));
+}
+
+#[test]
+fn task_state_faulted_from_terminal_is_noop() {
+    let state = TaskState::Completed(HarnessOutcome {
+        status: "ok".to_owned(),
+        output: json!({}),
+    });
+    let fault = Fault::Panic {
+        message: "late".to_owned(),
+    };
+    let state = state.transition_to_faulted(fault);
+    // Should remain Completed, not change to Faulted
+    assert!(matches!(state, TaskState::Completed(_)));
+}
+
+#[tokio::test]
+async fn task_supervisor_tracks_state_through_lifecycle() {
+    let clock = Arc::new(FixedClock::new(1_000_000));
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    kernel.register_pack(sample_pack()).unwrap();
+    kernel.register_harness_adapter(MockEmbeddedPiHarness {
+        seen_tasks: Mutex::new(Vec::new()),
+    });
+    let token = kernel.issue_token("sales-intel", "agent-1", 3600).unwrap();
+
+    let intent = TaskIntent {
+        task_id: "supervised-1".to_owned(),
+        objective: "supervised test".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::InvokeTool]),
+        payload: json!({"key": "value"}),
+    };
+
+    let mut supervisor = TaskSupervisor::new(intent);
+    assert!(supervisor.is_runnable());
+
+    let result = supervisor.execute(&kernel, "sales-intel", &token).await;
+    assert!(result.is_ok());
+    assert!(matches!(supervisor.state(), TaskState::Completed(_)));
+}
+
+#[tokio::test]
+async fn task_supervisor_faults_on_kernel_error() {
+    let clock = Arc::new(FixedClock::new(1_000_000));
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    kernel.register_pack(sample_pack()).unwrap();
+    // NOTE: no harness adapter registered -- execute_task will fail
+    let token = kernel.issue_token("sales-intel", "agent-1", 3600).unwrap();
+
+    let intent = TaskIntent {
+        task_id: "supervised-fail".to_owned(),
+        objective: "will fail".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::InvokeTool]),
+        payload: json!({}),
+    };
+
+    let mut supervisor = TaskSupervisor::new(intent);
+    let result = supervisor.execute(&kernel, "sales-intel", &token).await;
+    assert!(result.is_err());
+    assert!(matches!(supervisor.state(), TaskState::Faulted(_)));
+}
+
+#[test]
+fn task_supervisor_rejects_execute_after_completion() {
+    let intent = TaskIntent {
+        task_id: "t-double".to_owned(),
+        objective: "test".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::InvokeTool]),
+        payload: json!({}),
+    };
+    let mut supervisor = TaskSupervisor::new(intent);
+    supervisor.force_state(TaskState::Completed(HarnessOutcome {
+        status: "ok".to_owned(),
+        output: json!({}),
+    }));
+    assert!(!supervisor.is_runnable());
+}
+
+// ── Namespace tests ──────────────────────────────────────────────────
+
+#[test]
+fn register_pack_creates_namespace() {
+    let mut kernel = LoongClawKernel::new(StaticPolicyEngine::default());
+    kernel.register_pack(sample_pack()).unwrap();
+
+    let ns = kernel.get_namespace("sales-intel");
+    assert!(ns.is_some());
+    let ns = ns.unwrap();
+    assert_eq!(ns.pack_id, "sales-intel");
+    assert_eq!(ns.domain, "sales");
+    assert!(ns.granted_capabilities.contains(&Capability::InvokeTool));
+}
+
+#[test]
+fn get_namespace_returns_none_for_unregistered_pack() {
+    let kernel = LoongClawKernel::new(StaticPolicyEngine::default());
+    assert!(kernel.get_namespace("nonexistent").is_none());
+}
+
+#[test]
+fn namespace_membrane_defaults_to_pack_id() {
+    let mut kernel = LoongClawKernel::new(StaticPolicyEngine::default());
+    kernel.register_pack(sample_pack()).unwrap();
+
+    let ns = kernel.get_namespace("sales-intel").unwrap();
+    assert_eq!(ns.membrane, "sales-intel");
 }

@@ -1,0 +1,27 @@
+[package]
+name = "loongclaw-spec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+kernel = { package = "loongclaw-kernel", path = "../kernel" }
+loongclaw-protocol = { path = "../protocol" }
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+futures-util.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+wasmparser.workspace = true
+base64.workspace = true
+ed25519-dalek.workspace = true
+wasmtime.workspace = true
+
+[dev-dependencies]
+wat = "1"
+
+[lints]
+workspace = true

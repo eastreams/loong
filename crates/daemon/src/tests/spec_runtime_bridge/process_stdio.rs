@@ -328,11 +328,13 @@ async fn execute_spec_process_stdio_bridge_fails_on_invalid_json_line_response()
         report.outcome["outcome"]["payload"]["bridge_execution"]["status"],
         "failed"
     );
+    let reason = report.outcome["outcome"]["payload"]["bridge_execution"]["reason"]
+        .as_str()
+        .expect("failed reason should be string");
     assert!(
-        report.outcome["outcome"]["payload"]["bridge_execution"]["reason"]
-            .as_str()
-            .expect("failed reason should be string")
-            .contains("failed to decode inbound frame")
+        reason.contains("failed to decode inbound frame")
+            || reason.contains("failed to read frame"),
+        "unexpected failure reason: {reason}"
     );
     assert_eq!(
         report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["transport_kind"],

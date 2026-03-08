@@ -6,33 +6,10 @@ use std::{
     },
 };
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+// Re-export data types from contracts
+pub use loongclaw_contracts::{PolicyContext, PolicyDecision, PolicyRequest};
 
 use crate::{contracts::CapabilityToken, errors::PolicyError, pack::VerticalPackManifest};
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct PolicyContext {
-    pub conversation_hash: Option<String>,
-    pub call_depth: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PolicyRequest {
-    pub tool_name: String,
-    pub parameters: Value,
-    pub pack_id: String,
-    pub agent_id: String,
-    pub capabilities_used: BTreeSet<crate::contracts::Capability>,
-    pub context: PolicyContext,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PolicyDecision {
-    Allow,
-    Deny(String),
-    RequireApproval(String),
-}
 
 pub trait PolicyEngine: Send + Sync {
     fn issue_token(
@@ -53,6 +30,10 @@ pub trait PolicyEngine: Send + Sync {
 
     fn revoke_token(&self, token_id: &str) -> Result<(), PolicyError>;
 
+    fn revoke_generation(&self, _below: u64) {
+        // Default no-op
+    }
+
     fn check_tool_call(&self, _request: &PolicyRequest) -> PolicyDecision {
         PolicyDecision::Allow
     }
@@ -62,12 +43,30 @@ pub trait PolicyEngine: Send + Sync {
 pub struct StaticPolicyEngine {
     token_seq: AtomicU64,
     revoked_tokens: Mutex<BTreeSet<String>>,
+    generation: AtomicU64,
+    revoked_below_generation: AtomicU64,
 }
 
 impl StaticPolicyEngine {
     fn next_token_id(&self) -> String {
         let seq = self.token_seq.fetch_add(1, Ordering::Relaxed) + 1;
         format!("tok-{seq:016x}")
+    }
+
+    /// Revoke all tokens with generation <= `below`.
+    ///
+    /// Note: tokens issued concurrently during this call may land in the
+    /// revoked range. This is acceptable for StaticPolicyEngine (test/dev).
+    /// A production engine should use a lock or AcqRel ordering.
+    pub fn revoke_generation(&self, below: u64) {
+        self.revoked_below_generation
+            .fetch_max(below, Ordering::Relaxed);
+        // Fast-forward generation so newly issued tokens won't be immediately revoked.
+        self.generation.fetch_max(below, Ordering::Relaxed);
+    }
+
+    pub fn current_generation(&self) -> u64 {
+        self.generation.load(Ordering::Relaxed)
     }
 }
 
@@ -79,6 +78,7 @@ impl PolicyEngine for StaticPolicyEngine {
         now_epoch_s: u64,
         ttl_s: u64,
     ) -> Result<CapabilityToken, PolicyError> {
+        let gen = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
         Ok(CapabilityToken {
             token_id: self.next_token_id(),
             pack_id: pack.pack_id.clone(),
@@ -86,6 +86,8 @@ impl PolicyEngine for StaticPolicyEngine {
             allowed_capabilities: pack.granted_capabilities.clone(),
             issued_at_epoch_s: now_epoch_s,
             expires_at_epoch_s: now_epoch_s.saturating_add(ttl_s),
+            generation: gen,
+            membrane: None,
         })
     }
 
@@ -104,6 +106,13 @@ impl PolicyEngine for StaticPolicyEngine {
             })?
             .contains(&token.token_id)
         {
+            return Err(PolicyError::RevokedToken {
+                token_id: token.token_id.clone(),
+            });
+        }
+
+        let threshold = self.revoked_below_generation.load(Ordering::Relaxed);
+        if token.generation > 0 && token.generation <= threshold {
             return Err(PolicyError::RevokedToken {
                 token_id: token.token_id.clone(),
             });
@@ -144,5 +153,9 @@ impl PolicyEngine for StaticPolicyEngine {
             })?;
         revoked.insert(token_id.to_owned());
         Ok(())
+    }
+
+    fn revoke_generation(&self, below: u64) {
+        self.revoke_generation(below);
     }
 }

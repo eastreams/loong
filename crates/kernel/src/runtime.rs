@@ -1,40 +1,14 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+
+// Re-export data types from contracts
+pub use loongclaw_contracts::{
+    RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionOutcome, RuntimeExtensionRequest,
+    RuntimeTier,
+};
 
 use crate::errors::RuntimePlaneError;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RuntimeTier {
-    Core,
-    Extension,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RuntimeCoreRequest {
-    pub action: String,
-    pub payload: Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RuntimeCoreOutcome {
-    pub status: String,
-    pub payload: Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RuntimeExtensionRequest {
-    pub action: String,
-    pub payload: Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RuntimeExtensionOutcome {
-    pub status: String,
-    pub payload: Value,
-}
 
 #[async_trait]
 pub trait CoreRuntimeAdapter: Send + Sync {

@@ -1,8 +1,12 @@
 [workspace]
 members = [
+  "crates/contracts",
   "crates/kernel",
-  "crates/daemon",
   "crates/protocol",
+  "crates/spec",
+  "crates/bench",
+  "crates/app",
+  "crates/daemon",
 ]
 resolver = "2"
 
@@ -30,3 +34,10 @@ ed25519-dalek = "2.2"
 wasmtime = "41.0.4"
 rusqlite = { version = "0.32", features = ["bundled"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

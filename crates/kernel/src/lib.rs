@@ -18,6 +18,7 @@ pub mod plugin_ir;
 pub mod policy;
 pub mod policy_ext;
 pub mod runtime;
+pub mod task_supervisor;
 pub mod tool;
 
 pub use architecture::{
@@ -38,8 +39,8 @@ pub use connector::{
     CoreConnectorAdapter,
 };
 pub use contracts::{
-    Capability, CapabilityToken, ConnectorCommand, ConnectorOutcome, ExecutionRoute, HarnessKind,
-    HarnessOutcome, HarnessRequest, TaskIntent,
+    Capability, CapabilityToken, ConnectorCommand, ConnectorOutcome, ExecutionRoute, Fault,
+    HarnessKind, HarnessOutcome, HarnessRequest, Namespace, TaskIntent, TaskState,
 };
 pub use errors::{
     AuditError, ConnectorError, HarnessError, IntegrationError, KernelError, MemoryPlaneError,
@@ -69,6 +70,7 @@ pub use runtime::{
     CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
     RuntimeExtensionOutcome, RuntimeExtensionRequest, RuntimePlane, RuntimeTier,
 };
+pub use task_supervisor::TaskSupervisor;
 pub use tool::{
     CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter, ToolExtensionOutcome,
     ToolExtensionRequest, ToolPlane, ToolTier,

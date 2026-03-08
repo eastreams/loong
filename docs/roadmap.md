@@ -276,9 +276,9 @@ Delivered in current baseline:
 - one-command source install scripts (`scripts/install.sh`, `scripts/install.ps1`)
 - Cargo feature flags for MVP packaging controls
 - modular channel/provider architecture for extension-safe evolution:
-  - `mvp/channel/feishu/*` split into adapter/payload/webhook layers
+  - `app/channel/feishu/*` split into adapter/payload/webhook layers
   - Feishu encrypted webhook payload decrypt lane with signature verification
-  - `mvp/provider/*` split into policy/transport/shape layers
+  - `app/provider/*` split into policy/transport/shape layers
   - `ConversationRuntime` port for non-invasive backend extension and contract testing
 - daemon runtime entrypoint decomposition:
   - `crates/daemon/src/main.rs` reduced to CLI routing + bootstrap wiring
@@ -310,6 +310,60 @@ All roadmap stages must keep these gates green:
 3. Security regression set (approval, scan, bridge constraints)
 4. Audit schema stability checks for critical event kinds
 5. No hardcoded risk exceptions when config-driven alternatives exist
+
+## Discussion: Post-MVP Foundation Items
+
+These items emerged from the Phase 0–3 restructure (PR #15). They are candidates for near-term work but need prioritization discussion before commitment.
+
+### D1: Wire Phase 3 primitives into production paths
+
+Phase 3 added generation tokens, Fault, TaskState FSM, and Namespace as additive types with tests. They are not yet used in production code paths.
+
+Candidates:
+- Issue tokens with membrane scoped to Namespace during `bootstrap_kernel_context`
+- Use `TaskSupervisor` in spec runner's `execute_task` path for FSM-enforced lifecycle
+- Return `Fault` from kernel dispatch methods alongside `KernelError` for caller-side recovery matching
+- Use generation-based revocation for session rotation (e.g., Telegram channel restart)
+
+Trade-off: wiring now locks in the API surface; waiting allows more usage patterns to emerge.
+
+### D2: Persistent audit sink
+
+`InMemoryAuditSink` loses all audit events on process restart. For security-critical decisions (policy denials, token revocations) to be auditable post-incident, a durable sink is needed.
+
+Options:
+- SQLite audit table (reuse existing rusqlite dependency)
+- Append-only JSONL file (simplest, grep-friendly)
+- SIEM export lane (already planned in Stage 1)
+
+Trade-off: SQLite is queryable but adds schema migration burden. JSONL is zero-schema but harder to query.
+
+### D3: Make `persist_turn` async
+
+`persist_turn` currently uses `tokio::task::block_in_place` to bridge sync → async kernel calls. This works but blocks a tokio worker thread and panics on single-threaded runtimes.
+
+Approach: make `ConversationRuntime::persist_turn` async, update `ConversationOrchestrator` callers. Straightforward but touches 6+ files.
+
+Trade-off: low risk, moderate churn. Unblocks single-threaded runtime compatibility.
+
+### D4: Route `build_messages` memory window through kernel
+
+`build_messages_for_session` in the MVP provider layer couples system prompt construction with SQLite memory window loading. The memory-read portion should route through the kernel's memory plane for policy/audit coverage.
+
+Approach: split `build_messages_for_session` into prompt construction + kernel-routed memory read. Requires new `MemoryCoreRequest` operation (e.g., `read_window`).
+
+Trade-off: improves audit coverage for memory reads, but requires splitting a tightly coupled function.
+
+### D5: Upgrade `InMemoryAuditSink` to queryable snapshot
+
+Current `InMemoryAuditSink::snapshot()` returns a full clone of all events. For long-running processes, this grows unboundedly.
+
+Options:
+- Add ring-buffer with configurable capacity
+- Add filtered snapshot (by time range, event kind, pack_id)
+- Combine with D2 (persistent sink replaces in-memory for production)
+
+Trade-off: if D2 lands, this becomes test-only infrastructure. May not be worth optimizing independently.
 
 ## Current Priority Order
 

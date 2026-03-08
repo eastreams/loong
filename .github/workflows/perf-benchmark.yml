@@ -1,0 +1,36 @@
+name: perf-benchmark
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: perf-benchmark-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run programmatic pressure benchmark
+        run: ./scripts/benchmark_programmatic_pressure.sh
+
+      - name: Upload benchmark report
+        uses: actions/upload-artifact@v4
+        with:
+          name: programmatic-pressure-report-${{ github.run_id }}
+          path: target/benchmarks/programmatic-pressure-report.json
+          retention-days: 30

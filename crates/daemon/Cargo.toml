@@ -7,41 +7,36 @@ authors.workspace = true
 
 [features]
 default = ["mvp"]
-mvp = ["channel-cli", "channel-telegram", "channel-feishu", "config-toml", "memory-sqlite", "tool-shell", "tool-file", "provider-openai", "provider-volcengine"]
-channel-cli = []
-channel-telegram = []
-channel-feishu = ["dep:axum", "dep:aes", "dep:cbc"]
-provider-openai = []
-provider-volcengine = []
-config-toml = ["dep:toml"]
-memory-sqlite = ["dep:rusqlite"]
-tool-shell = []
-tool-file = []
+mvp = ["loongclaw-app/default"]
+channel-cli = ["loongclaw-app/channel-cli"]
+channel-telegram = ["loongclaw-app/channel-telegram"]
+channel-feishu = ["loongclaw-app/channel-feishu"]
+provider-openai = ["loongclaw-app/provider-openai"]
+provider-volcengine = ["loongclaw-app/provider-volcengine"]
+config-toml = ["loongclaw-app/config-toml"]
+memory-sqlite = ["loongclaw-app/memory-sqlite"]
+tool-shell = ["loongclaw-app/tool-shell"]
+tool-file = ["loongclaw-app/tool-file"]
 
 [dependencies]
-async-trait.workspace = true
 clap.workspace = true
 kernel = { package = "loongclaw-kernel", path = "../kernel" }
-loongclaw-protocol = { path = "../protocol" }
+loongclaw-bench = { path = "../bench" }
+loongclaw-app = { path = "../app", default-features = false }
+loongclaw-spec = { path = "../spec" }
 serde.workspace = true
 serde_json.workspace = true
-toml = { workspace = true, optional = true }
-reqwest.workspace = true
-futures-util.workspace = true
-sha2.workspace = true
 tokio.workspace = true
-wasmparser.workspace = true
-base64.workspace = true
-ed25519-dalek.workspace = true
-wasmtime.workspace = true
-rusqlite = { workspace = true, optional = true }
-axum = { workspace = true, optional = true }
-aes = { version = "0.8", optional = true }
-cbc = { version = "0.1", optional = true }
 
 [[bin]]
 name = "loongclawd"
 path = "src/main.rs"
 
 [dev-dependencies]
+base64.workspace = true
+ed25519-dalek.workspace = true
+sha2.workspace = true
 wat = "1"
+
+[lints]
+workspace = true

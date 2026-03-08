@@ -1,70 +1,31 @@
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    fs,
-    io::Write,
-    path::{Path, PathBuf},
-    process::Stdio,
-    sync::{Arc, Mutex, OnceLock},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+#[cfg(test)]
+use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeSet, fs, path::Path, sync::Arc};
 
-use async_trait::async_trait;
+#[cfg(test)]
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use clap::{Parser, Subcommand};
-use ed25519_dalek::{Signature as Ed25519Signature, Verifier, VerifyingKey};
-use futures_util::stream::{FuturesUnordered, StreamExt};
-use kernel::{
-    ArchitectureBoundaryPolicy, ArchitectureGuardReport, AuditEvent, AuditEventKind, AuditSink,
-    AutoProvisionAgent, AutoProvisionRequest, BootstrapPolicy, BootstrapReport,
-    BootstrapTaskStatus, BridgeSupportMatrix, Capability, Clock, CodebaseAwarenessConfig,
-    CodebaseAwarenessEngine, CodebaseAwarenessSnapshot, ConnectorAdapter, ConnectorCommand,
-    ConnectorError, ConnectorOutcome, CoreConnectorAdapter, CoreMemoryAdapter, CoreRuntimeAdapter,
-    CoreToolAdapter, ExecutionRoute, FixedClock, HarnessAdapter, HarnessError, HarnessKind,
-    HarnessOutcome, HarnessRequest, InMemoryAuditSink, IntegrationCatalog, IntegrationHotfix,
-    LoongClawKernel, MemoryCoreOutcome, MemoryCoreRequest, MemoryExtensionAdapter,
-    MemoryExtensionOutcome, MemoryExtensionRequest, PluginAbsorbReport, PluginActivationPlan,
-    PluginActivationStatus, PluginBootstrapExecutor, PluginBridgeKind, PluginDescriptor,
-    PluginScanReport, PluginScanner, PluginTranslationReport, PluginTranslator, ProvisionPlan,
-    RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter, RuntimeExtensionOutcome,
-    RuntimeExtensionRequest, StaticPolicyEngine, SystemClock, TaskIntent, ToolCoreOutcome,
-    ToolCoreRequest, ToolExtensionAdapter, ToolExtensionOutcome, ToolExtensionRequest,
-    VerticalPackManifest,
-};
-use loongclaw_protocol::{
-    JsonLineTransport, OutboundFrame, ProtocolRouter, RouteAuthorizationRequest, Transport,
-    TransportInfo,
-};
-use reqwest::Method;
-use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use kernel::{AuditEventKind, ExecutionRoute, HarnessKind, PluginBridgeKind, VerticalPackManifest};
+use kernel::{Capability, ConnectorCommand, FixedClock, InMemoryAuditSink, TaskIntent};
+use serde::Serialize;
 use serde_json::{json, Value};
+#[cfg(test)]
 use sha2::{Digest, Sha256};
-use tokio::{
-    io::AsyncReadExt,
-    process::Command as TokioCommand,
-    time::{sleep, timeout, Instant as TokioInstant},
-};
-use wasmparser::{Parser as WasmParser, Payload as WasmPayload};
-use wasmtime::{
-    Config as WasmtimeConfig, Engine as WasmtimeEngine, Linker as WasmtimeLinker,
-    Module as WasmtimeModule, Store as WasmtimeStore,
-};
+#[cfg(test)]
+use tokio::time::sleep;
 
-const DEFAULT_PACK_ID: &str = "dev-automation";
-const DEFAULT_AGENT_ID: &str = "agent-dev-01";
-static BUNDLED_APPROVAL_RISK_PROFILE: OnceLock<ApprovalRiskProfile> = OnceLock::new();
-static BUNDLED_SECURITY_SCAN_PROFILE: OnceLock<SecurityScanProfile> = OnceLock::new();
-static WEBHOOK_TEST_RETRY_STATE: OnceLock<Mutex<BTreeMap<String, usize>>> = OnceLock::new();
-type CliResult<T> = Result<T, String>;
+use loongclaw_app as mvp;
+pub(crate) use loongclaw_spec::spec_execution::*;
+pub(crate) use loongclaw_spec::spec_runtime::*;
+use loongclaw_spec::{kernel_bootstrap, CliResult, DEFAULT_AGENT_ID, DEFAULT_PACK_ID};
 
-mod mvp;
-mod pressure_benchmark;
-mod programmatic;
-use pressure_benchmark::{
+use loongclaw_bench::{
     run_programmatic_pressure_baseline_lint_cli, run_programmatic_pressure_benchmark_cli,
 };
-use programmatic::{
-    acquire_programmatic_circuit_slot, execute_programmatic_tool_call,
-    record_programmatic_circuit_outcome,
+#[cfg(test)]
+pub(crate) use loongclaw_spec::programmatic::{
+    acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
 };
 #[cfg(test)]
 mod tests;
@@ -196,8 +157,6 @@ enum Commands {
     },
 }
 
-include!("spec_runtime.inc.rs");
-
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -264,7 +223,7 @@ async fn main() {
 }
 
 async fn run_demo() -> CliResult<()> {
-    let kernel = bootstrap_kernel_default();
+    let kernel = kernel_bootstrap::KernelBuilder::default().build();
     let token = kernel
         .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 300)
         .map_err(|error| format!("token issue failed: {error}"))?;
@@ -307,7 +266,7 @@ async fn run_demo() -> CliResult<()> {
 async fn run_task_cli(objective: &str, payload_raw: &str) -> CliResult<()> {
     let payload = parse_json_payload(payload_raw, "run-task payload")?;
 
-    let kernel = bootstrap_kernel_default();
+    let kernel = kernel_bootstrap::KernelBuilder::default().build();
     let token = kernel
         .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
         .map_err(|error| format!("token issue failed: {error}"))?;
@@ -338,7 +297,7 @@ async fn run_task_cli(objective: &str, payload_raw: &str) -> CliResult<()> {
 async fn invoke_connector_cli(operation: &str, payload_raw: &str) -> CliResult<()> {
     let payload = parse_json_payload(payload_raw, "invoke-connector payload")?;
 
-    let kernel = bootstrap_kernel_default();
+    let kernel = kernel_bootstrap::KernelBuilder::default().build();
     let token = kernel
         .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
         .map_err(|error| format!("token issue failed: {error}"))?;
@@ -367,7 +326,10 @@ async fn run_audit_demo() -> CliResult<()> {
     let fixed_clock = Arc::new(FixedClock::new(1_700_000_000));
     let audit_sink = Arc::new(InMemoryAuditSink::default());
 
-    let kernel = bootstrap_kernel_with_runtime(fixed_clock.clone(), audit_sink.clone());
+    let kernel = kernel_bootstrap::KernelBuilder::default()
+        .clock(fixed_clock.clone())
+        .audit(audit_sink.clone())
+        .build();
 
     let token = kernel
         .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 30)
@@ -507,8 +469,6 @@ async fn run_feishu_serve_cli(
     mvp::channel::run_feishu_channel(config_path, bind_override, path_override).await
 }
 
-include!("spec_execution.inc.rs");
-
 fn parse_json_payload(raw: &str, context: &str) -> CliResult<Value> {
     serde_json::from_str(raw).map_err(|error| format!("invalid JSON for {context}: {error}"))
 }
@@ -531,73 +491,4 @@ fn write_json_file<T: Serialize>(path: &str, value: &T) -> CliResult<()> {
     fs::write(path, serialized)
         .map_err(|error| format!("write JSON output file failed: {error}"))?;
     Ok(())
-}
-
-fn bootstrap_kernel_default() -> LoongClawKernel<StaticPolicyEngine> {
-    let mut kernel = LoongClawKernel::new(StaticPolicyEngine::default());
-    register_builtin_adapters(&mut kernel);
-    kernel
-        .register_pack(default_pack_manifest())
-        .expect("pack registration failed");
-    kernel
-}
-
-fn bootstrap_kernel_with_runtime(
-    clock: Arc<dyn Clock>,
-    audit: Arc<dyn AuditSink>,
-) -> LoongClawKernel<StaticPolicyEngine> {
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
-    register_builtin_adapters(&mut kernel);
-    kernel
-        .register_pack(default_pack_manifest())
-        .expect("pack registration failed");
-    kernel
-}
-
-fn register_builtin_adapters(kernel: &mut LoongClawKernel<StaticPolicyEngine>) {
-    kernel.register_harness_adapter(EmbeddedPiHarness {
-        seen: Mutex::new(Vec::new()),
-    });
-    kernel.register_connector(WebhookConnector);
-    kernel.register_core_connector_adapter(CrmCoreConnector);
-    kernel.register_core_connector_adapter(CrmGrpcCoreConnector);
-    kernel.register_connector_extension_adapter(ShieldedConnectorExtension);
-
-    kernel.register_core_runtime_adapter(NativeCoreRuntime);
-    kernel.register_core_runtime_adapter(FallbackCoreRuntime);
-    kernel.register_runtime_extension_adapter(AcpBridgeRuntimeExtension);
-
-    kernel.register_core_tool_adapter(CoreToolRuntime);
-    kernel.register_tool_extension_adapter(SqlAnalyticsToolExtension);
-
-    kernel.register_core_memory_adapter(KvCoreMemory);
-    kernel.register_memory_extension_adapter(VectorIndexMemoryExtension);
-}
-
-fn default_pack_manifest() -> VerticalPackManifest {
-    VerticalPackManifest {
-        pack_id: DEFAULT_PACK_ID.to_owned(),
-        domain: "engineering".to_owned(),
-        version: "0.1.0".to_owned(),
-        default_route: ExecutionRoute {
-            harness_kind: HarnessKind::EmbeddedPi,
-            adapter: Some("pi-local".to_owned()),
-        },
-        allowed_connectors: BTreeSet::from([
-            "webhook".to_owned(),
-            "crm".to_owned(),
-            "erp".to_owned(),
-        ]),
-        granted_capabilities: BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::InvokeConnector,
-            Capability::MemoryRead,
-            Capability::MemoryWrite,
-            Capability::ObserveTelemetry,
-        ]),
-        metadata: BTreeMap::from([
-            ("owner".to_owned(), "platform-team".to_owned()),
-            ("stage".to_owned(), "prototype".to_owned()),
-        ]),
-    }
 }

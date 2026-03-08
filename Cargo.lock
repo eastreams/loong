@@ -1340,7 +1340,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
-name = "loongclaw-daemon"
+name = "loongclaw-app"
 version = "0.1.0"
 dependencies = [
  "aes",
@@ -1348,11 +1348,8 @@ dependencies = [
  "axum",
  "base64",
  "cbc",
- "clap",
- "ed25519-dalek",
- "futures-util",
+ "loongclaw-contracts",
  "loongclaw-kernel",
- "loongclaw-protocol",
  "reqwest",
  "rusqlite",
  "serde",
@@ -1360,8 +1357,44 @@ dependencies = [
  "sha2",
  "tokio",
  "toml 0.8.23",
- "wasmparser 0.240.0",
- "wasmtime",
+]
+
+[[package]]
+name = "loongclaw-bench"
+version = "0.1.0"
+dependencies = [
+ "loongclaw-spec",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+]
+
+[[package]]
+name = "loongclaw-contracts"
+version = "0.1.0"
+dependencies = [
+ "semver",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "loongclaw-daemon"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "clap",
+ "ed25519-dalek",
+ "loongclaw-app",
+ "loongclaw-bench",
+ "loongclaw-kernel",
+ "loongclaw-spec",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
  "wat",
 ]
 
@@ -1370,6 +1403,7 @@ name = "loongclaw-kernel"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "loongclaw-contracts",
  "proptest",
  "semver",
  "serde",
@@ -1387,6 +1421,26 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "loongclaw-spec"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "ed25519-dalek",
+ "futures-util",
+ "loongclaw-kernel",
+ "loongclaw-protocol",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "wasmparser 0.240.0",
+ "wasmtime",
+ "wat",
 ]
 
 [[package]]

@@ -1,40 +1,13 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+
+// Re-export data types from contracts
+pub use loongclaw_contracts::{
+    ToolCoreOutcome, ToolCoreRequest, ToolExtensionOutcome, ToolExtensionRequest, ToolTier,
+};
 
 use crate::errors::ToolPlaneError;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ToolTier {
-    Core,
-    Extension,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ToolCoreRequest {
-    pub tool_name: String,
-    pub payload: Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ToolCoreOutcome {
-    pub status: String,
-    pub payload: Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ToolExtensionRequest {
-    pub extension_action: String,
-    pub payload: Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ToolExtensionOutcome {
-    pub status: String,
-    pub payload: Value,
-}
 
 #[async_trait]
 pub trait CoreToolAdapter: Send + Sync {

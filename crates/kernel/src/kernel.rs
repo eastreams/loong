@@ -63,6 +63,7 @@ struct PlaneInvocationRecord<'a> {
 pub struct LoongClawKernel<P: PolicyEngine> {
     policy: P,
     packs: BTreeMap<String, VerticalPackManifest>,
+    namespaces: BTreeMap<String, loongclaw_contracts::Namespace>,
     harness: HarnessBroker,
     connectors: ConnectorRegistry,
     connector_plane: ConnectorPlane,
@@ -86,6 +87,7 @@ impl<P: PolicyEngine> LoongClawKernel<P> {
         Self {
             policy,
             packs: BTreeMap::new(),
+            namespaces: BTreeMap::new(),
             harness: HarnessBroker::new(),
             connectors: ConnectorRegistry::new(),
             connector_plane: ConnectorPlane::new(),
@@ -104,8 +106,20 @@ impl<P: PolicyEngine> LoongClawKernel<P> {
         if self.packs.contains_key(&pack.pack_id) {
             return Err(KernelError::DuplicatePack(pack.pack_id));
         }
+        let namespace = loongclaw_contracts::Namespace {
+            pack_id: pack.pack_id.clone(),
+            domain: pack.domain.clone(),
+            membrane: pack.pack_id.clone(),
+            default_route: pack.default_route.clone(),
+            granted_capabilities: pack.granted_capabilities.clone(),
+        };
+        self.namespaces.insert(pack.pack_id.clone(), namespace);
         self.packs.insert(pack.pack_id.clone(), pack);
         Ok(())
+    }
+
+    pub fn get_namespace(&self, pack_id: &str) -> Option<&loongclaw_contracts::Namespace> {
+        self.namespaces.get(pack_id)
     }
 
     pub fn register_policy_extension<E: PolicyExtension + 'static>(&mut self, extension: E) {
@@ -230,6 +244,10 @@ impl<P: PolicyEngine> LoongClawKernel<P> {
             },
         ))?;
         Ok(())
+    }
+
+    pub fn revoke_generation(&self, below: u64) {
+        self.policy.revoke_generation(below);
     }
 
     pub fn record_audit_event(

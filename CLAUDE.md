@@ -2,59 +2,70 @@
 
 This document is intentionally mirrored in `CLAUDE.md` and `AGENTS.md`.
 
-## 1. Architecture Contract
+This file is the **map** — keep it short (~100 lines). Deeper context lives in `docs/`.
+
+## 1. Start Here
+
+- [Core Beliefs](docs/design-docs/core-beliefs.md) — 10 golden principles
+- [ARCHITECTURE.md](ARCHITECTURE.md) — 7-crate DAG, data flow, "where does X live"
+- [Quality Score](docs/QUALITY_SCORE.md) — per-crate grades
+- [Docs Index](docs/index.md) — full documentation map
+
+## 2. Architecture Contract
 
 ```text
-loongclawd (bin)
-  -> crates/daemon
-       -> crates/kernel
-       -> crates/protocol
-
-crates/kernel   -> (no internal loongclaw crate deps)
-crates/protocol -> (no daemon/kernel imports)
+contracts (leaf — zero internal deps)
+├── kernel → contracts
+├── protocol (independent leaf)
+├── app → contracts, kernel
+├── spec → contracts, kernel, protocol
+├── bench → contracts, kernel, spec
+└── daemon (binary) → all of the above
 ```
 
-Non-negotiable boundaries:
-- `crates/kernel` owns policy, pack boundaries, and execution-plane contracts.
-- `crates/protocol` is transport/routing foundation only; keep it runtime-business-logic free.
-- `crates/daemon` composes runtime channels/tools/providers and may depend on `kernel` + `protocol`.
-- Cross-layer behavior changes must include tests in the affected crate(s).
+Non-negotiable: no dependency cycles. See [Core Beliefs](docs/design-docs/core-beliefs.md).
 
-## 2. Commands Cheat Sheet
+## 3. Commands
 
-- Build workspace: `cargo build --workspace`
 - Format check: `cargo fmt --all -- --check`
-- Lint: `cargo clippy --workspace --all-targets --all-features`
 - Strict lint: `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- Test workspace: `cargo test --workspace`
 - Test all features: `cargo test --workspace --all-features`
 - Canonical verify: `task verify`
 - Extended verify: `task verify:full`
-- Run daemon help: `cargo run -p loongclaw-daemon --bin loongclawd -- --help`
-- Run install script: `./scripts/install.sh --setup`
-
-## 3. Code Generation Workflow
-
-No generated source is required in the current Rust workspace.
-
-If code generation is introduced later:
-- Document generator entrypoints and output files here.
-- Add regeneration commands to `Taskfile.yml`.
-- Ensure generated artifacts are reproducible and included/excluded intentionally.
 
 ## 4. Non-Negotiable Rules
 
-- Keep kernel contract behavior backward-compatible unless an explicit breaking-change decision is documented.
-- Do not bypass policy checks for tool/runtime/connector actions.
-- Keep strict lint and all-feature tests healthy; run them before high-risk merges.
+- Kernel contracts are backward-compatible. No breaking changes without documented decision.
+- All execution paths route through kernel capability/policy/audit. No shadow paths.
+- Strict lint and all-feature tests pass at every commit.
 - Never commit credentials, tokens, or private endpoints.
 - Keep `CLAUDE.md` and `AGENTS.md` mirrored in the same change.
+- **Before every commit**, run CI-parity checks. Any manual edit after fmt must be re-checked.
 
 ## 5. Verification Gates
 
-- Default gate before completion: `task verify`.
-- For runtime/policy/benchmark changes: run `task verify:full`.
-- CI enforces:
-  - `cargo fmt --all -- --check`
-  - `cargo clippy --workspace --all-targets --all-features`
-  - `cargo test --workspace`
+CI enforces:
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo test --workspace`
+- `cargo test --workspace --all-features`
+
+## 6. Pre-Commit Hook
+
+```bash
+cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+```
+
+Runs fmt + clippy before each commit, matching CI exactly.
+
+## 7. Where to Look Next
+
+| Need | Go to |
+|------|-------|
+| Architectural decisions | `docs/design-docs/` |
+| Active implementation plans | `docs/exec-plans/active/` |
+| Known tech debt | `docs/exec-plans/tech-debt-tracker.md` |
+| Reference material | `docs/references/` |
+| Roadmap | `docs/roadmap.md` |
+| Reliability invariants | `docs/RELIABILITY.md` |
+| Contributing recipes | `CONTRIBUTING.md` |
