@@ -43,6 +43,7 @@ Supported checks:
 - `min_peak_in_flight`
 - `max_circuit_open_error_ratio`
 - `max_half_open_p95_ms`
+- `expected_schema_fingerprint` (step output schema contract)
 
 Per-scenario drift strategy (`tolerance`) is also supported:
 
@@ -55,6 +56,13 @@ Gate behavior:
 - pass: all configured checks pass per scenario
 - fail: any configured check fails
 - strict mode (`--enforce-gate`): missing baseline for a scenario fails the run
+
+Schema fingerprint behavior:
+
+- Each `spec_run` scenario derives a deterministic fingerprint from `outcome.step_outputs` schema.
+- The hash is shape-based (type/schema), not value-based, so dynamic payload values do not cause drift.
+- Baseline `expected_schema_fingerprint` enforces schema compatibility across refactors.
+- If multiple schema variants appear across iterations, the report emits a `multi:<sha256>` aggregate fingerprint.
 
 ### Drift Example
 
@@ -109,6 +117,7 @@ The report includes:
 - throughput (`connector_calls_total / total_duration`)
 - scheduler aggregates (`peak_in_flight`, budget reductions/increases, wait cycles)
 - circuit transition timing (`half_open_transition_ms`)
+- per-scenario `schema_fingerprint` for contract drift detection
 - structured gate checks and pass/fail status
 
 Use the report as the machine-readable artifact for performance regression audits.

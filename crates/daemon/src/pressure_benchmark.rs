@@ -1,5 +1,6 @@
 use super::*;
 use serde::de::DeserializeOwned;
+use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
 
 const DEFAULT_PRESSURE_ITERATIONS: usize = 12;
@@ -82,6 +83,8 @@ struct ProgrammaticPressureScenarioThresholds {
     #[serde(default)]
     max_half_open_p95_ms: Option<f64>,
     #[serde(default)]
+    expected_schema_fingerprint: Option<String>,
+    #[serde(default)]
     tolerance: ProgrammaticPressureGateTolerance,
 }
 
@@ -123,6 +126,8 @@ struct ProgrammaticPressureScenarioReport {
     throughput_rps: f64,
     latency_ms: NumericStats,
     circuit_open_error_ratio: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schema_fingerprint: Option<String>,
     scheduler: Option<ProgrammaticSchedulerAggregate>,
     circuit: Option<ProgrammaticCircuitAggregate>,
     error_codes: BTreeMap<String, usize>,
@@ -182,6 +187,8 @@ struct ProgrammaticPressureGateCheck {
     passed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     baseline_threshold: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -191,6 +198,7 @@ struct ScenarioRunSample {
     blocked: bool,
     connector_calls: usize,
     error_codes: BTreeMap<String, usize>,
+    schema_fingerprint: Option<String>,
     scheduler: Option<SchedulerSnapshot>,
     half_open_transition_ms: Option<f64>,
     closed_after_recovery: Option<bool>,
@@ -425,6 +433,7 @@ async fn run_spec_pressure_once(
         .get("connector_calls")
         .and_then(Value::as_u64)
         .unwrap_or(0) as usize;
+    sample.schema_fingerprint = extract_programmatic_schema_fingerprint(&report.outcome);
 
     collect_spec_step_metrics(&report.outcome, &mut sample);
 
@@ -616,6 +625,7 @@ fn summarize_programmatic_pressure_scenario(
 
     let scheduler = build_scheduler_aggregate(&samples);
     let circuit = build_circuit_aggregate(&samples);
+    let schema_fingerprint = aggregate_schema_fingerprint(&samples);
 
     let mut report = ProgrammaticPressureScenarioReport {
         name: scenario.name.clone(),
@@ -632,6 +642,7 @@ fn summarize_programmatic_pressure_scenario(
         throughput_rps,
         latency_ms,
         circuit_open_error_ratio,
+        schema_fingerprint,
         scheduler,
         circuit,
         error_codes,
@@ -815,6 +826,7 @@ fn evaluate_scenario_gate(
                 observed: 0.0,
                 passed: false,
                 baseline_threshold: None,
+                detail: None,
             });
         } else {
             warnings.push("baseline thresholds missing for this scenario".to_owned());
@@ -911,6 +923,14 @@ fn evaluate_scenario_gate(
             enforce_gate,
         );
     }
+    if let Some(expected) = thresholds.expected_schema_fingerprint.as_deref() {
+        push_schema_fingerprint_gate_check(
+            &mut checks,
+            &mut warnings,
+            report.schema_fingerprint.as_deref(),
+            expected,
+        );
+    }
 
     ProgrammaticPressureScenarioGate {
         passed: checks.iter().all(|check| check.passed),
@@ -935,6 +955,7 @@ fn push_max_gate_check(
         observed,
         passed: observed <= effective_threshold,
         baseline_threshold: Some(threshold),
+        detail: None,
     });
 }
 
@@ -953,6 +974,7 @@ fn push_min_gate_check(
         observed,
         passed: observed >= effective_threshold,
         baseline_threshold: Some(threshold),
+        detail: None,
     });
 }
 
@@ -984,6 +1006,7 @@ fn push_optional_max_gate_check(
                     observed: f64::INFINITY,
                     passed: false,
                     baseline_threshold: Some(threshold),
+                    detail: None,
                 });
             } else {
                 warnings.push(format!("metric {metric} not observed in report"));
@@ -1012,6 +1035,7 @@ fn push_optional_min_gate_check(
                     observed: 0.0,
                     passed: false,
                     baseline_threshold: Some(threshold),
+                    detail: None,
                 });
             } else {
                 warnings.push(format!("metric {metric} not observed in report"));
@@ -1028,6 +1052,102 @@ fn normalized_gate_tolerance(
         min_ratio: normalize_ratio_tolerance(tolerance.min_ratio),
         latency_ms: normalize_non_negative_tolerance(tolerance.latency_ms),
     }
+}
+
+fn push_schema_fingerprint_gate_check(
+    checks: &mut Vec<ProgrammaticPressureGateCheck>,
+    warnings: &mut Vec<String>,
+    observed: Option<&str>,
+    expected: &str,
+) {
+    match observed {
+        Some(actual) => {
+            let passed = actual == expected;
+            checks.push(ProgrammaticPressureGateCheck {
+                metric: "schema_fingerprint".to_owned(),
+                comparator: "==".to_owned(),
+                threshold: 1.0,
+                observed: if passed { 1.0 } else { 0.0 },
+                passed,
+                baseline_threshold: Some(1.0),
+                detail: Some(format!("expected={expected}, observed={actual}")),
+            });
+        }
+        None => {
+            checks.push(ProgrammaticPressureGateCheck {
+                metric: "schema_fingerprint".to_owned(),
+                comparator: "==".to_owned(),
+                threshold: 1.0,
+                observed: 0.0,
+                passed: false,
+                baseline_threshold: Some(1.0),
+                detail: Some(format!("expected={expected}, observed=<missing>")),
+            });
+            warnings.push("schema fingerprint is unavailable for this scenario report".to_owned());
+        }
+    }
+}
+
+fn aggregate_schema_fingerprint(samples: &[ScenarioRunSample]) -> Option<String> {
+    let mut unique = samples
+        .iter()
+        .filter_map(|sample| sample.schema_fingerprint.clone())
+        .collect::<Vec<_>>();
+    unique.sort();
+    unique.dedup();
+    match unique.len() {
+        0 => None,
+        1 => unique.into_iter().next(),
+        _ => {
+            let joined = unique.join("|");
+            Some(format!("multi:{}", sha256_hex(&joined)))
+        }
+    }
+}
+
+fn extract_programmatic_schema_fingerprint(outcome: &Value) -> Option<String> {
+    let step_outputs = outcome.get("step_outputs")?;
+    let descriptor = schema_descriptor(step_outputs);
+    let encoded = serde_json::to_string(&descriptor).ok()?;
+    Some(sha256_hex(&encoded))
+}
+
+fn schema_descriptor(value: &Value) -> Value {
+    match value {
+        Value::Null => Value::String("null".to_owned()),
+        Value::Bool(_) => Value::String("bool".to_owned()),
+        Value::Number(_) => Value::String("number".to_owned()),
+        Value::String(_) => Value::String("string".to_owned()),
+        Value::Array(items) => {
+            let mut normalized = items
+                .iter()
+                .map(schema_descriptor)
+                .map(|schema| {
+                    let key = serde_json::to_string(&schema).unwrap_or_else(|_| "null".to_owned());
+                    (key, schema)
+                })
+                .collect::<Vec<_>>();
+            normalized.sort_by(|left, right| left.0.cmp(&right.0));
+            normalized.dedup_by(|left, right| left.0 == right.0);
+            Value::Object(serde_json::Map::from_iter([(
+                "array".to_owned(),
+                Value::Array(normalized.into_iter().map(|(_, schema)| schema).collect()),
+            )]))
+        }
+        Value::Object(entries) => {
+            let ordered = entries
+                .iter()
+                .map(|(key, entry)| (key.clone(), schema_descriptor(entry)))
+                .collect::<BTreeMap<_, _>>();
+            Value::Object(serde_json::Map::from_iter(ordered))
+        }
+    }
+}
+
+fn sha256_hex(input: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 fn normalize_ratio_tolerance(value: f64) -> f64 {
@@ -1171,6 +1291,56 @@ mod tests {
     }
 
     #[test]
+    fn schema_fingerprint_is_stable_for_same_shape() {
+        let left = json!({
+            "step_outputs": {
+                "fanout": {
+                    "calls": [
+                        {"call_id":"a","status":"ok","execution":{"attempts":1,"retries":0}},
+                        {"call_id":"b","status":"error","error_code":"connector_execution_error"}
+                    ],
+                    "scheduler": {
+                        "peak_in_flight": 2,
+                        "budget_reductions": 1
+                    }
+                }
+            }
+        });
+        let right = json!({
+            "step_outputs": {
+                "fanout": {
+                    "calls": [
+                        {"call_id":"x","status":"ok","execution":{"attempts":9,"retries":3}},
+                        {"call_id":"y","status":"error","error_code":"circuit_open"}
+                    ],
+                    "scheduler": {
+                        "peak_in_flight": 8,
+                        "budget_reductions": 0
+                    }
+                }
+            }
+        });
+        let changed_shape = json!({
+            "step_outputs": {
+                "fanout": {
+                    "calls": [
+                        {"call_id":"z","status":"ok","execution":{"attempts":1,"new_field":true}}
+                    ]
+                }
+            }
+        });
+
+        let left_hash =
+            extract_programmatic_schema_fingerprint(&left).expect("left fingerprint should exist");
+        let right_hash = extract_programmatic_schema_fingerprint(&right)
+            .expect("right fingerprint should exist");
+        let changed_hash = extract_programmatic_schema_fingerprint(&changed_shape)
+            .expect("changed fingerprint should exist");
+        assert_eq!(left_hash, right_hash);
+        assert_ne!(left_hash, changed_hash);
+    }
+
+    #[test]
     fn scenario_gate_fails_when_threshold_regresses() {
         let report = ProgrammaticPressureScenarioReport {
             name: "adaptive".to_owned(),
@@ -1195,6 +1365,7 @@ mod tests {
                 p99: Some(29.8),
             },
             circuit_open_error_ratio: 0.0,
+            schema_fingerprint: Some("schema-a".to_owned()),
             scheduler: Some(ProgrammaticSchedulerAggregate {
                 observed_runs: 10,
                 peak_in_flight_max: 3,
@@ -1222,6 +1393,7 @@ mod tests {
             min_peak_in_flight: Some(2.0),
             max_circuit_open_error_ratio: Some(0.2),
             max_half_open_p95_ms: None,
+            expected_schema_fingerprint: None,
             tolerance: ProgrammaticPressureGateTolerance::default(),
         };
 
@@ -1231,6 +1403,68 @@ mod tests {
             .checks
             .iter()
             .any(|check| { check.metric == "error_rate" && !check.passed }));
+    }
+
+    #[test]
+    fn scenario_gate_fails_on_schema_fingerprint_mismatch() {
+        let report = ProgrammaticPressureScenarioReport {
+            name: "schema".to_owned(),
+            description: None,
+            scenario_kind: "spec_run".to_owned(),
+            iterations: 4,
+            warmup_iterations: 1,
+            success_runs: 4,
+            failed_runs: 0,
+            blocked_runs: 0,
+            error_rate: 0.0,
+            blocked_rate: 0.0,
+            connector_calls_total: 8,
+            throughput_rps: 16.0,
+            latency_ms: NumericStats {
+                count: 4,
+                min: Some(10.0),
+                max: Some(20.0),
+                avg: Some(14.0),
+                p50: Some(13.0),
+                p95: Some(19.0),
+                p99: Some(19.8),
+            },
+            circuit_open_error_ratio: 0.0,
+            schema_fingerprint: Some("observed-schema".to_owned()),
+            scheduler: None,
+            circuit: None,
+            error_codes: BTreeMap::new(),
+            gate: ProgrammaticPressureScenarioGate {
+                passed: true,
+                checks: Vec::new(),
+                warnings: Vec::new(),
+            },
+        };
+
+        let thresholds = ProgrammaticPressureScenarioThresholds {
+            max_error_rate: Some(0.0),
+            max_p95_latency_ms: Some(100.0),
+            max_p99_latency_ms: Some(100.0),
+            min_throughput_rps: Some(1.0),
+            min_peak_in_flight: None,
+            max_circuit_open_error_ratio: Some(0.2),
+            max_half_open_p95_ms: None,
+            expected_schema_fingerprint: Some("expected-schema".to_owned()),
+            tolerance: ProgrammaticPressureGateTolerance::default(),
+        };
+
+        let gate = evaluate_scenario_gate(&report, Some(&thresholds), true);
+        let schema_check = gate
+            .checks
+            .iter()
+            .find(|check| check.metric == "schema_fingerprint")
+            .expect("schema check should be present");
+        assert!(!schema_check.passed);
+        assert!(schema_check
+            .detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains("expected=expected-schema"));
     }
 
     #[test]
@@ -1258,6 +1492,7 @@ mod tests {
                 p99: Some(112.0),
             },
             circuit_open_error_ratio: 0.0,
+            schema_fingerprint: Some("schema-a".to_owned()),
             scheduler: Some(ProgrammaticSchedulerAggregate {
                 observed_runs: 10,
                 peak_in_flight_max: 2,
@@ -1285,6 +1520,7 @@ mod tests {
             min_peak_in_flight: Some(2.0),
             max_circuit_open_error_ratio: Some(0.1),
             max_half_open_p95_ms: None,
+            expected_schema_fingerprint: None,
             tolerance: ProgrammaticPressureGateTolerance {
                 max_ratio: 0.05,
                 min_ratio: 0.10,
