@@ -140,6 +140,12 @@ Delivered in current baseline:
     - protocol route authorization gate before process execution
     - response contract checks (method/id must match request)
     - bounded send/close/recv/exit timeouts (`process_timeout_ms`)
+  - daemon `http_json` bridge hardening:
+    - protocol route authorization gate before HTTP request
+    - protocol runtime evidence (`request_method/id`, required capability)
+    - optional strict response contract mode (`http_enforce_protocol_contract`)
+      validating response `method` + `id`
+    - bounded HTTP timeout parsing with deterministic clamp (`http_timeout_ms`)
   - strict/lenient custom route control to avoid ad-hoc string dispatch at call sites
   - linked in-memory `ChannelTransport` primitive with:
     - bounded queue backpressure

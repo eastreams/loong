@@ -1432,12 +1432,60 @@ fn execute_http_json_bridge(
         }
     };
 
-    let timeout_ms = provider
-        .metadata
-        .get("http_timeout_ms")
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(8_000);
+    let timeout_ms = parse_http_timeout_ms(provider);
+    let enforce_protocol_contract = parse_http_enforce_protocol_contract(provider);
+    let request_method = "tools/call".to_owned();
+    let request_id = Some(format!(
+        "{}:{}:{}",
+        provider.provider_id, channel.channel_id, command.operation
+    ));
+    let router = ProtocolRouter::default();
+    let resolved_route = match router.resolve(&request_method) {
+        Ok(route) => route,
+        Err(error) => {
+            execution["status"] = Value::String("blocked".to_owned());
+            execution["reason"] = Value::String(format!(
+                "http_json protocol method {request_method} is invalid: {error}"
+            ));
+            execution["runtime"] = json!({
+                "executor": "http_json_reqwest",
+                "method": method_label,
+                "url": channel.endpoint,
+                "request_method": request_method,
+                "request_id": request_id,
+                "timeout_ms": timeout_ms,
+                "enforce_protocol_contract": enforce_protocol_contract,
+            });
+            return execution;
+        }
+    };
+    let protocol_capabilities = protocol_capabilities_for_connector_command(command);
+    let required_route_capability = resolved_route.policy.required_capability.clone();
+    if let Err(error) = router.authorize(
+        &resolved_route,
+        &RouteAuthorizationRequest {
+            authenticated: true,
+            capabilities: protocol_capabilities.clone(),
+        },
+    ) {
+        execution["status"] = Value::String("blocked".to_owned());
+        execution["reason"] = Value::String(format!(
+            "http_json protocol route authorization failed: {error}"
+        ));
+        execution["runtime"] = json!({
+            "executor": "http_json_reqwest",
+            "method": method_label,
+            "url": channel.endpoint,
+            "request_method": request_method,
+            "request_id": request_id,
+            "timeout_ms": timeout_ms,
+            "enforce_protocol_contract": enforce_protocol_contract,
+            "protocol_route": resolved_route.method(),
+            "protocol_required_capability": required_route_capability.clone(),
+            "protocol_capabilities": protocol_capabilities.iter().cloned().collect::<Vec<_>>(),
+        });
+        return execution;
+    }
 
     let request_payload = json!({
         "provider_id": provider.provider_id,
@@ -1448,8 +1496,10 @@ fn execute_http_json_bridge(
     let url = channel.endpoint.clone();
     let request_payload_for_runtime = request_payload.clone();
     let request_payload_for_worker = request_payload.clone();
+    let request_method_for_worker = request_method.clone();
+    let request_id_for_worker = request_id.clone();
 
-    let run = std::thread::spawn(move || -> Result<(u16, bool, String, Value), String> {
+    let run = std::thread::spawn(move || -> Result<(u16, bool, String, Value, Option<String>, Option<String>), String> {
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_millis(timeout_ms))
             .build()
@@ -1469,12 +1519,48 @@ fn execute_http_json_bridge(
             .text()
             .map_err(|error| format!("failed to read http_json response body: {error}"))?;
         let body_json = serde_json::from_str::<Value>(&body).unwrap_or(Value::Null);
-        Ok((status_code, success, body, body_json))
+
+        let response_method = body_json
+            .as_object()
+            .and_then(|value| value.get("method"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let response_id = body_json
+            .as_object()
+            .and_then(|value| value.get("id"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if enforce_protocol_contract {
+            let method = response_method
+                .as_deref()
+                .ok_or_else(|| "http_json strict protocol contract requires response.method".to_owned())?;
+            if method != request_method_for_worker {
+                return Err(format!(
+                    "http_json response method mismatch: expected `{}`, got `{method}`",
+                    request_method_for_worker
+                ));
+            }
+            if response_id != request_id_for_worker {
+                return Err(format!(
+                    "http_json response id mismatch: expected `{:?}`, got `{:?}`",
+                    request_id_for_worker, response_id
+                ));
+            }
+        }
+
+        Ok((status_code, success, body, body_json, response_method, response_id))
     })
     .join();
 
     match run {
-        Ok(Ok((status_code, success, body, body_json))) => {
+        Ok(Ok((
+            status_code,
+            success,
+            body,
+            body_json,
+            response_method,
+            response_id,
+        ))) => {
             execution["status"] = Value::String(if success {
                 "executed".to_owned()
             } else {
@@ -1491,9 +1577,17 @@ fn execute_http_json_bridge(
                 "url": channel.endpoint,
                 "status_code": status_code,
                 "request": request_payload_for_runtime,
+                "request_method": request_method,
+                "request_id": request_id,
                 "response_text": body,
                 "response_json": body_json,
+                "response_method": response_method,
+                "response_id": response_id,
                 "timeout_ms": timeout_ms,
+                "enforce_protocol_contract": enforce_protocol_contract,
+                "protocol_route": resolved_route.method(),
+                "protocol_required_capability": required_route_capability.clone(),
+                "protocol_capabilities": protocol_capabilities.iter().cloned().collect::<Vec<_>>(),
             });
             execution
         }
@@ -1505,7 +1599,13 @@ fn execute_http_json_bridge(
                 "method": method_label,
                 "url": channel.endpoint,
                 "request": request_payload_for_runtime,
+                "request_method": request_method,
+                "request_id": request_id,
                 "timeout_ms": timeout_ms,
+                "enforce_protocol_contract": enforce_protocol_contract,
+                "protocol_route": resolved_route.method(),
+                "protocol_required_capability": required_route_capability.clone(),
+                "protocol_capabilities": protocol_capabilities.iter().cloned().collect::<Vec<_>>(),
             });
             execution
         }
@@ -1518,7 +1618,13 @@ fn execute_http_json_bridge(
                 "method": method_label,
                 "url": channel.endpoint,
                 "request": request_payload_for_runtime,
+                "request_method": request_method,
+                "request_id": request_id,
                 "timeout_ms": timeout_ms,
+                "enforce_protocol_contract": enforce_protocol_contract,
+                "protocol_route": resolved_route.method(),
+                "protocol_required_capability": required_route_capability,
+                "protocol_capabilities": protocol_capabilities.iter().cloned().collect::<Vec<_>>(),
             });
             execution
         }
@@ -2023,6 +2129,25 @@ fn parse_process_args(provider: &kernel::ProviderConfig) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn parse_http_timeout_ms(provider: &kernel::ProviderConfig) -> u64 {
+    provider
+        .metadata
+        .get("http_timeout_ms")
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(|value| value.min(300_000))
+        .unwrap_or(8_000)
+}
+
+fn parse_http_enforce_protocol_contract(provider: &kernel::ProviderConfig) -> bool {
+    parse_bool_flag(
+        provider
+            .metadata
+            .get("http_enforce_protocol_contract")
+            .map(String::as_str),
+    )
+}
+
 fn parse_process_timeout_ms(provider: &kernel::ProviderConfig) -> u64 {
     provider
         .metadata
@@ -2031,6 +2156,11 @@ fn parse_process_timeout_ms(provider: &kernel::ProviderConfig) -> u64 {
         .filter(|value| *value > 0)
         .map(|value| value.min(300_000))
         .unwrap_or(5_000)
+}
+
+fn parse_bool_flag(raw: Option<&str>) -> bool {
+    raw.map(|value| value.trim().to_ascii_lowercase())
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
 }
 
 fn protocol_capabilities_for_connector_command(command: &ConnectorCommand) -> BTreeSet<String> {

@@ -162,6 +162,8 @@ Rules:
   (json-line frame contract) instead of ad-hoc stdin/stdout JSON handling.
 - Runtime process stdio execution should enforce protocol-route authorization,
   request/response method+id consistency, and bounded timeout controls.
+- Runtime http_json execution should enforce protocol-route authorization and
+  support optional strict method/id response contract validation.
 
 ### L6. Integration Control Plane (Autonomous Provisioning)
 
