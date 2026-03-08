@@ -137,6 +137,27 @@ Rules:
 - Specialization is data/config-driven through pack manifests.
 - Core kernel logic should not fork per vertical domain.
 
+### L5.5 Protocol Foundation Layer
+
+Scope:
+
+- `crates/protocol`
+- transport frame contracts
+- typed protocol method router
+- in-memory linked channel transport primitive
+
+Responsibilities:
+
+- Keep protocol transport and routing contracts out of daemon business logic.
+- Provide typed route resolution for standard methods before handler dispatch.
+- Provide deterministic local transport primitive for test/runtime bridging.
+
+Rules:
+
+- Unknown custom methods must fail closed in strict mode.
+- Transport close semantics must be explicit and testable.
+- Bounded queues must preserve backpressure instead of unbounded buffering.
+
 ### L6. Integration Control Plane (Autonomous Provisioning)
 
 Scope:
