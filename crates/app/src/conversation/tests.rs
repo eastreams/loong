@@ -565,6 +565,179 @@ async fn handle_turn_with_runtime_repeated_tool_signature_guard_warns_then_trigg
     );
 }
 
+#[tokio::test]
+async fn handle_turn_with_runtime_ping_pong_loop_guard_triggers_completion() {
+    let turn_for = |path: &str, call_id: &str| {
+        Ok(ProviderTurn {
+            assistant_text: format!("Trying to read {path}."),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!({ "path": path }),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-ping-pong-guard".to_owned(),
+                turn_id: format!("turn-ping-pong-{path}"),
+                tool_call_id: call_id.to_owned(),
+            }],
+            raw_meta: Value::Null,
+        })
+    };
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            turn_for("note_a.md", "call-ping-a-1"),
+            turn_for("note_b.md", "call-ping-b-1"),
+            turn_for("note_a.md", "call-ping-a-2"),
+            turn_for("note_b.md", "call-ping-b-2"),
+            turn_for("note_a.md", "call-ping-a-3"),
+        ],
+        vec![Ok("Switching strategy after loop warning.".to_owned())],
+    );
+
+    let mut config = test_config();
+    config.conversation.turn_loop.max_rounds = 6;
+    config.conversation.turn_loop.max_repeated_tool_call_rounds = 8;
+    config.conversation.turn_loop.max_ping_pong_cycles = 2;
+    config.conversation.turn_loop.max_same_tool_failure_rounds = 8;
+
+    let turn_loop = ConversationTurnLoop::new();
+    let reply = turn_loop
+        .handle_turn_with_runtime(
+            &config,
+            "session-ping-pong-guard",
+            "read note_a then note_b",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("ping-pong loop guard fallback should succeed");
+
+    assert_eq!(reply, "Switching strategy after loop warning.");
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 5);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        1
+    );
+
+    let completion_payloads = runtime
+        .completion_requested_messages
+        .lock()
+        .expect("completion requests lock");
+    assert_eq!(completion_payloads.len(), 1);
+    let completion_payload =
+        serde_json::to_string(&completion_payloads[0]).expect("serialize completion");
+    assert!(
+        completion_payload.contains("[tool_loop_guard]"),
+        "completion payload should include loop guard marker, got: {completion_payload}"
+    );
+    assert!(
+        completion_payload.contains("ping_pong_tool_patterns"),
+        "completion payload should include ping-pong reason, got: {completion_payload}"
+    );
+
+    let turn_payloads = runtime
+        .turn_requested_messages
+        .lock()
+        .expect("turn requests lock");
+    assert_eq!(turn_payloads.len(), 5);
+    let warning_turn_payload =
+        serde_json::to_string(&turn_payloads[4]).expect("serialize warning turn");
+    assert!(
+        warning_turn_payload.contains("[tool_loop_warning]"),
+        "warning turn payload should include loop warning marker, got: {warning_turn_payload}"
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_failure_streak_guard_triggers_completion() {
+    let turn_for = |path: &str, call_id: &str| {
+        Ok(ProviderTurn {
+            assistant_text: format!("Attempting read for {path}."),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!({ "path": path }),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-failure-streak-guard".to_owned(),
+                turn_id: format!("turn-failure-streak-{path}"),
+                tool_call_id: call_id.to_owned(),
+            }],
+            raw_meta: Value::Null,
+        })
+    };
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            turn_for("note_1.md", "call-failure-1"),
+            turn_for("note_2.md", "call-failure-2"),
+            turn_for("note_3.md", "call-failure-3"),
+            turn_for("note_4.md", "call-failure-4"),
+        ],
+        vec![Ok("Stopping after repeated tool failures.".to_owned())],
+    );
+
+    let mut config = test_config();
+    config.conversation.turn_loop.max_rounds = 5;
+    config.conversation.turn_loop.max_repeated_tool_call_rounds = 8;
+    config.conversation.turn_loop.max_ping_pong_cycles = 8;
+    config.conversation.turn_loop.max_same_tool_failure_rounds = 3;
+
+    let turn_loop = ConversationTurnLoop::new();
+    let reply = turn_loop
+        .handle_turn_with_runtime(
+            &config,
+            "session-failure-streak-guard",
+            "read those notes",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("failure-streak loop guard fallback should succeed");
+
+    assert_eq!(reply, "Stopping after repeated tool failures.");
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 4);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        1
+    );
+
+    let completion_payloads = runtime
+        .completion_requested_messages
+        .lock()
+        .expect("completion requests lock");
+    assert_eq!(completion_payloads.len(), 1);
+    let completion_payload =
+        serde_json::to_string(&completion_payloads[0]).expect("serialize completion");
+    assert!(
+        completion_payload.contains("[tool_loop_guard]"),
+        "completion payload should include loop guard marker, got: {completion_payload}"
+    );
+    assert!(
+        completion_payload.contains("tool_failure_streak"),
+        "completion payload should include failure-streak reason, got: {completion_payload}"
+    );
+
+    let turn_payloads = runtime
+        .turn_requested_messages
+        .lock()
+        .expect("turn requests lock");
+    assert_eq!(turn_payloads.len(), 4);
+    let warning_turn_payload =
+        serde_json::to_string(&turn_payloads[3]).expect("serialize warning turn");
+    assert!(
+        warning_turn_payload.contains("[tool_loop_warning]"),
+        "warning turn payload should include loop warning marker, got: {warning_turn_payload}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_truncates_large_tool_result_in_followup_payload() {
     use super::integration_tests::TurnTestHarness;
@@ -803,6 +976,8 @@ async fn handle_turn_with_runtime_turn_loop_policy_override_allows_more_repeated
     let mut config = test_config();
     config.conversation.turn_loop.max_rounds = 5;
     config.conversation.turn_loop.max_repeated_tool_call_rounds = 4;
+    config.conversation.turn_loop.max_ping_pong_cycles = 8;
+    config.conversation.turn_loop.max_same_tool_failure_rounds = 8;
 
     let turn_loop = ConversationTurnLoop::new();
     let reply = turn_loop

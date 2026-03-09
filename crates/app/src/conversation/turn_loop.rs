@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use serde_json::{json, Value};
@@ -77,17 +78,23 @@ impl ConversationTurnLoop {
             let had_tool_intents = !turn.tool_intents.is_empty();
             let current_tool_signature =
                 had_tool_intents.then(|| tool_intent_signature_for_turn(&turn));
+            let current_tool_name_signature =
+                had_tool_intents.then(|| tool_name_signature(&turn.tool_intents));
 
             let turn_result = TurnEngine::new(policy.max_tool_steps_per_round)
                 .execute_turn(&turn, kernel_ctx)
                 .await;
-            let loop_supervisor_verdict = if let Some(signature) = current_tool_signature.as_deref()
-            {
-                tool_round_outcome_fingerprint(&turn_result).map(|outcome_fingerprint| {
+            let loop_supervisor_verdict = if let (Some(signature), Some(name_signature)) = (
+                current_tool_signature.as_deref(),
+                current_tool_name_signature.as_deref(),
+            ) {
+                tool_round_outcome(&turn_result).map(|outcome| {
                     loop_supervisor.observe_round(
-                        policy.max_repeated_tool_call_rounds,
+                        &policy,
                         signature,
-                        outcome_fingerprint.as_str(),
+                        name_signature,
+                        outcome.fingerprint.as_str(),
+                        outcome.failed,
                     )
                 })
             } else {
@@ -439,11 +446,26 @@ fn truncate_followup_tool_payload(label: &str, text: &str, max_chars: usize) -> 
     format!("{truncated}\n[{label}_truncated] removed_chars={removed}")
 }
 
-fn tool_round_outcome_fingerprint(turn_result: &TurnResult) -> Option<String> {
+#[derive(Debug, Clone)]
+struct ToolRoundOutcome {
+    fingerprint: String,
+    failed: bool,
+}
+
+fn tool_round_outcome(turn_result: &TurnResult) -> Option<ToolRoundOutcome> {
     match turn_result {
-        TurnResult::FinalText(text) => Some(text_fingerprint("tool_final_text", text)),
-        TurnResult::ToolDenied(reason) => Some(text_fingerprint("tool_denied", reason)),
-        TurnResult::ToolError(reason) => Some(text_fingerprint("tool_error", reason)),
+        TurnResult::FinalText(text) => Some(ToolRoundOutcome {
+            fingerprint: text_fingerprint("tool_final_text", text),
+            failed: false,
+        }),
+        TurnResult::ToolDenied(reason) => Some(ToolRoundOutcome {
+            fingerprint: text_fingerprint("tool_denied", reason),
+            failed: true,
+        }),
+        TurnResult::ToolError(reason) => Some(ToolRoundOutcome {
+            fingerprint: text_fingerprint("tool_error", reason),
+            failed: true,
+        }),
         TurnResult::NeedsApproval(_) | TurnResult::ProviderError(_) => None,
     }
 }
@@ -472,11 +494,21 @@ fn tool_intent_signature(intents: &[ToolIntent]) -> String {
         .join("||")
 }
 
+fn tool_name_signature(intents: &[ToolIntent]) -> String {
+    intents
+        .iter()
+        .map(|intent| intent.tool_name.trim())
+        .collect::<Vec<_>>()
+        .join("||")
+}
+
 #[derive(Debug, Clone, Copy)]
 struct TurnLoopPolicy {
     max_rounds: usize,
     max_tool_steps_per_round: usize,
     max_repeated_tool_call_rounds: usize,
+    max_ping_pong_cycles: usize,
+    max_same_tool_failure_rounds: usize,
     max_followup_tool_payload_chars: usize,
 }
 
@@ -487,6 +519,8 @@ impl TurnLoopPolicy {
             max_rounds: turn_loop.max_rounds.max(1),
             max_tool_steps_per_round: turn_loop.max_tool_steps_per_round.max(1),
             max_repeated_tool_call_rounds: turn_loop.max_repeated_tool_call_rounds.max(1),
+            max_ping_pong_cycles: turn_loop.max_ping_pong_cycles.max(1),
+            max_same_tool_failure_rounds: turn_loop.max_same_tool_failure_rounds.max(1),
             max_followup_tool_payload_chars: turn_loop.max_followup_tool_payload_chars.max(256),
         }
     }
@@ -496,7 +530,8 @@ impl TurnLoopPolicy {
 struct ToolLoopSupervisor {
     last_pattern: Option<String>,
     last_pattern_streak: usize,
-    warned_pattern: Option<String>,
+    warned_reason_key: Option<String>,
+    recent_rounds: VecDeque<ToolLoopObservation>,
 }
 
 #[derive(Debug, Clone)]
@@ -506,12 +541,29 @@ enum ToolLoopSupervisorVerdict {
     HardStop { reason: String },
 }
 
+#[derive(Debug, Clone)]
+struct ToolLoopObservation {
+    pattern: String,
+    tool_name_signature: String,
+    failed: bool,
+}
+
+#[derive(Debug, Clone)]
+struct LoopDetectionReason {
+    key: String,
+    text: String,
+}
+
 impl ToolLoopSupervisor {
+    const MAX_RECENT_ROUNDS: usize = 24;
+
     fn observe_round(
         &mut self,
-        max_repeated_rounds: usize,
+        policy: &TurnLoopPolicy,
         tool_signature: &str,
+        tool_name_signature: &str,
         outcome_fingerprint: &str,
+        failed: bool,
     ) -> ToolLoopSupervisorVerdict {
         let pattern = format!("{tool_signature}::{outcome_fingerprint}");
         if self.last_pattern.as_deref() == Some(pattern.as_str()) {
@@ -521,21 +573,120 @@ impl ToolLoopSupervisor {
             self.last_pattern_streak = 1;
         }
 
-        if self.last_pattern_streak <= max_repeated_rounds {
-            return ToolLoopSupervisorVerdict::Continue;
+        self.recent_rounds.push_back(ToolLoopObservation {
+            pattern: pattern.clone(),
+            tool_name_signature: tool_name_signature.to_owned(),
+            failed,
+        });
+        if self.recent_rounds.len() > Self::MAX_RECENT_ROUNDS {
+            self.recent_rounds.pop_front();
         }
 
-        let reason = format!(
-            "repeated_tool_call_no_progress signature_streak={} threshold={max_repeated_rounds}",
-            self.last_pattern_streak
-        );
+        let detection = self
+            .check_no_progress(policy.max_repeated_tool_call_rounds)
+            .or_else(|| self.check_ping_pong(policy.max_ping_pong_cycles))
+            .or_else(|| self.check_failure_streak(policy.max_same_tool_failure_rounds));
 
-        if self.warned_pattern.as_deref() == Some(pattern.as_str()) {
-            ToolLoopSupervisorVerdict::HardStop { reason }
+        match detection {
+            Some(reason) => {
+                if self.warned_reason_key.as_deref() == Some(reason.key.as_str()) {
+                    ToolLoopSupervisorVerdict::HardStop {
+                        reason: reason.text,
+                    }
+                } else {
+                    self.warned_reason_key = Some(reason.key);
+                    ToolLoopSupervisorVerdict::InjectWarning {
+                        reason: reason.text,
+                    }
+                }
+            }
+            None => {
+                self.warned_reason_key = None;
+                ToolLoopSupervisorVerdict::Continue
+            }
+        }
+    }
+
+    fn check_no_progress(&self, threshold: usize) -> Option<LoopDetectionReason> {
+        let pattern = self.last_pattern.as_deref()?;
+        if self.last_pattern_streak <= threshold {
+            return None;
+        }
+        Some(LoopDetectionReason {
+            key: format!("no_progress:{pattern}"),
+            text: format!(
+                "repeated_tool_call_no_progress signature_streak={} threshold={threshold}",
+                self.last_pattern_streak
+            ),
+        })
+    }
+
+    fn check_ping_pong(&self, cycles: usize) -> Option<LoopDetectionReason> {
+        let minimum_rounds = cycles.saturating_mul(2);
+        if cycles == 0 || self.recent_rounds.len() < minimum_rounds {
+            return None;
+        }
+
+        let tail = self
+            .recent_rounds
+            .iter()
+            .rev()
+            .take(minimum_rounds)
+            .collect::<Vec<_>>();
+        let first = tail.first()?.pattern.as_str();
+        let second = tail.get(1)?.pattern.as_str();
+        if first == second {
+            return None;
+        }
+
+        let alternating = tail.iter().enumerate().all(|(index, round)| {
+            if index % 2 == 0 {
+                round.pattern == first
+            } else {
+                round.pattern == second
+            }
+        });
+        if !alternating {
+            return None;
+        }
+
+        let (left, right) = if first <= second {
+            (first, second)
         } else {
-            self.warned_pattern = Some(pattern);
-            ToolLoopSupervisorVerdict::InjectWarning { reason }
+            (second, first)
+        };
+        Some(LoopDetectionReason {
+            key: format!("ping_pong:{left}<->{right}"),
+            text: format!(
+                "ping_pong_tool_patterns cycles={} threshold={cycles}",
+                minimum_rounds / 2
+            ),
+        })
+    }
+
+    fn check_failure_streak(&self, threshold: usize) -> Option<LoopDetectionReason> {
+        let last = self.recent_rounds.back()?;
+        if !last.failed {
+            return None;
         }
+        let streak = self
+            .recent_rounds
+            .iter()
+            .rev()
+            .take_while(|round| {
+                round.failed && round.tool_name_signature == last.tool_name_signature
+            })
+            .count();
+        if streak < threshold {
+            return None;
+        }
+        Some(LoopDetectionReason {
+            key: format!("failure_streak:{}", last.tool_name_signature),
+            text: format!(
+                "tool_failure_streak rounds={streak} threshold={threshold} tool={}",
+                last.tool_name_signature
+            ),
+        })
     }
 }
 

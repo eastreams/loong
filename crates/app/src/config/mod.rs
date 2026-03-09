@@ -274,6 +274,11 @@ model = "model-example"
             config.conversation.turn_loop.max_repeated_tool_call_rounds,
             2
         );
+        assert_eq!(config.conversation.turn_loop.max_ping_pong_cycles, 2);
+        assert_eq!(
+            config.conversation.turn_loop.max_same_tool_failure_rounds,
+            3
+        );
         assert_eq!(
             config
                 .conversation
@@ -291,6 +296,8 @@ model = "model-example"
 max_rounds = 6
 max_tool_steps_per_round = 3
 max_repeated_tool_call_rounds = 5
+max_ping_pong_cycles = 4
+max_same_tool_failure_rounds = 7
 max_followup_tool_payload_chars = 1200
 "#;
         let parsed =
@@ -300,6 +307,11 @@ max_followup_tool_payload_chars = 1200
         assert_eq!(
             parsed.conversation.turn_loop.max_repeated_tool_call_rounds,
             5
+        );
+        assert_eq!(parsed.conversation.turn_loop.max_ping_pong_cycles, 4);
+        assert_eq!(
+            parsed.conversation.turn_loop.max_same_tool_failure_rounds,
+            7
         );
         assert_eq!(
             parsed
