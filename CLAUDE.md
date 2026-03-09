@@ -43,6 +43,7 @@ Non-negotiable: no dependency cycles. See [Core Beliefs](docs/design-docs/core-b
 - Never commit credentials, tokens, or private endpoints.
 - Keep `CLAUDE.md` and `AGENTS.md` mirrored in the same change.
 - **Before every commit**, run CI-parity checks. Any manual edit after fmt must be re-checked.
+- Every released version must map to `docs/releases/vX.Y.Z.md` with process log and detail links.
 
 ## 5. Verification Gates
 
@@ -68,5 +69,6 @@ Runs fmt + clippy before each commit, matching CI exactly.
 | Layered architecture | `docs/design-docs/layered-kernel-design.md` |
 | Roadmap | `docs/roadmap.md` |
 | Reliability invariants | `docs/RELIABILITY.md` |
+| Release process docs | `docs/releases/` |
 | Product requirements | `docs/product-specs/` |
 | Contributing recipes | `CONTRIBUTING.md` |
