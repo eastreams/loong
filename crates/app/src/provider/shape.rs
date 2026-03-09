@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use serde_json::{json, Value};
 
 use crate::conversation::turn_engine::{ProviderTurn, ToolIntent};
+use crate::tools;
 
 pub fn extract_provider_turn(body: &Value) -> Option<ProviderTurn> {
     let message = body
@@ -25,7 +26,8 @@ pub fn extract_provider_turn(body: &Value) -> Option<ProviderTurn> {
                 .iter()
                 .filter_map(|call| {
                     let function = call.get("function")?;
-                    let tool_name = function.get("name").and_then(Value::as_str)?.to_owned();
+                    let raw_tool_name = function.get("name").and_then(Value::as_str)?;
+                    let tool_name = tools::canonical_tool_name(raw_tool_name).to_owned();
                     let args_str = function
                         .get("arguments")
                         .and_then(Value::as_str)
@@ -262,6 +264,28 @@ mod tests {
             args.get("_raw_arguments").and_then(|v| v.as_str()),
             Some("{{not valid json")
         );
+    }
+
+    #[test]
+    fn extract_provider_turn_normalizes_underscore_tool_aliases() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "calling",
+                    "tool_calls": [{
+                        "id": "call_underscore",
+                        "type": "function",
+                        "function": {
+                            "name": "file_read",
+                            "arguments": "{\"path\":\"README.md\"}"
+                        }
+                    }]
+                }
+            }]
+        });
+        let turn = extract_provider_turn(&body).expect("turn");
+        assert_eq!(turn.tool_intents.len(), 1);
+        assert_eq!(turn.tool_intents[0].tool_name, "file.read");
     }
 
     #[test]

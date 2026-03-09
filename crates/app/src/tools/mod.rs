@@ -39,16 +39,35 @@ pub fn execute_tool_core(request: ToolCoreRequest) -> Result<ToolCoreOutcome, St
     execute_tool_core_with_config(request, runtime_config::get_tool_runtime_config())
 }
 
+pub fn canonical_tool_name(raw: &str) -> &str {
+    match raw {
+        "file_read" => "file.read",
+        "file_write" => "file.write",
+        "shell_exec" | "shell" => "shell.exec",
+        other => other,
+    }
+}
+
+pub fn is_known_tool_name(raw: &str) -> bool {
+    matches!(
+        canonical_tool_name(raw),
+        "shell.exec" | "file.read" | "file.write"
+    )
+}
+
 pub fn execute_tool_core_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    match request.tool_name.as_str() {
-        "shell.exec" | "shell_exec" | "shell" => {
-            shell::execute_shell_tool_with_config(request, config)
-        }
-        "file.read" | "file_read" => file::execute_file_read_tool_with_config(request, config),
-        "file.write" | "file_write" => file::execute_file_write_tool_with_config(request, config),
+    let canonical_name = canonical_tool_name(request.tool_name.as_str());
+    let request = ToolCoreRequest {
+        tool_name: canonical_name.to_owned(),
+        payload: request.payload,
+    };
+    match canonical_name {
+        "shell.exec" => shell::execute_shell_tool_with_config(request, config),
+        "file.read" => file::execute_file_read_tool_with_config(request, config),
+        "file.write" => file::execute_file_write_tool_with_config(request, config),
         _ => Err(format!(
             "tool_not_found: unknown tool `{}`",
             request.tool_name
@@ -96,6 +115,101 @@ pub fn capability_snapshot() -> String {
         lines.push(format!("- {}: {}", entry.name, entry.description));
     }
     lines.join("\n")
+}
+
+/// Provider request tool schema for function-calling capable models.
+///
+/// The output shape matches OpenAI-compatible `tools=[{type:function,...}]`.
+/// Order is deterministic for stable prompting/tests.
+pub fn provider_tool_definitions() -> Vec<Value> {
+    let mut tools = Vec::new();
+
+    #[cfg(feature = "tool-file")]
+    {
+        tools.push(json!({
+            "type": "function",
+            "function": {
+                "name": "file_read",
+                "description": "Read file contents",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to read (absolute or relative to configured file root)."
+                        },
+                        "max_bytes": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 8_388_608,
+                            "description": "Optional read limit in bytes. Defaults to 1048576."
+                        }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false
+                }
+            }
+        }));
+        tools.push(json!({
+            "type": "function",
+            "function": {
+                "name": "file_write",
+                "description": "Write file contents",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to write (absolute or relative to configured file root)."
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "File content to write."
+                        },
+                        "create_dirs": {
+                            "type": "boolean",
+                            "description": "Create parent directories when missing. Defaults to true."
+                        }
+                    },
+                    "required": ["path", "content"],
+                    "additionalProperties": false
+                }
+            }
+        }));
+    }
+
+    #[cfg(feature = "tool-shell")]
+    {
+        tools.push(json!({
+            "type": "function",
+            "function": {
+                "name": "shell_exec",
+                "description": "Execute shell commands",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "Executable command name. Must be allowlisted."
+                        },
+                        "args": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional command arguments."
+                        },
+                        "cwd": {
+                            "type": "string",
+                            "description": "Optional working directory."
+                        }
+                    },
+                    "required": ["command"],
+                    "additionalProperties": false
+                }
+            }
+        }));
+    }
+
+    tools
 }
 
 #[allow(dead_code)]
@@ -165,6 +279,47 @@ mod tests {
         assert!(names.contains(&"shell.exec"));
         assert!(names.contains(&"file.read"));
         assert!(names.contains(&"file.write"));
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
+    #[test]
+    fn provider_tool_definitions_are_stable_and_complete() {
+        let defs = provider_tool_definitions();
+        assert_eq!(defs.len(), 3);
+
+        let names: Vec<&str> = defs
+            .iter()
+            .filter_map(|item| item.get("function"))
+            .filter_map(|function| function.get("name"))
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(names, vec!["file_read", "file_write", "shell_exec"]);
+
+        for item in &defs {
+            assert_eq!(item["type"], "function");
+            assert_eq!(item["function"]["parameters"]["type"], "object");
+        }
+    }
+
+    #[test]
+    fn canonical_tool_name_maps_known_aliases() {
+        assert_eq!(canonical_tool_name("file_read"), "file.read");
+        assert_eq!(canonical_tool_name("file_write"), "file.write");
+        assert_eq!(canonical_tool_name("shell_exec"), "shell.exec");
+        assert_eq!(canonical_tool_name("shell"), "shell.exec");
+        assert_eq!(canonical_tool_name("file.read"), "file.read");
+    }
+
+    #[test]
+    fn is_known_tool_name_accepts_canonical_and_alias_forms() {
+        assert!(is_known_tool_name("file.read"));
+        assert!(is_known_tool_name("file_read"));
+        assert!(is_known_tool_name("file.write"));
+        assert!(is_known_tool_name("file_write"));
+        assert!(is_known_tool_name("shell.exec"));
+        assert!(is_known_tool_name("shell_exec"));
+        assert!(is_known_tool_name("shell"));
+        assert!(!is_known_tool_name("nonexistent.tool"));
     }
 
     #[test]

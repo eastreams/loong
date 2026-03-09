@@ -22,15 +22,41 @@ use crate::KernelContext;
 struct FakeRuntime {
     seed_messages: Vec<Value>,
     completion: Result<String, String>,
+    turn: Result<ProviderTurn, String>,
     persisted: Mutex<Vec<(String, String, String)>>,
     requested_messages: Mutex<Vec<Value>>,
 }
 
 impl FakeRuntime {
     fn new(seed_messages: Vec<Value>, completion: Result<String, String>) -> Self {
+        let turn = completion.as_ref().map_or_else(
+            |error| Err(error.to_owned()),
+            |content| {
+                Ok(ProviderTurn {
+                    assistant_text: content.to_owned(),
+                    tool_intents: Vec::new(),
+                    raw_meta: Value::Null,
+                })
+            },
+        );
         Self {
             seed_messages,
             completion,
+            turn,
+            persisted: Mutex::new(Vec::new()),
+            requested_messages: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn with_turn(seed_messages: Vec<Value>, turn: Result<ProviderTurn, String>) -> Self {
+        let completion = turn.as_ref().map_or_else(
+            |error| Err(error.to_owned()),
+            |value| Ok(value.assistant_text.clone()),
+        );
+        Self {
+            seed_messages,
+            completion,
+            turn,
             persisted: Mutex::new(Vec::new()),
             requested_messages: Mutex::new(Vec::new()),
         }
@@ -56,6 +82,15 @@ impl ConversationRuntime for FakeRuntime {
     ) -> CliResult<String> {
         *self.requested_messages.lock().expect("request lock") = messages.to_vec();
         self.completion.clone().map_err(|error| error.to_owned())
+    }
+
+    async fn request_turn(
+        &self,
+        _config: &LoongClawConfig,
+        messages: &[Value],
+    ) -> CliResult<ProviderTurn> {
+        *self.requested_messages.lock().expect("request lock") = messages.to_vec();
+        self.turn.clone().map_err(|error| error.to_owned())
     }
 
     async fn persist_turn(
@@ -189,6 +224,115 @@ async fn handle_turn_with_runtime_inline_mode_returns_synthetic_reply_and_persis
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_tool_turn_combines_preface_and_execution_output() {
+    use super::integration_tests::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    std::fs::write(
+        harness.temp_dir.join("note.md"),
+        "hello from orchestrator test",
+    )
+    .expect("seed test note");
+
+    let runtime = FakeRuntime::with_turn(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Reading the file now.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!({"path": "note.md"}),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-tool".to_owned(),
+                turn_id: "turn-tool".to_owned(),
+                tool_call_id: "call-tool".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        }),
+    );
+
+    let orchestrator = ConversationOrchestrator::new();
+    let reply = orchestrator
+        .handle_turn_with_runtime(
+            &test_config(),
+            "session-tool",
+            "read note.md",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            Some(&harness.kernel_ctx),
+        )
+        .await
+        .expect("tool turn should succeed");
+
+    assert!(
+        reply.contains("Reading the file now."),
+        "expected assistant preface, got: {reply}"
+    );
+    assert!(
+        reply.contains("hello from orchestrator test"),
+        "expected tool execution content, got: {reply}"
+    );
+    assert!(
+        reply.contains("[ok]"),
+        "expected tool status marker, got: {reply}"
+    );
+
+    let persisted = runtime.persisted.lock().expect("persisted lock");
+    assert_eq!(persisted.len(), 2);
+    assert_eq!(persisted[0].1, "user");
+    assert_eq!(persisted[1].1, "assistant");
+    assert_eq!(persisted[1].2, reply);
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_tool_denial_returns_inline_reply_even_in_propagate_mode() {
+    let runtime = FakeRuntime::with_turn(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Reading the file now.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!({"path": "note.md"}),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-denied".to_owned(),
+                turn_id: "turn-denied".to_owned(),
+                tool_call_id: "call-denied".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        }),
+    );
+
+    let orchestrator = ConversationOrchestrator::new();
+    let reply = orchestrator
+        .handle_turn_with_runtime(
+            &test_config(),
+            "session-denied",
+            "read note.md",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("tool denial should still return inline assistant text");
+
+    assert!(
+        reply.contains("Reading the file now."),
+        "expected assistant preface, got: {reply}"
+    );
+    assert!(
+        reply.contains("[tool_denied]"),
+        "expected inline tool denial marker, got: {reply}"
+    );
+    assert!(
+        reply.contains("no_kernel_context"),
+        "expected denial reason in reply, got: {reply}"
+    );
+
+    let persisted = runtime.persisted.lock().expect("persisted lock");
+    assert_eq!(persisted.len(), 2);
+    assert_eq!(persisted[1].2, reply);
+}
+
 #[test]
 fn format_provider_error_reply_is_stable() {
     let output = format_provider_error_reply("timeout");
@@ -225,6 +369,44 @@ fn turn_engine_no_tool_intents_returns_final_text() {
     match result {
         TurnResult::FinalText(text) => assert_eq!(text, "Hello!"),
         other => panic!("expected FinalText, got {:?}", other),
+    }
+}
+
+#[test]
+fn provider_tool_aliases_flow_through_parse_and_turn_validation() {
+    use crate::conversation::turn_engine::{TurnEngine, TurnResult};
+    use crate::provider::extract_provider_turn;
+
+    let response_body = serde_json::json!({
+        "choices": [{
+            "message": {
+                "content": "reading",
+                "tool_calls": [{
+                    "id": "call_underscore",
+                    "type": "function",
+                    "function": {
+                        "name": "file_read",
+                        "arguments": "{\"path\":\"README.md\"}"
+                    }
+                }]
+            }
+        }]
+    });
+
+    let turn = extract_provider_turn(&response_body).expect("provider turn");
+    assert_eq!(turn.tool_intents.len(), 1);
+    assert_eq!(turn.tool_intents[0].tool_name, "file.read");
+
+    let engine = TurnEngine::new(1);
+    let result = engine.evaluate_turn(&turn);
+    match result {
+        TurnResult::NeedsApproval(reason) => {
+            assert!(
+                reason.contains("kernel_context_required"),
+                "reason: {reason}"
+            );
+        }
+        other => panic!("expected NeedsApproval, got {:?}", other),
     }
 }
 

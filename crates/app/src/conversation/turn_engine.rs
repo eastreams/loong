@@ -55,19 +55,11 @@ pub enum TurnResult {
 /// `execute_turn` performs policy-gated tool execution through the kernel.
 pub struct TurnEngine {
     max_tool_steps: usize,
-    known_tools: BTreeSet<String>,
 }
 
 impl TurnEngine {
     pub fn new(max_tool_steps: usize) -> Self {
-        let known_tools = ["shell.exec", "file.read", "file.write"]
-            .iter()
-            .map(|s| (*s).to_owned())
-            .collect();
-        Self {
-            max_tool_steps,
-            known_tools,
-        }
+        Self { max_tool_steps }
     }
 
     /// Evaluate a provider turn and produce a deterministic result.
@@ -85,7 +77,7 @@ impl TurnEngine {
 
         // Check each tool intent
         for intent in &turn.tool_intents {
-            if !self.known_tools.contains(&intent.tool_name) {
+            if !crate::tools::is_known_tool_name(&intent.tool_name) {
                 return TurnResult::ToolDenied(format!("tool_not_found: {}", intent.tool_name));
             }
         }
@@ -120,7 +112,7 @@ impl TurnEngine {
 
         // Check each tool intent is known
         for intent in &turn.tool_intents {
-            if !self.known_tools.contains(&intent.tool_name) {
+            if !crate::tools::is_known_tool_name(&intent.tool_name) {
                 return TurnResult::ToolDenied(format!("tool_not_found: {}", intent.tool_name));
             }
         }

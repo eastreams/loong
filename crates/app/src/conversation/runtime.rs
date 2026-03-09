@@ -10,6 +10,7 @@ use crate::KernelContext;
 #[cfg(feature = "memory-sqlite")]
 use super::super::memory;
 use super::super::{config::LoongClawConfig, provider};
+use super::turn_engine::ProviderTurn;
 
 pub struct DefaultConversationRuntime;
 
@@ -28,6 +29,12 @@ pub trait ConversationRuntime: Send + Sync {
         config: &LoongClawConfig,
         messages: &[Value],
     ) -> CliResult<String>;
+
+    async fn request_turn(
+        &self,
+        config: &LoongClawConfig,
+        messages: &[Value],
+    ) -> CliResult<ProviderTurn>;
 
     async fn persist_turn(
         &self,
@@ -62,6 +69,14 @@ impl ConversationRuntime for DefaultConversationRuntime {
         messages: &[Value],
     ) -> CliResult<String> {
         provider::request_completion(config, messages).await
+    }
+
+    async fn request_turn(
+        &self,
+        config: &LoongClawConfig,
+        messages: &[Value],
+    ) -> CliResult<ProviderTurn> {
+        provider::request_turn(config, messages).await
     }
 
     async fn persist_turn(

@@ -195,6 +195,25 @@ fn build_completion_request_body(
     Value::Object(body)
 }
 
+fn build_turn_request_body(
+    config: &LoongClawConfig,
+    messages: &[Value],
+    model: &str,
+    payload_mode: CompletionPayloadMode,
+    include_tool_schema: bool,
+    tool_definitions: &[Value],
+) -> Value {
+    let mut body = build_completion_request_body(config, messages, model, payload_mode);
+    if include_tool_schema && !tool_definitions.is_empty() {
+        let object = body
+            .as_object_mut()
+            .expect("completion request body must be a JSON object");
+        object.insert("tools".to_owned(), Value::Array(tool_definitions.to_vec()));
+        object.insert("tool_choice".to_owned(), json!("auto"));
+    }
+    body
+}
+
 async fn resolve_request_models(
     config: &LoongClawConfig,
     headers: &reqwest::header::HeaderMap,
@@ -408,6 +427,17 @@ fn is_parameter_unsupported(error: &ProviderApiError, parameter: &str) -> bool {
         return false;
     }
     message.contains(param.as_str())
+}
+
+fn should_disable_tool_schema_for_error(error: &ProviderApiError) -> bool {
+    if is_parameter_unsupported(error, "tools") || is_parameter_unsupported(error, "tool_choice") {
+        return true;
+    }
+
+    let message = error.message.as_deref().unwrap_or_default();
+    message.contains("tools are not supported")
+        || message.contains("tool use is not supported")
+        || message.contains("function calling is not supported")
 }
 
 fn should_try_next_model_on_error(error: &ProviderApiError) -> bool {
@@ -635,10 +665,19 @@ async fn request_turn_with_model(
     let mut backoff_ms = request_policy.initial_backoff_ms;
     let mut payload_mode = CompletionPayloadMode::default_for(&config.provider);
     let mut tried_payload_modes = vec![payload_mode];
+    let tool_definitions = super::tools::provider_tool_definitions();
+    let mut include_tool_schema = !tool_definitions.is_empty();
 
     loop {
         attempt += 1;
-        let body = build_completion_request_body(config, messages, model, payload_mode);
+        let body = build_turn_request_body(
+            config,
+            messages,
+            model,
+            payload_mode,
+            include_tool_schema,
+            &tool_definitions,
+        );
         let mut req = client.post(endpoint).headers(headers.clone()).json(&body);
         if let Some(auth_header) = config.provider.authorization_header() {
             req = req.header(reqwest::header::AUTHORIZATION, auth_header);
@@ -671,6 +710,10 @@ async fn request_turn_with_model(
                 }
 
                 let api_error = parse_provider_api_error(&response_body);
+                if include_tool_schema && should_disable_tool_schema_for_error(&api_error) {
+                    include_tool_schema = false;
+                    continue;
+                }
                 if let Some(next_mode) =
                     adapt_payload_mode_for_error(payload_mode, &config.provider, &api_error)
                 {
@@ -861,6 +904,76 @@ mod tests {
         assert!(body.get("max_completion_tokens").is_none());
         assert!(body.get("reasoning").is_none());
         assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[cfg(any(feature = "tool-file", feature = "tool-shell"))]
+    #[test]
+    fn turn_body_includes_tool_schema_and_auto_choice() {
+        let config = LoongClawConfig {
+            provider: ProviderConfig::default(),
+            cli: crate::config::CliChannelConfig::default(),
+            telegram: crate::config::TelegramChannelConfig::default(),
+            feishu: FeishuChannelConfig::default(),
+            tools: ToolConfig::default(),
+            memory: MemoryConfig::default(),
+        };
+
+        let body = build_turn_request_body(
+            &config,
+            &[],
+            "model-latest",
+            CompletionPayloadMode::default_for(&config.provider),
+            true,
+            &crate::tools::provider_tool_definitions(),
+        );
+        let tools = body
+            .get("tools")
+            .and_then(|value| value.as_array())
+            .expect("tools array in turn body");
+        assert!(!tools.is_empty());
+        let names: Vec<&str> = tools
+            .iter()
+            .filter_map(|item| item.get("function"))
+            .filter_map(|function| function.get("name"))
+            .filter_map(Value::as_str)
+            .collect();
+
+        let mut expected = Vec::new();
+        #[cfg(feature = "tool-file")]
+        {
+            expected.push("file_read");
+            expected.push("file_write");
+        }
+        #[cfg(feature = "tool-shell")]
+        {
+            expected.push("shell_exec");
+        }
+
+        assert_eq!(names, expected);
+        assert_eq!(body["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn tool_schema_fallback_detects_unsupported_error_shapes() {
+        let unsupported_tools = json!({
+            "error": {
+                "code": "unsupported_parameter",
+                "param": "tools",
+                "message": "Unsupported parameter: tools"
+            }
+        });
+        let unsupported_tool_choice = json!({
+            "error": {
+                "message": "Function calling is not supported for this model."
+            }
+        });
+
+        assert!(should_disable_tool_schema_for_error(
+            &parse_provider_api_error(&unsupported_tools)
+        ));
+        assert!(should_disable_tool_schema_for_error(
+            &parse_provider_api_error(&unsupported_tool_choice)
+        ));
     }
 
     #[test]
