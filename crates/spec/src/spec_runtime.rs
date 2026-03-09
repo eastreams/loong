@@ -80,7 +80,7 @@ struct WasmModuleCacheLookup {
 #[derive(Debug, Default)]
 struct WasmModuleCache {
     order: VecDeque<WasmModuleCacheKey>,
-    entries: HashMap<WasmModuleCacheKey, CachedWasmModule>,
+    entries: HashMap<WasmModuleCacheKey, Arc<CachedWasmModule>>,
 }
 
 impl WasmModuleCache {
@@ -95,7 +95,7 @@ impl WasmModuleCache {
         self.order.push_back(key.clone());
     }
 
-    fn get(&mut self, key: &WasmModuleCacheKey) -> Option<CachedWasmModule> {
+    fn get(&mut self, key: &WasmModuleCacheKey) -> Option<Arc<CachedWasmModule>> {
         let entry = self.entries.get(key).cloned()?;
         self.touch(key);
         Some(entry)
@@ -104,7 +104,7 @@ impl WasmModuleCache {
     fn insert(
         &mut self,
         key: WasmModuleCacheKey,
-        value: CachedWasmModule,
+        value: Arc<CachedWasmModule>,
         max_entries: usize,
     ) -> usize {
         if max_entries == 0 {
@@ -2094,7 +2094,7 @@ fn compile_wasm_module(
 
 fn lookup_cached_wasm_module(
     cache_key: &WasmModuleCacheKey,
-) -> Result<Option<(CachedWasmModule, WasmModuleCacheLookup)>, String> {
+) -> Result<Option<(Arc<CachedWasmModule>, WasmModuleCacheLookup)>, String> {
     let cache_capacity = wasm_module_cache_capacity();
     let cache_lock = wasm_module_cache();
     let mut cache = cache_lock
@@ -2116,7 +2116,7 @@ fn lookup_cached_wasm_module(
 
 fn insert_cached_wasm_module(
     cache_key: WasmModuleCacheKey,
-    module: CachedWasmModule,
+    module: Arc<CachedWasmModule>,
 ) -> Result<WasmModuleCacheLookup, String> {
     let cache_capacity = wasm_module_cache_capacity();
     let cache_lock = wasm_module_cache();
@@ -2298,7 +2298,7 @@ pub fn execute_wasm_component_bridge(
                 Ok(Some(hit)) => hit,
                 Ok(None) => {
                     let compiled = match compile_wasm_module(&module_bytes, fuel_enabled) {
-                        Ok(module) => module,
+                        Ok(module) => Arc::new(module),
                         Err(reason) => {
                             execution["status"] = Value::String("failed".to_owned());
                             execution["reason"] = Value::String(reason);
