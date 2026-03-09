@@ -31,6 +31,8 @@ pub(crate) use loongclaw_spec::programmatic::{
 #[cfg(test)]
 mod tests;
 
+const PUBLIC_GITHUB_REPO: &str = "loongclaw-ai/loongclaw";
+
 #[derive(Parser, Debug)]
 #[command(
     name = "loongclawd",
@@ -241,7 +243,7 @@ async fn run_demo() -> CliResult<()> {
         task_id: "task-bootstrap-01".to_owned(),
         objective: "summarize flaky test clusters".to_owned(),
         required_capabilities: BTreeSet::from([Capability::InvokeTool, Capability::MemoryRead]),
-        payload: json!({"repo": "chumyin/LoongClaw"}),
+        payload: json!({"repo": PUBLIC_GITHUB_REPO}),
     };
 
     let task_dispatch = kernel

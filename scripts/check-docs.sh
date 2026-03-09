@@ -6,6 +6,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ERRORS=0
+PUBLIC_GITHUB_REPO="${LOONGCLAW_PUBLIC_REPO:-loongclaw-ai/loongclaw}"
+PUBLIC_GITHUB_BASE="https://github.com/${PUBLIC_GITHUB_REPO}"
 
 # --- 1. CLAUDE.md / AGENTS.md mirror check ---
 if ! diff -q "$REPO_ROOT/CLAUDE.md" "$REPO_ROOT/AGENTS.md" > /dev/null 2>&1; then
@@ -143,6 +145,46 @@ if [ -s "$RELEASE_TAGS_FILE" ]; then
             fi
         fi
     done < "$RELEASE_TAGS_FILE"
+fi
+
+# --- 5. Canonical public repository link checks ---
+check_canonical_github_links() {
+    local file="$1"
+    local found=0
+    while IFS= read -r url; do
+        found=1
+        case "$url" in
+            "${PUBLIC_GITHUB_BASE}"/*) ;;
+            *)
+                echo "FAIL: ${file} contains non-canonical GitHub URL: ${url}"
+                ERRORS=$((ERRORS + 1))
+                ;;
+        esac
+    done < <(grep -Eo 'https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+[^)[:space:]]*' "$file" 2>/dev/null || true)
+
+    if [ "$found" -eq 0 ]; then
+        echo "FAIL: ${file} contains no GitHub links; expected links under ${PUBLIC_GITHUB_BASE}"
+        ERRORS=$((ERRORS + 1))
+    fi
+}
+
+for release_doc in "$REPO_ROOT/docs/releases/TEMPLATE.md" "$REPO_ROOT"/docs/releases/v*.md; do
+    [ -f "$release_doc" ] || continue
+    if grep -Fq "github.com/<org>/<repo>" "$release_doc"; then
+        echo "FAIL: ${release_doc} still contains placeholder github.com/<org>/<repo>"
+        ERRORS=$((ERRORS + 1))
+    fi
+    check_canonical_github_links "$release_doc"
+done
+
+ISSUE_TEMPLATE_CONFIG="$REPO_ROOT/.github/ISSUE_TEMPLATE/config.yml"
+EXPECTED_ADVISORY_URL="${PUBLIC_GITHUB_BASE}/security/advisories/new"
+if [ ! -f "$ISSUE_TEMPLATE_CONFIG" ]; then
+    echo "FAIL: missing issue template config: .github/ISSUE_TEMPLATE/config.yml"
+    ERRORS=$((ERRORS + 1))
+elif ! grep -Fq "${EXPECTED_ADVISORY_URL}" "$ISSUE_TEMPLATE_CONFIG"; then
+    echo "FAIL: ${ISSUE_TEMPLATE_CONFIG} must reference canonical advisory URL ${EXPECTED_ADVISORY_URL}"
+    ERRORS=$((ERRORS + 1))
 fi
 
 # --- Summary ---

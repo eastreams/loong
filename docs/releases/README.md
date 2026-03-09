@@ -25,3 +25,9 @@ Required sections in each canonical release document:
 `## Summary` must include trace linkage fields (`Trace ID`, `Trace path`).
 
 Start from `docs/releases/TEMPLATE.md` when preparing a release.
+
+Canonical public repository links in release docs and issue templates must point to:
+
+- `https://github.com/loongclaw-ai/loongclaw`
+
+This is enforced by `scripts/check-docs.sh`.
