@@ -1366,7 +1366,7 @@ fn parse_wasm_import_modules(bytes: &[u8]) -> Result<Vec<String>, String> {
     for payload in WasmParser::new(0).parse_all(bytes) {
         match payload {
             Ok(WasmPayload::ImportSection(section)) => {
-                for import in section {
+                for import in section.into_imports() {
                     let import = import.map_err(|error| error.to_string())?;
                     modules.push(import.module.to_owned());
                 }

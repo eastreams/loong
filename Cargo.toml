@@ -28,7 +28,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 futures-util = "0.3"
 sha2 = "0.10"
-wasmparser = "0.240"
+wasmparser = "0.245"
 base64 = "0.22"
 ed25519-dalek = "2.2"
 wasmtime = "42.0.1"
