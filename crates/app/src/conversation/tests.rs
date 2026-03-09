@@ -25,6 +25,8 @@ struct FakeRuntime {
     turn: Result<ProviderTurn, String>,
     persisted: Mutex<Vec<(String, String, String)>>,
     requested_messages: Mutex<Vec<Value>>,
+    completion_calls: Mutex<usize>,
+    turn_calls: Mutex<usize>,
 }
 
 impl FakeRuntime {
@@ -45,6 +47,8 @@ impl FakeRuntime {
             turn,
             persisted: Mutex::new(Vec::new()),
             requested_messages: Mutex::new(Vec::new()),
+            completion_calls: Mutex::new(0),
+            turn_calls: Mutex::new(0),
         }
     }
 
@@ -53,12 +57,22 @@ impl FakeRuntime {
             |error| Err(error.to_owned()),
             |value| Ok(value.assistant_text.clone()),
         );
+        Self::with_turn_and_completion(seed_messages, turn, completion)
+    }
+
+    fn with_turn_and_completion(
+        seed_messages: Vec<Value>,
+        turn: Result<ProviderTurn, String>,
+        completion: Result<String, String>,
+    ) -> Self {
         Self {
             seed_messages,
             completion,
             turn,
             persisted: Mutex::new(Vec::new()),
             requested_messages: Mutex::new(Vec::new()),
+            completion_calls: Mutex::new(0),
+            turn_calls: Mutex::new(0),
         }
     }
 }
@@ -80,6 +94,8 @@ impl ConversationRuntime for FakeRuntime {
         _config: &LoongClawConfig,
         messages: &[Value],
     ) -> CliResult<String> {
+        let mut calls = self.completion_calls.lock().expect("completion calls lock");
+        *calls += 1;
         *self.requested_messages.lock().expect("request lock") = messages.to_vec();
         self.completion.clone().map_err(|error| error.to_owned())
     }
@@ -89,6 +105,8 @@ impl ConversationRuntime for FakeRuntime {
         _config: &LoongClawConfig,
         messages: &[Value],
     ) -> CliResult<ProviderTurn> {
+        let mut calls = self.turn_calls.lock().expect("turn calls lock");
+        *calls += 1;
         *self.requested_messages.lock().expect("request lock") = messages.to_vec();
         self.turn.clone().map_err(|error| error.to_owned())
     }
@@ -225,7 +243,7 @@ async fn handle_turn_with_runtime_inline_mode_returns_synthetic_reply_and_persis
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn handle_turn_with_runtime_tool_turn_combines_preface_and_execution_output() {
+async fn handle_turn_with_runtime_tool_turn_uses_natural_language_completion_by_default() {
     use super::integration_tests::TurnTestHarness;
 
     let harness = TurnTestHarness::new();
@@ -235,7 +253,7 @@ async fn handle_turn_with_runtime_tool_turn_combines_preface_and_execution_outpu
     )
     .expect("seed test note");
 
-    let runtime = FakeRuntime::with_turn(
+    let runtime = FakeRuntime::with_turn_and_completion(
         vec![],
         Ok(ProviderTurn {
             assistant_text: "Reading the file now.".to_owned(),
@@ -249,6 +267,7 @@ async fn handle_turn_with_runtime_tool_turn_combines_preface_and_execution_outpu
             }],
             raw_meta: Value::Null,
         }),
+        Ok("Summary: the note says hello from orchestrator test.".to_owned()),
     );
 
     let orchestrator = ConversationOrchestrator::new();
@@ -256,7 +275,72 @@ async fn handle_turn_with_runtime_tool_turn_combines_preface_and_execution_outpu
         .handle_turn_with_runtime(
             &test_config(),
             "session-tool",
-            "read note.md",
+            "read and summarize note.md",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            Some(&harness.kernel_ctx),
+        )
+        .await
+        .expect("tool turn should succeed");
+
+    assert_eq!(
+        reply,
+        "Summary: the note says hello from orchestrator test."
+    );
+    assert!(
+        !reply.contains("[ok]"),
+        "default reply should not contain raw tool marker, got: {reply}"
+    );
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        1
+    );
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 1);
+
+    let persisted = runtime.persisted.lock().expect("persisted lock");
+    assert_eq!(persisted.len(), 2);
+    assert_eq!(persisted[0].1, "user");
+    assert_eq!(persisted[1].1, "assistant");
+    assert_eq!(persisted[1].2, reply);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_tool_turn_raw_request_skips_second_pass_completion() {
+    use super::integration_tests::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    std::fs::write(
+        harness.temp_dir.join("note.md"),
+        "hello from orchestrator test",
+    )
+    .expect("seed test note");
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Reading the file now.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!({"path": "note.md"}),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-tool-raw".to_owned(),
+                turn_id: "turn-tool-raw".to_owned(),
+                tool_call_id: "call-tool-raw".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        }),
+        Ok("this must not be used".to_owned()),
+    );
+
+    let orchestrator = ConversationOrchestrator::new();
+    let reply = orchestrator
+        .handle_turn_with_runtime(
+            &test_config(),
+            "session-tool-raw",
+            "read note.md and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
             Some(&harness.kernel_ctx),
@@ -265,23 +349,17 @@ async fn handle_turn_with_runtime_tool_turn_combines_preface_and_execution_outpu
         .expect("tool turn should succeed");
 
     assert!(
-        reply.contains("Reading the file now."),
-        "expected assistant preface, got: {reply}"
-    );
-    assert!(
-        reply.contains("hello from orchestrator test"),
-        "expected tool execution content, got: {reply}"
-    );
-    assert!(
         reply.contains("[ok]"),
-        "expected tool status marker, got: {reply}"
+        "raw-request mode should keep tool marker, got: {reply}"
     );
-
-    let persisted = runtime.persisted.lock().expect("persisted lock");
-    assert_eq!(persisted.len(), 2);
-    assert_eq!(persisted[0].1, "user");
-    assert_eq!(persisted[1].1, "assistant");
-    assert_eq!(persisted[1].2, reply);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 1);
 }
 
 #[tokio::test]
@@ -591,8 +669,8 @@ async fn turn_engine_executes_known_tool_with_kernel() {
     match result {
         TurnResult::FinalText(text) => {
             assert!(
-                text.contains("[ok]"),
-                "expected ok status in output, got: {text}"
+                text.contains("\"tool\":\"file.read\""),
+                "expected echoed tool payload in output, got: {text}"
             );
         }
         TurnResult::ToolDenied(reason) => {

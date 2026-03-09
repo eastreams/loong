@@ -247,8 +247,8 @@ mod tests {
         match &write_result {
             TurnResult::FinalText(text) => {
                 assert!(
-                    text.contains("[ok]"),
-                    "expected [ok] in write result, got: {text}"
+                    text.contains("bytes_written") || text.contains("round-trip.txt"),
+                    "expected write metadata in write result, got: {text}"
                 );
             }
             other => panic!("expected FinalText for write, got: {other:?}"),
@@ -284,10 +284,6 @@ mod tests {
                 assert!(
                     text.contains("hello"),
                     "expected 'hello' in output, got: {text}"
-                );
-                assert!(
-                    text.contains("[ok]"),
-                    "expected '[ok]' in output, got: {text}"
                 );
             }
             other => panic!("expected FinalText, got: {other:?}"),
