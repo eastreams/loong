@@ -45,7 +45,7 @@ If you are unsure which track applies, open an issue and ask maintainers for tri
 
 ## Where Do I Start?
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full crate map and data flow.
+Use [Core Beliefs](docs/design-docs/core-beliefs.md) and [Layered Kernel Design](docs/design-docs/layered-kernel-design.md) for architecture principles and dependency boundaries.
 
 **Common contribution areas:**
 

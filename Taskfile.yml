@@ -39,7 +39,7 @@ tasks:
       - ./scripts/benchmark_programmatic_pressure.sh
 
   check:docs:
-    desc: Validate doc governance (mirror, dead links, stale plans)
+    desc: Validate doc governance (mirror, dead links)
     cmds:
       - scripts/check-docs.sh
 

@@ -6,10 +6,12 @@ This file is the **map** — keep it short (~100 lines). Deeper context lives in
 
 ## 1. Start Here
 
-- [Core Beliefs](docs/design-docs/core-beliefs.md) — 10 golden principles
-- [ARCHITECTURE.md](ARCHITECTURE.md) — 7-crate DAG, data flow, "where does X live"
-- [Quality Score](docs/QUALITY_SCORE.md) — per-crate grades
-- [Docs Index](docs/index.md) — full documentation map
+- [Core Beliefs](docs/design-docs/core-beliefs.md) — kernel and engineering principles
+- [Layered Kernel Design](docs/design-docs/layered-kernel-design.md) — layered model and boundary rules
+- [Roadmap](docs/roadmap.md) — stage-based milestones and acceptance criteria
+- [Reliability](docs/RELIABILITY.md) — invariants and operating expectations
+- [Product Specs](docs/product-specs/index.md) — user-facing requirements
+- [Contributing Guide](CONTRIBUTING.md) — contributor workflow and recipes
 
 ## 2. Architecture Contract
 
@@ -62,10 +64,9 @@ Runs fmt + clippy before each commit, matching CI exactly.
 
 | Need | Go to |
 |------|-------|
-| Architectural decisions | `docs/design-docs/` |
-| Active implementation plans | `docs/exec-plans/active/` |
-| Known tech debt | `docs/exec-plans/tech-debt-tracker.md` |
-| Reference material | `docs/references/` |
+| Core principles | `docs/design-docs/core-beliefs.md` |
+| Layered architecture | `docs/design-docs/layered-kernel-design.md` |
 | Roadmap | `docs/roadmap.md` |
 | Reliability invariants | `docs/RELIABILITY.md` |
+| Product requirements | `docs/product-specs/` |
 | Contributing recipes | `CONTRIBUTING.md` |

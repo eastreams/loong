@@ -10,7 +10,7 @@ These are the golden principles for anyone — agent or human — working in thi
 
 4. **Audit everything security-critical** — policy denials, token lifecycle events, and plane invocations all emit structured audit events. Silent drops are bugs (see: NoopAuditSink incident).
 
-5. **7-crate DAG, no cycles** — `contracts` (leaf) -> `kernel` -> `protocol` (leaf) -> `app` -> `spec` -> `bench` -> `daemon`. Dependency direction is non-negotiable. See [ARCHITECTURE.md](../../ARCHITECTURE.md).
+5. **7-crate DAG, no cycles** — `contracts` (leaf) -> `kernel` -> `protocol` (leaf) -> `app` -> `spec` -> `bench` -> `daemon`. Dependency direction is non-negotiable. See [Layered Kernel Design](layered-kernel-design.md).
 
 6. **Tests are the contract** — if a behavior isn't tested, it doesn't exist. All tests pass at every commit, enforced by the pre-commit hook.
 

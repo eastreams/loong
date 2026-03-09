@@ -4,7 +4,7 @@ User-facing product requirements and specifications for LoongClaw.
 
 ## Structure
 
-Product specs describe **what** the product does from the user's perspective, not **how** it's implemented (that's `design-docs/`) or **when** it's built (that's `exec-plans/`).
+Product specs describe **what** the product does from the user's perspective, not implementation internals or scheduling details.
 
 ## Specs
 

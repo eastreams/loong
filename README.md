@@ -18,7 +18,7 @@ The kernel enforces layered execution planes with core/extension separation:
 - audit and deterministic timeline controls
 - integration, plugin IR, bootstrap activation, architecture guard, and awareness snapshots
 
-For full details, see [Layered Kernel Design](docs/layered-kernel-design.md).
+For architecture boundaries, see [Layered Kernel Design](docs/design-docs/layered-kernel-design.md).
 
 ## Current Validation Status
 
@@ -73,16 +73,12 @@ pwsh ./scripts/install.ps1 -Setup
 
 ## Documentation Index
 
-- [Documentation Home](docs/index.md)
+- [Core Beliefs](docs/design-docs/core-beliefs.md)
+- [Layered Kernel Design](docs/design-docs/layered-kernel-design.md)
 - [Roadmap](docs/roadmap.md)
-- [Spec Runner Reference](docs/reference/spec-runner.md)
-- [Plugin Runtime Governance](docs/reference/plugin-runtime-governance.md)
-- [Programmatic Tool Call](docs/reference/programmatic-tool-call.md)
-- [Programmatic Pressure Benchmark](docs/reference/programmatic-pressure-benchmark.md)
-- [Plugin Manifest Format](docs/reference/plugin-manifest-format.md)
-- [MVP Quickstart](docs/reference/mvp-quickstart.md)
-- [MVP Foundation Architecture](docs/reference/mvp-foundation-architecture.md)
-- [Status, Roadmap, and MVP Progress (2026-03-08)](docs/reference/status-roadmap-mvp-2026-03-08.md)
+- [Reliability](docs/RELIABILITY.md)
+- [Product Specs](docs/product-specs/index.md)
+- [Contributing Guide](CONTRIBUTING.md)
 
 ## Open Source Contribution
 
