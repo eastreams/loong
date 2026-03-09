@@ -805,6 +805,7 @@ mod tests {
             feishu: FeishuChannelConfig::default(),
             tools: ToolConfig::default(),
             memory: MemoryConfig::default(),
+            conversation: crate::config::ConversationConfig::default(),
         };
 
         let messages =
@@ -822,6 +823,7 @@ mod tests {
             feishu: FeishuChannelConfig::default(),
             tools: ToolConfig::default(),
             memory: MemoryConfig::default(),
+            conversation: crate::config::ConversationConfig::default(),
         };
 
         let messages =
@@ -855,6 +857,7 @@ mod tests {
             feishu: FeishuChannelConfig::default(),
             tools: ToolConfig::default(),
             memory: MemoryConfig::default(),
+            conversation: crate::config::ConversationConfig::default(),
         };
         config.provider.reasoning_effort = Some(ReasoningEffort::High);
 
@@ -891,6 +894,7 @@ mod tests {
             feishu: FeishuChannelConfig::default(),
             tools: ToolConfig::default(),
             memory: MemoryConfig::default(),
+            conversation: crate::config::ConversationConfig::default(),
         };
 
         let body = build_completion_request_body(
@@ -915,6 +919,7 @@ mod tests {
             feishu: FeishuChannelConfig::default(),
             tools: ToolConfig::default(),
             memory: MemoryConfig::default(),
+            conversation: crate::config::ConversationConfig::default(),
         };
 
         let body = build_turn_request_body(

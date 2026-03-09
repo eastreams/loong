@@ -10,8 +10,8 @@ use loongclaw_kernel::{
 use serde_json::{json, Value};
 
 use super::super::config::{
-    CliChannelConfig, FeishuChannelConfig, LoongClawConfig, MemoryConfig, ProviderConfig,
-    TelegramChannelConfig, ToolConfig,
+    CliChannelConfig, ConversationConfig, FeishuChannelConfig, LoongClawConfig, MemoryConfig,
+    ProviderConfig, TelegramChannelConfig, ToolConfig,
 };
 use super::persistence::format_provider_error_reply;
 use super::runtime::DefaultConversationRuntime;
@@ -153,6 +153,7 @@ fn test_config() -> LoongClawConfig {
         feishu: FeishuChannelConfig::default(),
         tools: ToolConfig::default(),
         memory: MemoryConfig::default(),
+        conversation: ConversationConfig::default(),
     }
 }
 
@@ -485,6 +486,198 @@ async fn handle_turn_with_runtime_supports_multiple_tool_rounds_before_final_ans
 }
 
 #[tokio::test]
+async fn handle_turn_with_runtime_repeated_tool_signature_guard_triggers_completion() {
+    let repeated_tool_turn = || {
+        Ok(ProviderTurn {
+            assistant_text: "Reading the file again.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!({"path": "note.md"}),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-loop-guard".to_owned(),
+                turn_id: "turn-loop-guard".to_owned(),
+                tool_call_id: "call-loop-guard".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        })
+    };
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            repeated_tool_turn(),
+            repeated_tool_turn(),
+            repeated_tool_turn(),
+        ],
+        vec![Ok(
+            "I cannot access additional context, but here's what I found.".to_owned(),
+        )],
+    );
+
+    let turn_loop = ConversationTurnLoop::new();
+    let reply = turn_loop
+        .handle_turn_with_runtime(
+            &test_config(),
+            "session-loop-guard",
+            "read note.md",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("loop guard fallback should succeed");
+
+    assert_eq!(
+        reply,
+        "I cannot access additional context, but here's what I found."
+    );
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 3);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        1
+    );
+
+    let completion_payloads = runtime
+        .completion_requested_messages
+        .lock()
+        .expect("completion requests lock");
+    assert_eq!(completion_payloads.len(), 1);
+    let serialized = serde_json::to_string(&completion_payloads[0]).expect("serialize completion");
+    assert!(
+        serialized.contains("[tool_loop_guard]"),
+        "completion fallback payload should include loop guard marker, got: {serialized}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_turn_loop_policy_override_allows_multiple_tool_steps() {
+    use super::integration_tests::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    std::fs::write(harness.temp_dir.join("note_a.md"), "first note").expect("seed note_a");
+    std::fs::write(harness.temp_dir.join("note_b.md"), "second note").expect("seed note_b");
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Reading both notes.".to_owned(),
+            tool_intents: vec![
+                ToolIntent {
+                    tool_name: "file.read".to_owned(),
+                    args_json: json!({"path": "note_a.md"}),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "session-step-override".to_owned(),
+                    turn_id: "turn-step-override".to_owned(),
+                    tool_call_id: "call-step-1".to_owned(),
+                },
+                ToolIntent {
+                    tool_name: "file.read".to_owned(),
+                    args_json: json!({"path": "note_b.md"}),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "session-step-override".to_owned(),
+                    turn_id: "turn-step-override".to_owned(),
+                    tool_call_id: "call-step-2".to_owned(),
+                },
+            ],
+            raw_meta: Value::Null,
+        }),
+        Ok("this must not be used".to_owned()),
+    );
+
+    let mut config = test_config();
+    config.conversation.turn_loop.max_tool_steps_per_round = 2;
+
+    let turn_loop = ConversationTurnLoop::new();
+    let reply = turn_loop
+        .handle_turn_with_runtime(
+            &config,
+            "session-step-override",
+            "read note_a.md and note_b.md, return raw tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            Some(&harness.kernel_ctx),
+        )
+        .await
+        .expect("multiple tool steps should be allowed by override");
+
+    assert!(
+        reply.matches("[ok]").count() >= 2,
+        "expected at least two tool outputs, got: {reply}"
+    );
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 1);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_turn_loop_policy_override_allows_more_repeated_rounds() {
+    let repeated_tool_turn = || {
+        Ok(ProviderTurn {
+            assistant_text: "Trying file.read again.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!({"path": "note.md"}),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-loop-override".to_owned(),
+                turn_id: "turn-loop-override".to_owned(),
+                tool_call_id: "call-loop-override".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        })
+    };
+
+    let runtime = FakeRuntime::with_turns(
+        vec![],
+        vec![
+            repeated_tool_turn(),
+            repeated_tool_turn(),
+            repeated_tool_turn(),
+            repeated_tool_turn(),
+            Ok(ProviderTurn {
+                assistant_text: "Final answer after four retries.".to_owned(),
+                tool_intents: vec![],
+                raw_meta: Value::Null,
+            }),
+        ],
+    );
+
+    let mut config = test_config();
+    config.conversation.turn_loop.max_rounds = 5;
+    config.conversation.turn_loop.max_repeated_tool_call_rounds = 4;
+
+    let turn_loop = ConversationTurnLoop::new();
+    let reply = turn_loop
+        .handle_turn_with_runtime(
+            &config,
+            "session-loop-override",
+            "read note.md",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("policy override should permit extra repeated rounds");
+
+    assert_eq!(reply, "Final answer after four retries.");
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 5);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+}
+
+#[tokio::test]
 async fn handle_turn_with_runtime_tool_denial_returns_inline_reply_even_in_propagate_mode() {
     let runtime = FakeRuntime::with_turns(
         vec![],
@@ -640,10 +833,13 @@ async fn handle_turn_with_runtime_tool_failure_completion_error_uses_raw_reason_
         vec![Err("completion_unavailable".to_owned())],
     );
 
+    let mut config = test_config();
+    config.conversation.turn_loop.max_repeated_tool_call_rounds = 8;
+
     let turn_loop = ConversationTurnLoop::new();
     let reply = turn_loop
         .handle_turn_with_runtime(
-            &test_config(),
+            &config,
             "session-denied-fallback",
             "read note.md",
             ProviderErrorMode::Propagate,

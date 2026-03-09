@@ -27,6 +27,42 @@ pub struct LoongClawConfig {
     pub tools: ToolConfig,
     #[serde(default)]
     pub memory: MemoryConfig,
+    #[serde(default)]
+    pub conversation: ConversationConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationConfig {
+    #[serde(default)]
+    pub turn_loop: ConversationTurnLoopConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationTurnLoopConfig {
+    #[serde(default = "default_turn_loop_max_rounds")]
+    pub max_rounds: usize,
+    #[serde(default = "default_turn_loop_max_tool_steps_per_round")]
+    pub max_tool_steps_per_round: usize,
+    #[serde(default = "default_turn_loop_max_repeated_tool_call_rounds")]
+    pub max_repeated_tool_call_rounds: usize,
+}
+
+impl Default for ConversationConfig {
+    fn default() -> Self {
+        Self {
+            turn_loop: ConversationTurnLoopConfig::default(),
+        }
+    }
+}
+
+impl Default for ConversationTurnLoopConfig {
+    fn default() -> Self {
+        Self {
+            max_rounds: default_turn_loop_max_rounds(),
+            max_tool_steps_per_round: default_turn_loop_max_tool_steps_per_round(),
+            max_repeated_tool_call_rounds: default_turn_loop_max_repeated_tool_call_rounds(),
+        }
+    }
 }
 
 pub fn load(path: Option<&str>) -> CliResult<(PathBuf, LoongClawConfig)> {
@@ -92,4 +128,16 @@ fn encode_toml_config(config: &LoongClawConfig) -> CliResult<String> {
 #[cfg(not(feature = "config-toml"))]
 fn encode_toml_config(_config: &LoongClawConfig) -> CliResult<String> {
     Err("config-toml feature is disabled for this build".to_owned())
+}
+
+const fn default_turn_loop_max_rounds() -> usize {
+    4
+}
+
+const fn default_turn_loop_max_tool_steps_per_round() -> usize {
+    1
+}
+
+const fn default_turn_loop_max_repeated_tool_call_rounds() -> usize {
+    2
 }

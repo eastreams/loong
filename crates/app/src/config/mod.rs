@@ -9,7 +9,10 @@ pub use channels::{CliChannelConfig, FeishuChannelConfig, TelegramChannelConfig}
 #[allow(unused_imports)]
 pub use provider::{ProviderConfig, ProviderKind, ReasoningEffort};
 #[allow(unused_imports)]
-pub use runtime::{default_loongclaw_home, load, write_template, LoongClawConfig};
+pub use runtime::{
+    default_loongclaw_home, load, write_template, ConversationConfig, ConversationTurnLoopConfig,
+    LoongClawConfig,
+};
 #[allow(unused_imports)]
 pub use tools_memory::{MemoryConfig, ToolConfig};
 
@@ -260,6 +263,36 @@ model = "model-example"
         let config = ProviderConfig::default();
         assert_eq!(config.model, "auto");
         assert!(config.model_selection_requires_fetch());
+    }
+
+    #[test]
+    fn turn_loop_policy_defaults_are_stable() {
+        let config = LoongClawConfig::default();
+        assert_eq!(config.conversation.turn_loop.max_rounds, 4);
+        assert_eq!(config.conversation.turn_loop.max_tool_steps_per_round, 1);
+        assert_eq!(
+            config.conversation.turn_loop.max_repeated_tool_call_rounds,
+            2
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn turn_loop_policy_can_be_overridden_from_toml() {
+        let raw = r#"
+[conversation.turn_loop]
+max_rounds = 6
+max_tool_steps_per_round = 3
+max_repeated_tool_call_rounds = 5
+"#;
+        let parsed =
+            toml::from_str::<LoongClawConfig>(raw).expect("parse turn-loop config should pass");
+        assert_eq!(parsed.conversation.turn_loop.max_rounds, 6);
+        assert_eq!(parsed.conversation.turn_loop.max_tool_steps_per_round, 3);
+        assert_eq!(
+            parsed.conversation.turn_loop.max_repeated_tool_call_rounds,
+            5
+        );
     }
 
     #[test]
