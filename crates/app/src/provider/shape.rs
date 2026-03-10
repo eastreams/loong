@@ -12,11 +12,7 @@ pub fn extract_provider_turn(body: &Value) -> Option<ProviderTurn> {
         .and_then(|choices| choices.first())
         .and_then(|choice| choice.get("message"))?;
 
-    let assistant_text = message
-        .get("content")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_owned();
+    let assistant_text = message_content(message).unwrap_or_default();
 
     let tool_intents = message
         .get("tool_calls")
@@ -70,12 +66,24 @@ pub(super) fn extract_message_content(body: &Value) -> Option<String> {
         .and_then(Value::as_array)
         .and_then(|choices| choices.first())
         .and_then(|choice| choice.get("message"))
-        .and_then(|message| message.get("content"))?;
+        .and_then(message_content_value)?;
 
+    extract_content_text(content)
+}
+
+fn message_content(message: &Value) -> Option<String> {
+    let content = message_content_value(message)?;
+    extract_content_text(content)
+}
+
+fn message_content_value(message: &Value) -> Option<&Value> {
+    message.get("content")
+}
+
+fn extract_content_text(content: &Value) -> Option<String> {
     if let Some(text) = content.as_str() {
         return normalize_text(text);
     }
-
     let parts = content.as_array()?;
     let mut merged = Vec::new();
     for part in parts {
@@ -300,6 +308,38 @@ mod tests {
         let turn = extract_provider_turn(&body).expect("turn");
         assert_eq!(turn.assistant_text, "hello world");
         assert!(turn.tool_intents.is_empty());
+    }
+
+    #[test]
+    fn extract_provider_turn_supports_array_content_shape() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "line1"},
+                        {"type": "text", "text": {"value": "line2"}}
+                    ]
+                }
+            }]
+        });
+        let turn = extract_provider_turn(&body).expect("turn");
+        assert_eq!(turn.assistant_text, "line1\nline2");
+        assert!(turn.tool_intents.is_empty());
+    }
+
+    #[test]
+    fn extract_provider_turn_preserves_reasoning_content_in_raw_meta() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "done",
+                    "reasoning_content": "thinking"
+                }
+            }]
+        });
+        let turn = extract_provider_turn(&body).expect("turn");
+        assert_eq!(turn.assistant_text, "done");
+        assert_eq!(turn.raw_meta["reasoning_content"], "thinking");
     }
 
     #[test]

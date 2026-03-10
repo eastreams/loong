@@ -5,7 +5,7 @@ use tokio::time::sleep;
 
 use crate::CliResult;
 
-use super::config::{LoongClawConfig, ProviderConfig, ProviderKind};
+use super::config::{LoongClawConfig, ProviderConfig, ProviderKind, ReasoningEffort};
 #[cfg(feature = "memory-sqlite")]
 use super::memory;
 
@@ -54,10 +54,11 @@ pub fn build_messages_for_session(
 }
 
 pub async fn request_completion(config: &LoongClawConfig, messages: &[Value]) -> CliResult<String> {
+    validate_provider_configuration(config)?;
     validate_provider_feature_gate(config)?;
 
     let endpoint = config.provider.endpoint();
-    let headers = transport::build_request_headers(&config.provider.headers)?;
+    let headers = transport::build_request_headers(&config.provider)?;
     let request_policy = policy::ProviderRequestPolicy::from_config(&config.provider);
     let client = build_http_client(&request_policy)?;
     let model_candidates = resolve_request_models(config, &headers, &request_policy).await?;
@@ -95,10 +96,11 @@ pub async fn request_turn(
     config: &LoongClawConfig,
     messages: &[Value],
 ) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
+    validate_provider_configuration(config)?;
     validate_provider_feature_gate(config)?;
 
     let endpoint = config.provider.endpoint();
-    let headers = transport::build_request_headers(&config.provider.headers)?;
+    let headers = transport::build_request_headers(&config.provider)?;
     let request_policy = policy::ProviderRequestPolicy::from_config(&config.provider);
     let client = build_http_client(&request_policy)?;
     let model_candidates = resolve_request_models(config, &headers, &request_policy).await?;
@@ -133,8 +135,9 @@ pub async fn request_turn(
 }
 
 pub async fn fetch_available_models(config: &LoongClawConfig) -> CliResult<Vec<String>> {
+    validate_provider_configuration(config)?;
     validate_provider_feature_gate(config)?;
-    let headers = transport::build_request_headers(&config.provider.headers)?;
+    let headers = transport::build_request_headers(&config.provider)?;
     let request_policy = policy::ProviderRequestPolicy::from_config(&config.provider);
     fetch_available_models_with_policy(config, &headers, &request_policy).await
 }
@@ -152,6 +155,7 @@ fn build_completion_request_body(
     model: &str,
     payload_mode: CompletionPayloadMode,
 ) -> Value {
+    let transport_mode = ProviderTransportMode::for_provider(&config.provider);
     let mut body = serde_json::Map::new();
     body.insert("model".to_owned(), json!(model));
     body.insert("messages".to_owned(), Value::Array(messages.to_vec()));
@@ -192,6 +196,12 @@ fn build_completion_request_body(
         }
     }
 
+    if transport_mode == ProviderTransportMode::KimiApi {
+        if let Some(extra_body) = kimi_extra_body(config.provider.reasoning_effort) {
+            body.insert("extra_body".to_owned(), extra_body);
+        }
+    }
+
     Value::Object(body)
 }
 
@@ -218,8 +228,8 @@ async fn resolve_request_models(
     headers: &reqwest::header::HeaderMap,
     request_policy: &policy::ProviderRequestPolicy,
 ) -> CliResult<Vec<String>> {
-    if !config.provider.model_selection_requires_fetch() {
-        return Ok(vec![config.provider.model.trim().to_owned()]);
+    if let Some(model) = config.provider.resolved_model() {
+        return Ok(vec![model]);
     }
     let available = fetch_available_models_with_policy(config, headers, request_policy).await?;
     let ordered = rank_model_candidates(&config.provider, &available);
@@ -332,6 +342,21 @@ fn push_unique_model(out: &mut Vec<String>, model: &str) {
 struct ModelRequestError {
     message: String,
     try_next_model: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderTransportMode {
+    OpenAiChatCompletions,
+    KimiApi,
+}
+
+impl ProviderTransportMode {
+    fn for_provider(provider: &ProviderConfig) -> Self {
+        match provider.kind {
+            ProviderKind::KimiCoding => Self::KimiApi,
+            _ => Self::OpenAiChatCompletions,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -788,6 +813,65 @@ fn validate_provider_feature_gate(config: &LoongClawConfig) -> CliResult<()> {
     Ok(())
 }
 
+fn validate_provider_configuration(config: &LoongClawConfig) -> CliResult<()> {
+    if config.provider.kind == ProviderKind::Kimi
+        && provider_uses_kimi_coding_endpoint(&config.provider)
+    {
+        return Err(
+            "kimi provider cannot target Kimi Coding endpoints; use `kind = \"kimi_coding\"`"
+                .to_owned(),
+        );
+    }
+
+    if config.provider.kind == ProviderKind::KimiCoding {
+        if let Some(user_agent) = config.provider.header_value("user-agent") {
+            if !is_kimi_cli_user_agent(user_agent) {
+                return Err(format!(
+                    "kimi_coding provider requires a `User-Agent` header starting with `KimiCLI/`; got `{user_agent}`"
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn provider_uses_kimi_coding_endpoint(provider: &ProviderConfig) -> bool {
+    is_kimi_coding_endpoint(provider.endpoint().as_str())
+        || provider
+            .endpoint
+            .as_deref()
+            .is_some_and(is_kimi_coding_endpoint)
+}
+
+fn is_kimi_coding_endpoint(endpoint: &str) -> bool {
+    endpoint
+        .trim()
+        .to_ascii_lowercase()
+        .contains("://api.kimi.com/coding/")
+}
+
+fn is_kimi_cli_user_agent(user_agent: &str) -> bool {
+    user_agent.trim().starts_with("KimiCLI/")
+}
+
+fn kimi_extra_body(reasoning_effort: Option<ReasoningEffort>) -> Option<Value> {
+    let reasoning_effort = reasoning_effort?;
+    let thinking_type = match reasoning_effort {
+        ReasoningEffort::None => "disabled",
+        ReasoningEffort::Minimal
+        | ReasoningEffort::Low
+        | ReasoningEffort::Medium
+        | ReasoningEffort::High
+        | ReasoningEffort::Xhigh => "enabled",
+    };
+    Some(json!({
+        "thinking": {
+            "type": thinking_type
+        }
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -871,6 +955,31 @@ mod tests {
     }
 
     #[test]
+    fn kimi_coding_completion_body_adds_extra_body_thinking() {
+        let mut config = LoongClawConfig {
+            provider: ProviderConfig {
+                kind: ProviderKind::KimiCoding,
+                ..ProviderConfig::default()
+            },
+            cli: crate::config::CliChannelConfig::default(),
+            telegram: crate::config::TelegramChannelConfig::default(),
+            feishu: FeishuChannelConfig::default(),
+            tools: ToolConfig::default(),
+            memory: MemoryConfig::default(),
+        };
+        config.provider.reasoning_effort = Some(ReasoningEffort::High);
+
+        let body = build_completion_request_body(
+            &config,
+            &[],
+            "kimi-for-coding",
+            CompletionPayloadMode::default_for(&config.provider),
+        );
+        assert_eq!(body["reasoning_effort"], "high");
+        assert_eq!(body["extra_body"]["thinking"]["type"], "enabled");
+    }
+
+    #[test]
     fn model_catalog_selection_prefers_user_preferences() {
         let config = ProviderConfig {
             model: "auto".to_owned(),
@@ -907,6 +1016,39 @@ mod tests {
         assert!(body.get("max_completion_tokens").is_none());
         assert!(body.get("reasoning").is_none());
         assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn kimi_coding_request_headers_include_default_user_agent() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::KimiCoding,
+            ..ProviderConfig::default()
+        };
+        let headers = transport::build_request_headers(&provider).expect("headers");
+        let user_agent = headers
+            .get(reqwest::header::USER_AGENT)
+            .expect("default user-agent")
+            .to_str()
+            .expect("user-agent value");
+        assert_eq!(user_agent, "KimiCLI/LoongClaw");
+    }
+
+    #[test]
+    fn kimi_coding_keeps_explicit_compatible_user_agent() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::KimiCoding,
+            headers: [("User-Agent".to_owned(), "KimiCLI/custom".to_owned())]
+                .into_iter()
+                .collect(),
+            ..ProviderConfig::default()
+        };
+        let headers = transport::build_request_headers(&provider).expect("headers");
+        let user_agent = headers
+            .get(reqwest::header::USER_AGENT)
+            .expect("explicit user-agent")
+            .to_str()
+            .expect("user-agent value");
+        assert_eq!(user_agent, "KimiCLI/custom");
     }
 
     #[cfg(any(feature = "tool-file", feature = "tool-shell"))]
@@ -1101,5 +1243,44 @@ mod tests {
         });
         let parsed = parse_provider_api_error(&body);
         assert!(should_try_next_model_on_error(&parsed));
+    }
+
+    #[test]
+    fn validate_provider_configuration_rejects_plain_kimi_on_coding_endpoint() {
+        let config = LoongClawConfig {
+            provider: ProviderConfig {
+                kind: ProviderKind::Kimi,
+                base_url: "https://api.kimi.com/coding".to_owned(),
+                chat_completions_path: "/v1/chat/completions".to_owned(),
+                ..ProviderConfig::default()
+            },
+            cli: crate::config::CliChannelConfig::default(),
+            telegram: crate::config::TelegramChannelConfig::default(),
+            feishu: FeishuChannelConfig::default(),
+            tools: ToolConfig::default(),
+            memory: MemoryConfig::default(),
+        };
+        let error = validate_provider_configuration(&config).expect_err("misconfig should fail");
+        assert!(error.contains("use `kind = \"kimi_coding\"`"));
+    }
+
+    #[test]
+    fn validate_provider_configuration_rejects_incompatible_kimi_coding_user_agent() {
+        let config = LoongClawConfig {
+            provider: ProviderConfig {
+                kind: ProviderKind::KimiCoding,
+                headers: [("User-Agent".to_owned(), "LoongClaw/0.1".to_owned())]
+                    .into_iter()
+                    .collect(),
+                ..ProviderConfig::default()
+            },
+            cli: crate::config::CliChannelConfig::default(),
+            telegram: crate::config::TelegramChannelConfig::default(),
+            feishu: FeishuChannelConfig::default(),
+            tools: ToolConfig::default(),
+            memory: MemoryConfig::default(),
+        };
+        let error = validate_provider_configuration(&config).expect_err("invalid ua");
+        assert!(error.contains("KimiCLI/"));
     }
 }

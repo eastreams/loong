@@ -42,6 +42,8 @@ pub enum ProviderKind {
     Anthropic,
     #[serde(alias = "kimi_compatible")]
     Kimi,
+    #[serde(alias = "kimi_coding_compatible")]
+    KimiCoding,
     #[serde(alias = "minimax_compatible")]
     Minimax,
     #[serde(alias = "ollama_compatible")]
@@ -223,9 +225,16 @@ impl ProviderConfig {
         self.api_key().map(|key| format!("Bearer {key}"))
     }
 
-    pub fn model_selection_requires_fetch(&self) -> bool {
+    pub fn resolved_model(&self) -> Option<String> {
         let trimmed = self.model.trim();
-        trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto")
+        if !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("auto") {
+            return Some(trimmed.to_owned());
+        }
+        self.kind.default_model().map(str::to_owned)
+    }
+
+    pub fn model_selection_requires_fetch(&self) -> bool {
+        self.resolved_model().is_none()
     }
 
     pub fn oauth_access_token(&self) -> Option<String> {
@@ -301,6 +310,13 @@ impl ProviderConfig {
 
         first_non_empty_env_value(&env_keys)
     }
+
+    pub fn header_value(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
 }
 
 impl ProviderKind {
@@ -310,6 +326,7 @@ impl ProviderKind {
             ProviderKind::Anthropic,
             ProviderKind::Deepseek,
             ProviderKind::Kimi,
+            ProviderKind::KimiCoding,
             ProviderKind::Minimax,
             ProviderKind::Ollama,
             ProviderKind::Openai,
@@ -327,6 +344,7 @@ impl ProviderKind {
             ProviderKind::Anthropic => "anthropic",
             ProviderKind::Deepseek => "deepseek",
             ProviderKind::Kimi => "kimi",
+            ProviderKind::KimiCoding => "kimi_coding",
             ProviderKind::Minimax => "minimax",
             ProviderKind::Ollama => "ollama",
             ProviderKind::Openai => "openai",
@@ -354,6 +372,11 @@ impl ProviderKind {
                 id: "kimi",
                 base_url: "https://api.moonshot.cn",
                 chat_completions_path: "/v1/chat/completions",
+            },
+            ProviderKind::KimiCoding => ProviderProfile {
+                id: "kimi_coding",
+                base_url: "https://api.kimi.com",
+                chat_completions_path: "/coding/v1/chat/completions",
             },
             ProviderKind::Minimax => ProviderProfile {
                 id: "minimax",
@@ -403,6 +426,7 @@ impl ProviderKind {
             ProviderKind::Anthropic => Some("ANTHROPIC_API_KEY"),
             ProviderKind::Deepseek => Some("DEEPSEEK_API_KEY"),
             ProviderKind::Kimi => Some("MOONSHOT_API_KEY"),
+            ProviderKind::KimiCoding => Some("KIMI_API_KEY"),
             ProviderKind::Minimax => Some("MINIMAX_API_KEY"),
             ProviderKind::Ollama => None,
             ProviderKind::Openai => Some("OPENAI_API_KEY"),
@@ -417,8 +441,23 @@ impl ProviderKind {
     pub const fn api_key_env_aliases(self) -> &'static [&'static str] {
         match self {
             ProviderKind::Kimi => &["KIMI_API_KEY"],
+            ProviderKind::KimiCoding => &["KIMICODE_API_KEY"],
             ProviderKind::Zhipu => &["ZHIPU_API_KEY"],
             _ => &[],
+        }
+    }
+
+    pub const fn default_model(self) -> Option<&'static str> {
+        match self {
+            ProviderKind::KimiCoding => Some("kimi-for-coding"),
+            _ => None,
+        }
+    }
+
+    pub const fn default_user_agent(self) -> Option<&'static str> {
+        match self {
+            ProviderKind::KimiCoding => Some("KimiCLI/LoongClaw"),
+            _ => None,
         }
     }
 

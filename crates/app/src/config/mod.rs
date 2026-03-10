@@ -61,6 +61,7 @@ mod tests {
                 "anthropic",
                 "deepseek",
                 "kimi",
+                "kimi_coding",
                 "minimax",
                 "ollama",
                 "openai",
@@ -85,6 +86,10 @@ mod tests {
             (
                 ProviderKind::Kimi,
                 "https://api.moonshot.cn/v1/chat/completions",
+            ),
+            (
+                ProviderKind::KimiCoding,
+                "https://api.kimi.com/coding/v1/chat/completions",
             ),
             (
                 ProviderKind::Minimax,
@@ -162,6 +167,28 @@ mod tests {
             config.default_api_key_env().as_deref(),
             Some("OPENROUTER_API_KEY")
         );
+    }
+
+    #[test]
+    fn kimi_coding_uses_native_profile_defaults() {
+        let config = ProviderConfig {
+            kind: ProviderKind::KimiCoding,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            config.endpoint(),
+            "https://api.kimi.com/coding/v1/chat/completions"
+        );
+        assert_eq!(
+            config.models_endpoint(),
+            "https://api.kimi.com/coding/v1/models"
+        );
+        assert_eq!(config.resolved_model().as_deref(), Some("kimi-for-coding"));
+        assert_eq!(
+            config.default_api_key_env().as_deref(),
+            Some("KIMI_API_KEY")
+        );
+        assert!(!config.model_selection_requires_fetch());
     }
 
     #[test]
@@ -247,6 +274,47 @@ model = "model-example"
         let parsed =
             toml::from_str::<LoongClawConfig>(raw).expect("parse compatible alias should pass");
         assert_eq!(parsed.provider.kind, ProviderKind::Xai);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn provider_kind_keeps_kimi_coding_compatible_alias() {
+        let raw = r#"
+[provider]
+kind = "kimi_coding_compatible"
+model = "model-example"
+"#;
+        let parsed =
+            toml::from_str::<LoongClawConfig>(raw).expect("parse kimi coding alias should pass");
+        assert_eq!(parsed.provider.kind, ProviderKind::KimiCoding);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn kimi_coding_partial_config_uses_internal_defaults() {
+        let raw = r#"
+[provider]
+kind = "kimi_coding"
+"#;
+        let parsed =
+            toml::from_str::<LoongClawConfig>(raw).expect("parse minimal kimi coding config");
+        assert_eq!(parsed.provider.kind, ProviderKind::KimiCoding);
+        assert_eq!(
+            parsed.provider.endpoint(),
+            "https://api.kimi.com/coding/v1/chat/completions"
+        );
+        assert_eq!(
+            parsed.provider.models_endpoint(),
+            "https://api.kimi.com/coding/v1/models"
+        );
+        assert_eq!(
+            parsed.provider.resolved_model().as_deref(),
+            Some("kimi-for-coding")
+        );
+        assert_eq!(
+            parsed.provider.default_api_key_env().as_deref(),
+            Some("KIMI_API_KEY")
+        );
     }
 
     #[test]
@@ -593,6 +661,10 @@ max_followup_tool_payload_chars_total = 3200
                 "https://api.anthropic.com/v1/models",
             ),
             (ProviderKind::Kimi, "https://api.moonshot.cn/v1/models"),
+            (
+                ProviderKind::KimiCoding,
+                "https://api.kimi.com/coding/v1/models",
+            ),
             (ProviderKind::Minimax, "https://api.minimaxi.com/v1/models"),
             (ProviderKind::Ollama, "http://127.0.0.1:11434/v1/models"),
             (ProviderKind::Openai, "https://api.openai.com/v1/models"),
@@ -618,5 +690,18 @@ max_followup_tool_payload_chars_total = 3200
             };
             assert_eq!(config.models_endpoint(), expected, "kind={kind:?}");
         }
+    }
+
+    #[test]
+    fn kimi_coding_header_lookup_is_case_insensitive() {
+        let config = ProviderConfig {
+            kind: ProviderKind::KimiCoding,
+            headers: [("User-Agent".to_owned(), "KimiCLI/custom".to_owned())]
+                .into_iter()
+                .collect(),
+            ..ProviderConfig::default()
+        };
+        assert_eq!(config.header_value("user-agent"), Some("KimiCLI/custom"));
+        assert_eq!(config.header_value("USER-AGENT"), Some("KimiCLI/custom"));
     }
 }
