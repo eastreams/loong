@@ -423,6 +423,7 @@ pub(crate) fn validate_non_interactive_risk_gate(
 pub(crate) fn parse_provider_kind(raw: &str) -> Option<mvp::config::ProviderKind> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "anthropic" | "anthropic_compatible" => Some(mvp::config::ProviderKind::Anthropic),
+        "deepseek" | "deepseek_compatible" => Some(mvp::config::ProviderKind::Deepseek),
         "kimi" | "kimi_compatible" => Some(mvp::config::ProviderKind::Kimi),
         "minimax" | "minimax_compatible" => Some(mvp::config::ProviderKind::Minimax),
         "ollama" | "ollama_compatible" => Some(mvp::config::ProviderKind::Ollama),
@@ -441,6 +442,7 @@ pub(crate) fn parse_provider_kind(raw: &str) -> Option<mvp::config::ProviderKind
 pub(crate) fn provider_default_api_key_env(kind: mvp::config::ProviderKind) -> &'static str {
     match kind {
         mvp::config::ProviderKind::Anthropic => "ANTHROPIC_API_KEY",
+        mvp::config::ProviderKind::Deepseek => "DEEPSEEK_API_KEY",
         mvp::config::ProviderKind::Kimi => "MOONSHOT_API_KEY",
         mvp::config::ProviderKind::Minimax => "MINIMAX_API_KEY",
         mvp::config::ProviderKind::Ollama => "OLLAMA_API_KEY",
@@ -456,6 +458,7 @@ pub(crate) fn provider_default_api_key_env(kind: mvp::config::ProviderKind) -> &
 pub(crate) fn provider_kind_id(kind: mvp::config::ProviderKind) -> &'static str {
     match kind {
         mvp::config::ProviderKind::Anthropic => "anthropic",
+        mvp::config::ProviderKind::Deepseek => "deepseek",
         mvp::config::ProviderKind::Kimi => "kimi",
         mvp::config::ProviderKind::Minimax => "minimax",
         mvp::config::ProviderKind::Ollama => "ollama",
@@ -469,5 +472,5 @@ pub(crate) fn provider_kind_id(kind: mvp::config::ProviderKind) -> &'static str 
 }
 
 fn supported_provider_list() -> &'static str {
-    "openai, anthropic, openrouter, kimi, minimax, ollama, volcengine, xai, zai, zhipu"
+    "openai, anthropic, openrouter, kimi, minimax, ollama, volcengine, xai, zai, zhipu, deepseek"
 }

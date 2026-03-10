@@ -59,6 +59,8 @@ pub enum ProviderKind {
     Zai,
     #[serde(alias = "zhipu_compatible")]
     Zhipu,
+    #[serde(alias = "deepseek_compatible")]
+    Deepseek,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -306,6 +308,7 @@ impl ProviderKind {
     pub const fn all_sorted() -> &'static [ProviderKind] {
         &[
             ProviderKind::Anthropic,
+            ProviderKind::Deepseek,
             ProviderKind::Kimi,
             ProviderKind::Minimax,
             ProviderKind::Ollama,
@@ -322,6 +325,7 @@ impl ProviderKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             ProviderKind::Anthropic => "anthropic",
+            ProviderKind::Deepseek => "deepseek",
             ProviderKind::Kimi => "kimi",
             ProviderKind::Minimax => "minimax",
             ProviderKind::Ollama => "ollama",
@@ -340,6 +344,11 @@ impl ProviderKind {
                 id: "anthropic",
                 base_url: "https://api.anthropic.com/v1",
                 chat_completions_path: "/chat/completions",
+            },
+            ProviderKind::Deepseek => ProviderProfile {
+                id: "deepseek",
+                base_url: "https://api.deepseek.com",
+                chat_completions_path: "/v1/chat/completions",
             },
             ProviderKind::Kimi => ProviderProfile {
                 id: "kimi",
@@ -392,6 +401,7 @@ impl ProviderKind {
     pub const fn default_api_key_env(self) -> Option<&'static str> {
         match self {
             ProviderKind::Anthropic => Some("ANTHROPIC_API_KEY"),
+            ProviderKind::Deepseek => Some("DEEPSEEK_API_KEY"),
             ProviderKind::Kimi => Some("MOONSHOT_API_KEY"),
             ProviderKind::Minimax => Some("MINIMAX_API_KEY"),
             ProviderKind::Ollama => None,

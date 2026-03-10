@@ -39,7 +39,7 @@ tasks:
       - ./scripts/benchmark_programmatic_pressure.sh
 
   check:docs:
-    desc: Validate doc governance (dev mode: warn on missing local .docs release traces)
+    desc: "Validate doc governance (dev mode: warn on missing local .docs release traces)"
     cmds:
       - scripts/check-docs.sh
 

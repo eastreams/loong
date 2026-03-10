@@ -59,6 +59,7 @@ mod tests {
             ids,
             vec![
                 "anthropic",
+                "deepseek",
                 "kimi",
                 "minimax",
                 "ollama",
