@@ -31,6 +31,8 @@ For architecture boundaries, see [Layered Kernel Design](docs/design-docs/layere
 ## MVP Foundation (In Progress)
 
 - `setup` command: generate beginner-friendly TOML config and bootstrap SQLite memory.
+- `onboard` command: guided first-run onboarding with preflight diagnostics and risk acknowledgement.
+- `doctor` command: setup diagnostics with optional safe fixes (`--fix`) and machine-readable output (`--json`).
 - `chat` command: interactive CLI channel with sliding-window conversation memory.
 - Core tool runtime now supports:
   - `shell.exec`
@@ -50,7 +52,9 @@ For architecture boundaries, see [Layered Kernel Design](docs/design-docs/layere
 cargo test -p loongclaw-kernel
 cargo test -p loongclaw-daemon
 cargo run -p loongclaw-daemon --bin loongclawd
+cargo run -p loongclaw-daemon --bin loongclawd -- onboard
 cargo run -p loongclaw-daemon --bin loongclawd -- setup --force
+cargo run -p loongclaw-daemon --bin loongclawd -- doctor --fix
 cargo run -p loongclaw-daemon --bin loongclawd -- list-models --json
 cargo run -p loongclaw-daemon --bin loongclawd -- chat
 cargo run -p loongclaw-daemon --bin loongclawd -- run-spec --spec examples/spec/runtime-extension.json --print-audit

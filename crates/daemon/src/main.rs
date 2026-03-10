@@ -25,6 +25,8 @@ use loongclaw_bench::{
     run_programmatic_pressure_baseline_lint_cli, run_programmatic_pressure_benchmark_cli,
     run_wasm_cache_benchmark_cli,
 };
+mod doctor_cli;
+mod onboard_cli;
 #[cfg(test)]
 pub(crate) use loongclaw_spec::programmatic::{
     acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
@@ -155,6 +157,38 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         fail_on_diagnostics: bool,
     },
+    /// Guided onboarding for fast first-chat setup with preflight diagnostics
+    Onboard {
+        #[arg(long)]
+        output: Option<String>,
+        #[arg(long, default_value_t = false)]
+        force: bool,
+        #[arg(long, default_value_t = false)]
+        non_interactive: bool,
+        #[arg(long, default_value_t = false)]
+        accept_risk: bool,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        api_key_env: Option<String>,
+        #[arg(long)]
+        system_prompt: Option<String>,
+        #[arg(long, default_value_t = false)]
+        skip_model_probe: bool,
+    },
+    /// Run setup diagnostics and optionally apply safe config/path fixes
+    Doctor {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long, default_value_t = false)]
+        fix: bool,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        #[arg(long, default_value_t = false)]
+        skip_model_probe: bool,
+    },
     /// Fetch and print currently available provider model list
     ListModels {
         #[arg(long)]
@@ -277,6 +311,44 @@ async fn main() {
             &locale,
             fail_on_diagnostics,
         ),
+        Commands::Onboard {
+            output,
+            force,
+            non_interactive,
+            accept_risk,
+            provider,
+            model,
+            api_key_env,
+            system_prompt,
+            skip_model_probe,
+        } => {
+            onboard_cli::run_onboard_cli(onboard_cli::OnboardCommandOptions {
+                output,
+                force,
+                non_interactive,
+                accept_risk,
+                provider,
+                model,
+                api_key_env,
+                system_prompt,
+                skip_model_probe,
+            })
+            .await
+        }
+        Commands::Doctor {
+            config,
+            fix,
+            json,
+            skip_model_probe,
+        } => {
+            doctor_cli::run_doctor_cli(doctor_cli::DoctorCommandOptions {
+                config,
+                fix,
+                json,
+                skip_model_probe,
+            })
+            .await
+        }
         Commands::ListModels { config, json } => run_list_models_cli(config.as_deref(), json).await,
         Commands::Chat { config, session } => {
             run_chat_cli(config.as_deref(), session.as_deref()).await

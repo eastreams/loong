@@ -214,6 +214,32 @@ pub fn write_template(path: Option<&str>, force: bool) -> CliResult<PathBuf> {
     Ok(output_path)
 }
 
+pub fn write(path: Option<&str>, config: &LoongClawConfig, force: bool) -> CliResult<PathBuf> {
+    let output_path = path.map(expand_path).unwrap_or_else(default_config_path);
+    if output_path.exists() && !force {
+        return Err(format!(
+            "config {} already exists (use --force to overwrite)",
+            output_path.display()
+        ));
+    }
+
+    if let Some(parent) = output_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("failed to create config directory: {error}"))?;
+        }
+    }
+
+    let encoded = encode_toml_config(config)?;
+    fs::write(&output_path, encoded).map_err(|error| {
+        format!(
+            "failed to write config file {}: {error}",
+            output_path.display()
+        )
+    })?;
+    Ok(output_path)
+}
+
 pub fn default_config_path() -> PathBuf {
     default_loongclaw_home().join(DEFAULT_CONFIG_FILE)
 }
@@ -295,6 +321,14 @@ fn template_secret_usage_comment() -> &'static str {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_config_path(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should move forward")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{nanos}.toml"))
+    }
 
     #[test]
     #[cfg(feature = "config-toml")]
@@ -492,5 +526,41 @@ api_key_env = "{secret}"
 
         std::fs::remove_file(&config_path).ok();
         std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_persists_custom_model_and_prompt() {
+        let path = unique_config_path("loongclaw-config-runtime");
+        let path_string = path.display().to_string();
+        let mut config = LoongClawConfig::default();
+        config.provider.model = "openai/gpt-5.1-codex".to_owned();
+        config.cli.system_prompt = "You are an onboarding assistant.".to_owned();
+
+        let written = write(Some(&path_string), &config, true).expect("config write should pass");
+        assert_eq!(written, path);
+
+        let (_, loaded) = load(Some(&path_string)).expect("config load should pass");
+        assert_eq!(loaded.provider.model, "openai/gpt-5.1-codex");
+        assert_eq!(loaded.cli.system_prompt, "You are an onboarding assistant.");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_rejects_overwrite_without_force() {
+        let path = unique_config_path("loongclaw-config-runtime");
+        let path_string = path.display().to_string();
+        let first = LoongClawConfig::default();
+        write(Some(&path_string), &first, true).expect("initial config write should pass");
+
+        let mut updated = LoongClawConfig::default();
+        updated.provider.model = "openai/gpt-5".to_owned();
+        let error = write(Some(&path_string), &updated, false)
+            .expect_err("overwrite without --force should fail");
+        assert!(error.contains("already exists"));
+
+        let _ = fs::remove_file(path);
     }
 }

@@ -29,6 +29,7 @@ fn sign_security_scan_profile_for_test(profile: &SecurityScanProfile) -> (String
 }
 
 mod architecture;
+mod onboard_cli;
 mod programmatic;
 mod spec_runtime;
 mod spec_runtime_bridge;
