@@ -28,6 +28,7 @@ use loongclaw_protocol::{
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tokio::{
     io::AsyncReadExt,
     process::Command as TokioCommand,
@@ -56,6 +57,7 @@ struct WasmModuleCacheKey {
     module_size_bytes: u64,
     artifact_modified_unix_ns: Option<u128>,
     artifact_file_identity: Option<WasmArtifactFileIdentity>,
+    expected_sha256: Option<String>,
     fuel_enabled: bool,
 }
 
@@ -71,6 +73,7 @@ struct WasmArtifactFileIdentity {
 struct CachedWasmModule {
     engine: WasmtimeEngine,
     module: WasmtimeModule,
+    artifact_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -879,6 +882,8 @@ pub struct BridgeRuntimePolicy {
     pub wasm_allowed_path_prefixes: Vec<PathBuf>,
     pub wasm_max_component_bytes: Option<usize>,
     pub wasm_fuel_limit: Option<u64>,
+    pub wasm_require_hash_pin: bool,
+    pub wasm_required_sha256_by_plugin: BTreeMap<String, String>,
     pub enforce_execution_success: bool,
 }
 
@@ -2129,6 +2134,7 @@ fn build_wasm_module_cache_key(
     module_size_bytes: u64,
     artifact_modified_unix_ns: Option<u128>,
     artifact_file_identity: Option<WasmArtifactFileIdentity>,
+    expected_sha256: Option<String>,
     fuel_enabled: bool,
 ) -> WasmModuleCacheKey {
     WasmModuleCacheKey {
@@ -2136,6 +2142,7 @@ fn build_wasm_module_cache_key(
         module_size_bytes,
         artifact_modified_unix_ns,
         artifact_file_identity,
+        expected_sha256,
         fuel_enabled,
     }
 }
@@ -2145,6 +2152,74 @@ fn normalize_allowed_wasm_path_prefixes(prefixes: &[PathBuf]) -> Vec<PathBuf> {
         .iter()
         .map(|prefix| normalize_path_for_policy(prefix))
         .collect()
+}
+
+fn normalize_sha256_pin(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("wasm sha256 pin must not be empty".to_owned());
+    }
+
+    let lowered = trimmed.to_ascii_lowercase();
+    let digest = lowered.strip_prefix("sha256:").unwrap_or(&lowered).trim();
+    if digest.len() != 64 || !digest.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(
+            "wasm sha256 pin must be 64 hex characters (optional prefix `sha256:`)".to_owned(),
+        );
+    }
+
+    Ok(digest.to_owned())
+}
+
+fn resolve_expected_wasm_sha256(
+    provider: &kernel::ProviderConfig,
+    runtime_policy: &BridgeRuntimePolicy,
+) -> Result<Option<String>, String> {
+    let plugin_id = provider
+        .metadata
+        .get("plugin_id")
+        .cloned()
+        .unwrap_or_else(|| provider.provider_id.clone());
+
+    for key in [
+        "component_sha256",
+        "component_sha256_pin",
+        "component_sha256_hex",
+    ] {
+        if let Some(raw_pin) = provider.metadata.get(key) {
+            return normalize_sha256_pin(raw_pin)
+                .map(Some)
+                .map_err(|reason| format!("provider metadata `{key}` invalid: {reason}"));
+        }
+    }
+
+    if let Some(raw_pin) = runtime_policy
+        .wasm_required_sha256_by_plugin
+        .get(&plugin_id)
+    {
+        return normalize_sha256_pin(raw_pin).map(Some).map_err(|reason| {
+            format!(
+                "security_scan.wasm.required_sha256_by_plugin pin invalid for plugin `{plugin_id}`: {reason}"
+            )
+        });
+    }
+
+    if runtime_policy.wasm_require_hash_pin {
+        return Err(format!(
+            "wasm sha256 pin is required for plugin `{plugin_id}` but no pin was provided"
+        ));
+    }
+
+    Ok(None)
+}
+
+fn wasm_artifact_sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut out = String::with_capacity(64);
+    for byte in digest {
+        let _ = std::fmt::Write::write_fmt(&mut out, format_args!("{byte:02x}"));
+    }
+    out
 }
 
 #[derive(Debug)]
@@ -2180,6 +2255,7 @@ fn read_wasm_artifact_bytes(artifact_path: &Path) -> Result<WasmArtifactBytes, S
 fn compile_wasm_module(
     module_bytes: &[u8],
     fuel_enabled: bool,
+    artifact_sha256: Option<String>,
 ) -> Result<CachedWasmModule, String> {
     let mut config = WasmtimeConfig::new();
     if fuel_enabled {
@@ -2189,7 +2265,11 @@ fn compile_wasm_module(
         .map_err(|error| format!("failed to initialize wasmtime engine: {error}"))?;
     let module = WasmtimeModule::new(&engine, module_bytes)
         .map_err(|error| format!("failed to compile wasm module: {error}"))?;
-    Ok(CachedWasmModule { engine, module })
+    Ok(CachedWasmModule {
+        engine,
+        module,
+        artifact_sha256,
+    })
 }
 
 fn lookup_cached_wasm_module(
@@ -2347,12 +2427,40 @@ pub fn execute_wasm_component_bridge(
     let fuel_enabled = runtime_policy.wasm_fuel_limit.is_some();
     let cache_capacity = wasm_module_cache_capacity();
     let cache_max_bytes = wasm_module_cache_max_bytes();
+    let expected_sha256 = match resolve_expected_wasm_sha256(provider, runtime_policy) {
+        Ok(pin) => pin,
+        Err(reason) => {
+            execution["status"] = Value::String("blocked".to_owned());
+            execution["reason"] = Value::String(reason);
+            execution["runtime"] = json!({
+                "executor": "wasmtime_module",
+                "artifact_path": artifact_path.display().to_string(),
+                "export": export_name,
+                "operation": command.operation,
+                "payload": command.payload,
+                "module_size_bytes": module_size_bytes,
+                "fuel_limit": runtime_policy.wasm_fuel_limit,
+                "cache_hit": false,
+                "cache_miss": true,
+                "cache_evicted_entries": 0,
+                "cache_entries": 0,
+                "cache_capacity": cache_capacity,
+                "cache_total_module_bytes": 0,
+                "cache_max_bytes": cache_max_bytes,
+                "cache_inserted": false,
+                "integrity_check_required": true,
+                "integrity_check_passed": false,
+            });
+            return execution;
+        }
+    };
 
     let initial_cache_key = build_wasm_module_cache_key(
         &artifact_path,
         module_size_bytes as u64,
         artifact_modified_unix_ns,
         artifact_file_identity,
+        expected_sha256.clone(),
         fuel_enabled,
     );
     let (cached_module, cache_lookup) = match lookup_cached_wasm_module(&initial_cache_key) {
@@ -2403,6 +2511,29 @@ pub fn execute_wasm_component_bridge(
                 }
             }
 
+            let artifact_sha256 = if let Some(expected) = expected_sha256.as_deref() {
+                let actual = wasm_artifact_sha256_hex(&module_bytes);
+                if actual != expected {
+                    execution["status"] = Value::String("blocked".to_owned());
+                    execution["reason"] = Value::String(format!(
+                        "wasm artifact sha256 mismatch: expected {expected}, actual {actual}"
+                    ));
+                    execution["runtime"] = json!({
+                        "executor": "wasmtime_module",
+                        "artifact_path": artifact_path.display().to_string(),
+                        "module_size_bytes": module_size_bytes,
+                        "expected_sha256": expected,
+                        "artifact_sha256": actual,
+                        "integrity_check_required": true,
+                        "integrity_check_passed": false,
+                    });
+                    return execution;
+                }
+                Some(actual)
+            } else {
+                None
+            };
+
             let refreshed_cache_key = build_wasm_module_cache_key(
                 &artifact_path,
                 module_size_bytes as u64,
@@ -2410,37 +2541,39 @@ pub fn execute_wasm_component_bridge(
                     .modified_unix_ns
                     .or(artifact_modified_unix_ns),
                 artifact_bytes.file_identity.or(artifact_file_identity),
+                expected_sha256.clone(),
                 fuel_enabled,
             );
 
             match lookup_cached_wasm_module(&refreshed_cache_key) {
                 Ok(Some(hit)) => hit,
                 Ok(None) => {
-                    let compiled = match compile_wasm_module(&module_bytes, fuel_enabled) {
-                        Ok(module) => Arc::new(module),
-                        Err(reason) => {
-                            execution["status"] = Value::String("failed".to_owned());
-                            execution["reason"] = Value::String(reason);
-                            execution["runtime"] = json!({
-                                "executor": "wasmtime_module",
-                                "artifact_path": artifact_path.display().to_string(),
-                                "export": export_name,
-                                "operation": command.operation,
-                                "payload": command.payload,
-                                "module_size_bytes": module_size_bytes,
-                                "fuel_limit": runtime_policy.wasm_fuel_limit,
-                                "cache_hit": false,
-                                "cache_miss": true,
-                                "cache_evicted_entries": 0,
-                                "cache_entries": 0,
-                                "cache_capacity": cache_capacity,
-                                "cache_total_module_bytes": 0,
-                                "cache_max_bytes": cache_max_bytes,
-                                "cache_inserted": false,
-                            });
-                            return execution;
-                        }
-                    };
+                    let compiled =
+                        match compile_wasm_module(&module_bytes, fuel_enabled, artifact_sha256) {
+                            Ok(module) => Arc::new(module),
+                            Err(reason) => {
+                                execution["status"] = Value::String("failed".to_owned());
+                                execution["reason"] = Value::String(reason);
+                                execution["runtime"] = json!({
+                                    "executor": "wasmtime_module",
+                                    "artifact_path": artifact_path.display().to_string(),
+                                    "export": export_name,
+                                    "operation": command.operation,
+                                    "payload": command.payload,
+                                    "module_size_bytes": module_size_bytes,
+                                    "fuel_limit": runtime_policy.wasm_fuel_limit,
+                                    "cache_hit": false,
+                                    "cache_miss": true,
+                                    "cache_evicted_entries": 0,
+                                    "cache_entries": 0,
+                                    "cache_capacity": cache_capacity,
+                                    "cache_total_module_bytes": 0,
+                                    "cache_max_bytes": cache_max_bytes,
+                                    "cache_inserted": false,
+                                });
+                                return execution;
+                            }
+                        };
                     let cache_lookup = match insert_cached_wasm_module(
                         refreshed_cache_key,
                         compiled.clone(),
@@ -2570,6 +2703,10 @@ pub fn execute_wasm_component_bridge(
                 "cache_total_module_bytes": cache_lookup.cache_total_module_bytes,
                 "cache_max_bytes": cache_lookup.cache_max_bytes,
                 "cache_inserted": cache_lookup.inserted,
+                "expected_sha256": expected_sha256.clone(),
+                "artifact_sha256": cached_module.artifact_sha256.clone(),
+                "integrity_check_required": expected_sha256.is_some(),
+                "integrity_check_passed": expected_sha256.is_none() || cached_module.artifact_sha256.is_some(),
             });
             execution
         }
@@ -2592,6 +2729,10 @@ pub fn execute_wasm_component_bridge(
                 "cache_total_module_bytes": cache_lookup.cache_total_module_bytes,
                 "cache_max_bytes": cache_lookup.cache_max_bytes,
                 "cache_inserted": cache_lookup.inserted,
+                "expected_sha256": expected_sha256.clone(),
+                "artifact_sha256": cached_module.artifact_sha256.clone(),
+                "integrity_check_required": expected_sha256.is_some(),
+                "integrity_check_passed": expected_sha256.is_none() || cached_module.artifact_sha256.is_some(),
             });
             execution
         }
@@ -3059,11 +3200,11 @@ mod tests {
     };
 
     use super::{
-        build_wasm_module_cache_key, compile_wasm_module, parse_wasm_module_cache_capacity,
-        parse_wasm_module_cache_max_bytes, wasm_artifact_file_identity, WasmModuleCache,
-        DEFAULT_WASM_MODULE_CACHE_CAPACITY, DEFAULT_WASM_MODULE_CACHE_MAX_BYTES,
-        MAX_WASM_MODULE_CACHE_CAPACITY, MAX_WASM_MODULE_CACHE_MAX_BYTES,
-        MIN_WASM_MODULE_CACHE_MAX_BYTES,
+        build_wasm_module_cache_key, compile_wasm_module, normalize_sha256_pin,
+        parse_wasm_module_cache_capacity, parse_wasm_module_cache_max_bytes,
+        wasm_artifact_file_identity, WasmModuleCache, DEFAULT_WASM_MODULE_CACHE_CAPACITY,
+        DEFAULT_WASM_MODULE_CACHE_MAX_BYTES, MAX_WASM_MODULE_CACHE_CAPACITY,
+        MAX_WASM_MODULE_CACHE_MAX_BYTES, MIN_WASM_MODULE_CACHE_MAX_BYTES,
     };
 
     const EMPTY_WASM_MODULE: [u8; 8] = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
@@ -3139,14 +3280,53 @@ mod tests {
     }
 
     #[test]
+    fn normalize_sha256_pin_accepts_plain_or_prefixed_hex() {
+        let expected = "ab".repeat(32);
+        assert_eq!(
+            normalize_sha256_pin(expected.as_str()).expect("plain digest should parse"),
+            expected
+        );
+        assert_eq!(
+            normalize_sha256_pin(format!("sha256:{expected}").as_str())
+                .expect("prefixed digest should parse"),
+            expected
+        );
+        assert_eq!(
+            normalize_sha256_pin(format!("  SHA256:{expected}  ").as_str())
+                .expect("prefix should be case-insensitive"),
+            expected
+        );
+    }
+
+    #[test]
+    fn normalize_sha256_pin_rejects_invalid_values() {
+        assert!(normalize_sha256_pin("").is_err());
+        assert!(normalize_sha256_pin("sha256:").is_err());
+        assert!(normalize_sha256_pin("deadbeef").is_err());
+        assert!(normalize_sha256_pin(&"z".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn wasm_module_cache_key_distinguishes_expected_sha256_pin() {
+        let path = Path::new("/tmp/pin-test.wasm");
+        let pin_a = "aa".repeat(32);
+        let pin_b = "bb".repeat(32);
+        let key_a = build_wasm_module_cache_key(path, 8, Some(1), None, Some(pin_a), false);
+        let key_b = build_wasm_module_cache_key(path, 8, Some(1), None, Some(pin_b), false);
+        assert_ne!(key_a, key_b);
+    }
+
+    #[test]
     fn wasm_module_cache_evicts_lru_entries_when_byte_budget_exceeded() {
         let compiled = Arc::new(
-            compile_wasm_module(&EMPTY_WASM_MODULE, false)
+            compile_wasm_module(&EMPTY_WASM_MODULE, false, None)
                 .expect("empty wasm module should compile"),
         );
         let mut cache = WasmModuleCache::default();
-        let key_a = build_wasm_module_cache_key(Path::new("/tmp/a.wasm"), 6, Some(1), None, false);
-        let key_b = build_wasm_module_cache_key(Path::new("/tmp/b.wasm"), 6, Some(2), None, false);
+        let key_a =
+            build_wasm_module_cache_key(Path::new("/tmp/a.wasm"), 6, Some(1), None, None, false);
+        let key_b =
+            build_wasm_module_cache_key(Path::new("/tmp/b.wasm"), 6, Some(2), None, None, false);
 
         let first = cache.insert(key_a.clone(), compiled.clone(), 6, 8, 10);
         assert!(first.inserted);
@@ -3166,14 +3346,20 @@ mod tests {
     #[test]
     fn wasm_module_cache_skips_single_module_larger_than_byte_budget() {
         let compiled = Arc::new(
-            compile_wasm_module(&EMPTY_WASM_MODULE, false)
+            compile_wasm_module(&EMPTY_WASM_MODULE, false, None)
                 .expect("empty wasm module should compile"),
         );
         let mut cache = WasmModuleCache::default();
         let baseline =
-            build_wasm_module_cache_key(Path::new("/tmp/base.wasm"), 4, Some(1), None, false);
-        let oversized =
-            build_wasm_module_cache_key(Path::new("/tmp/oversized.wasm"), 11, Some(2), None, false);
+            build_wasm_module_cache_key(Path::new("/tmp/base.wasm"), 4, Some(1), None, None, false);
+        let oversized = build_wasm_module_cache_key(
+            Path::new("/tmp/oversized.wasm"),
+            11,
+            Some(2),
+            None,
+            None,
+            false,
+        );
 
         let baseline_insert = cache.insert(baseline.clone(), compiled.clone(), 4, 8, 10);
         assert!(baseline_insert.inserted);

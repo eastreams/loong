@@ -1488,6 +1488,14 @@ fn bridge_runtime_policy(
     let runtime = security_scan
         .map(|scan| scan.runtime.clone())
         .unwrap_or_default();
+    let (wasm_require_hash_pin, wasm_required_sha256_by_plugin) = security_scan
+        .map(|scan| {
+            (
+                scan.wasm.require_hash_pin,
+                scan.wasm.required_sha256_by_plugin.clone(),
+            )
+        })
+        .unwrap_or_else(|| (false, BTreeMap::new()));
     let wasm_allowed_path_prefixes = runtime
         .allowed_path_prefixes
         .iter()
@@ -1508,6 +1516,8 @@ fn bridge_runtime_policy(
         wasm_allowed_path_prefixes,
         wasm_max_component_bytes: runtime.max_component_bytes,
         wasm_fuel_limit: runtime.fuel_limit,
+        wasm_require_hash_pin,
+        wasm_required_sha256_by_plugin,
         enforce_execution_success: bridge.enforce_execution_success,
     }
 }
