@@ -29,9 +29,12 @@ pub(super) fn execute_claw_import_tool_with_config(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(DEFAULT_MODE);
-    if !matches!(mode, "plan" | "apply") {
+    if !matches!(
+        mode,
+        "plan" | "apply" | "discover" | "plan_many" | "recommend_primary"
+    ) {
         return Err(format!(
-            "claw.import payload.mode must be `plan` or `apply`, got `{mode}`"
+            "claw.import payload.mode must be `plan`, `apply`, `discover`, `plan_many`, or `recommend_primary`, got `{mode}`"
         ));
     }
 
@@ -65,6 +68,48 @@ pub(super) fn execute_claw_import_tool_with_config(
         .map(parse_source_hint)
         .transpose()?
         .flatten();
+
+    if mode == "discover" {
+        let report = migration::discover_import_sources(
+            &input_path,
+            migration::DiscoveryOptions::default(),
+        )?;
+        return Ok(ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "adapter": "core-tools",
+                "tool_name": request.tool_name,
+                "mode": "discover",
+                "input_path": input_path.display().to_string(),
+                "sources": report
+                    .sources
+                    .iter()
+                    .map(discovered_source_payload)
+                    .collect::<Vec<_>>(),
+            }),
+        });
+    }
+
+    if matches!(mode, "plan_many" | "recommend_primary") {
+        let report = migration::discover_import_sources(
+            &input_path,
+            migration::DiscoveryOptions::default(),
+        )?;
+        let summary = migration::plan_import_sources(&report)?;
+        let recommendation = migration::recommend_primary_source(&summary).ok();
+        return Ok(ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "adapter": "core-tools",
+                "tool_name": request.tool_name,
+                "mode": mode,
+                "input_path": input_path.display().to_string(),
+                "plans": summary.plans.iter().map(planned_source_payload).collect::<Vec<_>>(),
+                "recommendation": recommendation.as_ref().map(primary_recommendation_payload),
+            }),
+        });
+    }
+
     let plan = migration::plan_import_from_path(&input_path, hint)?;
 
     let mut merged_config = load_or_default_config(output_path.as_deref())?;
@@ -102,6 +147,36 @@ pub(super) fn execute_claw_import_tool_with_config(
                 .as_ref()
                 .map(|path| format!("loongclawd chat --config {}", path.display())),
         }),
+    })
+}
+
+fn discovered_source_payload(source: &migration::DiscoveredImportSource) -> Value {
+    json!({
+        "source_id": source.source.as_id(),
+        "input_path": source.path.display().to_string(),
+        "confidence_score": source.confidence_score,
+        "found_files": source.found_files,
+    })
+}
+
+fn planned_source_payload(plan: &migration::PlannedImportSource) -> Value {
+    json!({
+        "source_id": plan.source_id,
+        "input_path": plan.input_path.display().to_string(),
+        "confidence_score": plan.confidence_score,
+        "prompt_addendum_present": plan.prompt_addendum_present,
+        "profile_note_present": plan.profile_note_present,
+        "warning_count": plan.warning_count,
+    })
+}
+
+fn primary_recommendation_payload(
+    recommendation: &migration::PrimarySourceRecommendation,
+) -> Value {
+    json!({
+        "source_id": recommendation.source_id,
+        "input_path": recommendation.input_path.display().to_string(),
+        "reasons": recommendation.reasons,
     })
 }
 

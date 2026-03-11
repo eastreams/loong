@@ -10,7 +10,9 @@ use crate::{
 use serde_json::Value;
 
 pub use orchestrator::{
-    discover_import_sources, DiscoveredImportSource, DiscoveryOptions, DiscoveryReport,
+    discover_import_sources, plan_import_sources, recommend_primary_source, DiscoveredImportSource,
+    DiscoveryOptions, DiscoveryPlanSummary, DiscoveryReport, PlannedImportSource,
+    PrimarySourceRecommendation,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

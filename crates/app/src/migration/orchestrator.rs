@@ -6,7 +6,7 @@ use std::{
 
 use crate::CliResult;
 
-use super::{inspect_import_path, LegacyClawSource};
+use super::{inspect_import_path, plan_import_from_path, LegacyClawSource};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveryOptions {
@@ -32,6 +32,30 @@ pub struct DiscoveredImportSource {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DiscoveryReport {
     pub sources: Vec<DiscoveredImportSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedImportSource {
+    pub source: LegacyClawSource,
+    pub source_id: String,
+    pub input_path: PathBuf,
+    pub confidence_score: u32,
+    pub prompt_addendum_present: bool,
+    pub profile_note_present: bool,
+    pub warning_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DiscoveryPlanSummary {
+    pub plans: Vec<PlannedImportSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrimarySourceRecommendation {
+    pub source: LegacyClawSource,
+    pub source_id: String,
+    pub input_path: PathBuf,
+    pub reasons: Vec<String>,
 }
 
 pub fn discover_import_sources(
@@ -66,6 +90,54 @@ pub fn discover_import_sources(
     });
 
     Ok(DiscoveryReport { sources })
+}
+
+pub fn plan_import_sources(report: &DiscoveryReport) -> CliResult<DiscoveryPlanSummary> {
+    let mut plans = Vec::new();
+    for source in &report.sources {
+        let plan = plan_import_from_path(&source.path, Some(source.source))?;
+        plans.push(PlannedImportSource {
+            source: source.source,
+            source_id: source.source.as_id().to_owned(),
+            input_path: source.path.clone(),
+            confidence_score: source.confidence_score,
+            prompt_addendum_present: plan.system_prompt_addendum.is_some(),
+            profile_note_present: plan.profile_note.is_some(),
+            warning_count: plan.warnings.len(),
+        });
+    }
+    Ok(DiscoveryPlanSummary { plans })
+}
+
+pub fn recommend_primary_source(
+    summary: &DiscoveryPlanSummary,
+) -> CliResult<PrimarySourceRecommendation> {
+    let Some(best) = summary.plans.iter().max_by(|left, right| {
+        primary_recommendation_score(left)
+            .cmp(&primary_recommendation_score(right))
+            .then_with(|| left.input_path.cmp(&right.input_path))
+    }) else {
+        return Err("cannot recommend primary source from an empty plan summary".to_owned());
+    };
+
+    let mut reasons = Vec::new();
+    reasons.push(format!("confidence score {}", best.confidence_score));
+    if best.prompt_addendum_present {
+        reasons.push("contains imported prompt overlay".to_owned());
+    }
+    if best.profile_note_present {
+        reasons.push("contains imported profile overlay".to_owned());
+    }
+    if best.warning_count == 0 {
+        reasons.push("has no import warnings".to_owned());
+    }
+
+    Ok(PrimarySourceRecommendation {
+        source: best.source,
+        source_id: best.source_id.clone(),
+        input_path: best.input_path.clone(),
+        reasons,
+    })
 }
 
 fn collect_candidate_directories(
@@ -121,6 +193,20 @@ fn score_discovered_source(inspection: &super::ImportPathInspection) -> u32 {
     score = score.saturating_add(inspection.warning_count as u32 * 3);
     score = score.saturating_add(inspection.found_files.len() as u32);
     score
+}
+
+fn primary_recommendation_score(plan: &PlannedImportSource) -> u32 {
+    let mut score = plan.confidence_score;
+    if plan.prompt_addendum_present {
+        score = score.saturating_add(10);
+    }
+    if plan.profile_note_present {
+        score = score.saturating_add(10);
+    }
+    if plan.warning_count == 0 {
+        score = score.saturating_add(3);
+    }
+    score.saturating_sub(plan.warning_count as u32)
 }
 
 #[cfg(test)]
@@ -220,6 +306,86 @@ mod tests {
         assert!(
             report.sources.is_empty(),
             "noise-only roots should be ignored"
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn plan_import_sources_returns_summary_for_each_candidate() {
+        let root = unique_temp_dir("loongclaw-import-plan-many");
+        fs::create_dir_all(&root).expect("create fixture root");
+
+        let openclaw_root = root.join("openclaw-workspace");
+        fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+        write_file(
+            &openclaw_root,
+            "SOUL.md",
+            "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+        );
+        write_file(
+            &openclaw_root,
+            "IDENTITY.md",
+            "# Identity\n\n- Role: Release copilot\n- Priority: stability first\n",
+        );
+
+        let nanobot_root = root.join("nanobot");
+        fs::create_dir_all(&nanobot_root).expect("create nanobot root");
+        write_file(
+            &nanobot_root,
+            "IDENTITY.md",
+            "# Identity\n\n- Motto: your nanobot agent for deploys\n",
+        );
+
+        let discovery = discover_import_sources(&root, DiscoveryOptions::default())
+            .expect("discovery should succeed");
+        let summary = plan_import_sources(&discovery).expect("plan-many should succeed");
+
+        assert_eq!(summary.plans.len(), 2);
+        assert_eq!(summary.plans[0].source_id, "openclaw");
+        assert!(summary.plans[0].prompt_addendum_present);
+        assert!(summary.plans[0].profile_note_present);
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn recommend_primary_source_prefers_richer_custom_source() {
+        let root = unique_temp_dir("loongclaw-import-recommend-primary");
+        fs::create_dir_all(&root).expect("create fixture root");
+
+        let openclaw_root = root.join("openclaw-workspace");
+        fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+        write_file(
+            &openclaw_root,
+            "SOUL.md",
+            "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+        );
+        write_file(
+            &openclaw_root,
+            "IDENTITY.md",
+            "# Identity\n\n- Role: Release copilot\n- Priority: stability first\n",
+        );
+
+        let nanobot_root = root.join("nanobot");
+        fs::create_dir_all(&nanobot_root).expect("create nanobot root");
+        write_file(
+            &nanobot_root,
+            "SOUL.md",
+            "# Soul\n\nAlways prefer brief shell output.\n",
+        );
+
+        let discovery = discover_import_sources(&root, DiscoveryOptions::default())
+            .expect("discovery should succeed");
+        let summary = plan_import_sources(&discovery).expect("plan-many should succeed");
+        let recommendation =
+            recommend_primary_source(&summary).expect("primary recommendation should succeed");
+
+        assert_eq!(recommendation.source_id, "openclaw");
+        assert_eq!(recommendation.source, LegacyClawSource::OpenClaw);
+        assert!(
+            !recommendation.reasons.is_empty(),
+            "recommendation reasons should be populated"
         );
 
         fs::remove_dir_all(&root).ok();

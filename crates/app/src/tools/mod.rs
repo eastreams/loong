@@ -563,6 +563,141 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
+    #[test]
+    fn claw_import_discover_mode_returns_detected_sources() {
+        use std::{
+            fs,
+            path::{Path, PathBuf},
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        fn unique_temp_dir(prefix: &str) -> PathBuf {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos();
+            std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+        }
+
+        fn write_file(root: &Path, relative: &str, content: &str) {
+            let path = root.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create parent directory");
+            }
+            fs::write(path, content).expect("write fixture");
+        }
+
+        let root = unique_temp_dir("loongclaw-tool-import-discover");
+        fs::create_dir_all(&root).expect("create fixture root");
+
+        let openclaw_root = root.join("openclaw-workspace");
+        fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+        write_file(
+            &openclaw_root,
+            "SOUL.md",
+            "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+        );
+        write_file(
+            &openclaw_root,
+            "IDENTITY.md",
+            "# Identity\n\n- Role: Release copilot\n- Priority: stability first\n",
+        );
+
+        let config = runtime_config::ToolRuntimeConfig {
+            shell_allowlist: BTreeSet::new(),
+            file_root: Some(root.clone()),
+        };
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "claw.import".to_owned(),
+                payload: json!({
+                    "mode": "discover",
+                    "input_path": "."
+                }),
+            },
+            &config,
+        )
+        .expect("claw import discover should succeed");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["mode"], "discover");
+        assert_eq!(outcome.payload["sources"][0]["source_id"], "openclaw");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn claw_import_plan_many_mode_returns_source_summaries_and_recommendation() {
+        use std::{
+            fs,
+            path::{Path, PathBuf},
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        fn unique_temp_dir(prefix: &str) -> PathBuf {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos();
+            std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+        }
+
+        fn write_file(root: &Path, relative: &str, content: &str) {
+            let path = root.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create parent directory");
+            }
+            fs::write(path, content).expect("write fixture");
+        }
+
+        let root = unique_temp_dir("loongclaw-tool-import-plan-many");
+        fs::create_dir_all(&root).expect("create fixture root");
+
+        let openclaw_root = root.join("openclaw-workspace");
+        fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+        write_file(
+            &openclaw_root,
+            "SOUL.md",
+            "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+        );
+        write_file(
+            &openclaw_root,
+            "IDENTITY.md",
+            "# Identity\n\n- Role: Release copilot\n- Priority: stability first\n",
+        );
+
+        let nanobot_root = root.join("nanobot");
+        fs::create_dir_all(&nanobot_root).expect("create nanobot root");
+        write_file(
+            &nanobot_root,
+            "IDENTITY.md",
+            "# Identity\n\n- Motto: your nanobot agent for deploys\n",
+        );
+
+        let config = runtime_config::ToolRuntimeConfig {
+            shell_allowlist: BTreeSet::new(),
+            file_root: Some(root.clone()),
+        };
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "claw.import".to_owned(),
+                payload: json!({
+                    "mode": "plan_many",
+                    "input_path": "."
+                }),
+            },
+            &config,
+        )
+        .expect("claw import plan_many should succeed");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["mode"], "plan_many");
+        assert_eq!(outcome.payload["plans"][0]["source_id"], "openclaw");
+        assert_eq!(outcome.payload["recommendation"]["source_id"], "openclaw");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
     // --- Kernel-routed tool tests ---
 
     use std::sync::{Arc, Mutex};
