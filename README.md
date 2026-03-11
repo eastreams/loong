@@ -188,6 +188,38 @@ loongclaw import-claw --mode apply_selected --input ~/legacy-claws \
 loongclaw import-claw --mode rollback_last_apply --output ~/.loongclaw/config.toml
 ```
 
+## External Skills Runtime Guardrails
+
+External skills runtime is now safety-first by default and explicitly opt-in:
+
+- `external_skills.enabled = false` by default (downloads/runtime disabled).
+- `external_skills.require_download_approval = true` by default.
+- Domain blocklist has priority over every other rule.
+- If `allowed_domains` is non-empty, only allowlisted domains can be downloaded.
+- `external_skills.fetch` blocks redirects to avoid silent cross-domain hops.
+
+Recommended config baseline:
+
+```toml
+[external_skills]
+enabled = true
+require_download_approval = true
+allowed_domains = ["skills.sh", "clawhub.io"]
+blocked_domains = ["*.evil.example"]
+```
+
+Agent-facing tools:
+
+- `external_skills_policy`
+  - `action=get` reads effective runtime policy.
+  - `action=set` updates enable/approval/domain policy at runtime (requires `policy_update_approved=true`).
+  - `action=reset` clears runtime overrides back to config defaults (requires `policy_update_approved=true`).
+- `external_skills_fetch`
+  - Requires `url`.
+  - Requires `approval_granted=true` when approval guard is enabled.
+  - Saves artifact under `<tools.file_root>/external-skills-downloads/`.
+  - Enforces allowlist/blocklist before network download.
+
 ## Key Features
 
 **Kernel and Security**
@@ -211,7 +243,7 @@ loongclaw import-claw --mode rollback_last_apply --output ~/.loongclaw/config.to
 - `onboard` -- guided first-run with preflight diagnostics
 - `doctor` -- diagnostics with optional safe fixes (`--fix`) and machine-readable output (`--json`)
 - `chat` -- interactive CLI with sliding-window conversation memory
-- Core tools: `shell.exec`, `file.read`, `file.write`
+- Core tools: `shell.exec`, `file.read`, `file.write`, `external_skills.policy`, `external_skills.fetch`
 - Providers: OpenAI-compatible, Volcengine custom endpoint
 - Channels: CLI, Telegram polling, Feishu encrypted webhook
 

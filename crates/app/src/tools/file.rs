@@ -281,6 +281,7 @@ mod tests {
         let config = ToolRuntimeConfig {
             shell_allowlist: Default::default(),
             file_root: Some(root.clone()),
+            external_skills: Default::default(),
         };
         let error =
             resolve_safe_file_path_with_config("secret-link", &config).expect_err("escape denied");
@@ -304,6 +305,7 @@ mod tests {
         let config = ToolRuntimeConfig {
             shell_allowlist: Default::default(),
             file_root: Some(root.clone()),
+            external_skills: Default::default(),
         };
         let request = ToolCoreRequest {
             tool_name: "file.write".to_owned(),
@@ -329,6 +331,7 @@ mod tests {
         let config = ToolRuntimeConfig {
             shell_allowlist: Default::default(),
             file_root: Some(root.clone()),
+            external_skills: Default::default(),
         };
         let request = ToolCoreRequest {
             tool_name: "file.write".to_owned(),

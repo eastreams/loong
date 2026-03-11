@@ -10,8 +10,8 @@ use loongclaw_kernel::{
 use serde_json::{Value, json};
 
 use super::super::config::{
-    CliChannelConfig, ConversationConfig, FeishuChannelConfig, LoongClawConfig, MemoryConfig,
-    ProviderConfig, TelegramChannelConfig, ToolConfig,
+    CliChannelConfig, ConversationConfig, ExternalSkillsConfig, FeishuChannelConfig,
+    LoongClawConfig, MemoryConfig, ProviderConfig, TelegramChannelConfig, ToolConfig,
 };
 use super::persistence::format_provider_error_reply;
 use super::runtime::DefaultConversationRuntime;
@@ -151,6 +151,7 @@ fn test_config() -> LoongClawConfig {
         feishu: FeishuChannelConfig::default(),
         conversation: ConversationConfig::default(),
         tools: ToolConfig::default(),
+        external_skills: ExternalSkillsConfig::default(),
         memory: MemoryConfig::default(),
     }
 }

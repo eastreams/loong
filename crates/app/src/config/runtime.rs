@@ -13,7 +13,7 @@ use super::{
         default_loongclaw_home as shared_default_loongclaw_home, expand_path,
         format_config_validation_issues,
     },
-    tools_memory::{MemoryConfig, ToolConfig},
+    tools_memory::{ExternalSkillsConfig, MemoryConfig, ToolConfig},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -66,6 +66,8 @@ pub struct LoongClawConfig {
     pub conversation: ConversationConfig,
     #[serde(default)]
     pub tools: ToolConfig,
+    #[serde(default)]
+    pub external_skills: ExternalSkillsConfig,
     #[serde(default)]
     pub memory: MemoryConfig,
 }
@@ -622,6 +624,29 @@ api_key_env = "{secret}"
 
         let raw = fs::read_to_string(&path).expect("read written config");
         assert!(!raw.contains("api_key_env = \"OPENAI_API_KEY\""));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_default_config_keeps_external_skills_guardrails() {
+        let path = unique_config_path("loongclaw-config-runtime-external-skills");
+        let path_string = path.display().to_string();
+
+        write(Some(&path_string), &LoongClawConfig::default(), true)
+            .expect("default config write should pass");
+
+        let raw = fs::read_to_string(&path).expect("read written config");
+        assert!(raw.contains("[external_skills]"));
+        assert!(raw.contains("enabled = false"));
+        assert!(raw.contains("require_download_approval = true"));
+
+        let (_, loaded) = load(Some(&path_string)).expect("config load should pass");
+        assert!(!loaded.external_skills.enabled);
+        assert!(loaded.external_skills.require_download_approval);
+        assert!(loaded.external_skills.allowed_domains.is_empty());
+        assert!(loaded.external_skills.blocked_domains.is_empty());
 
         let _ = fs::remove_file(path);
     }

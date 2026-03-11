@@ -716,6 +716,28 @@ fn apply_runtime_env(config: &LoongClawConfig) {
         "LOONGCLAW_FILE_ROOT",
         config.tools.resolved_file_root().display().to_string(),
     );
+    crate::process_env::set_var(
+        "LOONGCLAW_EXTERNAL_SKILLS_ENABLED",
+        config.external_skills.enabled.to_string(),
+    );
+    crate::process_env::set_var(
+        "LOONGCLAW_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL",
+        config.external_skills.require_download_approval.to_string(),
+    );
+    crate::process_env::set_var(
+        "LOONGCLAW_EXTERNAL_SKILLS_ALLOWED_DOMAINS",
+        config
+            .external_skills
+            .normalized_allowed_domains()
+            .join(","),
+    );
+    crate::process_env::set_var(
+        "LOONGCLAW_EXTERNAL_SKILLS_BLOCKED_DOMAINS",
+        config
+            .external_skills
+            .normalized_blocked_domains()
+            .join(","),
+    );
     // Populate the typed tool runtime config so executors never hit env vars
     // on the hot path.  Ignore the error if already initialised.
     let tool_rt = crate::tools::runtime_config::ToolRuntimeConfig {
@@ -726,6 +748,20 @@ fn apply_runtime_env(config: &LoongClawConfig) {
             .map(|s| s.to_ascii_lowercase())
             .collect(),
         file_root: Some(config.tools.resolved_file_root()),
+        external_skills: crate::tools::runtime_config::ExternalSkillsRuntimePolicy {
+            enabled: config.external_skills.enabled,
+            require_download_approval: config.external_skills.require_download_approval,
+            allowed_domains: config
+                .external_skills
+                .normalized_allowed_domains()
+                .into_iter()
+                .collect(),
+            blocked_domains: config
+                .external_skills
+                .normalized_blocked_domains()
+                .into_iter()
+                .collect(),
+        },
     };
     let _ = crate::tools::runtime_config::init_tool_runtime_config(tool_rt);
 

@@ -154,6 +154,38 @@ loongclaw import-claw --mode apply_selected --input ~/legacy-claws \
 loongclaw import-claw --mode rollback_last_apply --output ~/.loongclaw/config.toml
 ```
 
+## External Skills 运行时安全护栏
+
+external skills 运行时采用默认安全关闭策略，必须显式开启：
+
+- `external_skills.enabled = false`（默认禁用下载/挂载）。
+- `external_skills.require_download_approval = true`（默认每次下载都需授权）。
+- 域名黑名单优先级最高，命中即拒绝。
+- 当 `allowed_domains` 非空时，仅允许白名单域名下载。
+- `external_skills.fetch` 默认拒绝 HTTP 重定向，避免静默跨域跳转。
+
+推荐配置基线：
+
+```toml
+[external_skills]
+enabled = true
+require_download_approval = true
+allowed_domains = ["skills.sh", "clawhub.io"]
+blocked_domains = ["*.evil.example"]
+```
+
+面向 agent 的工具：
+
+- `external_skills_policy`
+  - `action=get`：读取当前生效策略。
+  - `action=set`：在运行时更新开关、授权门禁、域名白/黑名单（必须带 `policy_update_approved=true`）。
+  - `action=reset`：清除运行时覆盖，回到配置文件默认值（必须带 `policy_update_approved=true`）。
+- `external_skills_fetch`
+  - 必填 `url`。
+  - 当授权门禁开启时必须传 `approval_granted=true`。
+  - 下载文件落在 `<tools.file_root>/external-skills-downloads/`。
+  - 下载前强制执行白/黑名单校验。
+
 ## 核心功能
 
 **内核与安全**
@@ -177,7 +209,7 @@ loongclaw import-claw --mode rollback_last_apply --output ~/.loongclaw/config.to
 - `onboard` -- 引导式首次运行，带预检诊断
 - `doctor` -- 诊断工具，可选安全修复 (`--fix`) 和机器可读输出 (`--json`)
 - `chat` -- 交互式 CLI，滑动窗口对话记忆
-- 核心工具：`shell.exec`、`file.read`、`file.write`
+- 核心工具：`shell.exec`、`file.read`、`file.write`、`external_skills.policy`、`external_skills.fetch`
 - Provider：OpenAI 兼容、火山引擎自定义端点
 - 通道：CLI、Telegram 轮询、飞书加密 webhook
 
