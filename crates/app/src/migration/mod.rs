@@ -1,3 +1,5 @@
+mod orchestrator;
+
 use std::{collections::BTreeSet, fs, path::Path};
 
 use crate::{
@@ -6,6 +8,10 @@ use crate::{
     CliResult,
 };
 use serde_json::Value;
+
+pub use orchestrator::{
+    discover_import_sources, DiscoveredImportSource, DiscoveryOptions, DiscoveryReport,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LegacyClawSource {
@@ -123,6 +129,72 @@ pub fn apply_import_plan(config: &mut LoongClawConfig, plan: &ImportPlan) {
     config.cli.refresh_native_system_prompt();
     config.memory.profile = MemoryProfile::ProfilePlusWindow;
     config.memory.profile_note = plan.profile_note.clone();
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ImportPathInspection {
+    pub source: LegacyClawSource,
+    pub found_files: Vec<String>,
+    pub custom_prompt_files: usize,
+    pub custom_profile_files: usize,
+    pub warning_count: usize,
+}
+
+pub(crate) fn inspect_import_path(
+    input_path: &Path,
+    hint: Option<LegacyClawSource>,
+) -> CliResult<Option<ImportPathInspection>> {
+    let files = collect_import_files(input_path)?;
+    if files.is_empty() {
+        return Ok(None);
+    }
+
+    let source = hint.unwrap_or_else(|| detect_source(input_path, &files));
+    let mut found_files = Vec::new();
+    let mut custom_prompt_files = 0usize;
+    let mut custom_profile_files = 0usize;
+    let mut warning_count = 0usize;
+
+    for file in files {
+        found_files.push(file.label.clone());
+        match file.kind {
+            ImportFileKind::Prompt => {
+                if !is_stock_template(source, &file.label, &file.content) {
+                    custom_prompt_files = custom_prompt_files.saturating_add(1);
+                }
+            }
+            ImportFileKind::Profile => {
+                if !is_stock_template(source, &file.label, &file.content) {
+                    custom_profile_files = custom_profile_files.saturating_add(1);
+                }
+            }
+            ImportFileKind::AieosJson => {
+                if render_aieos_profile_note(&file.content)?.is_some() {
+                    custom_profile_files = custom_profile_files.saturating_add(1);
+                }
+            }
+            ImportFileKind::Heartbeat => {
+                if heartbeat_has_active_tasks(&file.content) {
+                    warning_count = warning_count.saturating_add(1);
+                }
+            }
+        }
+    }
+
+    if custom_prompt_files == 0 && custom_profile_files == 0 && warning_count == 0 {
+        return Ok(None);
+    }
+
+    found_files.sort();
+    found_files.dedup();
+
+    Ok(Some(ImportPathInspection {
+        source,
+        found_files,
+        custom_prompt_files,
+        custom_profile_files,
+        warning_count,
+    }))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
