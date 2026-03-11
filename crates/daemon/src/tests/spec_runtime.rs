@@ -4369,6 +4369,182 @@ async fn execute_spec_default_medium_policy_allows_low_risk_tool_call_without_ap
 }
 
 #[tokio::test]
+async fn execute_spec_tool_core_can_run_claw_import_plan_via_native_tool_runtime() {
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+    }
+
+    fn write_file(root: &Path, relative: &str, content: &str) {
+        let path = root.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent directory");
+        }
+        fs::write(path, content).expect("write fixture");
+    }
+
+    let root = unique_temp_dir("loongclaw-spec-tool-core-import");
+    fs::create_dir_all(&root).expect("create fixture root");
+    write_file(
+        &root,
+        "SOUL.md",
+        "# Soul\n\nAlways prefer concise shell output. updated by nanobot.\n",
+    );
+    write_file(
+        &root,
+        "IDENTITY.md",
+        "# Identity\n\n- Motto: your nanobot agent for deploys\n",
+    );
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-tool-core-claw-import".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-tool-core-claw-import".to_owned(),
+        ttl_s: 120,
+        approval: None,
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: None,
+        bridge_support: None,
+        bootstrap: None,
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        operation: OperationSpec::ToolCore {
+            tool_name: "claw.import".to_owned(),
+            required_capabilities: BTreeSet::from([Capability::InvokeTool]),
+            payload: json!({
+                "mode": "plan",
+                "source": "nanobot",
+                "input_path": root.display().to_string()
+            }),
+            core: None,
+        },
+    };
+
+    let report = execute_spec(spec, true).await;
+    assert_eq!(report.operation_kind, "tool_core");
+    assert_eq!(report.outcome["outcome"]["status"], "ok");
+    assert_eq!(report.outcome["outcome"]["payload"]["source"], "nanobot");
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["config_preview"]["prompt_pack_id"],
+        "loongclaw-core-v1"
+    );
+    assert!(
+        report.outcome["outcome"]["payload"]["config_preview"]["system_prompt_addendum"]
+            .as_str()
+            .expect("prompt addendum should exist")
+            .contains("LoongClaw")
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
+async fn execute_spec_tool_extension_can_hot_handle_claw_import_via_core_wrapper() {
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+    }
+
+    fn write_file(root: &Path, relative: &str, content: &str) {
+        let path = root.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent directory");
+        }
+        fs::write(path, content).expect("write fixture");
+    }
+
+    let root = unique_temp_dir("loongclaw-spec-tool-extension-import");
+    fs::create_dir_all(&root).expect("create fixture root");
+    write_file(
+        &root,
+        "SOUL.md",
+        "# Soul\n\nAlways prefer concise shell output. updated by nanobot.\n",
+    );
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-tool-extension-claw-import".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-tool-extension-claw-import".to_owned(),
+        ttl_s: 120,
+        approval: None,
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: None,
+        bridge_support: None,
+        bootstrap: None,
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        operation: OperationSpec::ToolExtension {
+            extension_action: "plan".to_owned(),
+            required_capabilities: BTreeSet::from([Capability::InvokeTool]),
+            payload: json!({
+                "source": "nanobot",
+                "input_path": root.display().to_string()
+            }),
+            extension: "claw-migration".to_owned(),
+            core: None,
+        },
+    };
+
+    let report = execute_spec(spec, true).await;
+    assert_eq!(report.operation_kind, "tool_extension");
+    assert_eq!(report.outcome["outcome"]["status"], "ok");
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["extension"],
+        "claw-migration"
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["core_outcome"]["mode"],
+        "plan"
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["core_outcome"]["source"],
+        "nanobot"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
 async fn execute_spec_denylist_overrides_other_approvals() {
     let spec = RunnerSpec {
         pack: VerticalPackManifest {

@@ -8,7 +8,8 @@ Product specs describe **what** the product does from the user's perspective, no
 
 ## Specs
 
-No product specs yet. Add them here as LoongClaw's user-facing surface grows.
+- [Prompt And Personality](prompt-and-personality.md)
+- [Memory Profiles](memory-profiles.md)
 
 Template for new specs:
 

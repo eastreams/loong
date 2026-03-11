@@ -203,6 +203,10 @@ pub fn write(path: Option<&str>, config: &LoongClawConfig, force: bool) -> CliRe
     Ok(output_path)
 }
 
+pub fn render(config: &LoongClawConfig) -> CliResult<String> {
+    encode_toml_config(config)
+}
+
 pub fn default_config_path() -> PathBuf {
     default_loongclaw_home().join(DEFAULT_CONFIG_FILE)
 }
@@ -531,6 +535,56 @@ api_key_env = "{secret}"
         let (_, loaded) = load(Some(&path_string)).expect("config load should pass");
         assert_eq!(loaded.provider.model, "openai/gpt-5.1-codex");
         assert_eq!(loaded.cli.system_prompt, "You are an onboarding assistant.");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_persists_prompt_pack_and_personality_metadata() {
+        let path = unique_config_path("loongclaw-prompt-config");
+        let path_string = path.display().to_string();
+        let mut config = LoongClawConfig::default();
+        config.cli.prompt_pack_id = Some("loongclaw-core-v1".to_owned());
+        config.cli.personality = Some(crate::prompt::PromptPersonality::AutonomousExecutor);
+
+        write(Some(&path_string), &config, true).expect("config write should pass");
+        let (_, loaded) = load(Some(&path_string)).expect("config load should pass");
+
+        assert_eq!(
+            loaded.cli.prompt_pack_id.as_deref(),
+            Some("loongclaw-core-v1")
+        );
+        assert_eq!(
+            loaded.cli.personality,
+            Some(crate::prompt::PromptPersonality::AutonomousExecutor)
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_persists_memory_profile_metadata() {
+        let path = unique_config_path("loongclaw-memory-config");
+        let path_string = path.display().to_string();
+        let mut config = LoongClawConfig::default();
+        config.memory.profile = crate::config::MemoryProfile::WindowPlusSummary;
+        config.memory.summary_max_chars = 900;
+        config.memory.profile_note = Some("Imported NanoBot preferences".to_owned());
+
+        write(Some(&path_string), &config, true).expect("config write should pass");
+        let (_, loaded) = load(Some(&path_string)).expect("config load should pass");
+
+        assert_eq!(
+            loaded.memory.profile,
+            crate::config::MemoryProfile::WindowPlusSummary
+        );
+        assert_eq!(loaded.memory.summary_max_chars, 900);
+        assert_eq!(
+            loaded.memory.profile_note.as_deref(),
+            Some("Imported NanoBot preferences")
+        );
 
         let _ = fs::remove_file(path);
     }

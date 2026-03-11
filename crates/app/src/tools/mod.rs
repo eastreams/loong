@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 
 use crate::KernelContext;
 
+mod claw_import;
 mod file;
 mod kernel_adapter;
 pub mod runtime_config;
@@ -41,6 +42,7 @@ pub fn execute_tool_core(request: ToolCoreRequest) -> Result<ToolCoreOutcome, St
 
 pub fn canonical_tool_name(raw: &str) -> &str {
     match raw {
+        "claw_import" | "import_claw" => "claw.import",
         "file_read" => "file.read",
         "file_write" => "file.write",
         "shell_exec" | "shell" => "shell.exec",
@@ -51,7 +53,7 @@ pub fn canonical_tool_name(raw: &str) -> &str {
 pub fn is_known_tool_name(raw: &str) -> bool {
     matches!(
         canonical_tool_name(raw),
-        "shell.exec" | "file.read" | "file.write"
+        "claw.import" | "shell.exec" | "file.read" | "file.write"
     )
 }
 
@@ -65,6 +67,7 @@ pub fn execute_tool_core_with_config(
         payload: request.payload,
     };
     match canonical_name {
+        "claw.import" => claw_import::execute_claw_import_tool_with_config(request, config),
         "shell.exec" => shell::execute_shell_tool_with_config(request, config),
         "file.read" => file::execute_file_read_tool_with_config(request, config),
         "file.write" => file::execute_file_write_tool_with_config(request, config),
@@ -85,6 +88,10 @@ pub struct ToolRegistryEntry {
 /// Returns a sorted list of all registered tools, gated by feature flags.
 pub fn tool_registry() -> Vec<ToolRegistryEntry> {
     let mut entries = Vec::new();
+    entries.push(ToolRegistryEntry {
+        name: "claw.import",
+        description: "Import legacy Claw configs into native LoongClaw settings",
+    });
     #[cfg(feature = "tool-file")]
     {
         entries.push(ToolRegistryEntry {
@@ -103,6 +110,7 @@ pub fn tool_registry() -> Vec<ToolRegistryEntry> {
             description: "Execute shell commands",
         });
     }
+    entries.sort_by_key(|entry| entry.name);
     entries
 }
 
@@ -123,6 +131,43 @@ pub fn capability_snapshot() -> String {
 /// Order is deterministic for stable prompting/tests.
 pub fn provider_tool_definitions() -> Vec<Value> {
     let mut tools = Vec::new();
+
+    tools.push(json!({
+        "type": "function",
+        "function": {
+            "name": "claw_import",
+            "description": "Import a legacy Claw workspace or persona into native LoongClaw config with preview or apply mode.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "input_path": {
+                        "type": "string",
+                        "description": "Path to the legacy Claw workspace, config root, or portable import file."
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["plan", "apply"],
+                        "description": "Use `plan` to preview the nativeized result, or `apply` to write a target config."
+                    },
+                    "source": {
+                        "type": "string",
+                        "enum": ["auto", "nanobot", "openclaw", "picoclaw", "zeroclaw", "nanoclaw"],
+                        "description": "Optional source hint. Defaults to automatic detection."
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Target config path to write in apply mode."
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Overwrite an existing target config when applying. Defaults to false."
+                    }
+                },
+                "required": ["input_path"],
+                "additionalProperties": false
+            }
+        }
+    }));
 
     #[cfg(feature = "tool-file")]
     {
@@ -209,12 +254,28 @@ pub fn provider_tool_definitions() -> Vec<Value> {
         }));
     }
 
+    tools.sort_by(|left, right| tool_function_name(left).cmp(tool_function_name(right)));
     tools
+}
+
+fn tool_function_name(tool: &Value) -> &str {
+    tool.get("function")
+        .and_then(|value| value.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
 }
 
 #[allow(dead_code)]
 fn _shape_examples() -> BTreeMap<&'static str, Value> {
     BTreeMap::from([
+        (
+            "claw.import",
+            json!({
+                "input_path": "/tmp/nanobot-workspace",
+                "mode": "plan",
+                "source": "auto"
+            }),
+        ),
         (
             "shell.exec",
             json!({
@@ -258,24 +319,28 @@ mod tests {
     #[test]
     fn capability_snapshot_lists_all_tools_when_all_features_enabled() {
         let snapshot = capability_snapshot();
+        assert!(snapshot
+            .contains("- claw.import: Import legacy Claw configs into native LoongClaw settings"));
         assert!(snapshot.contains("- file.read: Read file contents"));
         assert!(snapshot.contains("- file.write: Write file contents"));
         assert!(snapshot.contains("- shell.exec: Execute shell commands"));
 
-        // Verify sorted order: file.read < file.write < shell.exec
+        // Verify sorted order: claw.import < file.read < file.write < shell.exec
         let lines: Vec<&str> = snapshot.lines().skip(1).collect();
-        assert_eq!(lines.len(), 3);
-        assert!(lines[0].starts_with("- file.read"));
-        assert!(lines[1].starts_with("- file.write"));
-        assert!(lines[2].starts_with("- shell.exec"));
+        assert_eq!(lines.len(), 4);
+        assert!(lines[0].starts_with("- claw.import"));
+        assert!(lines[1].starts_with("- file.read"));
+        assert!(lines[2].starts_with("- file.write"));
+        assert!(lines[3].starts_with("- shell.exec"));
     }
 
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
     fn tool_registry_returns_all_known_tools() {
         let entries = tool_registry();
-        assert_eq!(entries.len(), 3);
+        assert_eq!(entries.len(), 4);
         let names: Vec<&str> = entries.iter().map(|e| e.name).collect();
+        assert!(names.contains(&"claw.import"));
         assert!(names.contains(&"shell.exec"));
         assert!(names.contains(&"file.read"));
         assert!(names.contains(&"file.write"));
@@ -285,7 +350,7 @@ mod tests {
     #[test]
     fn provider_tool_definitions_are_stable_and_complete() {
         let defs = provider_tool_definitions();
-        assert_eq!(defs.len(), 3);
+        assert_eq!(defs.len(), 4);
 
         let names: Vec<&str> = defs
             .iter()
@@ -293,7 +358,10 @@ mod tests {
             .filter_map(|function| function.get("name"))
             .filter_map(Value::as_str)
             .collect();
-        assert_eq!(names, vec!["file_read", "file_write", "shell_exec"]);
+        assert_eq!(
+            names,
+            vec!["claw_import", "file_read", "file_write", "shell_exec"]
+        );
 
         for item in &defs {
             assert_eq!(item["type"], "function");
@@ -303,6 +371,7 @@ mod tests {
 
     #[test]
     fn canonical_tool_name_maps_known_aliases() {
+        assert_eq!(canonical_tool_name("claw_import"), "claw.import");
         assert_eq!(canonical_tool_name("file_read"), "file.read");
         assert_eq!(canonical_tool_name("file_write"), "file.write");
         assert_eq!(canonical_tool_name("shell_exec"), "shell.exec");
@@ -312,6 +381,8 @@ mod tests {
 
     #[test]
     fn is_known_tool_name_accepts_canonical_and_alias_forms() {
+        assert!(is_known_tool_name("claw.import"));
+        assert!(is_known_tool_name("claw_import"));
         assert!(is_known_tool_name("file.read"));
         assert!(is_known_tool_name("file_read"));
         assert!(is_known_tool_name("file.write"));
@@ -333,6 +404,163 @@ mod tests {
             err.contains("tool_not_found"),
             "error should contain tool_not_found, got: {err}"
         );
+    }
+
+    #[test]
+    fn claw_import_plan_mode_returns_nativeized_preview() {
+        use std::{
+            fs,
+            path::{Path, PathBuf},
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        fn unique_temp_dir(prefix: &str) -> PathBuf {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos();
+            std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+        }
+
+        fn write_file(root: &Path, relative: &str, content: &str) {
+            let path = root.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create parent directory");
+            }
+            fs::write(path, content).expect("write fixture");
+        }
+
+        let root = unique_temp_dir("loongclaw-tool-import-plan");
+        fs::create_dir_all(&root).expect("create fixture root");
+        write_file(
+            &root,
+            "SOUL.md",
+            "# Soul\n\nAlways prefer concise shell output. updated by nanobot.\n",
+        );
+        write_file(
+            &root,
+            "IDENTITY.md",
+            "# Identity\n\n- Motto: your nanobot agent for deploys\n",
+        );
+
+        let config = runtime_config::ToolRuntimeConfig {
+            shell_allowlist: BTreeSet::new(),
+            file_root: Some(root.clone()),
+        };
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "claw.import".to_owned(),
+                payload: json!({
+                    "mode": "plan",
+                    "source": "nanobot",
+                    "input_path": "."
+                }),
+            },
+            &config,
+        )
+        .expect("claw import plan should succeed");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["tool_name"], "claw.import");
+        assert_eq!(outcome.payload["mode"], "plan");
+        assert_eq!(outcome.payload["source"], "nanobot");
+        assert_eq!(
+            outcome.payload["config_preview"]["prompt_pack_id"],
+            "loongclaw-core-v1"
+        );
+        assert_eq!(
+            outcome.payload["config_preview"]["memory_profile"],
+            "profile_plus_window"
+        );
+        assert!(outcome.payload["config_preview"]["system_prompt_addendum"]
+            .as_str()
+            .expect("prompt addendum should exist")
+            .contains("LoongClaw"));
+        assert!(outcome.payload["config_preview"]["profile_note"]
+            .as_str()
+            .expect("profile note should exist")
+            .contains("LoongClaw"));
+        assert_eq!(outcome.payload["config_written"], false);
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn claw_import_apply_mode_writes_target_config() {
+        use std::{
+            fs,
+            path::{Path, PathBuf},
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        fn unique_temp_dir(prefix: &str) -> PathBuf {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos();
+            std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+        }
+
+        fn write_file(root: &Path, relative: &str, content: &str) {
+            let path = root.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create parent directory");
+            }
+            fs::write(path, content).expect("write fixture");
+        }
+
+        let root = unique_temp_dir("loongclaw-tool-import-apply");
+        fs::create_dir_all(&root).expect("create fixture root");
+        write_file(
+            &root,
+            "SOUL.md",
+            "# Soul\n\nAlways prefer concise shell output. updated by nanobot.\n",
+        );
+        write_file(
+            &root,
+            "IDENTITY.md",
+            "# Identity\n\n- Motto: your nanobot agent for deploys\n",
+        );
+
+        let output_path = root.join("generated").join("loongclaw.toml");
+        let config = runtime_config::ToolRuntimeConfig {
+            shell_allowlist: BTreeSet::new(),
+            file_root: Some(root.clone()),
+        };
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "claw_import".to_owned(),
+                payload: json!({
+                    "mode": "apply",
+                    "source": "nanobot",
+                    "input_path": ".",
+                    "output_path": "generated/loongclaw.toml",
+                    "force": true
+                }),
+            },
+            &config,
+        )
+        .expect("claw import apply should succeed");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["mode"], "apply");
+        assert_eq!(outcome.payload["config_written"], true);
+        assert_eq!(
+            outcome.payload["output_path"]
+                .as_str()
+                .expect("output path should exist"),
+            fs::canonicalize(&output_path)
+                .expect("output path should canonicalize")
+                .display()
+                .to_string()
+        );
+
+        let raw = fs::read_to_string(&output_path).expect("output config should exist");
+        assert!(raw.contains("prompt_pack_id = \"loongclaw-core-v1\""));
+        assert!(raw.contains("profile = \"profile_plus_window\""));
+        assert!(raw.contains("LoongClaw"));
+
+        fs::remove_dir_all(&root).ok();
     }
 
     // --- Kernel-routed tool tests ---

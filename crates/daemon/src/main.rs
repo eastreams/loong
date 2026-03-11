@@ -26,6 +26,7 @@ use loongclaw_bench::{
     run_wasm_cache_benchmark_cli,
 };
 mod doctor_cli;
+mod import_claw_cli;
 mod onboard_cli;
 #[cfg(test)]
 pub(crate) use loongclaw_spec::programmatic::{
@@ -174,9 +175,24 @@ enum Commands {
         #[arg(long)]
         api_key_env: Option<String>,
         #[arg(long)]
+        personality: Option<String>,
+        #[arg(long)]
+        memory_profile: Option<String>,
+        #[arg(long)]
         system_prompt: Option<String>,
         #[arg(long, default_value_t = false)]
         skip_model_probe: bool,
+    },
+    /// Import prompt/identity traits from another claw workspace into LoongClaw config
+    ImportClaw {
+        #[arg(long)]
+        input: String,
+        #[arg(long)]
+        output: Option<String>,
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long, default_value_t = false)]
+        force: bool,
     },
     /// Run setup diagnostics and optionally apply safe config/path fixes
     Doctor {
@@ -343,6 +359,8 @@ async fn main() {
             provider,
             model,
             api_key_env,
+            personality,
+            memory_profile,
             system_prompt,
             skip_model_probe,
         } => {
@@ -354,11 +372,24 @@ async fn main() {
                 provider,
                 model,
                 api_key_env,
+                personality,
+                memory_profile,
                 system_prompt,
                 skip_model_probe,
             })
             .await
         }
+        Commands::ImportClaw {
+            input,
+            output,
+            source,
+            force,
+        } => import_claw_cli::run_import_claw_cli(import_claw_cli::ImportClawCommandOptions {
+            input,
+            output,
+            source,
+            force,
+        }),
         Commands::Doctor {
             config,
             fix,
@@ -607,10 +638,8 @@ fn run_setup_cli(output: Option<&str>, force: bool) -> CliResult<()> {
             .to_str()
             .ok_or_else(|| format!("config path is not valid UTF-8: {}", path.display()))?;
         let (_, parsed) = mvp::config::load(Some(path_str))?;
-        let mem_config = mvp::memory::runtime_config::MemoryRuntimeConfig {
-            sqlite_path: Some(parsed.memory.resolved_sqlite_path()),
-            sliding_window: Some(parsed.memory.sliding_window),
-        };
+        let mem_config =
+            mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&parsed.memory);
         let memory_db = mvp::memory::ensure_memory_db_ready(
             Some(parsed.memory.resolved_sqlite_path()),
             &mem_config,

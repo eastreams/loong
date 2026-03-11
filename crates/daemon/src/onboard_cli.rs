@@ -16,6 +16,8 @@ pub(crate) struct OnboardCommandOptions {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub api_key_env: Option<String>,
+    pub personality: Option<String>,
+    pub memory_profile: Option<String>,
     pub system_prompt: Option<String>,
     pub skip_model_probe: bool,
 }
@@ -36,6 +38,12 @@ struct OnboardCheck {
 
 pub(crate) async fn run_onboard_cli(options: OnboardCommandOptions) -> CliResult<()> {
     validate_non_interactive_risk_gate(options.non_interactive, options.accept_risk)?;
+    let using_prompt_override = options
+        .system_prompt
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    let total_steps = if using_prompt_override { 5 } else { 6 };
 
     if !options.non_interactive && !options.accept_risk {
         println!("Security warning:");
@@ -57,7 +65,7 @@ pub(crate) async fn run_onboard_cli(options: OnboardCommandOptions) -> CliResult
     let mut config = mvp::config::LoongClawConfig::default();
 
     if !options.non_interactive {
-        print_step_header(1, 4, "provider");
+        print_step_header(1, total_steps, "provider");
     }
     let selected_provider = resolve_provider_selection(&options, &config)?;
     config.provider.kind = selected_provider;
@@ -66,13 +74,13 @@ pub(crate) async fn run_onboard_cli(options: OnboardCommandOptions) -> CliResult
     config.provider.chat_completions_path = profile.chat_completions_path.to_owned();
 
     if !options.non_interactive {
-        print_step_header(2, 4, "model");
+        print_step_header(2, total_steps, "model");
     }
     let selected_model = resolve_model_selection(&options, &config)?;
     config.provider.model = selected_model;
 
     if !options.non_interactive {
-        print_step_header(3, 4, "credential env");
+        print_step_header(3, total_steps, "credential env");
     }
     let default_api_key_env = provider_default_api_key_env(config.provider.kind).to_owned();
     let selected_api_key_env = resolve_api_key_env_selection(&options, default_api_key_env)?;
@@ -82,11 +90,38 @@ pub(crate) async fn run_onboard_cli(options: OnboardCommandOptions) -> CliResult
         Some(selected_api_key_env)
     };
 
-    if !options.non_interactive {
-        print_step_header(4, 4, "system prompt");
-    }
-    if let Some(system_prompt) = resolve_system_prompt_selection(&options, &config)? {
-        config.cli.system_prompt = system_prompt;
+    if using_prompt_override {
+        if !options.non_interactive {
+            print_step_header(4, total_steps, "system prompt override");
+        }
+        if let Some(system_prompt) = resolve_system_prompt_selection(&options, &config)? {
+            config.cli.prompt_pack_id = None;
+            config.cli.personality = None;
+            config.cli.system_prompt_addendum = None;
+            config.cli.system_prompt = system_prompt;
+        }
+        if !options.non_interactive {
+            print_step_header(5, total_steps, "memory profile");
+        }
+        config.memory.profile = resolve_memory_profile_selection(&options, &config)?;
+    } else {
+        if !options.non_interactive {
+            print_step_header(4, total_steps, "personality");
+        }
+        let personality = resolve_personality_selection(&options, &config)?;
+        config.cli.prompt_pack_id = Some(mvp::prompt::DEFAULT_PROMPT_PACK_ID.to_owned());
+        config.cli.personality = Some(personality);
+
+        if !options.non_interactive {
+            print_step_header(5, total_steps, "prompt addendum");
+        }
+        config.cli.system_prompt_addendum = resolve_prompt_addendum_selection(&options, &config)?;
+        config.cli.refresh_native_system_prompt();
+
+        if !options.non_interactive {
+            print_step_header(6, total_steps, "memory profile");
+        }
+        config.memory.profile = resolve_memory_profile_selection(&options, &config)?;
     }
 
     let checks = run_preflight_checks(&config, options.skip_model_probe).await;
@@ -129,10 +164,8 @@ pub(crate) async fn run_onboard_cli(options: OnboardCommandOptions) -> CliResult
     let path = mvp::config::write(options.output.as_deref(), &config, force_write)?;
     #[cfg(feature = "memory-sqlite")]
     let memory_path = {
-        let mem_config = mvp::memory::runtime_config::MemoryRuntimeConfig {
-            sqlite_path: Some(config.memory.resolved_sqlite_path()),
-            sliding_window: Some(config.memory.sliding_window),
-        };
+        let mem_config =
+            mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
         mvp::memory::ensure_memory_db_ready(Some(config.memory.resolved_sqlite_path()), &mem_config)
             .map_err(|error| format!("failed to bootstrap sqlite memory: {error}"))?
     };
@@ -141,6 +174,18 @@ pub(crate) async fn run_onboard_cli(options: OnboardCommandOptions) -> CliResult
     println!("- config: {}", path.display());
     println!("- provider: {}", provider_kind_id(config.provider.kind));
     println!("- model: {}", config.provider.model);
+    if let Some(pack_id) = config.cli.prompt_pack_id() {
+        println!("- prompt pack: {pack_id}");
+    } else {
+        println!("- prompt mode: inline override");
+    }
+    if let Some(personality) = config.cli.personality {
+        println!("- personality: {}", prompt_personality_id(personality));
+    }
+    println!(
+        "- memory profile: {}",
+        memory_profile_id(config.memory.profile)
+    );
     if let Some(api_env) = config.provider.api_key_env.as_deref() {
         println!("- credential env: {api_env}");
     }
@@ -257,6 +302,84 @@ fn resolve_system_prompt_selection(
         return Ok(None);
     }
     Ok(Some(trimmed.to_owned()))
+}
+
+fn resolve_personality_selection(
+    options: &OnboardCommandOptions,
+    config: &mvp::config::LoongClawConfig,
+) -> CliResult<mvp::prompt::PromptPersonality> {
+    if options.non_interactive {
+        if let Some(personality_raw) = options.personality.as_deref() {
+            return parse_prompt_personality(personality_raw).ok_or_else(|| {
+                format!(
+                    "unsupported --personality value \"{personality_raw}\". supported: {}",
+                    supported_personality_list()
+                )
+            });
+        }
+        return Ok(config.cli.resolved_personality());
+    }
+
+    let default_personality = options
+        .personality
+        .as_deref()
+        .and_then(parse_prompt_personality)
+        .unwrap_or_else(|| config.cli.resolved_personality());
+    loop {
+        println!("Personality options: {}", supported_personality_list());
+        let input = prompt_with_default("Personality", prompt_personality_id(default_personality))?;
+        if let Some(personality) = parse_prompt_personality(&input) {
+            return Ok(personality);
+        }
+        println!("Invalid personality: {input}");
+    }
+}
+
+fn resolve_prompt_addendum_selection(
+    options: &OnboardCommandOptions,
+    config: &mvp::config::LoongClawConfig,
+) -> CliResult<Option<String>> {
+    if options.non_interactive {
+        return Ok(config.cli.system_prompt_addendum.clone());
+    }
+    prompt_optional(
+        "Prompt addendum (blank keeps current, '-' clears)",
+        config.cli.system_prompt_addendum.as_deref(),
+    )
+}
+
+fn resolve_memory_profile_selection(
+    options: &OnboardCommandOptions,
+    config: &mvp::config::LoongClawConfig,
+) -> CliResult<mvp::config::MemoryProfile> {
+    if options.non_interactive {
+        if let Some(profile_raw) = options.memory_profile.as_deref() {
+            return parse_memory_profile(profile_raw).ok_or_else(|| {
+                format!(
+                    "unsupported --memory-profile value \"{profile_raw}\". supported: {}",
+                    supported_memory_profile_list()
+                )
+            });
+        }
+        return Ok(config.memory.profile);
+    }
+
+    let default_profile = options
+        .memory_profile
+        .as_deref()
+        .and_then(parse_memory_profile)
+        .unwrap_or(config.memory.profile);
+    loop {
+        println!(
+            "Memory profile options: {}",
+            supported_memory_profile_list()
+        );
+        let input = prompt_with_default("Memory profile", memory_profile_id(default_profile))?;
+        if let Some(profile) = parse_memory_profile(&input) {
+            return Ok(profile);
+        }
+        println!("Invalid memory profile: {input}");
+    }
 }
 
 async fn run_preflight_checks(
@@ -423,6 +546,26 @@ fn prompt_confirm(message: &str, default: bool) -> CliResult<bool> {
     Ok(matches!(value.as_str(), "y" | "yes"))
 }
 
+fn prompt_optional(label: &str, current: Option<&str>) -> CliResult<Option<String>> {
+    let default = current.unwrap_or("none");
+    print!("{label} [{default}]: ");
+    io::stdout()
+        .flush()
+        .map_err(|error| format!("flush stdout failed: {error}"))?;
+    let mut line = String::new();
+    io::stdin()
+        .read_line(&mut line)
+        .map_err(|error| format!("read stdin failed: {error}"))?;
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return Ok(current.map(str::to_owned));
+    }
+    if trimmed == "-" {
+        return Ok(None);
+    }
+    Ok(Some(trimmed.to_owned()))
+}
+
 pub(crate) fn validate_non_interactive_risk_gate(
     non_interactive: bool,
     accept_risk: bool,
@@ -452,6 +595,34 @@ pub(crate) fn parse_provider_kind(raw: &str) -> Option<mvp::config::ProviderKind
         "xai" | "xai_compatible" => Some(mvp::config::ProviderKind::Xai),
         "zai" | "zai_compatible" => Some(mvp::config::ProviderKind::Zai),
         "zhipu" | "zhipu_compatible" => Some(mvp::config::ProviderKind::Zhipu),
+        _ => None,
+    }
+}
+
+pub(crate) fn parse_prompt_personality(raw: &str) -> Option<mvp::prompt::PromptPersonality> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "calm_engineering" | "engineering" | "calm" => {
+            Some(mvp::prompt::PromptPersonality::CalmEngineering)
+        }
+        "friendly_collab" | "friendly" | "collab" => {
+            Some(mvp::prompt::PromptPersonality::FriendlyCollab)
+        }
+        "autonomous_executor" | "autonomous" | "executor" => {
+            Some(mvp::prompt::PromptPersonality::AutonomousExecutor)
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn parse_memory_profile(raw: &str) -> Option<mvp::config::MemoryProfile> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "window_only" | "window" => Some(mvp::config::MemoryProfile::WindowOnly),
+        "window_plus_summary" | "summary" | "summary_window" => {
+            Some(mvp::config::MemoryProfile::WindowPlusSummary)
+        }
+        "profile_plus_window" | "profile" | "profile_window" => {
+            Some(mvp::config::MemoryProfile::ProfilePlusWindow)
+        }
         _ => None,
     }
 }
@@ -490,8 +661,32 @@ pub(crate) fn provider_kind_id(kind: mvp::config::ProviderKind) -> &'static str 
     }
 }
 
+pub(crate) fn prompt_personality_id(personality: mvp::prompt::PromptPersonality) -> &'static str {
+    match personality {
+        mvp::prompt::PromptPersonality::CalmEngineering => "calm_engineering",
+        mvp::prompt::PromptPersonality::FriendlyCollab => "friendly_collab",
+        mvp::prompt::PromptPersonality::AutonomousExecutor => "autonomous_executor",
+    }
+}
+
+pub(crate) fn memory_profile_id(profile: mvp::config::MemoryProfile) -> &'static str {
+    match profile {
+        mvp::config::MemoryProfile::WindowOnly => "window_only",
+        mvp::config::MemoryProfile::WindowPlusSummary => "window_plus_summary",
+        mvp::config::MemoryProfile::ProfilePlusWindow => "profile_plus_window",
+    }
+}
+
 fn supported_provider_list() -> &'static str {
     "openai, anthropic, openrouter, kimi, kimi_coding, minimax, ollama, volcengine, xai, zai, zhipu, deepseek"
+}
+
+fn supported_personality_list() -> &'static str {
+    "calm_engineering, friendly_collab, autonomous_executor"
+}
+
+fn supported_memory_profile_list() -> &'static str {
+    "window_only, window_plus_summary, profile_plus_window"
 }
 
 fn resolve_force_write(output_path: &Path, options: &OnboardCommandOptions) -> CliResult<bool> {

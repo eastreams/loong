@@ -30,6 +30,7 @@ fn sign_security_scan_profile_for_test(profile: &SecurityScanProfile) -> (String
 }
 
 mod architecture;
+mod import_claw_cli;
 mod onboard_cli;
 mod programmatic;
 mod spec_runtime;

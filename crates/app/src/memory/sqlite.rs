@@ -103,39 +103,8 @@ pub(super) fn load_window(
     } else {
         requested_limit.min(default_window)
     };
-
     let path = resolve_db_path(config);
-    ensure_sqlite_schema(&path)?;
-    let conn = rusqlite::Connection::open(&path)
-        .map_err(|error| format!("open sqlite memory db failed: {error}"))?;
-
-    let mut stmt = conn
-        .prepare(
-            "SELECT role, content, ts
-             FROM turns
-             WHERE session_id = ?1
-             ORDER BY id DESC
-             LIMIT ?2",
-        )
-        .map_err(|error| format!("prepare memory window query failed: {error}"))?;
-    let rows = stmt
-        .query_map(
-            rusqlite::params![session_id, window_limit as i64],
-            |row| -> rusqlite::Result<ConversationTurn> {
-                Ok(ConversationTurn {
-                    role: row.get(0)?,
-                    content: row.get(1)?,
-                    ts: row.get(2)?,
-                })
-            },
-        )
-        .map_err(|error| format!("query memory window failed: {error}"))?;
-
-    let mut turns = Vec::new();
-    for item in rows {
-        turns.push(item.map_err(|error| format!("decode memory window row failed: {error}"))?);
-    }
-    turns.reverse();
+    let turns = query_turns(session_id, Some(window_limit), config)?;
 
     Ok(MemoryCoreOutcome {
         status: "ok".to_owned(),
@@ -226,6 +195,13 @@ pub(super) fn window_direct_with_options(
         .map_err(|error| format!("decode memory turns failed: {error}"))
 }
 
+pub(super) fn session_turns_direct(
+    session_id: &str,
+    config: &MemoryRuntimeConfig,
+) -> Result<Vec<ConversationTurn>, String> {
+    query_turns(session_id, None, config)
+}
+
 pub(super) fn ensure_memory_db_ready(
     path: Option<PathBuf>,
     config: &MemoryRuntimeConfig,
@@ -236,10 +212,7 @@ pub(super) fn ensure_memory_db_ready(
 }
 
 fn default_window_size(config: &MemoryRuntimeConfig) -> usize {
-    config
-        .sliding_window
-        .filter(|value| *value > 0)
-        .unwrap_or(12)
+    config.sliding_window.max(1)
 }
 
 fn default_window_size_u64(config: &MemoryRuntimeConfig) -> u64 {
@@ -258,6 +231,80 @@ fn resolve_db_path(config: &MemoryRuntimeConfig) -> PathBuf {
         return path.clone();
     }
     crate::config::default_loongclaw_home().join("memory.sqlite3")
+}
+
+fn query_turns(
+    session_id: &str,
+    limit: Option<usize>,
+    config: &MemoryRuntimeConfig,
+) -> Result<Vec<ConversationTurn>, String> {
+    let path = resolve_db_path(config);
+    ensure_sqlite_schema(&path)?;
+    let conn = rusqlite::Connection::open(&path)
+        .map_err(|error| format!("open sqlite memory db failed: {error}"))?;
+
+    let mut turns = if let Some(limit) = limit {
+        let mut stmt = conn
+            .prepare(
+                "SELECT role, content, ts
+                 FROM turns
+                 WHERE session_id = ?1
+                 ORDER BY id DESC
+                 LIMIT ?2",
+            )
+            .map_err(|error| format!("prepare memory window query failed: {error}"))?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params![session_id, limit as i64],
+                |row| -> rusqlite::Result<ConversationTurn> {
+                    Ok(ConversationTurn {
+                        role: row.get(0)?,
+                        content: row.get(1)?,
+                        ts: row.get(2)?,
+                    })
+                },
+            )
+            .map_err(|error| format!("query memory window failed: {error}"))?;
+
+        let mut turns = Vec::new();
+        for item in rows {
+            turns.push(item.map_err(|error| format!("decode memory window row failed: {error}"))?);
+        }
+        turns.reverse();
+        turns
+    } else {
+        let mut stmt = conn
+            .prepare(
+                "SELECT role, content, ts
+                 FROM turns
+                 WHERE session_id = ?1
+                 ORDER BY id ASC",
+            )
+            .map_err(|error| format!("prepare full memory query failed: {error}"))?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params![session_id],
+                |row| -> rusqlite::Result<ConversationTurn> {
+                    Ok(ConversationTurn {
+                        role: row.get(0)?,
+                        content: row.get(1)?,
+                        ts: row.get(2)?,
+                    })
+                },
+            )
+            .map_err(|error| format!("query full memory session failed: {error}"))?;
+
+        let mut turns = Vec::new();
+        for item in rows {
+            turns.push(item.map_err(|error| format!("decode full memory row failed: {error}"))?);
+        }
+        turns
+    };
+
+    if turns.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(std::mem::take(&mut turns))
 }
 
 fn ensure_sqlite_schema(path: &PathBuf) -> Result<(), String> {

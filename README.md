@@ -45,6 +45,7 @@ LoongClaw is a layered Agentic OS kernel focused on stable kernel contracts, str
 - **Business logic lives in extension planes** -- providers, tools, channels, and memory backends are all replaceable adapters that never touch the kernel.
 - **Multi-language plugins** -- supports Rust, WASM, and process plugins in any language. The community can extend freely.
 - **Bidirectional integration** -- can be embedded as a kernel into other systems, or connect to external services via adapters.
+- **Operator-ready product layer** -- onboarding, personalities, memory profiles, and legacy claw import are all first-class runtime capabilities.
 
 ## Sponsors
 
@@ -119,6 +120,41 @@ Run `loongclaw doctor --fix` if anything goes wrong.
 ```bash
 cargo test --workspace --all-features
 ```
+
+## Prompt And Personality
+
+LoongClaw ships with a native prompt pack and three default personalities. All
+three personalities keep the same security-first boundaries; they only change
+tone, initiative, confirmation style, and response density.
+
+- `calm_engineering`: rigorous, direct, and technically grounded
+- `friendly_collab`: warm, cooperative, and explanatory when helpful
+- `autonomous_executor`: decisive, high-initiative, and execution-oriented
+
+Interactive onboarding now defaults to personality selection, while advanced
+operators can still pass `--system-prompt` for a full inline override.
+
+## Memory Profiles
+
+LoongClaw separates memory behavior from the storage backend. The current
+backend is SQLite, with three operator-selectable context injection modes:
+
+- `window_only`: only the recent sliding window is loaded
+- `window_plus_summary`: earlier turns are condensed into a summary block
+- `profile_plus_window`: a durable `profile_note` block is injected before the recent window
+
+`profile_note` is the first migration-friendly durable memory lane. It is meant
+to carry imported claw identity, stable preferences, or long-lived operator
+tuning without forcing everything into the system prompt.
+
+## Migration And Import
+
+LoongClaw can discover legacy claw homes during onboarding and offer an import
+before the rest of first-run setup continues.
+
+- Recommended path: import a single highest-confidence source.
+- Advanced path: plan multiple sources, merge only the profile lane, and keep prompt/system identity single-source.
+- Safety defaults: secrets are not migrated, imported runtime identity is normalized to `LoongClaw`, and every apply creates a backup manifest with rollback support.
 
 ## Key Features
 

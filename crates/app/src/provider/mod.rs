@@ -5,8 +5,7 @@ use tokio::time::sleep;
 
 use crate::CliResult;
 
-use super::config::LoongClawConfig;
-#[cfg(feature = "memory-sqlite")]
+use super::config::{LoongClawConfig, ProviderConfig, ProviderKind, ReasoningEffort};
 use super::memory;
 
 mod error_policy;
@@ -36,7 +35,8 @@ pub fn build_system_message(
     if !include_system_prompt {
         return None;
     }
-    let system = config.cli.system_prompt.trim();
+    let system_prompt = config.cli.resolved_system_prompt();
+    let system = system_prompt.trim();
     let snapshot = super::tools::capability_snapshot();
     let content = if system.is_empty() {
         snapshot
@@ -99,15 +99,23 @@ pub fn load_memory_window_messages(
 ) -> CliResult<Vec<Value>> {
     #[cfg(feature = "memory-sqlite")]
     {
-        let mem_config = super::memory::runtime_config::MemoryRuntimeConfig {
-            sqlite_path: Some(config.memory.resolved_sqlite_path()),
-            sliding_window: Some(config.memory.sliding_window),
-        };
-        let turns = memory::window_direct(session_id, config.memory.sliding_window, &mem_config)
-            .map_err(|error| format!("load memory window failed: {error}"))?;
-        let mut messages = Vec::with_capacity(turns.len());
-        for turn in turns {
-            push_history_message(&mut messages, turn.role.as_str(), turn.content.as_str());
+        let mem_config =
+            super::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let memory_entries = memory::load_prompt_context(session_id, &mem_config)
+            .map_err(|error| format!("load prompt memory context failed: {error}"))?;
+        let mut messages = Vec::with_capacity(memory_entries.len());
+        for entry in memory_entries {
+            match entry.kind {
+                memory::MemoryContextKind::Profile | memory::MemoryContextKind::Summary => {
+                    messages.push(json!({
+                        "role": entry.role,
+                        "content": entry.content,
+                    }));
+                }
+                memory::MemoryContextKind::Turn => {
+                    push_history_message(&mut messages, entry.role.as_str(), entry.content.as_str());
+                }
+            }
         }
         Ok(messages)
     }
@@ -681,6 +689,101 @@ mod tests {
     }
 
     #[test]
+    fn message_builder_uses_rendered_prompt_from_pack_metadata() {
+        let mut config = LoongClawConfig {
+            provider: ProviderConfig::default(),
+            cli: crate::config::CliChannelConfig::default(),
+            telegram: crate::config::TelegramChannelConfig::default(),
+            feishu: FeishuChannelConfig::default(),
+            tools: ToolConfig::default(),
+            memory: MemoryConfig::default(),
+            conversation: crate::config::ConversationConfig::default(),
+        };
+        config.cli.personality = Some(crate::prompt::PromptPersonality::FriendlyCollab);
+        config.cli.system_prompt = String::new();
+
+        let messages =
+            build_messages_for_session(&config, "noop-session", true).expect("build messages");
+        let system_content = messages[0]["content"].as_str().expect("system content");
+
+        assert!(system_content.contains("## Personality Overlay: Friendly Collaboration"));
+        assert!(system_content.contains("[available_tools]"));
+    }
+
+    #[test]
+    fn message_builder_keeps_legacy_inline_prompt_when_pack_is_disabled() {
+        let mut config = LoongClawConfig {
+            provider: ProviderConfig::default(),
+            cli: crate::config::CliChannelConfig::default(),
+            telegram: crate::config::TelegramChannelConfig::default(),
+            feishu: FeishuChannelConfig::default(),
+            tools: ToolConfig::default(),
+            memory: MemoryConfig::default(),
+            conversation: crate::config::ConversationConfig::default(),
+        };
+        config.cli.prompt_pack_id = None;
+        config.cli.personality = None;
+        config.cli.system_prompt = "You are a legacy inline prompt.".to_owned();
+
+        let messages =
+            build_messages_for_session(&config, "noop-session", true).expect("build messages");
+        let system_content = messages[0]["content"].as_str().expect("system content");
+
+        assert!(system_content.contains("You are a legacy inline prompt."));
+        assert!(!system_content.contains("## Personality Overlay: Calm Engineering"));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn message_builder_includes_summary_block_for_window_plus_summary_profile() {
+        let tmp =
+            std::env::temp_dir().join(format!("loongclaw-provider-summary-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("provider-summary.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let mut config = LoongClawConfig {
+            provider: ProviderConfig::default(),
+            cli: crate::config::CliChannelConfig::default(),
+            telegram: crate::config::TelegramChannelConfig::default(),
+            feishu: FeishuChannelConfig::default(),
+            tools: ToolConfig::default(),
+            memory: MemoryConfig::default(),
+            conversation: crate::config::ConversationConfig::default(),
+        };
+        config.memory.sqlite_path = db_path.display().to_string();
+        config.memory.profile = crate::config::MemoryProfile::WindowPlusSummary;
+        config.memory.sliding_window = 2;
+
+        let memory_config =
+            crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+        crate::memory::append_turn_direct("summary-session", "user", "turn 1", &memory_config)
+            .expect("append turn 1 should succeed");
+        crate::memory::append_turn_direct("summary-session", "assistant", "turn 2", &memory_config)
+            .expect("append turn 2 should succeed");
+        crate::memory::append_turn_direct("summary-session", "user", "turn 3", &memory_config)
+            .expect("append turn 3 should succeed");
+        crate::memory::append_turn_direct("summary-session", "assistant", "turn 4", &memory_config)
+            .expect("append turn 4 should succeed");
+
+        let messages =
+            build_messages_for_session(&config, "summary-session", true).expect("build messages");
+
+        assert!(
+            messages.iter().any(|message| {
+                message["role"] == "system"
+                    && message["content"]
+                        .as_str()
+                        .is_some_and(|content| content.contains("## Memory Summary"))
+            }),
+            "expected a system summary block in provider messages"
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[test]
     fn completion_body_includes_reasoning_effort_when_configured() {
         let mut config = LoongClawConfig {
             provider: ProviderConfig::default(),
@@ -834,6 +937,7 @@ mod tests {
             .collect();
 
         let mut expected = Vec::new();
+        expected.push("claw_import");
         #[cfg(feature = "tool-file")]
         {
             expected.push("file_read");

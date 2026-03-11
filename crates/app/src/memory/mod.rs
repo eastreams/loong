@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use loongclaw_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
 use serde_json::{Value, json};
 
+use crate::config::{MemoryBackendKind, MemoryMode};
+
 mod kernel_adapter;
 pub mod runtime_config;
 #[cfg(feature = "memory-sqlite")]
@@ -45,6 +47,20 @@ pub fn build_window_request(session_id: &str, limit: usize) -> MemoryCoreRequest
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryContextKind {
+    Profile,
+    Summary,
+    Turn,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryContextEntry {
+    pub kind: MemoryContextKind,
+    pub role: String,
+    pub content: String,
+}
+
 pub fn execute_memory_core(request: MemoryCoreRequest) -> Result<MemoryCoreOutcome, String> {
     execute_memory_core_with_config(request, runtime_config::get_memory_runtime_config())
 }
@@ -53,18 +69,20 @@ pub fn execute_memory_core_with_config(
     request: MemoryCoreRequest,
     config: &runtime_config::MemoryRuntimeConfig,
 ) -> Result<MemoryCoreOutcome, String> {
-    match request.operation.as_str() {
-        MEMORY_OP_APPEND_TURN => append_turn(request, config),
-        MEMORY_OP_WINDOW => load_window(request, config),
-        MEMORY_OP_CLEAR_SESSION => clear_session(request, config),
-        _ => Ok(MemoryCoreOutcome {
-            status: "ok".to_owned(),
-            payload: json!({
-                "adapter": "kv-core",
-                "operation": request.operation,
-                "payload": request.payload,
+    match config.backend {
+        MemoryBackendKind::Sqlite => match request.operation.as_str() {
+            MEMORY_OP_APPEND_TURN => append_turn(request, config),
+            MEMORY_OP_WINDOW => load_window(request, config),
+            MEMORY_OP_CLEAR_SESSION => clear_session(request, config),
+            _ => Ok(MemoryCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "adapter": "kv-core",
+                    "operation": request.operation,
+                    "payload": request.payload,
+                }),
             }),
-        }),
+        },
     }
 }
 
@@ -184,6 +202,105 @@ pub fn ensure_memory_db_ready(
     sqlite::ensure_memory_db_ready(path, config)
 }
 
+pub fn load_prompt_context(
+    session_id: &str,
+    config: &runtime_config::MemoryRuntimeConfig,
+) -> Result<Vec<MemoryContextEntry>, String> {
+    let mut entries = Vec::new();
+
+    if matches!(config.mode, MemoryMode::ProfilePlusWindow) {
+        if let Some(profile_note) = config
+            .profile_note
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            entries.push(MemoryContextEntry {
+                kind: MemoryContextKind::Profile,
+                role: "system".to_owned(),
+                content: format!(
+                    "## Session Profile\nDurable preferences or imported identity carried into this session:\n- {profile_note}"
+                ),
+            });
+        }
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    {
+        let turns = sqlite::window_direct(session_id, config.sliding_window, config)?;
+        if matches!(config.mode, MemoryMode::WindowPlusSummary) {
+            let all_turns = sqlite::session_turns_direct(session_id, config)?;
+            let older_turn_count = all_turns.len().saturating_sub(turns.len());
+            if older_turn_count > 0 {
+                if let Some(summary) =
+                    build_summary_block(&all_turns[..older_turn_count], config.summary_max_chars)
+                {
+                    entries.push(MemoryContextEntry {
+                        kind: MemoryContextKind::Summary,
+                        role: "system".to_owned(),
+                        content: summary,
+                    });
+                }
+            }
+        }
+        for turn in turns {
+            entries.push(MemoryContextEntry {
+                kind: MemoryContextKind::Turn,
+                role: turn.role,
+                content: turn.content,
+            });
+        }
+    }
+
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = session_id;
+    }
+
+    Ok(entries)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn build_summary_block(turns: &[ConversationTurn], max_chars: usize) -> Option<String> {
+    if turns.is_empty() {
+        return None;
+    }
+
+    let header =
+        "## Memory Summary\nEarlier session context condensed from turns outside the active window:";
+    let mut body = String::new();
+    let budget = max_chars.max(256);
+
+    for turn in turns {
+        let normalized = turn
+            .content
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if normalized.is_empty() {
+            continue;
+        }
+        let prefix = if body.is_empty() { "" } else { "\n" };
+        let line = format!("{prefix}- {}: {}", turn.role, normalized);
+        if body.len() + line.len() > budget {
+            let remaining = budget.saturating_sub(body.len());
+            if remaining == 0 {
+                break;
+            }
+            let truncated = line.chars().take(remaining).collect::<String>();
+            body.push_str(&truncated);
+            break;
+        }
+        body.push_str(&line);
+    }
+
+    if body.is_empty() {
+        return None;
+    }
+
+    Some(format!("{header}\n{body}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,7 +409,7 @@ mod tests {
 
         let config = runtime_config::MemoryRuntimeConfig {
             sqlite_path: Some(db_path.clone()),
-            sliding_window: Some(12),
+            ..runtime_config::MemoryRuntimeConfig::default()
         };
 
         append_turn_direct("rt-session", "user", "hello from test", &config)
@@ -330,7 +447,8 @@ mod tests {
 
         let config = runtime_config::MemoryRuntimeConfig {
             sqlite_path: Some(db_path.clone()),
-            sliding_window: Some(12),
+            sliding_window: 12,
+            ..runtime_config::MemoryRuntimeConfig::default()
         };
 
         for idx in 0..130 {
@@ -345,7 +463,8 @@ mod tests {
 
         let explicit_limit_config = runtime_config::MemoryRuntimeConfig {
             sqlite_path: Some(db_path.clone()),
-            sliding_window: Some(1),
+            sliding_window: 1,
+            ..runtime_config::MemoryRuntimeConfig::default()
         };
         let turns = window_direct("window-semantics-session", 2, &explicit_limit_config)
             .expect("window_direct should honor the explicit limit");
@@ -355,7 +474,8 @@ mod tests {
 
         let default_window_config = runtime_config::MemoryRuntimeConfig {
             sqlite_path: Some(db_path.clone()),
-            sliding_window: Some(3),
+            sliding_window: 3,
+            ..runtime_config::MemoryRuntimeConfig::default()
         };
         let default_window = execute_memory_core_with_config(
             MemoryCoreRequest {
@@ -382,7 +502,8 @@ mod tests {
 
         let capped_window_config = runtime_config::MemoryRuntimeConfig {
             sqlite_path: Some(db_path.clone()),
-            sliding_window: Some(999),
+            sliding_window: 999,
+            ..runtime_config::MemoryRuntimeConfig::default()
         };
         let capped_window = execute_memory_core_with_config(
             MemoryCoreRequest {
@@ -407,5 +528,96 @@ mod tests {
 
         let _ = fs::remove_file(&db_path);
         let _ = fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn window_plus_summary_includes_condensed_older_context() {
+        use crate::config::{MemoryMode, MemoryProfile};
+
+        let tmp =
+            std::env::temp_dir().join(format!("loongclaw-summary-memory-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("summary.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            mode: MemoryMode::WindowPlusSummary,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..runtime_config::MemoryRuntimeConfig::default()
+        };
+
+        append_turn_direct("summary-session", "user", "turn 1", &config)
+            .expect("append turn 1 should succeed");
+        append_turn_direct("summary-session", "assistant", "turn 2", &config)
+            .expect("append turn 2 should succeed");
+        append_turn_direct("summary-session", "user", "turn 3", &config)
+            .expect("append turn 3 should succeed");
+        append_turn_direct("summary-session", "assistant", "turn 4", &config)
+            .expect("append turn 4 should succeed");
+
+        let hydrated =
+            load_prompt_context("summary-session", &config).expect("load prompt context");
+
+        assert!(
+            hydrated
+                .iter()
+                .any(|entry| entry.kind == MemoryContextKind::Summary),
+            "expected a summary entry"
+        );
+        assert!(
+            hydrated
+                .iter()
+                .any(|entry| entry.content.contains("turn 1")),
+            "expected summary to mention older turns"
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn profile_plus_window_includes_profile_note_block() {
+        use crate::config::{MemoryMode, MemoryProfile};
+
+        let tmp =
+            std::env::temp_dir().join(format!("loongclaw-profile-memory-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("profile.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::ProfilePlusWindow,
+            mode: MemoryMode::ProfilePlusWindow,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            profile_note: Some("Imported ZeroClaw preferences".to_owned()),
+            ..runtime_config::MemoryRuntimeConfig::default()
+        };
+
+        append_turn_direct("profile-session", "user", "recent turn", &config)
+            .expect("append turn should succeed");
+
+        let hydrated =
+            load_prompt_context("profile-session", &config).expect("load prompt context");
+
+        assert!(
+            hydrated
+                .iter()
+                .any(|entry| entry.kind == MemoryContextKind::Profile),
+            "expected a profile entry"
+        );
+        assert!(
+            hydrated
+                .iter()
+                .any(|entry| entry.content.contains("Imported ZeroClaw preferences")),
+            "expected profile note content"
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
     }
 }

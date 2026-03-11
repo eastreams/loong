@@ -18,14 +18,14 @@ pub use conversation::{ConversationConfig, ConversationTurnLoopConfig};
 pub use provider::{ProviderConfig, ProviderKind, ReasoningEffort};
 #[allow(unused_imports)]
 pub use runtime::{
-    ConfigValidationDiagnostic, LoongClawConfig, default_config_path, default_loongclaw_home, load,
-    normalize_validation_locale, supported_validation_locales, validate_file,
-    validate_file_with_locale, write, write_template,
+    default_config_path, default_loongclaw_home, load, normalize_validation_locale, render,
+    supported_validation_locales, validate_file, validate_file_with_locale, write, write_template,
+    ConfigValidationDiagnostic, LoongClawConfig,
 };
 #[allow(unused_imports)]
 pub use shared::expand_path;
 #[allow(unused_imports)]
-pub use tools_memory::{MemoryConfig, ToolConfig};
+pub use tools_memory::{MemoryBackendKind, MemoryConfig, MemoryMode, MemoryProfile, ToolConfig};
 
 #[cfg(test)]
 mod tests {

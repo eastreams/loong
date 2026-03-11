@@ -26,11 +26,7 @@ pub async fn run_cli_chat(config_path: Option<&str>, session_hint: Option<&str>)
     export_runtime_env(&config);
     let kernel_ctx = bootstrap_kernel_context("cli-chat", DEFAULT_TOKEN_TTL_S)?;
 
-    #[cfg(feature = "memory-sqlite")]
-    let memory_config = MemoryRuntimeConfig {
-        sqlite_path: Some(config.memory.resolved_sqlite_path()),
-        sliding_window: Some(config.memory.sliding_window),
-    };
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
 
     #[cfg(feature = "memory-sqlite")]
     {
@@ -172,14 +168,26 @@ async fn print_history(
             return Ok(());
         }
 
-        let turns = memory::window_direct(session_id, limit, memory_config)
+        let entries = memory::load_prompt_context(session_id, memory_config)
             .map_err(|error| format!("load history failed: {error}"))?;
-        if turns.is_empty() {
+        if entries.is_empty() {
             println!("(no history yet)");
             return Ok(());
         }
-        for turn in turns {
-            println!("[{}] {}: {}", turn.ts, turn.role, turn.content);
+        for entry in entries {
+            match entry.kind {
+                memory::MemoryContextKind::Profile => {
+                    println!("[profile]");
+                    println!("{}", entry.content);
+                }
+                memory::MemoryContextKind::Summary => {
+                    println!("[summary]");
+                    println!("{}", entry.content);
+                }
+                memory::MemoryContextKind::Turn => {
+                    println!("{}: {}", entry.role, entry.content);
+                }
+            }
         }
         Ok(())
     }
@@ -375,6 +383,15 @@ fn format_milli_ratio(value: Option<u32>) -> String {
 }
 
 fn export_runtime_env(config: &LoongClawConfig) {
+    crate::memory::runtime_config::apply_memory_runtime_env(&config.memory);
+    std::env::set_var(
+        "LOONGCLAW_SHELL_ALLOWLIST",
+        config.tools.shell_allowlist.join(","),
+    );
+    std::env::set_var(
+        "LOONGCLAW_FILE_ROOT",
+        config.tools.resolved_file_root().display().to_string(),
+    );
     // Populate the typed tool runtime config so executors never hit env vars
     // on the hot path.  Ignore the error if already initialised (e.g. tests).
     let tool_rt = crate::tools::runtime_config::ToolRuntimeConfig {
@@ -389,10 +406,8 @@ fn export_runtime_env(config: &LoongClawConfig) {
     let _ = crate::tools::runtime_config::init_tool_runtime_config(tool_rt);
 
     // Populate the typed memory runtime config (same pattern as tool config).
-    let memory_rt = crate::memory::runtime_config::MemoryRuntimeConfig {
-        sqlite_path: Some(config.memory.resolved_sqlite_path()),
-        sliding_window: Some(config.memory.sliding_window),
-    };
+    let memory_rt =
+        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
     let _ = crate::memory::runtime_config::init_memory_runtime_config(memory_rt);
 }
 

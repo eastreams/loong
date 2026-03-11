@@ -707,6 +707,15 @@ pub(super) async fn process_inbound_with_provider(
 
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
 fn apply_runtime_env(config: &LoongClawConfig) {
+    crate::memory::runtime_config::apply_memory_runtime_env(&config.memory);
+    std::env::set_var(
+        "LOONGCLAW_SHELL_ALLOWLIST",
+        config.tools.shell_allowlist.join(","),
+    );
+    std::env::set_var(
+        "LOONGCLAW_FILE_ROOT",
+        config.tools.resolved_file_root().display().to_string(),
+    );
     // Populate the typed tool runtime config so executors never hit env vars
     // on the hot path.  Ignore the error if already initialised.
     let tool_rt = crate::tools::runtime_config::ToolRuntimeConfig {
@@ -721,10 +730,8 @@ fn apply_runtime_env(config: &LoongClawConfig) {
     let _ = crate::tools::runtime_config::init_tool_runtime_config(tool_rt);
 
     // Populate the typed memory runtime config (same pattern as tool config).
-    let memory_rt = crate::memory::runtime_config::MemoryRuntimeConfig {
-        sqlite_path: Some(config.memory.resolved_sqlite_path()),
-        sliding_window: Some(config.memory.sliding_window),
-    };
+    let memory_rt =
+        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
     let _ = crate::memory::runtime_config::init_memory_runtime_config(memory_rt);
 }
 

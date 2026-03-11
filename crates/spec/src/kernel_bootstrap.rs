@@ -8,8 +8,8 @@ use kernel::{
 
 use crate::DEFAULT_PACK_ID;
 use crate::spec_runtime::{
-    AcpBridgeRuntimeExtension, CoreToolRuntime, CrmCoreConnector, CrmGrpcCoreConnector,
-    EmbeddedPiHarness, FallbackCoreRuntime, KvCoreMemory, NativeCoreRuntime,
+    AcpBridgeRuntimeExtension, ClawMigrationToolExtension, CoreToolRuntime, CrmCoreConnector,
+    CrmGrpcCoreConnector, EmbeddedPiHarness, FallbackCoreRuntime, KvCoreMemory, NativeCoreRuntime,
     ShieldedConnectorExtension, SqlAnalyticsToolExtension, VectorIndexMemoryExtension,
     WebhookConnector,
 };
@@ -82,6 +82,7 @@ fn register_builtin_adapters(kernel: &mut LoongClawKernel<StaticPolicyEngine>) {
     kernel.register_runtime_extension_adapter(AcpBridgeRuntimeExtension);
 
     kernel.register_core_tool_adapter(CoreToolRuntime);
+    kernel.register_tool_extension_adapter(ClawMigrationToolExtension);
     kernel.register_tool_extension_adapter(SqlAnalyticsToolExtension);
 
     kernel.register_core_memory_adapter(KvCoreMemory);

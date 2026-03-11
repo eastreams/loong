@@ -54,6 +54,43 @@ fn provider_kind_id_mapping_includes_kimi_coding() {
 }
 
 #[test]
+fn parse_prompt_personality_accepts_supported_ids() {
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("calm_engineering"),
+        Some(mvp::prompt::PromptPersonality::CalmEngineering)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("friendly_collab"),
+        Some(mvp::prompt::PromptPersonality::FriendlyCollab)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("autonomous_executor"),
+        Some(mvp::prompt::PromptPersonality::AutonomousExecutor)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("unknown"),
+        None
+    );
+}
+
+#[test]
+fn parse_memory_profile_accepts_supported_ids() {
+    assert_eq!(
+        crate::onboard_cli::parse_memory_profile("window_only"),
+        Some(mvp::config::MemoryProfile::WindowOnly)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_memory_profile("window_plus_summary"),
+        Some(mvp::config::MemoryProfile::WindowPlusSummary)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_memory_profile("profile_plus_window"),
+        Some(mvp::config::MemoryProfile::ProfilePlusWindow)
+    );
+    assert_eq!(crate::onboard_cli::parse_memory_profile("unknown"), None);
+}
+
+#[test]
 fn non_interactive_requires_explicit_risk_acknowledgement() {
     let denied = crate::onboard_cli::validate_non_interactive_risk_gate(true, false)
         .expect_err("risk gate should reject non-interactive without acknowledgement");

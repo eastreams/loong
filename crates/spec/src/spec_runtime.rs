@@ -2384,6 +2384,15 @@ fn stub_tool_core(request: ToolCoreRequest) -> Result<ToolCoreOutcome, String> {
     })
 }
 
+fn maybe_execute_native_app_tool(
+    request: &ToolCoreRequest,
+) -> Option<Result<ToolCoreOutcome, String>> {
+    if loongclaw_app::tools::canonical_tool_name(request.tool_name.as_str()) != "claw.import" {
+        return None;
+    }
+    Some(loongclaw_app::tools::execute_tool_core(request.clone()))
+}
+
 fn stub_memory_core(request: MemoryCoreRequest) -> Result<MemoryCoreOutcome, String> {
     Ok(MemoryCoreOutcome {
         status: "ok".to_string(),
@@ -2403,6 +2412,9 @@ impl CoreToolAdapter for CoreToolRuntime {
         &self,
         request: ToolCoreRequest,
     ) -> Result<ToolCoreOutcome, kernel::ToolPlaneError> {
+        if let Some(result) = maybe_execute_native_app_tool(&request) {
+            return result.map_err(kernel::ToolPlaneError::Execution);
+        }
         stub_tool_core(request).map_err(kernel::ToolPlaneError::Execution)
     }
 }
@@ -2433,6 +2445,46 @@ impl ToolExtensionAdapter for SqlAnalyticsToolExtension {
                 "action": request.extension_action,
                 "core_probe": core_probe.payload,
                 "payload": request.payload,
+            }),
+        })
+    }
+}
+
+pub struct ClawMigrationToolExtension;
+
+#[async_trait]
+impl ToolExtensionAdapter for ClawMigrationToolExtension {
+    fn name(&self) -> &str {
+        "claw-migration"
+    }
+
+    async fn execute_tool_extension(
+        &self,
+        request: ToolExtensionRequest,
+        core: &(dyn CoreToolAdapter + Sync),
+    ) -> Result<ToolExtensionOutcome, kernel::ToolPlaneError> {
+        let mut payload = request.payload.clone();
+        if payload.get("mode").is_none() {
+            if let Some(object) = payload.as_object_mut() {
+                object.insert(
+                    "mode".to_owned(),
+                    Value::String(request.extension_action.clone()),
+                );
+            }
+        }
+
+        let core_outcome = core
+            .execute_core_tool(ToolCoreRequest {
+                tool_name: "claw.import".to_owned(),
+                payload,
+            })
+            .await?;
+        Ok(ToolExtensionOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "extension": "claw-migration",
+                "action": request.extension_action,
+                "core_outcome": core_outcome.payload,
             }),
         })
     }

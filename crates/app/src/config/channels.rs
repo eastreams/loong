@@ -2,6 +2,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::prompt::{
+    render_default_system_prompt, render_system_prompt, PromptPersonality, PromptRenderInput,
+    DEFAULT_PROMPT_PACK_ID,
+};
 use crate::CliResult;
 
 use super::shared::{
@@ -21,6 +25,12 @@ pub struct CliChannelConfig {
     pub enabled: bool,
     #[serde(default = "default_system_prompt")]
     pub system_prompt: String,
+    #[serde(default = "default_prompt_pack_id")]
+    pub prompt_pack_id: Option<String>,
+    #[serde(default = "default_prompt_personality")]
+    pub personality: Option<PromptPersonality>,
+    #[serde(default)]
+    pub system_prompt_addendum: Option<String>,
     #[serde(default = "default_exit_commands")]
     pub exit_commands: Vec<String>,
 }
@@ -307,7 +317,53 @@ impl Default for CliChannelConfig {
         Self {
             enabled: true,
             system_prompt: default_system_prompt(),
+            prompt_pack_id: default_prompt_pack_id(),
+            personality: default_prompt_personality(),
+            system_prompt_addendum: None,
             exit_commands: default_exit_commands(),
+        }
+    }
+}
+
+impl CliChannelConfig {
+    pub fn uses_native_prompt_pack(&self) -> bool {
+        self.prompt_pack_id().is_some_and(|value| !value.is_empty())
+    }
+
+    pub fn prompt_pack_id(&self) -> Option<&str> {
+        self.prompt_pack_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn resolved_personality(&self) -> PromptPersonality {
+        self.personality.unwrap_or_default()
+    }
+
+    pub fn rendered_native_system_prompt(&self) -> String {
+        render_system_prompt(PromptRenderInput {
+            personality: self.resolved_personality(),
+            addendum: self.system_prompt_addendum.clone(),
+        })
+    }
+
+    pub fn resolved_system_prompt(&self) -> String {
+        if self.uses_native_prompt_pack() {
+            return self.rendered_native_system_prompt();
+        }
+
+        let inline = self.system_prompt.trim();
+        if !inline.is_empty() {
+            return inline.to_owned();
+        }
+
+        render_default_system_prompt()
+    }
+
+    pub fn refresh_native_system_prompt(&mut self) {
+        if self.uses_native_prompt_pack() {
+            self.system_prompt = self.rendered_native_system_prompt();
         }
     }
 }
@@ -784,7 +840,15 @@ fn default_feishu_webhook_path() -> String {
 }
 
 fn default_system_prompt() -> String {
-    "You are LoongClaw, a practical assistant.".to_owned()
+    render_default_system_prompt()
+}
+
+fn default_prompt_pack_id() -> Option<String> {
+    Some(DEFAULT_PROMPT_PACK_ID.to_owned())
+}
+
+fn default_prompt_personality() -> Option<PromptPersonality> {
+    Some(PromptPersonality::default())
 }
 
 fn default_exit_commands() -> Vec<String> {

@@ -123,7 +123,7 @@ impl TurnTestHarness {
             use crate::memory::runtime_config::MemoryRuntimeConfig;
             let memory_config = MemoryRuntimeConfig {
                 sqlite_path: Some(temp_dir.join("memory.sqlite3")),
-                sliding_window: Some(12),
+                ..MemoryRuntimeConfig::default()
             };
             kernel.register_core_memory_adapter(crate::memory::MvpMemoryAdapter::with_config(
                 memory_config,
