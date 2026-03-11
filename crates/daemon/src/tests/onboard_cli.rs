@@ -237,3 +237,39 @@ async fn non_interactive_onboard_persists_generic_provider_api_key_reference() {
     fs::remove_file(&config_path).ok();
     fs::remove_dir_all(&temp_dir).ok();
 }
+
+#[tokio::test]
+async fn non_interactive_onboard_preserves_inline_api_key_literals() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_nanos();
+    let temp_dir = std::env::temp_dir().join(format!("loongclaw-onboard-api-key-inline-{unique}"));
+    fs::create_dir_all(&temp_dir).expect("create temp directory");
+    let config_path = temp_dir.join("config.toml");
+    let path_string = config_path.display().to_string();
+    let literal_api_key = "sk-proj-demo-token";
+
+    crate::onboard_cli::run_onboard_cli(crate::onboard_cli::OnboardCommandOptions {
+        output: Some(path_string.clone()),
+        force: true,
+        non_interactive: true,
+        accept_risk: true,
+        provider: Some("openai".to_owned()),
+        model: Some("auto".to_owned()),
+        api_key: Some(literal_api_key.to_owned()),
+        personality: None,
+        memory_profile: None,
+        system_prompt: None,
+        skip_model_probe: true,
+    })
+    .await
+    .expect("non-interactive onboarding should accept inline api key literals");
+
+    let (_, config) = mvp::config::load(Some(&path_string)).expect("load written config");
+    assert_eq!(config.provider.api_key.as_deref(), Some(literal_api_key));
+    assert_eq!(config.provider.api_key_env, None);
+
+    fs::remove_file(&config_path).ok();
+    fs::remove_dir_all(&temp_dir).ok();
+}

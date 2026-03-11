@@ -3,7 +3,8 @@ use std::{collections::BTreeMap, env};
 use serde::{Deserialize, Serialize};
 
 use super::shared::{
-    ConfigValidationIssue, EnvPointerValidationHint, read_secret_prefer_inline,
+    ConfigValidationIssue, EnvPointerValidationHint, parse_explicit_env_reference,
+    read_secret_prefer_inline,
     validate_env_pointer_field,
 };
 
@@ -513,6 +514,9 @@ fn resolve_secret_with_env_fallbacks(inline: Option<&str>, env_keys: &[String]) 
     let primary_env_key = env_keys.first().map(String::as_str);
     if let Some(value) = read_secret_prefer_inline(inline, primary_env_key) {
         return Some(value);
+    }
+    if inline.and_then(parse_explicit_env_reference).is_some() {
+        return None;
     }
     env_keys.get(1..).and_then(first_non_empty_env_value)
 }

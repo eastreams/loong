@@ -306,6 +306,19 @@ mod tests {
     }
 
     #[test]
+    fn provider_api_key_missing_explicit_env_reference_does_not_fall_back_to_legacy_env() {
+        let config = ProviderConfig {
+            kind: ProviderKind::Openai,
+            api_key: Some("${LOONGCLAW_TEST_MISSING_API_KEY}".to_owned()),
+            api_key_env: Some("PATH".to_owned()),
+            ..ProviderConfig::default()
+        };
+
+        assert_eq!(config.api_key(), None);
+        assert_eq!(config.authorization_header(), None);
+    }
+
+    #[test]
     fn provider_api_key_env_legacy_fallback_still_works() {
         let expected = required_env_value("PATH");
         let config = ProviderConfig {

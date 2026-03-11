@@ -599,7 +599,7 @@ fn classify_inline_secret_input(raw: &str) -> Option<InlineSecretInput<'_>> {
     Some(InlineSecretInput::Literal(trimmed))
 }
 
-fn parse_explicit_env_reference(raw: &str) -> Option<&str> {
+pub(super) fn parse_explicit_env_reference(raw: &str) -> Option<&str> {
     parse_dollar_env_reference(raw)
         .or_else(|| parse_env_prefix_reference(raw))
         .or_else(|| parse_percent_env_reference(raw))
@@ -651,11 +651,7 @@ pub(super) fn read_secret_prefer_inline(
     if let Some(raw) = inline {
         match classify_inline_secret_input(raw) {
             Some(InlineSecretInput::Literal(value)) => return Some(value.to_owned()),
-            Some(InlineSecretInput::EnvReference(key)) => {
-                if let Some(value) = read_non_empty_env_value(key) {
-                    return Some(value);
-                }
-            }
+            Some(InlineSecretInput::EnvReference(key)) => return read_non_empty_env_value(key),
             None => {}
         }
     }

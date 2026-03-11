@@ -791,7 +791,7 @@ fn provider_credential_source(config: &mvp::config::LoongClawConfig) -> Provider
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        if let Some(env_name) = normalize_api_key_env_name(raw) {
+        if let Some(env_name) = parse_explicit_api_key_env_name(raw) {
             return ProviderCredentialSource::ApiKeyEnvRef(env_name);
         }
         return ProviderCredentialSource::InlineLiteral;
@@ -824,19 +824,30 @@ fn normalize_provider_api_key_source(raw: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
-    if let Some(env_name) = normalize_api_key_env_name(trimmed) {
+    if let Some(env_name) = normalize_onboard_api_key_env_name(trimmed) {
         return Some(format!("${{{env_name}}}"));
     }
     Some(trimmed.to_owned())
 }
 
-fn normalize_api_key_env_name(raw: &str) -> Option<String> {
+fn normalize_onboard_api_key_env_name(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
     }
-    if looks_like_env_name(trimmed) {
+    if let Some(env_name) = parse_explicit_api_key_env_name(trimmed) {
+        return Some(env_name);
+    }
+    if looks_like_bare_onboard_env_name(trimmed) {
         return Some(trimmed.to_owned());
+    }
+    None
+}
+
+fn parse_explicit_api_key_env_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
     }
     if let Some(env_name) = parse_dollar_env_name(trimmed) {
         return Some(env_name.to_owned());
@@ -856,6 +867,17 @@ fn normalize_api_key_env_name(raw: &str) -> Option<String> {
         return Some(env_name.to_owned());
     }
     None
+}
+
+fn looks_like_bare_onboard_env_name(raw: &str) -> bool {
+    let mut chars = raw.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_uppercase() || first == '_') {
+        return false;
+    }
+    chars.all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
 }
 
 fn parse_dollar_env_name(raw: &str) -> Option<&str> {
