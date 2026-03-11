@@ -87,7 +87,11 @@ pub(super) fn load_window(
         .get("allow_extended_limit")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let hard_limit_cap = if allow_extended_limit { 512 } else { 128 };
+    let hard_limit_cap = if allow_extended_limit {
+        512_u64
+    } else {
+        128_u64
+    };
     let requested_limit = payload
         .get("limit")
         .and_then(Value::as_u64)
