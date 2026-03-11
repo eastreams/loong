@@ -2464,13 +2464,13 @@ impl ToolExtensionAdapter for ClawMigrationToolExtension {
         core: &(dyn CoreToolAdapter + Sync),
     ) -> Result<ToolExtensionOutcome, kernel::ToolPlaneError> {
         let mut payload = request.payload.clone();
-        if payload.get("mode").is_none() {
-            if let Some(object) = payload.as_object_mut() {
-                object.insert(
-                    "mode".to_owned(),
-                    Value::String(request.extension_action.clone()),
-                );
-            }
+        if payload.get("mode").is_none()
+            && let Some(object) = payload.as_object_mut()
+        {
+            object.insert(
+                "mode".to_owned(),
+                Value::String(request.extension_action.clone()),
+            );
         }
 
         let core_outcome = core

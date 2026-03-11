@@ -212,9 +212,11 @@ mod tests {
 
     #[test]
     fn profile_plus_window_keeps_trimmed_profile_note() {
-        let mut config = MemoryConfig::default();
-        config.profile = MemoryProfile::ProfilePlusWindow;
-        config.profile_note = Some("  imported preferences  ".to_owned());
+        let config = MemoryConfig {
+            profile: MemoryProfile::ProfilePlusWindow,
+            profile_note: Some("  imported preferences  ".to_owned()),
+            ..MemoryConfig::default()
+        };
 
         assert_eq!(
             config.trimmed_profile_note().as_deref(),

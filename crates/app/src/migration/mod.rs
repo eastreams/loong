@@ -574,12 +574,16 @@ fn should_replace_identity_match(content: &[u8], start: usize, end: usize) -> bo
 
 fn is_identity_boundary(content: &[u8], index: usize, leading: bool) -> bool {
     let adjacent = if leading {
-        index.checked_sub(1).map(|offset| content[offset])
+        index
+            .checked_sub(1)
+            .and_then(|offset| content.get(offset).copied())
     } else {
         content.get(index).copied()
     };
     let beyond = if leading {
-        index.checked_sub(2).map(|offset| content[offset])
+        index
+            .checked_sub(2)
+            .and_then(|offset| content.get(offset).copied())
     } else {
         content.get(index + 1).copied()
     };

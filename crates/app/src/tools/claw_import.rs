@@ -86,9 +86,9 @@ pub(super) fn execute_claw_import_tool_with_config(
         .flatten();
 
     if mode == "rollback_last_apply" {
-        let output_path = output_path
-            .clone()
-            .expect("output path already required in rollback mode");
+        let output_path = output_path.clone().ok_or_else(|| {
+            "claw.import rollback_last_apply mode requires payload.output_path".to_owned()
+        })?;
         let restored_path = migration::rollback_last_import(&output_path)?;
         return Ok(ToolCoreOutcome {
             status: "ok".to_owned(),
@@ -102,11 +102,12 @@ pub(super) fn execute_claw_import_tool_with_config(
         });
     }
 
-    let input_path = input_path.expect("input path required for non-rollback modes");
+    let input_path =
+        input_path.ok_or_else(|| "claw.import requires payload.input_path".to_owned())?;
 
     if mode == "discover" {
         let report = migration::discover_import_sources(
-            &input_path,
+            input_path.as_path(),
             migration::DiscoveryOptions::default(),
         )?;
         return Ok(ToolCoreOutcome {
@@ -127,7 +128,7 @@ pub(super) fn execute_claw_import_tool_with_config(
 
     if matches!(mode, "plan_many" | "recommend_primary") {
         let report = migration::discover_import_sources(
-            &input_path,
+            input_path.as_path(),
             migration::DiscoveryOptions::default(),
         )?;
         let summary = migration::plan_import_sources(&report)?;
@@ -147,7 +148,7 @@ pub(super) fn execute_claw_import_tool_with_config(
 
     if mode == "merge_profiles" {
         let report = migration::discover_import_sources(
-            &input_path,
+            input_path.as_path(),
             migration::DiscoveryOptions::default(),
         )?;
         let summary = migration::plan_import_sources(&report)?;
@@ -172,11 +173,12 @@ pub(super) fn execute_claw_import_tool_with_config(
             migration::discover_import_sources(input_path, migration::DiscoveryOptions::default())?;
         let summary = migration::plan_import_sources(&report)?;
         let selection = parse_apply_selection_mode(payload, &summary)?;
+        let selected_output_path = output_path.clone().ok_or_else(|| {
+            "claw.import apply_selected mode requires payload.output_path".to_owned()
+        })?;
         let result = migration::apply_import_selection(&migration::ApplyImportSelection {
             discovery: report,
-            output_path: output_path
-                .clone()
-                .expect("output path already required in apply_selected mode"),
+            output_path: selected_output_path,
             mode: selection,
         })?;
         return Ok(ToolCoreOutcome {
@@ -192,7 +194,7 @@ pub(super) fn execute_claw_import_tool_with_config(
         });
     }
 
-    let plan = migration::plan_import_from_path(&input_path, hint)?;
+    let plan = migration::plan_import_from_path(input_path.as_path(), hint)?;
 
     let mut merged_config = load_or_default_config(output_path.as_deref())?;
     migration::apply_import_plan(&mut merged_config, &plan);
@@ -201,7 +203,7 @@ pub(super) fn execute_claw_import_tool_with_config(
     let written_output_path = if mode == "apply" {
         let output_path = output_path
             .clone()
-            .expect("output path already required in apply mode");
+            .ok_or_else(|| "claw.import apply mode requires payload.output_path".to_owned())?;
         let output_string = output_path.display().to_string();
         Some(config::write(Some(&output_string), &merged_config, force)?)
     } else {
@@ -435,10 +437,9 @@ fn resolve_safe_path_with_config(
         return canonicalize_or_fallback(combined);
     }
 
-    let root = config
-        .file_root
-        .clone()
-        .expect("file_root already checked above");
+    let Some(root) = config.file_root.clone() else {
+        return Err("configured file root was missing during safe path resolution".to_owned());
+    };
     let root = canonicalize_or_fallback(root)?;
 
     let candidate = Path::new(raw);

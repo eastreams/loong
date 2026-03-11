@@ -198,9 +198,11 @@ mod tests {
 
     #[test]
     fn runtime_config_from_memory_config_carries_profile_and_limits() {
-        let mut config = MemoryConfig::default();
-        config.profile = MemoryProfile::WindowPlusSummary;
-        config.summary_max_chars = 900;
+        let config = MemoryConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            summary_max_chars: 900,
+            ..MemoryConfig::default()
+        };
 
         let runtime = MemoryRuntimeConfig::from_memory_config(&config);
 

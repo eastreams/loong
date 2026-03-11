@@ -208,21 +208,20 @@ pub fn load_prompt_context(
 ) -> Result<Vec<MemoryContextEntry>, String> {
     let mut entries = Vec::new();
 
-    if matches!(config.mode, MemoryMode::ProfilePlusWindow) {
-        if let Some(profile_note) = config
+    if matches!(config.mode, MemoryMode::ProfilePlusWindow)
+        && let Some(profile_note) = config
             .profile_note
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-        {
-            entries.push(MemoryContextEntry {
-                kind: MemoryContextKind::Profile,
-                role: "system".to_owned(),
-                content: format!(
-                    "## Session Profile\nDurable preferences or imported identity carried into this session:\n- {profile_note}"
-                ),
-            });
-        }
+    {
+        entries.push(MemoryContextEntry {
+            kind: MemoryContextKind::Profile,
+            role: "system".to_owned(),
+            content: format!(
+                "## Session Profile\nDurable preferences or imported identity carried into this session:\n- {profile_note}"
+            ),
+        });
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -231,16 +230,15 @@ pub fn load_prompt_context(
         if matches!(config.mode, MemoryMode::WindowPlusSummary) {
             let all_turns = sqlite::session_turns_direct(session_id, config)?;
             let older_turn_count = all_turns.len().saturating_sub(turns.len());
-            if older_turn_count > 0 {
-                if let Some(summary) =
-                    build_summary_block(&all_turns[..older_turn_count], config.summary_max_chars)
-                {
-                    entries.push(MemoryContextEntry {
-                        kind: MemoryContextKind::Summary,
-                        role: "system".to_owned(),
-                        content: summary,
-                    });
-                }
+            if older_turn_count > 0
+                && let Some(older_turns) = all_turns.get(..older_turn_count)
+                && let Some(summary) = build_summary_block(older_turns, config.summary_max_chars)
+            {
+                entries.push(MemoryContextEntry {
+                    kind: MemoryContextKind::Summary,
+                    role: "system".to_owned(),
+                    content: summary,
+                });
             }
         }
         for turn in turns {
