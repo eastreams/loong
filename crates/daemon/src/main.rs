@@ -172,8 +172,8 @@ enum Commands {
         provider: Option<String>,
         #[arg(long)]
         model: Option<String>,
-        #[arg(long)]
-        api_key_env: Option<String>,
+        #[arg(long, alias = "api-key-env")]
+        api_key: Option<String>,
         #[arg(long)]
         personality: Option<String>,
         #[arg(long)]
@@ -358,7 +358,7 @@ async fn main() {
             accept_risk,
             provider,
             model,
-            api_key_env,
+            api_key,
             personality,
             memory_profile,
             system_prompt,
@@ -371,7 +371,7 @@ async fn main() {
                 accept_risk,
                 provider,
                 model,
-                api_key_env,
+                api_key,
                 personality,
                 memory_profile,
                 system_prompt,
@@ -1073,5 +1073,45 @@ mod cli_tests {
         let error = run_safe_lane_summary_cli(None, Some("session-a"), 0, false)
             .expect_err("zero limit must be rejected");
         assert!(error.contains(">= 1"));
+    }
+
+    #[test]
+    fn onboard_cli_accepts_generic_api_key_flag() {
+        let cli = Cli::try_parse_from([
+            "loongclaw",
+            "onboard",
+            "--non-interactive",
+            "--accept-risk",
+            "--api-key",
+            "${OPENAI_API_KEY}",
+        ])
+        .expect("`--api-key` should parse");
+
+        match cli.command {
+            Some(Commands::Onboard { api_key, .. }) => {
+                assert_eq!(api_key.as_deref(), Some("${OPENAI_API_KEY}"));
+            }
+            other => panic!("unexpected command parsed: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn onboard_cli_keeps_legacy_api_key_env_alias() {
+        let cli = Cli::try_parse_from([
+            "loongclaw",
+            "onboard",
+            "--non-interactive",
+            "--accept-risk",
+            "--api-key-env",
+            "OPENAI_API_KEY",
+        ])
+        .expect("legacy `--api-key-env` alias should still parse");
+
+        match cli.command {
+            Some(Commands::Onboard { api_key, .. }) => {
+                assert_eq!(api_key.as_deref(), Some("OPENAI_API_KEY"));
+            }
+            other => panic!("unexpected command parsed: {other:?}"),
+        }
     }
 }

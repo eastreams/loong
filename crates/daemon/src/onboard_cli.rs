@@ -15,7 +15,7 @@ pub(crate) struct OnboardCommandOptions {
     pub accept_risk: bool,
     pub provider: Option<String>,
     pub model: Option<String>,
-    pub api_key_env: Option<String>,
+    pub api_key: Option<String>,
     pub personality: Option<String>,
     pub memory_profile: Option<String>,
     pub system_prompt: Option<String>,
@@ -106,15 +106,12 @@ pub(crate) async fn run_onboard_cli(options: OnboardCommandOptions) -> CliResult
     config.provider.model = selected_model;
 
     if !options.non_interactive {
-        print_step_header(3, total_steps, "credential env");
+        print_step_header(3, total_steps, "credential source");
     }
     let default_api_key_env = provider_default_api_key_env(config.provider.kind).to_owned();
-    let selected_api_key_env = resolve_api_key_env_selection(&options, default_api_key_env)?;
-    config.provider.api_key_env = if selected_api_key_env.trim().is_empty() {
-        None
-    } else {
-        Some(selected_api_key_env)
-    };
+    let selected_api_key = resolve_api_key_selection(&options, default_api_key_env)?;
+    config.provider.api_key = normalize_provider_api_key_source(&selected_api_key);
+    config.provider.api_key_env = None;
 
     if using_prompt_override {
         if !options.non_interactive {
@@ -167,11 +164,8 @@ pub(crate) async fn run_onboard_cli(options: OnboardCommandOptions) -> CliResult
     if options.non_interactive {
         if !credential_ok {
             return Err(format!(
-                "onboard preflight failed: provider credentials missing. set {} in env or pass --api-key-env with a populated variable",
-                config
-                    .provider
-                    .api_key_env
-                    .clone()
+                "onboard preflight failed: provider credentials missing. set {} in env or pass --api-key with a populated value",
+                provider_credential_env_hint(&config)
                     .unwrap_or_else(|| "OPENAI_API_KEY".to_owned())
             ));
         }
@@ -216,9 +210,10 @@ pub(crate) async fn run_onboard_cli(options: OnboardCommandOptions) -> CliResult
         "- memory profile: {}",
         memory_profile_id(config.memory.profile)
     );
-    if let Some(api_env) = config.provider.api_key_env.as_deref() {
-        println!("- credential env: {api_env}");
-    }
+    println!(
+        "- credential source: {}",
+        describe_provider_credential_source(&config)
+    );
     #[cfg(feature = "memory-sqlite")]
     println!("- sqlite memory: {}", memory_path.display());
     println!("next step: loongclaw chat --config {}", path.display());
@@ -490,13 +485,13 @@ fn resolve_model_selection(
     Ok(trimmed.to_owned())
 }
 
-fn resolve_api_key_env_selection(
+fn resolve_api_key_selection(
     options: &OnboardCommandOptions,
     default_api_key_env: String,
 ) -> CliResult<String> {
     if options.non_interactive {
         return Ok(options
-            .api_key_env
+            .api_key
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -504,12 +499,12 @@ fn resolve_api_key_env_selection(
             .to_owned());
     }
     let initial = options
-        .api_key_env
+        .api_key
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(default_api_key_env.as_str());
-    let value = prompt_with_default("API key env var", initial)?;
+    let value = prompt_with_default("API key or env var", initial)?;
     Ok(value.trim().to_owned())
 }
 
@@ -623,40 +618,17 @@ async fn run_preflight_checks(
 ) -> Vec<OnboardCheck> {
     let mut checks = Vec::new();
 
-    let api_key_env = config
-        .provider
-        .api_key_env
-        .as_deref()
-        .map(str::trim)
-        .unwrap_or("");
-    let has_credentials = if api_key_env.is_empty() {
-        false
-    } else {
-        env::var(api_key_env)
-            .ok()
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false)
-    };
-
-    if api_key_env.is_empty() {
-        checks.push(OnboardCheck {
-            name: "provider credentials",
-            level: OnboardCheckLevel::Warn,
-            detail: "provider.api_key_env is empty".to_owned(),
-        });
-    } else if has_credentials {
-        checks.push(OnboardCheck {
-            name: "provider credentials",
-            level: OnboardCheckLevel::Pass,
-            detail: format!("{api_key_env} is available"),
-        });
-    } else {
-        checks.push(OnboardCheck {
-            name: "provider credentials",
-            level: OnboardCheckLevel::Warn,
-            detail: format!("{api_key_env} is not set"),
-        });
-    }
+    let credential_source = provider_credential_source(config);
+    let has_credentials = credential_source.is_available();
+    checks.push(OnboardCheck {
+        name: "provider credentials",
+        level: if has_credentials {
+            OnboardCheckLevel::Pass
+        } else {
+            OnboardCheckLevel::Warn
+        },
+        detail: credential_source.detail(),
+    });
 
     if skip_model_probe {
         checks.push(OnboardCheck {
@@ -738,6 +710,176 @@ fn print_preflight_checks(checks: &[OnboardCheck]) {
 fn print_step_header(step: usize, total: usize, title: &str) {
     println!();
     println!("[{step}/{total}] {title}");
+}
+
+#[derive(Debug, Clone)]
+enum ProviderCredentialSource {
+    InlineLiteral,
+    ApiKeyEnvRef(String),
+    LegacyApiKeyEnv(String),
+    DefaultApiKeyEnv(String),
+    Missing,
+}
+
+impl ProviderCredentialSource {
+    fn is_available(&self) -> bool {
+        match self {
+            Self::InlineLiteral => true,
+            Self::ApiKeyEnvRef(key) | Self::LegacyApiKeyEnv(key) | Self::DefaultApiKeyEnv(key) => {
+                env::var(key)
+                    .ok()
+                    .map(|value| !value.trim().is_empty())
+                    .unwrap_or(false)
+            }
+            Self::Missing => false,
+        }
+    }
+
+    fn detail(&self) -> String {
+        match self {
+            Self::InlineLiteral => "provider.api_key literal is configured".to_owned(),
+            Self::ApiKeyEnvRef(key) => {
+                if self.is_available() {
+                    format!("env {key} is available")
+                } else {
+                    format!("env {key} is not set")
+                }
+            }
+            Self::LegacyApiKeyEnv(key) => {
+                if self.is_available() {
+                    format!("legacy env {key} is available")
+                } else {
+                    format!("legacy env {key} is not set")
+                }
+            }
+            Self::DefaultApiKeyEnv(key) => {
+                if self.is_available() {
+                    format!("default env {key} is available")
+                } else {
+                    format!("default env {key} is not set")
+                }
+            }
+            Self::Missing => "provider.api_key is empty".to_owned(),
+        }
+    }
+
+    fn summary(&self) -> String {
+        match self {
+            Self::InlineLiteral => "direct provider.api_key".to_owned(),
+            Self::ApiKeyEnvRef(key) => format!("env {key}"),
+            Self::LegacyApiKeyEnv(key) => format!("legacy env {key}"),
+            Self::DefaultApiKeyEnv(key) => format!("default env {key}"),
+            Self::Missing => "not configured".to_owned(),
+        }
+    }
+
+    fn env_hint(&self) -> Option<String> {
+        match self {
+            Self::ApiKeyEnvRef(key) | Self::LegacyApiKeyEnv(key) | Self::DefaultApiKeyEnv(key) => {
+                Some(key.clone())
+            }
+            Self::InlineLiteral | Self::Missing => None,
+        }
+    }
+}
+
+fn provider_credential_source(config: &mvp::config::LoongClawConfig) -> ProviderCredentialSource {
+    if let Some(raw) = config
+        .provider
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if let Some(env_name) = normalize_api_key_env_name(raw) {
+            return ProviderCredentialSource::ApiKeyEnvRef(env_name);
+        }
+        return ProviderCredentialSource::InlineLiteral;
+    }
+    if let Some(key) = config
+        .provider
+        .api_key_env
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return ProviderCredentialSource::LegacyApiKeyEnv(key.to_owned());
+    }
+    if let Some(default_key) = config.provider.kind.default_api_key_env() {
+        return ProviderCredentialSource::DefaultApiKeyEnv(default_key.to_owned());
+    }
+    ProviderCredentialSource::Missing
+}
+
+fn provider_credential_env_hint(config: &mvp::config::LoongClawConfig) -> Option<String> {
+    provider_credential_source(config).env_hint()
+}
+
+fn describe_provider_credential_source(config: &mvp::config::LoongClawConfig) -> String {
+    provider_credential_source(config).summary()
+}
+
+fn normalize_provider_api_key_source(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(env_name) = normalize_api_key_env_name(trimmed) {
+        return Some(format!("${{{env_name}}}"));
+    }
+    Some(trimmed.to_owned())
+}
+
+fn normalize_api_key_env_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if looks_like_env_name(trimmed) {
+        return Some(trimmed.to_owned());
+    }
+    if let Some(env_name) = parse_dollar_env_name(trimmed) {
+        return Some(env_name.to_owned());
+    }
+    if trimmed.len() >= 4 && trimmed[..4].eq_ignore_ascii_case("env:") {
+        let env_name = trimmed[4..].trim();
+        if looks_like_env_name(env_name) {
+            return Some(env_name.to_owned());
+        }
+    }
+    if let Some(env_name) = trimmed
+        .strip_prefix('%')
+        .and_then(|rest| rest.strip_suffix('%'))
+        .map(str::trim)
+        .filter(|value| looks_like_env_name(value))
+    {
+        return Some(env_name.to_owned());
+    }
+    None
+}
+
+fn parse_dollar_env_name(raw: &str) -> Option<&str> {
+    let stripped = raw.strip_prefix('$')?.trim();
+    if stripped.is_empty() {
+        return None;
+    }
+    let candidate = stripped
+        .strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+        .map(str::trim)
+        .unwrap_or(stripped);
+    looks_like_env_name(candidate).then_some(candidate)
+}
+
+fn looks_like_env_name(raw: &str) -> bool {
+    let mut chars = raw.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphanumeric() || first == '_') {
+        return false;
+    }
+    chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' || ch == '.')
 }
 
 fn check_level_marker(level: OnboardCheckLevel) -> &'static str {

@@ -583,24 +583,83 @@ fn normalize_dollar_prefixed_env_name(raw: &str, fallback: &str) -> String {
     trimmed.to_owned()
 }
 
+enum InlineSecretInput<'a> {
+    Literal(&'a str),
+    EnvReference(&'a str),
+}
+
+fn classify_inline_secret_input(raw: &str) -> Option<InlineSecretInput<'_>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(env_key) = parse_explicit_env_reference(trimmed) {
+        return Some(InlineSecretInput::EnvReference(env_key));
+    }
+    Some(InlineSecretInput::Literal(trimmed))
+}
+
+fn parse_explicit_env_reference(raw: &str) -> Option<&str> {
+    parse_dollar_env_reference(raw)
+        .or_else(|| parse_env_prefix_reference(raw))
+        .or_else(|| parse_percent_env_reference(raw))
+}
+
+fn parse_dollar_env_reference(raw: &str) -> Option<&str> {
+    let stripped = raw.trim().strip_prefix('$')?.trim();
+    if stripped.is_empty() {
+        return None;
+    }
+    let candidate = stripped
+        .strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+        .map(str::trim)
+        .unwrap_or(stripped);
+    looks_like_compatible_env_name(candidate).then_some(candidate)
+}
+
+fn parse_env_prefix_reference(raw: &str) -> Option<&str> {
+    if raw.len() < 4 || !raw[..4].eq_ignore_ascii_case("env:") {
+        return None;
+    }
+    let candidate = raw[4..].trim();
+    looks_like_compatible_env_name(candidate).then_some(candidate)
+}
+
+fn parse_percent_env_reference(raw: &str) -> Option<&str> {
+    let candidate = parse_percent_wrapped_env_name(raw)?;
+    looks_like_compatible_env_name(candidate).then_some(candidate)
+}
+
+fn read_non_empty_env_value(key: &str) -> Option<String> {
+    let trimmed_key = key.trim();
+    if trimmed_key.is_empty() {
+        return None;
+    }
+    let value = env::var(trimmed_key).ok()?;
+    let trimmed_value = value.trim();
+    if trimmed_value.is_empty() {
+        return None;
+    }
+    Some(trimmed_value.to_owned())
+}
+
 pub(super) fn read_secret_prefer_inline(
     inline: Option<&str>,
     env_key: Option<&str>,
 ) -> Option<String> {
     if let Some(raw) = inline {
-        let value = raw.trim();
-        if !value.is_empty() {
-            return Some(value.to_owned());
+        match classify_inline_secret_input(raw) {
+            Some(InlineSecretInput::Literal(value)) => return Some(value.to_owned()),
+            Some(InlineSecretInput::EnvReference(key)) => {
+                if let Some(value) = read_non_empty_env_value(key) {
+                    return Some(value);
+                }
+            }
+            None => {}
         }
     }
-    if let Some(key) = env_key {
-        let value = env::var(key).ok()?;
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_owned());
-        }
-    }
-    None
+    env_key.and_then(read_non_empty_env_value)
 }
 
 #[cfg(test)]

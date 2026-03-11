@@ -59,8 +59,18 @@ pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<(
         });
     } else {
         let mut hints = Vec::new();
+        if let Some(key) = config
+            .provider
+            .api_key
+            .as_deref()
+            .and_then(parse_provider_api_key_env_hint)
+            && !hints.iter().any(|existing| existing == key)
+        {
+            hints.push(key.to_owned());
+        }
         if let Some(key) = config.provider.api_key_env.as_deref().map(str::trim)
             && !key.is_empty()
+            && !hints.iter().any(|existing| existing == key)
         {
             hints.push(key.to_owned());
         }
@@ -429,22 +439,40 @@ fn maybe_apply_provider_env_fix(
     fix: bool,
     fixes: &mut Vec<String>,
 ) -> bool {
-    let mut changed = false;
-    if config
+    if !fix
+        || config
+            .provider
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+    {
+        return false;
+    }
+
+    if let Some(existing_key) = config
         .provider
         .api_key_env
         .as_deref()
         .map(str::trim)
-        .unwrap_or("")
-        .is_empty()
-        && let Some(default_key) = config.provider.kind.default_api_key_env()
-        && fix
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
     {
-        config.provider.api_key_env = Some(default_key.to_owned());
-        fixes.push(format!("set provider.api_key_env={default_key}"));
-        changed = true;
+        config.provider.api_key = Some(format!("${{{existing_key}}}"));
+        config.provider.api_key_env = None;
+        fixes.push(format!("migrate provider.api_key=${{{existing_key}}}"));
+        return true;
     }
-    changed
+
+    if let Some(default_key) = config.provider.kind.default_api_key_env() {
+        config.provider.api_key = Some(format!("${{{default_key}}}"));
+        config.provider.api_key_env = None;
+        fixes.push(format!("set provider.api_key=${{{default_key}}}"));
+        return true;
+    }
+
+    false
 }
 
 fn maybe_apply_channel_env_fix(
@@ -508,6 +536,50 @@ fn ensure_env_binding(
     *slot = Some(default_key.to_owned());
     fixes.push(format!("{label}={default_key}"));
     true
+}
+
+fn parse_provider_api_key_env_hint(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    if trimmed.len() >= 4 && trimmed[..4].eq_ignore_ascii_case("env:") {
+        let candidate = trimmed[4..].trim();
+        return looks_like_env_name(candidate).then_some(candidate);
+    }
+    if let Some(candidate) = parse_dollar_env_name(trimmed) {
+        return Some(candidate);
+    }
+    if let Some(candidate) = trimmed
+        .strip_prefix('%')
+        .and_then(|rest| rest.strip_suffix('%'))
+        .map(str::trim)
+        .filter(|value| looks_like_env_name(value))
+    {
+        return Some(candidate);
+    }
+    None
+}
+
+fn parse_dollar_env_name(raw: &str) -> Option<&str> {
+    let stripped = raw.strip_prefix('$')?.trim();
+    if stripped.is_empty() {
+        return None;
+    }
+    let candidate = stripped
+        .strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+        .map(str::trim)
+        .unwrap_or(stripped);
+    looks_like_env_name(candidate).then_some(candidate)
+}
+
+fn looks_like_env_name(raw: &str) -> bool {
+    let mut chars = raw.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphanumeric() || first == '_') {
+        return false;
+    }
+    chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' || ch == '.')
 }
 
 #[cfg(test)]
@@ -602,6 +674,27 @@ mod tests {
         assert!(changed);
         assert_eq!(slot.as_deref(), Some("OPENAI_API_KEY"));
         assert_eq!(fixes.len(), 1);
+    }
+
+    #[test]
+    fn maybe_apply_provider_env_fix_prefers_generic_api_key_reference() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.api_key = None;
+        config.provider.api_key_env = None;
+        let mut fixes = Vec::new();
+
+        let changed = maybe_apply_provider_env_fix(&mut config, true, &mut fixes);
+
+        assert!(changed);
+        assert_eq!(
+            config.provider.api_key.as_deref(),
+            Some("${OPENAI_API_KEY}")
+        );
+        assert_eq!(config.provider.api_key_env, None);
+        assert_eq!(
+            fixes,
+            vec!["set provider.api_key=${OPENAI_API_KEY}".to_owned()]
+        );
     }
 
     #[test]

@@ -30,7 +30,15 @@ pub use tools_memory::{MemoryBackendKind, MemoryConfig, MemoryMode, MemoryProfil
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
+    use std::{collections::BTreeSet, env};
+
+    fn required_env_value(key: &str) -> String {
+        env::var(key)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| panic!("required env var {key} must be available for test"))
+    }
 
     #[test]
     fn endpoint_resolution_for_openai_compatible_is_stable() {
@@ -157,6 +165,12 @@ mod tests {
     }
 
     #[test]
+    fn provider_default_config_does_not_prepopulate_legacy_api_key_env_pointer() {
+        let config = ProviderConfig::default();
+        assert_eq!(config.api_key_env, None);
+    }
+
+    #[test]
     fn switching_provider_kind_uses_profile_defaults() {
         let config = ProviderConfig {
             kind: ProviderKind::Openrouter,
@@ -251,6 +265,57 @@ mod tests {
             config.authorization_header(),
             Some("Bearer vc-oauth-token".to_owned())
         );
+    }
+
+    #[test]
+    fn provider_api_key_supports_common_explicit_env_reference_formats() {
+        let expected = required_env_value("PATH");
+        let cases = vec!["${PATH}", "$PATH", "env:PATH", "%PATH%"];
+
+        for raw_api_key in cases {
+            let config = ProviderConfig {
+                kind: ProviderKind::Ollama,
+                api_key: Some(raw_api_key.to_owned()),
+                api_key_env: None,
+                ..ProviderConfig::default()
+            };
+            assert_eq!(
+                config.api_key().as_deref(),
+                Some(expected.as_str()),
+                "api_key={raw_api_key}"
+            );
+            assert_eq!(
+                config.authorization_header().as_deref(),
+                Some(format!("Bearer {expected}").as_str()),
+                "authorization_header should resolve env ref for {raw_api_key}"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_api_key_missing_explicit_env_reference_is_not_treated_as_literal() {
+        let config = ProviderConfig {
+            kind: ProviderKind::Ollama,
+            api_key: Some("${LOONGCLAW_TEST_MISSING_API_KEY}".to_owned()),
+            api_key_env: None,
+            ..ProviderConfig::default()
+        };
+
+        assert_eq!(config.api_key(), None);
+        assert_eq!(config.authorization_header(), None);
+    }
+
+    #[test]
+    fn provider_api_key_env_legacy_fallback_still_works() {
+        let expected = required_env_value("PATH");
+        let config = ProviderConfig {
+            kind: ProviderKind::Ollama,
+            api_key: None,
+            api_key_env: Some("PATH".to_owned()),
+            ..ProviderConfig::default()
+        };
+
+        assert_eq!(config.api_key().as_deref(), Some(expected.as_str()));
     }
 
     #[test]

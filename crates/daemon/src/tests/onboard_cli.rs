@@ -1,4 +1,8 @@
 use super::*;
+use std::{
+    fs,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[test]
 fn parse_provider_kind_accepts_primary_and_legacy_aliases() {
@@ -197,4 +201,39 @@ fn non_interactive_onboard_allows_selected_single_source_strategy() {
 
     crate::onboard_cli::validate_non_interactive_import_strategy(&strategy, false)
         .expect("single-source strategy should pass");
+}
+
+#[tokio::test]
+async fn non_interactive_onboard_persists_generic_provider_api_key_reference() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_nanos();
+    let temp_dir = std::env::temp_dir().join(format!("loongclaw-onboard-api-key-{unique}"));
+    fs::create_dir_all(&temp_dir).expect("create temp directory");
+    let config_path = temp_dir.join("config.toml");
+    let path_string = config_path.display().to_string();
+
+    crate::onboard_cli::run_onboard_cli(crate::onboard_cli::OnboardCommandOptions {
+        output: Some(path_string.clone()),
+        force: true,
+        non_interactive: true,
+        accept_risk: true,
+        provider: Some("openai".to_owned()),
+        model: Some("auto".to_owned()),
+        api_key: Some("PATH".to_owned()),
+        personality: None,
+        memory_profile: None,
+        system_prompt: None,
+        skip_model_probe: true,
+    })
+    .await
+    .expect("non-interactive onboarding should succeed with populated env");
+
+    let (_, config) = mvp::config::load(Some(&path_string)).expect("load written config");
+    assert_eq!(config.provider.api_key.as_deref(), Some("${PATH}"));
+    assert_eq!(config.provider.api_key_env, None);
+
+    fs::remove_file(&config_path).ok();
+    fs::remove_dir_all(&temp_dir).ok();
 }

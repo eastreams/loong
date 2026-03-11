@@ -273,15 +273,16 @@ cargo build -p loongclaw-daemon --no-default-features --features "channel-cli,pr
 
 ## Configuration
 
-`loongclaw setup` defaults to referencing secrets via environment variables (not storing them directly):
+`loongclaw setup` defaults to referencing provider credentials through `provider.api_key`, so secrets stay outside the config file:
 
 ```toml
 [provider]
 kind = "openai"
-api_key_env = "PROVIDER_API_KEY"   # env var name, not the key itself
+api_key = "${PROVIDER_API_KEY}"    # preferred explicit env reference
 ```
 
-For direct values, use the non-`_env` fields instead (`api_key = "sk-..."`).
+`provider.api_key` also accepts `$PROVIDER_API_KEY`, `env:PROVIDER_API_KEY`, `%PROVIDER_API_KEY%`, or a direct literal like `api_key = "sk-..."`.
+Legacy `api_key_env = "PROVIDER_API_KEY"` remains supported for compatibility, but new configs should prefer `provider.api_key`.
 
 Validate your config:
 

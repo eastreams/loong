@@ -250,9 +250,9 @@ fn encode_toml_config(_config: &LoongClawConfig) -> CliResult<String> {
 
 fn template_secret_usage_comment() -> &'static str {
     "# Secret configuration notes:\n\
-# - `*_env` fields store environment variable names, not secret values.\n\
-# - Example: `provider.api_key_env = \"PROVIDER_API_KEY\"`.\n\
-# - To write direct literals in config, use fields without `_env` (for example `provider.api_key`).\n\
+# - Preferred provider credential form: `provider.api_key = \"${PROVIDER_API_KEY}\"`.\n\
+# - `provider.api_key` also accepts direct literals and explicit env refs like `$VAR`, `env:VAR`, and `%VAR%`.\n\
+# - Legacy `*_env` fields stay supported for compatibility, but new configs should prefer the non-`_env` fields.\n\
 \n"
 }
 
@@ -313,7 +313,29 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
 
         let raw = std::fs::read_to_string(&config_path).expect("read template");
         assert!(raw.contains("# Secret configuration notes:"));
-        assert!(raw.contains("`*_env` fields store environment variable names"));
+        assert!(raw.contains("Preferred provider credential form"));
+
+        std::fs::remove_file(&config_path).ok();
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_template_prefers_generic_provider_api_key_reference_example() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("loongclaw-template-api-key-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("create temp directory");
+        let config_path = temp_dir.join("config.toml");
+
+        write_template(Some(config_path.to_string_lossy().as_ref()), true)
+            .expect("write template should succeed");
+
+        let raw = std::fs::read_to_string(&config_path).expect("read template");
+        assert!(raw.contains("provider.api_key = \"${PROVIDER_API_KEY}\""));
+        assert!(!raw.contains("provider.api_key_env = \"PROVIDER_API_KEY\""));
 
         std::fs::remove_file(&config_path).ok();
         std::fs::remove_dir_all(&temp_dir).ok();
@@ -585,6 +607,21 @@ api_key_env = "{secret}"
             loaded.memory.profile_note.as_deref(),
             Some("Imported NanoBot preferences")
         );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_default_config_omits_legacy_provider_api_key_env_field() {
+        let path = unique_config_path("loongclaw-config-runtime-default");
+        let path_string = path.display().to_string();
+
+        write(Some(&path_string), &LoongClawConfig::default(), true)
+            .expect("default config write should pass");
+
+        let raw = fs::read_to_string(&path).expect("read written config");
+        assert!(!raw.contains("api_key_env = \"OPENAI_API_KEY\""));
 
         let _ = fs::remove_file(path);
     }

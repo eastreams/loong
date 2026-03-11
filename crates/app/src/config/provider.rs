@@ -2,7 +2,10 @@ use std::{collections::BTreeMap, env};
 
 use serde::{Deserialize, Serialize};
 
-use super::shared::{ConfigValidationIssue, EnvPointerValidationHint, validate_env_pointer_field};
+use super::shared::{
+    ConfigValidationIssue, EnvPointerValidationHint, read_secret_prefer_inline,
+    validate_env_pointer_field,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderProfile {
@@ -117,7 +120,7 @@ impl Default for ProviderConfig {
             endpoint: None,
             models_endpoint: None,
             api_key: None,
-            api_key_env: Some(default_provider_api_key_env().to_owned()),
+            api_key_env: None,
             oauth_access_token: None,
             oauth_access_token_env: None,
             preferred_models: Vec::new(),
@@ -238,13 +241,6 @@ impl ProviderConfig {
     }
 
     pub fn oauth_access_token(&self) -> Option<String> {
-        if let Some(raw) = self.oauth_access_token.as_deref() {
-            let value = raw.trim();
-            if !value.is_empty() {
-                return Some(value.to_owned());
-            }
-        }
-
         let mut env_keys = Vec::new();
         push_unique_env_key(&mut env_keys, self.oauth_access_token_env.as_deref());
         push_unique_env_key(&mut env_keys, self.kind.default_oauth_access_token_env());
@@ -252,7 +248,7 @@ impl ProviderConfig {
             push_unique_env_key(&mut env_keys, Some(alias));
         }
 
-        first_non_empty_env_value(&env_keys)
+        resolve_secret_with_env_fallbacks(self.oauth_access_token.as_deref(), &env_keys)
     }
 
     fn resolve_base_url(&self, profile_default: &str, openai_default: &str) -> String {
@@ -294,13 +290,6 @@ impl ProviderConfig {
     }
 
     pub fn api_key(&self) -> Option<String> {
-        if let Some(raw) = self.api_key.as_deref() {
-            let value = raw.trim();
-            if !value.is_empty() {
-                return Some(value.to_owned());
-            }
-        }
-
         let mut env_keys = Vec::new();
         push_unique_env_key(&mut env_keys, self.api_key_env.as_deref());
         push_unique_env_key(&mut env_keys, self.kind.default_api_key_env());
@@ -308,7 +297,7 @@ impl ProviderConfig {
             push_unique_env_key(&mut env_keys, Some(alias));
         }
 
-        first_non_empty_env_value(&env_keys)
+        resolve_secret_with_env_fallbacks(self.api_key.as_deref(), &env_keys)
     }
 
     pub fn header_value(&self, name: &str) -> Option<&str> {
@@ -484,10 +473,6 @@ fn default_provider_base_url() -> String {
     "https://api.openai.com".to_owned()
 }
 
-const fn default_provider_api_key_env() -> &'static str {
-    "OPENAI_API_KEY"
-}
-
 fn default_openai_chat_path() -> String {
     "/v1/chat/completions".to_owned()
 }
@@ -522,6 +507,17 @@ fn first_non_empty_env_value(keys: &[String]) -> Option<String> {
         }
     }
     None
+}
+
+fn resolve_secret_with_env_fallbacks(inline: Option<&str>, env_keys: &[String]) -> Option<String> {
+    let primary_env_key = env_keys.first().map(String::as_str);
+    if let Some(value) = read_secret_prefer_inline(inline, primary_env_key) {
+        return Some(value);
+    }
+    if env_keys.len() <= 1 {
+        return None;
+    }
+    first_non_empty_env_value(&env_keys[1..])
 }
 
 fn push_unique_env_key(keys: &mut Vec<String>, maybe_key: Option<&str>) {

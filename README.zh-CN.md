@@ -236,15 +236,16 @@ cargo build -p loongclaw-daemon --no-default-features --features "channel-cli,pr
 
 ## 配置
 
-`loongclaw setup` 默认使用环境变量引用密钥（不直接存储）：
+`loongclaw setup` 默认通过 `provider.api_key` 引用 provider 凭据，这样密钥不会直接落在配置文件里：
 
 ```toml
 [provider]
 kind = "openai"
-api_key_env = "PROVIDER_API_KEY"   # 环境变量名称，不是密钥本身
+api_key = "${PROVIDER_API_KEY}"    # 推荐的显式环境变量引用写法
 ```
 
-如需直接写入值，使用非 `_env` 字段（`api_key = "sk-..."`）。
+`provider.api_key` 也兼容 `$PROVIDER_API_KEY`、`env:PROVIDER_API_KEY`、`%PROVIDER_API_KEY%`，以及直接字面量写法 `api_key = "sk-..."`。
+旧格式 `api_key_env = "PROVIDER_API_KEY"` 仍然兼容，但新配置建议优先使用 `provider.api_key`。
 
 验证配置：
 
