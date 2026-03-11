@@ -1,4 +1,4 @@
-# HVGR Design (Alpha-Test)
+# Hybrid Runtime Design (Alpha-Test)
 
 Date: 2026-03-11  
 Scope: `loongclaw-ai/loongclaw` `alpha-test` branch

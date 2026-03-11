@@ -236,7 +236,7 @@ fn print_safe_lane_summary(
                 .filter_map(|turn| (turn.role == "assistant").then_some(turn.content.as_str())),
         );
         println!("{}", format_safe_lane_summary(session_id, limit, &summary));
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(feature = "memory-sqlite"))]
