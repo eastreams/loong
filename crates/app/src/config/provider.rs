@@ -4,8 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::shared::{
     ConfigValidationIssue, EnvPointerValidationHint, parse_explicit_env_reference,
-    read_secret_prefer_inline,
-    validate_env_pointer_field,
+    read_secret_prefer_inline, validate_env_pointer_field,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
