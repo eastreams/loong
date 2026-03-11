@@ -2479,13 +2479,26 @@ impl ToolExtensionAdapter for ClawMigrationToolExtension {
                 payload,
             })
             .await?;
+        let mut response = serde_json::Map::new();
+        response.insert(
+            "extension".to_owned(),
+            Value::String("claw-migration".to_owned()),
+        );
+        response.insert(
+            "action".to_owned(),
+            Value::String(request.extension_action.clone()),
+        );
+        response.insert("core_outcome".to_owned(), core_outcome.payload.clone());
+        if let Some(core_object) = core_outcome.payload.as_object() {
+            for (key, value) in core_object {
+                response.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+        } else {
+            response.insert("result".to_owned(), core_outcome.payload.clone());
+        }
         Ok(ToolExtensionOutcome {
             status: "ok".to_owned(),
-            payload: json!({
-                "extension": "claw-migration",
-                "action": request.extension_action,
-                "core_outcome": core_outcome.payload,
-            }),
+            payload: Value::Object(response),
         })
     }
 }

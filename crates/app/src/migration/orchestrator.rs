@@ -6,7 +6,10 @@ use std::{
 
 use crate::CliResult;
 
-use super::{inspect_import_path, plan_import_from_path, LegacyClawSource};
+use super::{
+    inspect_import_path, merge_profile_entries, plan_import_from_path, LegacyClawSource,
+    MergedProfilePlan, ProfileEntryLane, ProfileMergeEntry,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveryOptions {
@@ -140,6 +143,44 @@ pub fn recommend_primary_source(
     })
 }
 
+pub fn merge_profile_sources(report: &DiscoveryReport) -> CliResult<MergedProfilePlan> {
+    if report.sources.is_empty() {
+        return Err("cannot merge profiles from an empty discovery report".to_owned());
+    }
+
+    let mut entries = Vec::new();
+    for source in &report.sources {
+        let plan = plan_import_from_path(&source.path, Some(source.source))?;
+        let source_id = source.source.as_id().to_owned();
+
+        if let Some(prompt_addendum) = plan.system_prompt_addendum.as_deref() {
+            entries.push(ProfileMergeEntry {
+                lane: ProfileEntryLane::Prompt,
+                canonical_text: prompt_addendum.trim().to_owned(),
+                source_id: source_id.clone(),
+                source_confidence: source.confidence_score,
+                entry_confidence: 1,
+                slot_key: None,
+            });
+        }
+
+        if let Some(profile_note) = plan.profile_note.as_deref() {
+            entries.extend(parse_profile_merge_entries(
+                profile_note,
+                &source_id,
+                source.confidence_score,
+            ));
+        }
+    }
+
+    let mut merged = merge_profile_entries(&entries)?;
+    if merged.prompt_owner_source_id.is_none() {
+        let summary = plan_import_sources(report)?;
+        merged.prompt_owner_source_id = Some(recommend_primary_source(&summary)?.source_id);
+    }
+    Ok(merged)
+}
+
 fn collect_candidate_directories(
     search_root: &Path,
     options: &DiscoveryOptions,
@@ -207,6 +248,75 @@ fn primary_recommendation_score(plan: &PlannedImportSource) -> u32 {
         score = score.saturating_add(3);
     }
     score.saturating_sub(plan.warning_count as u32)
+}
+
+fn parse_profile_merge_entries(
+    profile_note: &str,
+    source_id: &str,
+    source_confidence: u32,
+) -> Vec<ProfileMergeEntry> {
+    let mut entries = Vec::new();
+    let mut block_lines = Vec::new();
+
+    let flush_block = |entries: &mut Vec<ProfileMergeEntry>, block_lines: &mut Vec<String>| {
+        let joined = block_lines
+            .iter()
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        block_lines.clear();
+        if joined.is_empty() {
+            return;
+        }
+        entries.push(ProfileMergeEntry {
+            lane: ProfileEntryLane::Profile,
+            canonical_text: joined,
+            source_id: source_id.to_owned(),
+            source_confidence,
+            entry_confidence: 1,
+            slot_key: None,
+        });
+    };
+
+    for line in profile_note.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            flush_block(&mut entries, &mut block_lines);
+            continue;
+        }
+        if trimmed.starts_with("## Imported ") || trimmed.starts_with('#') {
+            flush_block(&mut entries, &mut block_lines);
+            continue;
+        }
+        if let Some((slot_key, value)) = parse_profile_slot_line(trimmed) {
+            flush_block(&mut entries, &mut block_lines);
+            entries.push(ProfileMergeEntry {
+                lane: ProfileEntryLane::Profile,
+                canonical_text: format!("{slot_key}: {value}"),
+                source_id: source_id.to_owned(),
+                source_confidence,
+                entry_confidence: 10,
+                slot_key: Some(slot_key),
+            });
+            continue;
+        }
+        block_lines.push(trimmed.to_owned());
+    }
+    flush_block(&mut entries, &mut block_lines);
+
+    entries
+}
+
+fn parse_profile_slot_line(line: &str) -> Option<(String, String)> {
+    let trimmed = line.trim_start_matches(['-', '*', ' ']).trim();
+    let (raw_key, raw_value) = trimmed.split_once(':')?;
+    let slot_key = raw_key.trim().to_ascii_lowercase();
+    let value = raw_value.trim();
+    if slot_key.is_empty() || value.is_empty() {
+        return None;
+    }
+    Some((slot_key, value.to_owned()))
 }
 
 #[cfg(test)]

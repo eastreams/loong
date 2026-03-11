@@ -4545,6 +4545,200 @@ async fn execute_spec_tool_extension_can_hot_handle_claw_import_via_core_wrapper
 }
 
 #[tokio::test]
+async fn execute_spec_tool_extension_can_discover_multiple_sources() {
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+    }
+
+    fn write_file(root: &Path, relative: &str, content: &str) {
+        let path = root.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent directory");
+        }
+        fs::write(path, content).expect("write fixture");
+    }
+
+    let root = unique_temp_dir("loongclaw-spec-tool-extension-discover-many");
+    fs::create_dir_all(&root).expect("create fixture root");
+
+    let openclaw_root = root.join("openclaw-workspace");
+    fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+    write_file(
+        &openclaw_root,
+        "SOUL.md",
+        "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+    );
+    write_file(
+        &openclaw_root,
+        "IDENTITY.md",
+        "# Identity\n\n- role: release copilot\n",
+    );
+
+    let nanobot_root = root.join("nanobot");
+    fs::create_dir_all(&nanobot_root).expect("create nanobot root");
+    write_file(
+        &nanobot_root,
+        "IDENTITY.md",
+        "# Identity\n\n- Motto: your nanobot agent for deploys\n",
+    );
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-tool-extension-claw-discover-many".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-tool-extension-claw-discover-many".to_owned(),
+        ttl_s: 120,
+        approval: None,
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: None,
+        bridge_support: None,
+        bootstrap: None,
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        operation: OperationSpec::ToolExtension {
+            extension_action: "discover".to_owned(),
+            required_capabilities: BTreeSet::from([Capability::InvokeTool]),
+            payload: json!({
+                "input_path": root.display().to_string()
+            }),
+            extension: "claw-migration".to_owned(),
+            core: None,
+        },
+    };
+
+    let report = execute_spec(spec, true).await;
+    assert_eq!(report.operation_kind, "tool_extension");
+    assert_eq!(report.outcome["outcome"]["status"], "ok");
+    assert_eq!(report.outcome["outcome"]["payload"]["action"], "discover");
+    assert!(
+        report.outcome["outcome"]["payload"]["sources"]
+            .as_array()
+            .expect("sources should be an array")
+            .len()
+            >= 2
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
+async fn execute_spec_tool_extension_can_merge_profiles_without_merging_prompt_lane() {
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+    }
+
+    fn write_file(root: &Path, relative: &str, content: &str) {
+        let path = root.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent directory");
+        }
+        fs::write(path, content).expect("write fixture");
+    }
+
+    let root = unique_temp_dir("loongclaw-spec-tool-extension-merge-profiles");
+    fs::create_dir_all(&root).expect("create fixture root");
+
+    let openclaw_root = root.join("openclaw-workspace");
+    fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+    write_file(
+        &openclaw_root,
+        "SOUL.md",
+        "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+    );
+    write_file(
+        &openclaw_root,
+        "IDENTITY.md",
+        "# Identity\n\n- role: release copilot\n- tone: steady\n",
+    );
+
+    let nanobot_root = root.join("nanobot");
+    fs::create_dir_all(&nanobot_root).expect("create nanobot root");
+    write_file(
+        &nanobot_root,
+        "IDENTITY.md",
+        "# Identity\n\n- role: release copilot\n- region: apac\n",
+    );
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-tool-extension-claw-merge-profiles".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-tool-extension-claw-merge-profiles".to_owned(),
+        ttl_s: 120,
+        approval: None,
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: None,
+        bridge_support: None,
+        bootstrap: None,
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        operation: OperationSpec::ToolExtension {
+            extension_action: "merge_profiles".to_owned(),
+            required_capabilities: BTreeSet::from([Capability::InvokeTool]),
+            payload: json!({
+                "input_path": root.display().to_string()
+            }),
+            extension: "claw-migration".to_owned(),
+            core: None,
+        },
+    };
+
+    let report = execute_spec(spec, true).await;
+    assert_eq!(report.operation_kind, "tool_extension");
+    assert_eq!(report.outcome["outcome"]["status"], "ok");
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["action"],
+        "merge_profiles"
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["result"]["prompt_owner_source_id"],
+        "openclaw"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
 async fn execute_spec_denylist_overrides_other_approvals() {
     let spec = RunnerSpec {
         pack: VerticalPackManifest {

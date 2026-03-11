@@ -698,6 +698,86 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
+    #[test]
+    fn claw_import_merge_profiles_mode_preserves_prompt_owner() {
+        use std::{
+            fs,
+            path::{Path, PathBuf},
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        fn unique_temp_dir(prefix: &str) -> PathBuf {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos();
+            std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+        }
+
+        fn write_file(root: &Path, relative: &str, content: &str) {
+            let path = root.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create parent directory");
+            }
+            fs::write(path, content).expect("write fixture");
+        }
+
+        let root = unique_temp_dir("loongclaw-tool-import-merge-profiles");
+        fs::create_dir_all(&root).expect("create fixture root");
+
+        let openclaw_root = root.join("openclaw-workspace");
+        fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+        write_file(
+            &openclaw_root,
+            "SOUL.md",
+            "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+        );
+        write_file(
+            &openclaw_root,
+            "IDENTITY.md",
+            "# Identity\n\n- role: release copilot\n- tone: steady\n",
+        );
+
+        let nanobot_root = root.join("nanobot");
+        fs::create_dir_all(&nanobot_root).expect("create nanobot root");
+        write_file(
+            &nanobot_root,
+            "IDENTITY.md",
+            "# Identity\n\n- role: release copilot\n- region: apac\n",
+        );
+
+        let config = runtime_config::ToolRuntimeConfig {
+            shell_allowlist: BTreeSet::new(),
+            file_root: Some(root.clone()),
+        };
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "claw.import".to_owned(),
+                payload: json!({
+                    "mode": "merge_profiles",
+                    "input_path": "."
+                }),
+            },
+            &config,
+        )
+        .expect("claw import merge_profiles should succeed");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["mode"], "merge_profiles");
+        assert_eq!(
+            outcome.payload["result"]["prompt_owner_source_id"],
+            "openclaw"
+        );
+        assert!(
+            outcome.payload["result"]["merged_profile_note"]
+                .as_str()
+                .expect("merged profile note should be present")
+                .contains("region: apac")
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
     // --- Kernel-routed tool tests ---
 
     use std::sync::{Arc, Mutex};

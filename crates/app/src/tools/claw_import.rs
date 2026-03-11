@@ -31,10 +31,15 @@ pub(super) fn execute_claw_import_tool_with_config(
         .unwrap_or(DEFAULT_MODE);
     if !matches!(
         mode,
-        "plan" | "apply" | "discover" | "plan_many" | "recommend_primary"
+        "plan"
+            | "apply"
+            | "discover"
+            | "plan_many"
+            | "recommend_primary"
+            | "merge_profiles"
     ) {
         return Err(format!(
-            "claw.import payload.mode must be `plan`, `apply`, `discover`, `plan_many`, or `recommend_primary`, got `{mode}`"
+            "claw.import payload.mode must be `plan`, `apply`, `discover`, `plan_many`, `recommend_primary`, or `merge_profiles`, got `{mode}`"
         ));
     }
 
@@ -110,6 +115,28 @@ pub(super) fn execute_claw_import_tool_with_config(
         });
     }
 
+    if mode == "merge_profiles" {
+        let report = migration::discover_import_sources(
+            &input_path,
+            migration::DiscoveryOptions::default(),
+        )?;
+        let summary = migration::plan_import_sources(&report)?;
+        let recommendation = migration::recommend_primary_source(&summary).ok();
+        let merged = migration::merge_profile_sources(&report)?;
+        return Ok(ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "adapter": "core-tools",
+                "tool_name": request.tool_name,
+                "mode": "merge_profiles",
+                "input_path": input_path.display().to_string(),
+                "plans": summary.plans.iter().map(planned_source_payload).collect::<Vec<_>>(),
+                "recommendation": recommendation.as_ref().map(primary_recommendation_payload),
+                "result": merged_profile_plan_payload(&merged),
+            }),
+        });
+    }
+
     let plan = migration::plan_import_from_path(&input_path, hint)?;
 
     let mut merged_config = load_or_default_config(output_path.as_deref())?;
@@ -177,6 +204,57 @@ fn primary_recommendation_payload(
         "source_id": recommendation.source_id,
         "input_path": recommendation.input_path.display().to_string(),
         "reasons": recommendation.reasons,
+    })
+}
+
+fn merged_profile_plan_payload(plan: &migration::MergedProfilePlan) -> Value {
+    json!({
+        "prompt_owner_source_id": plan.prompt_owner_source_id,
+        "merged_profile_note": plan.merged_profile_note,
+        "auto_apply_allowed": plan.auto_apply_allowed,
+        "kept_entries": plan
+            .kept_entries
+            .iter()
+            .map(|entry| {
+                json!({
+                    "lane": match entry.lane {
+                        migration::ProfileEntryLane::Prompt => "prompt",
+                        migration::ProfileEntryLane::Profile => "profile",
+                    },
+                    "canonical_text": entry.canonical_text,
+                    "source_id": entry.source_id,
+                    "slot_key": entry.slot_key,
+                })
+            })
+            .collect::<Vec<_>>(),
+        "dropped_duplicates": plan
+            .dropped_duplicates
+            .iter()
+            .map(|entry| {
+                json!({
+                    "lane": match entry.lane {
+                        migration::ProfileEntryLane::Prompt => "prompt",
+                        migration::ProfileEntryLane::Profile => "profile",
+                    },
+                    "canonical_text": entry.canonical_text,
+                    "source_id": entry.source_id,
+                    "slot_key": entry.slot_key,
+                })
+            })
+            .collect::<Vec<_>>(),
+        "unresolved_conflicts": plan
+            .unresolved_conflicts
+            .iter()
+            .map(|conflict| {
+                json!({
+                    "slot_key": conflict.slot_key,
+                    "preferred_source_id": conflict.preferred_source_id,
+                    "discarded_source_id": conflict.discarded_source_id,
+                    "preferred_text": conflict.preferred_text,
+                    "discarded_text": conflict.discarded_text,
+                })
+            })
+            .collect::<Vec<_>>(),
     })
 }
 

@@ -31,13 +31,12 @@
   "hotfixes": [],
   "operation": {
     "kind": "tool_extension",
-    "extension_action": "plan",
+    "extension_action": "plan_many",
     "required_capabilities": [
       "InvokeTool"
     ],
     "payload": {
-      "source": "nanobot",
-      "input_path": "./legacy/nanobot-workspace"
+      "input_path": "./legacy"
     },
     "extension": "claw-migration",
     "core": null
