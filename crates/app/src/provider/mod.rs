@@ -468,9 +468,8 @@ mod tests {
     use super::payload_adaptation::{ReasoningField, TemperatureField, TokenLimitField};
     use super::*;
     use crate::config::{
-        ConversationConfig, FeishuChannelConfig, MemoryConfig, ProviderConfig, ReasoningEffort,
-        ProviderKind,
-        ToolConfig,
+        ConversationConfig, FeishuChannelConfig, MemoryConfig, ProviderConfig, ProviderKind,
+        ReasoningEffort, ToolConfig,
     };
     use serde_json::json;
 

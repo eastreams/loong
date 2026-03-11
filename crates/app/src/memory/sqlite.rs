@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::{
-    build_append_turn_request, build_window_request, runtime_config::MemoryRuntimeConfig,
-    MEMORY_OP_APPEND_TURN, MEMORY_OP_CLEAR_SESSION, MEMORY_OP_WINDOW,
+    build_append_turn_request, runtime_config::MemoryRuntimeConfig, MEMORY_OP_APPEND_TURN,
+    MEMORY_OP_CLEAR_SESSION, MEMORY_OP_WINDOW,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
