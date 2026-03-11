@@ -967,7 +967,7 @@ fn run_safe_lane_summary_cli(
                 .unwrap_or_else(|| "-".to_owned())
         );
         println!("rollup route_reasons={route_reasons_rollup}");
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(feature = "memory-sqlite"))]
