@@ -96,10 +96,7 @@ impl PolicyExtension for FilePolicyExtension {
             if !raw_path.is_empty() && Self::path_escapes_root(root, raw_path) {
                 return Err(PolicyError::ExtensionDenied {
                     extension: self.name().to_owned(),
-                    reason: format!(
-                        "path `{raw_path}` escapes file root `{}`",
-                        root.display()
-                    ),
+                    reason: format!("path `{raw_path}` escapes file root `{}`", root.display()),
                 });
             }
         }
@@ -111,10 +108,10 @@ impl PolicyExtension for FilePolicyExtension {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{BTreeMap, BTreeSet};
     use loongclaw_contracts::{Capability, CapabilityToken, ExecutionRoute, HarnessKind};
     use loongclaw_kernel::{PolicyExtensionContext, VerticalPackManifest};
     use serde_json::json;
+    use std::collections::{BTreeMap, BTreeSet};
 
     fn test_pack() -> VerticalPackManifest {
         VerticalPackManifest {
@@ -169,10 +166,14 @@ mod tests {
         let pack = test_pack();
         let token = token_with_caps(BTreeSet::from([Capability::InvokeTool]));
         let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "file.write", "payload": {"path": "foo.txt", "content": "x"}});
+        let params =
+            json!({"tool_name": "file.write", "payload": {"path": "foo.txt", "content": "x"}});
         let ctx = make_context(&pack, &token, &caps, Some(&params));
         let result = ext.authorize_extension(&ctx);
-        assert!(matches!(result.unwrap_err(), PolicyError::ExtensionDenied { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            PolicyError::ExtensionDenied { .. }
+        ));
     }
 
     #[test]
@@ -184,7 +185,10 @@ mod tests {
         let params = json!({"tool_name": "file.read", "payload": {"path": "foo.txt"}});
         let ctx = make_context(&pack, &token, &caps, Some(&params));
         let result = ext.authorize_extension(&ctx);
-        assert!(matches!(result.unwrap_err(), PolicyError::ExtensionDenied { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            PolicyError::ExtensionDenied { .. }
+        ));
     }
 
     #[test]
@@ -213,7 +217,10 @@ mod tests {
         let params = json!({"tool_name": "file.read", "payload": {"path": "../../etc/passwd"}});
         let ctx = make_context(&pack, &token, &caps, Some(&params));
         let result = ext.authorize_extension(&ctx);
-        assert!(matches!(result.unwrap_err(), PolicyError::ExtensionDenied { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            PolicyError::ExtensionDenied { .. }
+        ));
     }
 
     #[test]

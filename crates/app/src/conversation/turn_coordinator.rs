@@ -1789,8 +1789,9 @@ async fn execute_single_tool_intent(
         .await
         .map_err(|error| {
             let kind = match classify_kernel_error(&error) {
-                KernelFailureClass::PolicyDenied
-                | KernelFailureClass::ApprovalRequired => PlanNodeErrorKind::PolicyDenied,
+                KernelFailureClass::PolicyDenied | KernelFailureClass::ApprovalRequired => {
+                    PlanNodeErrorKind::PolicyDenied
+                }
                 KernelFailureClass::RetryableExecution => PlanNodeErrorKind::Retryable,
                 KernelFailureClass::NonRetryable => PlanNodeErrorKind::NonRetryable,
             };

@@ -10,7 +10,7 @@ use super::shared::{
 pub(crate) const MIN_MEMORY_SLIDING_WINDOW: usize = 1;
 pub(crate) const MAX_MEMORY_SLIDING_WINDOW: usize = 128;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolConfig {
     /// Deprecated: shell policy is now enforced via PolicyExtensionChain.
     /// Kept for config deserialization backward compatibility.
@@ -100,15 +100,6 @@ pub enum MemoryMode {
     WindowOnly,
     WindowPlusSummary,
     ProfilePlusWindow,
-}
-
-impl Default for ToolConfig {
-    fn default() -> Self {
-        Self {
-            shell_allowlist: Vec::new(),
-            file_root: None,
-        }
-    }
 }
 
 impl ToolConfig {

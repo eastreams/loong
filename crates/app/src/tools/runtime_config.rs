@@ -18,9 +18,7 @@ impl ToolRuntimeConfig {
     pub fn from_env() -> Self {
         let file_root = std::env::var("LOONGCLAW_FILE_ROOT").ok().map(PathBuf::from);
 
-        Self {
-            file_root,
-        }
+        Self { file_root }
     }
 }
 

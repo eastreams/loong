@@ -1485,11 +1485,8 @@ async fn audit_event_json_schema_for_plane_invoked_is_stable() {
 async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_002_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = LoongClawKernel::with_runtime(
-        StaticPolicyEngine::default(),
-        clock.clone(),
-        audit.clone(),
-    );
+    let mut kernel =
+        LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock.clone(), audit.clone());
     kernel
         .register_pack(VerticalPackManifest {
             pack_id: "tool-gate-deny".to_owned(),
@@ -1505,9 +1502,10 @@ async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() 
         })
         .expect("pack should register");
     kernel.register_core_tool_adapter(MockCoreTool);
-    kernel.register_policy_extension(
-        ToolGatePolicyExtension::new("shell.exec", ToolGateMode::Deny),
-    );
+    kernel.register_policy_extension(ToolGatePolicyExtension::new(
+        "shell.exec",
+        ToolGateMode::Deny,
+    ));
 
     let token = kernel
         .issue_token("tool-gate-deny", "agent-deny", 120)
@@ -1549,11 +1547,8 @@ async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() 
 async fn tool_extension_call_reports_approval_required_when_policy_requires_human_gate() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_003_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = LoongClawKernel::with_runtime(
-        StaticPolicyEngine::default(),
-        clock.clone(),
-        audit.clone(),
-    );
+    let mut kernel =
+        LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock.clone(), audit.clone());
     kernel
         .register_pack(VerticalPackManifest {
             pack_id: "tool-gate-approval".to_owned(),
@@ -1570,9 +1565,10 @@ async fn tool_extension_call_reports_approval_required_when_policy_requires_huma
         .expect("pack should register");
     kernel.register_core_tool_adapter(MockCoreTool);
     kernel.register_tool_extension_adapter(MockToolExtension);
-    kernel.register_policy_extension(
-        ToolGatePolicyExtension::new("query_ledger", ToolGateMode::RequireApproval),
-    );
+    kernel.register_policy_extension(ToolGatePolicyExtension::new(
+        "query_ledger",
+        ToolGateMode::RequireApproval,
+    ));
 
     let token = kernel
         .issue_token("tool-gate-approval", "agent-approval", 120)

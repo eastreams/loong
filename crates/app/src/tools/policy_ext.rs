@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
-use loongclaw_kernel::{PolicyExtension, PolicyExtensionContext};
 use loongclaw_contracts::PolicyError;
+use loongclaw_kernel::{PolicyExtension, PolicyExtensionContext};
 
 pub struct ToolPolicyExtension {
     hard_deny: BTreeSet<String>,
@@ -18,9 +18,28 @@ impl ToolPolicyExtension {
             .map(String::from)
             .collect(),
             approval_required: [
-                "bash", "sh", "zsh", "fish", "sudo", "su", "curl", "wget", "ssh", "scp", "sftp",
-                "nc", "ncat", "netcat", "python", "python3", "node", "perl", "ruby", "php",
-                "pwsh", "powershell",
+                "bash",
+                "sh",
+                "zsh",
+                "fish",
+                "sudo",
+                "su",
+                "curl",
+                "wget",
+                "ssh",
+                "scp",
+                "sftp",
+                "nc",
+                "ncat",
+                "netcat",
+                "python",
+                "python3",
+                "node",
+                "perl",
+                "ruby",
+                "php",
+                "pwsh",
+                "powershell",
             ]
             .into_iter()
             .map(String::from)
@@ -81,9 +100,7 @@ impl PolicyExtension for ToolPolicyExtension {
         if self.approval_required.contains(command.as_str()) {
             return Err(PolicyError::ToolCallApprovalRequired {
                 tool_name: tool_name.to_owned(),
-                prompt: format!(
-                    "command `{command}` requires approval by default shell policy"
-                ),
+                prompt: format!("command `{command}` requires approval by default shell policy"),
             });
         }
 
@@ -94,10 +111,10 @@ impl PolicyExtension for ToolPolicyExtension {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{BTreeMap, BTreeSet};
     use loongclaw_contracts::{Capability, CapabilityToken, ExecutionRoute, HarnessKind};
     use loongclaw_kernel::{PolicyExtensionContext, VerticalPackManifest};
     use serde_json::json;
+    use std::collections::{BTreeMap, BTreeSet};
 
     fn test_pack() -> VerticalPackManifest {
         VerticalPackManifest {
@@ -152,7 +169,10 @@ mod tests {
         let ctx = make_context(&pack, &token, &caps, Some(&params));
         let result = ext.authorize_extension(&ctx);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PolicyError::ToolCallDenied { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            PolicyError::ToolCallDenied { .. }
+        ));
     }
 
     #[test]
@@ -165,7 +185,10 @@ mod tests {
         let ctx = make_context(&pack, &token, &caps, Some(&params));
         let result = ext.authorize_extension(&ctx);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PolicyError::ToolCallApprovalRequired { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            PolicyError::ToolCallApprovalRequired { .. }
+        ));
     }
 
     #[test]
@@ -188,7 +211,10 @@ mod tests {
         let params = json!({"tool_name": "shell_exec", "payload": {"command": "curl"}});
         let ctx = make_context(&pack, &token, &caps, Some(&params));
         let result = ext.authorize_extension(&ctx);
-        assert!(matches!(result.unwrap_err(), PolicyError::ToolCallApprovalRequired { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            PolicyError::ToolCallApprovalRequired { .. }
+        ));
     }
 
     #[test]

@@ -309,7 +309,8 @@ impl<P: PolicyEngine> LoongClawKernel<P> {
     ) -> Result<ConnectorDispatch, KernelError> {
         let pack = self.get_pack(pack_id)?;
         self.assert_connector_allowed(pack, &command.connector_name)?;
-        let now = self.authorize_pack_operation(pack, token, &command.required_capabilities, None)?;
+        let now =
+            self.authorize_pack_operation(pack, token, &command.required_capabilities, None)?;
 
         let connector_name = command.connector_name.clone();
         let operation = command.operation.clone();
@@ -354,7 +355,8 @@ impl<P: PolicyEngine> LoongClawKernel<P> {
     ) -> Result<ConnectorDispatch, KernelError> {
         let pack = self.get_pack(pack_id)?;
         self.assert_connector_allowed(pack, &command.connector_name)?;
-        let now = self.authorize_pack_operation(pack, token, &command.required_capabilities, None)?;
+        let now =
+            self.authorize_pack_operation(pack, token, &command.required_capabilities, None)?;
         let resolved_core_adapter = core_name
             .map(std::string::ToString::to_string)
             .or_else(|| {
@@ -408,7 +410,8 @@ impl<P: PolicyEngine> LoongClawKernel<P> {
     ) -> Result<ConnectorDispatch, KernelError> {
         let pack = self.get_pack(pack_id)?;
         self.assert_connector_allowed(pack, &command.connector_name)?;
-        let now = self.authorize_pack_operation(pack, token, &command.required_capabilities, None)?;
+        let now =
+            self.authorize_pack_operation(pack, token, &command.required_capabilities, None)?;
         let resolved_core_adapter = core_name
             .map(std::string::ToString::to_string)
             .or_else(|| {
@@ -550,7 +553,10 @@ impl<P: PolicyEngine> LoongClawKernel<P> {
             "payload": &request.payload,
         });
         let now = self.authorize_pack_operation(
-            pack, token, required_capabilities, Some(&tool_policy_params),
+            pack,
+            token,
+            required_capabilities,
+            Some(&tool_policy_params),
         )?;
         let resolved_core_adapter = core_name
             .map(std::string::ToString::to_string)
@@ -597,7 +603,10 @@ impl<P: PolicyEngine> LoongClawKernel<P> {
             "payload": &request.payload,
         });
         let now = self.authorize_pack_operation(
-            pack, token, required_capabilities, Some(&tool_policy_params),
+            pack,
+            token,
+            required_capabilities,
+            Some(&tool_policy_params),
         )?;
         let resolved_core_adapter = core_name
             .map(std::string::ToString::to_string)
@@ -725,7 +734,13 @@ impl<P: PolicyEngine> LoongClawKernel<P> {
     ) -> Result<u64, KernelError> {
         self.assert_pack_grants(pack, required_capabilities)?;
         let now = self.clock.now_epoch_s();
-        self.authorize_or_audit_denial(pack, token, now, required_capabilities, request_parameters)?;
+        self.authorize_or_audit_denial(
+            pack,
+            token,
+            now,
+            required_capabilities,
+            request_parameters,
+        )?;
         Ok(now)
     }
 

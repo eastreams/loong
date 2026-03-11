@@ -125,9 +125,9 @@ impl TurnTestHarness {
         kernel.register_policy_extension(
             crate::tools::policy_ext::ToolPolicyExtension::default_rules(),
         );
-        kernel.register_policy_extension(
-            crate::tools::file_policy_ext::FilePolicyExtension::new(tool_config.file_root),
-        );
+        kernel.register_policy_extension(crate::tools::file_policy_ext::FilePolicyExtension::new(
+            tool_config.file_root,
+        ));
 
         #[cfg(feature = "memory-sqlite")]
         {
