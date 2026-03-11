@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::BTreeSet, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +16,18 @@ pub struct ToolConfig {
     pub shell_allowlist: Vec<String>,
     #[serde(default)]
     pub file_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalSkillsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_require_download_approval")]
+    pub require_download_approval: bool,
+    #[serde(default)]
+    pub allowed_domains: Vec<String>,
+    #[serde(default)]
+    pub blocked_domains: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,12 +121,33 @@ impl Default for ToolConfig {
     }
 }
 
+impl Default for ExternalSkillsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            require_download_approval: default_require_download_approval(),
+            allowed_domains: Vec::new(),
+            blocked_domains: Vec::new(),
+        }
+    }
+}
+
 impl ToolConfig {
     pub fn resolved_file_root(&self) -> PathBuf {
         if let Some(path) = self.file_root.as_deref() {
             return expand_path(path);
         }
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    }
+}
+
+impl ExternalSkillsConfig {
+    pub fn normalized_allowed_domains(&self) -> Vec<String> {
+        normalize_domain_entries(&self.allowed_domains)
+    }
+
+    pub fn normalized_blocked_domains(&self) -> Vec<String> {
+        normalize_domain_entries(&self.blocked_domains)
     }
 }
 
@@ -190,6 +223,21 @@ fn default_shell_allowlist() -> Vec<String> {
     ]
 }
 
+const fn default_require_download_approval() -> bool {
+    true
+}
+
+fn normalize_domain_entries(entries: &[String]) -> Vec<String> {
+    let mut normalized = BTreeSet::new();
+    for entry in entries {
+        let value = entry.trim().to_ascii_lowercase();
+        if !value.is_empty() {
+            normalized.insert(value);
+        }
+    }
+    normalized.into_iter().collect()
+}
+
 const fn default_sliding_window() -> usize {
     12
 }
@@ -221,6 +269,41 @@ mod tests {
         assert_eq!(
             config.trimmed_profile_note().as_deref(),
             Some("imported preferences")
+        );
+    }
+
+    #[test]
+    fn external_skills_defaults_to_safe_off_mode() {
+        let config = ExternalSkillsConfig::default();
+        assert!(!config.enabled);
+        assert!(config.require_download_approval);
+        assert!(config.allowed_domains.is_empty());
+        assert!(config.blocked_domains.is_empty());
+    }
+
+    #[test]
+    fn external_skills_normalized_domains_are_lowercase_and_deduped() {
+        let config = ExternalSkillsConfig {
+            enabled: true,
+            require_download_approval: true,
+            allowed_domains: vec![
+                "Skills.SH".to_owned(),
+                "skills.sh".to_owned(),
+                "  CLAWHUB.IO ".to_owned(),
+            ],
+            blocked_domains: vec![
+                "Bad.Example".to_owned(),
+                "bad.example".to_owned(),
+                " ".to_owned(),
+            ],
+        };
+        assert_eq!(
+            config.normalized_allowed_domains(),
+            vec!["clawhub.io".to_owned(), "skills.sh".to_owned()]
+        );
+        assert_eq!(
+            config.normalized_blocked_domains(),
+            vec!["bad.example".to_owned()]
         );
     }
 }

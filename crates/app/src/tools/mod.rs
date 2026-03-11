@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use crate::KernelContext;
 
 mod claw_import;
+mod external_skills;
 mod file;
 mod kernel_adapter;
 pub mod runtime_config;
@@ -43,6 +44,8 @@ pub fn execute_tool_core(request: ToolCoreRequest) -> Result<ToolCoreOutcome, St
 pub fn canonical_tool_name(raw: &str) -> &str {
     match raw {
         "claw_import" | "import_claw" => "claw.import",
+        "external_skills_policy" => "external_skills.policy",
+        "external_skills_fetch" => "external_skills.fetch",
         "file_read" => "file.read",
         "file_write" => "file.write",
         "shell_exec" | "shell" => "shell.exec",
@@ -53,7 +56,12 @@ pub fn canonical_tool_name(raw: &str) -> &str {
 pub fn is_known_tool_name(raw: &str) -> bool {
     matches!(
         canonical_tool_name(raw),
-        "claw.import" | "shell.exec" | "file.read" | "file.write"
+        "claw.import"
+            | "external_skills.policy"
+            | "external_skills.fetch"
+            | "shell.exec"
+            | "file.read"
+            | "file.write"
     )
 }
 
@@ -68,6 +76,12 @@ pub fn execute_tool_core_with_config(
     };
     match canonical_name {
         "claw.import" => claw_import::execute_claw_import_tool_with_config(request, config),
+        "external_skills.policy" => {
+            external_skills::execute_external_skills_policy_tool_with_config(request, config)
+        }
+        "external_skills.fetch" => {
+            external_skills::execute_external_skills_fetch_tool_with_config(request, config)
+        }
         "shell.exec" => shell::execute_shell_tool_with_config(request, config),
         "file.read" => file::execute_file_read_tool_with_config(request, config),
         "file.write" => file::execute_file_write_tool_with_config(request, config),
@@ -91,6 +105,14 @@ pub fn tool_registry() -> Vec<ToolRegistryEntry> {
     entries.push(ToolRegistryEntry {
         name: "claw.import",
         description: "Import legacy Claw configs into native LoongClaw settings",
+    });
+    entries.push(ToolRegistryEntry {
+        name: "external_skills.fetch",
+        description: "Download external skills artifacts with domain policy and approval guards",
+    });
+    entries.push(ToolRegistryEntry {
+        name: "external_skills.policy",
+        description: "Read/update external skills domain allow/block policy at runtime",
     });
     #[cfg(feature = "tool-file")]
     {
@@ -198,6 +220,81 @@ pub fn provider_tool_definitions() -> Vec<Value> {
                     }
                 },
                 "required": [],
+                "additionalProperties": false
+            }
+        }
+    }));
+
+    tools.push(json!({
+        "type": "function",
+        "function": {
+            "name": "external_skills_policy",
+            "description": "Get, set, or reset runtime policy for external skills downloads (enabled flag, approval gate, domain allowlist/blocklist).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["get", "set", "reset"],
+                        "description": "Policy action. Defaults to `get`."
+                    },
+                    "policy_update_approved": {
+                        "type": "boolean",
+                        "description": "Explicit user authorization for policy updates. Required for `set` and `reset`."
+                    },
+                    "enabled": {
+                        "type": "boolean",
+                        "description": "Whether external skills runtime/download is enabled."
+                    },
+                    "require_download_approval": {
+                        "type": "boolean",
+                        "description": "When true, every external skills download requires explicit approval_granted=true."
+                    },
+                    "allowed_domains": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional domain allowlist (supports exact domains and wildcard forms like *.example.com). Empty list means allow all domains unless blocked."
+                    },
+                    "blocked_domains": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional domain blocklist (supports exact domains and wildcard forms like *.example.com). Blocklist always takes precedence."
+                    }
+                },
+                "required": [],
+                "additionalProperties": false
+            }
+        }
+    }));
+
+    tools.push(json!({
+        "type": "function",
+        "function": {
+            "name": "external_skills_fetch",
+            "description": "Download an external skill artifact with strict domain policy checks and explicit approval gating.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "HTTPS URL to download."
+                    },
+                    "approval_granted": {
+                        "type": "boolean",
+                        "description": "Explicit user authorization for this download. Required when require_download_approval=true."
+                    },
+                    "save_as": {
+                        "type": "string",
+                        "description": "Optional output filename (stored under configured file root / external-skills-downloads)."
+                    },
+                    "max_bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20971520,
+                        "description": "Maximum download size in bytes. Defaults to 5242880 and is capped at 20971520."
+                    }
+                },
+                "required": ["url"],
                 "additionalProperties": false
             }
         }
@@ -318,6 +415,24 @@ fn _shape_examples() -> BTreeMap<&'static str, Value> {
             }),
         ),
         (
+            "external_skills.policy",
+            json!({
+                "action": "set",
+                "policy_update_approved": true,
+                "enabled": true,
+                "require_download_approval": true,
+                "allowed_domains": ["skills.sh"],
+                "blocked_domains": ["*.evil.example"]
+            }),
+        ),
+        (
+            "external_skills.fetch",
+            json!({
+                "url": "https://skills.sh/packages/demo-skill.tar.gz",
+                "approval_granted": true
+            }),
+        ),
+        (
             "file.read",
             json!({
                 "path": "README.md",
@@ -358,26 +473,32 @@ mod tests {
                 "- claw.import: Import legacy Claw configs into native LoongClaw settings"
             )
         );
+        assert!(snapshot.contains("- external_skills.fetch: Download external skills artifacts with domain policy and approval guards"));
+        assert!(snapshot.contains("- external_skills.policy: Read/update external skills domain allow/block policy at runtime"));
         assert!(snapshot.contains("- file.read: Read file contents"));
         assert!(snapshot.contains("- file.write: Write file contents"));
         assert!(snapshot.contains("- shell.exec: Execute shell commands"));
 
-        // Verify sorted order: claw.import < file.read < file.write < shell.exec
+        // Verify sorted order: claw.import < external_skills.* < file.* < shell.exec
         let lines: Vec<&str> = snapshot.lines().skip(1).collect();
-        assert_eq!(lines.len(), 4);
+        assert_eq!(lines.len(), 6);
         assert!(lines[0].starts_with("- claw.import"));
-        assert!(lines[1].starts_with("- file.read"));
-        assert!(lines[2].starts_with("- file.write"));
-        assert!(lines[3].starts_with("- shell.exec"));
+        assert!(lines[1].starts_with("- external_skills.fetch"));
+        assert!(lines[2].starts_with("- external_skills.policy"));
+        assert!(lines[3].starts_with("- file.read"));
+        assert!(lines[4].starts_with("- file.write"));
+        assert!(lines[5].starts_with("- shell.exec"));
     }
 
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
     fn tool_registry_returns_all_known_tools() {
         let entries = tool_registry();
-        assert_eq!(entries.len(), 4);
+        assert_eq!(entries.len(), 6);
         let names: Vec<&str> = entries.iter().map(|e| e.name).collect();
         assert!(names.contains(&"claw.import"));
+        assert!(names.contains(&"external_skills.fetch"));
+        assert!(names.contains(&"external_skills.policy"));
         assert!(names.contains(&"shell.exec"));
         assert!(names.contains(&"file.read"));
         assert!(names.contains(&"file.write"));
@@ -387,7 +508,7 @@ mod tests {
     #[test]
     fn provider_tool_definitions_are_stable_and_complete() {
         let defs = provider_tool_definitions();
-        assert_eq!(defs.len(), 4);
+        assert_eq!(defs.len(), 6);
 
         let names: Vec<&str> = defs
             .iter()
@@ -397,7 +518,14 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            vec!["claw_import", "file_read", "file_write", "shell_exec"]
+            vec![
+                "claw_import",
+                "external_skills_fetch",
+                "external_skills_policy",
+                "file_read",
+                "file_write",
+                "shell_exec"
+            ]
         );
 
         for item in &defs {
@@ -446,6 +574,14 @@ mod tests {
     #[test]
     fn canonical_tool_name_maps_known_aliases() {
         assert_eq!(canonical_tool_name("claw_import"), "claw.import");
+        assert_eq!(
+            canonical_tool_name("external_skills_policy"),
+            "external_skills.policy"
+        );
+        assert_eq!(
+            canonical_tool_name("external_skills_fetch"),
+            "external_skills.fetch"
+        );
         assert_eq!(canonical_tool_name("file_read"), "file.read");
         assert_eq!(canonical_tool_name("file_write"), "file.write");
         assert_eq!(canonical_tool_name("shell_exec"), "shell.exec");
@@ -457,6 +593,10 @@ mod tests {
     fn is_known_tool_name_accepts_canonical_and_alias_forms() {
         assert!(is_known_tool_name("claw.import"));
         assert!(is_known_tool_name("claw_import"));
+        assert!(is_known_tool_name("external_skills.policy"));
+        assert!(is_known_tool_name("external_skills_policy"));
+        assert!(is_known_tool_name("external_skills.fetch"));
+        assert!(is_known_tool_name("external_skills_fetch"));
         assert!(is_known_tool_name("file.read"));
         assert!(is_known_tool_name("file_read"));
         assert!(is_known_tool_name("file.write"));
@@ -520,6 +660,7 @@ mod tests {
         let config = runtime_config::ToolRuntimeConfig {
             shell_allowlist: BTreeSet::new(),
             file_root: Some(root.clone()),
+            external_skills: Default::default(),
         };
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {
@@ -604,6 +745,7 @@ mod tests {
         let config = runtime_config::ToolRuntimeConfig {
             shell_allowlist: BTreeSet::new(),
             file_root: Some(root.clone()),
+            external_skills: Default::default(),
         };
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {
@@ -692,6 +834,7 @@ mod tests {
         let config = runtime_config::ToolRuntimeConfig {
             shell_allowlist: BTreeSet::new(),
             file_root: Some(root.clone()),
+            external_skills: Default::default(),
         };
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {
@@ -763,6 +906,7 @@ mod tests {
         let config = runtime_config::ToolRuntimeConfig {
             shell_allowlist: BTreeSet::new(),
             file_root: Some(root.clone()),
+            external_skills: Default::default(),
         };
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {
@@ -835,6 +979,7 @@ mod tests {
         let config = runtime_config::ToolRuntimeConfig {
             shell_allowlist: BTreeSet::new(),
             file_root: Some(root.clone()),
+            external_skills: Default::default(),
         };
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {
@@ -896,6 +1041,7 @@ mod tests {
         let config = runtime_config::ToolRuntimeConfig {
             shell_allowlist: BTreeSet::new(),
             file_root: Some(root.clone()),
+            external_skills: Default::default(),
         };
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {
@@ -978,6 +1124,7 @@ mod tests {
         let config = runtime_config::ToolRuntimeConfig {
             shell_allowlist: BTreeSet::new(),
             file_root: Some(root.clone()),
+            external_skills: Default::default(),
         };
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {
@@ -1061,6 +1208,7 @@ mod tests {
         let config = runtime_config::ToolRuntimeConfig {
             shell_allowlist: BTreeSet::new(),
             file_root: Some(root.clone()),
+            external_skills: Default::default(),
         };
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {
@@ -1146,6 +1294,7 @@ mod tests {
         let config = runtime_config::ToolRuntimeConfig {
             shell_allowlist: BTreeSet::new(),
             file_root: Some(root.clone()),
+            external_skills: Default::default(),
         };
         execute_tool_core_with_config(
             ToolCoreRequest {

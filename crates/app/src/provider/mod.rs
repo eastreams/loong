@@ -483,8 +483,8 @@ mod tests {
     use super::payload_adaptation::{ReasoningField, TemperatureField, TokenLimitField};
     use super::*;
     use crate::config::{
-        ConversationConfig, FeishuChannelConfig, MemoryConfig, ProviderConfig, ProviderKind,
-        ReasoningEffort, ToolConfig,
+        ConversationConfig, ExternalSkillsConfig, FeishuChannelConfig, MemoryConfig,
+        ProviderConfig, ProviderKind, ReasoningEffort, ToolConfig,
     };
     use serde_json::json;
 
@@ -497,6 +497,7 @@ mod tests {
             feishu: FeishuChannelConfig::default(),
             conversation: ConversationConfig::default(),
             tools: ToolConfig::default(),
+            external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
         };
 
@@ -515,6 +516,7 @@ mod tests {
             feishu: FeishuChannelConfig::default(),
             conversation: ConversationConfig::default(),
             tools: ToolConfig::default(),
+            external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
         };
 
@@ -550,6 +552,7 @@ mod tests {
             feishu: FeishuChannelConfig::default(),
             conversation: ConversationConfig::default(),
             tools: ToolConfig::default(),
+            external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
         };
 
@@ -630,6 +633,7 @@ mod tests {
             feishu: FeishuChannelConfig::default(),
             conversation: ConversationConfig::default(),
             tools: ToolConfig::default(),
+            external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
         };
 
@@ -700,6 +704,7 @@ mod tests {
             telegram: crate::config::TelegramChannelConfig::default(),
             feishu: FeishuChannelConfig::default(),
             tools: ToolConfig::default(),
+            external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
             conversation: crate::config::ConversationConfig::default(),
         };
@@ -722,6 +727,7 @@ mod tests {
             telegram: crate::config::TelegramChannelConfig::default(),
             feishu: FeishuChannelConfig::default(),
             tools: ToolConfig::default(),
+            external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
             conversation: crate::config::ConversationConfig::default(),
         };
@@ -752,6 +758,7 @@ mod tests {
             telegram: crate::config::TelegramChannelConfig::default(),
             feishu: FeishuChannelConfig::default(),
             tools: ToolConfig::default(),
+            external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
             conversation: crate::config::ConversationConfig::default(),
         };
@@ -796,6 +803,7 @@ mod tests {
             feishu: FeishuChannelConfig::default(),
             conversation: ConversationConfig::default(),
             tools: ToolConfig::default(),
+            external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
         };
         config.provider.reasoning_effort = Some(ReasoningEffort::High);
@@ -820,6 +828,7 @@ mod tests {
             telegram: crate::config::TelegramChannelConfig::default(),
             feishu: FeishuChannelConfig::default(),
             tools: ToolConfig::default(),
+            external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
             conversation: crate::config::ConversationConfig::default(),
         };
@@ -859,6 +868,7 @@ mod tests {
             feishu: FeishuChannelConfig::default(),
             conversation: ConversationConfig::default(),
             tools: ToolConfig::default(),
+            external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
         };
 
@@ -917,6 +927,7 @@ mod tests {
             feishu: FeishuChannelConfig::default(),
             conversation: ConversationConfig::default(),
             tools: ToolConfig::default(),
+            external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
         };
 
@@ -942,6 +953,8 @@ mod tests {
 
         let mut expected = Vec::new();
         expected.push("claw_import");
+        expected.push("external_skills_fetch");
+        expected.push("external_skills_policy");
         #[cfg(feature = "tool-file")]
         {
             expected.push("file_read");
@@ -1115,6 +1128,7 @@ mod tests {
             telegram: crate::config::TelegramChannelConfig::default(),
             feishu: FeishuChannelConfig::default(),
             tools: ToolConfig::default(),
+            external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
             conversation: crate::config::ConversationConfig::default(),
         };
@@ -1136,6 +1150,7 @@ mod tests {
             telegram: crate::config::TelegramChannelConfig::default(),
             feishu: FeishuChannelConfig::default(),
             tools: ToolConfig::default(),
+            external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
             conversation: crate::config::ConversationConfig::default(),
         };
