@@ -1,16 +1,19 @@
+#[cfg(feature = "memory-sqlite")]
 use std::collections::BTreeSet;
 use std::io::{self, Write};
 
+#[cfg(feature = "memory-sqlite")]
 use loongclaw_contracts::Capability;
 
 use crate::CliResult;
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context};
 
 use super::config::{self, LoongClawConfig};
-use super::conversation::{
-    ConversationTurnCoordinator, ProviderErrorMode, SafeLaneEventSummary, SafeLaneFinalStatus,
-    summarize_safe_lane_events,
-};
+#[cfg(feature = "memory-sqlite")]
+use super::conversation::summarize_safe_lane_events;
+use super::conversation::{ConversationTurnCoordinator, ProviderErrorMode};
+#[cfg(any(test, feature = "memory-sqlite"))]
+use super::conversation::{SafeLaneEventSummary, SafeLaneFinalStatus};
 #[cfg(feature = "memory-sqlite")]
 use super::memory;
 #[cfg(feature = "memory-sqlite")]
@@ -256,6 +259,7 @@ fn print_safe_lane_summary(
     }
 }
 
+#[cfg(any(test, feature = "memory-sqlite"))]
 fn format_safe_lane_summary(
     session_id: &str,
     limit: usize,
@@ -365,6 +369,7 @@ fn format_safe_lane_summary(
     .join("\n")
 }
 
+#[cfg(any(test, feature = "memory-sqlite"))]
 fn format_rollup_counts(counts: &std::collections::BTreeMap<String, u32>) -> String {
     if counts.is_empty() {
         return "-".to_owned();
@@ -376,6 +381,7 @@ fn format_rollup_counts(counts: &std::collections::BTreeMap<String, u32>) -> Str
         .join(",")
 }
 
+#[cfg(any(test, feature = "memory-sqlite"))]
 fn format_milli_ratio(value: Option<u32>) -> String {
     value
         .map(|raw| format!("{:.3}", (raw as f64) / 1000.0))

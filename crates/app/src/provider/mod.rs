@@ -5,7 +5,8 @@ use tokio::time::sleep;
 
 use crate::CliResult;
 
-use super::config::{LoongClawConfig, ProviderConfig, ProviderKind, ReasoningEffort};
+use super::config::LoongClawConfig;
+#[cfg(feature = "memory-sqlite")]
 use super::memory;
 
 mod error_policy;
@@ -58,6 +59,7 @@ pub(crate) fn build_base_messages(
         .collect()
 }
 
+#[cfg(feature = "memory-sqlite")]
 pub(crate) fn push_history_message(messages: &mut Vec<Value>, role: &str, content: &str) {
     if !is_supported_chat_role(role) {
         return;
@@ -71,10 +73,12 @@ pub(crate) fn push_history_message(messages: &mut Vec<Value>, role: &str, conten
     }));
 }
 
+#[cfg(feature = "memory-sqlite")]
 fn is_supported_chat_role(role: &str) -> bool {
     matches!(role, "system" | "user" | "assistant" | "tool")
 }
 
+#[cfg(feature = "memory-sqlite")]
 fn should_skip_history_turn(role: &str, content: &str) -> bool {
     if role != "assistant" {
         return false;
@@ -113,7 +117,11 @@ pub fn load_memory_window_messages(
                     }));
                 }
                 memory::MemoryContextKind::Turn => {
-                    push_history_message(&mut messages, entry.role.as_str(), entry.content.as_str());
+                    push_history_message(
+                        &mut messages,
+                        entry.role.as_str(),
+                        entry.content.as_str(),
+                    );
                 }
             }
         }
@@ -556,10 +564,8 @@ mod tests {
             .join(format!("{session_id}.sqlite3"))
             .display()
             .to_string();
-        let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            sqlite_path: Some(config.memory.resolved_sqlite_path()),
-            sliding_window: Some(config.memory.sliding_window),
-        };
+        let memory_config =
+            crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
         crate::memory::append_turn_direct(&session_id, "user", "hello", &memory_config)
             .expect("persist user turn");
         crate::memory::append_turn_direct(
@@ -638,10 +644,8 @@ mod tests {
             .join(format!("{session_id}.sqlite3"))
             .display()
             .to_string();
-        let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            sqlite_path: Some(config.memory.resolved_sqlite_path()),
-            sliding_window: Some(config.memory.sliding_window),
-        };
+        let memory_config =
+            crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
         crate::memory::append_turn_direct(&session_id, "user", "hello", &memory_config)
             .expect("persist user turn");
         crate::memory::append_turn_direct(
