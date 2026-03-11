@@ -216,4 +216,93 @@ mod tests {
         let _ = fs::remove_file(&db_path);
         let _ = fs::remove_dir(&tmp);
     }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn explicit_window_limit_ignores_env_default() {
+        use std::fs;
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-test-memory-window-limit-{}",
+            std::process::id()
+        ));
+        let _ = fs::create_dir_all(&tmp);
+        let db_path = tmp.join("limit-override.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let config = runtime_config::MemoryRuntimeConfig {
+            sqlite_path: Some(db_path.clone()),
+        };
+
+        for idx in 0..3 {
+            append_turn_direct("window-limit-session", "user", &format!("turn-{idx}"), &config)
+                .expect("append_turn_direct should succeed");
+        }
+
+        std::env::set_var("LOONGCLAW_SLIDING_WINDOW", "1");
+        let turns = window_direct("window-limit-session", 2, &config)
+            .expect("window_direct should honor the explicit limit");
+        std::env::remove_var("LOONGCLAW_SLIDING_WINDOW");
+
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].content, "turn-1");
+        assert_eq!(turns[1].content, "turn-2");
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn missing_window_limit_uses_env_default_and_caps_high_limits() {
+        use std::fs;
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-test-memory-window-default-{}",
+            std::process::id()
+        ));
+        let _ = fs::create_dir_all(&tmp);
+        let db_path = tmp.join("default-and-cap.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let config = runtime_config::MemoryRuntimeConfig {
+            sqlite_path: Some(db_path.clone()),
+        };
+
+        for idx in 0..130 {
+            append_turn_direct("window-default-session", "user", &format!("turn-{idx}"), &config)
+                .expect("append_turn_direct should succeed");
+        }
+
+        std::env::set_var("LOONGCLAW_SLIDING_WINDOW", "3");
+        let default_window = execute_memory_core_with_config(
+            MemoryCoreRequest {
+                operation: "window".to_owned(),
+                payload: json!({
+                    "session_id": "window-default-session",
+                }),
+            },
+            &config,
+        )
+        .expect("window load without explicit limit should succeed");
+        std::env::remove_var("LOONGCLAW_SLIDING_WINDOW");
+
+        let default_turns: Vec<ConversationTurn> = serde_json::from_value(
+            default_window
+                .payload
+                .get("turns")
+                .cloned()
+                .expect("turns payload should be present"),
+        )
+        .expect("turns payload should decode");
+        assert_eq!(default_turns.len(), 3);
+        assert_eq!(default_window.payload["limit"], json!(3));
+
+        let capped_turns = window_direct("window-default-session", 999, &config)
+            .expect("window_direct should clamp large limits");
+        assert_eq!(capped_turns.len(), 128);
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir(&tmp);
+    }
 }

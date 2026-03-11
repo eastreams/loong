@@ -80,13 +80,11 @@ pub(super) fn load_window(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "memory.window requires payload.session_id".to_owned())?;
-    let requested_limit = payload
+    let window_limit = payload
         .get("limit")
         .and_then(Value::as_u64)
-        .unwrap_or_else(default_window_size_u64)
-        .clamp(1, 128) as usize;
-    let default_window = default_window_size().max(1);
-    let window_limit = requested_limit.min(default_window);
+        .map(|limit| limit.clamp(1, 128) as usize)
+        .unwrap_or_else(default_window_size);
 
     let path = resolve_db_path(config);
     ensure_sqlite_schema(&path)?;
@@ -221,10 +219,6 @@ fn default_window_size() -> usize {
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(12)
-}
-
-fn default_window_size_u64() -> u64 {
-    default_window_size() as u64
 }
 
 fn unix_ts_now() -> i64 {
