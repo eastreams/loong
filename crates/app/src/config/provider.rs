@@ -149,7 +149,7 @@ impl ProviderConfig {
                 detect_telegram_token_shape: false,
             },
         ) {
-            issues.push(issue);
+            issues.push(*issue);
         }
         let oauth_example = self
             .kind
@@ -164,7 +164,7 @@ impl ProviderConfig {
                 detect_telegram_token_shape: false,
             },
         ) {
-            issues.push(issue);
+            issues.push(*issue);
         }
         issues
     }

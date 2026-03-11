@@ -5,7 +5,12 @@ mod shared;
 mod tools_memory;
 
 #[allow(unused_imports)]
-pub use channels::{CliChannelConfig, FeishuChannelConfig, TelegramChannelConfig};
+pub use channels::{
+    ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource,
+    ChannelResolvedAccountRoute, CliChannelConfig, FeishuAccountConfig, FeishuChannelConfig,
+    FeishuDomain, ResolvedFeishuChannelConfig, ResolvedTelegramChannelConfig,
+    TelegramAccountConfig, TelegramChannelConfig,
+};
 #[allow(unused_imports)]
 pub use provider::{ProviderConfig, ProviderKind, ReasoningEffort};
 #[allow(unused_imports)]
@@ -380,6 +385,85 @@ kind = "kimi_coding"
     }
 
     #[test]
+    fn config_validation_rejects_duplicate_normalized_telegram_account_ids() {
+        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "telegram": {
+                "accounts": {
+                    "Work Bot": {
+                        "bot_token_env": "WORK_TELEGRAM_TOKEN"
+                    },
+                    "work-bot": {
+                        "bot_token_env": "WORK_TELEGRAM_TOKEN_DUP"
+                    }
+                }
+            }
+        }))
+        .expect("deserialize telegram duplicate-account config");
+
+        let error = config
+            .validate()
+            .expect_err("duplicate normalized telegram account ids should fail");
+        assert!(error.contains("config.channel_account.duplicate_id"));
+        assert!(error.contains("telegram.accounts"));
+        assert!(error.contains("work-bot"));
+        assert!(error.contains("Work Bot"));
+    }
+
+    #[test]
+    fn config_validation_rejects_duplicate_normalized_feishu_account_ids() {
+        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "feishu": {
+                "accounts": {
+                    "Lark Prod": {
+                        "app_id_env": "LARK_APP_ID",
+                        "app_secret_env": "LARK_APP_SECRET"
+                    },
+                    "lark-prod": {
+                        "app_id_env": "LARK_APP_ID_DUP",
+                        "app_secret_env": "LARK_APP_SECRET_DUP"
+                    }
+                }
+            }
+        }))
+        .expect("deserialize feishu duplicate-account config");
+
+        let error = config
+            .validate()
+            .expect_err("duplicate normalized feishu account ids should fail");
+        assert!(error.contains("config.channel_account.duplicate_id"));
+        assert!(error.contains("feishu.accounts"));
+        assert!(error.contains("lark-prod"));
+        assert!(error.contains("Lark Prod"));
+    }
+
+    #[test]
+    fn config_validation_rejects_unknown_telegram_default_account() {
+        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "telegram": {
+                "default_account": "missing",
+                "accounts": {
+                    "alpha": {
+                        "bot_token_env": "ALPHA_TELEGRAM_TOKEN"
+                    },
+                    "beta": {
+                        "bot_token_env": "BETA_TELEGRAM_TOKEN"
+                    }
+                }
+            }
+        }))
+        .expect("deserialize telegram unknown-default config");
+
+        let error = config
+            .validate()
+            .expect_err("unknown telegram default account should fail");
+        assert!(error.contains("config.channel_account.unknown_default"));
+        assert!(error.contains("telegram.default_account"));
+        assert!(error.contains("missing"));
+        assert!(error.contains("alpha"));
+        assert!(error.contains("beta"));
+    }
+
+    #[test]
     fn config_validation_accepts_shell_style_env_names() {
         let mut config = LoongClawConfig::default();
         config.provider.api_key_env = Some("KIMI_CODING_API_KEY".to_owned());
@@ -549,7 +633,9 @@ kind = "kimi_coding"
     #[test]
     fn feishu_defaults_are_stable() {
         let config = FeishuChannelConfig::default();
-        assert_eq!(config.base_url, "https://open.feishu.cn");
+        assert_eq!(config.domain, FeishuDomain::Feishu);
+        assert_eq!(config.base_url, None);
+        assert_eq!(config.resolved_base_url(), "https://open.feishu.cn");
         assert_eq!(config.receive_id_type, "chat_id");
         assert_eq!(config.webhook_bind, "127.0.0.1:8080");
         assert_eq!(config.webhook_path, "/feishu/events");
@@ -558,6 +644,28 @@ kind = "kimi_coding"
             Some("FEISHU_ENCRYPT_KEY")
         );
         assert!(config.ignore_bot_messages);
+    }
+
+    #[test]
+    fn feishu_lark_domain_uses_lark_base_url_when_base_url_not_set() {
+        let config = FeishuChannelConfig {
+            domain: FeishuDomain::Lark,
+            base_url: None,
+            ..FeishuChannelConfig::default()
+        };
+
+        assert_eq!(config.resolved_base_url(), "https://open.larksuite.com");
+    }
+
+    #[test]
+    fn feishu_explicit_base_url_overrides_domain_default() {
+        let config = FeishuChannelConfig {
+            domain: FeishuDomain::Lark,
+            base_url: Some("https://example.internal".to_owned()),
+            ..FeishuChannelConfig::default()
+        };
+
+        assert_eq!(config.resolved_base_url(), "https://example.internal");
     }
 
     #[test]

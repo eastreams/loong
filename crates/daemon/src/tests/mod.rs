@@ -59,3 +59,81 @@ fn resolve_validate_output_rejects_conflicting_json_and_output_flags() {
         .expect_err("conflicting flags should fail");
     assert!(error.contains("conflicts"));
 }
+
+#[test]
+fn render_channel_snapshots_text_reports_aliases_and_operation_health() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.feishu.enabled = true;
+    config.feishu.app_id = Some("cli_a1b2c3".to_owned());
+    config.feishu.app_secret = Some("app-secret".to_owned());
+
+    let snapshots = mvp::channel::channel_status_snapshots(&config);
+    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &snapshots);
+
+    assert!(rendered.contains("config=/tmp/loongclaw.toml"));
+    assert!(rendered.contains("Feishu/Lark [feishu]"));
+    assert!(rendered.contains("aliases=lark"));
+    assert!(rendered.contains("account=feishu:cli_a1b2c3"));
+    assert!(rendered.contains("op send (feishu-send) ready"));
+    assert!(rendered.contains("op serve (feishu-serve) misconfigured"));
+    assert!(rendered.contains("running=false"));
+}
+
+#[test]
+fn render_channel_snapshots_text_reports_configured_accounts_for_multi_account_channels() {
+    let config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+        "telegram": {
+            "enabled": true,
+            "default_account": "Work Bot",
+            "allowed_chat_ids": [1001],
+            "accounts": {
+                "Work Bot": {
+                    "account_id": "Ops-Bot",
+                    "bot_token": "123456:token-work",
+                    "allowed_chat_ids": [2002]
+                },
+                "Personal": {
+                    "bot_token": "654321:token-personal",
+                    "allowed_chat_ids": [3003]
+                }
+            }
+        }
+    }))
+    .expect("deserialize multi-account config");
+
+    let snapshots = mvp::channel::channel_status_snapshots(&config);
+    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &snapshots);
+
+    assert!(rendered.contains("configured_account=work-bot"));
+    assert!(rendered.contains("configured_account=personal"));
+}
+
+#[test]
+fn render_channel_snapshots_text_reports_default_account_marker() {
+    let config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+        "telegram": {
+            "enabled": true,
+            "default_account": "Work Bot",
+            "allowed_chat_ids": [1001],
+            "accounts": {
+                "Work Bot": {
+                    "account_id": "Ops-Bot",
+                    "bot_token": "123456:token-work",
+                    "allowed_chat_ids": [2002]
+                },
+                "Personal": {
+                    "bot_token": "654321:token-personal",
+                    "allowed_chat_ids": [3003]
+                }
+            }
+        }
+    }))
+    .expect("deserialize multi-account config");
+
+    let snapshots = mvp::channel::channel_status_snapshots(&config);
+    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &snapshots);
+
+    assert!(rendered.contains("configured_account=work-bot"));
+    assert!(rendered.contains("default_account=true"));
+    assert!(rendered.contains("default_source=explicit_default"));
+}

@@ -14,8 +14,11 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
-use crate::channel::{process_inbound_with_provider, ChannelInboundMessage};
-use crate::config::LoongClawConfig;
+use crate::channel::{
+    process_inbound_with_provider, runtime_state::ChannelOperationRuntimeTracker, ChannelAdapter,
+    ChannelInboundMessage,
+};
+use crate::config::{LoongClawConfig, ResolvedFeishuChannelConfig};
 use crate::KernelContext;
 
 use super::adapter::FeishuAdapter;
@@ -25,35 +28,40 @@ use super::payload::FeishuWebhookAction;
 pub(super) struct FeishuWebhookState {
     config: LoongClawConfig,
     adapter: Arc<Mutex<FeishuAdapter>>,
+    account_id: String,
     verification_token: Option<String>,
     encrypt_key: Option<String>,
     allowed_chat_ids: BTreeSet<String>,
     ignore_bot_messages: bool,
     seen_events: Arc<Mutex<RecentIdCache>>,
     kernel_ctx: Arc<KernelContext>,
+    runtime: Arc<ChannelOperationRuntimeTracker>,
 }
 
 impl FeishuWebhookState {
     pub(super) fn new(
         config: LoongClawConfig,
+        resolved: &ResolvedFeishuChannelConfig,
         adapter: FeishuAdapter,
         kernel_ctx: KernelContext,
+        runtime: Arc<ChannelOperationRuntimeTracker>,
     ) -> Self {
         Self {
-            verification_token: config.feishu.verification_token(),
-            encrypt_key: config.feishu.encrypt_key(),
-            allowed_chat_ids: config
-                .feishu
+            account_id: resolved.account.id.clone(),
+            verification_token: resolved.verification_token(),
+            encrypt_key: resolved.encrypt_key(),
+            allowed_chat_ids: resolved
                 .allowed_chat_ids
                 .iter()
                 .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty())
                 .collect(),
-            ignore_bot_messages: config.feishu.ignore_bot_messages,
+            ignore_bot_messages: resolved.ignore_bot_messages,
             config,
             adapter: Arc::new(Mutex::new(adapter)),
             seen_events: Arc::new(Mutex::new(RecentIdCache::new(2_048))),
             kernel_ctx: Arc::new(kernel_ctx),
+            runtime,
         }
     }
 }
@@ -61,7 +69,20 @@ impl FeishuWebhookState {
 struct RecentIdCache {
     max_len: usize,
     queue: VecDeque<String>,
-    set: BTreeSet<String>,
+    states: std::collections::BTreeMap<String, RecentIdState>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecentIdState {
+    Processing,
+    Completed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecentIdReservation {
+    Accepted,
+    InProgressDuplicate,
+    CompletedDuplicate,
 }
 
 impl RecentIdCache {
@@ -69,27 +90,48 @@ impl RecentIdCache {
         Self {
             max_len: max_len.max(1),
             queue: VecDeque::new(),
-            set: BTreeSet::new(),
+            states: std::collections::BTreeMap::new(),
         }
     }
 
-    fn insert_if_new(&mut self, id: &str) -> bool {
+    fn begin_processing(&mut self, id: &str) -> RecentIdReservation {
         let id = id.trim();
         if id.is_empty() {
-            return false;
+            return RecentIdReservation::CompletedDuplicate;
         }
-        if self.set.contains(id) {
-            return false;
+        if let Some(state) = self.states.get(id) {
+            return match state {
+                RecentIdState::Processing => RecentIdReservation::InProgressDuplicate,
+                RecentIdState::Completed => RecentIdReservation::CompletedDuplicate,
+            };
         }
 
         self.queue.push_back(id.to_owned());
-        self.set.insert(id.to_owned());
+        self.states.insert(id.to_owned(), RecentIdState::Processing);
+        self.trim_to_max();
+        RecentIdReservation::Accepted
+    }
+
+    fn mark_completed(&mut self, id: &str) {
+        let id = id.trim();
+        if let Some(state) = self.states.get_mut(id) {
+            *state = RecentIdState::Completed;
+        }
+    }
+
+    fn release(&mut self, id: &str) {
+        let id = id.trim();
+        if self.states.remove(id).is_some() {
+            self.queue.retain(|entry| entry != id);
+        }
+    }
+
+    fn trim_to_max(&mut self) {
         while self.queue.len() > self.max_len {
             if let Some(removed) = self.queue.pop_front() {
-                self.set.remove(&removed);
+                self.states.remove(&removed);
             }
         }
-        true
     }
 }
 
@@ -149,6 +191,7 @@ async fn handle_feishu_webhook_payload(
         state.encrypt_key.as_deref(),
         &state.allowed_chat_ids,
         state.ignore_bot_messages,
+        state.account_id.as_str(),
     )
     .map_err(map_feishu_parse_error)?;
 
@@ -158,51 +201,83 @@ async fn handle_feishu_webhook_payload(
         FeishuWebhookAction::Inbound(event) => {
             {
                 let mut dedupe = state.seen_events.lock().await;
-                if !dedupe.insert_if_new(&event.event_id) {
+                if !matches!(
+                    dedupe.begin_processing(&event.event_id),
+                    RecentIdReservation::Accepted
+                ) {
                     return Ok(json!({"code": 0, "msg": "duplicate_event"}));
                 }
             }
 
-            let channel_message = ChannelInboundMessage {
-                session_id: event.session_id,
-                reply_target: event.message_id.clone(),
-                text: event.text,
-            };
-            let reply = process_inbound_with_provider(
-                &state.config,
-                &channel_message,
-                Some(&state.kernel_ctx),
-            )
-            .await
-            .map_err(|error| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("provider processing failed: {error}"),
-                )
-            })?;
-
-            let mut adapter = state.adapter.lock().await;
-            if let Err(first_error) = adapter.send_reply(&event.message_id, &reply).await {
-                adapter.refresh_tenant_token().await.map_err(|error| {
+            let event_id = event.event_id.clone();
+            let result = async {
+                state.runtime.mark_run_start().await.map_err(|error| {
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        format!(
-                            "feishu token refresh failed after send error `{first_error}`: {error}"
-                        ),
+                        format!("channel runtime start failed: {error}"),
                     )
                 })?;
-                adapter
-                    .send_reply(&event.message_id, &reply)
-                    .await
-                    .map_err(|error| {
+                let channel_message = ChannelInboundMessage {
+                    session: event.session,
+                    reply_target: event.reply_target,
+                    text: event.text,
+                    delivery: Default::default(),
+                };
+                let reply = process_inbound_with_provider(
+                    &state.config,
+                    &channel_message,
+                    Some(&state.kernel_ctx),
+                )
+                .await
+                .map_err(|error| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("provider processing failed: {error}"),
+                    )
+                })?;
+                let reply_target = channel_message.reply_target.clone();
+
+                let mut adapter = state.adapter.lock().await;
+                if let Err(first_error) = adapter.send_text(&reply_target, &reply).await {
+                    adapter.refresh_tenant_token().await.map_err(|error| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!(
+                                "feishu token refresh failed after send error `{first_error}`: {error}"
+                            ),
+                        )
+                    })?;
+                    adapter.send_text(&reply_target, &reply).await.map_err(|error| {
                         (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             format!("feishu reply failed after token refresh: {error}"),
                         )
                     })?;
+                }
+
+                Ok(json!({"code": 0, "msg": "ok"}))
+            }
+            .await;
+            let runtime_end_result = state.runtime.mark_run_end().await;
+            let result = match (result, runtime_end_result) {
+                (Ok(reply), Ok(())) => Ok(reply),
+                (Err(error), _) => Err(error),
+                (Ok(_), Err(error)) => Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("channel runtime end failed: {error}"),
+                )),
+            };
+
+            {
+                let mut dedupe = state.seen_events.lock().await;
+                if result.is_ok() {
+                    dedupe.mark_completed(&event_id);
+                } else {
+                    dedupe.release(&event_id);
+                }
             }
 
-            Ok(json!({"code": 0, "msg": "ok"}))
+            result
         }
     }
 }
@@ -288,11 +363,50 @@ mod tests {
     #[test]
     fn recent_cache_deduplicates_and_rolls_window() {
         let mut cache = RecentIdCache::new(2);
-        assert!(cache.insert_if_new("a"));
-        assert!(!cache.insert_if_new("a"));
-        assert!(cache.insert_if_new("b"));
-        assert!(cache.insert_if_new("c"));
-        assert!(cache.insert_if_new("a"));
+        assert!(matches!(
+            cache.begin_processing("a"),
+            RecentIdReservation::Accepted
+        ));
+        cache.mark_completed("a");
+        assert!(matches!(
+            cache.begin_processing("a"),
+            RecentIdReservation::CompletedDuplicate
+        ));
+        assert!(matches!(
+            cache.begin_processing("b"),
+            RecentIdReservation::Accepted
+        ));
+        cache.mark_completed("b");
+        assert!(matches!(
+            cache.begin_processing("c"),
+            RecentIdReservation::Accepted
+        ));
+        cache.mark_completed("c");
+        assert!(matches!(
+            cache.begin_processing("a"),
+            RecentIdReservation::Accepted
+        ));
+    }
+
+    #[test]
+    fn recent_cache_releases_failed_events_for_retry() {
+        let mut cache = RecentIdCache::new(4);
+
+        assert!(matches!(
+            cache.begin_processing("evt-1"),
+            RecentIdReservation::Accepted
+        ));
+        assert!(matches!(
+            cache.begin_processing("evt-1"),
+            RecentIdReservation::InProgressDuplicate
+        ));
+
+        cache.release("evt-1");
+
+        assert!(matches!(
+            cache.begin_processing("evt-1"),
+            RecentIdReservation::Accepted
+        ));
     }
 
     #[test]

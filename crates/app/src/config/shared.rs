@@ -46,6 +46,8 @@ pub(super) enum ConfigValidationCode {
     PercentWrapped,
     SecretLiteral,
     InvalidName,
+    DuplicateChannelAccountId,
+    UnknownChannelDefaultAccount,
 }
 
 impl ConfigValidationCode {
@@ -56,6 +58,12 @@ impl ConfigValidationCode {
             ConfigValidationCode::PercentWrapped => "config.env_pointer.percent_wrapped",
             ConfigValidationCode::SecretLiteral => "config.env_pointer.secret_literal",
             ConfigValidationCode::InvalidName => "config.env_pointer.invalid_name",
+            ConfigValidationCode::DuplicateChannelAccountId => {
+                "config.channel_account.duplicate_id"
+            }
+            ConfigValidationCode::UnknownChannelDefaultAccount => {
+                "config.channel_account.unknown_default"
+            }
         }
     }
 
@@ -76,6 +84,12 @@ impl ConfigValidationCode {
             ConfigValidationCode::InvalidName => {
                 "urn:loongclaw:problem:config.env_pointer.invalid_name"
             }
+            ConfigValidationCode::DuplicateChannelAccountId => {
+                "urn:loongclaw:problem:config.channel_account.duplicate_id"
+            }
+            ConfigValidationCode::UnknownChannelDefaultAccount => {
+                "urn:loongclaw:problem:config.channel_account.unknown_default"
+            }
         }
     }
 
@@ -86,6 +100,12 @@ impl ConfigValidationCode {
             ConfigValidationCode::PercentWrapped => "config.env_pointer.percent_wrapped.title",
             ConfigValidationCode::SecretLiteral => "config.env_pointer.secret_literal.title",
             ConfigValidationCode::InvalidName => "config.env_pointer.invalid_name.title",
+            ConfigValidationCode::DuplicateChannelAccountId => {
+                "config.channel_account.duplicate_id.title"
+            }
+            ConfigValidationCode::UnknownChannelDefaultAccount => {
+                "config.channel_account.unknown_default.title"
+            }
         }
     }
 
@@ -106,6 +126,10 @@ impl ConfigValidationCode {
             ConfigValidationCode::PercentWrapped => "Percent-Wrapped Env Pointer Notation",
             ConfigValidationCode::SecretLiteral => "Secret Literal Used In Env Pointer",
             ConfigValidationCode::InvalidName => "Invalid Env Pointer Name",
+            ConfigValidationCode::DuplicateChannelAccountId => {
+                "Duplicate Normalized Channel Account ID"
+            }
+            ConfigValidationCode::UnknownChannelDefaultAccount => "Unknown Channel Default Account",
         }
     }
 
@@ -126,6 +150,12 @@ impl ConfigValidationCode {
             ConfigValidationCode::InvalidName => {
                 "[{code}] {field_path} is not a valid environment variable name reference. use `{field_path}` with a name like `{example_env_name}`"
             }
+            ConfigValidationCode::DuplicateChannelAccountId => {
+                "[{code}] {field_path} contains duplicate configured accounts that normalize to `{normalized_account_id}`: {raw_account_labels}. rename one of the account keys so each normalized account id is unique"
+            }
+            ConfigValidationCode::UnknownChannelDefaultAccount => {
+                "[{code}] {field_path} points to `{requested_account_id}`, but configured accounts are: {configured_account_ids}. set `{field_path}` to one of the configured account ids"
+            }
         }
     }
 }
@@ -137,6 +167,7 @@ pub(super) struct ConfigValidationIssue {
     pub inline_field_path: String,
     pub example_env_name: String,
     pub suggested_env_name: Option<String>,
+    pub extra_message_variables: BTreeMap<String, String>,
 }
 
 impl ConfigValidationIssue {
@@ -166,6 +197,7 @@ impl ConfigValidationIssue {
             .as_deref()
             .unwrap_or(self.example_env_name.as_str());
         variables.insert("suggested_env_name".to_owned(), suggested.to_owned());
+        variables.extend(self.extra_message_variables.clone());
         variables
     }
 
@@ -218,6 +250,14 @@ const EN_VALIDATION_MESSAGE_CATALOG: &[ConfigValidationCatalogEntry] = &[
         "Invalid Env Pointer Name",
     ),
     ConfigValidationCatalogEntry::new(
+        "config.channel_account.duplicate_id.title",
+        "Duplicate Normalized Channel Account ID",
+    ),
+    ConfigValidationCatalogEntry::new(
+        "config.channel_account.unknown_default.title",
+        "Unknown Channel Default Account",
+    ),
+    ConfigValidationCatalogEntry::new(
         "config.env_pointer.assignment",
         "[{code}] {field_path} expects an environment variable name, not `KEY=VALUE`. use `{field_path} = \"{suggested_env_name}\"` and place the secret value in that env var",
     ),
@@ -236,6 +276,14 @@ const EN_VALIDATION_MESSAGE_CATALOG: &[ConfigValidationCatalogEntry] = &[
     ConfigValidationCatalogEntry::new(
         "config.env_pointer.invalid_name",
         "[{code}] {field_path} is not a valid environment variable name reference. use `{field_path}` with a name like `{example_env_name}`",
+    ),
+    ConfigValidationCatalogEntry::new(
+        "config.channel_account.duplicate_id",
+        "[{code}] {field_path} contains duplicate configured accounts that normalize to `{normalized_account_id}`: {raw_account_labels}. rename one of the account keys so each normalized account id is unique",
+    ),
+    ConfigValidationCatalogEntry::new(
+        "config.channel_account.unknown_default",
+        "[{code}] {field_path} points to `{requested_account_id}`, but configured accounts are: {configured_account_ids}. set `{field_path}` to one of the configured account ids",
     ),
 ];
 
@@ -309,7 +357,7 @@ pub(super) fn validate_env_pointer_field(
     field_path: &str,
     env_key: Option<&str>,
     hint: EnvPointerValidationHint<'_>,
-) -> Result<(), ConfigValidationIssue> {
+) -> Result<(), Box<ConfigValidationIssue>> {
     let Some(raw) = env_key else {
         return Ok(());
     };
@@ -319,24 +367,26 @@ pub(super) fn validate_env_pointer_field(
     }
 
     if let Some((name, _value)) = parse_env_assignment(trimmed) {
-        return Err(ConfigValidationIssue {
+        return Err(Box::new(ConfigValidationIssue {
             code: ConfigValidationCode::Assignment,
             field_path: field_path.to_owned(),
             inline_field_path: hint.inline_field_path.to_owned(),
             example_env_name: hint.example_env_name.to_owned(),
             suggested_env_name: Some(name.to_owned()),
-        });
+            extra_message_variables: BTreeMap::new(),
+        }));
     }
 
     if let Some(raw_name) = trimmed.strip_prefix('$') {
         let suggested = normalize_dollar_prefixed_env_name(raw_name, hint.example_env_name);
-        return Err(ConfigValidationIssue {
+        return Err(Box::new(ConfigValidationIssue {
             code: ConfigValidationCode::DollarPrefix,
             field_path: field_path.to_owned(),
             inline_field_path: hint.inline_field_path.to_owned(),
             example_env_name: hint.example_env_name.to_owned(),
             suggested_env_name: Some(suggested),
-        });
+            extra_message_variables: BTreeMap::new(),
+        }));
     }
 
     if let Some(raw_name) = parse_percent_wrapped_env_name(trimmed) {
@@ -345,33 +395,36 @@ pub(super) fn validate_env_pointer_field(
         } else {
             raw_name.to_owned()
         };
-        return Err(ConfigValidationIssue {
+        return Err(Box::new(ConfigValidationIssue {
             code: ConfigValidationCode::PercentWrapped,
             field_path: field_path.to_owned(),
             inline_field_path: hint.inline_field_path.to_owned(),
             example_env_name: hint.example_env_name.to_owned(),
             suggested_env_name: Some(suggested),
-        });
+            extra_message_variables: BTreeMap::new(),
+        }));
     }
 
     if looks_like_secret_literal(trimmed, hint.detect_telegram_token_shape) {
-        return Err(ConfigValidationIssue {
+        return Err(Box::new(ConfigValidationIssue {
             code: ConfigValidationCode::SecretLiteral,
             field_path: field_path.to_owned(),
             inline_field_path: hint.inline_field_path.to_owned(),
             example_env_name: hint.example_env_name.to_owned(),
             suggested_env_name: None,
-        });
+            extra_message_variables: BTreeMap::new(),
+        }));
     }
 
     if !looks_like_compatible_env_name(trimmed) {
-        return Err(ConfigValidationIssue {
+        return Err(Box::new(ConfigValidationIssue {
             code: ConfigValidationCode::InvalidName,
             field_path: field_path.to_owned(),
             inline_field_path: hint.inline_field_path.to_owned(),
             example_env_name: hint.example_env_name.to_owned(),
             suggested_env_name: Some(hint.example_env_name.to_owned()),
-        });
+            extra_message_variables: BTreeMap::new(),
+        }));
     }
 
     Ok(())
@@ -483,7 +536,6 @@ fn normalize_dollar_prefixed_env_name(raw: &str, fallback: &str) -> String {
     trimmed.to_owned()
 }
 
-#[cfg(feature = "channel-feishu")]
 pub(super) fn read_secret_prefer_inline(
     inline: Option<&str>,
     env_key: Option<&str>,
@@ -534,6 +586,7 @@ mod tests {
             inline_field_path: "provider.api_key".to_owned(),
             example_env_name: "OPENAI_API_KEY".to_owned(),
             suggested_env_name: Some("OPENAI_API_KEY".to_owned()),
+            extra_message_variables: BTreeMap::new(),
         };
         assert_eq!(
             issue.title(ConfigValidationLocale::En),

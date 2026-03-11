@@ -1,0 +1,838 @@
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+use serde::{Deserialize, Serialize};
+use tokio::{task::JoinHandle, time::sleep};
+
+use crate::{config::default_loongclaw_home, CliResult};
+
+use super::ChannelPlatform;
+
+const CHANNEL_RUNTIME_HEARTBEAT_MS: u64 = 5_000;
+const CHANNEL_RUNTIME_STALE_MS: u64 = 15_000;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChannelOperationRuntime {
+    pub running: bool,
+    pub stale: bool,
+    pub busy: bool,
+    pub active_runs: usize,
+    pub last_run_activity_at: Option<u64>,
+    pub last_heartbeat_at: Option<u64>,
+    pub pid: Option<u32>,
+    pub account_id: Option<String>,
+    pub account_label: Option<String>,
+    pub instance_count: usize,
+    pub running_instances: usize,
+    pub stale_instances: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+struct PersistedChannelOperationRuntime {
+    running: bool,
+    busy: bool,
+    active_runs: usize,
+    last_run_activity_at: Option<u64>,
+    last_heartbeat_at: Option<u64>,
+    pid: Option<u32>,
+    account_id: Option<String>,
+    account_label: Option<String>,
+}
+
+impl PersistedChannelOperationRuntime {
+    fn to_runtime_view(&self, now_ms: u64) -> ChannelOperationRuntime {
+        let stale = self.running
+            && self
+                .last_heartbeat_at
+                .map(|heartbeat| now_ms.saturating_sub(heartbeat) > CHANNEL_RUNTIME_STALE_MS)
+                .unwrap_or(true);
+        ChannelOperationRuntime {
+            running: self.running && !stale,
+            stale,
+            busy: self.busy,
+            active_runs: self.active_runs,
+            last_run_activity_at: self.last_run_activity_at,
+            last_heartbeat_at: self.last_heartbeat_at,
+            pid: self.pid,
+            account_id: self.account_id.clone(),
+            account_label: self.account_label.clone(),
+            instance_count: 0,
+            running_instances: 0,
+            stale_instances: 0,
+        }
+    }
+}
+
+pub(crate) struct ChannelOperationRuntimeTracker {
+    path: PathBuf,
+    state: Arc<Mutex<PersistedChannelOperationRuntime>>,
+    stopped: Arc<AtomicBool>,
+    heartbeat_task: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl ChannelOperationRuntimeTracker {
+    pub(crate) async fn start(
+        platform: ChannelPlatform,
+        operation_id: &'static str,
+        account_id: &str,
+        account_label: &str,
+    ) -> CliResult<Self> {
+        Self::start_in_dir_with_account_and_pid(
+            &default_channel_runtime_state_dir(),
+            platform,
+            operation_id,
+            account_id,
+            account_label,
+            CHANNEL_RUNTIME_HEARTBEAT_MS,
+            std::process::id(),
+        )
+        .await
+    }
+
+    #[cfg(test)]
+    async fn start_in_dir_with_pid(
+        runtime_dir: &Path,
+        platform: ChannelPlatform,
+        operation_id: &'static str,
+        heartbeat_ms: u64,
+        process_id: u32,
+    ) -> CliResult<Self> {
+        Self::start_in_dir_impl(
+            runtime_dir,
+            platform,
+            operation_id,
+            None,
+            None,
+            heartbeat_ms,
+            process_id,
+        )
+        .await
+    }
+
+    async fn start_in_dir_with_account_and_pid(
+        runtime_dir: &Path,
+        platform: ChannelPlatform,
+        operation_id: &'static str,
+        account_id: &str,
+        account_label: &str,
+        heartbeat_ms: u64,
+        process_id: u32,
+    ) -> CliResult<Self> {
+        Self::start_in_dir_impl(
+            runtime_dir,
+            platform,
+            operation_id,
+            Some(account_id),
+            Some(account_label),
+            heartbeat_ms,
+            process_id,
+        )
+        .await
+    }
+
+    async fn start_in_dir_impl(
+        runtime_dir: &Path,
+        platform: ChannelPlatform,
+        operation_id: &'static str,
+        account_id: Option<&str>,
+        account_label: Option<&str>,
+        heartbeat_ms: u64,
+        process_id: u32,
+    ) -> CliResult<Self> {
+        let path = channel_operation_runtime_path(
+            runtime_dir,
+            platform,
+            operation_id,
+            account_id,
+            Some(process_id),
+        );
+        let initial = PersistedChannelOperationRuntime {
+            running: true,
+            busy: false,
+            active_runs: 0,
+            last_run_activity_at: None,
+            last_heartbeat_at: Some(now_ms()),
+            pid: Some(process_id),
+            account_id: normalize_optional_account_value(account_id),
+            account_label: normalize_optional_account_value(account_label),
+        };
+        write_runtime_state(&path, &initial)?;
+
+        let state = Arc::new(Mutex::new(initial));
+        let stopped = Arc::new(AtomicBool::new(false));
+        let heartbeat_state = state.clone();
+        let heartbeat_stopped = stopped.clone();
+        let heartbeat_path = path.clone();
+        let task = tokio::spawn(async move {
+            while !heartbeat_stopped.load(Ordering::SeqCst) {
+                sleep(Duration::from_millis(heartbeat_ms)).await;
+                if heartbeat_stopped.load(Ordering::SeqCst) {
+                    break;
+                }
+                let snapshot = {
+                    let Ok(mut state) = heartbeat_state.lock() else {
+                        break;
+                    };
+                    state.last_heartbeat_at = Some(now_ms());
+                    state.clone()
+                };
+                let _ = write_runtime_state(&heartbeat_path, &snapshot);
+            }
+        });
+
+        Ok(Self {
+            path,
+            state,
+            stopped,
+            heartbeat_task: Mutex::new(Some(task)),
+        })
+    }
+
+    pub(crate) async fn mark_run_start(&self) -> CliResult<()> {
+        self.update_state(|state| {
+            state.active_runs = state.active_runs.saturating_add(1);
+            state.busy = true;
+            let now = now_ms();
+            state.last_run_activity_at = Some(now);
+            state.last_heartbeat_at = Some(now);
+        })
+        .await
+    }
+
+    pub(crate) async fn mark_run_end(&self) -> CliResult<()> {
+        self.update_state(|state| {
+            state.active_runs = state.active_runs.saturating_sub(1);
+            state.busy = state.active_runs > 0;
+            let now = now_ms();
+            state.last_run_activity_at = Some(now);
+            state.last_heartbeat_at = Some(now);
+        })
+        .await
+    }
+
+    pub(crate) async fn shutdown(&self) -> CliResult<()> {
+        self.stopped.store(true, Ordering::SeqCst);
+        let task = self
+            .heartbeat_task
+            .lock()
+            .map_err(|error| format!("channel runtime heartbeat task lock poisoned: {error}"))?
+            .take();
+        if let Some(task) = task {
+            task.abort();
+        }
+        self.update_state(|state| {
+            state.running = false;
+            state.busy = false;
+            state.active_runs = 0;
+            state.last_heartbeat_at = Some(now_ms());
+        })
+        .await
+    }
+
+    async fn update_state(
+        &self,
+        mutate: impl FnOnce(&mut PersistedChannelOperationRuntime),
+    ) -> CliResult<()> {
+        let snapshot = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|error| format!("channel runtime state lock poisoned: {error}"))?;
+            mutate(&mut state);
+            state.clone()
+        };
+        write_runtime_state(&self.path, &snapshot)
+    }
+}
+
+#[cfg(test)]
+pub(crate) async fn start_channel_operation_runtime_tracker_for_test(
+    runtime_dir: &Path,
+    platform: ChannelPlatform,
+    operation_id: &'static str,
+    account_id: &str,
+    account_label: &str,
+    process_id: u32,
+) -> CliResult<ChannelOperationRuntimeTracker> {
+    ChannelOperationRuntimeTracker::start_in_dir_with_account_and_pid(
+        runtime_dir,
+        platform,
+        operation_id,
+        account_id,
+        account_label,
+        CHANNEL_RUNTIME_HEARTBEAT_MS,
+        process_id,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(crate) fn load_channel_operation_runtime_from_dir(
+    runtime_dir: &Path,
+    platform: ChannelPlatform,
+    operation_id: &str,
+    now_ms: u64,
+) -> Option<ChannelOperationRuntime> {
+    load_channel_operation_runtime_for_optional_account_from_dir(
+        runtime_dir,
+        platform,
+        operation_id,
+        None,
+        now_ms,
+    )
+}
+
+pub(crate) fn load_channel_operation_runtime_for_account_from_dir(
+    runtime_dir: &Path,
+    platform: ChannelPlatform,
+    operation_id: &str,
+    account_id: &str,
+    now_ms: u64,
+) -> Option<ChannelOperationRuntime> {
+    load_channel_operation_runtime_for_optional_account_from_dir(
+        runtime_dir,
+        platform,
+        operation_id,
+        Some(account_id),
+        now_ms,
+    )
+}
+
+fn load_channel_operation_runtime_for_optional_account_from_dir(
+    runtime_dir: &Path,
+    platform: ChannelPlatform,
+    operation_id: &str,
+    account_id: Option<&str>,
+    now_ms: u64,
+) -> Option<ChannelOperationRuntime> {
+    let prefix = channel_operation_runtime_file_prefix(platform, operation_id, account_id);
+    let mut candidates = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(runtime_dir) {
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_file() {
+                continue;
+            }
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            if !matches_channel_operation_runtime_file(file_name.as_ref(), &prefix) {
+                continue;
+            }
+            if let Some(runtime) = read_runtime_state(entry.path().as_path(), now_ms) {
+                candidates.push(runtime);
+            }
+        }
+    }
+
+    if candidates.is_empty() && account_id.is_some() {
+        return load_channel_operation_runtime_for_optional_account_from_dir(
+            runtime_dir,
+            platform,
+            operation_id,
+            None,
+            now_ms,
+        );
+    }
+
+    if candidates.is_empty() {
+        let legacy_path =
+            channel_operation_runtime_path(runtime_dir, platform, operation_id, None, None);
+        if let Some(runtime) = read_runtime_state(&legacy_path, now_ms) {
+            candidates.push(runtime);
+        }
+    }
+
+    summarize_runtime_candidates(candidates)
+}
+
+pub(crate) fn default_channel_runtime_state_dir() -> PathBuf {
+    default_loongclaw_home().join("channel-runtime")
+}
+
+fn channel_operation_runtime_file_prefix(
+    platform: ChannelPlatform,
+    operation_id: &str,
+    account_id: Option<&str>,
+) -> String {
+    match normalize_optional_account_value(account_id) {
+        Some(account_id) => format!("{}-{operation_id}-{account_id}", platform.as_str()),
+        None => format!("{}-{operation_id}", platform.as_str()),
+    }
+}
+
+fn channel_operation_runtime_path(
+    runtime_dir: &Path,
+    platform: ChannelPlatform,
+    operation_id: &str,
+    account_id: Option<&str>,
+    process_id: Option<u32>,
+) -> PathBuf {
+    let prefix = channel_operation_runtime_file_prefix(platform, operation_id, account_id);
+    match process_id {
+        Some(process_id) => runtime_dir.join(format!("{prefix}-{process_id}.json")),
+        None => runtime_dir.join(format!("{prefix}.json")),
+    }
+}
+
+fn matches_channel_operation_runtime_file(file_name: &str, prefix: &str) -> bool {
+    if file_name == format!("{prefix}.json") {
+        return true;
+    }
+
+    file_name
+        .strip_prefix(prefix)
+        .and_then(|suffix| suffix.strip_prefix('-'))
+        .and_then(|suffix| suffix.strip_suffix(".json"))
+        .map(|pid| !pid.is_empty() && pid.chars().all(|value| value.is_ascii_digit()))
+        .unwrap_or(false)
+}
+
+fn read_runtime_state(path: &Path, now_ms: u64) -> Option<ChannelOperationRuntime> {
+    let raw = fs::read_to_string(path).ok()?;
+    let state = serde_json::from_str::<PersistedChannelOperationRuntime>(&raw).ok()?;
+    Some(state.to_runtime_view(now_ms))
+}
+
+fn select_preferred_runtime(
+    candidates: Vec<ChannelOperationRuntime>,
+) -> Option<ChannelOperationRuntime> {
+    candidates.into_iter().max_by_key(|runtime| {
+        (
+            runtime.running,
+            !runtime.stale,
+            runtime.last_heartbeat_at.unwrap_or(0),
+            runtime.last_run_activity_at.unwrap_or(0),
+            runtime.pid.unwrap_or(0),
+        )
+    })
+}
+
+fn summarize_runtime_candidates(
+    candidates: Vec<ChannelOperationRuntime>,
+) -> Option<ChannelOperationRuntime> {
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let instance_count = candidates.len();
+    let running_instances = candidates.iter().filter(|runtime| runtime.running).count();
+    let stale_instances = candidates.iter().filter(|runtime| runtime.stale).count();
+    let mut preferred = select_preferred_runtime(candidates)?;
+    preferred.instance_count = instance_count;
+    preferred.running_instances = running_instances;
+    preferred.stale_instances = stale_instances;
+    Some(preferred)
+}
+
+fn normalize_optional_account_value(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn write_runtime_state(path: &Path, state: &PersistedChannelOperationRuntime) -> CliResult<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|error| {
+                format!("create channel runtime state directory failed: {error}")
+            })?;
+        }
+    }
+    let encoded = serde_json::to_string_pretty(state)
+        .map_err(|error| format!("serialize channel runtime state failed: {error}"))?;
+    fs::write(path, encoded).map_err(|error| format!("write channel runtime state failed: {error}"))
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+#[cfg(test)]
+pub(crate) fn write_runtime_state_for_test(
+    runtime_dir: &Path,
+    platform: ChannelPlatform,
+    operation_id: &str,
+    running: bool,
+    busy: bool,
+    active_runs: usize,
+    last_run_activity_at: Option<u64>,
+    last_heartbeat_at: Option<u64>,
+    pid: Option<u32>,
+) -> CliResult<()> {
+    let path = channel_operation_runtime_path(runtime_dir, platform, operation_id, None, None);
+    let state = PersistedChannelOperationRuntime {
+        running,
+        busy,
+        active_runs,
+        last_run_activity_at,
+        last_heartbeat_at,
+        pid,
+        account_id: None,
+        account_label: None,
+    };
+    write_runtime_state(&path, &state)
+}
+
+#[cfg(test)]
+pub(crate) fn write_runtime_state_for_test_with_pid(
+    runtime_dir: &Path,
+    platform: ChannelPlatform,
+    operation_id: &str,
+    process_id: u32,
+    running: bool,
+    busy: bool,
+    active_runs: usize,
+    last_run_activity_at: Option<u64>,
+    last_heartbeat_at: Option<u64>,
+    pid: Option<u32>,
+) -> CliResult<()> {
+    let path =
+        channel_operation_runtime_path(runtime_dir, platform, operation_id, None, Some(process_id));
+    let state = PersistedChannelOperationRuntime {
+        running,
+        busy,
+        active_runs,
+        last_run_activity_at,
+        last_heartbeat_at,
+        pid,
+        account_id: None,
+        account_label: None,
+    };
+    write_runtime_state(&path, &state)
+}
+
+#[cfg(test)]
+pub(crate) fn write_runtime_state_for_test_with_account_and_pid(
+    runtime_dir: &Path,
+    platform: ChannelPlatform,
+    operation_id: &str,
+    account_id: &str,
+    process_id: u32,
+    running: bool,
+    busy: bool,
+    active_runs: usize,
+    last_run_activity_at: Option<u64>,
+    last_heartbeat_at: Option<u64>,
+    pid: Option<u32>,
+) -> CliResult<()> {
+    let path = channel_operation_runtime_path(
+        runtime_dir,
+        platform,
+        operation_id,
+        Some(account_id),
+        Some(process_id),
+    );
+    let state = PersistedChannelOperationRuntime {
+        running,
+        busy,
+        active_runs,
+        last_run_activity_at,
+        last_heartbeat_at,
+        pid,
+        account_id: Some(account_id.to_owned()),
+        account_label: Some(test_account_label(account_id)),
+    };
+    write_runtime_state(&path, &state)
+}
+
+#[cfg(test)]
+fn test_account_label(account_id: &str) -> String {
+    match account_id.split_once('_') {
+        Some((platform, rest)) if !platform.is_empty() && !rest.is_empty() => {
+            format!("{platform}:{rest}")
+        }
+        _ => account_id.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_runtime_dir(suffix: &str) -> PathBuf {
+        let unique = format!(
+            "loongclaw-channel-runtime-{suffix}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        );
+        std::env::temp_dir().join(unique)
+    }
+
+    #[tokio::test]
+    async fn runtime_tracker_persists_run_activity_and_shutdown_state() {
+        let runtime_dir = temp_runtime_dir("tracker");
+        let tracker = ChannelOperationRuntimeTracker::start_in_dir_with_pid(
+            &runtime_dir,
+            ChannelPlatform::Telegram,
+            "serve",
+            20,
+            4242,
+        )
+        .await
+        .expect("start runtime tracker");
+
+        tracker.mark_run_start().await.expect("mark run start");
+        tracker.mark_run_end().await.expect("mark run end");
+        sleep(Duration::from_millis(30)).await;
+        tracker.shutdown().await.expect("shutdown tracker");
+
+        let runtime = load_channel_operation_runtime_from_dir(
+            &runtime_dir,
+            ChannelPlatform::Telegram,
+            "serve",
+            now_ms(),
+        )
+        .expect("load runtime state");
+
+        assert!(!runtime.running);
+        assert!(!runtime.busy);
+        assert_eq!(runtime.active_runs, 0);
+        assert!(runtime.last_run_activity_at.is_some());
+        assert!(runtime.last_heartbeat_at.is_some());
+        assert_eq!(runtime.pid, Some(4242));
+        let entries = fs::read_dir(&runtime_dir)
+            .expect("list runtime dir")
+            .map(|entry| {
+                entry
+                    .expect("runtime entry")
+                    .file_name()
+                    .into_string()
+                    .expect("utf-8 file name")
+            })
+            .collect::<Vec<_>>();
+        assert!(entries.contains(&"telegram-serve-4242.json".to_owned()));
+    }
+
+    #[test]
+    fn stale_runtime_is_marked_not_running() {
+        let runtime_dir = temp_runtime_dir("stale");
+        let now = now_ms();
+        write_runtime_state_for_test(
+            &runtime_dir,
+            ChannelPlatform::Feishu,
+            "serve",
+            true,
+            true,
+            1,
+            Some(now.saturating_sub(30_000)),
+            Some(now.saturating_sub(30_000)),
+            Some(99),
+        )
+        .expect("write stale runtime state");
+
+        let runtime = load_channel_operation_runtime_from_dir(
+            &runtime_dir,
+            ChannelPlatform::Feishu,
+            "serve",
+            now,
+        )
+        .expect("load runtime state");
+
+        assert!(!runtime.running);
+        assert!(runtime.stale);
+        assert!(runtime.busy);
+        assert_eq!(runtime.active_runs, 1);
+    }
+
+    #[test]
+    fn load_runtime_prefers_running_pid_scoped_state_over_newer_stopped_instance() {
+        let runtime_dir = temp_runtime_dir("pid-scoped-selection");
+        let now = now_ms();
+        write_runtime_state_for_test_with_pid(
+            &runtime_dir,
+            ChannelPlatform::Telegram,
+            "serve",
+            1001,
+            true,
+            true,
+            2,
+            Some(now.saturating_sub(2_000)),
+            Some(now.saturating_sub(1_000)),
+            Some(1001),
+        )
+        .expect("write running pid-scoped runtime");
+        write_runtime_state_for_test_with_pid(
+            &runtime_dir,
+            ChannelPlatform::Telegram,
+            "serve",
+            2002,
+            false,
+            false,
+            0,
+            Some(now.saturating_sub(100)),
+            Some(now.saturating_sub(100)),
+            Some(2002),
+        )
+        .expect("write stopped pid-scoped runtime");
+
+        let runtime = load_channel_operation_runtime_from_dir(
+            &runtime_dir,
+            ChannelPlatform::Telegram,
+            "serve",
+            now,
+        )
+        .expect("load runtime state");
+
+        assert!(runtime.running);
+        assert!(!runtime.stale);
+        assert!(runtime.busy);
+        assert_eq!(runtime.active_runs, 2);
+        assert_eq!(runtime.pid, Some(1001));
+    }
+
+    #[test]
+    fn load_runtime_keeps_backward_compatibility_with_legacy_single_file() {
+        let runtime_dir = temp_runtime_dir("legacy-runtime");
+        let now = now_ms();
+        write_runtime_state_for_test(
+            &runtime_dir,
+            ChannelPlatform::Feishu,
+            "serve",
+            true,
+            true,
+            1,
+            Some(now.saturating_sub(500)),
+            Some(now.saturating_sub(200)),
+            Some(9090),
+        )
+        .expect("write legacy runtime state");
+
+        let runtime = load_channel_operation_runtime_from_dir(
+            &runtime_dir,
+            ChannelPlatform::Feishu,
+            "serve",
+            now,
+        )
+        .expect("load runtime state");
+
+        assert!(runtime.running);
+        assert_eq!(runtime.pid, Some(9090));
+    }
+
+    #[test]
+    fn load_runtime_reads_account_scoped_pid_file() {
+        let runtime_dir = temp_runtime_dir("account-runtime");
+        let now = now_ms();
+        write_runtime_state_for_test_with_account_and_pid(
+            &runtime_dir,
+            ChannelPlatform::Telegram,
+            "serve",
+            "bot_123456",
+            3003,
+            true,
+            true,
+            1,
+            Some(now.saturating_sub(250)),
+            Some(now.saturating_sub(100)),
+            Some(3003),
+        )
+        .expect("write account-scoped runtime state");
+
+        let runtime = load_channel_operation_runtime_for_account_from_dir(
+            &runtime_dir,
+            ChannelPlatform::Telegram,
+            "serve",
+            "bot_123456",
+            now,
+        )
+        .expect("load account runtime state");
+
+        assert!(runtime.running);
+        assert_eq!(runtime.pid, Some(3003));
+        assert_eq!(runtime.account_id.as_deref(), Some("bot_123456"));
+    }
+
+    #[test]
+    fn account_scoped_runtime_loader_falls_back_to_legacy_operation_files() {
+        let runtime_dir = temp_runtime_dir("account-runtime-legacy");
+        let now = now_ms();
+        write_runtime_state_for_test(
+            &runtime_dir,
+            ChannelPlatform::Feishu,
+            "serve",
+            true,
+            false,
+            0,
+            Some(now.saturating_sub(250)),
+            Some(now.saturating_sub(100)),
+            Some(8181),
+        )
+        .expect("write legacy runtime state");
+
+        let runtime = load_channel_operation_runtime_for_account_from_dir(
+            &runtime_dir,
+            ChannelPlatform::Feishu,
+            "serve",
+            "lark_cli_a1b2c3",
+            now,
+        )
+        .expect("load account runtime state via legacy fallback");
+
+        assert!(runtime.running);
+        assert_eq!(runtime.pid, Some(8181));
+    }
+
+    #[test]
+    fn account_scoped_runtime_loader_reports_duplicate_running_instances() {
+        let runtime_dir = temp_runtime_dir("account-runtime-duplicates");
+        let now = now_ms();
+        write_runtime_state_for_test_with_account_and_pid(
+            &runtime_dir,
+            ChannelPlatform::Telegram,
+            "serve",
+            "bot_123456",
+            3003,
+            true,
+            true,
+            1,
+            Some(now.saturating_sub(300)),
+            Some(now.saturating_sub(100)),
+            Some(3003),
+        )
+        .expect("write first running runtime state");
+        write_runtime_state_for_test_with_account_and_pid(
+            &runtime_dir,
+            ChannelPlatform::Telegram,
+            "serve",
+            "bot_123456",
+            4004,
+            true,
+            false,
+            0,
+            Some(now.saturating_sub(200)),
+            Some(now.saturating_sub(50)),
+            Some(4004),
+        )
+        .expect("write second running runtime state");
+
+        let runtime = load_channel_operation_runtime_for_account_from_dir(
+            &runtime_dir,
+            ChannelPlatform::Telegram,
+            "serve",
+            "bot_123456",
+            now,
+        )
+        .expect("load account runtime state");
+
+        assert_eq!(runtime.instance_count, 2);
+        assert_eq!(runtime.running_instances, 2);
+        assert_eq!(runtime.stale_instances, 0);
+        assert_eq!(runtime.pid, Some(4004));
+    }
+}

@@ -1,4 +1,4 @@
-use std::env;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -23,7 +23,7 @@ enum DoctorCheckLevel {
 
 #[derive(Debug, Clone)]
 struct DoctorCheck {
-    name: &'static str,
+    name: String,
     level: DoctorCheckLevel,
     detail: String,
 }
@@ -33,6 +33,12 @@ struct DoctorSummary {
     pass: usize,
     warn: usize,
     fail: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DoctorChannelCheckSpec {
+    config_name: &'static str,
+    runtime_name: Option<&'static str>,
 }
 
 pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
@@ -47,7 +53,7 @@ pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<(
     let has_provider_credentials = config.provider.authorization_header().is_some();
     if has_provider_credentials {
         checks.push(DoctorCheck {
-            name: "provider credentials",
+            name: "provider credentials".to_owned(),
             level: DoctorCheckLevel::Pass,
             detail: "provider credentials are available".to_owned(),
         });
@@ -72,7 +78,7 @@ pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<(
             )
         };
         checks.push(DoctorCheck {
-            name: "provider credentials",
+            name: "provider credentials".to_owned(),
             level: DoctorCheckLevel::Warn,
             detail,
         });
@@ -80,25 +86,25 @@ pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<(
 
     if options.skip_model_probe {
         checks.push(DoctorCheck {
-            name: "provider model probe",
+            name: "provider model probe".to_owned(),
             level: DoctorCheckLevel::Warn,
             detail: "skipped by --skip-model-probe".to_owned(),
         });
     } else if !has_provider_credentials {
         checks.push(DoctorCheck {
-            name: "provider model probe",
+            name: "provider model probe".to_owned(),
             level: DoctorCheckLevel::Warn,
             detail: "skipped because credentials are missing".to_owned(),
         });
     } else {
         match mvp::provider::fetch_available_models(&config).await {
             Ok(models) => checks.push(DoctorCheck {
-                name: "provider model probe",
+                name: "provider model probe".to_owned(),
                 level: DoctorCheckLevel::Pass,
                 detail: format!("{} model(s) available", models.len()),
             }),
             Err(error) => checks.push(DoctorCheck {
-                name: "provider model probe",
+                name: "provider model probe".to_owned(),
                 level: DoctorCheckLevel::Fail,
                 detail: error,
             }),
@@ -124,7 +130,7 @@ pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<(
         .is_empty()
     {
         checks.push(DoctorCheck {
-            name: "tool file root policy",
+            name: "tool file root policy".to_owned(),
             level: DoctorCheckLevel::Warn,
             detail: "tools.file_root is empty (falls back to current working directory)".to_owned(),
         });
@@ -139,7 +145,7 @@ pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<(
         }
     } else {
         checks.push(DoctorCheck {
-            name: "tool file root policy",
+            name: "tool file root policy".to_owned(),
             level: DoctorCheckLevel::Pass,
             detail: "tools.file_root is configured".to_owned(),
         });
@@ -153,9 +159,7 @@ pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<(
         "create tool file root",
     ));
 
-    checks.push(check_telegram_channel(&config));
-    let feishu_checks = check_feishu_channel(&config);
-    checks.extend(feishu_checks);
+    checks.extend(check_channel_surfaces(&config));
 
     if options.fix && config_mutated {
         let path = config_path
@@ -222,13 +226,13 @@ fn check_directory_ready(
     if directory.exists() {
         if directory.is_dir() {
             return DoctorCheck {
-                name,
+                name: name.to_owned(),
                 level: DoctorCheckLevel::Pass,
                 detail: directory.display().to_string(),
             };
         }
         return DoctorCheck {
-            name,
+            name: name.to_owned(),
             level: DoctorCheckLevel::Fail,
             detail: format!("{} exists but is not a directory", directory.display()),
         };
@@ -236,7 +240,7 @@ fn check_directory_ready(
 
     if !fix {
         return DoctorCheck {
-            name,
+            name: name.to_owned(),
             level: DoctorCheckLevel::Fail,
             detail: format!(
                 "{} is missing (rerun with --fix to create it)",
@@ -249,107 +253,181 @@ fn check_directory_ready(
         Ok(()) => {
             fixes.push(format!("{fix_label}: {}", directory.display()));
             DoctorCheck {
-                name,
+                name: name.to_owned(),
                 level: DoctorCheckLevel::Pass,
                 detail: format!("created {}", directory.display()),
             }
         }
         Err(error) => DoctorCheck {
-            name,
+            name: name.to_owned(),
             level: DoctorCheckLevel::Fail,
             detail: format!("failed to create {}: {error}", directory.display()),
         },
     }
 }
 
-fn check_telegram_channel(config: &mvp::config::LoongClawConfig) -> DoctorCheck {
-    if !config.telegram.enabled {
-        return DoctorCheck {
-            name: "telegram channel",
-            level: DoctorCheckLevel::Warn,
-            detail: "disabled".to_owned(),
-        };
+fn check_channel_surfaces(config: &mvp::config::LoongClawConfig) -> Vec<DoctorCheck> {
+    let snapshots = mvp::channel::channel_status_snapshots(config);
+    build_channel_surface_checks(&snapshots)
+}
+
+fn build_channel_surface_checks(
+    snapshots: &[mvp::channel::ChannelStatusSnapshot],
+) -> Vec<DoctorCheck> {
+    let mut checks = Vec::new();
+    let mut counts = BTreeMap::new();
+    for snapshot in snapshots {
+        *counts.entry(snapshot.id).or_insert(0_usize) += 1;
     }
-    let token = resolve_secret_value(
-        config.telegram.bot_token.as_deref(),
-        config.telegram.bot_token_env.as_deref(),
-    );
-    if token.is_some() {
-        DoctorCheck {
-            name: "telegram channel",
-            level: DoctorCheckLevel::Pass,
-            detail: "bot token resolved".to_owned(),
+
+    for snapshot in snapshots {
+        let scoped = counts.get(snapshot.id).copied().unwrap_or(0) > 1;
+        if snapshot.is_default_account
+            && scoped
+            && snapshot.default_account_source
+                == mvp::config::ChannelDefaultAccountSelectionSource::Fallback
+        {
+            checks.push(DoctorCheck {
+                name: format!("{} default account policy", snapshot.id),
+                level: DoctorCheckLevel::Warn,
+                detail: format!(
+                    "multiple configured accounts are using fallback default selection; omitting --account currently routes to `{}`. set default_account explicitly to avoid routing surprises",
+                    snapshot.configured_account_label
+                ),
+            });
         }
-    } else {
-        DoctorCheck {
-            name: "telegram channel",
-            level: DoctorCheckLevel::Fail,
-            detail: "enabled but bot token is missing (telegram.bot_token or env)".to_owned(),
+        for operation in &snapshot.operations {
+            let Some(spec) = doctor_check_spec(snapshot.id, operation.id) else {
+                continue;
+            };
+            checks.push(DoctorCheck {
+                name: scoped_doctor_check_name(spec.config_name, snapshot, scoped),
+                level: doctor_check_level_for_health(operation.health),
+                detail: operation.detail.clone(),
+            });
+
+            if let Some(runtime_name) = spec.runtime_name {
+                if operation.health == mvp::channel::ChannelOperationHealth::Ready {
+                    checks.push(build_channel_runtime_check(
+                        scoped_doctor_check_name(runtime_name, snapshot, scoped).as_str(),
+                        operation,
+                    ));
+                }
+            }
         }
+    }
+
+    checks
+}
+
+fn scoped_doctor_check_name(
+    base_name: &str,
+    snapshot: &mvp::channel::ChannelStatusSnapshot,
+    scoped: bool,
+) -> String {
+    if !scoped {
+        return base_name.to_owned();
+    }
+    format!("{base_name} [{}]", snapshot.configured_account_label)
+}
+
+fn doctor_check_spec(channel_id: &str, operation_id: &str) -> Option<DoctorChannelCheckSpec> {
+    match (channel_id, operation_id) {
+        ("telegram", "serve") => Some(DoctorChannelCheckSpec {
+            config_name: "telegram channel",
+            runtime_name: Some("telegram channel runtime"),
+        }),
+        ("feishu", "send") => Some(DoctorChannelCheckSpec {
+            config_name: "feishu channel",
+            runtime_name: None,
+        }),
+        ("feishu", "serve") => Some(DoctorChannelCheckSpec {
+            config_name: "feishu webhook verification",
+            runtime_name: Some("feishu webhook runtime"),
+        }),
+        _ => None,
     }
 }
 
-fn check_feishu_channel(config: &mvp::config::LoongClawConfig) -> Vec<DoctorCheck> {
-    if !config.feishu.enabled {
-        return vec![DoctorCheck {
-            name: "feishu channel",
-            level: DoctorCheckLevel::Warn,
-            detail: "disabled".to_owned(),
-        }];
+fn doctor_check_level_for_health(health: mvp::channel::ChannelOperationHealth) -> DoctorCheckLevel {
+    match health {
+        mvp::channel::ChannelOperationHealth::Ready => DoctorCheckLevel::Pass,
+        mvp::channel::ChannelOperationHealth::Disabled => DoctorCheckLevel::Warn,
+        mvp::channel::ChannelOperationHealth::Unsupported
+        | mvp::channel::ChannelOperationHealth::Misconfigured => DoctorCheckLevel::Fail,
     }
+}
 
-    let app_id = resolve_secret_value(
-        config.feishu.app_id.as_deref(),
-        config.feishu.app_id_env.as_deref(),
+fn build_channel_runtime_check(
+    name: &str,
+    operation: &mvp::channel::ChannelOperationStatus,
+) -> DoctorCheck {
+    let Some(runtime) = operation.runtime.as_ref() else {
+        return DoctorCheck {
+            name: name.to_owned(),
+            level: DoctorCheckLevel::Warn,
+            detail: "ready but runtime tracking is unavailable".to_owned(),
+        };
+    };
+
+    let detail_tail = format!(
+        "account={} account_id={} pid={} busy={} active_runs={} instance_count={} running_instances={} stale_instances={} last_run_activity_at={} last_heartbeat_at={}",
+        runtime
+            .account_label
+            .as_deref()
+            .unwrap_or("-"),
+        runtime
+            .account_id
+            .as_deref()
+            .unwrap_or("-"),
+        runtime
+            .pid
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_owned()),
+        runtime.busy,
+        runtime.active_runs,
+        runtime.instance_count,
+        runtime.running_instances,
+        runtime.stale_instances,
+        runtime
+            .last_run_activity_at
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_owned()),
+        runtime
+            .last_heartbeat_at
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_owned()),
     );
-    let app_secret = resolve_secret_value(
-        config.feishu.app_secret.as_deref(),
-        config.feishu.app_secret_env.as_deref(),
-    );
-    let mut checks = Vec::new();
-    if app_id.is_some() && app_secret.is_some() {
-        checks.push(DoctorCheck {
-            name: "feishu channel",
-            level: DoctorCheckLevel::Pass,
-            detail: "app credentials resolved".to_owned(),
-        });
-    } else {
-        let mut missing = Vec::new();
-        if app_id.is_none() {
-            missing.push("app_id");
-        }
-        if app_secret.is_none() {
-            missing.push("app_secret");
-        }
-        checks.push(DoctorCheck {
-            name: "feishu channel",
+
+    if runtime.stale {
+        return DoctorCheck {
+            name: name.to_owned(),
             level: DoctorCheckLevel::Fail,
-            detail: format!("enabled but missing {}", missing.join(", ")),
-        });
+            detail: format!("stale runtime detected ({detail_tail})"),
+        };
     }
 
-    let verification_token = resolve_secret_value(
-        config.feishu.verification_token.as_deref(),
-        config.feishu.verification_token_env.as_deref(),
-    );
-    let encrypt_key = resolve_secret_value(
-        config.feishu.encrypt_key.as_deref(),
-        config.feishu.encrypt_key_env.as_deref(),
-    );
-    if verification_token.is_none() && encrypt_key.is_none() {
-        checks.push(DoctorCheck {
-            name: "feishu webhook verification",
-            level: DoctorCheckLevel::Warn,
-            detail: "verification token and encrypt key are both missing".to_owned(),
-        });
-    } else {
-        checks.push(DoctorCheck {
-            name: "feishu webhook verification",
+    if runtime.running {
+        if runtime.running_instances > 1 {
+            return DoctorCheck {
+                name: name.to_owned(),
+                level: DoctorCheckLevel::Warn,
+                detail: format!("multiple runtime instances detected ({detail_tail})"),
+            };
+        }
+
+        return DoctorCheck {
+            name: name.to_owned(),
             level: DoctorCheckLevel::Pass,
-            detail: "verification token or encrypt key is configured".to_owned(),
-        });
+            detail: format!("running ({detail_tail})"),
+        };
     }
-    checks
+
+    DoctorCheck {
+        name: name.to_owned(),
+        level: DoctorCheckLevel::Warn,
+        detail: format!("ready but not currently running ({detail_tail})"),
+    }
 }
 
 fn maybe_apply_provider_env_fix(
@@ -440,7 +518,10 @@ fn ensure_env_binding(
     true
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_secret_value(inline: Option<&str>, env_key: Option<&str>) -> Option<String> {
+    use std::env;
+
     if let Some(value) = inline.map(str::trim).filter(|value| !value.is_empty()) {
         return Some(value.to_owned());
     }
@@ -504,6 +585,10 @@ fn check_level_json(level: DoctorCheckLevel) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mvp::channel::{
+        ChannelOperationHealth, ChannelOperationRuntime, ChannelOperationStatus,
+        ChannelStatusSnapshot,
+    };
 
     #[test]
     fn resolve_secret_prefers_inline_value() {
@@ -525,5 +610,315 @@ mod tests {
         assert!(changed);
         assert_eq!(slot.as_deref(), Some("OPENAI_API_KEY"));
         assert_eq!(fixes.len(), 1);
+    }
+
+    #[test]
+    fn build_channel_surface_checks_warns_when_ready_serve_operation_is_not_running() {
+        let snapshots = vec![ChannelStatusSnapshot {
+            id: "telegram",
+            configured_account_id: "bot_123456".to_owned(),
+            configured_account_label: "bot_123456".to_owned(),
+            is_default_account: true,
+            default_account_source:
+                mvp::config::ChannelDefaultAccountSelectionSource::RuntimeIdentity,
+            label: "Telegram",
+            aliases: Vec::new(),
+            transport: "telegram_bot_api_polling",
+            compiled: true,
+            enabled: true,
+            api_base_url: Some("https://api.telegram.org".to_owned()),
+            notes: Vec::new(),
+            operations: vec![ChannelOperationStatus {
+                id: "serve",
+                label: "reply loop",
+                command: "telegram-serve",
+                health: ChannelOperationHealth::Ready,
+                detail: "ready".to_owned(),
+                issues: Vec::new(),
+                runtime: Some(ChannelOperationRuntime {
+                    running: false,
+                    stale: false,
+                    busy: false,
+                    active_runs: 0,
+                    last_run_activity_at: None,
+                    last_heartbeat_at: None,
+                    pid: None,
+                    account_id: Some("bot_123456".to_owned()),
+                    account_label: Some("bot:123456".to_owned()),
+                    instance_count: 1,
+                    running_instances: 0,
+                    stale_instances: 0,
+                }),
+            }],
+        }];
+
+        let checks = build_channel_surface_checks(&snapshots);
+
+        assert!(
+            checks.iter().any(|check| {
+                check.name == "telegram channel runtime"
+                    && check.level == DoctorCheckLevel::Warn
+                    && check.detail.contains("not currently running")
+                    && check.detail.contains("account=bot:123456")
+            }),
+            "ready telegram serve operation should emit runtime warning when not running"
+        );
+    }
+
+    #[test]
+    fn build_channel_surface_checks_fails_when_ready_serve_operation_is_stale() {
+        let snapshots = vec![ChannelStatusSnapshot {
+            id: "feishu",
+            configured_account_id: "feishu_cli_a1b2c3".to_owned(),
+            configured_account_label: "feishu_cli_a1b2c3".to_owned(),
+            is_default_account: true,
+            default_account_source:
+                mvp::config::ChannelDefaultAccountSelectionSource::RuntimeIdentity,
+            label: "Feishu/Lark",
+            aliases: vec!["lark"],
+            transport: "feishu_openapi_webhook",
+            compiled: true,
+            enabled: true,
+            api_base_url: Some("https://open.feishu.cn".to_owned()),
+            notes: Vec::new(),
+            operations: vec![ChannelOperationStatus {
+                id: "serve",
+                label: "webhook reply server",
+                command: "feishu-serve",
+                health: ChannelOperationHealth::Ready,
+                detail: "ready".to_owned(),
+                issues: Vec::new(),
+                runtime: Some(ChannelOperationRuntime {
+                    running: false,
+                    stale: true,
+                    busy: true,
+                    active_runs: 1,
+                    last_run_activity_at: Some(1_700_000_000_000),
+                    last_heartbeat_at: Some(1_700_000_005_000),
+                    pid: Some(4242),
+                    account_id: Some("feishu_cli_a1b2c3".to_owned()),
+                    account_label: Some("feishu:cli_a1b2c3".to_owned()),
+                    instance_count: 1,
+                    running_instances: 0,
+                    stale_instances: 1,
+                }),
+            }],
+        }];
+
+        let checks = build_channel_surface_checks(&snapshots);
+
+        assert!(
+            checks.iter().any(|check| {
+                check.name == "feishu webhook runtime"
+                    && check.level == DoctorCheckLevel::Fail
+                    && check.detail.contains("stale")
+                    && check.detail.contains("pid=4242")
+                    && check.detail.contains("account=feishu:cli_a1b2c3")
+            }),
+            "stale feishu serve runtime should fail doctor checks"
+        );
+    }
+
+    #[test]
+    fn build_channel_surface_checks_warns_when_multiple_runtime_instances_are_running() {
+        let snapshots = vec![ChannelStatusSnapshot {
+            id: "telegram",
+            configured_account_id: "bot_123456".to_owned(),
+            configured_account_label: "bot_123456".to_owned(),
+            is_default_account: true,
+            default_account_source:
+                mvp::config::ChannelDefaultAccountSelectionSource::RuntimeIdentity,
+            label: "Telegram",
+            aliases: Vec::new(),
+            transport: "telegram_bot_api_polling",
+            compiled: true,
+            enabled: true,
+            api_base_url: Some("https://api.telegram.org".to_owned()),
+            notes: Vec::new(),
+            operations: vec![ChannelOperationStatus {
+                id: "serve",
+                label: "reply loop",
+                command: "telegram-serve",
+                health: ChannelOperationHealth::Ready,
+                detail: "ready".to_owned(),
+                issues: Vec::new(),
+                runtime: Some(ChannelOperationRuntime {
+                    running: true,
+                    stale: false,
+                    busy: true,
+                    active_runs: 1,
+                    last_run_activity_at: Some(1_700_000_000_000),
+                    last_heartbeat_at: Some(1_700_000_005_000),
+                    pid: Some(3003),
+                    account_id: Some("bot_123456".to_owned()),
+                    account_label: Some("bot:123456".to_owned()),
+                    instance_count: 2,
+                    running_instances: 2,
+                    stale_instances: 0,
+                }),
+            }],
+        }];
+
+        let checks = build_channel_surface_checks(&snapshots);
+
+        assert!(
+            checks.iter().any(|check| {
+                check.name == "telegram channel runtime"
+                    && check.level == DoctorCheckLevel::Warn
+                    && check.detail.contains("multiple runtime instances")
+                    && check.detail.contains("running_instances=2")
+            }),
+            "duplicate running telegram runtimes should emit runtime warning"
+        );
+    }
+
+    #[test]
+    fn build_channel_surface_checks_scopes_names_for_multi_account_snapshots() {
+        let snapshots = vec![
+            ChannelStatusSnapshot {
+                id: "telegram",
+                configured_account_id: "ops".to_owned(),
+                configured_account_label: "ops".to_owned(),
+                is_default_account: true,
+                default_account_source:
+                    mvp::config::ChannelDefaultAccountSelectionSource::ExplicitDefault,
+                label: "Telegram",
+                aliases: Vec::new(),
+                transport: "telegram_bot_api_polling",
+                compiled: true,
+                enabled: true,
+                api_base_url: Some("https://api.telegram.org".to_owned()),
+                notes: vec!["configured_account_id=ops".to_owned()],
+                operations: vec![ChannelOperationStatus {
+                    id: "serve",
+                    label: "reply loop",
+                    command: "telegram-serve",
+                    health: ChannelOperationHealth::Ready,
+                    detail: "ready".to_owned(),
+                    issues: Vec::new(),
+                    runtime: Some(ChannelOperationRuntime {
+                        running: true,
+                        stale: false,
+                        busy: false,
+                        active_runs: 0,
+                        last_run_activity_at: None,
+                        last_heartbeat_at: None,
+                        pid: Some(2001),
+                        account_id: Some("bot_123456".to_owned()),
+                        account_label: Some("bot:123456".to_owned()),
+                        instance_count: 1,
+                        running_instances: 1,
+                        stale_instances: 0,
+                    }),
+                }],
+            },
+            ChannelStatusSnapshot {
+                id: "telegram",
+                configured_account_id: "personal".to_owned(),
+                configured_account_label: "personal".to_owned(),
+                is_default_account: false,
+                default_account_source:
+                    mvp::config::ChannelDefaultAccountSelectionSource::ExplicitDefault,
+                label: "Telegram",
+                aliases: Vec::new(),
+                transport: "telegram_bot_api_polling",
+                compiled: true,
+                enabled: true,
+                api_base_url: Some("https://api.telegram.org".to_owned()),
+                notes: vec!["configured_account_id=personal".to_owned()],
+                operations: vec![ChannelOperationStatus {
+                    id: "serve",
+                    label: "reply loop",
+                    command: "telegram-serve",
+                    health: ChannelOperationHealth::Ready,
+                    detail: "ready".to_owned(),
+                    issues: Vec::new(),
+                    runtime: Some(ChannelOperationRuntime {
+                        running: false,
+                        stale: false,
+                        busy: false,
+                        active_runs: 0,
+                        last_run_activity_at: None,
+                        last_heartbeat_at: None,
+                        pid: None,
+                        account_id: Some("bot_654321".to_owned()),
+                        account_label: Some("bot:654321".to_owned()),
+                        instance_count: 0,
+                        running_instances: 0,
+                        stale_instances: 0,
+                    }),
+                }],
+            },
+        ];
+
+        let checks = build_channel_surface_checks(&snapshots);
+
+        assert!(checks
+            .iter()
+            .any(|check| check.name == "telegram channel [ops]"));
+        assert!(checks
+            .iter()
+            .any(|check| check.name == "telegram channel runtime [personal]"));
+    }
+
+    #[test]
+    fn build_channel_surface_checks_warns_when_multi_account_default_uses_fallback() {
+        let snapshots = vec![
+            ChannelStatusSnapshot {
+                id: "telegram",
+                configured_account_id: "alerts".to_owned(),
+                configured_account_label: "alerts".to_owned(),
+                is_default_account: true,
+                default_account_source: mvp::config::ChannelDefaultAccountSelectionSource::Fallback,
+                label: "Telegram",
+                aliases: Vec::new(),
+                transport: "telegram_bot_api_polling",
+                compiled: true,
+                enabled: true,
+                api_base_url: Some("https://api.telegram.org".to_owned()),
+                notes: vec!["default_account_source=fallback".to_owned()],
+                operations: vec![ChannelOperationStatus {
+                    id: "serve",
+                    label: "reply loop",
+                    command: "telegram-serve",
+                    health: ChannelOperationHealth::Ready,
+                    detail: "ready".to_owned(),
+                    issues: Vec::new(),
+                    runtime: None,
+                }],
+            },
+            ChannelStatusSnapshot {
+                id: "telegram",
+                configured_account_id: "work".to_owned(),
+                configured_account_label: "work".to_owned(),
+                is_default_account: false,
+                default_account_source: mvp::config::ChannelDefaultAccountSelectionSource::Fallback,
+                label: "Telegram",
+                aliases: Vec::new(),
+                transport: "telegram_bot_api_polling",
+                compiled: true,
+                enabled: true,
+                api_base_url: Some("https://api.telegram.org".to_owned()),
+                notes: vec!["default_account_source=fallback".to_owned()],
+                operations: vec![ChannelOperationStatus {
+                    id: "serve",
+                    label: "reply loop",
+                    command: "telegram-serve",
+                    health: ChannelOperationHealth::Ready,
+                    detail: "ready".to_owned(),
+                    issues: Vec::new(),
+                    runtime: None,
+                }],
+            },
+        ];
+
+        let checks = build_channel_surface_checks(&snapshots);
+
+        assert!(checks.iter().any(|check| {
+            check.name == "telegram default account policy"
+                && check.level == DoctorCheckLevel::Warn
+                && check.detail.contains("alerts")
+                && check.detail.contains("default_account")
+        }));
     }
 }
