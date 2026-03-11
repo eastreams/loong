@@ -7,7 +7,6 @@ use serde_json::Value;
 use crate::CliResult;
 use crate::KernelContext;
 
-#[cfg(feature = "memory-sqlite")]
 use super::super::memory;
 use super::super::{config::LoongClawConfig, provider};
 use super::turn_engine::ProviderTurn;
@@ -55,7 +54,11 @@ impl ConversationRuntime for DefaultConversationRuntime {
         kernel_ctx: Option<&KernelContext>,
     ) -> CliResult<Vec<Value>> {
         if let Some(ctx) = kernel_ctx {
-            let mut messages = provider::build_base_messages(config, include_system_prompt);
+            let base_messages = provider::build_base_messages(config, include_system_prompt);
+            #[cfg(feature = "memory-sqlite")]
+            let mut messages = base_messages;
+            #[cfg(not(feature = "memory-sqlite"))]
+            let messages = base_messages;
             #[cfg(feature = "memory-sqlite")]
             {
                 let request =
