@@ -22,4 +22,4 @@ These are the golden principles for anyone — agent or human — working in thi
 
 10. **YAGNI ruthlessly** — don't design for hypothetical future requirements. The minimum complexity for the current task is the right amount. Three similar lines of code is better than a premature abstraction.
 
-11. **Control complexity growth with explicit budgets** — large hotspots must have line/function budget checks and boundary assertions (`scripts/check_architecture_boundaries.sh`) so architecture drift is detected before review time.
+11. **Control complexity growth with explicit budgets** — large hotspots should have line/function budget checks and boundary assertions (`scripts/check_architecture_boundaries.sh`) so architecture drift is surfaced early in local verification and can be promoted into CI once the checks are stable.

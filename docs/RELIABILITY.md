@@ -16,14 +16,14 @@ Enforced by: CI (`verify` workflow). The optional `scripts/pre-commit` hook runs
 
 1. **Wasm trap behavior is platform-aware by default** — on macOS, `signals_based_traps` is disabled to avoid trap-handler abort instability under parallel bridge tests.
 2. **Runtime override is explicit** — set `LOONGCLAW_WASM_SIGNALS_BASED_TRAPS=true|false` to force trap behavior for diagnostics/experiments.
-3. **Daemon stress gate is scriptable** — run `./scripts/stress_daemon_tests.sh 10 default,2,1` to execute repeated daemon test rounds across thread modes.
-4. **Trap-mode matrix is available when needed** — set `LOONGCLAW_STRESS_WASM_TRAPS_MODES=auto,false,true` to sweep daemon tests across trap behavior modes.
+3. **Daemon stress helper is scriptable** — run `./scripts/stress_daemon_tests.sh 10 default,2,1` for manual repeated daemon test validation across thread modes.
+4. **Trap-mode matrix is available when needed** — set `LOONGCLAW_STRESS_WASM_TRAPS_MODES=auto,false,true` to sweep daemon tests across trap behavior modes during targeted investigation.
 
 ## Architecture Stability Guardrails
 
-1. **Complexity budgets are machine-checkable** — run `./scripts/check_architecture_boundaries.sh` to inspect module line/function budgets for architecture hotspots (`spec_runtime`, `spec_execution`, `provider/mod`, `memory/mod`).
+1. **Complexity budgets are locally machine-checkable** — run `./scripts/check_architecture_boundaries.sh` or `task check:architecture` to inspect module line/function budgets for architecture hotspots (`spec_runtime`, `spec_execution`, `provider/mod`, `memory/mod`).
 2. **Memory operation literals are boundary-guarded** — memory core operation strings (`append_turn`, `window`, `clear_session`) must remain centralized in `crates/app/src/memory/*` and never spread into callsites.
-3. **Strict enforcement is opt-in for local hard gates** — set `LOONGCLAW_ARCH_STRICT=true` to make architecture budget violations fail non-zero.
+3. **Strict enforcement is an extended local gate** — use `task check:architecture:strict` (or set `LOONGCLAW_ARCH_STRICT=true`) to make architecture budget violations fail non-zero. This check is part of `task verify:full`, not the canonical CI-parity gate.
 
 ## Kernel Invariants
 

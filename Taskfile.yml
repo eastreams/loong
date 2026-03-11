@@ -61,7 +61,7 @@ tasks:
   check:architecture:strict:
     desc: Fail on any architecture boundary budget violations
     cmds:
-      - LOONGCLAW_ARCH_STRICT=1 scripts/check_architecture_boundaries.sh
+      - LOONGCLAW_ARCH_STRICT=true scripts/check_architecture_boundaries.sh
 
   check:deny:
     desc: Run cargo-deny (advisories, bans, sources)
@@ -82,8 +82,9 @@ tasks:
       - task: check:deny
 
   verify:full:
-    desc: Extended verification including smoke and benchmark gates
+    desc: Extended verification including architecture, smoke, and benchmark gates
     cmds:
       - task: verify
+      - task: check:architecture:strict
       - task: smoke
       - task: benchmark:pressure

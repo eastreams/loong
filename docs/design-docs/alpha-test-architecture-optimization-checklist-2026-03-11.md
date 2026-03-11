@@ -47,7 +47,7 @@ This checklist tracks architecture hardening and long-term sustainability work f
 - [x] `spec_execution` blocked-operation report assembly centralized via shared builder to remove duplicated return payload construction.
 - [x] Architecture boundary checker added:
   - `scripts/check_architecture_boundaries.sh`
-  - Task entries: `check:architecture`, `check:architecture:strict`
+  - Task entries: `check:architecture`, `check:architecture:strict` (local / extended verification)
 - [x] Daemon stress script supports optional trap-mode matrix (`auto|false|true`) via `LOONGCLAW_STRESS_WASM_TRAPS_MODES`.
 - [x] Provider request gate/error policy extracted into dedicated module:
   - `crates/app/src/provider/error_policy.rs`
@@ -96,7 +96,7 @@ This checklist tracks architecture hardening and long-term sustainability work f
     - architecture budget script still passes
 
 - [ ] Establish CI-visible architecture check stage (without changing workflow logic by default).
-  - Local gate first: `task check:architecture:strict`
+  - Local gate first: `task check:architecture:strict` (now wired into `task verify:full`)
   - Acceptance:
     - command deterministic on macOS/Linux
     - no false positives in current codebase
