@@ -26,6 +26,11 @@ tasks:
     cmds:
       - cargo test --workspace --all-features
 
+  test:daemon:stress:
+    desc: Stress daemon test binary across thread modes to catch intermittent regressions
+    cmds:
+      - ./scripts/stress_daemon_tests.sh 10 default,2,1
+
   smoke:
     desc: Run representative spec-runner smoke scenarios
     cmds:
@@ -47,6 +52,16 @@ tasks:
     desc: Validate doc governance in strict release mode (missing .docs artifacts fail)
     cmds:
       - LOONGCLAW_RELEASE_DOCS_STRICT=1 scripts/check-docs.sh
+
+  check:architecture:
+    desc: Validate architecture boundary budgets and memory-operation abstraction
+    cmds:
+      - scripts/check_architecture_boundaries.sh
+
+  check:architecture:strict:
+    desc: Fail on any architecture boundary budget violations
+    cmds:
+      - LOONGCLAW_ARCH_STRICT=1 scripts/check_architecture_boundaries.sh
 
   check:deny:
     desc: Run cargo-deny (advisories, bans, sources)

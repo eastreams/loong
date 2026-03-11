@@ -1,4 +1,7 @@
+use std::collections::BTreeSet;
 use std::io::{self, Write};
+
+use loongclaw_contracts::Capability;
 
 use crate::context::{bootstrap_kernel_context, DEFAULT_TOKEN_TTL_S};
 use crate::CliResult;
@@ -78,9 +81,15 @@ pub async fn run_cli_chat(config_path: Option<&str>, session_hint: Option<&str>)
         }
         if input == "/history" {
             #[cfg(feature = "memory-sqlite")]
-            print_history(&session_id, config.memory.sliding_window, &memory_config)?;
+            print_history(
+                &session_id,
+                config.memory.sliding_window,
+                Some(&kernel_ctx),
+                &memory_config,
+            )
+            .await?;
             #[cfg(not(feature = "memory-sqlite"))]
-            print_history(&session_id, config.memory.sliding_window)?;
+            print_history(&session_id, config.memory.sliding_window, Some(&kernel_ctx)).await?;
             continue;
         }
 
@@ -119,13 +128,38 @@ fn print_help() {
 }
 
 #[allow(clippy::print_stdout)] // CLI output
-fn print_history(
+async fn print_history(
     session_id: &str,
     limit: usize,
+    kernel_ctx: Option<&crate::KernelContext>,
     #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
 ) -> CliResult<()> {
     #[cfg(feature = "memory-sqlite")]
     {
+        if let Some(ctx) = kernel_ctx {
+            let request = memory::build_window_request(session_id, limit);
+            let caps = BTreeSet::from([Capability::MemoryRead]);
+            let outcome = ctx
+                .kernel
+                .execute_memory_core(ctx.pack_id(), &ctx.token, &caps, None, request)
+                .await
+                .map_err(|error| format!("load history via kernel failed: {error}"))?;
+            let turns = memory::decode_window_turns(&outcome.payload);
+            if turns.is_empty() {
+                println!("(no history yet)");
+                return Ok(());
+            }
+            for turn in turns {
+                println!(
+                    "[{}] {}: {}",
+                    turn.ts.unwrap_or_default(),
+                    turn.role,
+                    turn.content
+                );
+            }
+            return Ok(());
+        }
+
         let turns = memory::window_direct(session_id, limit, memory_config)
             .map_err(|error| format!("load history failed: {error}"))?;
         if turns.is_empty() {
@@ -140,7 +174,7 @@ fn print_history(
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let _ = (session_id, limit);
+        let _ = (session_id, limit, kernel_ctx);
         println!("history unavailable: memory-sqlite feature disabled");
         Ok(())
     }

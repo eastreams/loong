@@ -2,7 +2,7 @@
 use std::path::PathBuf;
 
 use loongclaw_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
-use serde_json::json;
+use serde_json::{json, Value};
 
 mod kernel_adapter;
 pub mod runtime_config;
@@ -13,6 +13,38 @@ pub use kernel_adapter::MvpMemoryAdapter;
 #[cfg(feature = "memory-sqlite")]
 pub use sqlite::ConversationTurn;
 
+pub const MEMORY_OP_APPEND_TURN: &str = "append_turn";
+pub const MEMORY_OP_WINDOW: &str = "window";
+pub const MEMORY_OP_CLEAR_SESSION: &str = "clear_session";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowTurn {
+    pub role: String,
+    pub content: String,
+    pub ts: Option<i64>,
+}
+
+pub fn build_append_turn_request(session_id: &str, role: &str, content: &str) -> MemoryCoreRequest {
+    MemoryCoreRequest {
+        operation: MEMORY_OP_APPEND_TURN.to_owned(),
+        payload: json!({
+            "session_id": session_id,
+            "role": role,
+            "content": content,
+        }),
+    }
+}
+
+pub fn build_window_request(session_id: &str, limit: usize) -> MemoryCoreRequest {
+    MemoryCoreRequest {
+        operation: MEMORY_OP_WINDOW.to_owned(),
+        payload: json!({
+            "session_id": session_id,
+            "limit": limit,
+        }),
+    }
+}
+
 pub fn execute_memory_core(request: MemoryCoreRequest) -> Result<MemoryCoreOutcome, String> {
     execute_memory_core_with_config(request, runtime_config::get_memory_runtime_config())
 }
@@ -22,9 +54,9 @@ pub fn execute_memory_core_with_config(
     config: &runtime_config::MemoryRuntimeConfig,
 ) -> Result<MemoryCoreOutcome, String> {
     match request.operation.as_str() {
-        "append_turn" => append_turn(request, config),
-        "window" => load_window(request, config),
-        "clear_session" => clear_session(request, config),
+        MEMORY_OP_APPEND_TURN => append_turn(request, config),
+        MEMORY_OP_WINDOW => load_window(request, config),
+        MEMORY_OP_CLEAR_SESSION => clear_session(request, config),
         _ => Ok(MemoryCoreOutcome {
             status: "ok".to_owned(),
             payload: json!({
@@ -34,6 +66,28 @@ pub fn execute_memory_core_with_config(
             }),
         }),
     }
+}
+
+pub fn decode_window_turns(payload: &Value) -> Vec<WindowTurn> {
+    payload
+        .get("turns")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|turn| WindowTurn {
+            role: turn
+                .get("role")
+                .and_then(Value::as_str)
+                .unwrap_or("assistant")
+                .to_owned(),
+            content: turn
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            ts: turn.get("ts").and_then(Value::as_i64),
+        })
+        .collect()
 }
 
 fn append_turn(
@@ -130,6 +184,36 @@ mod tests {
         .expect("fallback operation should succeed");
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["adapter"], "kv-core");
+    }
+
+    #[test]
+    fn decode_window_turns_tolerates_partial_payload_shape() {
+        let payload = json!({
+            "turns": [
+                {"role": "user", "content": "hello", "ts": 1},
+                {"role": "assistant"},
+                {"content": "only-content"},
+                {}
+            ]
+        });
+        let turns = decode_window_turns(&payload);
+        assert_eq!(turns.len(), 4);
+        assert_eq!(turns[0].role, "user");
+        assert_eq!(turns[0].content, "hello");
+        assert_eq!(turns[0].ts, Some(1));
+        assert_eq!(turns[1].role, "assistant");
+        assert_eq!(turns[1].content, "");
+        assert_eq!(turns[2].role, "assistant");
+        assert_eq!(turns[2].content, "only-content");
+        assert_eq!(turns[3].role, "assistant");
+        assert_eq!(turns[3].content, "");
+    }
+
+    #[test]
+    fn decode_window_turns_returns_empty_for_missing_turns() {
+        assert!(decode_window_turns(&json!({})).is_empty());
+        assert!(decode_window_turns(&json!({"turns": null})).is_empty());
+        assert!(decode_window_turns(&json!({"turns": "invalid"})).is_empty());
     }
 
     #[tokio::test]

@@ -79,7 +79,7 @@ impl FakeRuntime {
 
 #[async_trait]
 impl ConversationRuntime for FakeRuntime {
-    fn build_messages(
+    async fn build_messages(
         &self,
         _config: &LoongClawConfig,
         _session_id: &str,
@@ -1831,13 +1831,26 @@ impl CoreMemoryAdapter for SharedTestMemoryAdapter {
         &self,
         request: MemoryCoreRequest,
     ) -> Result<MemoryCoreOutcome, MemoryPlaneError> {
+        let payload = if request.operation == crate::memory::MEMORY_OP_WINDOW {
+            json!({
+                "turns": [
+                    {
+                        "role": "assistant",
+                        "content": "history-from-kernel",
+                        "ts": 1
+                    }
+                ]
+            })
+        } else {
+            json!({})
+        };
         self.invocations
             .lock()
             .expect("invocations lock")
             .push(request);
         Ok(MemoryCoreOutcome {
             status: "ok".to_owned(),
-            payload: json!({}),
+            payload,
         })
     }
 }
@@ -1856,7 +1869,7 @@ async fn persist_turn_routes_through_kernel_when_context_provided() {
     // Verify the memory adapter received the request.
     let captured = invocations.lock().expect("invocations lock");
     assert_eq!(captured.len(), 1);
-    assert_eq!(captured[0].operation, "append_turn");
+    assert_eq!(captured[0].operation, crate::memory::MEMORY_OP_APPEND_TURN);
     assert_eq!(captured[0].payload["session_id"], "session-k1");
     assert_eq!(captured[0].payload["role"], "user");
     assert_eq!(captured[0].payload["content"], "kernel-hello");
@@ -1875,6 +1888,39 @@ async fn persist_turn_routes_through_kernel_when_context_provided() {
     assert!(
         has_memory_plane,
         "audit should contain memory plane invocation"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn build_messages_routes_window_through_kernel_when_context_provided() {
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let (ctx, invocations) = build_kernel_context(audit);
+
+    let runtime = DefaultConversationRuntime;
+    let config = test_config();
+    let messages = runtime
+        .build_messages(&config, "session-k2", true, Some(&ctx))
+        .await
+        .expect("build messages via kernel");
+
+    assert!(
+        !messages.is_empty(),
+        "messages should include at least system prompt"
+    );
+    assert_eq!(messages[0]["role"], "system");
+    assert!(
+        messages
+            .iter()
+            .any(|message| message["content"] == "history-from-kernel"),
+        "messages should include history loaded from kernel window payload"
+    );
+
+    let captured = invocations.lock().expect("invocations lock");
+    assert!(
+        captured
+            .iter()
+            .any(|request| request.operation == crate::memory::MEMORY_OP_WINDOW),
+        "build_messages should route memory window through kernel memory plane"
     );
 }
 

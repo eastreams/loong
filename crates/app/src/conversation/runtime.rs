@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
-use loongclaw_contracts::{Capability, MemoryCoreRequest};
+use loongclaw_contracts::Capability;
 use serde_json::{json, Value};
 
 use crate::CliResult;
@@ -16,7 +16,7 @@ pub struct DefaultConversationRuntime;
 
 #[async_trait]
 pub trait ConversationRuntime: Send + Sync {
-    fn build_messages(
+    async fn build_messages(
         &self,
         config: &LoongClawConfig,
         session_id: &str,
@@ -47,20 +47,47 @@ pub trait ConversationRuntime: Send + Sync {
 
 #[async_trait]
 impl ConversationRuntime for DefaultConversationRuntime {
-    // TODO(task-11): Route memory window loading through kernel when kernel_ctx is Some.
-    // Currently `build_messages_for_session` couples system-prompt construction with
-    // memory window loading in a single function. Routing the memory portion through
-    // kernel requires splitting that function into (a) system prompt building and
-    // (b) memory window loading. Deferred to avoid invasive refactoring of the
-    // provider module.
-    fn build_messages(
+    async fn build_messages(
         &self,
         config: &LoongClawConfig,
         session_id: &str,
         include_system_prompt: bool,
-        _kernel_ctx: Option<&KernelContext>,
+        kernel_ctx: Option<&KernelContext>,
     ) -> CliResult<Vec<Value>> {
-        provider::build_messages_for_session(config, session_id, include_system_prompt)
+        let mut messages = Vec::new();
+        if let Some(system_message) = provider::build_system_message(config, include_system_prompt)
+        {
+            messages.push(system_message);
+        }
+
+        if let Some(ctx) = kernel_ctx {
+            #[cfg(feature = "memory-sqlite")]
+            {
+                let request =
+                    memory::build_window_request(session_id, config.memory.sliding_window);
+                let caps = BTreeSet::from([Capability::MemoryRead]);
+                let outcome = ctx
+                    .kernel
+                    .execute_memory_core(ctx.pack_id(), &ctx.token, &caps, None, request)
+                    .await
+                    .map_err(|error| format!("load memory window via kernel failed: {error}"))?;
+                let turns = memory::decode_window_turns(&outcome.payload);
+                for turn in turns {
+                    messages.push(json!({
+                        "role": turn.role,
+                        "content": turn.content,
+                    }));
+                }
+            }
+            #[cfg(not(feature = "memory-sqlite"))]
+            {
+                let _ = (ctx, session_id, config);
+            }
+            return Ok(messages);
+        }
+
+        messages.extend(provider::load_memory_window_messages(config, session_id)?);
+        Ok(messages)
     }
 
     async fn request_completion(
@@ -87,14 +114,7 @@ impl ConversationRuntime for DefaultConversationRuntime {
         kernel_ctx: Option<&KernelContext>,
     ) -> CliResult<()> {
         if let Some(ctx) = kernel_ctx {
-            let request = MemoryCoreRequest {
-                operation: "append_turn".to_owned(),
-                payload: json!({
-                    "session_id": session_id,
-                    "role": role,
-                    "content": content,
-                }),
-            };
+            let request = memory::build_append_turn_request(session_id, role, content);
             let caps = BTreeSet::from([Capability::MemoryWrite]);
             ctx.kernel
                 .execute_memory_core(ctx.pack_id(), &ctx.token, &caps, None, request)
