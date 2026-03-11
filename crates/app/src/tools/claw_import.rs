@@ -5,7 +5,7 @@ use std::{
 };
 
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::{
     config::{self, LoongClawConfig, MemoryProfile},
@@ -234,7 +234,8 @@ pub(super) fn execute_claw_import_tool_with_config(
 
 fn discovered_source_payload(source: &migration::DiscoveredImportSource) -> Value {
     json!({
-        "source_id": source.source.as_id(),
+        "source_id": source.source_id,
+        "source_kind": source.source.as_id(),
         "input_path": source.path.display().to_string(),
         "confidence_score": source.confidence_score,
         "found_files": source.found_files,
@@ -244,6 +245,7 @@ fn discovered_source_payload(source: &migration::DiscoveredImportSource) -> Valu
 fn planned_source_payload(plan: &migration::PlannedImportSource) -> Value {
     json!({
         "source_id": plan.source_id,
+        "source_kind": plan.source.as_id(),
         "input_path": plan.input_path.display().to_string(),
         "confidence_score": plan.confidence_score,
         "prompt_addendum_present": plan.prompt_addendum_present,
@@ -257,6 +259,7 @@ fn primary_recommendation_payload(
 ) -> Value {
     json!({
         "source_id": recommendation.source_id,
+        "source_kind": recommendation.source.as_id(),
         "input_path": recommendation.input_path.display().to_string(),
         "reasons": recommendation.reasons,
     })
@@ -347,7 +350,9 @@ fn parse_apply_selection_mode(
         .unwrap_or(false)
     {
         let primary_source_id = payload
-            .get("primary_source_id")
+            .get("primary_selection_id")
+            .or_else(|| payload.get("selection_id"))
+            .or_else(|| payload.get("primary_source_id"))
             .or_else(|| payload.get("source_id"))
             .and_then(Value::as_str)
             .map(str::trim)
@@ -365,7 +370,8 @@ fn parse_apply_selection_mode(
     }
 
     if let Some(source_id) = payload
-        .get("source_id")
+        .get("selection_id")
+        .or_else(|| payload.get("source_id"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())

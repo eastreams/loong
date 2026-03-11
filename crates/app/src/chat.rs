@@ -29,6 +29,7 @@ pub async fn run_cli_chat(config_path: Option<&str>, session_hint: Option<&str>)
     export_runtime_env(&config);
     let kernel_ctx = bootstrap_kernel_context("cli-chat", DEFAULT_TOKEN_TTL_S)?;
 
+    #[cfg(feature = "memory-sqlite")]
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
 
     #[cfg(feature = "memory-sqlite")]
@@ -390,11 +391,11 @@ fn format_milli_ratio(value: Option<u32>) -> String {
 
 fn export_runtime_env(config: &LoongClawConfig) {
     crate::memory::runtime_config::apply_memory_runtime_env(&config.memory);
-    std::env::set_var(
+    crate::process_env::set_var(
         "LOONGCLAW_SHELL_ALLOWLIST",
         config.tools.shell_allowlist.join(","),
     );
-    std::env::set_var(
+    crate::process_env::set_var(
         "LOONGCLAW_FILE_ROOT",
         config.tools.resolved_file_root().display().to_string(),
     );

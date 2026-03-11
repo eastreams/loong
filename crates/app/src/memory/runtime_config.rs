@@ -54,14 +54,11 @@ impl MemoryRuntimeConfig {
         let sqlite_path = std::env::var("LOONGCLAW_SQLITE_PATH")
             .ok()
             .map(PathBuf::from);
-        let sliding_window = std::env::var("LOONGCLAW_SLIDING_WINDOW")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
+        let sliding_window = parse_positive_usize(std::env::var("LOONGCLAW_SLIDING_WINDOW").ok())
             .unwrap_or(defaults.sliding_window);
-        let summary_max_chars = std::env::var("LOONGCLAW_MEMORY_SUMMARY_MAX_CHARS")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(defaults.summary_char_budget());
+        let summary_max_chars =
+            parse_positive_usize(std::env::var("LOONGCLAW_MEMORY_SUMMARY_MAX_CHARS").ok())
+                .unwrap_or(defaults.summary_char_budget());
         let profile_note = std::env::var("LOONGCLAW_MEMORY_PROFILE_NOTE")
             .ok()
             .as_deref()
@@ -94,32 +91,37 @@ impl MemoryRuntimeConfig {
     }
 }
 
+fn parse_positive_usize(raw: Option<String>) -> Option<usize> {
+    raw.and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+}
+
 pub fn apply_memory_runtime_env(config: &MemoryConfig) {
-    std::env::set_var(
+    crate::process_env::set_var(
         "LOONGCLAW_SQLITE_PATH",
         config.resolved_sqlite_path().display().to_string(),
     );
-    std::env::set_var(
+    crate::process_env::set_var(
         "LOONGCLAW_SLIDING_WINDOW",
         config.sliding_window.to_string(),
     );
-    std::env::set_var(
+    crate::process_env::set_var(
         "LOONGCLAW_MEMORY_BACKEND",
         config.resolved_backend().as_str(),
     );
-    std::env::set_var(
+    crate::process_env::set_var(
         "LOONGCLAW_MEMORY_PROFILE",
         config.resolved_profile().as_str(),
     );
-    std::env::set_var(
+    crate::process_env::set_var(
         "LOONGCLAW_MEMORY_SUMMARY_MAX_CHARS",
         config.summary_char_budget().to_string(),
     );
 
     if let Some(profile_note) = config.trimmed_profile_note() {
-        std::env::set_var("LOONGCLAW_MEMORY_PROFILE_NOTE", profile_note);
+        crate::process_env::set_var("LOONGCLAW_MEMORY_PROFILE_NOTE", profile_note);
     } else {
-        std::env::remove_var("LOONGCLAW_MEMORY_PROFILE_NOTE");
+        crate::process_env::remove_var("LOONGCLAW_MEMORY_PROFILE_NOTE");
     }
 }
 
@@ -156,19 +158,19 @@ mod tests {
 
     #[test]
     fn parse_sliding_window_accepts_positive_integer() {
-        assert_eq!(parse_sliding_window(Some("24")), Some(24));
+        assert_eq!(parse_positive_usize(Some("24".to_owned())), Some(24));
     }
 
     #[test]
     fn parse_sliding_window_rejects_zero_negative_and_invalid_values() {
-        assert_eq!(parse_sliding_window(Some("0")), None);
-        assert_eq!(parse_sliding_window(Some("-1")), None);
-        assert_eq!(parse_sliding_window(Some("invalid")), None);
+        assert_eq!(parse_positive_usize(Some("0".to_owned())), None);
+        assert_eq!(parse_positive_usize(Some("-1".to_owned())), None);
+        assert_eq!(parse_positive_usize(Some("invalid".to_owned())), None);
     }
 
     #[test]
     fn parse_sliding_window_returns_none_when_absent() {
-        assert_eq!(parse_sliding_window(None), None);
+        assert_eq!(parse_positive_usize(None), None);
     }
 
     #[test]
@@ -212,7 +214,7 @@ mod tests {
     fn apply_memory_runtime_env_clears_absent_profile_note() {
         let _guard = env_lock().lock().expect("env lock");
 
-        std::env::set_var("LOONGCLAW_MEMORY_PROFILE_NOTE", "stale imported note");
+        crate::process_env::set_var("LOONGCLAW_MEMORY_PROFILE_NOTE", "stale imported note");
 
         let config = MemoryConfig::default();
         apply_memory_runtime_env(&config);

@@ -266,8 +266,7 @@ fn build_summary_block(turns: &[ConversationTurn], max_chars: usize) -> Option<S
         return None;
     }
 
-    let header =
-        "## Memory Summary\nEarlier session context condensed from turns outside the active window:";
+    let header = "## Memory Summary\nEarlier session context condensed from turns outside the active window:";
     let mut body = String::new();
     let budget = max_chars.max(256);
 

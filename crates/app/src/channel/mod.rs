@@ -708,11 +708,11 @@ pub(super) async fn process_inbound_with_provider(
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
 fn apply_runtime_env(config: &LoongClawConfig) {
     crate::memory::runtime_config::apply_memory_runtime_env(&config.memory);
-    std::env::set_var(
+    crate::process_env::set_var(
         "LOONGCLAW_SHELL_ALLOWLIST",
         config.tools.shell_allowlist.join(","),
     );
-    std::env::set_var(
+    crate::process_env::set_var(
         "LOONGCLAW_FILE_ROOT",
         config.tools.resolved_file_root().display().to_string(),
     );

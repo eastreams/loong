@@ -400,10 +400,20 @@ fn resolve_interactive_onboard_import_strategy(
     };
     println!("Import options:");
     if let Some(recommendation) = discovery.recommendation.as_ref() {
-        println!("  [r] Recommended source ({})", recommendation.source_id);
+        println!(
+            "  [r] Recommended source ({} -> {} @ {})",
+            recommendation.source_id,
+            recommendation.source.as_id(),
+            recommendation.input_path.display()
+        );
     }
     for plan in &discovery.summary.plans {
-        println!("  [{}] Import only {}", plan.source_id, plan.source_id);
+        println!(
+            "  [{}] Import only {} @ {}",
+            plan.source_id,
+            plan.source.as_id(),
+            plan.input_path.display()
+        );
     }
     if discovery.summary.plans.len() > 1 {
         println!("  [m] Safe profile merge");
@@ -861,15 +871,23 @@ pub(crate) fn build_onboard_import_summary(
             format!("{} warning(s)", plan.warning_count)
         };
         lines.push(format!(
-            "- {}: score {}, {}, {}, {}",
-            plan.source_id, plan.confidence_score, prompt_state, profile_state, warning_state
+            "- {}: {} @ {}, score {}, {}, {}, {}",
+            plan.source_id,
+            plan.source.as_id(),
+            plan.input_path.display(),
+            plan.confidence_score,
+            prompt_state,
+            profile_state,
+            warning_state
         ));
     }
 
     if let Some(recommendation) = recommendation {
         lines.push(format!(
-            "Recommended import source: {}",
-            recommendation.source_id
+            "Recommended import source: {} ({} @ {})",
+            recommendation.source_id,
+            recommendation.source.as_id(),
+            recommendation.input_path.display()
         ));
     }
 

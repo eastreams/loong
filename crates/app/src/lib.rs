@@ -9,6 +9,8 @@ pub mod prompt;
 pub mod provider;
 pub mod tools;
 
+mod process_env;
+
 pub use context::KernelContext;
 /// Result type for MVP CLI operations.
 pub type CliResult<T> = Result<T, String>;

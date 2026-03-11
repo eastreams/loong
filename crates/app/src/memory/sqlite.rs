@@ -341,7 +341,8 @@ mod tests {
     fn default_window_size_prefers_injected_config() {
         let config = MemoryRuntimeConfig {
             sqlite_path: None,
-            sliding_window: Some(24),
+            sliding_window: 24,
+            ..MemoryRuntimeConfig::default()
         };
 
         assert_eq!(default_window_size(&config), 24);

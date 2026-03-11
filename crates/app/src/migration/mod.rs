@@ -4,21 +4,21 @@ mod orchestrator;
 use std::{collections::BTreeSet, fs, path::Path};
 
 use crate::{
+    CliResult,
     config::{LoongClawConfig, MemoryProfile},
     prompt::DEFAULT_PROMPT_PACK_ID,
-    CliResult,
 };
 use serde_json::Value;
 
 pub use merge::{
-    merge_profile_entries, MergedProfilePlan, ProfileEntryLane, ProfileMergeConflict,
-    ProfileMergeEntry,
+    MergedProfilePlan, ProfileEntryLane, ProfileMergeConflict, ProfileMergeEntry,
+    merge_profile_entries,
 };
 pub use orchestrator::{
-    apply_import_selection, discover_import_sources, merge_profile_sources, plan_import_sources,
-    recommend_primary_source, rollback_last_import, ApplyImportSelection,
-    ApplyImportSelectionResult, DiscoveredImportSource, DiscoveryOptions, DiscoveryPlanSummary,
-    DiscoveryReport, ImportSelectionMode, PlannedImportSource, PrimarySourceRecommendation,
+    ApplyImportSelection, ApplyImportSelectionResult, DiscoveredImportSource, DiscoveryOptions,
+    DiscoveryPlanSummary, DiscoveryReport, ImportSelectionMode, PlannedImportSource,
+    PrimarySourceRecommendation, apply_import_selection, discover_import_sources,
+    merge_profile_sources, plan_import_sources, recommend_primary_source, rollback_last_import,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -543,9 +543,59 @@ fn normalize_brand_references(content: &str) -> String {
         "nanobot", "Nanobot", "NanoBot", "openclaw", "OpenClaw", "picoclaw", "PicoClaw",
         "zeroclaw", "ZeroClaw", "nanoclaw", "NanoClaw",
     ] {
-        normalized = normalized.replace(needle, "LoongClaw");
+        normalized = replace_identity_token(&normalized, needle, "LoongClaw");
     }
     normalized
+}
+
+fn replace_identity_token(content: &str, needle: &str, replacement: &str) -> String {
+    let mut normalized = String::with_capacity(content.len());
+    let mut cursor = 0usize;
+
+    while let Some(relative) = content[cursor..].find(needle) {
+        let start = cursor + relative;
+        let end = start + needle.len();
+        normalized.push_str(&content[cursor..start]);
+        if should_replace_identity_match(content.as_bytes(), start, end) {
+            normalized.push_str(replacement);
+        } else {
+            normalized.push_str(&content[start..end]);
+        }
+        cursor = end;
+    }
+
+    normalized.push_str(&content[cursor..]);
+    normalized
+}
+
+fn should_replace_identity_match(content: &[u8], start: usize, end: usize) -> bool {
+    is_identity_boundary(content, start, true) && is_identity_boundary(content, end, false)
+}
+
+fn is_identity_boundary(content: &[u8], index: usize, leading: bool) -> bool {
+    let adjacent = if leading {
+        index.checked_sub(1).map(|offset| content[offset])
+    } else {
+        content.get(index).copied()
+    };
+    let beyond = if leading {
+        index.checked_sub(2).map(|offset| content[offset])
+    } else {
+        content.get(index + 1).copied()
+    };
+
+    match adjacent {
+        None => true,
+        Some(byte)
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'/' | b'\\' | b'-') =>
+        {
+            false
+        }
+        Some(b'.') => {
+            beyond.is_none_or(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')))
+        }
+        Some(_) => true,
+    }
 }
 
 #[cfg(test)]
@@ -643,6 +693,24 @@ mod tests {
         );
 
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn brand_remap_preserves_paths_urls_and_identifiers() {
+        let normalized = normalize_brand_references(
+            "I am nanobot. Use your nanobot agent for deploys.\n\
+             Repo: github.com/openclaw-ai/openclaw\n\
+             Path: ~/.config/openclaw/IDENTITY.md\n\
+             File: openclaw.toml\n\
+             Key: openclaw_agent_id",
+        );
+
+        assert!(normalized.contains("I am LoongClaw."));
+        assert!(normalized.contains("your LoongClaw agent"));
+        assert!(normalized.contains("github.com/openclaw-ai/openclaw"));
+        assert!(normalized.contains("~/.config/openclaw/IDENTITY.md"));
+        assert!(normalized.contains("openclaw.toml"));
+        assert!(normalized.contains("openclaw_agent_id"));
     }
 
     #[test]

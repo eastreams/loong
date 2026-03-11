@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::prompt::{
-    render_default_system_prompt, render_system_prompt, PromptPersonality, PromptRenderInput,
-    DEFAULT_PROMPT_PACK_ID,
-};
 use crate::CliResult;
+use crate::prompt::{
+    DEFAULT_PROMPT_PACK_ID, PromptPersonality, PromptRenderInput, render_default_system_prompt,
+    render_system_prompt,
+};
 
 use super::shared::{
     ConfigValidationCode, ConfigValidationIssue, EnvPointerValidationHint,

@@ -909,10 +909,8 @@ fn run_safe_lane_summary_cli(
 
     #[cfg(feature = "memory-sqlite")]
     {
-        let mem_config = mvp::memory::runtime_config::MemoryRuntimeConfig {
-            sqlite_path: Some(config.memory.resolved_sqlite_path()),
-            sliding_window: Some(config.memory.sliding_window),
-        };
+        let mem_config =
+            mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
         let turns = mvp::memory::window_direct(&session_id, limit, &mem_config)
             .map_err(|error| format!("load safe-lane summary failed: {error}"))?;
         let summary = mvp::conversation::summarize_safe_lane_events(
@@ -1008,6 +1006,7 @@ fn run_safe_lane_summary_cli(
     }
 }
 
+#[cfg(feature = "memory-sqlite")]
 fn format_milli_ratio(value: Option<u32>) -> String {
     value
         .map(|raw| format!("{:.3}", (raw as f64) / 1000.0))

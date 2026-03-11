@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use crate::CliResult;
 
 use super::{
-    apply_import_plan, inspect_import_path, merge_profile_entries, plan_import_from_path,
-    LegacyClawSource, MergedProfilePlan, ProfileEntryLane, ProfileMergeEntry,
+    LegacyClawSource, MergedProfilePlan, ProfileEntryLane, ProfileMergeEntry, apply_import_plan,
+    inspect_import_path, merge_profile_entries, plan_import_from_path,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +30,7 @@ impl Default for DiscoveryOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveredImportSource {
     pub source: LegacyClawSource,
+    pub source_id: String,
     pub path: PathBuf,
     pub confidence_score: u32,
     pub found_files: Vec<String>,
@@ -121,6 +122,7 @@ pub fn discover_import_sources(
         };
         sources.push(DiscoveredImportSource {
             source: inspection.source,
+            source_id: String::new(),
             confidence_score: score_discovered_source(&inspection),
             found_files: inspection.found_files,
             path: candidate,
@@ -133,6 +135,7 @@ pub fn discover_import_sources(
             .cmp(&left.confidence_score)
             .then_with(|| left.path.cmp(&right.path))
     });
+    assign_discovery_source_ids(&mut sources);
 
     Ok(DiscoveryReport { sources })
 }
@@ -143,7 +146,7 @@ pub fn plan_import_sources(report: &DiscoveryReport) -> CliResult<DiscoveryPlanS
         let plan = plan_import_from_path(&source.path, Some(source.source))?;
         plans.push(PlannedImportSource {
             source: source.source,
-            source_id: source.source.as_id().to_owned(),
+            source_id: source.source_id.clone(),
             input_path: source.path.clone(),
             confidence_score: source.confidence_score,
             prompt_addendum_present: plan.system_prompt_addendum.is_some(),
@@ -193,7 +196,7 @@ pub fn merge_profile_sources(report: &DiscoveryReport) -> CliResult<MergedProfil
     let mut entries = Vec::new();
     for source in &report.sources {
         let plan = plan_import_from_path(&source.path, Some(source.source))?;
-        let source_id = source.source.as_id().to_owned();
+        let source_id = source.source_id.clone();
 
         if let Some(prompt_addendum) = plan.system_prompt_addendum.as_deref() {
             entries.push(ProfileMergeEntry {
@@ -253,7 +256,6 @@ pub fn apply_import_selection(
             let primary_plan =
                 plan_import_from_path(&selected_primary.path, Some(selected_primary.source))?;
             warnings.extend(primary_plan.warnings.clone());
-            apply_import_plan(&mut config, &primary_plan);
 
             for source in &request.discovery.sources {
                 if source.path == selected_primary.path {
@@ -281,12 +283,9 @@ pub fn apply_import_selection(
                     .discovery
                     .sources
                     .iter()
-                    .map(|source| source.source.as_id().to_owned())
+                    .map(|source| source.source_id.clone())
                     .collect(),
-                merged
-                    .prompt_owner_source_id
-                    .clone()
-                    .or(Some(selected_primary_source_id.clone())),
+                None,
                 merged.unresolved_conflicts.len(),
             )
         }
@@ -439,6 +438,59 @@ fn score_discovered_source(inspection: &super::ImportPathInspection) -> u32 {
     score
 }
 
+fn assign_discovery_source_ids(sources: &mut [DiscoveredImportSource]) {
+    let mut source_type_counts = BTreeMap::<String, usize>::new();
+    for source in sources.iter() {
+        *source_type_counts
+            .entry(source.source.as_id().to_owned())
+            .or_default() += 1;
+    }
+
+    let mut token_counts = BTreeMap::<String, usize>::new();
+    for source in sources.iter_mut() {
+        let base_id = source.source.as_id().to_owned();
+        let token_base = if source_type_counts.get(&base_id).copied().unwrap_or(0) > 1 {
+            format!("{base_id}-{}", selection_slug(&source.path))
+        } else {
+            base_id
+        };
+        let count = token_counts.entry(token_base.clone()).or_default();
+        *count += 1;
+        source.source_id = if *count == 1 {
+            token_base
+        } else {
+            format!("{token_base}-{}", *count)
+        };
+    }
+}
+
+fn selection_slug(path: &Path) -> String {
+    let raw = path
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "source".to_owned());
+
+    let mut slug = String::new();
+    let mut just_pushed_dash = false;
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            just_pushed_dash = false;
+        } else if !just_pushed_dash {
+            slug.push('-');
+            just_pushed_dash = true;
+        }
+    }
+
+    let trimmed = slug.trim_matches('-');
+    if trimmed.is_empty() {
+        "source".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
 fn primary_recommendation_score(plan: &PlannedImportSource) -> u32 {
     let mut score = plan.confidence_score;
     if plan.prompt_addendum_present {
@@ -529,7 +581,7 @@ fn resolve_discovered_source<'a>(
     report
         .sources
         .iter()
-        .find(|source| source.source.as_id() == source_id)
+        .find(|source| source.source_id == source_id)
         .ok_or_else(|| format!("selected import source `{source_id}` was not discovered"))
 }
 
@@ -635,14 +687,18 @@ mod tests {
             report.sources[0].confidence_score >= report.sources[1].confidence_score,
             "expected descending confidence scores"
         );
-        assert!(report.sources[0]
-            .found_files
-            .iter()
-            .any(|value| value == "SOUL.md"));
-        assert!(report.sources[0]
-            .found_files
-            .iter()
-            .any(|value| value == "IDENTITY.md"));
+        assert!(
+            report.sources[0]
+                .found_files
+                .iter()
+                .any(|value| value == "SOUL.md")
+        );
+        assert!(
+            report.sources[0]
+                .found_files
+                .iter()
+                .any(|value| value == "IDENTITY.md")
+        );
 
         fs::remove_dir_all(&root).ok();
     }
@@ -795,6 +851,138 @@ mod tests {
         assert!(result.backup_path.exists());
         assert!(result.manifest_path.exists());
         assert_eq!(result.selected_primary_source_id, "openclaw");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn safe_profile_merge_keeps_existing_prompt_and_applies_only_profile_lane() {
+        let root = unique_temp_dir("loongclaw-import-safe-merge-profile-only");
+        fs::create_dir_all(&root).expect("create fixture root");
+
+        let openclaw_root = root.join("openclaw-workspace");
+        fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+        write_file(
+            &openclaw_root,
+            "SOUL.md",
+            "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+        );
+        write_file(
+            &openclaw_root,
+            "IDENTITY.md",
+            "# Identity\n\n- role: release copilot\n",
+        );
+
+        let nanobot_root = root.join("nanobot");
+        fs::create_dir_all(&nanobot_root).expect("create nanobot root");
+        write_file(
+            &nanobot_root,
+            "IDENTITY.md",
+            "# Identity\n\n- region: apac\n",
+        );
+
+        let discovery = discover_import_sources(&root, DiscoveryOptions::default())
+            .expect("discovery should succeed");
+        let summary = plan_import_sources(&discovery).expect("summary should succeed");
+        let recommendation =
+            recommend_primary_source(&summary).expect("recommendation should succeed");
+        let output_path = root.join("loongclaw.toml");
+
+        let mut existing = crate::config::LoongClawConfig::default();
+        existing.cli.system_prompt_addendum = Some("Native LoongClaw prompt".to_owned());
+        let existing_body = crate::config::render(&existing).expect("render existing config");
+        fs::write(&output_path, existing_body).expect("write existing config");
+
+        let result = apply_import_selection(&ApplyImportSelection {
+            discovery,
+            output_path: output_path.clone(),
+            mode: ImportSelectionMode::SafeProfileMerge {
+                primary_source_id: recommendation.source_id,
+            },
+        })
+        .expect("safe profile merge should succeed");
+
+        let output_string = output_path.display().to_string();
+        let (_, merged_config) =
+            crate::config::load(Some(&output_string)).expect("load merged config");
+        assert_eq!(result.prompt_owner_source_id, None);
+        assert_eq!(
+            merged_config.cli.system_prompt_addendum.as_deref(),
+            Some("Native LoongClaw prompt")
+        );
+        assert_eq!(
+            merged_config.memory.profile,
+            crate::config::MemoryProfile::ProfilePlusWindow
+        );
+        let profile_note = merged_config
+            .memory
+            .profile_note
+            .as_deref()
+            .expect("profile note should be present");
+        assert!(profile_note.contains("role: release copilot"));
+        assert!(profile_note.contains("region: apac"));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn duplicate_source_types_get_distinct_ids_and_apply_selected_uses_requested_source() {
+        let root = unique_temp_dir("loongclaw-import-duplicate-source-kind");
+        fs::create_dir_all(&root).expect("create fixture root");
+
+        let alpha_root = root.join("openclaw-alpha");
+        fs::create_dir_all(&alpha_root).expect("create alpha root");
+        write_file(&alpha_root, "SOUL.md", "# Soul\n\nAlpha prompt guidance.\n");
+        write_file(&alpha_root, "IDENTITY.md", "# Identity\n\n- region: east\n");
+
+        let beta_root = root.join("openclaw-beta");
+        fs::create_dir_all(&beta_root).expect("create beta root");
+        write_file(&beta_root, "SOUL.md", "# Soul\n\nBeta prompt guidance.\n");
+        write_file(&beta_root, "IDENTITY.md", "# Identity\n\n- region: west\n");
+
+        let discovery = discover_import_sources(&root, DiscoveryOptions::default())
+            .expect("discovery should succeed");
+        let summary = plan_import_sources(&discovery).expect("summary should succeed");
+        assert_eq!(summary.plans.len(), 2);
+        assert_ne!(summary.plans[0].source_id, summary.plans[1].source_id);
+        assert!(summary.plans[0].source_id.starts_with("openclaw-"));
+        assert!(summary.plans[1].source_id.starts_with("openclaw-"));
+
+        let selected_source_id = summary.plans[1].source_id.clone();
+        let output_path = root.join("loongclaw.toml");
+        let original_body =
+            crate::config::render(&crate::config::LoongClawConfig::default()).expect("render");
+        fs::write(&output_path, original_body).expect("write original config");
+
+        let result = apply_import_selection(&ApplyImportSelection {
+            discovery,
+            output_path: output_path.clone(),
+            mode: ImportSelectionMode::SelectedSingleSource {
+                source_id: selected_source_id.clone(),
+            },
+        })
+        .expect("apply should succeed");
+
+        let output_string = output_path.display().to_string();
+        let (_, merged_config) =
+            crate::config::load(Some(&output_string)).expect("load merged config");
+        assert_eq!(result.selected_primary_source_id, selected_source_id);
+        assert!(
+            merged_config
+                .cli
+                .system_prompt_addendum
+                .as_deref()
+                .is_some_and(|value| value.contains("Beta prompt guidance")),
+            "expected selected source prompt to be imported"
+        );
+        assert!(
+            merged_config
+                .memory
+                .profile_note
+                .as_deref()
+                .is_some_and(|value| value.contains("region: west")),
+            "expected selected source profile note to be imported"
+        );
 
         fs::remove_dir_all(&root).ok();
     }

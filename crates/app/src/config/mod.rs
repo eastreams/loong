@@ -18,9 +18,9 @@ pub use conversation::{ConversationConfig, ConversationTurnLoopConfig};
 pub use provider::{ProviderConfig, ProviderKind, ReasoningEffort};
 #[allow(unused_imports)]
 pub use runtime::{
-    default_config_path, default_loongclaw_home, load, normalize_validation_locale, render,
-    supported_validation_locales, validate_file, validate_file_with_locale, write, write_template,
-    ConfigValidationDiagnostic, LoongClawConfig,
+    ConfigValidationDiagnostic, LoongClawConfig, default_config_path, default_loongclaw_home, load,
+    normalize_validation_locale, render, supported_validation_locales, validate_file,
+    validate_file_with_locale, write, write_template,
 };
 #[allow(unused_imports)]
 pub use shared::expand_path;

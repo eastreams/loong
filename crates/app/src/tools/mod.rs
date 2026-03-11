@@ -319,8 +319,11 @@ mod tests {
     #[test]
     fn capability_snapshot_lists_all_tools_when_all_features_enabled() {
         let snapshot = capability_snapshot();
-        assert!(snapshot
-            .contains("- claw.import: Import legacy Claw configs into native LoongClaw settings"));
+        assert!(
+            snapshot.contains(
+                "- claw.import: Import legacy Claw configs into native LoongClaw settings"
+            )
+        );
         assert!(snapshot.contains("- file.read: Read file contents"));
         assert!(snapshot.contains("- file.write: Write file contents"));
         assert!(snapshot.contains("- shell.exec: Execute shell commands"));
@@ -472,14 +475,18 @@ mod tests {
             outcome.payload["config_preview"]["memory_profile"],
             "profile_plus_window"
         );
-        assert!(outcome.payload["config_preview"]["system_prompt_addendum"]
-            .as_str()
-            .expect("prompt addendum should exist")
-            .contains("LoongClaw"));
-        assert!(outcome.payload["config_preview"]["profile_note"]
-            .as_str()
-            .expect("profile note should exist")
-            .contains("LoongClaw"));
+        assert!(
+            outcome.payload["config_preview"]["system_prompt_addendum"]
+                .as_str()
+                .expect("prompt addendum should exist")
+                .contains("LoongClaw")
+        );
+        assert!(
+            outcome.payload["config_preview"]["profile_note"]
+                .as_str()
+                .expect("profile note should exist")
+                .contains("LoongClaw")
+        );
         assert_eq!(outcome.payload["config_written"], false);
 
         fs::remove_dir_all(&root).ok();
@@ -768,10 +775,12 @@ mod tests {
             outcome.payload["result"]["prompt_owner_source_id"],
             "openclaw"
         );
-        assert!(outcome.payload["result"]["merged_profile_note"]
-            .as_str()
-            .expect("merged profile note should be present")
-            .contains("region: apac"));
+        assert!(
+            outcome.payload["result"]["merged_profile_note"]
+                .as_str()
+                .expect("merged profile note should be present")
+                .contains("region: apac")
+        );
 
         fs::remove_dir_all(&root).ok();
     }
@@ -841,18 +850,22 @@ mod tests {
 
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["mode"], "apply_selected");
-        assert!(Path::new(
-            outcome.payload["result"]["backup_path"]
-                .as_str()
-                .expect("backup path should be present")
-        )
-        .exists());
-        assert!(Path::new(
-            outcome.payload["result"]["manifest_path"]
-                .as_str()
-                .expect("manifest path should be present")
-        )
-        .exists());
+        assert!(
+            Path::new(
+                outcome.payload["result"]["backup_path"]
+                    .as_str()
+                    .expect("backup path should be present")
+            )
+            .exists()
+        );
+        assert!(
+            Path::new(
+                outcome.payload["result"]["manifest_path"]
+                    .as_str()
+                    .expect("manifest path should be present")
+            )
+            .exists()
+        );
 
         fs::remove_dir_all(&root).ok();
     }
@@ -933,9 +946,11 @@ mod tests {
         .expect("claw import rollback_last_apply should succeed");
 
         assert_eq!(rollback.status, "ok");
-        assert!(rollback.payload["rolled_back"]
-            .as_bool()
-            .expect("rolled_back flag should exist"));
+        assert!(
+            rollback.payload["rolled_back"]
+                .as_bool()
+                .expect("rolled_back flag should exist")
+        );
         assert_eq!(
             fs::read_to_string(&output_path).expect("read restored config"),
             original_body

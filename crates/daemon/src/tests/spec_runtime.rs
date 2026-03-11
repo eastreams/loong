@@ -4739,6 +4739,127 @@ async fn execute_spec_tool_extension_can_merge_profiles_without_merging_prompt_l
 }
 
 #[tokio::test]
+async fn execute_spec_tool_extension_apply_selected_safe_merge_keeps_native_prompt() {
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+    }
+
+    fn write_file(root: &Path, relative: &str, content: &str) {
+        let path = root.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent directory");
+        }
+        fs::write(path, content).expect("write fixture");
+    }
+
+    let root = unique_temp_dir("loongclaw-spec-tool-extension-apply-safe-merge");
+    fs::create_dir_all(&root).expect("create fixture root");
+
+    let openclaw_root = root.join("openclaw-workspace");
+    fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+    write_file(
+        &openclaw_root,
+        "SOUL.md",
+        "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+    );
+    write_file(
+        &openclaw_root,
+        "IDENTITY.md",
+        "# Identity\n\n- role: release copilot\n",
+    );
+
+    let nanobot_root = root.join("nanobot");
+    fs::create_dir_all(&nanobot_root).expect("create nanobot root");
+    write_file(
+        &nanobot_root,
+        "IDENTITY.md",
+        "# Identity\n\n- region: apac\n",
+    );
+
+    let output_path = root.join("loongclaw.toml");
+    let mut existing = loongclaw_app::config::LoongClawConfig::default();
+    existing.cli.system_prompt_addendum = Some("Native LoongClaw prompt".to_owned());
+    let existing_body = loongclaw_app::config::render(&existing).expect("render existing config");
+    fs::write(&output_path, existing_body).expect("write existing config");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-tool-extension-claw-apply-safe-merge".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-tool-extension-claw-apply-safe-merge".to_owned(),
+        ttl_s: 120,
+        approval: None,
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: None,
+        bridge_support: None,
+        bootstrap: None,
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        operation: OperationSpec::ToolExtension {
+            extension_action: "apply_selected".to_owned(),
+            required_capabilities: BTreeSet::from([Capability::InvokeTool]),
+            payload: json!({
+                "input_path": root.display().to_string(),
+                "output_path": output_path.display().to_string(),
+                "safe_profile_merge": true,
+                "primary_source_id": "openclaw"
+            }),
+            extension: "claw-migration".to_owned(),
+            core: None,
+        },
+    };
+
+    let report = execute_spec(spec, true).await;
+    assert_eq!(report.operation_kind, "tool_extension");
+    assert_eq!(report.outcome["outcome"]["status"], "ok");
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["action"],
+        "apply_selected"
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["result"]["prompt_owner_source_id"],
+        serde_json::Value::Null
+    );
+
+    let output_string = output_path.display().to_string();
+    let (_, merged_config) =
+        loongclaw_app::config::load(Some(&output_string)).expect("load merged config");
+    assert_eq!(
+        merged_config.cli.system_prompt_addendum.as_deref(),
+        Some("Native LoongClaw prompt")
+    );
+    let profile_note = merged_config
+        .memory
+        .profile_note
+        .as_deref()
+        .expect("profile note should be present");
+    assert!(profile_note.contains("role: release copilot"));
+    assert!(profile_note.contains("region: apac"));
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
 async fn execute_spec_denylist_overrides_other_approvals() {
     let spec = RunnerSpec {
         pack: VerticalPackManifest {

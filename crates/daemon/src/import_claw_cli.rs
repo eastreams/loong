@@ -119,9 +119,5 @@ fn memory_profile_id(profile: mvp::config::MemoryProfile) -> &'static str {
 }
 
 fn yes_no(value: bool) -> &'static str {
-    if value {
-        "yes"
-    } else {
-        "no"
-    }
+    if value { "yes" } else { "no" }
 }
