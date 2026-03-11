@@ -514,10 +514,7 @@ fn resolve_secret_with_env_fallbacks(inline: Option<&str>, env_keys: &[String]) 
     if let Some(value) = read_secret_prefer_inline(inline, primary_env_key) {
         return Some(value);
     }
-    if env_keys.len() <= 1 {
-        return None;
-    }
-    first_non_empty_env_value(&env_keys[1..])
+    env_keys.get(1..).and_then(first_non_empty_env_value)
 }
 
 fn push_unique_env_key(keys: &mut Vec<String>, maybe_key: Option<&str>) {
