@@ -284,6 +284,19 @@ api_key = "${PROVIDER_API_KEY}"    # preferred explicit env reference
 `provider.api_key` also accepts `$PROVIDER_API_KEY`, `env:PROVIDER_API_KEY`, `%PROVIDER_API_KEY%`, or a direct literal like `api_key = "sk-..."`.
 Legacy `api_key_env = "PROVIDER_API_KEY"` remains supported for compatibility, but new configs should prefer `provider.api_key`.
 
+Volcengine Coding Plan / ARK demo:
+
+```toml
+[provider]
+kind = "volcengine"
+model = "your-coding-plan-model-id"
+api_key = "${ARK_API_KEY}"
+base_url = "https://ark.cn-beijing.volces.com"
+chat_completions_path = "/api/v3/chat/completions"
+```
+
+`kind = "volcengine"` already applies the Volcengine defaults above, so `base_url` and `chat_completions_path` are only needed when you want the config to spell them out explicitly.
+
 Validate your config:
 
 ```bash

@@ -247,6 +247,19 @@ api_key = "${PROVIDER_API_KEY}"    # 推荐的显式环境变量引用写法
 `provider.api_key` 也兼容 `$PROVIDER_API_KEY`、`env:PROVIDER_API_KEY`、`%PROVIDER_API_KEY%`，以及直接字面量写法 `api_key = "sk-..."`。
 旧格式 `api_key_env = "PROVIDER_API_KEY"` 仍然兼容，但新配置建议优先使用 `provider.api_key`。
 
+火山 Coding Plan / ARK 示例：
+
+```toml
+[provider]
+kind = "volcengine"
+model = "your-coding-plan-model-id"
+api_key = "${ARK_API_KEY}"
+base_url = "https://ark.cn-beijing.volces.com"
+chat_completions_path = "/api/v3/chat/completions"
+```
+
+`kind = "volcengine"` 已经内置了上面的火山默认 endpoint，所以只有在你希望把这些值明确写进配置时，才需要额外保留 `base_url` 和 `chat_completions_path`。
+
 验证配置：
 
 ```bash
