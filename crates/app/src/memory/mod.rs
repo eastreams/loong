@@ -235,8 +235,13 @@ mod tests {
         };
 
         for idx in 0..3 {
-            append_turn_direct("window-limit-session", "user", &format!("turn-{idx}"), &config)
-                .expect("append_turn_direct should succeed");
+            append_turn_direct(
+                "window-limit-session",
+                "user",
+                &format!("turn-{idx}"),
+                &config,
+            )
+            .expect("append_turn_direct should succeed");
         }
 
         std::env::set_var("LOONGCLAW_SLIDING_WINDOW", "1");
@@ -270,8 +275,13 @@ mod tests {
         };
 
         for idx in 0..130 {
-            append_turn_direct("window-default-session", "user", &format!("turn-{idx}"), &config)
-                .expect("append_turn_direct should succeed");
+            append_turn_direct(
+                "window-default-session",
+                "user",
+                &format!("turn-{idx}"),
+                &config,
+            )
+            .expect("append_turn_direct should succeed");
         }
 
         std::env::set_var("LOONGCLAW_SLIDING_WINDOW", "3");
