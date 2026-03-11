@@ -146,7 +146,7 @@ pub(crate) async fn run_onboard_cli(options: OnboardCommandOptions) -> CliResult
     }
     #[cfg(feature = "memory-sqlite")]
     println!("- sqlite memory: {}", memory_path.display());
-    println!("next step: loongclawd chat --config {}", path.display());
+    println!("next step: loongclaw chat --config {}", path.display());
     Ok(())
 }
 

@@ -27,7 +27,7 @@ No dependency cycles. This is non-negotiable.
 | `app` | Providers, tools, channels, memory backends, configuration, and conversation engine. Houses all feature-flagged modules. |
 | `spec` | Execution specification runner for deterministic test scenarios. |
 | `bench` | Performance benchmark harness and gate enforcement. |
-| `daemon` | CLI binary (`loongclawd`). Wires all crates into runnable commands: `setup`, `onboard`, `doctor`, `chat`, `run-spec`, benchmarks. |
+| `daemon` | CLI binary (`loongclaw`). Wires all crates into runnable commands: `setup`, `onboard`, `doctor`, `chat`, `run-spec`, benchmarks. |
 
 ## Layered Execution Model
 

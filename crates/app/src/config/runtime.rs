@@ -6,6 +6,7 @@ use crate::CliResult;
 
 use super::{
     channels::{CliChannelConfig, FeishuChannelConfig, TelegramChannelConfig},
+    conversation::ConversationConfig,
     provider::ProviderConfig,
     shared::{
         ConfigValidationIssue, ConfigValidationLocale, DEFAULT_CONFIG_FILE,
@@ -62,50 +63,11 @@ pub struct LoongClawConfig {
     #[serde(default)]
     pub feishu: FeishuChannelConfig,
     #[serde(default)]
+    pub conversation: ConversationConfig,
+    #[serde(default)]
     pub tools: ToolConfig,
     #[serde(default)]
     pub memory: MemoryConfig,
-    #[serde(default)]
-    pub conversation: ConversationConfig,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ConversationConfig {
-    #[serde(default)]
-    pub turn_loop: ConversationTurnLoopConfig,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConversationTurnLoopConfig {
-    #[serde(default = "default_turn_loop_max_rounds")]
-    pub max_rounds: usize,
-    #[serde(default = "default_turn_loop_max_tool_steps_per_round")]
-    pub max_tool_steps_per_round: usize,
-    #[serde(default = "default_turn_loop_max_repeated_tool_call_rounds")]
-    pub max_repeated_tool_call_rounds: usize,
-    #[serde(default = "default_turn_loop_max_ping_pong_cycles")]
-    pub max_ping_pong_cycles: usize,
-    #[serde(default = "default_turn_loop_max_same_tool_failure_rounds")]
-    pub max_same_tool_failure_rounds: usize,
-    #[serde(default = "default_turn_loop_max_followup_tool_payload_chars")]
-    pub max_followup_tool_payload_chars: usize,
-    #[serde(default = "default_turn_loop_max_followup_tool_payload_chars_total")]
-    pub max_followup_tool_payload_chars_total: usize,
-}
-
-impl Default for ConversationTurnLoopConfig {
-    fn default() -> Self {
-        Self {
-            max_rounds: default_turn_loop_max_rounds(),
-            max_tool_steps_per_round: default_turn_loop_max_tool_steps_per_round(),
-            max_repeated_tool_call_rounds: default_turn_loop_max_repeated_tool_call_rounds(),
-            max_ping_pong_cycles: default_turn_loop_max_ping_pong_cycles(),
-            max_same_tool_failure_rounds: default_turn_loop_max_same_tool_failure_rounds(),
-            max_followup_tool_payload_chars: default_turn_loop_max_followup_tool_payload_chars(),
-            max_followup_tool_payload_chars_total:
-                default_turn_loop_max_followup_tool_payload_chars_total(),
-        }
-    }
 }
 
 impl LoongClawConfig {
@@ -145,7 +107,7 @@ pub fn load(path: Option<&str>) -> CliResult<(PathBuf, LoongClawConfig)> {
     let config_path = path.map(expand_path).unwrap_or_else(default_config_path);
     let raw = fs::read_to_string(&config_path).map_err(|error| {
         format!(
-            "failed to read config {}: {error}. run `loongclawd setup` first",
+            "failed to read config {}: {error}. run `loongclaw setup` first",
             config_path.display()
         )
     })?;
@@ -173,7 +135,7 @@ pub fn validate_file_with_locale(
     let config_path = path.map(expand_path).unwrap_or_else(default_config_path);
     let raw = fs::read_to_string(&config_path).map_err(|error| {
         format!(
-            "failed to read config {}: {error}. run `loongclawd setup` first",
+            "failed to read config {}: {error}. run `loongclaw setup` first",
             config_path.display()
         )
     })?;
@@ -280,34 +242,6 @@ fn encode_toml_config(config: &LoongClawConfig) -> CliResult<String> {
 #[cfg(not(feature = "config-toml"))]
 fn encode_toml_config(_config: &LoongClawConfig) -> CliResult<String> {
     Err("config-toml feature is disabled for this build".to_owned())
-}
-
-const fn default_turn_loop_max_rounds() -> usize {
-    4
-}
-
-const fn default_turn_loop_max_tool_steps_per_round() -> usize {
-    1
-}
-
-const fn default_turn_loop_max_repeated_tool_call_rounds() -> usize {
-    2
-}
-
-const fn default_turn_loop_max_ping_pong_cycles() -> usize {
-    2
-}
-
-const fn default_turn_loop_max_same_tool_failure_rounds() -> usize {
-    3
-}
-
-const fn default_turn_loop_max_followup_tool_payload_chars() -> usize {
-    8_000
-}
-
-const fn default_turn_loop_max_followup_tool_payload_chars_total() -> usize {
-    20_000
 }
 
 fn template_secret_usage_comment() -> &'static str {
@@ -510,6 +444,15 @@ api_key_env = "$OPENAI_API_KEY"
     #[test]
     fn supported_validation_locales_stays_stable() {
         assert_eq!(supported_validation_locales(), vec!["en"]);
+    }
+
+    #[test]
+    fn load_missing_config_guides_user_to_loongclaw_setup() {
+        let missing = unique_config_path("loongclaw-config-missing");
+        let path_string = missing.display().to_string();
+
+        let error = load(Some(&path_string)).expect_err("missing config should fail");
+        assert!(error.contains("run `loongclaw setup` first"));
     }
 
     #[test]

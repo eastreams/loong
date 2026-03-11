@@ -6,8 +6,8 @@ usage() {
 Usage: ./scripts/install.sh [--prefix <dir>] [--setup]
 
 Options:
-  --prefix <dir>   Install directory for loongclawd (default: $HOME/.local/bin)
-  --setup          Run `loongclawd setup --force` after install
+  --prefix <dir>   Install directory for loongclaw (default: $HOME/.local/bin)
+  --setup          Run `loongclaw setup --force` after install
   -h, --help       Show this help
 USAGE
 }
@@ -49,20 +49,20 @@ fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 
-printf '==> Building loongclawd (release)\n'
+printf '==> Building loongclaw (release)\n'
 (
   cd "${repo_root}"
-  cargo build -p loongclaw-daemon --bin loongclawd --release
+  cargo build -p loongclaw-daemon --bin loongclaw --release
 )
 
 mkdir -p "${prefix}"
-install -m 755 "${repo_root}/target/release/loongclawd" "${prefix}/loongclawd"
+install -m 755 "${repo_root}/target/release/loongclaw" "${prefix}/loongclaw"
 
-printf '==> Installed loongclawd to %s\n' "${prefix}/loongclawd"
+printf '==> Installed loongclaw to %s\n' "${prefix}/loongclaw"
 
 if [[ "${run_setup}" -eq 1 ]]; then
   printf '==> Running initial setup\n'
-  "${prefix}/loongclawd" setup --force
+  "${prefix}/loongclaw" setup --force
 fi
 
 case ":${PATH}:" in
@@ -73,4 +73,4 @@ case ":${PATH}:" in
     ;;
 esac
 
-printf '\nDone. Try:\n  loongclawd --help\n'
+printf '\nDone. Try:\n  loongclaw --help\n'

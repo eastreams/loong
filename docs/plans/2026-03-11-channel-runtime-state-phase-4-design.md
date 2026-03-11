@@ -116,7 +116,7 @@ premature coordinator or lock server.
 - `process_channel_batch(...)` updates runtime for Telegram serve work
 - `feishu_webhook_handler(...)` updates runtime around provider processing
 - channel registry merges persisted runtime into serve operation snapshots
-- `loongclawd channels` renders runtime lines for tracked operations
+- `loongclaw channels` renders runtime lines for tracked operations
 
 **Why This Is The Right Next Step**
 

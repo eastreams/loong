@@ -38,7 +38,7 @@ const PUBLIC_GITHUB_REPO: &str = "loongclaw-ai/loongclaw";
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "loongclawd",
+    name = "loongclaw",
     about = "LoongClaw low-level runtime daemon",
     version
 )]
@@ -210,6 +210,17 @@ enum Commands {
         #[arg(long)]
         session: Option<String>,
     },
+    /// Print safe-lane runtime event summary for a session
+    SafeLaneSummary {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     /// Run Telegram channel polling/response loop
     TelegramServe {
         #[arg(long)]
@@ -367,6 +378,12 @@ async fn main() {
         Commands::Chat { config, session } => {
             run_chat_cli(config.as_deref(), session.as_deref()).await
         }
+        Commands::SafeLaneSummary {
+            config,
+            session,
+            limit,
+            json,
+        } => run_safe_lane_summary_cli(config.as_deref(), session.as_deref(), limit, json),
         Commands::TelegramServe {
             config,
             once,
@@ -609,7 +626,7 @@ fn run_setup_cli(output: Option<&str>, force: bool) -> CliResult<()> {
     {
         println!("setup complete\n- config: {}", path.display());
     }
-    println!("next step: loongclawd chat --config {}", path.display());
+    println!("next step: loongclaw chat --config {}", path.display());
     Ok(())
 }
 
@@ -844,6 +861,130 @@ async fn run_chat_cli(config_path: Option<&str>, session: Option<&str>) -> CliRe
     mvp::chat::run_cli_chat(config_path, session).await
 }
 
+fn run_safe_lane_summary_cli(
+    config_path: Option<&str>,
+    session: Option<&str>,
+    limit: usize,
+    as_json: bool,
+) -> CliResult<()> {
+    if limit == 0 {
+        return Err("safe-lane-summary limit must be >= 1".to_owned());
+    }
+
+    let (_, config) = mvp::config::load(config_path)?;
+    let session_id = session
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("default")
+        .to_owned();
+
+    #[cfg(feature = "memory-sqlite")]
+    {
+        let mem_config = mvp::memory::runtime_config::MemoryRuntimeConfig {
+            sqlite_path: Some(config.memory.resolved_sqlite_path()),
+            sliding_window: Some(config.memory.sliding_window),
+        };
+        let turns = mvp::memory::window_direct(&session_id, limit, &mem_config)
+            .map_err(|error| format!("load safe-lane summary failed: {error}"))?;
+        let summary = mvp::conversation::summarize_safe_lane_events(
+            turns
+                .iter()
+                .filter_map(|turn| (turn.role == "assistant").then_some(turn.content.as_str())),
+        );
+        if as_json {
+            let payload = json!({
+                "session": session_id,
+                "limit": limit,
+                "summary": summary,
+            });
+            let pretty = serde_json::to_string_pretty(&payload)
+                .map_err(|error| format!("serialize safe-lane summary failed: {error}"))?;
+            println!("{pretty}");
+            return Ok(());
+        }
+
+        let final_status = match summary.final_status {
+            Some(mvp::conversation::SafeLaneFinalStatus::Succeeded) => "succeeded",
+            Some(mvp::conversation::SafeLaneFinalStatus::Failed) => "failed",
+            None => "unknown",
+        };
+        println!("safe_lane_summary session={} limit={}", session_id, limit);
+        println!(
+            "events lane_selected={} round_started={} round_completed_succeeded={} round_completed_failed={} verify_failed={} verify_policy_adjusted={} replan_triggered={} final_status={} governor_engaged={} governor_force_no_replan={}",
+            summary.lane_selected_events,
+            summary.round_started_events,
+            summary.round_completed_succeeded_events,
+            summary.round_completed_failed_events,
+            summary.verify_failed_events,
+            summary.verify_policy_adjusted_events,
+            summary.replan_triggered_events,
+            summary.final_status_events,
+            summary.session_governor_engaged_events,
+            summary.session_governor_force_no_replan_events
+        );
+        println!(
+            "terminal status={} failure_code={} route_decision={} route_reason={}",
+            final_status,
+            summary.final_failure_code.as_deref().unwrap_or("-"),
+            summary.final_route_decision.as_deref().unwrap_or("-"),
+            summary.final_route_reason.as_deref().unwrap_or("-")
+        );
+        let route_reasons_rollup = if summary.route_reason_counts.is_empty() {
+            "-".to_owned()
+        } else {
+            summary
+                .route_reason_counts
+                .iter()
+                .map(|(key, value)| format!("{key}:{value}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        println!(
+            "governor trigger_failed_threshold={} trigger_backpressure_threshold={} trigger_trend_threshold={} trigger_recovery_threshold={}",
+            summary.session_governor_failed_threshold_triggered_events,
+            summary.session_governor_backpressure_threshold_triggered_events,
+            summary.session_governor_trend_threshold_triggered_events,
+            summary.session_governor_recovery_threshold_triggered_events
+        );
+        println!(
+            "governor_latest snapshots={} trend_samples={} trend_min_samples={} trend_failure_ewma={} trend_backpressure_ewma={} recovery_success_streak={} recovery_streak_threshold={}",
+            summary.session_governor_metrics_snapshots_seen,
+            summary
+                .session_governor_latest_trend_samples
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_owned()),
+            summary
+                .session_governor_latest_trend_min_samples
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_owned()),
+            format_milli_ratio(summary.session_governor_latest_trend_failure_ewma_milli),
+            format_milli_ratio(summary.session_governor_latest_trend_backpressure_ewma_milli),
+            summary
+                .session_governor_latest_recovery_success_streak
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_owned()),
+            summary
+                .session_governor_latest_recovery_success_streak_threshold
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_owned())
+        );
+        println!("rollup route_reasons={route_reasons_rollup}");
+        Ok(())
+    }
+
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = (config, session_id, as_json);
+        Err("safe-lane-summary requires memory-sqlite feature".to_owned())
+    }
+}
+
+fn format_milli_ratio(value: Option<u32>) -> String {
+    value
+        .map(|raw| format!("{:.3}", (raw as f64) / 1000.0))
+        .unwrap_or_else(|| "-".to_owned())
+}
+
 async fn run_telegram_serve_cli(
     config_path: Option<&str>,
     once: bool,
@@ -893,4 +1034,16 @@ fn write_json_file<T: Serialize>(path: &str, value: &T) -> CliResult<()> {
     fs::write(path, serialized)
         .map_err(|error| format!("write JSON output file failed: {error}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn safe_lane_summary_cli_rejects_zero_limit() {
+        let error = run_safe_lane_summary_cli(None, Some("session-a"), 0, false)
+            .expect_err("zero limit must be rejected");
+        assert!(error.contains(">= 1"));
+    }
 }

@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use super::{
     MEMORY_OP_APPEND_TURN, MEMORY_OP_CLEAR_SESSION, MEMORY_OP_WINDOW, build_append_turn_request,
-    build_window_request, runtime_config::MemoryRuntimeConfig,
+    runtime_config::MemoryRuntimeConfig,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,15 +83,22 @@ pub(super) fn load_window(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "memory.window requires payload.session_id".to_owned())?;
-    let window_limit = payload
+    let allow_extended_limit = payload
+        .get("allow_extended_limit")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let hard_limit_cap = if allow_extended_limit { 512 } else { 128 };
+    let requested_limit = payload
         .get("limit")
         .and_then(Value::as_u64)
-        .map(|limit| limit as usize)
-        .unwrap_or_else(|| default_window_size(config))
-        .clamp(
-            crate::config::MIN_MEMORY_SLIDING_WINDOW,
-            crate::config::MAX_MEMORY_SLIDING_WINDOW,
-        );
+        .unwrap_or_else(|| default_window_size_u64(config))
+        .clamp(1, hard_limit_cap) as usize;
+    let default_window = default_window_size(config).max(1);
+    let window_limit = if allow_extended_limit {
+        requested_limit
+    } else {
+        requested_limit.min(default_window)
+    };
 
     let path = resolve_db_path(config);
     ensure_sqlite_schema(&path)?;
@@ -133,6 +140,7 @@ pub(super) fn load_window(
             "operation": MEMORY_OP_WINDOW,
             "session_id": session_id,
             "limit": window_limit,
+            "allow_extended_limit": allow_extended_limit,
             "turns": turns,
             "db_path": path.display().to_string(),
         }),
@@ -191,7 +199,23 @@ pub(super) fn window_direct(
     limit: usize,
     config: &MemoryRuntimeConfig,
 ) -> Result<Vec<ConversationTurn>, String> {
-    let request = build_window_request(session_id, limit);
+    window_direct_with_options(session_id, limit, true, config)
+}
+
+pub(super) fn window_direct_with_options(
+    session_id: &str,
+    limit: usize,
+    allow_extended_limit: bool,
+    config: &MemoryRuntimeConfig,
+) -> Result<Vec<ConversationTurn>, String> {
+    let request = MemoryCoreRequest {
+        operation: "window".to_owned(),
+        payload: json!({
+            "session_id": session_id,
+            "limit": limit,
+            "allow_extended_limit": allow_extended_limit,
+        }),
+    };
     let outcome = super::execute_memory_core_with_config(request, config)?;
     let turns_raw = outcome.payload.get("turns").cloned().unwrap_or(Value::Null);
     serde_json::from_value(turns_raw)
@@ -213,6 +237,11 @@ fn default_window_size(config: &MemoryRuntimeConfig) -> usize {
         .filter(|value| *value > 0)
         .unwrap_or(12)
 }
+
+fn default_window_size_u64(config: &MemoryRuntimeConfig) -> u64 {
+    default_window_size(config) as u64
+}
+
 fn unix_ts_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -4,7 +4,7 @@ This checklist tracks architecture hardening and long-term sustainability work f
 
 ## Baseline Assessment Snapshot
 
-- Crash evidence: macOS daemon abort trace captured at `~/Library/Logs/DiagnosticReports/loongclawd-8971dc537d3d8ba9-2026-03-11-084504.ips` (Wasmtime machports trap handler path).
+- Crash evidence: macOS daemon abort trace captured in `~/Library/Logs/DiagnosticReports/` for the CLI binary (Wasmtime machports trap handler path).
 - Complexity hotspots (lines/functions):
   - `crates/spec/src/spec_runtime.rs`: `2771/46`
   - `crates/spec/src/spec_execution.rs`: `1441/22`

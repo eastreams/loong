@@ -30,7 +30,7 @@ tokio.workspace = true
 chrono.workspace = true
 
 [[bin]]
-name = "loongclawd"
+name = "loongclaw"
 path = "src/main.rs"
 
 [dev-dependencies]

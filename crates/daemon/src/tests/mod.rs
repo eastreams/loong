@@ -1,4 +1,5 @@
 use super::*;
+use clap::CommandFactory;
 
 fn approval_test_operation(tool_name: &str, payload: Value) -> OperationSpec {
     OperationSpec::ToolCore {
@@ -33,6 +34,12 @@ mod onboard_cli;
 mod programmatic;
 mod spec_runtime;
 mod spec_runtime_bridge;
+
+#[test]
+fn clap_command_name_is_loongclaw() {
+    let command = Cli::command();
+    assert_eq!(command.get_name(), "loongclaw");
+}
 
 #[test]
 fn resolve_validate_output_defaults_to_text() {

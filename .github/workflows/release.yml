@@ -11,7 +11,7 @@ on:
         required: true
 
 env:
-  BIN_NAME: loongclawd
+  BIN_NAME: loongclaw
   PACKAGE_NAME: loongclaw
 
 jobs:

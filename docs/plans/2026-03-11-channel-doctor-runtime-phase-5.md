@@ -1,7 +1,7 @@
 # Channel Doctor Runtime Phase 5 Implementation Plan
 
-**Goal:** Make `loongclawd doctor` consume the same runtime-aware channel
-snapshots as `loongclawd channels`, so operator diagnostics reflect both config
+**Goal:** Make `loongclaw doctor` consume the same runtime-aware channel
+snapshots as `loongclaw channels`, so operator diagnostics reflect both config
 readiness and serve-loop liveness.
 
 **Architecture:** Reuse shared channel snapshots from `loongclaw-app::channel`,

@@ -2,7 +2,7 @@
 
 **Scope**
 
-Phase 5 upgrades `loongclawd doctor` from configuration-only channel checks to
+Phase 5 upgrades `loongclaw doctor` from configuration-only channel checks to
 runtime-aware diagnostics for tracked serve operations.
 
 It does not add new channel transports. It closes the operator feedback loop
@@ -11,7 +11,7 @@ opened by Phase 4 runtime persistence.
 **Problem Statement**
 
 After Phase 4, LoongClaw could persist serve runtime state and expose it through
-`loongclawd channels`, but `doctor` still treated channels as a pure readiness
+`loongclaw channels`, but `doctor` still treated channels as a pure readiness
 problem. That left two operator workflows misaligned:
 
 - `channels` could say a serve loop was stale or not running

@@ -75,8 +75,8 @@ For both `telegram` and `feishu`:
 `ChannelStatusSnapshot` should grow a boolean marker for default-account
 selection. That marker should appear in:
 
-- JSON output from `loongclawd channels --json`
-- text output from `loongclawd channels`
+- JSON output from `loongclaw channels --json`
+- text output from `loongclaw channels`
 - snapshot notes used by `doctor` and other diagnostics
 
 The goal is not cosmetic labeling. The goal is to make it obvious which

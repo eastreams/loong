@@ -97,7 +97,7 @@ cargo install --path crates/daemon
 1. Generate config and bootstrap local state:
 
    ```bash
-   loongclawd setup
+   loongclaw setup
    ```
 
 2. Set your provider API key:
@@ -109,10 +109,10 @@ cargo install --path crates/daemon
 3. Start chatting:
 
    ```bash
-   loongclawd chat
+   loongclaw chat
    ```
 
-Run `loongclawd doctor --fix` if anything goes wrong.
+Run `loongclaw doctor --fix` if anything goes wrong.
 
 ### Run Tests
 
@@ -182,7 +182,7 @@ contracts (leaf -- zero internal deps)
 | `app` | Providers, tools, channels, memory, configuration, conversation engine. |
 | `spec` | Execution spec runner for deterministic test scenarios. |
 | `bench` | Benchmark harness and gate enforcement. |
-| `daemon` | CLI binary (`loongclawd`). Wires everything into runnable commands. |
+| `daemon` | CLI binary (`loongclaw`). Wires everything into runnable commands. |
 
 For the full layered execution model (L0-L9), see [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -237,7 +237,7 @@ cargo build -p loongclaw-daemon --no-default-features --features "channel-cli,pr
 
 ## Configuration
 
-`loongclawd setup` defaults to referencing secrets via environment variables (not storing them directly):
+`loongclaw setup` defaults to referencing secrets via environment variables (not storing them directly):
 
 ```toml
 [provider]
@@ -250,7 +250,7 @@ For direct values, use the non-`_env` fields instead (`api_key = "sk-..."`).
 Validate your config:
 
 ```bash
-loongclawd validate-config --config ~/.loongclaw/config.toml --json
+loongclaw validate-config --config ~/.loongclaw/config.toml --json
 ```
 
 ## Contributing

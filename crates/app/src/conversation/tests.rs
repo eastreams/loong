@@ -54,10 +54,6 @@ impl FakeRuntime {
         Self::with_turns_and_completions(seed_messages, vec![turn], vec![completion])
     }
 
-    fn with_turns(seed_messages: Vec<Value>, turns: Vec<Result<ProviderTurn, String>>) -> Self {
-        Self::with_turns_and_completions(seed_messages, turns, Vec::new())
-    }
-
     fn with_turns_and_completions(
         seed_messages: Vec<Value>,
         turns: Vec<Result<ProviderTurn, String>>,
@@ -102,13 +98,12 @@ impl ConversationRuntime for FakeRuntime {
             .expect("completion request lock")
             .push(messages.to_vec());
         drop(calls);
-        return self
-            .completion_responses
+        self.completion_responses
             .lock()
             .expect("completion response lock")
             .pop_front()
             .unwrap_or_else(|| Err("unexpected_completion_call".to_owned()))
-            .map_err(|error| error.to_owned());
+            .map_err(|error| error.to_owned())
     }
 
     async fn request_turn(
@@ -124,13 +119,12 @@ impl ConversationRuntime for FakeRuntime {
             .expect("turn request lock")
             .push(messages.to_vec());
         drop(calls);
-        return self
-            .turn_responses
+        self.turn_responses
             .lock()
             .expect("turn response lock")
             .pop_front()
             .unwrap_or_else(|| Err("unexpected_turn_call".to_owned()))
-            .map_err(|error| error.to_owned());
+            .map_err(|error| error.to_owned())
     }
 
     async fn persist_turn(
@@ -155,9 +149,9 @@ fn test_config() -> LoongClawConfig {
         cli: CliChannelConfig::default(),
         telegram: TelegramChannelConfig::default(),
         feishu: FeishuChannelConfig::default(),
+        conversation: ConversationConfig::default(),
         tools: ToolConfig::default(),
         memory: MemoryConfig::default(),
-        conversation: ConversationConfig::default(),
     }
 }
 
@@ -167,8 +161,8 @@ async fn handle_turn_with_runtime_success_persists_user_and_assistant_turns() {
         vec![json!({"role": "system", "content": "sys"})],
         Ok("assistant-reply".to_owned()),
     );
-    let turn_loop = ConversationTurnLoop::new();
-    let reply = turn_loop
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
             "session-1",
@@ -210,8 +204,8 @@ async fn handle_turn_with_runtime_success_persists_user_and_assistant_turns() {
 #[tokio::test]
 async fn handle_turn_with_runtime_propagates_error_without_persisting() {
     let runtime = FakeRuntime::new(vec![], Err("timeout".to_owned()));
-    let turn_loop = ConversationTurnLoop::new();
-    let error = turn_loop
+    let coordinator = ConversationTurnCoordinator::new();
+    let error = coordinator
         .handle_turn_with_runtime(
             &test_config(),
             "session-2",
@@ -230,8 +224,8 @@ async fn handle_turn_with_runtime_propagates_error_without_persisting() {
 #[tokio::test]
 async fn handle_turn_with_runtime_inline_mode_returns_synthetic_reply_and_persists() {
     let runtime = FakeRuntime::new(vec![], Err("timeout".to_owned()));
-    let turn_loop = ConversationTurnLoop::new();
-    let output = turn_loop
+    let coordinator = ConversationTurnCoordinator::new();
+    let output = coordinator
         .handle_turn_with_runtime(
             &test_config(),
             "session-3",
@@ -266,41 +260,35 @@ async fn handle_turn_with_runtime_inline_mode_returns_synthetic_reply_and_persis
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn handle_turn_with_runtime_tool_turn_runs_second_turn_for_natural_language_reply() {
+async fn handle_turn_with_runtime_tool_turn_uses_natural_language_completion_by_default() {
     use super::integration_tests::TurnTestHarness;
 
     let harness = TurnTestHarness::new();
     std::fs::write(
         harness.temp_dir.join("note.md"),
-        "hello from orchestrator test",
+        "hello from coordinator test",
     )
     .expect("seed test note");
 
-    let runtime = FakeRuntime::with_turns(
+    let runtime = FakeRuntime::with_turn_and_completion(
         vec![],
-        vec![
-            Ok(ProviderTurn {
-                assistant_text: "Reading the file now.".to_owned(),
-                tool_intents: vec![ToolIntent {
-                    tool_name: "file.read".to_owned(),
-                    args_json: json!({"path": "note.md"}),
-                    source: "provider_tool_call".to_owned(),
-                    session_id: "session-tool".to_owned(),
-                    turn_id: "turn-tool".to_owned(),
-                    tool_call_id: "call-tool".to_owned(),
-                }],
-                raw_meta: Value::Null,
-            }),
-            Ok(ProviderTurn {
-                assistant_text: "Summary: the note says hello from orchestrator test.".to_owned(),
-                tool_intents: vec![],
-                raw_meta: Value::Null,
-            }),
-        ],
+        Ok(ProviderTurn {
+            assistant_text: "Reading the file now.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!({"path": "note.md"}),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-tool".to_owned(),
+                turn_id: "turn-tool".to_owned(),
+                tool_call_id: "call-tool".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        }),
+        Ok("Summary: the note says hello from coordinator test.".to_owned()),
     );
 
-    let turn_loop = ConversationTurnLoop::new();
-    let reply = turn_loop
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
             "session-tool",
@@ -312,10 +300,7 @@ async fn handle_turn_with_runtime_tool_turn_runs_second_turn_for_natural_languag
         .await
         .expect("tool turn should succeed");
 
-    assert_eq!(
-        reply,
-        "Summary: the note says hello from orchestrator test."
-    );
+    assert_eq!(reply, "Summary: the note says hello from coordinator test.");
     assert!(
         !reply.contains("[ok]"),
         "default reply should not contain raw tool marker, got: {reply}"
@@ -325,24 +310,9 @@ async fn handle_turn_with_runtime_tool_turn_runs_second_turn_for_natural_languag
             .completion_calls
             .lock()
             .expect("completion calls lock"),
-        0
+        1
     );
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 2);
-
-    let requested_turns = runtime
-        .turn_requested_messages
-        .lock()
-        .expect("turn request lock");
-    assert_eq!(requested_turns.len(), 2);
-    let second_turn_payload = serde_json::to_string(&requested_turns[1]).expect("serialize turns");
-    assert!(
-        second_turn_payload.contains("[tool_result]"),
-        "second turn should include tool result context, got: {second_turn_payload}"
-    );
-    assert!(
-        second_turn_payload.contains("Original request"),
-        "second turn should include followup prompt, got: {second_turn_payload}"
-    );
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 1);
 
     let persisted = runtime.persisted.lock().expect("persisted lock");
     assert_eq!(persisted.len(), 2);
@@ -358,7 +328,7 @@ async fn handle_turn_with_runtime_tool_turn_raw_request_skips_second_pass_comple
     let harness = TurnTestHarness::new();
     std::fs::write(
         harness.temp_dir.join("note.md"),
-        "hello from orchestrator test",
+        "hello from coordinator test",
     )
     .expect("seed test note");
 
@@ -379,8 +349,8 @@ async fn handle_turn_with_runtime_tool_turn_raw_request_skips_second_pass_comple
         Ok("this must not be used".to_owned()),
     );
 
-    let turn_loop = ConversationTurnLoop::new();
-    let reply = turn_loop
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
             "session-tool-raw",
@@ -406,776 +376,1510 @@ async fn handle_turn_with_runtime_tool_turn_raw_request_skips_second_pass_comple
     assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 1);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn handle_turn_with_runtime_supports_multiple_tool_rounds_before_final_answer() {
-    use super::integration_tests::TurnTestHarness;
-
-    let harness = TurnTestHarness::new();
-    std::fs::write(harness.temp_dir.join("note_a.md"), "first note").expect("seed note_a");
-    std::fs::write(harness.temp_dir.join("note_b.md"), "second note").expect("seed note_b");
-
-    let runtime = FakeRuntime::with_turns(
-        vec![],
-        vec![
-            Ok(ProviderTurn {
-                assistant_text: "Reading note_a.md.".to_owned(),
-                tool_intents: vec![ToolIntent {
-                    tool_name: "file.read".to_owned(),
-                    args_json: json!({"path": "note_a.md"}),
-                    source: "provider_tool_call".to_owned(),
-                    session_id: "session-multi-tool".to_owned(),
-                    turn_id: "turn-1".to_owned(),
-                    tool_call_id: "call-1".to_owned(),
-                }],
-                raw_meta: Value::Null,
-            }),
-            Ok(ProviderTurn {
-                assistant_text: "Need note_b.md as well.".to_owned(),
-                tool_intents: vec![ToolIntent {
-                    tool_name: "file.read".to_owned(),
-                    args_json: json!({"path": "note_b.md"}),
-                    source: "provider_tool_call".to_owned(),
-                    session_id: "session-multi-tool".to_owned(),
-                    turn_id: "turn-2".to_owned(),
-                    tool_call_id: "call-2".to_owned(),
-                }],
-                raw_meta: Value::Null,
-            }),
-            Ok(ProviderTurn {
-                assistant_text: "Summary: note_a says first note; note_b says second note."
-                    .to_owned(),
-                tool_intents: vec![],
-                raw_meta: Value::Null,
-            }),
-        ],
-    );
-
-    let turn_loop = ConversationTurnLoop::new();
-    let reply = turn_loop
-        .handle_turn_with_runtime(
-            &test_config(),
-            "session-multi-tool",
-            "read note_a.md and note_b.md then summarize",
-            ProviderErrorMode::Propagate,
-            &runtime,
-            Some(&harness.kernel_ctx),
-        )
-        .await
-        .expect("multi-tool turn should succeed");
-
-    assert_eq!(
-        reply,
-        "Summary: note_a says first note; note_b says second note."
-    );
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 3);
-    assert_eq!(
-        *runtime
-            .completion_calls
-            .lock()
-            .expect("completion calls lock"),
-        0
-    );
-
-    let requested_turns = runtime
-        .turn_requested_messages
-        .lock()
-        .expect("turn request lock");
-    assert_eq!(requested_turns.len(), 3);
-    let third_turn_payload = serde_json::to_string(&requested_turns[2]).expect("serialize turns");
-    let tool_result_mentions = third_turn_payload.matches("[tool_result]").count();
-    assert!(
-        tool_result_mentions >= 2,
-        "third turn should include at least two tool_result entries, got: {third_turn_payload}"
-    );
-}
-
 #[tokio::test]
-async fn handle_turn_with_runtime_repeated_tool_signature_guard_warns_then_triggers_completion() {
-    let repeated_tool_turn = || {
-        Ok(ProviderTurn {
-            assistant_text: "Reading the file again.".to_owned(),
-            tool_intents: vec![ToolIntent {
-                tool_name: "file.read".to_owned(),
-                args_json: json!({"path": "note.md"}),
-                source: "provider_tool_call".to_owned(),
-                session_id: "session-loop-guard".to_owned(),
-                turn_id: "turn-loop-guard".to_owned(),
-                tool_call_id: "call-loop-guard".to_owned(),
-            }],
-            raw_meta: Value::Null,
-        })
-    };
-
-    let runtime = FakeRuntime::with_turns_and_completions(
-        vec![],
-        vec![
-            repeated_tool_turn(),
-            repeated_tool_turn(),
-            repeated_tool_turn(),
-            repeated_tool_turn(),
-        ],
-        vec![Ok(
-            "I cannot access additional context, but here's what I found.".to_owned(),
-        )],
-    );
-
-    let turn_loop = ConversationTurnLoop::new();
-    let reply = turn_loop
-        .handle_turn_with_runtime(
-            &test_config(),
-            "session-loop-guard",
-            "read note.md",
-            ProviderErrorMode::Propagate,
-            &runtime,
-            None,
-        )
-        .await
-        .expect("loop guard fallback should succeed");
-
-    assert_eq!(
-        reply,
-        "I cannot access additional context, but here's what I found."
-    );
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 4);
-    assert_eq!(
-        *runtime
-            .completion_calls
-            .lock()
-            .expect("completion calls lock"),
-        1
-    );
-
-    let completion_payloads = runtime
-        .completion_requested_messages
-        .lock()
-        .expect("completion requests lock");
-    assert_eq!(completion_payloads.len(), 1);
-    let serialized = serde_json::to_string(&completion_payloads[0]).expect("serialize completion");
-    assert!(
-        serialized.contains("[tool_loop_guard]"),
-        "completion fallback payload should include loop guard marker, got: {serialized}"
-    );
-    assert!(
-        serialized.contains("Detected tool-loop behavior across rounds."),
-        "completion fallback should include generic tool-loop guard prompt, got: {serialized}"
-    );
-    assert!(
-        serialized.contains("Loop guard reason:"),
-        "completion fallback should include loop guard reason section, got: {serialized}"
-    );
-    assert!(
-        serialized.matches("[tool_failure]").count() == 4,
-        "completion fallback should preserve the latest tool failure context before guard fallback, got: {serialized}"
-    );
-
-    let turn_payloads = runtime
-        .turn_requested_messages
-        .lock()
-        .expect("turn requests lock");
-    assert_eq!(turn_payloads.len(), 4);
-    let warning_turn_payload =
-        serde_json::to_string(&turn_payloads[3]).expect("serialize warning turn");
-    assert!(
-        warning_turn_payload.contains("[tool_loop_warning]"),
-        "warning turn payload should include loop warning marker before hard stop, got: {warning_turn_payload}"
-    );
-}
-
-#[tokio::test]
-async fn handle_turn_with_runtime_ping_pong_loop_guard_triggers_completion() {
-    let turn_for = |path: &str, call_id: &str| {
-        Ok(ProviderTurn {
-            assistant_text: format!("Trying to read {path}."),
-            tool_intents: vec![ToolIntent {
-                tool_name: "file.read".to_owned(),
-                args_json: json!({ "path": path }),
-                source: "provider_tool_call".to_owned(),
-                session_id: "session-ping-pong-guard".to_owned(),
-                turn_id: format!("turn-ping-pong-{path}"),
-                tool_call_id: call_id.to_owned(),
-            }],
-            raw_meta: Value::Null,
-        })
-    };
-
-    let runtime = FakeRuntime::with_turns_and_completions(
-        vec![],
-        vec![
-            turn_for("note_a.md", "call-ping-a-1"),
-            turn_for("note_b.md", "call-ping-b-1"),
-            turn_for("note_a.md", "call-ping-a-2"),
-            turn_for("note_b.md", "call-ping-b-2"),
-            turn_for("note_a.md", "call-ping-a-3"),
-        ],
-        vec![Ok("Switching strategy after loop warning.".to_owned())],
-    );
-
-    let mut config = test_config();
-    config.conversation.turn_loop.max_rounds = 6;
-    config.conversation.turn_loop.max_repeated_tool_call_rounds = 8;
-    config.conversation.turn_loop.max_ping_pong_cycles = 2;
-    config.conversation.turn_loop.max_same_tool_failure_rounds = 8;
-
-    let turn_loop = ConversationTurnLoop::new();
-    let reply = turn_loop
-        .handle_turn_with_runtime(
-            &config,
-            "session-ping-pong-guard",
-            "read note_a then note_b",
-            ProviderErrorMode::Propagate,
-            &runtime,
-            None,
-        )
-        .await
-        .expect("ping-pong loop guard fallback should succeed");
-
-    assert_eq!(reply, "Switching strategy after loop warning.");
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 5);
-    assert_eq!(
-        *runtime
-            .completion_calls
-            .lock()
-            .expect("completion calls lock"),
-        1
-    );
-
-    let completion_payloads = runtime
-        .completion_requested_messages
-        .lock()
-        .expect("completion requests lock");
-    assert_eq!(completion_payloads.len(), 1);
-    let completion_payload =
-        serde_json::to_string(&completion_payloads[0]).expect("serialize completion");
-    assert!(
-        completion_payload.contains("[tool_loop_guard]"),
-        "completion payload should include loop guard marker, got: {completion_payload}"
-    );
-    assert!(
-        completion_payload.contains("Loop guard reason:"),
-        "completion payload should include loop guard reason section, got: {completion_payload}"
-    );
-    assert!(
-        completion_payload.matches("[tool_failure]").count() == 5,
-        "completion payload should include the latest tool failure payload before hard stop, got: {completion_payload}"
-    );
-    assert!(
-        completion_payload.contains("ping_pong_tool_patterns"),
-        "completion payload should include ping-pong reason, got: {completion_payload}"
-    );
-
-    let turn_payloads = runtime
-        .turn_requested_messages
-        .lock()
-        .expect("turn requests lock");
-    assert_eq!(turn_payloads.len(), 5);
-    let warning_turn_payload =
-        serde_json::to_string(&turn_payloads[4]).expect("serialize warning turn");
-    assert!(
-        warning_turn_payload.contains("[tool_loop_warning]"),
-        "warning turn payload should include loop warning marker, got: {warning_turn_payload}"
-    );
-}
-
-#[tokio::test]
-async fn handle_turn_with_runtime_failure_streak_guard_triggers_completion() {
-    let turn_for = |path: &str, call_id: &str| {
-        Ok(ProviderTurn {
-            assistant_text: format!("Attempting read for {path}."),
-            tool_intents: vec![ToolIntent {
-                tool_name: "file.read".to_owned(),
-                args_json: json!({ "path": path }),
-                source: "provider_tool_call".to_owned(),
-                session_id: "session-failure-streak-guard".to_owned(),
-                turn_id: format!("turn-failure-streak-{path}"),
-                tool_call_id: call_id.to_owned(),
-            }],
-            raw_meta: Value::Null,
-        })
-    };
-
-    let runtime = FakeRuntime::with_turns_and_completions(
-        vec![],
-        vec![
-            turn_for("note_1.md", "call-failure-1"),
-            turn_for("note_2.md", "call-failure-2"),
-            turn_for("note_3.md", "call-failure-3"),
-            turn_for("note_4.md", "call-failure-4"),
-        ],
-        vec![Ok("Stopping after repeated tool failures.".to_owned())],
-    );
-
-    let mut config = test_config();
-    config.conversation.turn_loop.max_rounds = 5;
-    config.conversation.turn_loop.max_repeated_tool_call_rounds = 8;
-    config.conversation.turn_loop.max_ping_pong_cycles = 8;
-    config.conversation.turn_loop.max_same_tool_failure_rounds = 3;
-
-    let turn_loop = ConversationTurnLoop::new();
-    let reply = turn_loop
-        .handle_turn_with_runtime(
-            &config,
-            "session-failure-streak-guard",
-            "read those notes",
-            ProviderErrorMode::Propagate,
-            &runtime,
-            None,
-        )
-        .await
-        .expect("failure-streak loop guard fallback should succeed");
-
-    assert_eq!(reply, "Stopping after repeated tool failures.");
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 4);
-    assert_eq!(
-        *runtime
-            .completion_calls
-            .lock()
-            .expect("completion calls lock"),
-        1
-    );
-
-    let completion_payloads = runtime
-        .completion_requested_messages
-        .lock()
-        .expect("completion requests lock");
-    assert_eq!(completion_payloads.len(), 1);
-    let completion_payload =
-        serde_json::to_string(&completion_payloads[0]).expect("serialize completion");
-    assert!(
-        completion_payload.contains("[tool_loop_guard]"),
-        "completion payload should include loop guard marker, got: {completion_payload}"
-    );
-    assert!(
-        completion_payload.contains("Loop guard reason:"),
-        "completion payload should include loop guard reason section, got: {completion_payload}"
-    );
-    assert!(
-        completion_payload.matches("[tool_failure]").count() == 4,
-        "completion payload should include the latest tool failure payload before hard stop, got: {completion_payload}"
-    );
-    assert!(
-        completion_payload.contains("tool_failure_streak"),
-        "completion payload should include failure-streak reason, got: {completion_payload}"
-    );
-
-    let turn_payloads = runtime
-        .turn_requested_messages
-        .lock()
-        .expect("turn requests lock");
-    assert_eq!(turn_payloads.len(), 4);
-    let warning_turn_payload =
-        serde_json::to_string(&turn_payloads[3]).expect("serialize warning turn");
-    assert!(
-        warning_turn_payload.contains("[tool_loop_warning]"),
-        "warning turn payload should include loop warning marker, got: {warning_turn_payload}"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn handle_turn_with_runtime_truncates_large_tool_result_in_followup_payload() {
-    use super::integration_tests::TurnTestHarness;
-
-    let harness = TurnTestHarness::new();
-    let large_note = format!("BEGIN-UNIQUE-{}-END-UNIQUE", "x".repeat(1_600));
-    std::fs::write(harness.temp_dir.join("large_note.md"), large_note).expect("seed large note");
-
-    let runtime = FakeRuntime::with_turns(
-        vec![],
-        vec![
-            Ok(ProviderTurn {
-                assistant_text: "Reading large note.".to_owned(),
-                tool_intents: vec![ToolIntent {
-                    tool_name: "file.read".to_owned(),
-                    args_json: json!({"path": "large_note.md"}),
-                    source: "provider_tool_call".to_owned(),
-                    session_id: "session-truncate-tool-result".to_owned(),
-                    turn_id: "turn-truncate-tool-result-1".to_owned(),
-                    tool_call_id: "call-truncate-tool-result-1".to_owned(),
-                }],
-                raw_meta: Value::Null,
-            }),
-            Ok(ProviderTurn {
-                assistant_text: "Summary completed.".to_owned(),
-                tool_intents: vec![],
-                raw_meta: Value::Null,
-            }),
-        ],
-    );
-
-    let mut config = test_config();
-    config
-        .conversation
-        .turn_loop
-        .max_followup_tool_payload_chars = 220;
-
-    let turn_loop = ConversationTurnLoop::new();
-    let reply = turn_loop
-        .handle_turn_with_runtime(
-            &config,
-            "session-truncate-tool-result",
-            "read large_note.md and summarize",
-            ProviderErrorMode::Propagate,
-            &runtime,
-            Some(&harness.kernel_ctx),
-        )
-        .await
-        .expect("tool-result truncation path should succeed");
-
-    assert_eq!(reply, "Summary completed.");
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 2);
-
-    let requested_turns = runtime
-        .turn_requested_messages
-        .lock()
-        .expect("turn request lock");
-    assert_eq!(requested_turns.len(), 2);
-    let second_turn_payload = serde_json::to_string(&requested_turns[1]).expect("serialize turns");
-    assert!(
-        second_turn_payload.contains("[tool_result_truncated]"),
-        "followup payload should include tool-result truncation marker, got: {second_turn_payload}"
-    );
-    assert!(
-        second_turn_payload.contains("BEGIN-UNIQUE-"),
-        "followup payload should retain leading tool context, got: {second_turn_payload}"
-    );
-    assert!(
-        !second_turn_payload.contains("-END-UNIQUE"),
-        "followup payload should trim tail content when truncated, got: {second_turn_payload}"
-    );
-}
-
-#[tokio::test]
-async fn handle_turn_with_runtime_truncates_large_tool_failure_in_followup_payload() {
-    let oversized_tool_name = format!("tool_{}", "z".repeat(900));
-    let runtime = FakeRuntime::with_turns(
-        vec![],
-        vec![
-            Ok(ProviderTurn {
-                assistant_text: "Attempting unknown tool.".to_owned(),
-                tool_intents: vec![ToolIntent {
-                    tool_name: oversized_tool_name.clone(),
-                    args_json: json!({}),
-                    source: "provider_tool_call".to_owned(),
-                    session_id: "session-truncate-tool-failure".to_owned(),
-                    turn_id: "turn-truncate-tool-failure-1".to_owned(),
-                    tool_call_id: "call-truncate-tool-failure-1".to_owned(),
-                }],
-                raw_meta: Value::Null,
-            }),
-            Ok(ProviderTurn {
-                assistant_text: "Fallback answer after tool failure.".to_owned(),
-                tool_intents: vec![],
-                raw_meta: Value::Null,
-            }),
-        ],
-    );
-
-    let mut config = test_config();
-    config
-        .conversation
-        .turn_loop
-        .max_followup_tool_payload_chars = 180;
-    config.conversation.turn_loop.max_repeated_tool_call_rounds = 5;
-
-    let turn_loop = ConversationTurnLoop::new();
-    let reply = turn_loop
-        .handle_turn_with_runtime(
-            &config,
-            "session-truncate-tool-failure",
-            "run this tool",
-            ProviderErrorMode::Propagate,
-            &runtime,
-            None,
-        )
-        .await
-        .expect("tool-failure truncation path should succeed");
-
-    assert_eq!(reply, "Fallback answer after tool failure.");
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 2);
-
-    let requested_turns = runtime
-        .turn_requested_messages
-        .lock()
-        .expect("turn request lock");
-    assert_eq!(requested_turns.len(), 2);
-    let second_turn_payload = serde_json::to_string(&requested_turns[1]).expect("serialize turns");
-    assert!(
-        second_turn_payload.contains("[tool_failure_truncated]"),
-        "followup payload should include tool-failure truncation marker, got: {second_turn_payload}"
-    );
-    assert!(
-        second_turn_payload.contains("tool_not_found"),
-        "followup payload should retain failure type, got: {second_turn_payload}"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn handle_turn_with_runtime_enforces_total_followup_payload_budget_across_rounds() {
-    use super::integration_tests::TurnTestHarness;
-
-    let harness = TurnTestHarness::new();
-    std::fs::write(
-        harness.temp_dir.join("note_a.md"),
-        format!("NOTE-A-BEGIN-{}-NOTE-A-END", "a".repeat(1_200)),
-    )
-    .expect("seed note_a");
-    std::fs::write(
-        harness.temp_dir.join("note_b.md"),
-        format!("NOTE-B-BEGIN-{}-NOTE-B-END", "b".repeat(1_200)),
-    )
-    .expect("seed note_b");
-    std::fs::write(
-        harness.temp_dir.join("note_c.md"),
-        format!("NOTE-C-BEGIN-{}-NOTE-C-END", "c".repeat(1_200)),
-    )
-    .expect("seed note_c");
-
-    let runtime = FakeRuntime::with_turns(
-        vec![],
-        vec![
-            Ok(ProviderTurn {
-                assistant_text: "Reading note A.".to_owned(),
-                tool_intents: vec![ToolIntent {
-                    tool_name: "file.read".to_owned(),
-                    args_json: json!({"path": "note_a.md"}),
-                    source: "provider_tool_call".to_owned(),
-                    session_id: "session-total-budget".to_owned(),
-                    turn_id: "turn-total-budget-1".to_owned(),
-                    tool_call_id: "call-total-budget-1".to_owned(),
-                }],
-                raw_meta: Value::Null,
-            }),
-            Ok(ProviderTurn {
-                assistant_text: "Reading note B.".to_owned(),
-                tool_intents: vec![ToolIntent {
-                    tool_name: "file.read".to_owned(),
-                    args_json: json!({"path": "note_b.md"}),
-                    source: "provider_tool_call".to_owned(),
-                    session_id: "session-total-budget".to_owned(),
-                    turn_id: "turn-total-budget-2".to_owned(),
-                    tool_call_id: "call-total-budget-2".to_owned(),
-                }],
-                raw_meta: Value::Null,
-            }),
-            Ok(ProviderTurn {
-                assistant_text: "Reading note C.".to_owned(),
-                tool_intents: vec![ToolIntent {
-                    tool_name: "file.read".to_owned(),
-                    args_json: json!({"path": "note_c.md"}),
-                    source: "provider_tool_call".to_owned(),
-                    session_id: "session-total-budget".to_owned(),
-                    turn_id: "turn-total-budget-3".to_owned(),
-                    tool_call_id: "call-total-budget-3".to_owned(),
-                }],
-                raw_meta: Value::Null,
-            }),
-            Ok(ProviderTurn {
-                assistant_text: "Final synthesis after bounded context.".to_owned(),
-                tool_intents: vec![],
-                raw_meta: Value::Null,
-            }),
-        ],
-    );
-
-    let mut config = test_config();
-    config.conversation.turn_loop.max_rounds = 4;
-    config.conversation.turn_loop.max_repeated_tool_call_rounds = 8;
-    config.conversation.turn_loop.max_ping_pong_cycles = 8;
-    config.conversation.turn_loop.max_same_tool_failure_rounds = 8;
-    config
-        .conversation
-        .turn_loop
-        .max_followup_tool_payload_chars = 600;
-    config
-        .conversation
-        .turn_loop
-        .max_followup_tool_payload_chars_total = 120;
-
-    let turn_loop = ConversationTurnLoop::new();
-    let reply = turn_loop
-        .handle_turn_with_runtime(
-            &config,
-            "session-total-budget",
-            "read all notes then summarize",
-            ProviderErrorMode::Propagate,
-            &runtime,
-            Some(&harness.kernel_ctx),
-        )
-        .await
-        .expect("total followup payload budget path should succeed");
-
-    assert_eq!(reply, "Final synthesis after bounded context.");
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 4);
-
-    let requested_turns = runtime
-        .turn_requested_messages
-        .lock()
-        .expect("turn request lock");
-    assert_eq!(requested_turns.len(), 4);
-    let fourth_turn_payload = serde_json::to_string(&requested_turns[3]).expect("serialize turns");
-    assert!(
-        fourth_turn_payload.contains("[tool_result_truncated]"),
-        "fourth turn should still include truncation marker, got: {fourth_turn_payload}"
-    );
-    assert!(
-        fourth_turn_payload.contains("budget_exhausted=true"),
-        "fourth turn should report exhausted total payload budget, got: {fourth_turn_payload}"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn handle_turn_with_runtime_turn_loop_policy_override_allows_multiple_tool_steps() {
-    use super::integration_tests::TurnTestHarness;
-
-    let harness = TurnTestHarness::new();
-    std::fs::write(harness.temp_dir.join("note_a.md"), "first note").expect("seed note_a");
-    std::fs::write(harness.temp_dir.join("note_b.md"), "second note").expect("seed note_b");
-
+async fn handle_turn_with_runtime_safe_lane_honors_configured_tool_step_budget() {
     let runtime = FakeRuntime::with_turn_and_completion(
         vec![],
         Ok(ProviderTurn {
-            assistant_text: "Reading both notes.".to_owned(),
+            assistant_text: "Executing deployment checks.".to_owned(),
             tool_intents: vec![
                 ToolIntent {
                     tool_name: "file.read".to_owned(),
-                    args_json: json!({"path": "note_a.md"}),
+                    args_json: json!({"path": "note.md"}),
                     source: "provider_tool_call".to_owned(),
-                    session_id: "session-step-override".to_owned(),
-                    turn_id: "turn-step-override".to_owned(),
-                    tool_call_id: "call-step-1".to_owned(),
+                    session_id: "session-safe-budget".to_owned(),
+                    turn_id: "turn-safe-budget".to_owned(),
+                    tool_call_id: "call-safe-budget-1".to_owned(),
                 },
                 ToolIntent {
                     tool_name: "file.read".to_owned(),
-                    args_json: json!({"path": "note_b.md"}),
+                    args_json: json!({"path": "checklist.md"}),
                     source: "provider_tool_call".to_owned(),
-                    session_id: "session-step-override".to_owned(),
-                    turn_id: "turn-step-override".to_owned(),
-                    tool_call_id: "call-step-2".to_owned(),
+                    session_id: "session-safe-budget".to_owned(),
+                    turn_id: "turn-safe-budget".to_owned(),
+                    tool_call_id: "call-safe-budget-2".to_owned(),
                 },
             ],
             raw_meta: Value::Null,
         }),
-        Ok("this must not be used".to_owned()),
+        Ok("unused".to_owned()),
     );
 
     let mut config = test_config();
-    config.conversation.turn_loop.max_tool_steps_per_round = 2;
+    config.conversation.safe_lane_max_tool_steps_per_turn = 2;
 
-    let turn_loop = ConversationTurnLoop::new();
-    let reply = turn_loop
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
         .handle_turn_with_runtime(
             &config,
-            "session-step-override",
-            "read note_a.md and note_b.md, return raw tool output",
-            ProviderErrorMode::Propagate,
-            &runtime,
-            Some(&harness.kernel_ctx),
-        )
-        .await
-        .expect("multiple tool steps should be allowed by override");
-
-    assert!(
-        reply.matches("[ok]").count() >= 2,
-        "expected at least two tool outputs, got: {reply}"
-    );
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 1);
-    assert_eq!(
-        *runtime
-            .completion_calls
-            .lock()
-            .expect("completion calls lock"),
-        0
-    );
-}
-
-#[tokio::test]
-async fn handle_turn_with_runtime_turn_loop_policy_override_allows_more_repeated_rounds() {
-    let repeated_tool_turn = || {
-        Ok(ProviderTurn {
-            assistant_text: "Trying file.read again.".to_owned(),
-            tool_intents: vec![ToolIntent {
-                tool_name: "file.read".to_owned(),
-                args_json: json!({"path": "note.md"}),
-                source: "provider_tool_call".to_owned(),
-                session_id: "session-loop-override".to_owned(),
-                turn_id: "turn-loop-override".to_owned(),
-                tool_call_id: "call-loop-override".to_owned(),
-            }],
-            raw_meta: Value::Null,
-        })
-    };
-
-    let runtime = FakeRuntime::with_turns(
-        vec![],
-        vec![
-            repeated_tool_turn(),
-            repeated_tool_turn(),
-            repeated_tool_turn(),
-            repeated_tool_turn(),
-            Ok(ProviderTurn {
-                assistant_text: "Final answer after four retries.".to_owned(),
-                tool_intents: vec![],
-                raw_meta: Value::Null,
-            }),
-        ],
-    );
-
-    let mut config = test_config();
-    config.conversation.turn_loop.max_rounds = 5;
-    config.conversation.turn_loop.max_repeated_tool_call_rounds = 4;
-    config.conversation.turn_loop.max_ping_pong_cycles = 8;
-    config.conversation.turn_loop.max_same_tool_failure_rounds = 8;
-
-    let turn_loop = ConversationTurnLoop::new();
-    let reply = turn_loop
-        .handle_turn_with_runtime(
-            &config,
-            "session-loop-override",
-            "read note.md",
+            "session-safe-budget",
+            "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
             None,
         )
         .await
-        .expect("policy override should permit extra repeated rounds");
+        .expect("safe lane should execute with configured step budget");
 
-    assert_eq!(reply, "Final answer after four retries.");
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 5);
+    assert!(
+        reply.contains("no_kernel_context"),
+        "expected kernel-context denial once tool-step budget is honored, got: {reply}"
+    );
+    assert!(
+        !reply.contains("max_tool_steps_exceeded"),
+        "safe lane should not hit max_tool_steps after config override, got: {reply}"
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_safe_lane_plan_path_bypasses_turn_step_limit() {
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Executing deployment checks.".to_owned(),
+            tool_intents: vec![
+                ToolIntent {
+                    tool_name: "file.read".to_owned(),
+                    args_json: json!({"path": "note.md"}),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "session-safe-plan".to_owned(),
+                    turn_id: "turn-safe-plan".to_owned(),
+                    tool_call_id: "call-safe-plan-1".to_owned(),
+                },
+                ToolIntent {
+                    tool_name: "file.read".to_owned(),
+                    args_json: json!({"path": "checklist.md"}),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "session-safe-plan".to_owned(),
+                    turn_id: "turn-safe-plan".to_owned(),
+                    tool_call_id: "call-safe-plan-2".to_owned(),
+                },
+            ],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+
+    let mut config = test_config();
+    config.conversation.safe_lane_plan_execution_enabled = true;
+    config.conversation.safe_lane_max_tool_steps_per_turn = 1;
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-safe-plan",
+            "deploy to production with secret token and show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("safe lane plan path should return inline tool error");
+
+    assert!(
+        reply.contains("no_kernel_context"),
+        "expected kernel-context denial from plan execution path, got: {reply}"
+    );
+    assert!(
+        !reply.contains("max_tool_steps_exceeded"),
+        "plan path should not use TurnEngine max_tool_steps gate, got: {reply}"
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_safe_lane_plan_persists_runtime_events_when_enabled() {
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Executing deployment checks.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!({"path": "note.md"}),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-safe-events".to_owned(),
+                turn_id: "turn-safe-events".to_owned(),
+                tool_call_id: "call-safe-events-1".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+
+    let mut config = test_config();
+    config.conversation.safe_lane_plan_execution_enabled = true;
+    config.conversation.safe_lane_emit_runtime_events = true;
+    config.conversation.safe_lane_replan_max_rounds = 0;
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let _reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-safe-events",
+            "deploy to production with secret token and show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("safe lane plan should produce a reply");
+
+    let persisted = runtime.persisted.lock().expect("persisted lock");
+    let event_names = persisted
+        .iter()
+        .filter_map(|(_, role, content)| {
+            if role != "assistant" {
+                return None;
+            }
+            let parsed = serde_json::from_str::<Value>(content).ok()?;
+            if parsed.get("type")?.as_str()? != "conversation_event" {
+                return None;
+            }
+            parsed.get("event")?.as_str().map(ToOwned::to_owned)
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        event_names.iter().any(|name| name == "lane_selected"),
+        "expected lane_selected event, got: {event_names:?}"
+    );
+    assert!(
+        event_names.iter().any(|name| name == "plan_round_started"),
+        "expected plan_round_started event, got: {event_names:?}"
+    );
+    assert!(
+        event_names
+            .iter()
+            .any(|name| name == "plan_round_completed"),
+        "expected plan_round_completed event, got: {event_names:?}"
+    );
+    assert!(
+        event_names.iter().any(|name| name == "final_status"),
+        "expected final_status event, got: {event_names:?}"
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_safe_lane_plan_skips_runtime_events_when_disabled() {
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Executing deployment checks.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!({"path": "note.md"}),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-safe-events-off".to_owned(),
+                turn_id: "turn-safe-events-off".to_owned(),
+                tool_call_id: "call-safe-events-off-1".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+
+    let mut config = test_config();
+    config.conversation.safe_lane_plan_execution_enabled = true;
+    config.conversation.safe_lane_emit_runtime_events = false;
+    config.conversation.safe_lane_replan_max_rounds = 0;
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let _reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-safe-events-off",
+            "deploy to production with secret token and show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("safe lane plan should produce a reply");
+
+    let persisted = runtime.persisted.lock().expect("persisted lock");
+    let event_count = persisted
+        .iter()
+        .filter_map(|(_, role, content)| {
+            if role != "assistant" {
+                return None;
+            }
+            let parsed = serde_json::from_str::<Value>(content).ok()?;
+            (parsed.get("type")?.as_str()? == "conversation_event").then_some(())
+        })
+        .count();
+    assert_eq!(event_count, 0, "unexpected runtime events: {persisted:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_safe_lane_plan_emits_kernel_runtime_audit_events() {
+    use super::integration_tests::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    std::fs::write(harness.temp_dir.join("note.md"), "safe lane audit probe")
+        .expect("write note fixture");
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Executing deployment checks.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!({"path": "note.md"}),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-safe-audit-on".to_owned(),
+                turn_id: "turn-safe-audit-on".to_owned(),
+                tool_call_id: "call-safe-audit-on-1".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+
+    let mut config = test_config();
+    config.conversation.safe_lane_plan_execution_enabled = true;
+    config.conversation.safe_lane_emit_runtime_events = true;
+    config.conversation.safe_lane_replan_max_rounds = 0;
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let _reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-safe-audit-on",
+            "deploy to production with secret token and show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            Some(&harness.kernel_ctx),
+        )
+        .await
+        .expect("safe lane plan should produce a reply");
+
+    let events = harness.audit.snapshot();
+    let runtime_ops = events
+        .iter()
+        .filter_map(|event| match &event.kind {
+            loongclaw_kernel::AuditEventKind::PlaneInvoked {
+                pack_id,
+                plane,
+                tier,
+                primary_adapter,
+                operation,
+                ..
+            } if *plane == loongclaw_contracts::ExecutionPlane::Runtime
+                && operation.starts_with("conversation.safe_lane.") =>
+            {
+                Some((
+                    pack_id.to_owned(),
+                    *tier,
+                    primary_adapter.to_owned(),
+                    operation.to_owned(),
+                ))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        runtime_ops
+            .iter()
+            .any(|(_, _, _, operation)| operation == "conversation.safe_lane.lane_selected"),
+        "expected lane_selected runtime audit event, got: {runtime_ops:?}"
+    );
+    assert!(
+        runtime_ops
+            .iter()
+            .any(|(_, _, _, operation)| operation == "conversation.safe_lane.final_status"),
+        "expected final_status runtime audit event, got: {runtime_ops:?}"
+    );
+    assert!(
+        runtime_ops.iter().all(|(pack_id, tier, adapter, _)| {
+            pack_id == "test-pack"
+                && *tier == loongclaw_contracts::PlaneTier::Core
+                && adapter == "conversation.safe_lane"
+        }),
+        "unexpected runtime audit metadata: {runtime_ops:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_safe_lane_plan_does_not_emit_kernel_runtime_audit_when_disabled()
+{
+    use super::integration_tests::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    std::fs::write(harness.temp_dir.join("note.md"), "safe lane audit disabled")
+        .expect("write note fixture");
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Executing deployment checks.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!({"path": "note.md"}),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-safe-audit-off".to_owned(),
+                turn_id: "turn-safe-audit-off".to_owned(),
+                tool_call_id: "call-safe-audit-off-1".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+
+    let mut config = test_config();
+    config.conversation.safe_lane_plan_execution_enabled = true;
+    config.conversation.safe_lane_emit_runtime_events = false;
+    config.conversation.safe_lane_replan_max_rounds = 0;
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let _reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-safe-audit-off",
+            "deploy to production with secret token and show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            Some(&harness.kernel_ctx),
+        )
+        .await
+        .expect("safe lane plan should produce a reply");
+
+    let has_safe_lane_runtime_event = harness.audit.snapshot().iter().any(|event| {
+        matches!(
+            &event.kind,
+            loongclaw_kernel::AuditEventKind::PlaneInvoked {
+                plane: loongclaw_contracts::ExecutionPlane::Runtime,
+                operation,
+                ..
+            } if operation.starts_with("conversation.safe_lane.")
+        )
+    });
+
+    assert!(
+        !has_safe_lane_runtime_event,
+        "safe-lane runtime audit events should be disabled"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_safe_lane_plan_replans_after_transient_tool_failure() {
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loongclaw_kernel::CoreToolAdapter;
+
+    struct FlakyOnceToolAdapter {
+        calls: Arc<Mutex<usize>>,
+    }
+
+    #[async_trait]
+    impl CoreToolAdapter for FlakyOnceToolAdapter {
+        fn name(&self) -> &str {
+            "flaky-once-tools"
+        }
+
+        async fn execute_core_tool(
+            &self,
+            request: ToolCoreRequest,
+        ) -> Result<ToolCoreOutcome, ToolPlaneError> {
+            let current_call = {
+                let mut calls = self.calls.lock().expect("flaky calls lock");
+                *calls = calls.saturating_add(1);
+                *calls
+            };
+            if current_call == 1 {
+                return Err(ToolPlaneError::Execution(
+                    "transient tool failure".to_owned(),
+                ));
+            }
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "tool": request.tool_name,
+                    "attempt": current_call
+                }),
+            })
+        }
+    }
+
+    let call_counter = Arc::new(Mutex::new(0usize));
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+    kernel.register_core_tool_adapter(FlakyOnceToolAdapter {
+        calls: call_counter.clone(),
+    });
+    kernel
+        .set_default_core_tool_adapter("flaky-once-tools")
+        .expect("set default core tool adapter");
+
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+    let ctx = KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Running checks.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!({"path": "note.md"}),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-safe-replan".to_owned(),
+                turn_id: "turn-safe-replan".to_owned(),
+                tool_call_id: "call-safe-replan-1".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+
+    let mut config = test_config();
+    config.conversation.safe_lane_plan_execution_enabled = true;
+    config.conversation.safe_lane_node_max_attempts = 1;
+    config.conversation.safe_lane_replan_max_rounds = 1;
+    config.conversation.safe_lane_replan_max_node_attempts = 2;
+    config.conversation.safe_lane_event_sample_every = 2;
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-safe-replan",
+            "deploy to production with secret token and show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            Some(&ctx),
+        )
+        .await
+        .expect("safe lane plan should recover via bounded replan");
+
+    assert!(
+        reply.contains("[ok]"),
+        "expected successful tool output after replan, got: {reply}"
+    );
+    assert!(
+        !reply.contains("transient tool failure"),
+        "final reply should not leak first transient failure after successful replan, got: {reply}"
+    );
+    let calls = *call_counter.lock().expect("call counter lock");
+    assert_eq!(calls, 2, "expected one failure + one replan success");
+
+    let persisted = runtime.persisted.lock().expect("persisted lock");
+    let failed_round_payload = persisted
+        .iter()
+        .filter_map(|(_, role, content)| {
+            if role != "assistant" {
+                return None;
+            }
+            let parsed = serde_json::from_str::<Value>(content).ok()?;
+            if parsed.get("type")?.as_str()? != "conversation_event" {
+                return None;
+            }
+            if parsed.get("event")?.as_str()? != "plan_round_completed" {
+                return None;
+            }
+            let payload = parsed.get("payload")?;
+            if payload.get("status")?.as_str()? != "failed" {
+                return None;
+            }
+            Some(payload.clone())
+        })
+        .next()
+        .expect("failed plan_round_completed payload");
+    assert_eq!(failed_round_payload["failure_kind"], "retryable");
     assert_eq!(
-        *runtime
-            .completion_calls
-            .lock()
-            .expect("completion calls lock"),
-        0
+        failed_round_payload["failure_code"],
+        "safe_lane_plan_node_retryable_error"
+    );
+    assert_eq!(failed_round_payload["failure_retryable"], true);
+    assert_eq!(failed_round_payload["route_decision"], "replan");
+    assert_eq!(failed_round_payload["route_reason"], "retryable_failure");
+
+    let has_sampled_out_success_round = !persisted.iter().any(|(_, role, content)| {
+        if role != "assistant" {
+            return false;
+        }
+        let parsed = match serde_json::from_str::<Value>(content) {
+            Ok(value) => value,
+            Err(_) => return false,
+        };
+        if parsed.get("type").and_then(Value::as_str) != Some("conversation_event") {
+            return false;
+        }
+        if parsed.get("event").and_then(Value::as_str) != Some("plan_round_completed") {
+            return false;
+        }
+        let payload = match parsed.get("payload") {
+            Some(value) => value,
+            None => return false,
+        };
+        payload.get("status").and_then(Value::as_str) == Some("succeeded")
+            && payload.get("round").and_then(Value::as_u64) == Some(1)
+    });
+    assert!(
+        has_sampled_out_success_round,
+        "round-1 plan_round_completed should be sampled out"
+    );
+
+    let final_status_payload = persisted
+        .iter()
+        .filter_map(|(_, role, content)| {
+            if role != "assistant" {
+                return None;
+            }
+            let parsed = serde_json::from_str::<Value>(content).ok()?;
+            if parsed.get("type")?.as_str()? != "conversation_event" {
+                return None;
+            }
+            if parsed.get("event")?.as_str()? != "final_status" {
+                return None;
+            }
+            parsed.get("payload").cloned()
+        })
+        .next_back()
+        .expect("final_status payload");
+    assert_eq!(final_status_payload["status"], "succeeded");
+    assert_eq!(final_status_payload["metrics"]["rounds_started"], 2);
+    assert_eq!(final_status_payload["metrics"]["rounds_succeeded"], 1);
+    assert_eq!(final_status_payload["metrics"]["rounds_failed"], 1);
+    assert_eq!(final_status_payload["metrics"]["verify_failures"], 0);
+    assert_eq!(final_status_payload["metrics"]["replans_triggered"], 1);
+    assert!(
+        final_status_payload["metrics"]["total_attempts_used"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 2
+    );
+
+    let summary = summarize_safe_lane_events(
+        persisted
+            .iter()
+            .filter_map(|(_, role, content)| (role == "assistant").then_some(content.as_str())),
+    );
+    assert_eq!(summary.final_status, Some(SafeLaneFinalStatus::Succeeded));
+    assert_eq!(summary.replan_triggered_events, 1);
+    assert_eq!(
+        summary
+            .latest_metrics
+            .as_ref()
+            .map(|metrics| metrics.rounds_started),
+        Some(2)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_safe_lane_backpressure_guard_blocks_retry_storm() {
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loongclaw_kernel::CoreToolAdapter;
+
+    struct FlakyAlwaysRetryableAdapter {
+        calls: Arc<Mutex<usize>>,
+    }
+
+    #[async_trait]
+    impl CoreToolAdapter for FlakyAlwaysRetryableAdapter {
+        fn name(&self) -> &str {
+            "flaky-always-retryable-tools"
+        }
+
+        async fn execute_core_tool(
+            &self,
+            _request: ToolCoreRequest,
+        ) -> Result<ToolCoreOutcome, ToolPlaneError> {
+            {
+                let mut calls = self.calls.lock().expect("flaky calls lock");
+                *calls = calls.saturating_add(1);
+            }
+            Err(ToolPlaneError::Execution(
+                "transient tool failure".to_owned(),
+            ))
+        }
+    }
+
+    let call_counter = Arc::new(Mutex::new(0usize));
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+    kernel.register_core_tool_adapter(FlakyAlwaysRetryableAdapter {
+        calls: call_counter.clone(),
+    });
+    kernel
+        .set_default_core_tool_adapter("flaky-always-retryable-tools")
+        .expect("set default core tool adapter");
+
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+    let ctx = KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Running checks.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!({"path": "note.md"}),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-safe-backpressure".to_owned(),
+                turn_id: "turn-safe-backpressure".to_owned(),
+                tool_call_id: "call-safe-backpressure-1".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+
+    let mut config = test_config();
+    config.conversation.safe_lane_plan_execution_enabled = true;
+    config.conversation.safe_lane_node_max_attempts = 1;
+    config.conversation.safe_lane_replan_max_rounds = 3;
+    config.conversation.safe_lane_replan_max_node_attempts = 4;
+    config.conversation.safe_lane_backpressure_guard_enabled = true;
+    config
+        .conversation
+        .safe_lane_backpressure_max_total_attempts = 1;
+    config.conversation.safe_lane_backpressure_max_replans = 10;
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-safe-backpressure",
+            "deploy to production with secret token and show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            Some(&ctx),
+        )
+        .await
+        .expect("safe lane should fail-fast under backpressure guard");
+
+    assert!(
+        reply.contains("safe_lane_plan_backpressure_guard"),
+        "expected explicit backpressure guard reason, got: {reply}"
+    );
+    let calls = *call_counter.lock().expect("call counter lock");
+    assert_eq!(
+        calls, 1,
+        "backpressure guard should block further replan retries"
+    );
+
+    let persisted = runtime.persisted.lock().expect("persisted lock");
+    let final_status_payload = persisted
+        .iter()
+        .filter_map(|(_, role, content)| {
+            if role != "assistant" {
+                return None;
+            }
+            let parsed = serde_json::from_str::<Value>(content).ok()?;
+            if parsed.get("type")?.as_str()? != "conversation_event" {
+                return None;
+            }
+            if parsed.get("event")?.as_str()? != "final_status" {
+                return None;
+            }
+            parsed.get("payload").cloned()
+        })
+        .next_back()
+        .expect("final_status payload");
+    assert_eq!(
+        final_status_payload["route_reason"],
+        "backpressure_attempts_exhausted"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_safe_lane_verify_non_retryable_failure_skips_replan() {
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loongclaw_kernel::CoreToolAdapter;
+
+    struct DenyMarkerAdapter {
+        calls: Arc<Mutex<usize>>,
+    }
+
+    #[async_trait]
+    impl CoreToolAdapter for DenyMarkerAdapter {
+        fn name(&self) -> &str {
+            "deny-marker-tools"
+        }
+
+        async fn execute_core_tool(
+            &self,
+            _request: ToolCoreRequest,
+        ) -> Result<ToolCoreOutcome, ToolPlaneError> {
+            let current_call = {
+                let mut calls = self.calls.lock().expect("anchor mismatch calls lock");
+                *calls = calls.saturating_add(1);
+                *calls
+            };
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "attempt": current_call,
+                    "message": "simulated tool_not_found marker"
+                }),
+            })
+        }
+    }
+
+    let call_counter = Arc::new(Mutex::new(0usize));
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+    kernel.register_core_tool_adapter(DenyMarkerAdapter {
+        calls: call_counter.clone(),
+    });
+    kernel
+        .set_default_core_tool_adapter("deny-marker-tools")
+        .expect("set default core tool adapter");
+
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+    let ctx = KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Running checks.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!({"path": "note.md"}),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-safe-verify-nonretryable".to_owned(),
+                turn_id: "turn-safe-verify-nonretryable".to_owned(),
+                tool_call_id: "call-safe-verify-nonretryable-1".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+
+    let mut config = test_config();
+    config.conversation.safe_lane_plan_execution_enabled = true;
+    config.conversation.safe_lane_node_max_attempts = 1;
+    config.conversation.safe_lane_replan_max_rounds = 3;
+    config.conversation.safe_lane_replan_max_node_attempts = 4;
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-safe-verify-nonretryable",
+            "deploy to production with secret token and show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            Some(&ctx),
+        )
+        .await
+        .expect("safe lane should return verify failure");
+
+    assert!(
+        reply.contains("safe_lane_plan_verify_failed"),
+        "expected verify failure in reply, got: {reply}"
+    );
+    let calls = *call_counter.lock().expect("call counter lock");
+    assert_eq!(
+        calls, 1,
+        "non-retryable verify failure should not trigger replan tool re-execution"
+    );
+
+    let persisted = runtime.persisted.lock().expect("persisted lock");
+    let verify_failed_payload = persisted
+        .iter()
+        .filter_map(|(_, role, content)| {
+            if role != "assistant" {
+                return None;
+            }
+            let parsed = serde_json::from_str::<Value>(content).ok()?;
+            if parsed.get("type")?.as_str()? != "conversation_event" {
+                return None;
+            }
+            if parsed.get("event")?.as_str()? != "verify_failed" {
+                return None;
+            }
+            parsed.get("payload").cloned()
+        })
+        .next_back()
+        .expect("verify_failed payload");
+    assert_eq!(verify_failed_payload["failure_kind"], "non_retryable");
+    assert_eq!(
+        verify_failed_payload["failure_code"],
+        "safe_lane_plan_verify_failed"
+    );
+    assert_eq!(verify_failed_payload["failure_retryable"], false);
+    assert_eq!(verify_failed_payload["route_decision"], "terminal");
+    assert_eq!(
+        verify_failed_payload["route_reason"],
+        "non_retryable_failure"
+    );
+
+    let final_status_payload = persisted
+        .iter()
+        .filter_map(|(_, role, content)| {
+            if role != "assistant" {
+                return None;
+            }
+            let parsed = serde_json::from_str::<Value>(content).ok()?;
+            if parsed.get("type")?.as_str()? != "conversation_event" {
+                return None;
+            }
+            if parsed.get("event")?.as_str()? != "final_status" {
+                return None;
+            }
+            parsed.get("payload").cloned()
+        })
+        .next_back()
+        .expect("final_status payload");
+    assert_eq!(final_status_payload["failure_kind"], "non_retryable");
+    assert_eq!(
+        final_status_payload["failure_code"],
+        "safe_lane_plan_verify_failed"
+    );
+    assert_eq!(final_status_payload["failure_retryable"], false);
+    assert_eq!(final_status_payload["route_decision"], "terminal");
+    assert_eq!(
+        final_status_payload["route_reason"],
+        "non_retryable_failure"
+    );
+    assert_eq!(final_status_payload["metrics"]["rounds_started"], 1);
+    assert_eq!(final_status_payload["metrics"]["rounds_succeeded"], 1);
+    assert_eq!(final_status_payload["metrics"]["rounds_failed"], 0);
+    assert_eq!(final_status_payload["metrics"]["verify_failures"], 1);
+    assert_eq!(final_status_payload["metrics"]["replans_triggered"], 0);
+
+    let summary = summarize_safe_lane_events(
+        persisted
+            .iter()
+            .filter_map(|(_, role, content)| (role == "assistant").then_some(content.as_str())),
+    );
+    assert_eq!(summary.final_status, Some(SafeLaneFinalStatus::Failed));
+    assert_eq!(
+        summary.final_failure_code.as_deref(),
+        Some("safe_lane_plan_verify_failed")
+    );
+    assert_eq!(summary.verify_failed_events, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_safe_lane_session_governor_forces_no_replan() {
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loongclaw_kernel::{CoreMemoryAdapter, CoreToolAdapter};
+
+    struct FlakyAlwaysRetryableAdapter {
+        calls: Arc<Mutex<usize>>,
+    }
+
+    #[async_trait]
+    impl CoreToolAdapter for FlakyAlwaysRetryableAdapter {
+        fn name(&self) -> &str {
+            "flaky-governor-tools"
+        }
+
+        async fn execute_core_tool(
+            &self,
+            _request: ToolCoreRequest,
+        ) -> Result<ToolCoreOutcome, ToolPlaneError> {
+            {
+                let mut calls = self.calls.lock().expect("flaky calls lock");
+                *calls = calls.saturating_add(1);
+            }
+            Err(ToolPlaneError::Execution(
+                "transient tool failure".to_owned(),
+            ))
+        }
+    }
+
+    struct ChronicFailureMemoryAdapter;
+
+    #[async_trait]
+    impl CoreMemoryAdapter for ChronicFailureMemoryAdapter {
+        fn name(&self) -> &str {
+            "chronic-failure-memory"
+        }
+
+        async fn execute_core_memory(
+            &self,
+            request: MemoryCoreRequest,
+        ) -> Result<MemoryCoreOutcome, MemoryPlaneError> {
+            if request.operation == "window" {
+                return Ok(MemoryCoreOutcome {
+                    status: "ok".to_owned(),
+                    payload: json!({
+                        "turns": [
+                            {
+                                "role": "assistant",
+                                "content": "{\"type\":\"conversation_event\",\"event\":\"final_status\",\"payload\":{\"status\":\"failed\",\"failure_code\":\"safe_lane_plan_node_retryable_error\",\"route_decision\":\"terminal\"}}",
+                                "ts": 1
+                            }
+                        ]
+                    }),
+                });
+            }
+            Ok(MemoryCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({}),
+            })
+        }
+    }
+
+    let call_counter = Arc::new(Mutex::new(0usize));
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::InvokeTool, Capability::MemoryRead]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+    kernel.register_core_memory_adapter(ChronicFailureMemoryAdapter);
+    kernel
+        .set_default_core_memory_adapter("chronic-failure-memory")
+        .expect("set default core memory adapter");
+    kernel.register_core_tool_adapter(FlakyAlwaysRetryableAdapter {
+        calls: call_counter.clone(),
+    });
+    kernel
+        .set_default_core_tool_adapter("flaky-governor-tools")
+        .expect("set default core tool adapter");
+
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+    let ctx = KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Running checks.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!({"path": "note.md"}),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-safe-governor".to_owned(),
+                turn_id: "turn-safe-governor".to_owned(),
+                tool_call_id: "call-safe-governor-1".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+
+    let mut config = test_config();
+    config.conversation.safe_lane_plan_execution_enabled = true;
+    config.conversation.safe_lane_node_max_attempts = 1;
+    config.conversation.safe_lane_replan_max_rounds = 3;
+    config.conversation.safe_lane_replan_max_node_attempts = 4;
+    config.conversation.safe_lane_session_governor_enabled = true;
+    config
+        .conversation
+        .safe_lane_session_governor_failed_final_status_threshold = 1;
+    config
+        .conversation
+        .safe_lane_session_governor_backpressure_failure_threshold = 9;
+    config
+        .conversation
+        .safe_lane_session_governor_force_no_replan = true;
+    config
+        .conversation
+        .safe_lane_session_governor_force_node_max_attempts = 1;
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let _reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-safe-governor",
+            "deploy to production with secret token and show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            Some(&ctx),
+        )
+        .await
+        .expect("safe lane should fail without replan under governor");
+
+    let calls = *call_counter.lock().expect("call counter lock");
+    assert_eq!(calls, 1, "governor should suppress replans");
+
+    let persisted = runtime.persisted.lock().expect("persisted lock");
+    let lane_selected_payload = persisted
+        .iter()
+        .filter_map(|(_, role, content)| {
+            if role != "assistant" {
+                return None;
+            }
+            let parsed = serde_json::from_str::<Value>(content).ok()?;
+            if parsed.get("type")?.as_str()? != "conversation_event" {
+                return None;
+            }
+            if parsed.get("event")?.as_str()? != "lane_selected" {
+                return None;
+            }
+            parsed.get("payload").cloned()
+        })
+        .next_back()
+        .expect("lane_selected payload");
+    assert_eq!(lane_selected_payload["session_governor"]["engaged"], true);
+    assert_eq!(
+        lane_selected_payload["session_governor"]["force_no_replan"],
+        true
+    );
+    assert_eq!(
+        lane_selected_payload["session_governor"]["failed_threshold_triggered"],
+        true
+    );
+    assert_eq!(
+        lane_selected_payload["session_governor"]["trend_enabled"],
+        true
+    );
+    assert_eq!(
+        lane_selected_payload["session_governor"]["trend_samples"],
+        1
+    );
+    assert_eq!(
+        lane_selected_payload["session_governor"]["trend_threshold_triggered"],
+        false
+    );
+    assert_eq!(
+        lane_selected_payload["session_governor"]["recovery_threshold_triggered"],
+        false
+    );
+    assert_eq!(
+        lane_selected_payload["session_governor"]["trend_failure_ewma"],
+        Value::Null
+    );
+
+    let round_started_payload = persisted
+        .iter()
+        .filter_map(|(_, role, content)| {
+            if role != "assistant" {
+                return None;
+            }
+            let parsed = serde_json::from_str::<Value>(content).ok()?;
+            if parsed.get("type")?.as_str()? != "conversation_event" {
+                return None;
+            }
+            if parsed.get("event")?.as_str()? != "plan_round_started" {
+                return None;
+            }
+            parsed.get("payload").cloned()
+        })
+        .next_back()
+        .expect("plan_round_started payload");
+    assert_eq!(round_started_payload["effective_max_rounds"], 0);
+    assert_eq!(round_started_payload["effective_max_node_attempts"], 1);
+
+    let final_status_payload = persisted
+        .iter()
+        .filter_map(|(_, role, content)| {
+            if role != "assistant" {
+                return None;
+            }
+            let parsed = serde_json::from_str::<Value>(content).ok()?;
+            if parsed.get("type")?.as_str()? != "conversation_event" {
+                return None;
+            }
+            if parsed.get("event")?.as_str()? != "final_status" {
+                return None;
+            }
+            parsed.get("payload").cloned()
+        })
+        .next_back()
+        .expect("final_status payload");
+    assert_eq!(
+        final_status_payload["route_reason"],
+        "session_governor_no_replan"
+    );
+    assert_eq!(
+        final_status_payload["failure_code"],
+        "safe_lane_plan_session_governor_no_replan"
+    );
+    assert_eq!(final_status_payload["metrics"]["replans_triggered"], 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_safe_lane_session_governor_requests_extended_history_window() {
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+    use loongclaw_kernel::{CoreMemoryAdapter, CoreToolAdapter};
+
+    struct NoopToolAdapter;
+
+    #[async_trait]
+    impl CoreToolAdapter for NoopToolAdapter {
+        fn name(&self) -> &str {
+            "noop-governor-tool"
+        }
+
+        async fn execute_core_tool(
+            &self,
+            _request: ToolCoreRequest,
+        ) -> Result<ToolCoreOutcome, loongclaw_contracts::ToolPlaneError> {
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({"ok": true}),
+            })
+        }
+    }
+
+    struct CapturingMemoryAdapter {
+        invocations: Arc<Mutex<Vec<MemoryCoreRequest>>>,
+    }
+
+    #[async_trait]
+    impl CoreMemoryAdapter for CapturingMemoryAdapter {
+        fn name(&self) -> &str {
+            "capturing-governor-memory"
+        }
+
+        async fn execute_core_memory(
+            &self,
+            request: MemoryCoreRequest,
+        ) -> Result<MemoryCoreOutcome, MemoryPlaneError> {
+            self.invocations
+                .lock()
+                .expect("memory invocations lock")
+                .push(request.clone());
+            if request.operation == "window" {
+                return Ok(MemoryCoreOutcome {
+                    status: "ok".to_owned(),
+                    payload: json!({
+                        "turns": []
+                    }),
+                });
+            }
+            Ok(MemoryCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({}),
+            })
+        }
+    }
+
+    let memory_invocations = Arc::new(Mutex::new(Vec::<MemoryCoreRequest>::new()));
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([
+            Capability::InvokeTool,
+            Capability::MemoryRead,
+            Capability::MemoryWrite,
+        ]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+    kernel.register_core_tool_adapter(NoopToolAdapter);
+    kernel
+        .set_default_core_tool_adapter("noop-governor-tool")
+        .expect("set default core tool adapter");
+    kernel.register_core_memory_adapter(CapturingMemoryAdapter {
+        invocations: memory_invocations.clone(),
+    });
+    kernel
+        .set_default_core_memory_adapter("capturing-governor-memory")
+        .expect("set default core memory adapter");
+
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+    let ctx = KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Running checks.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!({"path": "note.md"}),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-safe-governor-window".to_owned(),
+                turn_id: "turn-safe-governor-window".to_owned(),
+                tool_call_id: "call-safe-governor-window-1".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+
+    let mut config = test_config();
+    config.conversation.safe_lane_plan_execution_enabled = true;
+    config.conversation.safe_lane_session_governor_enabled = true;
+    config.conversation.safe_lane_session_governor_window_turns = 200;
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let _ = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-safe-governor-window",
+            "deploy to production with secret token and show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            Some(&ctx),
+        )
+        .await
+        .expect("safe lane turn should complete");
+
+    let captured = memory_invocations
+        .lock()
+        .expect("memory invocations lock")
+        .clone();
+    let window_request = captured
+        .iter()
+        .find(|request| request.operation == "window")
+        .expect("window request should be issued");
+    assert_eq!(
+        window_request.payload["session_id"],
+        "session-safe-governor-window"
+    );
+    assert_eq!(window_request.payload["limit"], 200);
+    assert_eq!(window_request.payload["allow_extended_limit"], true);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_safe_lane_replans_failed_subgraph_only() {
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loongclaw_kernel::CoreToolAdapter;
+
+    #[derive(Default)]
+    struct CallCounters {
+        note: usize,
+        checklist: usize,
+    }
+
+    struct FailChecklistOnceAdapter {
+        counters: Arc<Mutex<CallCounters>>,
+    }
+
+    #[async_trait]
+    impl CoreToolAdapter for FailChecklistOnceAdapter {
+        fn name(&self) -> &str {
+            "fail-checklist-once-tools"
+        }
+
+        async fn execute_core_tool(
+            &self,
+            request: ToolCoreRequest,
+        ) -> Result<ToolCoreOutcome, ToolPlaneError> {
+            let path = request
+                .payload
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let (note_calls, checklist_calls) = {
+                let mut counters = self.counters.lock().expect("counters lock");
+                match path.as_str() {
+                    "note.md" => counters.note = counters.note.saturating_add(1),
+                    "checklist.md" => counters.checklist = counters.checklist.saturating_add(1),
+                    _ => {}
+                }
+                (counters.note, counters.checklist)
+            };
+
+            if path == "checklist.md" && checklist_calls == 1 {
+                return Err(ToolPlaneError::Execution(
+                    "transient checklist failure".to_owned(),
+                ));
+            }
+
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "path": path,
+                    "note_calls": note_calls,
+                    "checklist_calls": checklist_calls
+                }),
+            })
+        }
+    }
+
+    let counters = Arc::new(Mutex::new(CallCounters::default()));
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+    kernel.register_core_tool_adapter(FailChecklistOnceAdapter {
+        counters: counters.clone(),
+    });
+    kernel
+        .set_default_core_tool_adapter("fail-checklist-once-tools")
+        .expect("set default core tool adapter");
+
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+    let ctx = KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Running checks.".to_owned(),
+            tool_intents: vec![
+                ToolIntent {
+                    tool_name: "file.read".to_owned(),
+                    args_json: json!({"path": "note.md"}),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "session-safe-subgraph".to_owned(),
+                    turn_id: "turn-safe-subgraph".to_owned(),
+                    tool_call_id: "call-safe-subgraph-1".to_owned(),
+                },
+                ToolIntent {
+                    tool_name: "file.read".to_owned(),
+                    args_json: json!({"path": "checklist.md"}),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "session-safe-subgraph".to_owned(),
+                    turn_id: "turn-safe-subgraph".to_owned(),
+                    tool_call_id: "call-safe-subgraph-2".to_owned(),
+                },
+            ],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+
+    let mut config = test_config();
+    config.conversation.safe_lane_plan_execution_enabled = true;
+    config.conversation.safe_lane_node_max_attempts = 1;
+    config.conversation.safe_lane_replan_max_rounds = 1;
+    config.conversation.safe_lane_replan_max_node_attempts = 2;
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-safe-subgraph",
+            "deploy to production with secret token and show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            Some(&ctx),
+        )
+        .await
+        .expect("safe lane should recover by replaying only failed subgraph");
+
+    assert!(
+        reply.contains("note.md"),
+        "expected note output, got: {reply}"
+    );
+    assert!(
+        reply.contains("checklist.md"),
+        "expected checklist output, got: {reply}"
+    );
+
+    let counters = counters.lock().expect("counters lock");
+    assert_eq!(counters.note, 1, "note.md should not be re-executed");
+    assert_eq!(
+        counters.checklist, 2,
+        "checklist.md should execute once + one replan retry"
     );
 }
 
 #[tokio::test]
 async fn handle_turn_with_runtime_tool_denial_returns_inline_reply_even_in_propagate_mode() {
-    let runtime = FakeRuntime::with_turns(
+    let runtime = FakeRuntime::with_turn_and_completion(
         vec![],
-        vec![
-            Ok(ProviderTurn {
-                assistant_text: "Reading the file now.".to_owned(),
-                tool_intents: vec![ToolIntent {
-                    tool_name: "file.read".to_owned(),
-                    args_json: json!({"path": "note.md"}),
-                    source: "provider_tool_call".to_owned(),
-                    session_id: "session-denied".to_owned(),
-                    turn_id: "turn-denied".to_owned(),
-                    tool_call_id: "call-denied".to_owned(),
-                }],
-                raw_meta: Value::Null,
-            }),
-            Ok(ProviderTurn {
-                assistant_text: "MODEL_DENIED_REPLY".to_owned(),
-                tool_intents: vec![],
-                raw_meta: Value::Null,
-            }),
-        ],
+        Ok(ProviderTurn {
+            assistant_text: "Reading the file now.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!({"path": "note.md"}),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-denied".to_owned(),
+                turn_id: "turn-denied".to_owned(),
+                tool_call_id: "call-denied".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        }),
+        Ok("MODEL_DENIED_REPLY".to_owned()),
     );
 
-    let turn_loop = ConversationTurnLoop::new();
-    let reply = turn_loop
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
             "session-denied",
@@ -1201,10 +1905,9 @@ async fn handle_turn_with_runtime_tool_denial_returns_inline_reply_even_in_propa
             .completion_calls
             .lock()
             .expect("completion calls lock"),
-        0,
-        "tool-denied loop should continue with request_turn without completion fallback"
+        1,
+        "tool-denied fallback should run a completion pass for language-aware output"
     );
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 2);
 
     let persisted = runtime.persisted.lock().expect("persisted lock");
     assert_eq!(persisted.len(), 2);
@@ -1216,31 +1919,25 @@ async fn handle_turn_with_runtime_tool_error_returns_natural_language_fallback()
     use super::integration_tests::TurnTestHarness;
 
     let harness = TurnTestHarness::new();
-    let runtime = FakeRuntime::with_turns(
+    let runtime = FakeRuntime::with_turn_and_completion(
         vec![],
-        vec![
-            Ok(ProviderTurn {
-                assistant_text: "Reading the file now.".to_owned(),
-                tool_intents: vec![ToolIntent {
-                    tool_name: "file.read".to_owned(),
-                    args_json: json!("not an object"),
-                    source: "provider_tool_call".to_owned(),
-                    session_id: "session-tool-error".to_owned(),
-                    turn_id: "turn-tool-error".to_owned(),
-                    tool_call_id: "call-tool-error".to_owned(),
-                }],
-                raw_meta: Value::Null,
-            }),
-            Ok(ProviderTurn {
-                assistant_text: "MODEL_ERROR_REPLY".to_owned(),
-                tool_intents: vec![],
-                raw_meta: Value::Null,
-            }),
-        ],
+        Ok(ProviderTurn {
+            assistant_text: "Reading the file now.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!("not an object"),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-tool-error".to_owned(),
+                turn_id: "turn-tool-error".to_owned(),
+                tool_call_id: "call-tool-error".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        }),
+        Ok("MODEL_ERROR_REPLY".to_owned()),
     );
 
-    let turn_loop = ConversationTurnLoop::new();
-    let reply = turn_loop
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
             "session-tool-error",
@@ -1267,10 +1964,9 @@ async fn handle_turn_with_runtime_tool_error_returns_natural_language_fallback()
             .completion_calls
             .lock()
             .expect("completion calls lock"),
-        0,
-        "tool-error loop should continue with request_turn without completion fallback"
+        1,
+        "tool-error fallback should run a completion pass for language-aware output"
     );
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 2);
 
     let persisted = runtime.persisted.lock().expect("persisted lock");
     assert_eq!(persisted.len(), 2);
@@ -1279,7 +1975,8 @@ async fn handle_turn_with_runtime_tool_error_returns_natural_language_fallback()
 
 #[tokio::test]
 async fn handle_turn_with_runtime_tool_failure_completion_error_uses_raw_reason_without_markers() {
-    let repeated_tool_turn = || {
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
         Ok(ProviderTurn {
             assistant_text: "Reading the file now.".to_owned(),
             tool_intents: vec![ToolIntent {
@@ -1291,27 +1988,14 @@ async fn handle_turn_with_runtime_tool_failure_completion_error_uses_raw_reason_
                 tool_call_id: "call-denied-fallback".to_owned(),
             }],
             raw_meta: Value::Null,
-        })
-    };
-
-    let runtime = FakeRuntime::with_turns_and_completions(
-        vec![],
-        vec![
-            repeated_tool_turn(),
-            repeated_tool_turn(),
-            repeated_tool_turn(),
-            repeated_tool_turn(),
-        ],
-        vec![Err("completion_unavailable".to_owned())],
+        }),
+        Err("completion_unavailable".to_owned()),
     );
 
-    let mut config = test_config();
-    config.conversation.turn_loop.max_repeated_tool_call_rounds = 8;
-
-    let turn_loop = ConversationTurnLoop::new();
-    let reply = turn_loop
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
         .handle_turn_with_runtime(
-            &config,
+            &test_config(),
             "session-denied-fallback",
             "read note.md",
             ProviderErrorMode::Propagate,
@@ -1344,7 +2028,6 @@ async fn handle_turn_with_runtime_tool_failure_completion_error_uses_raw_reason_
             .expect("completion calls lock"),
         1
     );
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 4);
 }
 
 #[test]
@@ -1450,6 +2133,40 @@ fn turn_engine_unknown_tool_returns_tool_denied() {
 }
 
 #[test]
+fn turn_engine_unknown_tool_exposes_structured_policy_denial() {
+    use crate::conversation::turn_engine::{
+        ProviderTurn, ToolIntent, TurnEngine, TurnFailureKind, TurnResult,
+    };
+    let engine = TurnEngine::new(1);
+    let turn = ProviderTurn {
+        assistant_text: "".to_owned(),
+        tool_intents: vec![ToolIntent {
+            tool_name: "nonexistent.tool".to_owned(),
+            args_json: serde_json::json!({}),
+            source: "provider_tool_call".to_owned(),
+            session_id: "s1".to_owned(),
+            turn_id: "t1".to_owned(),
+            tool_call_id: "c1".to_owned(),
+        }],
+        raw_meta: serde_json::Value::Null,
+    };
+
+    let result = engine.evaluate_turn(&turn);
+    match result {
+        TurnResult::ToolDenied(failure) => {
+            assert_eq!(failure.kind, TurnFailureKind::PolicyDenied);
+            assert_eq!(failure.code, "tool_not_found");
+            assert!(!failure.retryable);
+            assert!(
+                failure.reason.contains("tool_not_found"),
+                "failure={failure:?}"
+            );
+        }
+        other => panic!("expected ToolDenied, got {:?}", other),
+    }
+}
+
+#[test]
 fn turn_engine_exceeding_max_steps_returns_denied() {
     use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, TurnEngine, TurnResult};
     let engine = TurnEngine::new(1);
@@ -1528,6 +2245,143 @@ async fn turn_engine_execute_turn_no_kernel_returns_denied() {
         }
         other => panic!("expected ToolDenied, got {:?}", other),
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_engine_tool_execution_error_is_marked_retryable() {
+    use crate::conversation::turn_engine::{
+        ProviderTurn, ToolIntent, TurnEngine, TurnFailureKind, TurnResult,
+    };
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loongclaw_kernel::CoreToolAdapter;
+
+    struct RetryableErrorToolAdapter;
+
+    #[async_trait]
+    impl CoreToolAdapter for RetryableErrorToolAdapter {
+        fn name(&self) -> &str {
+            "retryable-error-tools"
+        }
+
+        async fn execute_core_tool(
+            &self,
+            _request: ToolCoreRequest,
+        ) -> Result<ToolCoreOutcome, ToolPlaneError> {
+            Err(ToolPlaneError::Execution("transient failure".to_owned()))
+        }
+    }
+
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+    kernel.register_core_tool_adapter(RetryableErrorToolAdapter);
+    kernel
+        .set_default_core_tool_adapter("retryable-error-tools")
+        .expect("set default");
+
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+
+    let ctx = KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    let engine = TurnEngine::new(1);
+    let turn = ProviderTurn {
+        assistant_text: "".to_owned(),
+        tool_intents: vec![ToolIntent {
+            tool_name: "file.read".to_owned(),
+            args_json: json!({"path": "test.txt"}),
+            source: "provider_tool_call".to_owned(),
+            session_id: "s1".to_owned(),
+            turn_id: "t1".to_owned(),
+            tool_call_id: "c1".to_owned(),
+        }],
+        raw_meta: serde_json::Value::Null,
+    };
+
+    let result = engine.execute_turn(&turn, Some(&ctx)).await;
+    match result {
+        TurnResult::ToolError(failure) => {
+            assert_eq!(failure.kind, TurnFailureKind::Retryable);
+            assert_eq!(failure.code, "tool_execution_failed");
+            assert!(failure.retryable);
+            assert!(
+                failure.reason.contains("transient failure"),
+                "failure={failure:?}"
+            );
+        }
+        other => panic!("expected ToolError, got {:?}", other),
+    }
+}
+
+#[test]
+fn kernel_error_classification_table_is_stable() {
+    use crate::conversation::turn_engine::{KernelFailureClass, classify_kernel_error};
+    use loongclaw_contracts::{KernelError, PolicyError, RuntimePlaneError, ToolPlaneError};
+
+    let policy_error = KernelError::Policy(PolicyError::ToolCallDenied {
+        tool_name: "file.read".to_owned(),
+        reason: "blocked".to_owned(),
+    });
+    assert_eq!(
+        classify_kernel_error(&policy_error),
+        KernelFailureClass::PolicyDenied
+    );
+
+    let boundary_error = KernelError::PackCapabilityBoundary {
+        pack_id: "test-pack".to_owned(),
+        capability: Capability::InvokeTool,
+    };
+    assert_eq!(
+        classify_kernel_error(&boundary_error),
+        KernelFailureClass::PolicyDenied
+    );
+
+    let connector_error = KernelError::ConnectorNotAllowed {
+        connector: "shell".to_owned(),
+        pack_id: "test-pack".to_owned(),
+    };
+    assert_eq!(
+        classify_kernel_error(&connector_error),
+        KernelFailureClass::PolicyDenied
+    );
+
+    let retryable_tool_error =
+        KernelError::ToolPlane(ToolPlaneError::Execution("temporary outage".to_owned()));
+    assert_eq!(
+        classify_kernel_error(&retryable_tool_error),
+        KernelFailureClass::RetryableExecution
+    );
+
+    let non_retryable_tool_error = KernelError::ToolPlane(ToolPlaneError::NoDefaultCoreAdapter);
+    assert_eq!(
+        classify_kernel_error(&non_retryable_tool_error),
+        KernelFailureClass::NonRetryable
+    );
+
+    let runtime_error =
+        KernelError::RuntimePlane(RuntimePlaneError::Execution("runtime failure".to_owned()));
+    assert_eq!(
+        classify_kernel_error(&runtime_error),
+        KernelFailureClass::NonRetryable
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1898,18 +2752,18 @@ async fn persist_turn_routes_through_kernel_when_context_provided() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn build_messages_routes_window_through_kernel_when_context_provided() {
     let audit = Arc::new(InMemoryAuditSink::default());
-    let (ctx, invocations) = build_kernel_context(audit);
+    let (ctx, invocations) = build_kernel_context(audit.clone());
 
     let runtime = DefaultConversationRuntime;
     let config = test_config();
     let messages = runtime
-        .build_messages(&config, "session-k2", true, Some(&ctx))
+        .build_messages(&config, "session-k-window", true, Some(&ctx))
         .await
         .expect("build messages via kernel");
 
     assert!(
         !messages.is_empty(),
-        "messages should include at least system prompt"
+        "expected at least system prompt message, got: {messages:?}"
     );
     assert_eq!(messages[0]["role"], "system");
     assert!(
@@ -1920,11 +2774,27 @@ async fn build_messages_routes_window_through_kernel_when_context_provided() {
     );
 
     let captured = invocations.lock().expect("invocations lock");
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].operation, crate::memory::MEMORY_OP_WINDOW);
+    assert_eq!(captured[0].payload["session_id"], "session-k-window");
+    assert_eq!(
+        captured[0].payload["limit"],
+        json!(config.memory.sliding_window)
+    );
+
+    let events = audit.snapshot();
+    let has_memory_plane = events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            loongclaw_kernel::AuditEventKind::PlaneInvoked {
+                plane: loongclaw_contracts::ExecutionPlane::Memory,
+                ..
+            }
+        )
+    });
     assert!(
-        captured
-            .iter()
-            .any(|request| request.operation == crate::memory::MEMORY_OP_WINDOW),
-        "build_messages should route memory window through kernel memory plane"
+        has_memory_plane,
+        "audit should contain memory plane invocation"
     );
 }
 

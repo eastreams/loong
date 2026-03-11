@@ -35,7 +35,7 @@ Each spec file is a self-contained execution scenario. No external services requ
 ## Running Spec Files
 
 ```bash
-loongclawd run-spec --spec examples/spec/runtime-extension.json --print-audit
+loongclaw run-spec --spec examples/spec/runtime-extension.json --print-audit
 ```
 
 `--print-audit` shows the full audit trail for the execution.
@@ -45,7 +45,7 @@ Run all spec files:
 ```bash
 for spec in examples/spec/*.json; do
   echo "--- Running: $spec ---"
-  loongclawd run-spec --spec "$spec" --print-audit
+  loongclaw run-spec --spec "$spec" --print-audit
 done
 ```
 
@@ -54,7 +54,7 @@ done
 Programmatic pressure benchmark:
 
 ```bash
-loongclawd benchmark-programmatic-pressure \
+loongclaw benchmark-programmatic-pressure \
   --matrix examples/benchmarks/programmatic-pressure-matrix.json \
   --enforce-gate
 ```
@@ -62,7 +62,7 @@ loongclawd benchmark-programmatic-pressure \
 WASM cache benchmark:
 
 ```bash
-loongclawd benchmark-wasm-cache \
+loongclaw benchmark-wasm-cache \
   --wasm examples/plugins-wasm/secure_echo.wasm \
   --enforce-gate
 ```
@@ -71,7 +71,7 @@ Optional runtime tuning:
 
 ```bash
 # default = 32, max = 4096
-LOONGCLAW_WASM_CACHE_CAPACITY=64 loongclawd benchmark-wasm-cache \
+LOONGCLAW_WASM_CACHE_CAPACITY=64 loongclaw benchmark-wasm-cache \
   --wasm examples/plugins-wasm/secure_echo.wasm \
   --enforce-gate
 ```

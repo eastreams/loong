@@ -97,7 +97,7 @@ cargo install --path crates/daemon
 1. 生成配置并引导本地状态：
 
    ```bash
-   loongclawd setup
+   loongclaw setup
    ```
 
 2. 设置 provider API 密钥：
@@ -109,10 +109,10 @@ cargo install --path crates/daemon
 3. 开始聊天：
 
    ```bash
-   loongclawd chat
+   loongclaw chat
    ```
 
-遇到问题请运行 `loongclawd doctor --fix`。
+遇到问题请运行 `loongclaw doctor --fix`。
 
 ### 运行测试
 
@@ -182,7 +182,7 @@ contracts (leaf -- 零内部依赖)
 | `app` | Provider、工具、通道、内存、配置、对话引擎。 |
 | `spec` | 确定性测试场景执行器。 |
 | `bench` | 基准测试框架和验收执行。 |
-| `daemon` | CLI 二进制 (`loongclawd`)。将所有 crate 连接为可运行的命令。 |
+| `daemon` | CLI 二进制 (`loongclaw`)。将所有 crate 连接为可运行的命令。 |
 
 完整的分层执行模型（L0-L9），请参见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
@@ -236,7 +236,7 @@ cargo build -p loongclaw-daemon --no-default-features --features "channel-cli,pr
 
 ## 配置
 
-`loongclawd setup` 默认使用环境变量引用密钥（不直接存储）：
+`loongclaw setup` 默认使用环境变量引用密钥（不直接存储）：
 
 ```toml
 [provider]
@@ -249,7 +249,7 @@ api_key_env = "PROVIDER_API_KEY"   # 环境变量名称，不是密钥本身
 验证配置：
 
 ```bash
-loongclawd validate-config --config ~/.loongclaw/config.toml --json
+loongclaw validate-config --config ~/.loongclaw/config.toml --json
 ```
 
 ## 贡献

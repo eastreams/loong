@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use async_trait::async_trait;
 use loongclaw_contracts::Capability;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::CliResult;
 use crate::KernelContext;
@@ -54,13 +54,8 @@ impl ConversationRuntime for DefaultConversationRuntime {
         include_system_prompt: bool,
         kernel_ctx: Option<&KernelContext>,
     ) -> CliResult<Vec<Value>> {
-        let mut messages = Vec::new();
-        if let Some(system_message) = provider::build_system_message(config, include_system_prompt)
-        {
-            messages.push(system_message);
-        }
-
         if let Some(ctx) = kernel_ctx {
+            let mut messages = provider::build_base_messages(config, include_system_prompt);
             #[cfg(feature = "memory-sqlite")]
             {
                 let request =
@@ -73,10 +68,11 @@ impl ConversationRuntime for DefaultConversationRuntime {
                     .map_err(|error| format!("load memory window via kernel failed: {error}"))?;
                 let turns = memory::decode_window_turns(&outcome.payload);
                 for turn in turns {
-                    messages.push(json!({
-                        "role": turn.role,
-                        "content": turn.content,
-                    }));
+                    provider::push_history_message(
+                        &mut messages,
+                        turn.role.as_str(),
+                        turn.content.as_str(),
+                    );
                 }
             }
             #[cfg(not(feature = "memory-sqlite"))]
@@ -85,9 +81,7 @@ impl ConversationRuntime for DefaultConversationRuntime {
             }
             return Ok(messages);
         }
-
-        messages.extend(provider::load_memory_window_messages(config, session_id)?);
-        Ok(messages)
+        provider::build_messages_for_session(config, session_id, include_system_prompt)
     }
 
     async fn request_completion(

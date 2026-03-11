@@ -57,7 +57,7 @@ Required behavior:
 
 ### Task 4: Expose runtime in operator surfaces
 
-Update `loongclawd channels` text output to include:
+Update `loongclaw channels` text output to include:
 
 - `running`
 - `stale`

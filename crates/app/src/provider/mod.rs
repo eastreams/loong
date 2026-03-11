@@ -36,7 +36,6 @@ pub fn build_system_message(
     if !include_system_prompt {
         return None;
     }
-
     let system = config.cli.system_prompt.trim();
     let snapshot = super::tools::capability_snapshot();
     let content = if system.is_empty() {
@@ -48,6 +47,50 @@ pub fn build_system_message(
         "role": "system",
         "content": content,
     }))
+}
+
+pub(crate) fn build_base_messages(
+    config: &LoongClawConfig,
+    include_system_prompt: bool,
+) -> Vec<Value> {
+    build_system_message(config, include_system_prompt)
+        .into_iter()
+        .collect()
+}
+
+pub(crate) fn push_history_message(messages: &mut Vec<Value>, role: &str, content: &str) {
+    if !is_supported_chat_role(role) {
+        return;
+    }
+    if should_skip_history_turn(role, content) {
+        return;
+    }
+    messages.push(json!({
+        "role": role,
+        "content": content,
+    }));
+}
+
+fn is_supported_chat_role(role: &str) -> bool {
+    matches!(role, "system" | "user" | "assistant" | "tool")
+}
+
+fn should_skip_history_turn(role: &str, content: &str) -> bool {
+    if role != "assistant" {
+        return false;
+    }
+    let parsed = match serde_json::from_str::<Value>(content) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    let event_type = parsed
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    matches!(
+        event_type,
+        "conversation_event" | "tool_decision" | "tool_outcome"
+    )
 }
 
 pub fn load_memory_window_messages(
@@ -64,10 +107,7 @@ pub fn load_memory_window_messages(
             .map_err(|error| format!("load memory window failed: {error}"))?;
         let mut messages = Vec::with_capacity(turns.len());
         for turn in turns {
-            messages.push(json!({
-                "role": turn.role,
-                "content": turn.content,
-            }));
+            push_history_message(&mut messages, turn.role.as_str(), turn.content.as_str());
         }
         Ok(messages)
     }
@@ -83,10 +123,7 @@ pub fn build_messages_for_session(
     session_id: &str,
     include_system_prompt: bool,
 ) -> CliResult<Vec<Value>> {
-    let mut messages = Vec::new();
-    if let Some(system_message) = build_system_message(config, include_system_prompt) {
-        messages.push(system_message);
-    }
+    let mut messages = build_base_messages(config, include_system_prompt);
     messages.extend(load_memory_window_messages(config, session_id)?);
     Ok(messages)
 }
@@ -430,8 +467,8 @@ mod tests {
     use super::payload_adaptation::{ReasoningField, TemperatureField, TokenLimitField};
     use super::*;
     use crate::config::{
-        FeishuChannelConfig, MemoryConfig, ProviderConfig, ProviderKind, ReasoningEffort,
-        ToolConfig,
+        ConversationConfig, FeishuChannelConfig, MemoryConfig, ProviderConfig, ProviderKind,
+        ReasoningEffort, ToolConfig,
     };
     use serde_json::json;
 
@@ -442,9 +479,9 @@ mod tests {
             cli: crate::config::CliChannelConfig::default(),
             telegram: crate::config::TelegramChannelConfig::default(),
             feishu: FeishuChannelConfig::default(),
+            conversation: ConversationConfig::default(),
             tools: ToolConfig::default(),
             memory: MemoryConfig::default(),
-            conversation: crate::config::ConversationConfig::default(),
         };
 
         let messages =
@@ -460,9 +497,9 @@ mod tests {
             cli: crate::config::CliChannelConfig::default(),
             telegram: crate::config::TelegramChannelConfig::default(),
             feishu: FeishuChannelConfig::default(),
+            conversation: ConversationConfig::default(),
             tools: ToolConfig::default(),
             memory: MemoryConfig::default(),
-            conversation: crate::config::ConversationConfig::default(),
         };
 
         let messages =
@@ -487,6 +524,162 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn build_messages_skips_internal_conversation_events_in_history_window() {
+        let mut config = LoongClawConfig {
+            provider: ProviderConfig::default(),
+            cli: crate::config::CliChannelConfig::default(),
+            telegram: crate::config::TelegramChannelConfig::default(),
+            feishu: FeishuChannelConfig::default(),
+            conversation: ConversationConfig::default(),
+            tools: ToolConfig::default(),
+            memory: MemoryConfig::default(),
+        };
+
+        let session_id = format!(
+            "provider-history-filter-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        );
+        config.memory.sqlite_path = std::env::temp_dir()
+            .join(format!("{session_id}.sqlite3"))
+            .display()
+            .to_string();
+        let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            sqlite_path: Some(config.memory.resolved_sqlite_path()),
+            sliding_window: Some(config.memory.sliding_window),
+        };
+        crate::memory::append_turn_direct(&session_id, "user", "hello", &memory_config)
+            .expect("persist user turn");
+        crate::memory::append_turn_direct(
+            &session_id,
+            "assistant",
+            r#"{"type":"conversation_event","event":"lane_selected","payload":{"lane":"safe"}}"#,
+            &memory_config,
+        )
+        .expect("persist conversation event");
+        crate::memory::append_turn_direct(
+            &session_id,
+            "assistant",
+            r#"{"type":"tool_outcome","turn_id":"t1","tool_call_id":"c1","outcome":{"status":"ok"}}"#,
+            &memory_config,
+        )
+        .expect("persist tool outcome");
+        crate::memory::append_turn_direct(
+            &session_id,
+            "assistant",
+            "normal assistant reply",
+            &memory_config,
+        )
+        .expect("persist assistant reply");
+
+        let messages =
+            build_messages_for_session(&config, &session_id, true).expect("build messages");
+        let history_contents = messages
+            .iter()
+            .skip(1)
+            .filter_map(|message| message.get("content").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+
+        assert!(
+            history_contents.contains(&"hello"),
+            "expected user content in history: {history_contents:?}"
+        );
+        assert!(
+            history_contents.contains(&"normal assistant reply"),
+            "expected normal assistant content in history: {history_contents:?}"
+        );
+        assert!(
+            history_contents
+                .iter()
+                .all(|content| !content.contains("\"type\":\"conversation_event\"")),
+            "conversation_event payload must be filtered out: {history_contents:?}"
+        );
+        assert!(
+            history_contents
+                .iter()
+                .all(|content| !content.contains("\"type\":\"tool_outcome\"")),
+            "tool_outcome payload must be filtered out: {history_contents:?}"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn build_messages_skips_unknown_history_roles() {
+        let mut config = LoongClawConfig {
+            provider: ProviderConfig::default(),
+            cli: crate::config::CliChannelConfig::default(),
+            telegram: crate::config::TelegramChannelConfig::default(),
+            feishu: FeishuChannelConfig::default(),
+            conversation: ConversationConfig::default(),
+            tools: ToolConfig::default(),
+            memory: MemoryConfig::default(),
+        };
+
+        let session_id = format!(
+            "provider-history-role-filter-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        );
+        config.memory.sqlite_path = std::env::temp_dir()
+            .join(format!("{session_id}.sqlite3"))
+            .display()
+            .to_string();
+        let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            sqlite_path: Some(config.memory.resolved_sqlite_path()),
+            sliding_window: Some(config.memory.sliding_window),
+        };
+        crate::memory::append_turn_direct(&session_id, "user", "hello", &memory_config)
+            .expect("persist user turn");
+        crate::memory::append_turn_direct(
+            &session_id,
+            "internal_event",
+            "should be hidden",
+            &memory_config,
+        )
+        .expect("persist unknown role turn");
+        crate::memory::append_turn_direct(
+            &session_id,
+            "assistant",
+            "visible reply",
+            &memory_config,
+        )
+        .expect("persist assistant turn");
+
+        let messages =
+            build_messages_for_session(&config, &session_id, true).expect("build messages");
+        let history_roles = messages
+            .iter()
+            .skip(1)
+            .filter_map(|message| message.get("role").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        let history_contents = messages
+            .iter()
+            .skip(1)
+            .filter_map(|message| message.get("content").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+
+        assert!(
+            history_roles.iter().all(|role| *role != "internal_event"),
+            "unknown roles should be filtered: {history_roles:?}"
+        );
+        assert!(
+            history_contents
+                .iter()
+                .all(|content| *content != "should be hidden"),
+            "unknown role content should not be included: {history_contents:?}"
+        );
+        assert!(
+            history_contents.contains(&"visible reply"),
+            "assistant content should still be kept: {history_contents:?}"
+        );
+    }
+
     #[test]
     fn completion_body_includes_reasoning_effort_when_configured() {
         let mut config = LoongClawConfig {
@@ -494,9 +687,9 @@ mod tests {
             cli: crate::config::CliChannelConfig::default(),
             telegram: crate::config::TelegramChannelConfig::default(),
             feishu: FeishuChannelConfig::default(),
+            conversation: ConversationConfig::default(),
             tools: ToolConfig::default(),
             memory: MemoryConfig::default(),
-            conversation: crate::config::ConversationConfig::default(),
         };
         config.provider.reasoning_effort = Some(ReasoningEffort::High);
 
@@ -557,9 +750,9 @@ mod tests {
             cli: crate::config::CliChannelConfig::default(),
             telegram: crate::config::TelegramChannelConfig::default(),
             feishu: FeishuChannelConfig::default(),
+            conversation: ConversationConfig::default(),
             tools: ToolConfig::default(),
             memory: MemoryConfig::default(),
-            conversation: crate::config::ConversationConfig::default(),
         };
 
         let body = build_completion_request_body(
@@ -615,9 +808,9 @@ mod tests {
             cli: crate::config::CliChannelConfig::default(),
             telegram: crate::config::TelegramChannelConfig::default(),
             feishu: FeishuChannelConfig::default(),
+            conversation: ConversationConfig::default(),
             tools: ToolConfig::default(),
             memory: MemoryConfig::default(),
-            conversation: crate::config::ConversationConfig::default(),
         };
 
         let body = build_turn_request_body(

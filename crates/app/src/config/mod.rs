@@ -1,4 +1,5 @@
 mod channels;
+mod conversation;
 mod provider;
 mod runtime;
 mod shared;
@@ -12,16 +13,17 @@ pub use channels::{
     TelegramAccountConfig, TelegramChannelConfig,
 };
 #[allow(unused_imports)]
+pub use conversation::{ConversationConfig, ConversationTurnLoopConfig};
+#[allow(unused_imports)]
 pub use provider::{ProviderConfig, ProviderKind, ReasoningEffort};
 #[allow(unused_imports)]
 pub use runtime::{
-    ConfigValidationDiagnostic, ConversationConfig, ConversationTurnLoopConfig, LoongClawConfig,
-    default_config_path, default_loongclaw_home, load, normalize_validation_locale,
-    supported_validation_locales, validate_file, validate_file_with_locale, write, write_template,
+    ConfigValidationDiagnostic, LoongClawConfig, default_config_path, default_loongclaw_home, load,
+    normalize_validation_locale, supported_validation_locales, validate_file,
+    validate_file_with_locale, write, write_template,
 };
 #[allow(unused_imports)]
 pub use shared::expand_path;
-pub(crate) use tools_memory::{MAX_MEMORY_SLIDING_WINDOW, MIN_MEMORY_SLIDING_WINDOW};
 #[allow(unused_imports)]
 pub use tools_memory::{MemoryConfig, ToolConfig};
 
@@ -779,6 +781,79 @@ max_followup_tool_payload_chars_total = 3200
                 .turn_loop
                 .max_followup_tool_payload_chars_total,
             3200
+        );
+    }
+
+    #[test]
+    fn conversation_defaults_are_stable() {
+        let config = ConversationConfig::default();
+        assert!(config.hybrid_lane_enabled);
+        assert!(!config.safe_lane_plan_execution_enabled);
+        assert_eq!(config.fast_lane_max_tool_steps_per_turn, 1);
+        assert_eq!(config.safe_lane_max_tool_steps_per_turn, 1);
+        assert_eq!(config.safe_lane_node_max_attempts, 2);
+        assert_eq!(config.safe_lane_plan_max_wall_time_ms, 30_000);
+        assert!(config.safe_lane_verify_output_non_empty);
+        assert_eq!(config.safe_lane_verify_min_output_chars, 8);
+        assert!(config.safe_lane_verify_require_status_prefix);
+        assert!(config.safe_lane_verify_adaptive_anchor_escalation);
+        assert_eq!(config.safe_lane_verify_anchor_escalation_after_failures, 2);
+        assert_eq!(config.safe_lane_verify_anchor_escalation_min_matches, 1);
+        assert!(config.safe_lane_emit_runtime_events);
+        assert_eq!(config.safe_lane_event_sample_every, 1);
+        assert!(config.safe_lane_event_adaptive_sampling);
+        assert_eq!(config.safe_lane_event_adaptive_failure_threshold, 1);
+        assert!(
+            config
+                .safe_lane_verify_deny_markers
+                .iter()
+                .any(|marker| marker == "tool_failure")
+        );
+        assert_eq!(config.safe_lane_replan_max_rounds, 1);
+        assert_eq!(config.safe_lane_replan_max_node_attempts, 4);
+        assert!(config.safe_lane_session_governor_enabled);
+        assert_eq!(config.safe_lane_session_governor_window_turns, 96);
+        assert_eq!(
+            config.safe_lane_session_governor_failed_final_status_threshold,
+            3
+        );
+        assert_eq!(
+            config.safe_lane_session_governor_backpressure_failure_threshold,
+            1
+        );
+        assert!(config.safe_lane_session_governor_trend_enabled);
+        assert_eq!(config.safe_lane_session_governor_trend_min_samples, 4);
+        assert_eq!(config.safe_lane_session_governor_trend_ewma_alpha, 0.35);
+        assert_eq!(
+            config.safe_lane_session_governor_trend_failure_ewma_threshold,
+            0.60
+        );
+        assert_eq!(
+            config.safe_lane_session_governor_trend_backpressure_ewma_threshold,
+            0.20
+        );
+        assert_eq!(config.safe_lane_session_governor_recovery_success_streak, 3);
+        assert_eq!(
+            config.safe_lane_session_governor_recovery_max_failure_ewma,
+            0.25
+        );
+        assert_eq!(
+            config.safe_lane_session_governor_recovery_max_backpressure_ewma,
+            0.10
+        );
+        assert!(config.safe_lane_session_governor_force_no_replan);
+        assert_eq!(config.safe_lane_session_governor_force_node_max_attempts, 1);
+        assert!(config.safe_lane_backpressure_guard_enabled);
+        assert_eq!(config.safe_lane_backpressure_max_total_attempts, 32);
+        assert_eq!(config.safe_lane_backpressure_max_replans, 8);
+        assert_eq!(config.safe_lane_risk_threshold, 4);
+        assert_eq!(config.safe_lane_complexity_threshold, 6);
+        assert_eq!(config.fast_lane_max_input_chars, 400);
+        assert!(
+            config
+                .high_risk_keywords
+                .iter()
+                .any(|keyword| keyword == "production")
         );
     }
 
