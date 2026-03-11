@@ -219,8 +219,10 @@ mod tests {
 
     #[test]
     fn verifier_rejects_short_output() {
-        let mut policy = PlanVerificationPolicy::default();
-        policy.min_output_chars = 20;
+        let policy = PlanVerificationPolicy {
+            min_output_chars: 20,
+            ..PlanVerificationPolicy::default()
+        };
         let report = verify_output("[ok] {}", &PlanVerificationContext::default(), &policy);
         assert!(!report.passed);
         assert!(

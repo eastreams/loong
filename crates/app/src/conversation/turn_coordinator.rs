@@ -24,7 +24,9 @@ use super::persistence::{
 use super::plan_executor::{
     PlanExecutor, PlanNodeError, PlanNodeErrorKind, PlanNodeExecutor, PlanRunFailure, PlanRunStatus,
 };
-use super::plan_ir::{PlanBudget, PlanEdge, PlanGraph, PlanNode, PlanNodeKind, RiskTier};
+use super::plan_ir::{
+    PlanBudget, PlanEdge, PlanGraph, PlanNode, PlanNodeKind, RiskTier, PLAN_GRAPH_VERSION,
+};
 use super::plan_verifier::{
     verify_output, PlanVerificationContext, PlanVerificationFailureCode, PlanVerificationPolicy,
     PlanVerificationReport,
@@ -748,7 +750,7 @@ fn should_emit_safe_lane_event(
         .get("round")
         .and_then(Value::as_u64)
         .unwrap_or_default();
-    round % (sample_every as u64) == 0
+    round.is_multiple_of(sample_every as u64)
 }
 
 fn is_safe_lane_critical_event(event_name: &str) -> bool {
@@ -857,9 +859,12 @@ fn build_safe_lane_plan_graph(
     });
 
     for pair in nodes.windows(2) {
+        let [from, to] = pair else {
+            continue;
+        };
         edges.push(PlanEdge {
-            from: pair[0].id.clone(),
-            to: pair[1].id.clone(),
+            from: from.id.clone(),
+            to: to.id.clone(),
         });
     }
 
@@ -869,7 +874,7 @@ fn build_safe_lane_plan_graph(
         .sum::<usize>()
         .max(1);
     PlanGraph {
-        version: "hvgr.v1".to_owned(),
+        version: PLAN_GRAPH_VERSION.to_owned(),
         nodes,
         edges,
         budget: PlanBudget {
@@ -1943,7 +1948,7 @@ mod tests {
 
     #[test]
     fn turn_failure_from_plan_failure_node_error_mapping_is_stable() {
-        let cases = vec![
+        let cases = [
             (
                 PlanNodeErrorKind::PolicyDenied,
                 TurnFailureKind::PolicyDenied,
@@ -1983,7 +1988,7 @@ mod tests {
 
     #[test]
     fn turn_failure_from_plan_failure_static_failure_mapping_is_stable() {
-        let failures = vec![
+        let failures = [
             PlanRunFailure::ValidationFailed("invalid".to_owned()),
             PlanRunFailure::TopologyResolutionFailed,
             PlanRunFailure::BudgetExceeded {
@@ -2208,7 +2213,7 @@ mod tests {
 
     #[test]
     fn summarize_governor_history_signals_extracts_failure_samples() {
-        let contents = vec![
+        let contents = [
             r#"{"type":"conversation_event","event":"final_status","payload":{"status":"failed","failure_code":"safe_lane_plan_backpressure_guard","route_reason":"backpressure_attempts_exhausted"}}"#,
             r#"{"type":"conversation_event","event":"final_status","payload":{"status":"succeeded"}}"#,
         ];

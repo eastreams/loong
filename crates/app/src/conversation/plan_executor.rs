@@ -127,13 +127,30 @@ impl PlanExecutor {
         let mut attempts_used = 0usize;
         let mut events = Vec::new();
         let started_at = Instant::now();
-        let ordered_nodes = ordered_indexes
+        let Some(ordered_nodes) = ordered_indexes
             .iter()
-            .map(|index| plan.nodes[*index].id.clone())
-            .collect::<Vec<_>>();
+            .map(|index| plan.nodes.get(*index).map(|node| node.id.clone()))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return PlanRunReport {
+                status: PlanRunStatus::Failed(PlanRunFailure::TopologyResolutionFailed),
+                ordered_nodes: Vec::new(),
+                attempts_used: 0,
+                attempt_events: Vec::new(),
+                elapsed_ms: 0,
+            };
+        };
 
         for node_index in ordered_indexes {
-            let node = &plan.nodes[node_index];
+            let Some(node) = plan.nodes.get(node_index) else {
+                return PlanRunReport {
+                    status: PlanRunStatus::Failed(PlanRunFailure::TopologyResolutionFailed),
+                    ordered_nodes,
+                    attempts_used,
+                    attempt_events: events,
+                    elapsed_ms: started_at.elapsed().as_millis(),
+                };
+            };
 
             for attempt in 1..=node.max_attempts {
                 let elapsed_ms = started_at.elapsed().as_millis();
@@ -275,8 +292,9 @@ fn topological_order(plan: &PlanGraph) -> Option<Vec<usize>> {
     for edge in &plan.edges {
         let from = *node_index.get(edge.from.as_str())?;
         let to = *node_index.get(edge.to.as_str())?;
-        indegree[to] = indegree[to].saturating_add(1);
-        adjacency[from].push(to);
+        let degree = indegree.get_mut(to)?;
+        *degree = degree.saturating_add(1);
+        adjacency.get_mut(from)?.push(to);
     }
 
     let mut queue = VecDeque::new();
@@ -289,9 +307,10 @@ fn topological_order(plan: &PlanGraph) -> Option<Vec<usize>> {
     let mut order = Vec::new();
     while let Some(index) = queue.pop_front() {
         order.push(index);
-        for next in &adjacency[index] {
-            indegree[*next] = indegree[*next].saturating_sub(1);
-            if indegree[*next] == 0 {
+        for next in adjacency.get(index)? {
+            let next_degree = indegree.get_mut(*next)?;
+            *next_degree = next_degree.saturating_sub(1);
+            if *next_degree == 0 {
                 queue.push_back(*next);
             }
         }
@@ -312,12 +331,12 @@ mod tests {
 
     use super::*;
     use crate::conversation::plan_ir::{
-        PlanBudget, PlanEdge, PlanGraph, PlanNode, PlanNodeKind, RiskTier,
+        PlanBudget, PlanEdge, PlanGraph, PlanNode, PlanNodeKind, RiskTier, PLAN_GRAPH_VERSION,
     };
 
     fn sample_graph() -> PlanGraph {
         PlanGraph {
-            version: "hvgr.v1".to_owned(),
+            version: PLAN_GRAPH_VERSION.to_owned(),
             nodes: vec![
                 PlanNode {
                     id: "n1".to_owned(),

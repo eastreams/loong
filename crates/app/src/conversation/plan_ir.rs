@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
+pub const PLAN_GRAPH_VERSION: &str = "hybrid_lane_plan.v1";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanNodeKind {
@@ -130,9 +132,20 @@ impl PlanGraph {
             if from_index == to_index {
                 return Err(format!("plan edge has self-loop at `{}`", edge.from));
             }
-            indegree[to_index] = indegree[to_index].saturating_add(1);
-            outdegree[from_index] = outdegree[from_index].saturating_add(1);
-            adjacency[from_index].push(to_index);
+            let Some(to_degree) = indegree.get_mut(to_index) else {
+                return Err("plan graph indegree index out of bounds".to_owned());
+            };
+            *to_degree = to_degree.saturating_add(1);
+
+            let Some(from_degree) = outdegree.get_mut(from_index) else {
+                return Err("plan graph outdegree index out of bounds".to_owned());
+            };
+            *from_degree = from_degree.saturating_add(1);
+
+            let Some(neighbors) = adjacency.get_mut(from_index) else {
+                return Err("plan graph adjacency index out of bounds".to_owned());
+            };
+            neighbors.push(to_index);
         }
 
         let entry_nodes = indegree.iter().filter(|degree| **degree == 0).count();
@@ -154,9 +167,15 @@ impl PlanGraph {
         let mut visited = 0usize;
         while let Some(index) = queue.pop_front() {
             visited = visited.saturating_add(1);
-            for next in &adjacency[index] {
-                remaining_indegree[*next] = remaining_indegree[*next].saturating_sub(1);
-                if remaining_indegree[*next] == 0 {
+            let Some(neighbors) = adjacency.get(index) else {
+                return Err("plan graph adjacency traversal index out of bounds".to_owned());
+            };
+            for next in neighbors {
+                let Some(next_degree) = remaining_indegree.get_mut(*next) else {
+                    return Err("plan graph indegree traversal index out of bounds".to_owned());
+                };
+                *next_degree = next_degree.saturating_sub(1);
+                if *next_degree == 0 {
                     queue.push_back(*next);
                 }
             }
@@ -174,7 +193,7 @@ mod tests {
 
     fn sample_graph() -> PlanGraph {
         PlanGraph {
-            version: "hvgr.v1".to_owned(),
+            version: PLAN_GRAPH_VERSION.to_owned(),
             nodes: vec![
                 PlanNode {
                     id: "n1".to_owned(),

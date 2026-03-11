@@ -586,13 +586,11 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(
-            history_contents.iter().any(|content| *content == "hello"),
+            history_contents.contains(&"hello"),
             "expected user content in history: {history_contents:?}"
         );
         assert!(
-            history_contents
-                .iter()
-                .any(|content| *content == "normal assistant reply"),
+            history_contents.contains(&"normal assistant reply"),
             "expected normal assistant content in history: {history_contents:?}"
         );
         assert!(
@@ -677,9 +675,7 @@ mod tests {
             "unknown role content should not be included: {history_contents:?}"
         );
         assert!(
-            history_contents
-                .iter()
-                .any(|content| *content == "visible reply"),
+            history_contents.contains(&"visible reply"),
             "assistant content should still be kept: {history_contents:?}"
         );
     }

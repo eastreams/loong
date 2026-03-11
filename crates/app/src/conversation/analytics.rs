@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn summarize_safe_lane_events_counts_and_final_fields() {
-        let payloads = vec![
+        let payloads = [
             r#"{"type":"conversation_event","event":"lane_selected","payload":{"lane":"safe"}}"#,
             r#"{"type":"conversation_event","event":"plan_round_started","payload":{"round":0}}"#,
             r#"{"type":"conversation_event","event":"plan_round_completed","payload":{"round":0,"status":"failed"}}"#,
@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn summarize_safe_lane_events_tracks_latest_metrics_snapshot() {
-        let payloads = vec![
+        let payloads = [
             json!({
                 "type": "conversation_event",
                 "event": "plan_round_started",
@@ -441,7 +441,7 @@ mod tests {
 
     #[test]
     fn summarize_safe_lane_events_accepts_partial_metrics_payload() {
-        let payloads = vec![json!({
+        let payloads = [json!({
             "type": "conversation_event",
             "event": "verify_failed",
             "payload": {
@@ -463,7 +463,7 @@ mod tests {
 
     #[test]
     fn summarize_safe_lane_events_handles_sparse_sampled_stream() {
-        let payloads = vec![
+        let payloads = [
             r#"{"type":"conversation_event","event":"lane_selected","payload":{"lane":"safe"}}"#,
             r#"{"type":"conversation_event","event":"final_status","payload":{"status":"failed","failure_code":"safe_lane_plan_node_retryable_error","route_decision":"terminal","route_reason":"session_governor_no_replan"}}"#,
         ];
@@ -497,7 +497,7 @@ mod tests {
 
     #[test]
     fn summarize_safe_lane_events_tracks_session_governor_signals() {
-        let payloads = vec![
+        let payloads = [
             json!({
                 "type": "conversation_event",
                 "event": "lane_selected",

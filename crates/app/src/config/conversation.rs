@@ -474,14 +474,16 @@ mod tests {
 
     #[test]
     fn session_governor_trend_parameters_are_clamped_to_valid_ranges() {
-        let mut config = ConversationConfig::default();
-        config.safe_lane_session_governor_trend_min_samples = 0;
-        config.safe_lane_session_governor_trend_ewma_alpha = f64::NAN;
-        config.safe_lane_session_governor_trend_failure_ewma_threshold = 2.0;
-        config.safe_lane_session_governor_trend_backpressure_ewma_threshold = -1.0;
-        config.safe_lane_session_governor_recovery_success_streak = 0;
-        config.safe_lane_session_governor_recovery_max_failure_ewma = -3.0;
-        config.safe_lane_session_governor_recovery_max_backpressure_ewma = 4.0;
+        let config = ConversationConfig {
+            safe_lane_session_governor_trend_min_samples: 0,
+            safe_lane_session_governor_trend_ewma_alpha: f64::NAN,
+            safe_lane_session_governor_trend_failure_ewma_threshold: 2.0,
+            safe_lane_session_governor_trend_backpressure_ewma_threshold: -1.0,
+            safe_lane_session_governor_recovery_success_streak: 0,
+            safe_lane_session_governor_recovery_max_failure_ewma: -3.0,
+            safe_lane_session_governor_recovery_max_backpressure_ewma: 4.0,
+            ..ConversationConfig::default()
+        };
 
         assert_eq!(config.safe_lane_session_governor_trend_min_samples(), 1);
         assert_eq!(
@@ -512,8 +514,10 @@ mod tests {
 
     #[test]
     fn session_governor_trend_alpha_uses_open_interval_floor() {
-        let mut config = ConversationConfig::default();
-        config.safe_lane_session_governor_trend_ewma_alpha = 0.0;
+        let config = ConversationConfig {
+            safe_lane_session_governor_trend_ewma_alpha: 0.0,
+            ..ConversationConfig::default()
+        };
 
         assert_eq!(config.safe_lane_session_governor_trend_ewma_alpha(), 0.01);
     }
