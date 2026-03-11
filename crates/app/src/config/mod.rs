@@ -865,6 +865,75 @@ max_followup_tool_payload_chars_total = 3200
     }
 
     #[test]
+    #[cfg(feature = "config-toml")]
+    fn conversation_tool_result_payload_summary_limit_can_be_overridden_from_toml() {
+        let raw = r#"
+[conversation]
+tool_result_payload_summary_limit_chars = 4096
+"#;
+        let parsed =
+            toml::from_str::<LoongClawConfig>(raw).expect("parse conversation config should pass");
+        assert_eq!(
+            parsed.conversation.tool_result_payload_summary_limit_chars,
+            4096
+        );
+        assert_eq!(
+            parsed
+                .conversation
+                .tool_result_payload_summary_limit_chars(),
+            4096
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn conversation_health_thresholds_can_be_overridden_from_toml() {
+        let raw = r#"
+[conversation]
+safe_lane_health_truncation_warn_threshold = 0.25
+safe_lane_health_truncation_critical_threshold = 0.75
+safe_lane_health_verify_failure_warn_threshold = 0.45
+safe_lane_health_replan_warn_threshold = 0.55
+"#;
+        let parsed =
+            toml::from_str::<LoongClawConfig>(raw).expect("parse conversation config should pass");
+        assert_eq!(
+            parsed
+                .conversation
+                .safe_lane_health_truncation_warn_threshold,
+            0.25
+        );
+        assert_eq!(
+            parsed
+                .conversation
+                .safe_lane_health_truncation_critical_threshold,
+            0.75
+        );
+        assert_eq!(
+            parsed
+                .conversation
+                .safe_lane_health_verify_failure_warn_threshold,
+            0.45
+        );
+        assert_eq!(
+            parsed.conversation.safe_lane_health_replan_warn_threshold,
+            0.55
+        );
+        assert_eq!(
+            parsed
+                .conversation
+                .safe_lane_health_truncation_warn_threshold(),
+            0.25
+        );
+        assert_eq!(
+            parsed
+                .conversation
+                .safe_lane_health_truncation_critical_threshold(),
+            0.75
+        );
+    }
+
+    #[test]
     fn conversation_defaults_are_stable() {
         let config = ConversationConfig::default();
         assert!(config.hybrid_lane_enabled);
@@ -929,6 +998,11 @@ max_followup_tool_payload_chars_total = 3200
         assert_eq!(config.safe_lane_risk_threshold, 4);
         assert_eq!(config.safe_lane_complexity_threshold, 6);
         assert_eq!(config.fast_lane_max_input_chars, 400);
+        assert_eq!(config.tool_result_payload_summary_limit_chars, 2_048);
+        assert_eq!(config.safe_lane_health_truncation_warn_threshold, 0.30);
+        assert_eq!(config.safe_lane_health_truncation_critical_threshold, 0.60);
+        assert_eq!(config.safe_lane_health_verify_failure_warn_threshold, 0.40);
+        assert_eq!(config.safe_lane_health_replan_warn_threshold, 0.50);
         assert!(
             config
                 .high_risk_keywords

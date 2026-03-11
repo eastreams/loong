@@ -11,11 +11,14 @@ use super::ProviderErrorMode;
 use super::persistence::{format_provider_error_reply, persist_error_turns, persist_success_turns};
 use super::runtime::{ConversationRuntime, DefaultConversationRuntime};
 use super::turn_engine::{ProviderTurn, ToolIntent, TurnEngine, TurnResult};
+use super::turn_shared::{
+    build_tool_followup_user_prompt, compose_assistant_reply, join_non_empty_lines,
+    user_requested_raw_tool_output,
+};
 
 #[derive(Default)]
 pub struct ConversationTurnLoop;
 
-const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to answer the original user request in natural language. Do not include raw JSON, payload wrappers, or status markers unless the user explicitly asks for raw output.";
 const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rounds. Do not repeat identical or cyclical tool calls without new evidence. Adjust strategy (different tool, arguments, or decomposition) or provide the best possible final answer and clearly state remaining gaps.";
 
 impl ConversationTurnLoop {
@@ -87,9 +90,14 @@ impl ConversationTurnLoop {
             let current_tool_name_signature =
                 had_tool_intents.then(|| tool_name_signature(&turn.tool_intents));
 
-            let turn_result = TurnEngine::new(policy.max_tool_steps_per_round)
-                .execute_turn(&turn, kernel_ctx)
-                .await;
+            let turn_result = TurnEngine::with_tool_result_payload_summary_limit(
+                policy.max_tool_steps_per_round,
+                config
+                    .conversation
+                    .tool_result_payload_summary_limit_chars(),
+            )
+            .execute_turn(&turn, kernel_ctx)
+            .await;
             let loop_supervisor_verdict = if let (Some(signature), Some(name_signature)) = (
                 current_tool_signature.as_deref(),
                 current_tool_name_signature.as_deref(),
@@ -333,7 +341,11 @@ fn append_tool_followup_messages(
     }
     messages.push(json!({
         "role": "user",
-        "content": build_tool_followup_prompt(user_input, loop_warning_reason),
+        "content": build_tool_followup_user_prompt(
+            user_input,
+            loop_warning_reason,
+            Some(tool_result_text),
+        ),
     }));
 }
 
@@ -366,7 +378,7 @@ fn append_tool_failure_followup_messages(
     }
     messages.push(json!({
         "role": "user",
-        "content": build_tool_followup_prompt(user_input, loop_warning_reason),
+        "content": build_tool_followup_user_prompt(user_input, loop_warning_reason, None),
     }));
 }
 
@@ -425,31 +437,6 @@ async fn request_completion_with_raw_fallback<R: ConversationRuntime + ?Sized>(
         }
         Err(_) => raw_reply.to_owned(),
     }
-}
-
-fn user_requested_raw_tool_output(user_input: &str) -> bool {
-    let normalized = user_input.to_ascii_lowercase();
-    [
-        "raw",
-        "json",
-        "payload",
-        "verbatim",
-        "exact output",
-        "full output",
-        "tool output",
-        "[ok]",
-    ]
-    .iter()
-    .any(|signal| normalized.contains(signal))
-}
-
-fn build_tool_followup_prompt(user_input: &str, loop_warning_reason: Option<&str>) -> String {
-    if let Some(reason) = loop_warning_reason {
-        return format!(
-            "{TOOL_FOLLOWUP_PROMPT}\n\nLoop warning:\n{reason}\nAvoid repeating the same tool call with unchanged results. Try a different tool, adjust arguments, or provide a best-effort final answer if evidence is sufficient.\n\nOriginal request:\n{user_input}"
-        );
-    }
-    format!("{TOOL_FOLLOWUP_PROMPT}\n\nOriginal request:\n{user_input}")
 }
 
 fn truncate_followup_tool_payload(label: &str, text: &str, max_chars: usize) -> String {
@@ -752,37 +739,55 @@ impl ToolLoopSupervisor {
     }
 }
 
-fn compose_assistant_reply(
-    assistant_preface: &str,
-    had_tool_intents: bool,
-    turn_result: TurnResult,
-) -> String {
-    match turn_result {
-        TurnResult::FinalText(text) => {
-            if had_tool_intents {
-                join_non_empty_lines(&[assistant_preface, text.as_str()])
-            } else {
-                text
-            }
-        }
-        TurnResult::NeedsApproval(reason) => {
-            let inline = format!("[tool_approval_required] {reason}");
-            join_non_empty_lines(&[assistant_preface, inline.as_str()])
-        }
-        TurnResult::ToolDenied(reason) => join_non_empty_lines(&[assistant_preface, &reason]),
-        TurnResult::ToolError(reason) => join_non_empty_lines(&[assistant_preface, &reason]),
-        TurnResult::ProviderError(reason) => {
-            let inline = format_provider_error_reply(&reason);
-            join_non_empty_lines(&[assistant_preface, inline.as_str()])
-        }
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn join_non_empty_lines(parts: &[&str]) -> String {
-    parts
-        .iter()
-        .map(|part| part.trim())
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
+    #[test]
+    fn append_tool_followup_messages_adds_truncation_hint_to_user_prompt() {
+        let mut messages = Vec::new();
+        let mut budget = FollowupPayloadBudget::new(8_000, 20_000);
+
+        append_tool_followup_messages(
+            &mut messages,
+            "preface",
+            r#"[ok] {"payload_truncated":true,"payload_summary":"..."}"#,
+            "summarize note.md",
+            &mut budget,
+            None,
+        );
+
+        let user_prompt = messages
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+        assert!(
+            user_prompt.contains(crate::conversation::turn_shared::TOOL_TRUNCATION_HINT_PROMPT)
+        );
+    }
+
+    #[test]
+    fn append_tool_failure_followup_messages_omits_truncation_hint_in_user_prompt() {
+        let mut messages = Vec::new();
+        let mut budget = FollowupPayloadBudget::new(8_000, 20_000);
+
+        append_tool_failure_followup_messages(
+            &mut messages,
+            "preface",
+            "tool_timeout ...(truncated 200 chars)",
+            "summarize note.md",
+            &mut budget,
+            None,
+        );
+
+        let user_prompt = messages
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+        assert!(
+            !user_prompt.contains(crate::conversation::turn_shared::TOOL_TRUNCATION_HINT_PROMPT)
+        );
+    }
 }

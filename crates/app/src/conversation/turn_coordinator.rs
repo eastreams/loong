@@ -37,11 +37,13 @@ use super::turn_engine::{
     KernelFailureClass, ProviderTurn, ToolIntent, TurnEngine, TurnFailure, TurnFailureKind,
     TurnResult, classify_kernel_error,
 };
+use super::turn_shared::{
+    build_tool_followup_user_prompt, compose_assistant_reply, join_non_empty_lines,
+    tool_result_contains_truncation_signal, user_requested_raw_tool_output,
+};
 
 #[derive(Default)]
 pub struct ConversationTurnCoordinator;
-
-const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to answer the original user request in natural language. Do not include raw JSON, payload wrappers, or status markers unless the user explicitly asks for raw output.";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct SafeLaneExecutionMetrics {
@@ -51,9 +53,32 @@ struct SafeLaneExecutionMetrics {
     verify_failures: u32,
     replans_triggered: u32,
     total_attempts_used: u64,
+    tool_output_result_lines_total: u64,
+    tool_output_truncated_result_lines_total: u64,
 }
 
 impl SafeLaneExecutionMetrics {
+    fn record_tool_output_stats(&mut self, stats: SafeLaneToolOutputStats) {
+        self.tool_output_result_lines_total = self
+            .tool_output_result_lines_total
+            .saturating_add(stats.result_lines as u64);
+        self.tool_output_truncated_result_lines_total = self
+            .tool_output_truncated_result_lines_total
+            .saturating_add(stats.truncated_result_lines as u64);
+    }
+
+    fn aggregate_tool_truncation_ratio_milli(self) -> Option<u32> {
+        if self.tool_output_result_lines_total == 0 {
+            return None;
+        }
+        Some(
+            self.tool_output_truncated_result_lines_total
+                .saturating_mul(1000)
+                .saturating_div(self.tool_output_result_lines_total)
+                .min(u32::MAX as u64) as u32,
+        )
+    }
+
     fn as_json(self) -> Value {
         json!({
             "rounds_started": self.rounds_started,
@@ -62,6 +87,9 @@ impl SafeLaneExecutionMetrics {
             "verify_failures": self.verify_failures,
             "replans_triggered": self.replans_triggered,
             "total_attempts_used": self.total_attempts_used,
+            "tool_output_result_lines_total": self.tool_output_result_lines_total,
+            "tool_output_truncated_result_lines_total": self.tool_output_truncated_result_lines_total,
+            "tool_output_aggregate_truncation_ratio_milli": self.aggregate_tool_truncation_ratio_milli(),
         })
     }
 }
@@ -69,6 +97,49 @@ impl SafeLaneExecutionMetrics {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct SafeLaneAdaptiveVerifyPolicyState {
     min_anchor_matches: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct SafeLaneToolOutputStats {
+    output_lines: usize,
+    result_lines: usize,
+    truncated_result_lines: usize,
+}
+
+impl SafeLaneToolOutputStats {
+    fn truncation_ratio_milli(self) -> usize {
+        if self.result_lines == 0 {
+            return 0;
+        }
+        self.truncated_result_lines
+            .saturating_mul(1000)
+            .saturating_div(self.result_lines)
+    }
+
+    fn as_json(self) -> Value {
+        json!({
+            "output_lines": self.output_lines,
+            "result_lines": self.result_lines,
+            "truncated_result_lines": self.truncated_result_lines,
+            "any_truncated": self.truncated_result_lines > 0,
+            "truncation_ratio_milli": self.truncation_ratio_milli(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SafeLaneRuntimeHealthSignal {
+    severity: &'static str,
+    flags: Vec<String>,
+}
+
+impl SafeLaneRuntimeHealthSignal {
+    fn as_json(&self) -> Value {
+        json!({
+            "severity": self.severity,
+            "flags": self.flags,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -198,9 +269,14 @@ impl ConversationTurnCoordinator {
                     )
                     .await
                 } else {
-                    TurnEngine::new(max_tool_steps)
-                        .execute_turn(&turn, kernel_ctx)
-                        .await
+                    TurnEngine::with_tool_result_payload_summary_limit(
+                        max_tool_steps,
+                        config
+                            .conversation
+                            .tool_result_payload_summary_limit_chars(),
+                    )
+                    .execute_turn(&turn, kernel_ctx)
+                    .await
                 };
                 let reply = match turn_result {
                     TurnResult::FinalText(tool_text) if had_tool_intents => {
@@ -461,11 +537,18 @@ async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?Sized>(
             kernel_ctx,
             config.conversation.safe_lane_verify_output_non_empty,
             seed_tool_outputs.clone(),
+            config
+                .conversation
+                .tool_result_payload_summary_limit_chars(),
         );
         let report = PlanExecutor::execute(&plan, &executor).await;
         metrics.total_attempts_used = metrics
             .total_attempts_used
             .saturating_add(report.attempts_used as u64);
+        let round_tool_outputs = executor.tool_outputs_snapshot().await;
+        let round_tool_output_stats =
+            summarize_safe_lane_tool_output_stats(round_tool_outputs.as_slice());
+        metrics.record_tool_output_stats(round_tool_output_stats);
 
         match report.status {
             PlanRunStatus::Succeeded => {
@@ -480,12 +563,20 @@ async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?Sized>(
                         "status": "succeeded",
                         "attempts_used": report.attempts_used,
                         "elapsed_ms": report.elapsed_ms,
+                        "tool_output_stats": round_tool_output_stats.as_json(),
+                        "health_signal": derive_safe_lane_runtime_health_signal(
+                            config,
+                            metrics,
+                            false,
+                            None,
+                        )
+                        .as_json(),
                         "metrics": metrics.as_json(),
                     }),
                     kernel_ctx,
                 )
                 .await;
-                let tool_output = executor.joined_output().await;
+                let tool_output = round_tool_outputs.join("\n");
                 let verify_report = verify_safe_lane_final_output(
                     config,
                     tool_output.as_str(),
@@ -502,6 +593,14 @@ async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?Sized>(
                             json!({
                                 "status": "succeeded",
                                 "round": round,
+                                "tool_output_stats": round_tool_output_stats.as_json(),
+                                "health_signal": derive_safe_lane_runtime_health_signal(
+                                    config,
+                                    metrics,
+                                    false,
+                                    None,
+                                )
+                                .as_json(),
                                 "metrics": metrics.as_json(),
                             }),
                             kernel_ctx,
@@ -546,6 +645,14 @@ async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?Sized>(
                                 "failure_retryable": verify_failure.retryable,
                                 "route_decision": format_safe_lane_route_decision(verify_route.decision),
                                 "route_reason": verify_route.reason,
+                                "tool_output_stats": round_tool_output_stats.as_json(),
+                                "health_signal": derive_safe_lane_runtime_health_signal(
+                                    config,
+                                    metrics,
+                                    false,
+                                    None,
+                                )
+                                .as_json(),
                                 "metrics": metrics.as_json(),
                             }),
                             kernel_ctx,
@@ -574,6 +681,14 @@ async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?Sized>(
                                     "failure_retryable": terminal_failure.retryable,
                                     "route_decision": format_safe_lane_route_decision(verify_route.decision),
                                     "route_reason": verify_route.reason,
+                                    "tool_output_stats": round_tool_output_stats.as_json(),
+                                    "health_signal": derive_safe_lane_runtime_health_signal(
+                                        config,
+                                        metrics,
+                                        true,
+                                        Some(terminal_failure.code.as_str()),
+                                    )
+                                    .as_json(),
                                     "metrics": metrics.as_json(),
                                 }),
                                 kernel_ctx,
@@ -593,6 +708,14 @@ async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?Sized>(
                                 "detail": verify_error,
                                 "route_decision": format_safe_lane_route_decision(verify_route.decision),
                                 "route_reason": verify_route.reason,
+                                "tool_output_stats": round_tool_output_stats.as_json(),
+                                "health_signal": derive_safe_lane_runtime_health_signal(
+                                    config,
+                                    metrics,
+                                    false,
+                                    None,
+                                )
+                                .as_json(),
                                 "metrics": metrics.as_json(),
                             }),
                             kernel_ctx,
@@ -626,6 +749,14 @@ async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?Sized>(
                         "failure_retryable": round_failure_meta.retryable,
                         "route_decision": format_safe_lane_route_decision(route.decision),
                         "route_reason": route.reason,
+                        "tool_output_stats": round_tool_output_stats.as_json(),
+                        "health_signal": derive_safe_lane_runtime_health_signal(
+                            config,
+                            metrics,
+                            false,
+                            None,
+                        )
+                        .as_json(),
                         "metrics": metrics.as_json(),
                     }),
                     kernel_ctx,
@@ -649,6 +780,14 @@ async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?Sized>(
                             "seeded_outputs": seed_tool_outputs.len(),
                             "route_decision": format_safe_lane_route_decision(route.decision),
                             "route_reason": route.reason,
+                            "tool_output_stats": round_tool_output_stats.as_json(),
+                            "health_signal": derive_safe_lane_runtime_health_signal(
+                                config,
+                                metrics,
+                                false,
+                                None,
+                            )
+                            .as_json(),
                             "metrics": metrics.as_json(),
                         }),
                         kernel_ctx,
@@ -673,6 +812,14 @@ async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?Sized>(
                             "failure_retryable": failure_meta.map(|failure| failure.retryable),
                             "route_decision": format_safe_lane_route_decision(route.decision),
                             "route_reason": route.reason,
+                            "tool_output_stats": round_tool_output_stats.as_json(),
+                            "health_signal": derive_safe_lane_runtime_health_signal(
+                                config,
+                                metrics,
+                                true,
+                                failure_meta.map(|failure| failure.code.as_str()),
+                            )
+                            .as_json(),
                             "metrics": metrics.as_json(),
                         }),
                         kernel_ctx,
@@ -800,6 +947,16 @@ fn safe_lane_failure_pressure(payload: &Value) -> u64 {
     }
 
     if payload
+        .get("tool_output_stats")
+        .and_then(|stats| stats.get("truncated_result_lines"))
+        .and_then(Value::as_u64)
+        .unwrap_or_default()
+        > 0
+    {
+        pressure = pressure.saturating_add(1);
+    }
+
+    if payload
         .get("metrics")
         .and_then(|metrics| metrics.get("verify_failures"))
         .and_then(Value::as_u64)
@@ -882,6 +1039,102 @@ fn build_safe_lane_plan_graph(
             max_total_attempts,
             max_wall_time_ms: config.conversation.safe_lane_plan_max_wall_time_ms.max(1),
         },
+    }
+}
+
+fn summarize_safe_lane_tool_output_stats(outputs: &[String]) -> SafeLaneToolOutputStats {
+    let mut stats = SafeLaneToolOutputStats::default();
+    for output in outputs {
+        for line in output
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
+            stats.output_lines = stats.output_lines.saturating_add(1);
+            if !line.starts_with('[') {
+                continue;
+            }
+            stats.result_lines = stats.result_lines.saturating_add(1);
+            if tool_result_contains_truncation_signal(line) {
+                stats.truncated_result_lines = stats.truncated_result_lines.saturating_add(1);
+            }
+        }
+    }
+    stats
+}
+
+fn derive_safe_lane_runtime_health_signal(
+    config: &LoongClawConfig,
+    metrics: SafeLaneExecutionMetrics,
+    final_status_failed: bool,
+    final_failure_code: Option<&str>,
+) -> SafeLaneRuntimeHealthSignal {
+    let rounds_started = metrics.rounds_started as f64;
+    let replan_rate = if rounds_started > 0.0 {
+        metrics.replans_triggered as f64 / rounds_started
+    } else {
+        0.0
+    };
+    let verify_failure_rate = if rounds_started > 0.0 {
+        metrics.verify_failures as f64 / rounds_started
+    } else {
+        0.0
+    };
+    let aggregate_truncation_ratio = metrics
+        .aggregate_tool_truncation_ratio_milli()
+        .map(|milli| (milli as f64) / 1000.0);
+    let truncation_warn_threshold = config
+        .conversation
+        .safe_lane_health_truncation_warn_threshold();
+    let truncation_critical_threshold = config
+        .conversation
+        .safe_lane_health_truncation_critical_threshold();
+    let verify_failure_warn_threshold = config
+        .conversation
+        .safe_lane_health_verify_failure_warn_threshold();
+    let replan_warn_threshold = config.conversation.safe_lane_health_replan_warn_threshold();
+
+    let mut flags = Vec::new();
+    let mut has_critical = false;
+
+    if let Some(ratio) = aggregate_truncation_ratio {
+        if ratio >= truncation_critical_threshold {
+            flags.push(format!("truncation_severe({ratio:.3})"));
+            has_critical = true;
+        } else if ratio >= truncation_warn_threshold {
+            flags.push(format!("truncation_pressure({ratio:.3})"));
+        }
+    }
+
+    if verify_failure_rate >= verify_failure_warn_threshold {
+        flags.push(format!("verify_failure_pressure({verify_failure_rate:.3})"));
+    }
+    if replan_rate >= replan_warn_threshold {
+        flags.push(format!("replan_pressure({replan_rate:.3})"));
+    }
+
+    let terminal_instability = final_status_failed
+        && final_failure_code
+            .map(|code| {
+                code.contains("verify_failed")
+                    || code.contains("backpressure")
+                    || code.contains("session_governor")
+            })
+            .unwrap_or(false);
+    if terminal_instability {
+        flags.push("terminal_instability".to_owned());
+        has_critical = true;
+    }
+
+    SafeLaneRuntimeHealthSignal {
+        severity: if has_critical {
+            "critical"
+        } else if flags.is_empty() {
+            "ok"
+        } else {
+            "warn"
+        },
+        flags,
     }
 }
 
@@ -1692,6 +1945,7 @@ struct SafeLanePlanNodeExecutor<'a> {
     kernel_ctx: Option<&'a KernelContext>,
     verify_output_non_empty: bool,
     tool_outputs: Mutex<Vec<String>>,
+    tool_result_payload_summary_limit_chars: usize,
 }
 
 impl<'a> SafeLanePlanNodeExecutor<'a> {
@@ -1700,17 +1954,15 @@ impl<'a> SafeLanePlanNodeExecutor<'a> {
         kernel_ctx: Option<&'a KernelContext>,
         verify_output_non_empty: bool,
         seed_tool_outputs: Vec<String>,
+        tool_result_payload_summary_limit_chars: usize,
     ) -> Self {
         Self {
             tool_intents,
             kernel_ctx,
             verify_output_non_empty,
             tool_outputs: Mutex::new(seed_tool_outputs),
+            tool_result_payload_summary_limit_chars,
         }
-    }
-
-    async fn joined_output(&self) -> String {
-        self.tool_outputs.lock().await.join("\n")
     }
 
     async fn tool_outputs_snapshot(&self) -> Vec<String> {
@@ -1730,7 +1982,12 @@ impl PlanNodeExecutor for SafeLanePlanNodeExecutor<'_> {
                         node.id
                     ))
                 })?;
-                let output = execute_single_tool_intent(intent, self.kernel_ctx).await?;
+                let output = execute_single_tool_intent(
+                    intent,
+                    self.kernel_ctx,
+                    self.tool_result_payload_summary_limit_chars,
+                )
+                .await?;
                 self.tool_outputs.lock().await.push(output);
                 Ok(())
             }
@@ -1769,6 +2026,7 @@ fn parse_tool_node_index(node_id: &str) -> Result<usize, PlanNodeError> {
 async fn execute_single_tool_intent(
     intent: &ToolIntent,
     kernel_ctx: Option<&KernelContext>,
+    payload_summary_limit_chars: usize,
 ) -> Result<String, PlanNodeError> {
     if !crate::tools::is_known_tool_name(&intent.tool_name) {
         return Err(PlanNodeError::policy_denied(format!(
@@ -1798,7 +2056,11 @@ async fn execute_single_tool_intent(
                 message: format!("{error}"),
             }
         })?;
-    Ok(format!("[{}] {}", outcome.status, outcome.payload))
+    Ok(super::turn_engine::format_tool_result_line_with_limit(
+        intent,
+        &outcome,
+        payload_summary_limit_chars,
+    ))
 }
 
 fn build_tool_followup_messages(
@@ -1821,7 +2083,7 @@ fn build_tool_followup_messages(
     }));
     messages.push(json!({
         "role": "user",
-        "content": format!("{TOOL_FOLLOWUP_PROMPT}\n\nOriginal request:\n{user_input}"),
+        "content": build_tool_followup_user_prompt(user_input, None, Some(tool_result_text)),
     }));
     messages
 }
@@ -1846,69 +2108,59 @@ fn build_tool_failure_followup_messages(
     }));
     messages.push(json!({
         "role": "user",
-        "content": format!("{TOOL_FOLLOWUP_PROMPT}\n\nOriginal request:\n{user_input}"),
+        "content": build_tool_followup_user_prompt(user_input, None, None),
     }));
     messages
-}
-
-fn user_requested_raw_tool_output(user_input: &str) -> bool {
-    let normalized = user_input.to_ascii_lowercase();
-    [
-        "raw",
-        "json",
-        "payload",
-        "verbatim",
-        "exact output",
-        "full output",
-        "tool output",
-        "[ok]",
-    ]
-    .iter()
-    .any(|signal| normalized.contains(signal))
-}
-
-fn compose_assistant_reply(
-    assistant_preface: &str,
-    had_tool_intents: bool,
-    turn_result: TurnResult,
-) -> String {
-    match turn_result {
-        TurnResult::FinalText(text) => {
-            if had_tool_intents {
-                join_non_empty_lines(&[assistant_preface, text.as_str()])
-            } else {
-                text
-            }
-        }
-        TurnResult::NeedsApproval(reason) => {
-            let inline = format!("[tool_approval_required] {}", reason.reason);
-            join_non_empty_lines(&[assistant_preface, inline.as_str()])
-        }
-        TurnResult::ToolDenied(failure) => {
-            join_non_empty_lines(&[assistant_preface, failure.reason.as_str()])
-        }
-        TurnResult::ToolError(failure) => {
-            join_non_empty_lines(&[assistant_preface, failure.reason.as_str()])
-        }
-        TurnResult::ProviderError(reason) => {
-            let inline = format_provider_error_reply(reason.reason.as_str());
-            join_non_empty_lines(&[assistant_preface, inline.as_str()])
-        }
-    }
-}
-
-fn join_non_empty_lines(parts: &[&str]) -> String {
-    parts
-        .iter()
-        .map(|part| part.trim())
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_tool_followup_messages_include_truncation_hint_for_truncated_tool_results() {
+        let messages = build_tool_followup_messages(
+            &[serde_json::json!({
+                "role": "system",
+                "content": "sys"
+            })],
+            "preface",
+            r#"[ok] {"payload_truncated":true,"payload_summary":"..."}"#,
+            "summarize note.md",
+        );
+
+        let user_prompt = messages
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+        assert!(
+            user_prompt.contains(crate::conversation::turn_shared::TOOL_TRUNCATION_HINT_PROMPT)
+        );
+        assert!(user_prompt.contains("Original request:\nsummarize note.md"));
+    }
+
+    #[test]
+    fn build_tool_failure_followup_messages_do_not_include_truncation_hint() {
+        let messages = build_tool_failure_followup_messages(
+            &[serde_json::json!({
+                "role": "system",
+                "content": "sys"
+            })],
+            "preface",
+            "tool_timeout ...(truncated 200 chars)",
+            "summarize note.md",
+        );
+
+        let user_prompt = messages
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+        assert!(
+            !user_prompt.contains(crate::conversation::turn_shared::TOOL_TRUNCATION_HINT_PROMPT)
+        );
+    }
 
     #[test]
     fn safe_lane_route_retryable_failure_replans_with_remaining_budget() {
@@ -2120,6 +2372,110 @@ mod tests {
         assert!(
             !emitted,
             "with adaptive sampling disabled, round-based sampling should still drop this event"
+        );
+    }
+
+    #[test]
+    fn safe_lane_failure_pressure_counts_truncated_tool_output_stats() {
+        let payload = json!({
+            "tool_output_stats": {
+                "output_lines": 1,
+                "result_lines": 1,
+                "truncated_result_lines": 1,
+                "any_truncated": true,
+                "truncation_ratio_milli": 1000
+            }
+        });
+        assert_eq!(safe_lane_failure_pressure(&payload), 1);
+    }
+
+    #[test]
+    fn safe_lane_tool_output_stats_detect_truncated_result_lines() {
+        let outputs = vec![
+            "[ok] {\"payload_truncated\":true}".to_owned(),
+            "[ok] {\"payload_truncated\":false}\n[tool_result_truncated] removed_chars=2"
+                .to_owned(),
+            "plain diagnostic line".to_owned(),
+        ];
+
+        let stats = summarize_safe_lane_tool_output_stats(outputs.as_slice());
+        assert_eq!(stats.output_lines, 4);
+        assert_eq!(stats.result_lines, 3);
+        assert_eq!(stats.truncated_result_lines, 2);
+        assert_eq!(stats.truncation_ratio_milli(), 666);
+        let encoded = stats.as_json();
+        assert_eq!(encoded["any_truncated"], true);
+        assert_eq!(encoded["truncation_ratio_milli"], 666);
+    }
+
+    #[test]
+    fn safe_lane_tool_output_stats_handles_mixed_multiline_blocks() {
+        let outputs = vec![
+            "\n[ok] {\"payload_truncated\":false}\nnot a result line\n[ok] {\"payload_truncated\":true}\n"
+                .to_owned(),
+            "[result] completed\n\n[ok] {\"payload_truncated\":false}".to_owned(),
+        ];
+
+        let stats = summarize_safe_lane_tool_output_stats(outputs.as_slice());
+        assert_eq!(stats.output_lines, 5);
+        assert_eq!(stats.result_lines, 4);
+        assert_eq!(stats.truncated_result_lines, 1);
+        assert_eq!(stats.truncation_ratio_milli(), 250);
+        let encoded = stats.as_json();
+        assert_eq!(encoded["any_truncated"], true);
+        assert_eq!(encoded["truncation_ratio_milli"], 250);
+    }
+
+    #[test]
+    fn runtime_health_signal_marks_warn_on_truncation_pressure() {
+        let mut config = LoongClawConfig::default();
+        config
+            .conversation
+            .safe_lane_health_truncation_warn_threshold = 0.20;
+        config
+            .conversation
+            .safe_lane_health_truncation_critical_threshold = 0.50;
+        let metrics = SafeLaneExecutionMetrics {
+            rounds_started: 2,
+            tool_output_result_lines_total: 4,
+            tool_output_truncated_result_lines_total: 1,
+            ..SafeLaneExecutionMetrics::default()
+        };
+
+        let signal = derive_safe_lane_runtime_health_signal(&config, metrics, false, None);
+        assert_eq!(signal.severity, "warn");
+        assert!(
+            signal
+                .flags
+                .iter()
+                .any(|value| value.contains("truncation_pressure(0.250)"))
+        );
+    }
+
+    #[test]
+    fn runtime_health_signal_marks_critical_on_terminal_instability() {
+        let config = LoongClawConfig::default();
+        let metrics = SafeLaneExecutionMetrics {
+            rounds_started: 2,
+            verify_failures: 1,
+            replans_triggered: 1,
+            tool_output_result_lines_total: 2,
+            tool_output_truncated_result_lines_total: 1,
+            ..SafeLaneExecutionMetrics::default()
+        };
+
+        let signal = derive_safe_lane_runtime_health_signal(
+            &config,
+            metrics,
+            true,
+            Some("safe_lane_plan_verify_failed_session_governor"),
+        );
+        assert_eq!(signal.severity, "critical");
+        assert!(
+            signal
+                .flags
+                .iter()
+                .any(|value| value == "terminal_instability")
         );
     }
 

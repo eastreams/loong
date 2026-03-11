@@ -8,7 +8,7 @@ use loongclaw_contracts::Capability;
 use crate::CliResult;
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context};
 
-use super::config::{self, LoongClawConfig};
+use super::config::{self, ConversationConfig, LoongClawConfig};
 #[cfg(feature = "memory-sqlite")]
 use super::conversation::summarize_safe_lane_events;
 use super::conversation::{ConversationTurnCoordinator, ProviderErrorMode};
@@ -98,9 +98,9 @@ pub async fn run_cli_chat(config_path: Option<&str>, session_hint: Option<&str>)
         }
         if let Some(limit) = parse_safe_lane_summary_limit(input, config.memory.sliding_window)? {
             #[cfg(feature = "memory-sqlite")]
-            print_safe_lane_summary(&session_id, limit, &memory_config)?;
+            print_safe_lane_summary(&session_id, limit, &config.conversation, &memory_config)?;
             #[cfg(not(feature = "memory-sqlite"))]
-            print_safe_lane_summary(&session_id, limit)?;
+            print_safe_lane_summary(&session_id, limit, &config.conversation)?;
             continue;
         }
 
@@ -237,6 +237,7 @@ fn parse_safe_lane_summary_limit(input: &str, default_window: usize) -> CliResul
 fn print_safe_lane_summary(
     session_id: &str,
     limit: usize,
+    conversation_config: &ConversationConfig,
     #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
 ) -> CliResult<()> {
     #[cfg(feature = "memory-sqlite")]
@@ -248,13 +249,16 @@ fn print_safe_lane_summary(
                 .iter()
                 .filter_map(|turn| (turn.role == "assistant").then_some(turn.content.as_str())),
         );
-        println!("{}", format_safe_lane_summary(session_id, limit, &summary));
+        println!(
+            "{}",
+            format_safe_lane_summary(session_id, limit, conversation_config, &summary)
+        );
         Ok(())
     }
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let _ = (session_id, limit);
+        let _ = (session_id, limit, conversation_config);
         println!("safe-lane summary unavailable: memory-sqlite feature disabled");
         Ok(())
     }
@@ -264,6 +268,7 @@ fn print_safe_lane_summary(
 fn format_safe_lane_summary(
     session_id: &str,
     limit: usize,
+    conversation_config: &ConversationConfig,
     summary: &SafeLaneEventSummary,
 ) -> String {
     let final_status = match summary.final_status {
@@ -295,6 +300,65 @@ fn format_safe_lane_summary(
         format_milli_ratio(summary.session_governor_latest_trend_failure_ewma_milli);
     let governor_trend_backpressure_ewma =
         format_milli_ratio(summary.session_governor_latest_trend_backpressure_ewma_milli);
+    let latest_tool_truncation_ratio = format_milli_ratio(
+        summary
+            .latest_tool_output
+            .as_ref()
+            .map(|snapshot| snapshot.truncation_ratio_milli),
+    );
+    let aggregate_tool_truncation_ratio_milli = summary
+        .tool_output_aggregate_truncation_ratio_milli
+        .or_else(|| {
+            if summary.tool_output_result_lines_total == 0 {
+                None
+            } else {
+                Some(
+                    summary
+                        .tool_output_truncated_result_lines_total
+                        .saturating_mul(1000)
+                        .saturating_div(summary.tool_output_result_lines_total)
+                        .min(u32::MAX as u64) as u32,
+                )
+            }
+        });
+    let aggregate_tool_truncation_ratio =
+        aggregate_tool_truncation_ratio_milli.map(|milli| (milli as f64) / 1000.0);
+    let aggregate_tool_truncation_ratio_text = aggregate_tool_truncation_ratio
+        .map(|value| format!("{value:.3}"))
+        .unwrap_or_else(|| "-".to_owned());
+    let health_signal = derive_safe_lane_health_signal(
+        conversation_config,
+        summary,
+        replan_rate,
+        verify_failure_rate,
+        aggregate_tool_truncation_ratio,
+    );
+    let health_flags = if health_signal.flags.is_empty() {
+        "-".to_owned()
+    } else {
+        health_signal.flags.join(",")
+    };
+    let health_payload = serde_json::json!({
+        "severity": health_signal.severity,
+        "flags": health_signal.flags.clone(),
+    })
+    .to_string();
+    let latest_health_event_severity = summary
+        .latest_health_signal
+        .as_ref()
+        .map(|snapshot| snapshot.severity.as_str())
+        .unwrap_or("-");
+    let latest_health_event_flags = summary
+        .latest_health_signal
+        .as_ref()
+        .map(|snapshot| {
+            if snapshot.flags.is_empty() {
+                "-".to_owned()
+            } else {
+                snapshot.flags.join(",")
+            }
+        })
+        .unwrap_or_else(|| "-".to_owned());
 
     let metrics_line = if let Some(metrics) = metrics {
         format!(
@@ -362,12 +426,107 @@ fn format_safe_lane_summary(
             "rates replan_per_round={:.3} verify_fail_per_round={:.3}",
             replan_rate, verify_failure_rate
         ),
+        format!(
+            "tool_output snapshots={} truncated_events={} result_lines_total={} truncated_result_lines_total={} latest_truncation_ratio={} aggregate_truncation_ratio={} aggregate_truncation_ratio_milli={} truncation_verify_failed_events={} truncation_replan_events={} truncation_final_failure_events={}",
+            summary.tool_output_snapshots_seen,
+            summary.tool_output_truncated_events,
+            summary.tool_output_result_lines_total,
+            summary.tool_output_truncated_result_lines_total,
+            latest_tool_truncation_ratio,
+            aggregate_tool_truncation_ratio_text
+            ,
+            aggregate_tool_truncation_ratio_milli
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_owned()),
+            summary.tool_output_truncation_verify_failed_events,
+            summary.tool_output_truncation_replan_events,
+            summary.tool_output_truncation_final_failure_events
+        ),
+        format!(
+            "health severity={} flags={health_flags}",
+            health_signal.severity
+        ),
+        format!("health_payload {health_payload}"),
+        format!(
+            "health_events snapshots={} warn={} critical={} latest_severity={} latest_flags={}",
+            summary.health_signal_snapshots_seen,
+            summary.health_signal_warn_events,
+            summary.health_signal_critical_events,
+            latest_health_event_severity,
+            latest_health_event_flags
+        ),
         metrics_line,
         format!("rollup route_decisions={route_rollup}"),
         format!("rollup route_reasons={route_reason_rollup}"),
         format!("rollup failure_codes={failure_rollup}"),
     ]
     .join("\n")
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn derive_safe_lane_health_signal(
+    conversation_config: &ConversationConfig,
+    summary: &SafeLaneEventSummary,
+    replan_rate: f64,
+    verify_failure_rate: f64,
+    aggregate_truncation_ratio: Option<f64>,
+) -> SafeLaneHealthSignal {
+    let mut flags = Vec::new();
+    let mut has_critical = false;
+    let truncation_warn_threshold =
+        conversation_config.safe_lane_health_truncation_warn_threshold();
+    let truncation_critical_threshold =
+        conversation_config.safe_lane_health_truncation_critical_threshold();
+    let verify_failure_warn_threshold =
+        conversation_config.safe_lane_health_verify_failure_warn_threshold();
+    let replan_warn_threshold = conversation_config.safe_lane_health_replan_warn_threshold();
+
+    if let Some(ratio) = aggregate_truncation_ratio {
+        if ratio >= truncation_critical_threshold {
+            flags.push(format!("truncation_severe({ratio:.3})"));
+            has_critical = true;
+        } else if ratio >= truncation_warn_threshold {
+            flags.push(format!("truncation_pressure({ratio:.3})"));
+        }
+    }
+    if verify_failure_rate >= verify_failure_warn_threshold {
+        flags.push(format!("verify_failure_pressure({verify_failure_rate:.3})"));
+    }
+    if replan_rate >= replan_warn_threshold {
+        flags.push(format!("replan_pressure({replan_rate:.3})"));
+    }
+    let terminal_instability = matches!(summary.final_status, Some(SafeLaneFinalStatus::Failed))
+        && summary
+            .final_failure_code
+            .as_deref()
+            .map(|code| {
+                code.contains("verify_failed")
+                    || code.contains("backpressure")
+                    || code.contains("session_governor")
+            })
+            .unwrap_or(false);
+    if terminal_instability {
+        flags.push("terminal_instability".to_owned());
+        has_critical = true;
+    }
+
+    SafeLaneHealthSignal {
+        severity: if has_critical {
+            "critical"
+        } else if flags.is_empty() {
+            "ok"
+        } else {
+            "warn"
+        },
+        flags,
+    }
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SafeLaneHealthSignal {
+    severity: &'static str,
+    flags: Vec<String>,
 }
 
 #[cfg(any(test, feature = "memory-sqlite"))]
@@ -483,6 +642,7 @@ mod tests {
 
     #[test]
     fn format_safe_lane_summary_includes_rollups_and_rates() {
+        let config = ConversationConfig::default();
         let mut summary = SafeLaneEventSummary {
             lane_selected_events: 1,
             round_started_events: 2,
@@ -516,6 +676,28 @@ mod tests {
                 replans_triggered: 1,
                 total_attempts_used: 3,
             }),
+            latest_tool_output: Some(crate::conversation::SafeLaneToolOutputSnapshot {
+                output_lines: 2,
+                result_lines: 2,
+                truncated_result_lines: 1,
+                any_truncated: true,
+                truncation_ratio_milli: 500,
+            }),
+            tool_output_snapshots_seen: 2,
+            tool_output_truncated_events: 1,
+            tool_output_result_lines_total: 3,
+            tool_output_truncated_result_lines_total: 1,
+            tool_output_aggregate_truncation_ratio_milli: Some(333),
+            tool_output_truncation_verify_failed_events: 1,
+            tool_output_truncation_replan_events: 1,
+            tool_output_truncation_final_failure_events: 1,
+            latest_health_signal: Some(crate::conversation::SafeLaneHealthSignalSnapshot {
+                severity: "critical".to_owned(),
+                flags: vec!["terminal_instability".to_owned()],
+            }),
+            health_signal_snapshots_seen: 2,
+            health_signal_warn_events: 1,
+            health_signal_critical_events: 1,
             ..SafeLaneEventSummary::default()
         };
         summary
@@ -527,7 +709,7 @@ mod tests {
         summary
             .failure_code_counts
             .insert("safe_lane_plan_verify_failed".to_owned(), 1);
-        let formatted = format_safe_lane_summary("session-a", 128, &summary);
+        let formatted = format_safe_lane_summary("session-a", 128, &config, &summary);
 
         assert!(formatted.contains("safe_lane_summary session=session-a limit=128"));
         assert!(formatted.contains("status=failed"));
@@ -540,8 +722,97 @@ mod tests {
         assert!(formatted.contains("trigger_trend_threshold=1"));
         assert!(formatted.contains("governor_latest snapshots=2"));
         assert!(formatted.contains("trend_failure_ewma=0.250"));
+        assert!(formatted.contains(
+            "tool_output snapshots=2 truncated_events=1 result_lines_total=3 truncated_result_lines_total=1"
+        ));
+        assert!(formatted.contains("latest_truncation_ratio=0.500"));
+        assert!(formatted.contains("aggregate_truncation_ratio=0.333"));
+        assert!(formatted.contains("aggregate_truncation_ratio_milli=333"));
+        assert!(formatted.contains("truncation_verify_failed_events=1"));
+        assert!(formatted.contains("truncation_replan_events=1"));
+        assert!(formatted.contains("truncation_final_failure_events=1"));
+        assert!(formatted.contains("health severity=critical"));
+        assert!(formatted.contains("health_payload {\"flags\":"));
+        assert!(formatted.contains("\"severity\":\"critical\""));
+        assert!(formatted.contains(
+            "health_events snapshots=2 warn=1 critical=1 latest_severity=critical latest_flags=terminal_instability"
+        ));
+        assert!(formatted.contains("truncation_pressure(0.333)"));
+        assert!(formatted.contains("verify_failure_pressure(0.500)"));
+        assert!(formatted.contains("replan_pressure(0.500)"));
+        assert!(formatted.contains("terminal_instability"));
         assert!(formatted.contains("rollup route_decisions=terminal:1"));
         assert!(formatted.contains("rollup route_reasons=session_governor_no_replan:1"));
         assert!(formatted.contains("rollup failure_codes=safe_lane_plan_verify_failed:1"));
+    }
+
+    #[test]
+    fn format_safe_lane_summary_health_is_ok_when_no_risk_signals() {
+        let config = ConversationConfig::default();
+        let summary = SafeLaneEventSummary {
+            lane_selected_events: 1,
+            round_started_events: 3,
+            final_status_events: 1,
+            final_status: Some(SafeLaneFinalStatus::Succeeded),
+            latest_metrics: Some(crate::conversation::SafeLaneMetricsSnapshot {
+                rounds_started: 3,
+                rounds_succeeded: 3,
+                rounds_failed: 0,
+                verify_failures: 0,
+                replans_triggered: 0,
+                total_attempts_used: 3,
+            }),
+            tool_output_snapshots_seen: 1,
+            tool_output_result_lines_total: 2,
+            tool_output_truncated_result_lines_total: 0,
+            latest_tool_output: Some(crate::conversation::SafeLaneToolOutputSnapshot {
+                output_lines: 2,
+                result_lines: 2,
+                truncated_result_lines: 0,
+                any_truncated: false,
+                truncation_ratio_milli: 0,
+            }),
+            ..SafeLaneEventSummary::default()
+        };
+        let formatted = format_safe_lane_summary("session-ok", 64, &config, &summary);
+        assert!(formatted.contains("health severity=ok flags=-"));
+        assert!(formatted.contains("health_payload {\"flags\":[],\"severity\":\"ok\"}"));
+        assert!(formatted.contains(
+            "health_events snapshots=0 warn=0 critical=0 latest_severity=- latest_flags=-"
+        ));
+    }
+
+    #[test]
+    fn format_safe_lane_summary_respects_configurable_health_thresholds() {
+        let config = ConversationConfig {
+            safe_lane_health_truncation_warn_threshold: 0.20,
+            safe_lane_health_truncation_critical_threshold: 0.50,
+            safe_lane_health_verify_failure_warn_threshold: 0.70,
+            safe_lane_health_replan_warn_threshold: 0.70,
+            ..ConversationConfig::default()
+        };
+        let summary = SafeLaneEventSummary {
+            round_started_events: 4,
+            verify_failed_events: 1,
+            replan_triggered_events: 1,
+            tool_output_snapshots_seen: 1,
+            tool_output_result_lines_total: 4,
+            tool_output_truncated_result_lines_total: 1,
+            tool_output_aggregate_truncation_ratio_milli: Some(250),
+            latest_tool_output: Some(crate::conversation::SafeLaneToolOutputSnapshot {
+                output_lines: 4,
+                result_lines: 4,
+                truncated_result_lines: 1,
+                any_truncated: true,
+                truncation_ratio_milli: 250,
+            }),
+            ..SafeLaneEventSummary::default()
+        };
+
+        let formatted = format_safe_lane_summary("session-threshold", 32, &config, &summary);
+        assert!(formatted.contains("health severity=warn"));
+        assert!(formatted.contains("truncation_pressure(0.250)"));
+        assert!(!formatted.contains("verify_failure_pressure"));
+        assert!(!formatted.contains("replan_pressure"));
     }
 }

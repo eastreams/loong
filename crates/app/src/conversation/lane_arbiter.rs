@@ -84,7 +84,7 @@ impl LaneArbiterPolicy {
         let normalized = user_input.to_ascii_lowercase();
         self.high_risk_keywords
             .iter()
-            .filter(|keyword| normalized.contains(keyword.as_str()))
+            .filter(|keyword| keyword_matches_risk_signal(normalized.as_str(), keyword))
             .count()
             .saturating_mul(2) as u32
     }
@@ -154,6 +154,36 @@ fn default_high_risk_keywords() -> BTreeSet<String> {
     .collect()
 }
 
+fn keyword_matches_risk_signal(normalized_input: &str, keyword: &str) -> bool {
+    if should_use_word_boundary_match(keyword) {
+        return contains_with_word_boundaries(normalized_input, keyword);
+    }
+    normalized_input.contains(keyword)
+}
+
+fn should_use_word_boundary_match(keyword: &str) -> bool {
+    keyword.len() <= 4 && keyword.chars().all(|ch| ch.is_ascii_alphanumeric())
+}
+
+fn contains_with_word_boundaries(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    haystack.match_indices(needle).any(|(start, _)| {
+        let end = start + needle.len();
+        let left = haystack[..start].chars().next_back();
+        let right = haystack[end..].chars().next();
+        is_word_boundary(left) && is_word_boundary(right)
+    })
+}
+
+fn is_word_boundary(ch: Option<char>) -> bool {
+    match ch {
+        None => true,
+        Some(value) => !value.is_ascii_alphanumeric(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +227,21 @@ mod tests {
             "expected complexity reason, got: {:?}",
             decision.reasons
         );
+    }
+
+    #[test]
+    fn short_keyword_match_avoids_product_false_positive() {
+        let policy = LaneArbiterPolicy::default();
+        let decision = policy.decide("review product launch notes and summarize user feedback");
+        assert_eq!(decision.risk_score, 0);
+        assert_eq!(decision.lane, ExecutionLane::Fast);
+    }
+
+    #[test]
+    fn short_keyword_match_preserves_prod_signal_with_boundaries() {
+        let policy = LaneArbiterPolicy::default();
+        let decision = policy.decide("deploy the patch to prod after smoke tests");
+        assert_eq!(decision.risk_score, 4);
+        assert_eq!(decision.lane, ExecutionLane::Safe);
     }
 }

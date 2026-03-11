@@ -82,6 +82,16 @@ pub struct ConversationConfig {
     pub safe_lane_complexity_threshold: u32,
     #[serde(default = "default_fast_lane_max_input_chars")]
     pub fast_lane_max_input_chars: usize,
+    #[serde(default = "default_tool_result_payload_summary_limit_chars")]
+    pub tool_result_payload_summary_limit_chars: usize,
+    #[serde(default = "default_safe_lane_health_truncation_warn_threshold")]
+    pub safe_lane_health_truncation_warn_threshold: f64,
+    #[serde(default = "default_safe_lane_health_truncation_critical_threshold")]
+    pub safe_lane_health_truncation_critical_threshold: f64,
+    #[serde(default = "default_safe_lane_health_verify_failure_warn_threshold")]
+    pub safe_lane_health_verify_failure_warn_threshold: f64,
+    #[serde(default = "default_safe_lane_health_replan_warn_threshold")]
+    pub safe_lane_health_replan_warn_threshold: f64,
     #[serde(default = "default_high_risk_keywords")]
     pub high_risk_keywords: Vec<String>,
 }
@@ -144,6 +154,16 @@ impl Default for ConversationConfig {
             safe_lane_risk_threshold: default_safe_lane_risk_threshold(),
             safe_lane_complexity_threshold: default_safe_lane_complexity_threshold(),
             fast_lane_max_input_chars: default_fast_lane_max_input_chars(),
+            tool_result_payload_summary_limit_chars:
+                default_tool_result_payload_summary_limit_chars(),
+            safe_lane_health_truncation_warn_threshold:
+                default_safe_lane_health_truncation_warn_threshold(),
+            safe_lane_health_truncation_critical_threshold:
+                default_safe_lane_health_truncation_critical_threshold(),
+            safe_lane_health_verify_failure_warn_threshold:
+                default_safe_lane_health_verify_failure_warn_threshold(),
+            safe_lane_health_replan_warn_threshold: default_safe_lane_health_replan_warn_threshold(
+            ),
             high_risk_keywords: default_high_risk_keywords(),
         }
     }
@@ -285,6 +305,40 @@ impl ConversationConfig {
     pub fn safe_lane_session_governor_force_node_max_attempts(&self) -> u8 {
         self.safe_lane_session_governor_force_node_max_attempts
             .max(1)
+    }
+
+    pub fn tool_result_payload_summary_limit_chars(&self) -> usize {
+        self.tool_result_payload_summary_limit_chars
+            .clamp(256, 64_000)
+    }
+
+    pub fn safe_lane_health_truncation_warn_threshold(&self) -> f64 {
+        clamp_unit_interval(
+            self.safe_lane_health_truncation_warn_threshold,
+            default_safe_lane_health_truncation_warn_threshold(),
+        )
+    }
+
+    pub fn safe_lane_health_truncation_critical_threshold(&self) -> f64 {
+        clamp_unit_interval(
+            self.safe_lane_health_truncation_critical_threshold,
+            default_safe_lane_health_truncation_critical_threshold(),
+        )
+        .max(self.safe_lane_health_truncation_warn_threshold())
+    }
+
+    pub fn safe_lane_health_verify_failure_warn_threshold(&self) -> f64 {
+        clamp_unit_interval(
+            self.safe_lane_health_verify_failure_warn_threshold,
+            default_safe_lane_health_verify_failure_warn_threshold(),
+        )
+    }
+
+    pub fn safe_lane_health_replan_warn_threshold(&self) -> f64 {
+        clamp_unit_interval(
+            self.safe_lane_health_replan_warn_threshold,
+            default_safe_lane_health_replan_warn_threshold(),
+        )
     }
 }
 
@@ -428,6 +482,26 @@ const fn default_fast_lane_max_input_chars() -> usize {
     400
 }
 
+const fn default_tool_result_payload_summary_limit_chars() -> usize {
+    2_048
+}
+
+const fn default_safe_lane_health_truncation_warn_threshold() -> f64 {
+    0.30
+}
+
+const fn default_safe_lane_health_truncation_critical_threshold() -> f64 {
+    0.60
+}
+
+const fn default_safe_lane_health_verify_failure_warn_threshold() -> f64 {
+    0.40
+}
+
+const fn default_safe_lane_health_replan_warn_threshold() -> f64 {
+    0.50
+}
+
 fn default_high_risk_keywords() -> Vec<String> {
     [
         "rm -rf",
@@ -520,5 +594,52 @@ mod tests {
         };
 
         assert_eq!(config.safe_lane_session_governor_trend_ewma_alpha(), 0.01);
+    }
+
+    #[test]
+    fn tool_result_payload_summary_limit_is_clamped() {
+        let too_small = ConversationConfig {
+            tool_result_payload_summary_limit_chars: 0,
+            ..ConversationConfig::default()
+        };
+        assert_eq!(too_small.tool_result_payload_summary_limit_chars(), 256);
+
+        let too_large = ConversationConfig {
+            tool_result_payload_summary_limit_chars: 1_000_000,
+            ..ConversationConfig::default()
+        };
+        assert_eq!(too_large.tool_result_payload_summary_limit_chars(), 64_000);
+    }
+
+    #[test]
+    fn safe_lane_health_thresholds_are_clamped_and_ordered() {
+        let config = ConversationConfig {
+            safe_lane_health_truncation_warn_threshold: 2.0,
+            safe_lane_health_truncation_critical_threshold: -1.0,
+            safe_lane_health_verify_failure_warn_threshold: f64::NAN,
+            safe_lane_health_replan_warn_threshold: -3.0,
+            ..ConversationConfig::default()
+        };
+        assert_eq!(config.safe_lane_health_truncation_warn_threshold(), 1.0);
+        assert_eq!(config.safe_lane_health_truncation_critical_threshold(), 1.0);
+        assert_eq!(
+            config.safe_lane_health_verify_failure_warn_threshold(),
+            default_safe_lane_health_verify_failure_warn_threshold()
+        );
+        assert_eq!(config.safe_lane_health_replan_warn_threshold(), 0.0);
+    }
+
+    #[test]
+    fn safe_lane_health_truncation_critical_threshold_respects_warn_floor() {
+        let config = ConversationConfig {
+            safe_lane_health_truncation_warn_threshold: 0.55,
+            safe_lane_health_truncation_critical_threshold: 0.20,
+            ..ConversationConfig::default()
+        };
+        assert_eq!(config.safe_lane_health_truncation_warn_threshold(), 0.55);
+        assert_eq!(
+            config.safe_lane_health_truncation_critical_threshold(),
+            0.55
+        );
     }
 }

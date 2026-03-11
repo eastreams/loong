@@ -377,6 +377,151 @@ async fn handle_turn_with_runtime_tool_turn_raw_request_skips_second_pass_comple
     assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 1);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_honors_configured_tool_result_summary_limit_on_fast_lane() {
+    use super::integration_tests::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    std::fs::write(harness.temp_dir.join("large-note.md"), "x".repeat(8_000))
+        .expect("seed large test note");
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Reading large note.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!({"path": "large-note.md"}),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-fast-limit".to_owned(),
+                turn_id: "turn-fast-limit".to_owned(),
+                tool_call_id: "call-fast-limit".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+
+    let mut config = test_config();
+    config.conversation.tool_result_payload_summary_limit_chars = 256;
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-fast-limit",
+            "read large-note.md and show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            Some(&harness.kernel_ctx),
+        )
+        .await
+        .expect("tool turn should succeed");
+
+    let line = reply
+        .lines()
+        .find(|entry| entry.starts_with("[ok] "))
+        .expect("reply should include tool envelope line");
+    let envelope: Value = serde_json::from_str(
+        line.strip_prefix("[ok] ")
+            .expect("tool line should keep status prefix"),
+    )
+    .expect("tool envelope should be valid json");
+
+    assert_eq!(envelope["payload_truncated"], true);
+    assert!(
+        envelope["payload_chars"]
+            .as_u64()
+            .expect("payload chars should exist")
+            > 256
+    );
+    let summary = envelope["payload_summary"]
+        .as_str()
+        .expect("payload summary should be a string");
+    assert!(
+        summary.contains("...(truncated "),
+        "summary should contain truncation marker, got: {summary}"
+    );
+    assert!(
+        summary.chars().count() <= 420,
+        "summary should respect configured bound, chars={}",
+        summary.chars().count()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_honors_configured_tool_result_summary_limit_on_safe_lane_plan() {
+    use super::integration_tests::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    std::fs::write(harness.temp_dir.join("large-note.md"), "x".repeat(8_000))
+        .expect("seed large test note");
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Running deployment read checks.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.read".to_owned(),
+                args_json: json!({"path": "large-note.md"}),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-safe-limit".to_owned(),
+                turn_id: "turn-safe-limit".to_owned(),
+                tool_call_id: "call-safe-limit".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+
+    let mut config = test_config();
+    config.conversation.safe_lane_plan_execution_enabled = true;
+    config.conversation.tool_result_payload_summary_limit_chars = 256;
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-safe-limit",
+            "deploy production safely and show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            Some(&harness.kernel_ctx),
+        )
+        .await
+        .expect("safe-lane plan turn should succeed");
+
+    let line = reply
+        .lines()
+        .find(|entry| entry.starts_with("[ok] "))
+        .expect("reply should include tool envelope line");
+    let envelope: Value = serde_json::from_str(
+        line.strip_prefix("[ok] ")
+            .expect("tool line should keep status prefix"),
+    )
+    .expect("tool envelope should be valid json");
+
+    assert_eq!(envelope["payload_truncated"], true);
+    assert!(
+        envelope["payload_chars"]
+            .as_u64()
+            .expect("payload chars should exist")
+            > 256
+    );
+    let summary = envelope["payload_summary"]
+        .as_str()
+        .expect("payload summary should be a string");
+    assert!(
+        summary.contains("...(truncated "),
+        "summary should contain truncation marker, got: {summary}"
+    );
+    assert!(
+        summary.chars().count() <= 420,
+        "summary should respect configured bound, chars={}",
+        summary.chars().count()
+    );
+}
+
 #[tokio::test]
 async fn handle_turn_with_runtime_safe_lane_honors_configured_tool_step_budget() {
     let runtime = FakeRuntime::with_turn_and_completion(
@@ -526,7 +671,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_persists_runtime_events_when_en
         .expect("safe lane plan should produce a reply");
 
     let persisted = runtime.persisted.lock().expect("persisted lock");
-    let event_names = persisted
+    let event_records = persisted
         .iter()
         .filter_map(|(_, role, content)| {
             if role != "assistant" {
@@ -536,8 +681,15 @@ async fn handle_turn_with_runtime_safe_lane_plan_persists_runtime_events_when_en
             if parsed.get("type")?.as_str()? != "conversation_event" {
                 return None;
             }
-            parsed.get("event")?.as_str().map(ToOwned::to_owned)
+            Some((
+                parsed.get("event")?.as_str()?.to_owned(),
+                parsed.get("payload").cloned().unwrap_or(Value::Null),
+            ))
         })
+        .collect::<Vec<_>>();
+    let event_names = event_records
+        .iter()
+        .map(|(event, _)| event.to_owned())
         .collect::<Vec<_>>();
 
     assert!(
@@ -557,6 +709,53 @@ async fn handle_turn_with_runtime_safe_lane_plan_persists_runtime_events_when_en
     assert!(
         event_names.iter().any(|name| name == "final_status"),
         "expected final_status event, got: {event_names:?}"
+    );
+
+    let plan_round_completed_payload = event_records
+        .iter()
+        .find_map(|(event, payload)| (event == "plan_round_completed").then_some(payload))
+        .expect("plan_round_completed payload should exist");
+    let plan_stats = plan_round_completed_payload
+        .get("tool_output_stats")
+        .expect("plan_round_completed should include tool_output_stats");
+    assert_eq!(
+        plan_stats
+            .get("truncated_result_lines")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    let plan_health = plan_round_completed_payload
+        .get("health_signal")
+        .expect("plan_round_completed should include health_signal");
+    assert_eq!(
+        plan_health.get("severity").and_then(Value::as_str),
+        Some("ok")
+    );
+    assert_eq!(
+        plan_health
+            .get("flags")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(0)
+    );
+
+    let final_status_payload = event_records
+        .iter()
+        .find_map(|(event, payload)| (event == "final_status").then_some(payload))
+        .expect("final_status payload should exist");
+    let final_stats = final_status_payload
+        .get("tool_output_stats")
+        .expect("final_status should include tool_output_stats");
+    assert_eq!(
+        final_stats.get("result_lines").and_then(Value::as_u64),
+        Some(0)
+    );
+    let final_health = final_status_payload
+        .get("health_signal")
+        .expect("final_status should include health_signal");
+    assert_eq!(
+        final_health.get("severity").and_then(Value::as_str),
+        Some("ok")
     );
 }
 
@@ -2459,9 +2658,26 @@ async fn turn_engine_executes_known_tool_with_kernel() {
     let result = engine.execute_turn(&turn, Some(&ctx)).await;
     match result {
         TurnResult::FinalText(text) => {
+            let line = text.lines().next().expect("tool result line should exist");
+            let payload = line
+                .strip_prefix("[ok] ")
+                .expect("tool result line should keep [ok] prefix");
+            let envelope: Value =
+                serde_json::from_str(payload).expect("tool result envelope should be json");
             assert!(
-                text.contains("\"tool\":\"file.read\""),
+                payload.contains("\"tool\":\"file.read\""),
                 "expected echoed tool payload in output, got: {text}"
+            );
+            assert_eq!(envelope["status"], "ok");
+            assert_eq!(envelope["tool"], "file.read");
+            assert_eq!(envelope["tool_call_id"], "c1");
+            assert_eq!(envelope["payload_truncated"], false);
+            assert!(
+                envelope["payload_summary"]
+                    .as_str()
+                    .expect("payload summary should be string")
+                    .contains("\"path\":\"test.txt\""),
+                "expected payload summary to include original args, got: {envelope:?}"
             );
         }
         TurnResult::ToolDenied(reason) => {
@@ -2483,6 +2699,115 @@ async fn turn_engine_executes_known_tool_with_kernel() {
                 panic!("unexpected result: {:?}", other);
             }
         }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_engine_truncates_oversized_tool_payload_summary() {
+    use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, TurnEngine, TurnResult};
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loongclaw_kernel::CoreToolAdapter;
+
+    struct LargePayloadToolAdapter;
+
+    #[async_trait]
+    impl CoreToolAdapter for LargePayloadToolAdapter {
+        fn name(&self) -> &str {
+            "large-payload-tools"
+        }
+
+        async fn execute_core_tool(
+            &self,
+            request: ToolCoreRequest,
+        ) -> Result<ToolCoreOutcome, ToolPlaneError> {
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "tool": request.tool_name,
+                    "blob": "x".repeat(10_000)
+                }),
+            })
+        }
+    }
+
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+    kernel.register_core_tool_adapter(LargePayloadToolAdapter);
+    kernel
+        .set_default_core_tool_adapter("large-payload-tools")
+        .expect("set default");
+
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+
+    let ctx = KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    let engine = TurnEngine::new(5);
+    let turn = ProviderTurn {
+        assistant_text: "".to_owned(),
+        tool_intents: vec![ToolIntent {
+            tool_name: "file.read".to_owned(),
+            args_json: json!({"path": "test.txt"}),
+            source: "provider_tool_call".to_owned(),
+            session_id: "s1".to_owned(),
+            turn_id: "t1".to_owned(),
+            tool_call_id: "c-large".to_owned(),
+        }],
+        raw_meta: serde_json::Value::Null,
+    };
+
+    let result = engine.execute_turn(&turn, Some(&ctx)).await;
+    match result {
+        TurnResult::FinalText(text) => {
+            let line = text.lines().next().expect("tool result line should exist");
+            let payload = line
+                .strip_prefix("[ok] ")
+                .expect("tool result line should keep [ok] prefix");
+            let envelope: Value =
+                serde_json::from_str(payload).expect("tool result envelope should be json");
+
+            assert_eq!(envelope["tool"], "file.read");
+            assert_eq!(envelope["tool_call_id"], "c-large");
+            assert_eq!(envelope["payload_truncated"], true);
+            assert!(
+                envelope["payload_chars"]
+                    .as_u64()
+                    .expect("payload chars should exist")
+                    > 2048
+            );
+            let summary = envelope["payload_summary"]
+                .as_str()
+                .expect("payload summary should be string");
+            assert!(
+                summary.contains("...(truncated "),
+                "expected truncated marker, got: {summary}"
+            );
+            assert!(
+                summary.chars().count() <= 2200,
+                "truncated summary should stay bounded, chars={}",
+                summary.chars().count()
+            );
+        }
+        other => panic!("expected FinalText, got {:?}", other),
     }
 }
 

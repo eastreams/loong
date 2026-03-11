@@ -21,6 +21,21 @@ pub struct SafeLaneMetricsSnapshot {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SafeLaneToolOutputSnapshot {
+    pub output_lines: u32,
+    pub result_lines: u32,
+    pub truncated_result_lines: u32,
+    pub any_truncated: bool,
+    pub truncation_ratio_milli: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SafeLaneHealthSignalSnapshot {
+    pub severity: String,
+    pub flags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SafeLaneEventSummary {
     pub lane_selected_events: u32,
     pub round_started_events: u32,
@@ -48,7 +63,20 @@ pub struct SafeLaneEventSummary {
     pub final_route_decision: Option<String>,
     pub final_route_reason: Option<String>,
     pub latest_metrics: Option<SafeLaneMetricsSnapshot>,
+    pub latest_tool_output: Option<SafeLaneToolOutputSnapshot>,
     pub metrics_snapshots_seen: u32,
+    pub tool_output_snapshots_seen: u32,
+    pub tool_output_truncated_events: u32,
+    pub tool_output_result_lines_total: u64,
+    pub tool_output_truncated_result_lines_total: u64,
+    pub tool_output_aggregate_truncation_ratio_milli: Option<u32>,
+    pub tool_output_truncation_verify_failed_events: u32,
+    pub tool_output_truncation_replan_events: u32,
+    pub tool_output_truncation_final_failure_events: u32,
+    pub latest_health_signal: Option<SafeLaneHealthSignalSnapshot>,
+    pub health_signal_snapshots_seen: u32,
+    pub health_signal_warn_events: u32,
+    pub health_signal_critical_events: u32,
     pub route_decision_counts: BTreeMap<String, u32>,
     pub route_reason_counts: BTreeMap<String, u32>,
     pub failure_code_counts: BTreeMap<String, u32>,
@@ -85,7 +113,16 @@ where
             continue;
         }
 
-        match record.event.as_str() {
+        let event_name = record.event.as_str();
+        let final_status_is_failed = event_name == "final_status"
+            && record
+                .payload
+                .get("status")
+                .and_then(Value::as_str)
+                .map(|status| status == "failed")
+                .unwrap_or(false);
+
+        match event_name {
             "lane_selected" => {
                 summary.lane_selected_events = summary.lane_selected_events.saturating_add(1);
             }
@@ -179,6 +216,60 @@ where
             summary.metrics_snapshots_seen = summary.metrics_snapshots_seen.saturating_add(1);
             summary.latest_metrics = Some(metrics);
         }
+        if let Some(tool_output) =
+            parse_tool_output_snapshot(record.payload.get("tool_output_stats"))
+        {
+            summary.tool_output_snapshots_seen =
+                summary.tool_output_snapshots_seen.saturating_add(1);
+            if tool_output.any_truncated || tool_output.truncated_result_lines > 0 {
+                summary.tool_output_truncated_events =
+                    summary.tool_output_truncated_events.saturating_add(1);
+                if event_name == "verify_failed" {
+                    summary.tool_output_truncation_verify_failed_events = summary
+                        .tool_output_truncation_verify_failed_events
+                        .saturating_add(1);
+                }
+                if event_name == "replan_triggered" {
+                    summary.tool_output_truncation_replan_events = summary
+                        .tool_output_truncation_replan_events
+                        .saturating_add(1);
+                }
+                if final_status_is_failed {
+                    summary.tool_output_truncation_final_failure_events = summary
+                        .tool_output_truncation_final_failure_events
+                        .saturating_add(1);
+                }
+            }
+            summary.tool_output_result_lines_total = summary
+                .tool_output_result_lines_total
+                .saturating_add(tool_output.result_lines as u64);
+            summary.tool_output_truncated_result_lines_total = summary
+                .tool_output_truncated_result_lines_total
+                .saturating_add(tool_output.truncated_result_lines as u64);
+            summary.tool_output_aggregate_truncation_ratio_milli = compute_truncation_ratio_milli(
+                summary.tool_output_truncated_result_lines_total,
+                summary.tool_output_result_lines_total,
+            );
+            summary.latest_tool_output = Some(tool_output);
+        }
+        if let Some(health_signal) =
+            parse_health_signal_snapshot(record.payload.get("health_signal"))
+        {
+            summary.health_signal_snapshots_seen =
+                summary.health_signal_snapshots_seen.saturating_add(1);
+            match health_signal.severity.as_str() {
+                "warn" => {
+                    summary.health_signal_warn_events =
+                        summary.health_signal_warn_events.saturating_add(1);
+                }
+                "critical" => {
+                    summary.health_signal_critical_events =
+                        summary.health_signal_critical_events.saturating_add(1);
+                }
+                _ => {}
+            }
+            summary.latest_health_signal = Some(health_signal);
+        }
     }
 
     summary
@@ -211,6 +302,92 @@ fn parse_metrics_snapshot(value: Option<&Value>) -> Option<SafeLaneMetricsSnapsh
             .and_then(Value::as_u64)
             .unwrap_or_default(),
     })
+}
+
+fn parse_tool_output_snapshot(value: Option<&Value>) -> Option<SafeLaneToolOutputSnapshot> {
+    let snapshot = value?;
+    let has_any = [
+        "output_lines",
+        "result_lines",
+        "truncated_result_lines",
+        "any_truncated",
+        "truncation_ratio_milli",
+    ]
+    .iter()
+    .any(|key| snapshot.get(*key).is_some());
+    if !has_any {
+        return None;
+    }
+
+    let output_lines = read_u32(snapshot, "output_lines");
+    let result_lines = read_u32(snapshot, "result_lines");
+    let truncated_result_lines = read_u32(snapshot, "truncated_result_lines").min(result_lines);
+    let any_truncated = snapshot
+        .get("any_truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(truncated_result_lines > 0);
+    let truncation_ratio_milli = snapshot
+        .get("truncation_ratio_milli")
+        .and_then(Value::as_u64)
+        .map(|raw| raw.min(1000) as u32)
+        .unwrap_or_else(|| {
+            if result_lines == 0 {
+                0
+            } else {
+                ((truncated_result_lines as u64)
+                    .saturating_mul(1000)
+                    .saturating_div(result_lines as u64))
+                .min(1000) as u32
+            }
+        });
+
+    Some(SafeLaneToolOutputSnapshot {
+        output_lines,
+        result_lines,
+        truncated_result_lines,
+        any_truncated,
+        truncation_ratio_milli,
+    })
+}
+
+fn compute_truncation_ratio_milli(truncated_lines: u64, result_lines: u64) -> Option<u32> {
+    if result_lines == 0 {
+        return None;
+    }
+    Some(
+        truncated_lines
+            .saturating_mul(1000)
+            .saturating_div(result_lines)
+            .min(u32::MAX as u64) as u32,
+    )
+}
+
+fn parse_health_signal_snapshot(value: Option<&Value>) -> Option<SafeLaneHealthSignalSnapshot> {
+    let signal = value?;
+    let severity = signal
+        .get("severity")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "unknown".to_owned());
+    let flags = signal
+        .get("flags")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if severity == "unknown" && flags.is_empty() {
+        return None;
+    }
+    Some(SafeLaneHealthSignalSnapshot { severity, flags })
 }
 
 fn is_safe_lane_event_name(event_name: &str) -> bool {
@@ -578,6 +755,173 @@ mod tests {
         assert_eq!(
             summary.session_governor_latest_recovery_success_streak_threshold,
             Some(3)
+        );
+    }
+
+    #[test]
+    fn summarize_safe_lane_events_tracks_tool_output_snapshot_rollups() {
+        let payloads = [
+            json!({
+                "type": "conversation_event",
+                "event": "plan_round_completed",
+                "payload": {
+                    "round": 0,
+                    "status": "succeeded",
+                    "tool_output_stats": {
+                        "output_lines": 2,
+                        "result_lines": 2,
+                        "truncated_result_lines": 1,
+                        "any_truncated": true,
+                        "truncation_ratio_milli": 500
+                    }
+                }
+            })
+            .to_string(),
+            json!({
+                "type": "conversation_event",
+                "event": "final_status",
+                "payload": {
+                    "status": "succeeded",
+                    "tool_output_stats": {
+                        "output_lines": 1,
+                        "result_lines": 1,
+                        "truncated_result_lines": 0,
+                        "any_truncated": false,
+                        "truncation_ratio_milli": 0
+                    }
+                }
+            })
+            .to_string(),
+        ];
+        let summary = summarize_safe_lane_events(payloads.iter().map(String::as_str));
+
+        assert_eq!(summary.tool_output_snapshots_seen, 2);
+        assert_eq!(summary.tool_output_truncated_events, 1);
+        assert_eq!(summary.tool_output_result_lines_total, 3);
+        assert_eq!(summary.tool_output_truncated_result_lines_total, 1);
+        assert_eq!(
+            summary.tool_output_aggregate_truncation_ratio_milli,
+            Some(333)
+        );
+        assert_eq!(summary.tool_output_truncation_verify_failed_events, 0);
+        assert_eq!(summary.tool_output_truncation_replan_events, 0);
+        assert_eq!(summary.tool_output_truncation_final_failure_events, 0);
+        assert_eq!(
+            summary.latest_tool_output,
+            Some(SafeLaneToolOutputSnapshot {
+                output_lines: 1,
+                result_lines: 1,
+                truncated_result_lines: 0,
+                any_truncated: false,
+                truncation_ratio_milli: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn summarize_safe_lane_events_tracks_truncation_failure_correlation_counters() {
+        let payloads = [
+            json!({
+                "type": "conversation_event",
+                "event": "verify_failed",
+                "payload": {
+                    "failure_code": "safe_lane_plan_verify_failed",
+                    "tool_output_stats": {
+                        "output_lines": 2,
+                        "result_lines": 2,
+                        "truncated_result_lines": 1,
+                        "any_truncated": true,
+                        "truncation_ratio_milli": 500
+                    }
+                }
+            })
+            .to_string(),
+            json!({
+                "type": "conversation_event",
+                "event": "replan_triggered",
+                "payload": {
+                    "tool_output_stats": {
+                        "output_lines": 1,
+                        "result_lines": 1,
+                        "truncated_result_lines": 1,
+                        "any_truncated": true,
+                        "truncation_ratio_milli": 1000
+                    }
+                }
+            })
+            .to_string(),
+            json!({
+                "type": "conversation_event",
+                "event": "final_status",
+                "payload": {
+                    "status": "failed",
+                    "failure_code": "safe_lane_plan_verify_failed",
+                    "tool_output_stats": {
+                        "output_lines": 1,
+                        "result_lines": 1,
+                        "truncated_result_lines": 1,
+                        "any_truncated": true,
+                        "truncation_ratio_milli": 1000
+                    }
+                }
+            })
+            .to_string(),
+        ];
+
+        let summary = summarize_safe_lane_events(payloads.iter().map(String::as_str));
+        assert_eq!(summary.tool_output_snapshots_seen, 3);
+        assert_eq!(summary.tool_output_truncated_events, 3);
+        assert_eq!(summary.tool_output_result_lines_total, 4);
+        assert_eq!(summary.tool_output_truncated_result_lines_total, 3);
+        assert_eq!(
+            summary.tool_output_aggregate_truncation_ratio_milli,
+            Some(750)
+        );
+        assert_eq!(summary.tool_output_truncation_verify_failed_events, 1);
+        assert_eq!(summary.tool_output_truncation_replan_events, 1);
+        assert_eq!(summary.tool_output_truncation_final_failure_events, 1);
+    }
+
+    #[test]
+    fn summarize_safe_lane_events_tracks_health_signal_rollups() {
+        let payloads = [
+            json!({
+                "type": "conversation_event",
+                "event": "plan_round_completed",
+                "payload": {
+                    "round": 0,
+                    "status": "failed",
+                    "health_signal": {
+                        "severity": "warn",
+                        "flags": ["truncation_pressure(0.300)"]
+                    }
+                }
+            })
+            .to_string(),
+            json!({
+                "type": "conversation_event",
+                "event": "final_status",
+                "payload": {
+                    "status": "failed",
+                    "health_signal": {
+                        "severity": "critical",
+                        "flags": ["terminal_instability"]
+                    }
+                }
+            })
+            .to_string(),
+        ];
+
+        let summary = summarize_safe_lane_events(payloads.iter().map(String::as_str));
+        assert_eq!(summary.health_signal_snapshots_seen, 2);
+        assert_eq!(summary.health_signal_warn_events, 1);
+        assert_eq!(summary.health_signal_critical_events, 1);
+        assert_eq!(
+            summary.latest_health_signal,
+            Some(SafeLaneHealthSignalSnapshot {
+                severity: "critical".to_owned(),
+                flags: vec!["terminal_instability".to_owned()],
+            })
         );
     }
 }

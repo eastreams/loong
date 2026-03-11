@@ -8,9 +8,11 @@ mod runtime;
 mod turn_coordinator;
 pub mod turn_engine;
 mod turn_loop;
+mod turn_shared;
 
 pub use analytics::{
-    ConversationEventRecord, SafeLaneEventSummary, SafeLaneFinalStatus, SafeLaneMetricsSnapshot,
+    ConversationEventRecord, SafeLaneEventSummary, SafeLaneFinalStatus,
+    SafeLaneHealthSignalSnapshot, SafeLaneMetricsSnapshot, SafeLaneToolOutputSnapshot,
     parse_conversation_event, summarize_safe_lane_events,
 };
 pub use lane_arbiter::{ExecutionLane, LaneArbiterPolicy, LaneDecision};

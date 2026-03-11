@@ -2,7 +2,9 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::ops::Deref;
 
-use loongclaw_contracts::{Capability, KernelError, ToolCoreRequest, ToolPlaneError};
+use loongclaw_contracts::{
+    Capability, KernelError, ToolCoreOutcome, ToolCoreRequest, ToolPlaneError,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::context::KernelContext;
@@ -41,6 +43,20 @@ pub struct ToolOutcome {
     pub human_reason: Option<String>,
     pub audit_event_id: Option<String>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolResultEnvelope {
+    pub status: String,
+    pub tool: String,
+    pub tool_call_id: String,
+    pub payload_summary: String,
+    pub payload_chars: usize,
+    pub payload_truncated: bool,
+}
+
+const TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS: usize = 2048;
+const MIN_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS: usize = 256;
+const MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS: usize = 64_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -185,17 +201,94 @@ pub(crate) fn classify_kernel_error(error: &KernelError) -> KernelFailureClass {
     }
 }
 
+#[allow(dead_code)]
+pub(crate) fn format_tool_result_line(intent: &ToolIntent, outcome: &ToolCoreOutcome) -> String {
+    format_tool_result_line_with_limit(intent, outcome, TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS)
+}
+
+pub(crate) fn format_tool_result_line_with_limit(
+    intent: &ToolIntent,
+    outcome: &ToolCoreOutcome,
+    payload_summary_limit_chars: usize,
+) -> String {
+    let envelope = build_tool_result_envelope(intent, outcome, payload_summary_limit_chars);
+    let encoded = serde_json::to_string(&envelope).unwrap_or_else(|_| {
+        format!(
+            "{{\"status\":\"{}\",\"tool\":\"{}\",\"tool_call_id\":\"{}\",\"payload_summary\":\"[tool_payload_unserializable]\",\"payload_chars\":0,\"payload_truncated\":false}}",
+            outcome.status,
+            crate::tools::canonical_tool_name(intent.tool_name.as_str()),
+            intent.tool_call_id
+        )
+    });
+    format!("[{}] {encoded}", outcome.status)
+}
+
+fn build_tool_result_envelope(
+    intent: &ToolIntent,
+    outcome: &ToolCoreOutcome,
+    payload_summary_limit_chars: usize,
+) -> ToolResultEnvelope {
+    let normalized_limit = payload_summary_limit_chars.clamp(
+        MIN_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
+        MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
+    );
+    let payload_text = serde_json::to_string(&outcome.payload)
+        .unwrap_or_else(|_| "[tool_payload_unserializable]".to_owned());
+    let (payload_summary, payload_chars, payload_truncated) =
+        truncate_by_chars(payload_text.as_str(), normalized_limit);
+
+    ToolResultEnvelope {
+        status: outcome.status.clone(),
+        tool: crate::tools::canonical_tool_name(intent.tool_name.as_str()).to_owned(),
+        tool_call_id: intent.tool_call_id.clone(),
+        payload_summary,
+        payload_chars,
+        payload_truncated,
+    }
+}
+
+fn truncate_by_chars(value: &str, limit: usize) -> (String, usize, bool) {
+    let total_chars = value.chars().count();
+    if total_chars <= limit {
+        return (value.to_owned(), total_chars, false);
+    }
+    let mut truncated = String::new();
+    for ch in value.chars().take(limit) {
+        truncated.push(ch);
+    }
+    let omitted = total_chars.saturating_sub(limit);
+    truncated.push_str(&format!("...(truncated {omitted} chars)"));
+    (truncated, total_chars, true)
+}
+
 /// Single orchestration boundary for tool-call evaluation and execution.
 ///
 /// `evaluate_turn` performs synchronous validation (no execution).
 /// `execute_turn` performs policy-gated tool execution through the kernel.
 pub struct TurnEngine {
     max_tool_steps: usize,
+    tool_result_payload_summary_limit_chars: usize,
 }
 
 impl TurnEngine {
     pub fn new(max_tool_steps: usize) -> Self {
-        Self { max_tool_steps }
+        Self::with_tool_result_payload_summary_limit(
+            max_tool_steps,
+            TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
+        )
+    }
+
+    pub fn with_tool_result_payload_summary_limit(
+        max_tool_steps: usize,
+        tool_result_payload_summary_limit_chars: usize,
+    ) -> Self {
+        Self {
+            max_tool_steps,
+            tool_result_payload_summary_limit_chars: tool_result_payload_summary_limit_chars.clamp(
+                MIN_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
+                MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
+            ),
+        }
     }
 
     /// Evaluate a provider turn and produce a deterministic result.
@@ -275,7 +368,11 @@ impl TurnEngine {
                 .await
             {
                 Ok(outcome) => {
-                    outputs.push(format!("[{}] {}", outcome.status, outcome.payload));
+                    outputs.push(format_tool_result_line_with_limit(
+                        intent,
+                        &outcome,
+                        self.tool_result_payload_summary_limit_chars,
+                    ));
                 }
                 Err(e) => {
                     let reason = format!("{e}");
