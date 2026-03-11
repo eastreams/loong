@@ -83,13 +83,22 @@ pub(super) fn load_window(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "memory.window requires payload.session_id".to_owned())?;
+    let allow_extended_limit = payload
+        .get("allow_extended_limit")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let hard_limit_cap = if allow_extended_limit { 512 } else { 128 };
     let requested_limit = payload
         .get("limit")
         .and_then(Value::as_u64)
         .unwrap_or_else(default_window_size_u64)
-        .clamp(1, 128) as usize;
+        .clamp(1, hard_limit_cap) as usize;
     let default_window = default_window_size().max(1);
-    let window_limit = requested_limit.min(default_window);
+    let window_limit = if allow_extended_limit {
+        requested_limit
+    } else {
+        requested_limit.min(default_window)
+    };
 
     let path = resolve_db_path(config);
     ensure_sqlite_schema(&path)?;
@@ -131,6 +140,7 @@ pub(super) fn load_window(
             "operation": MEMORY_OP_WINDOW,
             "session_id": session_id,
             "limit": window_limit,
+            "allow_extended_limit": allow_extended_limit,
             "turns": turns,
             "db_path": path.display().to_string(),
         }),
@@ -189,7 +199,23 @@ pub(super) fn window_direct(
     limit: usize,
     config: &MemoryRuntimeConfig,
 ) -> Result<Vec<ConversationTurn>, String> {
-    let request = build_window_request(session_id, limit);
+    window_direct_with_options(session_id, limit, false, config)
+}
+
+pub(super) fn window_direct_with_options(
+    session_id: &str,
+    limit: usize,
+    allow_extended_limit: bool,
+    config: &MemoryRuntimeConfig,
+) -> Result<Vec<ConversationTurn>, String> {
+    let request = MemoryCoreRequest {
+        operation: "window".to_owned(),
+        payload: json!({
+            "session_id": session_id,
+            "limit": limit,
+            "allow_extended_limit": allow_extended_limit,
+        }),
+    };
     let outcome = super::execute_memory_core_with_config(request, config)?;
     let turns_raw = outcome.payload.get("turns").cloned().unwrap_or(Value::Null);
     serde_json::from_value(turns_raw)

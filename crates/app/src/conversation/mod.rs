@@ -1,15 +1,28 @@
+pub mod analytics;
+mod lane_arbiter;
 mod persistence;
+pub mod plan_executor;
+pub mod plan_ir;
+pub mod plan_verifier;
 mod runtime;
+mod turn_coordinator;
 pub mod turn_engine;
 mod turn_loop;
 
-pub use turn_loop::ConversationTurnLoop;
-pub type ConversationOrchestrator = ConversationTurnLoop;
+pub use analytics::{
+    parse_conversation_event, summarize_safe_lane_events, ConversationEventRecord,
+    SafeLaneEventSummary, SafeLaneFinalStatus, SafeLaneMetricsSnapshot,
+};
+pub use lane_arbiter::{ExecutionLane, LaneArbiterPolicy, LaneDecision};
+pub type ConversationOrchestrator = ConversationTurnCoordinator;
 #[allow(unused_imports)]
 pub use runtime::{ConversationRuntime, DefaultConversationRuntime};
+pub use turn_coordinator::ConversationTurnCoordinator;
 pub use turn_engine::{
-    ProviderTurn, ToolDecision, ToolIntent, ToolOutcome, TurnEngine, TurnResult,
+    ProviderTurn, ToolDecision, ToolIntent, ToolOutcome, TurnEngine, TurnFailure, TurnFailureKind,
+    TurnResult,
 };
+pub use turn_loop::ConversationTurnLoop;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderErrorMode {

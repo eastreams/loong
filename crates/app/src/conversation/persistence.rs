@@ -1,4 +1,4 @@
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::CliResult;
 use crate::KernelContext;
@@ -92,4 +92,21 @@ pub(super) async fn persist_error_turns<R: ConversationRuntime + ?Sized>(
         .persist_turn(session_id, "assistant", synthetic_reply, kernel_ctx)
         .await?;
     Ok(())
+}
+
+pub(super) async fn persist_conversation_event<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    session_id: &str,
+    event_name: &str,
+    payload: Value,
+    kernel_ctx: Option<&KernelContext>,
+) -> CliResult<()> {
+    let content = json!({
+        "type": "conversation_event",
+        "event": event_name,
+        "payload": payload,
+    });
+    runtime
+        .persist_turn(session_id, "assistant", &content.to_string(), kernel_ctx)
+        .await
 }

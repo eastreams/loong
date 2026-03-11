@@ -164,6 +164,19 @@ pub fn window_direct(
 }
 
 #[cfg(feature = "memory-sqlite")]
+pub fn window_direct_extended(
+    session_id: &str,
+    limit: usize,
+) -> Result<Vec<ConversationTurn>, String> {
+    sqlite::window_direct_with_options(
+        session_id,
+        limit,
+        true,
+        runtime_config::get_memory_runtime_config(),
+    )
+}
+
+#[cfg(feature = "memory-sqlite")]
 pub fn ensure_memory_db_ready(
     path: Option<PathBuf>,
     config: &runtime_config::MemoryRuntimeConfig,

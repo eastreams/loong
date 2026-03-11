@@ -26,7 +26,7 @@ use super::config::{
     ResolvedTelegramChannelConfig,
 };
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
-use super::conversation::{ConversationTurnLoop, ProviderErrorMode};
+use super::conversation::{ConversationTurnCoordinator, ProviderErrorMode};
 
 #[cfg(feature = "channel-feishu")]
 mod feishu;
@@ -694,7 +694,7 @@ pub(super) async fn process_inbound_with_provider(
     kernel_ctx: Option<&KernelContext>,
 ) -> CliResult<String> {
     let session_key = message.session.session_key();
-    ConversationTurnLoop::new()
+    ConversationTurnCoordinator::new()
         .handle_turn(
             config,
             &session_key,
