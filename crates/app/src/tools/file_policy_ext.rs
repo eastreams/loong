@@ -42,6 +42,10 @@ impl FilePolicyExtension {
 }
 
 /// Normalize a path by resolving `.` and `..` components without touching the filesystem.
+///
+/// Note: `ParentDir` past the root is silently dropped (pop on empty vec is a no-op).
+/// This is intentionally conservative — the result stays within or at the root.
+/// The adapter layer's `canonicalize` check provides the authoritative escape guard.
 fn normalize_without_fs(path: &Path) -> PathBuf {
     let mut components = Vec::new();
     for component in path.components() {

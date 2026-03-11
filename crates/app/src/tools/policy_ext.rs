@@ -90,17 +90,24 @@ impl PolicyExtension for ToolPolicyExtension {
             return Ok(());
         };
 
-        if self.hard_deny.contains(command.as_str()) {
+        // Extract basename so absolute paths like "/usr/bin/rm" match "rm".
+        let basename = command
+            .rsplit('/')
+            .next()
+            .and_then(|s| s.rsplit('\\').next())
+            .unwrap_or(&command);
+
+        if self.hard_deny.contains(basename) {
             return Err(PolicyError::ToolCallDenied {
                 tool_name: tool_name.to_owned(),
-                reason: format!("command `{command}` is blocked by default shell policy"),
+                reason: format!("command `{basename}` is blocked by default shell policy"),
             });
         }
 
-        if self.approval_required.contains(command.as_str()) {
+        if self.approval_required.contains(basename) {
             return Err(PolicyError::ToolCallApprovalRequired {
                 tool_name: tool_name.to_owned(),
-                prompt: format!("command `{command}` requires approval by default shell policy"),
+                prompt: format!("command `{basename}` requires approval by default shell policy"),
             });
         }
 
@@ -236,5 +243,20 @@ mod tests {
         let caps = BTreeSet::from([Capability::InvokeTool]);
         let ctx = make_context(&pack, &token, &caps, None);
         assert!(ext.authorize_extension(&ctx).is_ok());
+    }
+
+    #[test]
+    fn denies_absolute_path_command() {
+        let ext = ToolPolicyExtension::default_rules();
+        let pack = test_pack();
+        let token = test_token();
+        let caps = BTreeSet::from([Capability::InvokeTool]);
+        let params = json!({"tool_name": "shell.exec", "payload": {"command": "/usr/bin/rm"}});
+        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        let result = ext.authorize_extension(&ctx);
+        assert!(matches!(
+            result.unwrap_err(),
+            PolicyError::ToolCallDenied { .. }
+        ));
     }
 }
