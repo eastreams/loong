@@ -10,7 +10,7 @@ These are the golden principles for anyone — agent or human — working in thi
 
 4. **Audit everything security-critical** — policy denials, token lifecycle events, and plane invocations all emit structured audit events. Silent drops are bugs (see: NoopAuditSink incident).
 
-5. **7-crate DAG, no cycles** — `contracts` (leaf) -> `kernel` -> `protocol` (leaf) -> `app` -> `spec` -> `bench` -> `daemon`. Dependency direction is non-negotiable. See [Layered Kernel Design](layered-kernel-design.md).
+5. **7-crate DAG, no cycles** — keep dependency direction strictly acyclic: `contracts -> kernel`; `app -> {contracts, kernel}`; `protocol` remains a foundation crate used by `spec`; `spec -> {kernel, protocol}`; `bench -> {kernel, spec}`; `daemon -> {kernel, app, spec, bench}`. Dependency direction is non-negotiable. See [Layered Kernel Design](layered-kernel-design.md).
 
 6. **Tests are the contract** — if a behavior isn't tested, it doesn't exist. All tests pass at every commit, enforced by the pre-commit hook.
 
@@ -21,3 +21,5 @@ These are the golden principles for anyone — agent or human — working in thi
 9. **Enforce mechanically, not manually** — prefer linters, CI gates, and pre-commit hooks over code review comments. Encode taste into tooling. See `scripts/pre-commit`.
 
 10. **YAGNI ruthlessly** — don't design for hypothetical future requirements. The minimum complexity for the current task is the right amount. Three similar lines of code is better than a premature abstraction.
+
+11. **Control complexity growth with explicit budgets** — large hotspots must have line/function budget checks and boundary assertions (`scripts/check_architecture_boundaries.sh`) so architecture drift is detected before review time.

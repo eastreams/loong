@@ -432,6 +432,50 @@ api_key_env = "$OPENAI_API_KEY"
 
     #[test]
     #[cfg(feature = "config-toml")]
+    fn validate_file_returns_channel_account_diagnostics() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("loongclaw-config-channel-account-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("create temp directory");
+        let config_path = temp_dir.join("config.toml");
+        let raw = r#"
+[telegram.accounts."Work Bot"]
+bot_token_env = "WORK_TELEGRAM_TOKEN"
+
+[telegram.accounts."work-bot"]
+bot_token_env = "WORK_TELEGRAM_TOKEN_DUP"
+"#;
+        std::fs::write(&config_path, raw).expect("write test config");
+
+        let (_, diagnostics) = validate_file(Some(config_path.to_string_lossy().as_ref()))
+            .expect("validate_file should parse and return diagnostics");
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "config.channel_account.duplicate_id");
+        assert_eq!(
+            diagnostics[0].problem_type,
+            "urn:loongclaw:problem:config.channel_account.duplicate_id"
+        );
+        assert_eq!(diagnostics[0].field_path, "telegram.accounts");
+        assert_eq!(
+            diagnostics[0]
+                .message_variables
+                .get("normalized_account_id"),
+            Some(&"work-bot".to_owned())
+        );
+        assert_eq!(
+            diagnostics[0].message_variables.get("raw_account_labels"),
+            Some(&"Work Bot, work-bot".to_owned())
+        );
+
+        std::fs::remove_file(&config_path).ok();
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
     fn validate_file_locale_tag_aliases_normalize_to_en() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)

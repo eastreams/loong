@@ -8,7 +8,10 @@ use loongclaw_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::runtime_config::MemoryRuntimeConfig;
+use super::{
+    MEMORY_OP_APPEND_TURN, MEMORY_OP_CLEAR_SESSION, MEMORY_OP_WINDOW, build_append_turn_request,
+    build_window_request, runtime_config::MemoryRuntimeConfig,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationTurn {
@@ -57,7 +60,7 @@ pub(super) fn append_turn(
         status: "ok".to_owned(),
         payload: json!({
             "adapter": "sqlite-core",
-            "operation": "append_turn",
+            "operation": MEMORY_OP_APPEND_TURN,
             "session_id": session_id,
             "role": role,
             "ts": ts,
@@ -127,7 +130,7 @@ pub(super) fn load_window(
         status: "ok".to_owned(),
         payload: json!({
             "adapter": "sqlite-core",
-            "operation": "window",
+            "operation": MEMORY_OP_WINDOW,
             "session_id": session_id,
             "limit": window_limit,
             "turns": turns,
@@ -165,7 +168,7 @@ pub(super) fn clear_session(
         status: "ok".to_owned(),
         payload: json!({
             "adapter": "sqlite-core",
-            "operation": "clear_session",
+            "operation": MEMORY_OP_CLEAR_SESSION,
             "session_id": session_id,
             "deleted_rows": affected,
         }),
@@ -178,14 +181,7 @@ pub(super) fn append_turn_direct(
     content: &str,
     config: &MemoryRuntimeConfig,
 ) -> Result<(), String> {
-    let request = MemoryCoreRequest {
-        operation: "append_turn".to_owned(),
-        payload: json!({
-            "session_id": session_id,
-            "role": role,
-            "content": content,
-        }),
-    };
+    let request = build_append_turn_request(session_id, role, content);
     super::execute_memory_core_with_config(request, config)?;
     Ok(())
 }
@@ -195,13 +191,7 @@ pub(super) fn window_direct(
     limit: usize,
     config: &MemoryRuntimeConfig,
 ) -> Result<Vec<ConversationTurn>, String> {
-    let request = MemoryCoreRequest {
-        operation: "window".to_owned(),
-        payload: json!({
-            "session_id": session_id,
-            "limit": limit,
-        }),
-    };
+    let request = build_window_request(session_id, limit);
     let outcome = super::execute_memory_core_with_config(request, config)?;
     let turns_raw = outcome.payload.get("turns").cloned().unwrap_or(Value::Null);
     serde_json::from_value(turns_raw)

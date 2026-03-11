@@ -2,8 +2,11 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use crate::CliResult;
-use crate::channel::{ChannelAdapter, ChannelInboundMessage};
-use crate::config::LoongClawConfig;
+use crate::channel::{
+    ChannelAdapter, ChannelInboundMessage, ChannelOutboundTarget, ChannelOutboundTargetKind,
+    ChannelPlatform,
+};
+use crate::config::ResolvedFeishuChannelConfig;
 
 use super::payload::{
     build_feishu_reply_payload, build_feishu_send_payload, ensure_feishu_response_ok,
@@ -18,20 +21,18 @@ pub(super) struct FeishuAdapter {
 }
 
 impl FeishuAdapter {
-    pub(super) fn new(config: &LoongClawConfig) -> CliResult<Self> {
+    pub(super) fn new(config: &ResolvedFeishuChannelConfig) -> CliResult<Self> {
         let app_id = config
-            .feishu
             .app_id()
             .ok_or_else(|| "missing Feishu app id (feishu.app_id or env)".to_owned())?;
         let app_secret = config
-            .feishu
             .app_secret()
             .ok_or_else(|| "missing Feishu app secret (feishu.app_secret or env)".to_owned())?;
         Ok(Self {
             app_id,
             app_secret,
-            base_url: config.feishu.base_url.clone(),
-            receive_id_type: config.feishu.receive_id_type.clone(),
+            base_url: config.resolved_base_url(),
+            receive_id_type: config.receive_id_type.clone(),
             tenant_access_token: None,
         })
     }
@@ -70,7 +71,12 @@ impl FeishuAdapter {
         Ok(())
     }
 
-    pub(super) async fn send_card(&self, receive_id: &str, text: &str) -> CliResult<()> {
+    pub(super) async fn send_card(
+        &self,
+        target: &ChannelOutboundTarget,
+        text: &str,
+    ) -> CliResult<()> {
+        let receive_id = self.resolve_receive_id_target(target)?;
         let card = json!({
             "config": {
                 "wide_screen_mode": true
@@ -86,7 +92,7 @@ impl FeishuAdapter {
             .await
     }
 
-    pub(super) async fn send_reply(&self, message_id: &str, text: &str) -> CliResult<()> {
+    async fn send_reply(&self, message_id: &str, text: &str) -> CliResult<()> {
         let token = self.tenant_access_token.as_deref().ok_or_else(|| {
             "feishu tenant token is missing, call refresh_tenant_token first".to_owned()
         })?;
@@ -144,6 +150,25 @@ impl FeishuAdapter {
             .map_err(|error| format!("feishu send decode failed: {error}"))?;
         ensure_feishu_response_ok("feishu send", &payload)
     }
+
+    fn resolve_receive_id_target<'a>(
+        &self,
+        target: &'a ChannelOutboundTarget,
+    ) -> CliResult<&'a str> {
+        if target.platform != ChannelPlatform::Feishu {
+            return Err(format!(
+                "feishu adapter cannot send to {} target",
+                target.platform.as_str()
+            ));
+        }
+        if target.kind != ChannelOutboundTargetKind::ReceiveId {
+            return Err(format!(
+                "feishu direct send requires receive_id target, got {}",
+                target.kind.as_str()
+            ));
+        }
+        target.trimmed_id()
+    }
 }
 
 #[async_trait]
@@ -156,8 +181,26 @@ impl ChannelAdapter for FeishuAdapter {
         Err("feishu inbound is served via webhook mode (`feishu-serve`)".to_owned())
     }
 
-    async fn send_text(&self, target: &str, text: &str) -> CliResult<()> {
-        self.send_message(target, "text", json!({"text": text}))
-            .await
+    async fn send_text(&self, target: &ChannelOutboundTarget, text: &str) -> CliResult<()> {
+        if target.platform != ChannelPlatform::Feishu {
+            return Err(format!(
+                "feishu adapter cannot send to {} target",
+                target.platform.as_str()
+            ));
+        }
+
+        match target.kind {
+            ChannelOutboundTargetKind::MessageReply => {
+                self.send_reply(target.trimmed_id()?, text).await
+            }
+            ChannelOutboundTargetKind::ReceiveId => {
+                self.send_message(target.trimmed_id()?, "text", json!({"text": text}))
+                    .await
+            }
+            ChannelOutboundTargetKind::Conversation => Err(
+                "feishu adapter does not support conversation targets for outbound sends"
+                    .to_owned(),
+            ),
+        }
     }
 }

@@ -47,7 +47,9 @@ impl ConversationTurnLoop {
         runtime: &R,
         kernel_ctx: Option<&KernelContext>,
     ) -> CliResult<String> {
-        let mut messages = runtime.build_messages(config, session_id, true, kernel_ctx)?;
+        let mut messages = runtime
+            .build_messages(config, session_id, true, kernel_ctx)
+            .await?;
         messages.push(json!({
             "role": "user",
             "content": user_input,

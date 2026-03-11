@@ -1,11 +1,10 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::Read,
     path::{Path, PathBuf},
-    process::Stdio,
-    sync::{Arc, Mutex, OnceLock},
-    time::{Duration, UNIX_EPOCH},
+    sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -21,19 +20,11 @@ use kernel::{
     ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter, ToolExtensionOutcome,
     ToolExtensionRequest, VerticalPackManifest,
 };
-use loongclaw_protocol::{
-    JsonLineTransport, OutboundFrame, ProtocolRouter, RouteAuthorizationRequest, Transport,
-    TransportInfo,
-};
-use reqwest::Method;
+use loongclaw_protocol::{OutboundFrame, ProtocolRouter, RouteAuthorizationRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio::{
-    io::AsyncReadExt,
-    process::Command as TokioCommand,
-    time::{Instant as TokioInstant, sleep, timeout},
-};
+use tokio::time::{Instant as TokioInstant, sleep};
 use wasmtime::{
     Config as WasmtimeConfig, Engine as WasmtimeEngine, Linker as WasmtimeLinker,
     Module as WasmtimeModule, Store as WasmtimeStore,
@@ -42,179 +33,22 @@ use wasmtime::{
 use crate::WEBHOOK_TEST_RETRY_STATE;
 use crate::spec_execution::{normalize_path_for_policy, resolve_plugin_relative_path};
 
-const DEFAULT_WASM_MODULE_CACHE_CAPACITY: usize = 32;
-const MAX_WASM_MODULE_CACHE_CAPACITY: usize = 4096;
-const DEFAULT_WASM_MODULE_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
-const MIN_WASM_MODULE_CACHE_MAX_BYTES: usize = 64 * 1024;
-const MAX_WASM_MODULE_CACHE_MAX_BYTES: usize = 512 * 1024 * 1024;
-static WASM_MODULE_CACHE: OnceLock<Mutex<WasmModuleCache>> = OnceLock::new();
-static WASM_MODULE_CACHE_CAPACITY: OnceLock<usize> = OnceLock::new();
-static WASM_MODULE_CACHE_MAX_BYTES: OnceLock<usize> = OnceLock::new();
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct WasmModuleCacheKey {
-    artifact_path: PathBuf,
-    module_size_bytes: u64,
-    artifact_modified_unix_ns: Option<u128>,
-    artifact_file_identity: Option<WasmArtifactFileIdentity>,
-    expected_sha256: Option<String>,
-    fuel_enabled: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct WasmArtifactFileIdentity {
-    device_id: u64,
-    inode: u64,
-    ctime_seconds: i64,
-    ctime_nanoseconds: i64,
-}
-
-#[derive(Debug, Clone)]
-struct CachedWasmModule {
-    engine: WasmtimeEngine,
-    module: WasmtimeModule,
-    artifact_sha256: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct WasmModuleCacheLookup {
-    hit: bool,
-    inserted: bool,
-    evicted_entries: usize,
-    cache_len: usize,
-    cache_capacity: usize,
-    cache_total_module_bytes: usize,
-    cache_max_bytes: usize,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct WasmModuleCacheInsertOutcome {
-    inserted: bool,
-    evicted_entries: usize,
-}
-
-#[derive(Debug, Clone)]
-struct WasmModuleCacheEntry {
-    module: Arc<CachedWasmModule>,
-    module_size_bytes: usize,
-}
-
-#[derive(Debug, Default)]
-struct WasmModuleCache {
-    order: VecDeque<WasmModuleCacheKey>,
-    entries: HashMap<WasmModuleCacheKey, WasmModuleCacheEntry>,
-    total_module_bytes: usize,
-}
-
-impl WasmModuleCache {
-    fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    fn total_module_bytes(&self) -> usize {
-        self.total_module_bytes
-    }
-
-    fn touch(&mut self, key: &WasmModuleCacheKey) {
-        if let Some(position) = self.order.iter().position(|candidate| candidate == key) {
-            let _ = self.order.remove(position);
-        }
-        self.order.push_back(key.clone());
-    }
-
-    fn remove_by_key(&mut self, key: &WasmModuleCacheKey) -> bool {
-        self.order.retain(|candidate| candidate != key);
-        let Some(removed) = self.entries.remove(key) else {
-            return false;
-        };
-        self.total_module_bytes = self
-            .total_module_bytes
-            .saturating_sub(removed.module_size_bytes);
-        true
-    }
-
-    fn evict_oldest(&mut self) -> bool {
-        while let Some(oldest) = self.order.pop_front() {
-            let removed = self.entries.remove(&oldest);
-            if let Some(removed) = removed {
-                self.total_module_bytes = self
-                    .total_module_bytes
-                    .saturating_sub(removed.module_size_bytes);
-                return true;
-            }
-        }
-        false
-    }
-
-    fn clear(&mut self) {
-        self.order.clear();
-        self.entries.clear();
-        self.total_module_bytes = 0;
-    }
-
-    fn get(&mut self, key: &WasmModuleCacheKey) -> Option<Arc<CachedWasmModule>> {
-        let entry = self.entries.get(key)?.module.clone();
-        self.touch(key);
-        Some(entry)
-    }
-
-    fn insert(
-        &mut self,
-        key: WasmModuleCacheKey,
-        value: Arc<CachedWasmModule>,
-        module_size_bytes: usize,
-        max_entries: usize,
-        max_total_bytes: usize,
-    ) -> WasmModuleCacheInsertOutcome {
-        if max_entries == 0 || max_total_bytes == 0 {
-            self.clear();
-            return WasmModuleCacheInsertOutcome {
-                inserted: false,
-                evicted_entries: 0,
-            };
-        }
-
-        if module_size_bytes > max_total_bytes {
-            return WasmModuleCacheInsertOutcome {
-                inserted: false,
-                evicted_entries: 0,
-            };
-        }
-
-        let _ = self.remove_by_key(&key);
-        let mut evicted_entries = 0usize;
-        while self.entries.len() >= max_entries
-            || self.total_module_bytes.saturating_add(module_size_bytes) > max_total_bytes
-        {
-            if !self.evict_oldest() {
-                break;
-            }
-            evicted_entries = evicted_entries.saturating_add(1);
-        }
-
-        if self.entries.len() >= max_entries
-            || self.total_module_bytes.saturating_add(module_size_bytes) > max_total_bytes
-        {
-            return WasmModuleCacheInsertOutcome {
-                inserted: false,
-                evicted_entries,
-            };
-        }
-        self.order.push_back(key.clone());
-        self.total_module_bytes = self.total_module_bytes.saturating_add(module_size_bytes);
-        self.entries.insert(
-            key,
-            WasmModuleCacheEntry {
-                module: value,
-                module_size_bytes,
-            },
-        );
-        WasmModuleCacheInsertOutcome {
-            inserted: true,
-            evicted_entries,
-        }
-    }
-}
+mod http_json_bridge;
+mod process_stdio_bridge;
+mod wasm_cache;
+mod wasm_runtime_policy;
+pub use http_json_bridge::execute_http_json_bridge;
+pub use process_stdio_bridge::{
+    ProcessStdioExchangeOutcome, execute_process_stdio_bridge, run_process_stdio_json_line_exchange,
+};
+#[cfg(test)]
+use wasm_cache::WasmModuleCache;
+use wasm_cache::{
+    CachedWasmModule, WasmArtifactFileIdentity, build_wasm_module_cache_key,
+    insert_cached_wasm_module, lookup_cached_wasm_module, modified_unix_nanos,
+    wasm_artifact_file_identity, wasm_module_cache_capacity, wasm_module_cache_max_bytes,
+};
+use wasm_runtime_policy::wasm_signals_based_traps_enabled_from_env;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DefaultCoreSelection {
@@ -1636,518 +1470,6 @@ pub async fn maybe_execute_bridge(
 
 include!("spec_bridge_protocol.inc.rs");
 
-#[allow(clippy::indexing_slicing)] // serde_json::Value string-keyed IndexMut is infallible
-pub fn execute_http_json_bridge(
-    mut execution: Value,
-    provider: &kernel::ProviderConfig,
-    channel: &kernel::ChannelConfig,
-    command: &ConnectorCommand,
-) -> Value {
-    let method_label = provider
-        .metadata
-        .get("http_method")
-        .map(|value| value.trim().to_ascii_uppercase())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "POST".to_owned());
-    let method = match Method::from_bytes(method_label.as_bytes()) {
-        Ok(method) => method,
-        Err(error) => {
-            execution["status"] = Value::String("blocked".to_owned());
-            execution["reason"] =
-                Value::String(format!("invalid http_method {method_label}: {error}"));
-            return execution;
-        }
-    };
-
-    let timeout_ms = parse_http_timeout_ms(provider);
-    let enforce_protocol_contract = parse_http_enforce_protocol_contract(provider);
-    let mut protocol_context =
-        ConnectorProtocolContext::from_connector_command(provider, channel, command);
-    if let Err(reason) = authorize_connector_protocol_context(&mut protocol_context) {
-        execution["status"] = Value::String("blocked".to_owned());
-        execution["reason"] = Value::String(format!("http_json {reason}"));
-        execution["runtime"] = http_json_runtime_evidence(
-            &protocol_context,
-            &method_label,
-            &channel.endpoint,
-            timeout_ms,
-            enforce_protocol_contract,
-            HttpJsonRuntimeEvidenceKind::BaseOnly,
-        );
-        return execution;
-    }
-
-    let request_payload = json!({
-        "provider_id": provider.provider_id,
-        "channel_id": channel.channel_id,
-        "operation": command.operation,
-        "payload": command.payload,
-    });
-    let url = channel.endpoint.clone();
-    let request_payload_for_runtime = request_payload.clone();
-    let request_payload_for_worker = request_payload.clone();
-    let request_method_for_worker = protocol_context.request_method.clone();
-    let request_id_for_worker = protocol_context.request_id.clone();
-
-    type HttpJsonBridgeWorkerResult =
-        Result<(u16, bool, String, Value, Option<String>, Option<String>), String>;
-    let run = std::thread::spawn(move || -> HttpJsonBridgeWorkerResult {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_millis(timeout_ms))
-            .build()
-            .map_err(|error| format!("failed to initialize http_json client: {error}"))?;
-
-        let response = client
-            .request(method, &url)
-            .header("content-type", "application/json")
-            .json(&request_payload_for_worker)
-            .send()
-            .map_err(|error| format!("http_json bridge request failed: {error}"))?;
-
-        let status = response.status();
-        let status_code = status.as_u16();
-        let success = status.is_success();
-        let body = response
-            .text()
-            .map_err(|error| format!("failed to read http_json response body: {error}"))?;
-        let body_json = serde_json::from_str::<Value>(&body).unwrap_or(Value::Null);
-
-        let response_method = body_json
-            .as_object()
-            .and_then(|value| value.get("method"))
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        let response_id = body_json
-            .as_object()
-            .and_then(|value| value.get("id"))
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        if enforce_protocol_contract {
-            let method = response_method.as_deref().ok_or_else(|| {
-                "http_json strict protocol contract requires response.method".to_owned()
-            })?;
-            if method != request_method_for_worker {
-                return Err(format!(
-                    "http_json response method mismatch: expected `{}`, got `{method}`",
-                    request_method_for_worker
-                ));
-            }
-            if response_id != request_id_for_worker {
-                return Err(format!(
-                    "http_json response id mismatch: expected `{:?}`, got `{:?}`",
-                    request_id_for_worker, response_id
-                ));
-            }
-        }
-
-        Ok((
-            status_code,
-            success,
-            body,
-            body_json,
-            response_method,
-            response_id,
-        ))
-    })
-    .join();
-
-    match run {
-        Ok(Ok((status_code, success, body, body_json, response_method, response_id))) => {
-            execution["status"] = Value::String(if success {
-                "executed".to_owned()
-            } else {
-                "failed".to_owned()
-            });
-            if !success {
-                execution["reason"] = Value::String(format!(
-                    "http_json bridge request failed with status {status_code}"
-                ));
-            }
-            execution["runtime"] = http_json_runtime_evidence(
-                &protocol_context,
-                &method_label,
-                &channel.endpoint,
-                timeout_ms,
-                enforce_protocol_contract,
-                HttpJsonRuntimeEvidenceKind::Response {
-                    status_code,
-                    request: request_payload_for_runtime,
-                    response_text: body,
-                    response_json: body_json,
-                    response_method,
-                    response_id,
-                },
-            );
-            execution
-        }
-        Ok(Err(reason)) => {
-            execution["status"] = Value::String("failed".to_owned());
-            execution["reason"] = Value::String(reason);
-            execution["runtime"] = http_json_runtime_evidence(
-                &protocol_context,
-                &method_label,
-                &channel.endpoint,
-                timeout_ms,
-                enforce_protocol_contract,
-                HttpJsonRuntimeEvidenceKind::RequestOnly {
-                    request: request_payload_for_runtime,
-                },
-            );
-            execution
-        }
-        Err(_) => {
-            execution["status"] = Value::String("failed".to_owned());
-            execution["reason"] =
-                Value::String("http_json bridge worker thread panicked".to_owned());
-            execution["runtime"] = http_json_runtime_evidence(
-                &protocol_context,
-                &method_label,
-                &channel.endpoint,
-                timeout_ms,
-                enforce_protocol_contract,
-                HttpJsonRuntimeEvidenceKind::RequestOnly {
-                    request: request_payload_for_runtime,
-                },
-            );
-            execution
-        }
-    }
-}
-
-#[allow(clippy::indexing_slicing)] // serde_json::Value string-keyed IndexMut is infallible
-pub async fn execute_process_stdio_bridge(
-    mut execution: Value,
-    provider: &kernel::ProviderConfig,
-    channel: &kernel::ChannelConfig,
-    command: &ConnectorCommand,
-    runtime_policy: &BridgeRuntimePolicy,
-) -> Value {
-    let Some(program) = provider.metadata.get("command").cloned() else {
-        execution["status"] = Value::String("blocked".to_owned());
-        execution["reason"] =
-            Value::String("process_stdio execution requires provider metadata.command".to_owned());
-        return execution;
-    };
-
-    if !is_process_command_allowed(&program, &runtime_policy.allowed_process_commands) {
-        execution["status"] = Value::String("blocked".to_owned());
-        execution["reason"] = Value::String(format!(
-            "process command {program} is not allowed by runtime policy"
-        ));
-        return execution;
-    }
-
-    let args = parse_process_args(provider);
-    let timeout_ms = parse_process_timeout_ms(provider);
-    let envelope = json!({
-        "provider_id": provider.provider_id,
-        "channel_id": channel.channel_id,
-        "operation": command.operation,
-        "payload": command.payload,
-    });
-    let mut protocol_context =
-        ConnectorProtocolContext::from_connector_command(provider, channel, command);
-    if let Err(reason) = authorize_connector_protocol_context(&mut protocol_context) {
-        execution["status"] = Value::String("blocked".to_owned());
-        execution["reason"] = Value::String(format!("process_stdio {reason}"));
-        execution["runtime"] = process_stdio_runtime_evidence(
-            &protocol_context,
-            &program,
-            &args,
-            timeout_ms,
-            ProcessStdioRuntimeEvidenceKind::BaseOnly,
-        );
-        return execution;
-    }
-
-    let exchange_result = run_process_stdio_json_line_exchange(
-        &program,
-        &args,
-        timeout_ms,
-        protocol_context.outbound_frame(envelope),
-    )
-    .await;
-
-    match exchange_result {
-        Ok(outcome) => {
-            execution["status"] = Value::String(if outcome.success {
-                "executed".to_owned()
-            } else {
-                "failed".to_owned()
-            });
-            if !outcome.success {
-                execution["reason"] = Value::String(format!(
-                    "process command exited with code {:?}",
-                    outcome.exit_code
-                ));
-            }
-            execution["runtime"] = process_stdio_runtime_evidence(
-                &protocol_context,
-                &program,
-                &args,
-                timeout_ms,
-                ProcessStdioRuntimeEvidenceKind::Execution {
-                    exit_code: outcome.exit_code,
-                    stdout: outcome.stdout,
-                    stderr: outcome.stderr,
-                    stdout_json: outcome.stdout_json,
-                    response_method: outcome.response_method,
-                    response_id: outcome.response_id,
-                },
-            );
-            execution
-        }
-        Err(reason) => {
-            execution["status"] = Value::String("failed".to_owned());
-            execution["reason"] = Value::String(reason);
-            execution["runtime"] = process_stdio_runtime_evidence(
-                &protocol_context,
-                &program,
-                &args,
-                timeout_ms,
-                ProcessStdioRuntimeEvidenceKind::BaseOnly,
-            );
-            execution
-        }
-    }
-}
-
-pub struct ProcessStdioExchangeOutcome {
-    pub success: bool,
-    pub exit_code: Option<i32>,
-    pub stdout: String,
-    pub stderr: String,
-    pub stdout_json: Value,
-    pub response_method: String,
-    pub response_id: Option<String>,
-}
-
-pub async fn run_process_stdio_json_line_exchange(
-    program: &str,
-    args: &[String],
-    timeout_ms: u64,
-    frame: OutboundFrame,
-) -> Result<ProcessStdioExchangeOutcome, String> {
-    let mut child = TokioCommand::new(program)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("failed to spawn process command {program}: {error}"))?;
-
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| format!("process command {program} stdin is not piped"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| format!("process command {program} stdout is not piped"))?;
-    let stderr = child.stderr.take();
-    let stderr_task = tokio::spawn(async move {
-        let mut bytes = Vec::new();
-        if let Some(mut stderr_pipe) = stderr {
-            let _ = stderr_pipe.read_to_end(&mut bytes).await;
-        }
-        bytes
-    });
-
-    let transport = JsonLineTransport::new(
-        TransportInfo {
-            name: format!("process_stdio/{program}"),
-            version: "0.1.0".to_owned(),
-            secure: false,
-        },
-        stdout,
-        stdin,
-    );
-
-    let expected_method = frame.method.clone();
-    let expected_id = frame.id.clone();
-
-    if let Err(error) = timeout(Duration::from_millis(timeout_ms), transport.send(frame))
-        .await
-        .map_err(|_err| format!("process_stdio transport send timed out after {timeout_ms}ms"))?
-    {
-        let _ = child.start_kill();
-        let _ = child.wait().await;
-        let _ = stderr_task.await;
-        return Err(format!("process_stdio transport send failed: {error}"));
-    }
-    if let Err(error) = timeout(Duration::from_millis(timeout_ms), transport.close())
-        .await
-        .map_err(|_err| format!("process_stdio transport close timed out after {timeout_ms}ms"))?
-    {
-        let _ = child.start_kill();
-        let _ = child.wait().await;
-        let _ = stderr_task.await;
-        return Err(format!("process_stdio transport close failed: {error}"));
-    }
-
-    let response = match timeout(Duration::from_millis(timeout_ms), transport.recv()).await {
-        Ok(Ok(Some(frame))) => frame,
-        Ok(Ok(None)) => {
-            drop(transport);
-            let _ = child.wait().await;
-            let _ = stderr_task.await;
-            return Err("process_stdio transport closed before response frame".to_owned());
-        }
-        Ok(Err(error)) => {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            let _ = stderr_task.await;
-            return Err(format!("process_stdio transport recv failed: {error}"));
-        }
-        Err(_) => {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            let _ = stderr_task.await;
-            return Err(format!(
-                "process_stdio transport recv timed out after {timeout_ms}ms"
-            ));
-        }
-    };
-
-    if response.method != expected_method {
-        let _ = child.start_kill();
-        let _ = child.wait().await;
-        let _ = stderr_task.await;
-        return Err(format!(
-            "process_stdio response method mismatch: expected `{expected_method}`, got `{}`",
-            response.method
-        ));
-    }
-    if response.id != expected_id {
-        let _ = child.start_kill();
-        let _ = child.wait().await;
-        let _ = stderr_task.await;
-        return Err(format!(
-            "process_stdio response id mismatch: expected `{:?}`, got `{:?}`",
-            expected_id, response.id
-        ));
-    }
-
-    drop(transport);
-    let status = match timeout(Duration::from_millis(timeout_ms), child.wait()).await {
-        Ok(Ok(status)) => status,
-        Ok(Err(error)) => {
-            let _ = stderr_task.await;
-            return Err(format!("failed to wait process output: {error}"));
-        }
-        Err(_) => {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            let _ = stderr_task.await;
-            return Err(format!(
-                "process command timed out after {timeout_ms}ms waiting for exit"
-            ));
-        }
-    };
-    let stderr_bytes = stderr_task
-        .await
-        .map_err(|error| format!("failed to collect process stderr: {error}"))?;
-    let stderr = String::from_utf8_lossy(&stderr_bytes).trim().to_owned();
-    let stdout_json = response.payload;
-    let stdout = serde_json::to_string(&stdout_json).unwrap_or_else(|_| "null".to_owned());
-
-    Ok(ProcessStdioExchangeOutcome {
-        success: status.success(),
-        exit_code: status.code(),
-        stdout,
-        stderr,
-        stdout_json,
-        response_method: response.method,
-        response_id: response.id,
-    })
-}
-
-fn wasm_module_cache() -> &'static Mutex<WasmModuleCache> {
-    WASM_MODULE_CACHE.get_or_init(|| Mutex::new(WasmModuleCache::default()))
-}
-
-fn parse_wasm_module_cache_capacity(raw: Option<&str>) -> usize {
-    raw.and_then(|value| value.trim().parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .map(|value| value.min(MAX_WASM_MODULE_CACHE_CAPACITY))
-        .unwrap_or(DEFAULT_WASM_MODULE_CACHE_CAPACITY)
-}
-
-fn wasm_module_cache_capacity() -> usize {
-    *WASM_MODULE_CACHE_CAPACITY.get_or_init(|| {
-        parse_wasm_module_cache_capacity(
-            std::env::var("LOONGCLAW_WASM_CACHE_CAPACITY")
-                .ok()
-                .as_deref(),
-        )
-    })
-}
-
-fn parse_wasm_module_cache_max_bytes(raw: Option<&str>) -> usize {
-    raw.and_then(|value| value.trim().parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .map(|value| {
-            value.clamp(
-                MIN_WASM_MODULE_CACHE_MAX_BYTES,
-                MAX_WASM_MODULE_CACHE_MAX_BYTES,
-            )
-        })
-        .unwrap_or(DEFAULT_WASM_MODULE_CACHE_MAX_BYTES)
-}
-
-fn wasm_module_cache_max_bytes() -> usize {
-    *WASM_MODULE_CACHE_MAX_BYTES.get_or_init(|| {
-        parse_wasm_module_cache_max_bytes(
-            std::env::var("LOONGCLAW_WASM_CACHE_MAX_BYTES")
-                .ok()
-                .as_deref(),
-        )
-    })
-}
-
-fn modified_unix_nanos(metadata: &fs::Metadata) -> Option<u128> {
-    metadata
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos())
-}
-
-#[cfg(unix)]
-fn wasm_artifact_file_identity(metadata: &fs::Metadata) -> Option<WasmArtifactFileIdentity> {
-    use std::os::unix::fs::MetadataExt;
-
-    Some(WasmArtifactFileIdentity {
-        device_id: metadata.dev(),
-        inode: metadata.ino(),
-        ctime_seconds: metadata.ctime(),
-        ctime_nanoseconds: metadata.ctime_nsec(),
-    })
-}
-
-#[cfg(not(unix))]
-fn wasm_artifact_file_identity(_metadata: &fs::Metadata) -> Option<WasmArtifactFileIdentity> {
-    None
-}
-
-fn build_wasm_module_cache_key(
-    artifact_path: &Path,
-    module_size_bytes: u64,
-    artifact_modified_unix_ns: Option<u128>,
-    artifact_file_identity: Option<WasmArtifactFileIdentity>,
-    expected_sha256: Option<String>,
-    fuel_enabled: bool,
-) -> WasmModuleCacheKey {
-    WasmModuleCacheKey {
-        artifact_path: artifact_path.to_path_buf(),
-        module_size_bytes,
-        artifact_modified_unix_ns,
-        artifact_file_identity,
-        expected_sha256,
-        fuel_enabled,
-    }
-}
-
 fn normalize_allowed_wasm_path_prefixes(prefixes: &[PathBuf]) -> Vec<PathBuf> {
     prefixes
         .iter()
@@ -2282,6 +1604,10 @@ fn compile_wasm_module(
     artifact_sha256: Option<String>,
 ) -> Result<CachedWasmModule, String> {
     let mut config = WasmtimeConfig::new();
+    // On macOS, default to `false` because Wasmtime's signal-based trap path
+    // relies on a global machports handler thread, which has shown intermittent
+    // aborts under highly parallel bridge tests.
+    config.signals_based_traps(wasm_signals_based_traps_enabled_from_env());
     if fuel_enabled {
         config.consume_fuel(true);
     }
@@ -2293,61 +1619,6 @@ fn compile_wasm_module(
         engine,
         module,
         artifact_sha256,
-    })
-}
-
-fn lookup_cached_wasm_module(
-    cache_key: &WasmModuleCacheKey,
-) -> Result<Option<(Arc<CachedWasmModule>, WasmModuleCacheLookup)>, String> {
-    let cache_capacity = wasm_module_cache_capacity();
-    let cache_max_bytes = wasm_module_cache_max_bytes();
-    let cache_lock = wasm_module_cache();
-    let mut cache = cache_lock
-        .lock()
-        .map_err(|error| format!("failed to lock wasm module cache: {error}"))?;
-    let Some(cached) = cache.get(cache_key) else {
-        return Ok(None);
-    };
-    Ok(Some((
-        cached,
-        WasmModuleCacheLookup {
-            hit: true,
-            inserted: false,
-            evicted_entries: 0,
-            cache_len: cache.len(),
-            cache_capacity,
-            cache_total_module_bytes: cache.total_module_bytes(),
-            cache_max_bytes,
-        },
-    )))
-}
-
-fn insert_cached_wasm_module(
-    cache_key: WasmModuleCacheKey,
-    module: Arc<CachedWasmModule>,
-    module_size_bytes: usize,
-) -> Result<WasmModuleCacheLookup, String> {
-    let cache_capacity = wasm_module_cache_capacity();
-    let cache_max_bytes = wasm_module_cache_max_bytes();
-    let cache_lock = wasm_module_cache();
-    let mut cache = cache_lock
-        .lock()
-        .map_err(|error| format!("failed to lock wasm module cache: {error}"))?;
-    let insert_outcome = cache.insert(
-        cache_key,
-        module,
-        module_size_bytes,
-        cache_capacity,
-        cache_max_bytes,
-    );
-    Ok(WasmModuleCacheLookup {
-        hit: false,
-        inserted: insert_outcome.inserted,
-        evicted_entries: insert_outcome.evicted_entries,
-        cache_len: cache.len(),
-        cache_capacity,
-        cache_total_module_bytes: cache.total_module_bytes(),
-        cache_max_bytes,
     })
 }
 
@@ -3224,13 +2495,16 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use super::{
-        BridgeRuntimePolicy, DEFAULT_WASM_MODULE_CACHE_CAPACITY,
-        DEFAULT_WASM_MODULE_CACHE_MAX_BYTES, MAX_WASM_MODULE_CACHE_CAPACITY,
-        MAX_WASM_MODULE_CACHE_MAX_BYTES, MIN_WASM_MODULE_CACHE_MAX_BYTES, WasmModuleCache,
-        build_wasm_module_cache_key, compile_wasm_module, normalize_sha256_pin,
+    use super::wasm_runtime_policy::{
+        DEFAULT_WASM_MODULE_CACHE_CAPACITY, DEFAULT_WASM_MODULE_CACHE_MAX_BYTES,
+        MAX_WASM_MODULE_CACHE_CAPACITY, MAX_WASM_MODULE_CACHE_MAX_BYTES,
+        MIN_WASM_MODULE_CACHE_MAX_BYTES, default_wasm_signals_based_traps,
         parse_wasm_module_cache_capacity, parse_wasm_module_cache_max_bytes,
-        resolve_expected_wasm_sha256, wasm_artifact_file_identity,
+        parse_wasm_signals_based_traps,
+    };
+    use super::{
+        BridgeRuntimePolicy, WasmModuleCache, build_wasm_module_cache_key, compile_wasm_module,
+        normalize_sha256_pin, resolve_expected_wasm_sha256, wasm_artifact_file_identity,
     };
 
     const EMPTY_WASM_MODULE: [u8; 8] = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
@@ -3303,6 +2577,38 @@ mod tests {
             parse_wasm_module_cache_max_bytes(Some(over_limit.as_str())),
             MAX_WASM_MODULE_CACHE_MAX_BYTES
         );
+    }
+
+    #[test]
+    fn parse_wasm_signals_based_traps_defaults_to_platform_policy() {
+        assert_eq!(
+            parse_wasm_signals_based_traps(None),
+            default_wasm_signals_based_traps()
+        );
+        assert_eq!(
+            parse_wasm_signals_based_traps(Some("")),
+            default_wasm_signals_based_traps()
+        );
+        assert_eq!(
+            parse_wasm_signals_based_traps(Some("invalid-value")),
+            default_wasm_signals_based_traps()
+        );
+    }
+
+    #[test]
+    fn parse_wasm_signals_based_traps_accepts_boolean_aliases() {
+        for raw in ["1", "true", "yes", "on", "enabled", "TRUE", " On "] {
+            assert!(
+                parse_wasm_signals_based_traps(Some(raw)),
+                "expected true for {raw}"
+            );
+        }
+        for raw in ["0", "false", "no", "off", "disabled", "FALSE", " Off "] {
+            assert!(
+                !parse_wasm_signals_based_traps(Some(raw)),
+                "expected false for {raw}"
+            );
+        }
     }
 
     #[test]

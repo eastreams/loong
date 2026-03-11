@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use serde_json::Value;
 
 use crate::CliResult;
+use crate::channel::{ChannelOutboundTarget, ChannelPlatform, ChannelSession};
 
 use super::crypto::decrypt_payload_if_needed;
 use super::types::{FeishuInboundEvent, FeishuWebhookAction};
@@ -13,6 +14,7 @@ pub(in crate::channel::feishu) fn parse_feishu_webhook_payload(
     encrypt_key: Option<&str>,
     allowed_chat_ids: &BTreeSet<String>,
     ignore_bot_messages: bool,
+    account_id: &str,
 ) -> CliResult<FeishuWebhookAction> {
     let decrypted_payload = decrypt_payload_if_needed(payload, encrypt_key)?;
     let payload = decrypted_payload.as_ref().unwrap_or(payload);
@@ -102,8 +104,12 @@ pub(in crate::channel::feishu) fn parse_feishu_webhook_payload(
 
     Ok(FeishuWebhookAction::Inbound(FeishuInboundEvent {
         event_id,
-        session_id: format!("feishu:{chat_id}"),
-        message_id: message_id.to_owned(),
+        session: ChannelSession::with_account(
+            ChannelPlatform::Feishu,
+            account_id,
+            chat_id.to_owned(),
+        ),
+        reply_target: ChannelOutboundTarget::feishu_message_reply(message_id.to_owned()),
         text,
     }))
 }

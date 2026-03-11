@@ -189,6 +189,13 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         skip_model_probe: bool,
     },
+    /// List compiled channel surfaces, aliases, and readiness status
+    Channels {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     /// Fetch and print currently available provider model list
     ListModels {
         #[arg(long)]
@@ -209,11 +216,15 @@ enum Commands {
         config: Option<String>,
         #[arg(long, default_value_t = false)]
         once: bool,
+        #[arg(long)]
+        account: Option<String>,
     },
     /// Send one Feishu message or card
     FeishuSend {
         #[arg(long)]
         config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
         #[arg(long)]
         receive_id: String,
         #[arg(long)]
@@ -225,6 +236,8 @@ enum Commands {
     FeishuServe {
         #[arg(long)]
         config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
         #[arg(long)]
         bind: Option<String>,
         #[arg(long)]
@@ -349,21 +362,45 @@ async fn main() {
             })
             .await
         }
+        Commands::Channels { config, json } => run_channels_cli(config.as_deref(), json),
         Commands::ListModels { config, json } => run_list_models_cli(config.as_deref(), json).await,
         Commands::Chat { config, session } => {
             run_chat_cli(config.as_deref(), session.as_deref()).await
         }
-        Commands::TelegramServe { config, once } => {
-            run_telegram_serve_cli(config.as_deref(), once).await
-        }
+        Commands::TelegramServe {
+            config,
+            once,
+            account,
+        } => run_telegram_serve_cli(config.as_deref(), once, account.as_deref()).await,
         Commands::FeishuSend {
             config,
+            account,
             receive_id,
             text,
             card,
-        } => run_feishu_send_cli(config.as_deref(), &receive_id, &text, card).await,
-        Commands::FeishuServe { config, bind, path } => {
-            run_feishu_serve_cli(config.as_deref(), bind.as_deref(), path.as_deref()).await
+        } => {
+            run_feishu_send_cli(
+                config.as_deref(),
+                account.as_deref(),
+                &receive_id,
+                &text,
+                card,
+            )
+            .await
+        }
+        Commands::FeishuServe {
+            config,
+            account,
+            bind,
+            path,
+        } => {
+            run_feishu_serve_cli(
+                config.as_deref(),
+                account.as_deref(),
+                bind.as_deref(),
+                path.as_deref(),
+            )
+            .await
         }
     };
     if let Err(error) = result {
@@ -701,29 +738,137 @@ async fn run_list_models_cli(config_path: Option<&str>, as_json: bool) -> CliRes
     Ok(())
 }
 
+fn run_channels_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
+    let (resolved_path, config) = mvp::config::load(config_path)?;
+    let snapshots = mvp::channel::channel_status_snapshots(&config);
+
+    if as_json {
+        let payload = json!({
+            "config": resolved_path.display().to_string(),
+            "channels": snapshots,
+        });
+        let pretty = serde_json::to_string_pretty(&payload)
+            .map_err(|error| format!("serialize channel status output failed: {error}"))?;
+        println!("{pretty}");
+        return Ok(());
+    }
+
+    println!(
+        "{}",
+        render_channel_snapshots_text(&resolved_path.display().to_string(), &snapshots)
+    );
+    Ok(())
+}
+
+fn render_channel_snapshots_text(
+    config_path: &str,
+    snapshots: &[mvp::channel::ChannelStatusSnapshot],
+) -> String {
+    let mut lines = vec![format!("config={config_path}")];
+    for snapshot in snapshots {
+        let aliases = if snapshot.aliases.is_empty() {
+            "-".to_owned()
+        } else {
+            snapshot.aliases.join(",")
+        };
+        let api_base_url = snapshot.api_base_url.as_deref().unwrap_or("-");
+        lines.push(format!(
+            "{} [{}] configured_account={} default_account={} default_source={} compiled={} enabled={} aliases={} api_base_url={}",
+            snapshot.label,
+            snapshot.id,
+            snapshot.configured_account_id,
+            snapshot.is_default_account,
+            snapshot.default_account_source.as_str(),
+            snapshot.compiled,
+            snapshot.enabled,
+            aliases,
+            api_base_url
+        ));
+        lines.push(format!("  transport={}", snapshot.transport));
+        lines.push(format!(
+            "  configured_account_label={}",
+            snapshot.configured_account_label
+        ));
+        for note in &snapshot.notes {
+            lines.push(format!("  note: {note}"));
+        }
+        for operation in &snapshot.operations {
+            lines.push(format!(
+                "  op {} ({}) {}: {}",
+                operation.id,
+                operation.command,
+                operation.health.as_str(),
+                operation.detail
+            ));
+            if let Some(runtime) = &operation.runtime {
+                lines.push(format!(
+                    "    runtime account={} account_id={} running={} stale={} busy={} active_runs={} instance_count={} running_instances={} stale_instances={} last_run_activity_at={} last_heartbeat_at={} pid={}",
+                    runtime
+                        .account_label
+                        .as_deref()
+                        .unwrap_or("-"),
+                    runtime
+                        .account_id
+                        .as_deref()
+                        .unwrap_or("-"),
+                    runtime.running,
+                    runtime.stale,
+                    runtime.busy,
+                    runtime.active_runs,
+                    runtime.instance_count,
+                    runtime.running_instances,
+                    runtime.stale_instances,
+                    runtime
+                        .last_run_activity_at
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_owned()),
+                    runtime
+                        .last_heartbeat_at
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_owned()),
+                    runtime
+                        .pid
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_owned())
+                ));
+            }
+            for issue in &operation.issues {
+                lines.push(format!("    issue: {issue}"));
+            }
+        }
+    }
+    lines.join("\n")
+}
+
 async fn run_chat_cli(config_path: Option<&str>, session: Option<&str>) -> CliResult<()> {
     mvp::chat::run_cli_chat(config_path, session).await
 }
 
-async fn run_telegram_serve_cli(config_path: Option<&str>, once: bool) -> CliResult<()> {
-    mvp::channel::run_telegram_channel(config_path, once).await
+async fn run_telegram_serve_cli(
+    config_path: Option<&str>,
+    once: bool,
+    account: Option<&str>,
+) -> CliResult<()> {
+    mvp::channel::run_telegram_channel(config_path, once, account).await
 }
 
 async fn run_feishu_send_cli(
     config_path: Option<&str>,
+    account: Option<&str>,
     receive_id: &str,
     text: &str,
     as_card: bool,
 ) -> CliResult<()> {
-    mvp::channel::run_feishu_send(config_path, receive_id, text, as_card).await
+    mvp::channel::run_feishu_send(config_path, account, receive_id, text, as_card).await
 }
 
 async fn run_feishu_serve_cli(
     config_path: Option<&str>,
+    account: Option<&str>,
     bind_override: Option<&str>,
     path_override: Option<&str>,
 ) -> CliResult<()> {
-    mvp::channel::run_feishu_channel(config_path, bind_override, path_override).await
+    mvp::channel::run_feishu_channel(config_path, account, bind_override, path_override).await
 }
 
 fn parse_json_payload(raw: &str, context: &str) -> CliResult<Value> {

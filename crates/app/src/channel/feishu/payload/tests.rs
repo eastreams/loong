@@ -7,6 +7,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use super::*;
+use crate::channel::{ChannelOutboundTarget, ChannelOutboundTargetKind, ChannelPlatform};
 
 #[test]
 fn feishu_url_verification_payload_parses() {
@@ -15,9 +16,15 @@ fn feishu_url_verification_payload_parses() {
         "token": "token-123",
         "challenge": "abc"
     });
-    let action =
-        parse_feishu_webhook_payload(&payload, Some("token-123"), None, &BTreeSet::new(), true)
-            .expect("parse feishu url verification");
+    let action = parse_feishu_webhook_payload(
+        &payload,
+        Some("token-123"),
+        None,
+        &BTreeSet::new(),
+        true,
+        "feishu_cli_a1b2c3",
+    )
+    .expect("parse feishu url verification");
 
     match action {
         FeishuWebhookAction::UrlVerification { challenge } => assert_eq!(challenge, "abc"),
@@ -47,14 +54,32 @@ fn feishu_message_event_parses_text_payload() {
     });
 
     let allowlist = BTreeSet::from([String::from("oc_123")]);
-    let action = parse_feishu_webhook_payload(&payload, Some("token-123"), None, &allowlist, true)
-        .expect("parse feishu event");
+    let action = parse_feishu_webhook_payload(
+        &payload,
+        Some("token-123"),
+        None,
+        &allowlist,
+        true,
+        "feishu_cli_a1b2c3",
+    )
+    .expect("parse feishu event");
 
     match action {
         FeishuWebhookAction::Inbound(event) => {
             assert_eq!(event.event_id, "evt_1");
-            assert_eq!(event.session_id, "feishu:oc_123");
-            assert_eq!(event.message_id, "om_123");
+            assert_eq!(
+                event.session.session_key(),
+                "feishu:feishu_cli_a1b2c3:oc_123"
+            );
+            assert_eq!(
+                event.reply_target,
+                ChannelOutboundTarget::feishu_message_reply("om_123")
+            );
+            assert_eq!(event.reply_target.platform, ChannelPlatform::Feishu);
+            assert_eq!(
+                event.reply_target.kind,
+                ChannelOutboundTargetKind::MessageReply
+            );
             assert_eq!(event.text, "hello loongclaw");
         }
         _ => panic!("unexpected action"),
@@ -77,9 +102,15 @@ fn feishu_token_mismatch_is_rejected() {
         "token": "token-x",
         "challenge": "abc"
     });
-    let error =
-        parse_feishu_webhook_payload(&payload, Some("token-y"), None, &BTreeSet::new(), true)
-            .expect_err("token mismatch should fail");
+    let error = parse_feishu_webhook_payload(
+        &payload,
+        Some("token-y"),
+        None,
+        &BTreeSet::new(),
+        true,
+        "feishu_cli_a1b2c3",
+    )
+    .expect_err("token mismatch should fail");
     assert!(error.contains("unauthorized"));
 }
 
@@ -100,9 +131,15 @@ fn feishu_non_text_message_is_ignored() {
             }
         }
     });
-    let action =
-        parse_feishu_webhook_payload(&payload, Some("token-123"), None, &BTreeSet::new(), true)
-            .expect("non-text payload should parse");
+    let action = parse_feishu_webhook_payload(
+        &payload,
+        Some("token-123"),
+        None,
+        &BTreeSet::new(),
+        true,
+        "feishu_cli_a1b2c3",
+    )
+    .expect("non-text payload should parse");
 
     assert!(matches!(action, FeishuWebhookAction::Ignore));
 }
@@ -157,14 +194,21 @@ fn feishu_encrypted_payload_parses_with_encrypt_key() {
         Some("encrypt-key"),
         &allowlist,
         true,
+        "feishu_cli_a1b2c3",
     )
     .expect("parse encrypted payload");
 
     match parsed {
         FeishuWebhookAction::Inbound(event) => {
             assert_eq!(event.event_id, "evt_encrypted_1");
-            assert_eq!(event.session_id, "feishu:oc_encrypt");
-            assert_eq!(event.message_id, "om_encrypt");
+            assert_eq!(
+                event.session.session_key(),
+                "feishu:feishu_cli_a1b2c3:oc_encrypt"
+            );
+            assert_eq!(
+                event.reply_target,
+                ChannelOutboundTarget::feishu_message_reply("om_encrypt")
+            );
             assert_eq!(event.text, "encrypted hello");
         }
         _ => panic!("unexpected action"),
@@ -174,9 +218,15 @@ fn feishu_encrypted_payload_parses_with_encrypt_key() {
 #[test]
 fn feishu_encrypted_payload_requires_encrypt_key() {
     let wrapper = json!({ "encrypt": "opaque" });
-    let error =
-        parse_feishu_webhook_payload(&wrapper, Some("token-123"), None, &BTreeSet::new(), true)
-            .expect_err("encrypted payload without key should fail");
+    let error = parse_feishu_webhook_payload(
+        &wrapper,
+        Some("token-123"),
+        None,
+        &BTreeSet::new(),
+        true,
+        "feishu_cli_a1b2c3",
+    )
+    .expect_err("encrypted payload without key should fail");
 
     assert!(error.contains("encrypt key is not configured"));
 }
@@ -201,9 +251,15 @@ fn feishu_message_event_is_ignored_when_allowlist_is_empty() {
         }
     });
 
-    let action =
-        parse_feishu_webhook_payload(&payload, Some("token-123"), None, &BTreeSet::new(), true)
-            .expect("parse feishu event");
+    let action = parse_feishu_webhook_payload(
+        &payload,
+        Some("token-123"),
+        None,
+        &BTreeSet::new(),
+        true,
+        "feishu_cli_a1b2c3",
+    )
+    .expect("parse feishu event");
     assert!(matches!(action, FeishuWebhookAction::Ignore));
 }
 
@@ -228,8 +284,9 @@ fn feishu_message_event_requires_verification_token_configuration() {
     });
 
     let allowlist = BTreeSet::from([String::from("oc_123")]);
-    let error = parse_feishu_webhook_payload(&payload, None, None, &allowlist, true)
-        .expect_err("missing verification token should fail");
+    let error =
+        parse_feishu_webhook_payload(&payload, None, None, &allowlist, true, "feishu_cli_a1b2c3")
+            .expect_err("missing verification token should fail");
 
     assert!(error.contains("verification token is not configured"));
 }
