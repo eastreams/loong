@@ -672,6 +672,19 @@ pub(crate) fn build_onboard_import_summary(
     lines.join("\n")
 }
 
+pub(crate) fn validate_non_interactive_import_strategy(
+    strategy: &OnboardImportStrategy,
+    allow_multi_source_merge: bool,
+) -> CliResult<()> {
+    if matches!(strategy.mode, OnboardImportMode::SafeProfileMerge) && !allow_multi_source_merge {
+        return Err(
+            "non-interactive onboarding blocks multi-source merge without explicit opt-in"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn parse_provider_kind(raw: &str) -> Option<mvp::config::ProviderKind> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "anthropic" | "anthropic_compatible" => Some(mvp::config::ProviderKind::Anthropic),

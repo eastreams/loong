@@ -778,6 +778,180 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
+    #[test]
+    fn claw_import_apply_selected_mode_writes_manifest_and_backup() {
+        use std::{
+            fs,
+            path::{Path, PathBuf},
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        fn unique_temp_dir(prefix: &str) -> PathBuf {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos();
+            std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+        }
+
+        fn write_file(root: &Path, relative: &str, content: &str) {
+            let path = root.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create parent directory");
+            }
+            fs::write(path, content).expect("write fixture");
+        }
+
+        let root = unique_temp_dir("loongclaw-tool-import-apply-selected");
+        fs::create_dir_all(&root).expect("create fixture root");
+
+        let openclaw_root = root.join("openclaw-workspace");
+        fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+        write_file(
+            &openclaw_root,
+            "SOUL.md",
+            "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+        );
+        write_file(
+            &openclaw_root,
+            "IDENTITY.md",
+            "# Identity\n\n- role: release copilot\n- tone: steady\n",
+        );
+
+        let output_path = root.join("loongclaw.toml");
+        let original_body = crate::config::render(&crate::config::LoongClawConfig::default())
+            .expect("render default config");
+        fs::write(&output_path, &original_body).expect("write original config");
+
+        let config = runtime_config::ToolRuntimeConfig {
+            shell_allowlist: BTreeSet::new(),
+            file_root: Some(root.clone()),
+        };
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "claw.import".to_owned(),
+                payload: json!({
+                    "mode": "apply_selected",
+                    "input_path": ".",
+                    "output_path": "loongclaw.toml",
+                    "source_id": "openclaw"
+                }),
+            },
+            &config,
+        )
+        .expect("claw import apply_selected should succeed");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["mode"], "apply_selected");
+        assert!(
+            Path::new(
+                outcome.payload["result"]["backup_path"]
+                    .as_str()
+                    .expect("backup path should be present")
+            )
+            .exists()
+        );
+        assert!(
+            Path::new(
+                outcome.payload["result"]["manifest_path"]
+                    .as_str()
+                    .expect("manifest path should be present")
+            )
+            .exists()
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn claw_import_rollback_last_apply_restores_original_config() {
+        use std::{
+            fs,
+            path::{Path, PathBuf},
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        fn unique_temp_dir(prefix: &str) -> PathBuf {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos();
+            std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+        }
+
+        fn write_file(root: &Path, relative: &str, content: &str) {
+            let path = root.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create parent directory");
+            }
+            fs::write(path, content).expect("write fixture");
+        }
+
+        let root = unique_temp_dir("loongclaw-tool-import-rollback-selected");
+        fs::create_dir_all(&root).expect("create fixture root");
+
+        let openclaw_root = root.join("openclaw-workspace");
+        fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+        write_file(
+            &openclaw_root,
+            "SOUL.md",
+            "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+        );
+        write_file(
+            &openclaw_root,
+            "IDENTITY.md",
+            "# Identity\n\n- role: release copilot\n- tone: steady\n",
+        );
+
+        let output_path = root.join("loongclaw.toml");
+        let original_body = crate::config::render(&crate::config::LoongClawConfig::default())
+            .expect("render default config");
+        fs::write(&output_path, &original_body).expect("write original config");
+
+        let config = runtime_config::ToolRuntimeConfig {
+            shell_allowlist: BTreeSet::new(),
+            file_root: Some(root.clone()),
+        };
+        execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "claw.import".to_owned(),
+                payload: json!({
+                    "mode": "apply_selected",
+                    "input_path": ".",
+                    "output_path": "loongclaw.toml",
+                    "source_id": "openclaw"
+                }),
+            },
+            &config,
+        )
+        .expect("claw import apply_selected should succeed");
+
+        let rollback = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "claw.import".to_owned(),
+                payload: json!({
+                    "mode": "rollback_last_apply",
+                    "output_path": "loongclaw.toml"
+                }),
+            },
+            &config,
+        )
+        .expect("claw import rollback_last_apply should succeed");
+
+        assert_eq!(rollback.status, "ok");
+        assert!(
+            rollback.payload["rolled_back"]
+                .as_bool()
+                .expect("rolled_back flag should exist")
+        );
+        assert_eq!(
+            fs::read_to_string(&output_path).expect("read restored config"),
+            original_body
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
     // --- Kernel-routed tool tests ---
 
     use std::sync::{Arc, Mutex};

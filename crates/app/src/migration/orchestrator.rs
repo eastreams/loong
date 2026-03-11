@@ -2,13 +2,16 @@ use std::{
     collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
+
+use serde::{Deserialize, Serialize};
 
 use crate::CliResult;
 
 use super::{
-    inspect_import_path, merge_profile_entries, plan_import_from_path, LegacyClawSource,
-    MergedProfilePlan, ProfileEntryLane, ProfileMergeEntry,
+    apply_import_plan, inspect_import_path, merge_profile_entries, plan_import_from_path,
+    LegacyClawSource, MergedProfilePlan, ProfileEntryLane, ProfileMergeEntry,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +62,45 @@ pub struct PrimarySourceRecommendation {
     pub source_id: String,
     pub input_path: PathBuf,
     pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportSelectionMode {
+    RecommendedSingleSource { source_id: String },
+    SelectedSingleSource { source_id: String },
+    SafeProfileMerge { primary_source_id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplyImportSelection {
+    pub discovery: DiscoveryReport,
+    pub output_path: PathBuf,
+    pub mode: ImportSelectionMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplyImportSelectionResult {
+    pub output_path: PathBuf,
+    pub backup_path: PathBuf,
+    pub manifest_path: PathBuf,
+    pub selected_primary_source_id: String,
+    pub merged_source_ids: Vec<String>,
+    pub prompt_owner_source_id: Option<String>,
+    pub unresolved_conflicts: usize,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ImportApplyManifest {
+    session_id: String,
+    selected_primary_source: String,
+    merged_sources: Vec<String>,
+    prompt_owner_source: Option<String>,
+    output_path: String,
+    backup_path: String,
+    output_preexisted: bool,
+    warnings: Vec<String>,
+    unresolved_conflicts: usize,
 }
 
 pub fn discover_import_sources(
@@ -179,6 +221,166 @@ pub fn merge_profile_sources(report: &DiscoveryReport) -> CliResult<MergedProfil
         merged.prompt_owner_source_id = Some(recommend_primary_source(&summary)?.source_id);
     }
     Ok(merged)
+}
+
+pub fn apply_import_selection(
+    request: &ApplyImportSelection,
+) -> CliResult<ApplyImportSelectionResult> {
+    let selected_primary_source_id = match &request.mode {
+        ImportSelectionMode::RecommendedSingleSource { source_id }
+        | ImportSelectionMode::SelectedSingleSource { source_id } => source_id.clone(),
+        ImportSelectionMode::SafeProfileMerge { primary_source_id } => primary_source_id.clone(),
+    };
+    let selected_primary =
+        resolve_discovered_source(&request.discovery, selected_primary_source_id.as_str())?;
+
+    let mut config = load_or_default_config(Some(&request.output_path))?;
+    let mut warnings = Vec::new();
+    let (merged_source_ids, prompt_owner_source_id, unresolved_conflicts) = match &request.mode {
+        ImportSelectionMode::RecommendedSingleSource { .. }
+        | ImportSelectionMode::SelectedSingleSource { .. } => {
+            let plan = plan_import_from_path(&selected_primary.path, Some(selected_primary.source))?;
+            warnings.extend(plan.warnings.clone());
+            apply_import_plan(&mut config, &plan);
+            (
+                vec![selected_primary_source_id.clone()],
+                Some(selected_primary_source_id.clone()),
+                0,
+            )
+        }
+        ImportSelectionMode::SafeProfileMerge { .. } => {
+            let primary_plan =
+                plan_import_from_path(&selected_primary.path, Some(selected_primary.source))?;
+            warnings.extend(primary_plan.warnings.clone());
+            apply_import_plan(&mut config, &primary_plan);
+
+            for source in &request.discovery.sources {
+                if source.path == selected_primary.path {
+                    continue;
+                }
+                let plan = plan_import_from_path(&source.path, Some(source.source))?;
+                warnings.extend(plan.warnings);
+            }
+
+            let merged = merge_profile_sources(&request.discovery)?;
+            if !merged.auto_apply_allowed {
+                return Err(format!(
+                    "cannot auto-apply safe profile merge with {} unresolved conflict(s)",
+                    merged.unresolved_conflicts.len()
+                ));
+            }
+            config.memory.profile = crate::config::MemoryProfile::ProfilePlusWindow;
+            config.memory.profile_note = if merged.merged_profile_note.trim().is_empty() {
+                None
+            } else {
+                Some(merged.merged_profile_note.clone())
+            };
+            (
+                request
+                    .discovery
+                    .sources
+                    .iter()
+                    .map(|source| source.source.as_id().to_owned())
+                    .collect(),
+                merged
+                    .prompt_owner_source_id
+                    .clone()
+                    .or(Some(selected_primary_source_id.clone())),
+                merged.unresolved_conflicts.len(),
+            )
+        }
+    };
+
+    let state_dir = migration_state_dir(&request.output_path);
+    fs::create_dir_all(&state_dir).map_err(|error| {
+        format!(
+            "failed to create migration state directory {}: {error}",
+            state_dir.display()
+        )
+    })?;
+    let session_id = import_session_id();
+    let backup_path = backup_path_for_output(&request.output_path, &state_dir, &session_id);
+    let manifest_path = manifest_path_for_output(&request.output_path, &state_dir);
+    let output_preexisted = request.output_path.exists();
+    if output_preexisted {
+        fs::copy(&request.output_path, &backup_path).map_err(|error| {
+            format!(
+                "failed to write import backup {}: {error}",
+                backup_path.display()
+            )
+        })?;
+    } else {
+        fs::write(&backup_path, "").map_err(|error| {
+            format!(
+                "failed to initialize import backup {}: {error}",
+                backup_path.display()
+            )
+        })?;
+    }
+
+    let output_string = request.output_path.display().to_string();
+    let written_output_path = crate::config::write(Some(&output_string), &config, true)?;
+
+    let manifest = ImportApplyManifest {
+        session_id,
+        selected_primary_source: selected_primary_source_id.clone(),
+        merged_sources: merged_source_ids.clone(),
+        prompt_owner_source: prompt_owner_source_id.clone(),
+        output_path: written_output_path.display().to_string(),
+        backup_path: backup_path.display().to_string(),
+        output_preexisted,
+        warnings: warnings.clone(),
+        unresolved_conflicts,
+    };
+    let manifest_body = serde_json::to_vec_pretty(&manifest)
+        .map_err(|error| format!("failed to encode import manifest: {error}"))?;
+    fs::write(&manifest_path, manifest_body).map_err(|error| {
+        format!(
+            "failed to write import manifest {}: {error}",
+            manifest_path.display()
+        )
+    })?;
+
+    Ok(ApplyImportSelectionResult {
+        output_path: written_output_path,
+        backup_path,
+        manifest_path,
+        selected_primary_source_id,
+        merged_source_ids,
+        prompt_owner_source_id,
+        unresolved_conflicts,
+        warnings,
+    })
+}
+
+pub fn rollback_last_import(output_path: &Path) -> CliResult<PathBuf> {
+    let manifest_path = manifest_path_for_output(output_path, &migration_state_dir(output_path));
+    let manifest_body = fs::read(&manifest_path).map_err(|error| {
+        format!(
+            "failed to read migration manifest {}: {error}",
+            manifest_path.display()
+        )
+    })?;
+    let manifest: ImportApplyManifest = serde_json::from_slice(&manifest_body)
+        .map_err(|error| format!("failed to parse migration manifest: {error}"))?;
+    let backup_path = PathBuf::from(&manifest.backup_path);
+    if manifest.output_preexisted {
+        fs::copy(&backup_path, output_path).map_err(|error| {
+            format!(
+                "failed to restore config {} from backup {}: {error}",
+                output_path.display(),
+                backup_path.display()
+            )
+        })?;
+    } else if output_path.exists() {
+        fs::remove_file(output_path).map_err(|error| {
+            format!(
+                "failed to remove imported config {}: {error}",
+                output_path.display()
+            )
+        })?;
+    }
+    Ok(output_path.to_path_buf())
 }
 
 fn collect_candidate_directories(
@@ -317,6 +519,60 @@ fn parse_profile_slot_line(line: &str) -> Option<(String, String)> {
         return None;
     }
     Some((slot_key, value.to_owned()))
+}
+
+fn resolve_discovered_source<'a>(
+    report: &'a DiscoveryReport,
+    source_id: &str,
+) -> CliResult<&'a DiscoveredImportSource> {
+    report
+        .sources
+        .iter()
+        .find(|source| source.source.as_id() == source_id)
+        .ok_or_else(|| format!("selected import source `{source_id}` was not discovered"))
+}
+
+fn load_or_default_config(path: Option<&Path>) -> CliResult<crate::config::LoongClawConfig> {
+    let Some(path) = path else {
+        return Ok(crate::config::LoongClawConfig::default());
+    };
+    if !path.exists() {
+        return Ok(crate::config::LoongClawConfig::default());
+    }
+    let path_string = path.display().to_string();
+    let (_, config) = crate::config::load(Some(&path_string))?;
+    Ok(config)
+}
+
+fn migration_state_dir(output_path: &Path) -> PathBuf {
+    output_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(".loongclaw-migration")
+}
+
+fn manifest_path_for_output(output_path: &Path, state_dir: &Path) -> PathBuf {
+    let file_tag = output_path
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| "loongclaw-config".to_owned());
+    state_dir.join(format!("{file_tag}.last-import.json"))
+}
+
+fn backup_path_for_output(output_path: &Path, state_dir: &Path, session_id: &str) -> PathBuf {
+    let file_tag = output_path
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| "loongclaw-config".to_owned());
+    state_dir.join(format!("{file_tag}.{session_id}.bak"))
+}
+
+fn import_session_id() -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    format!("import-{millis}")
 }
 
 #[cfg(test)]
@@ -496,6 +752,90 @@ mod tests {
         assert!(
             !recommendation.reasons.is_empty(),
             "recommendation reasons should be populated"
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn apply_import_selection_writes_backup_and_manifest() {
+        let root = unique_temp_dir("loongclaw-import-apply-selection");
+        fs::create_dir_all(&root).expect("create fixture root");
+
+        let openclaw_root = root.join("openclaw-workspace");
+        fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+        write_file(
+            &openclaw_root,
+            "SOUL.md",
+            "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+        );
+        write_file(
+            &openclaw_root,
+            "IDENTITY.md",
+            "# Identity\n\n- role: release copilot\n- tone: steady\n",
+        );
+
+        let discovery = discover_import_sources(&root, DiscoveryOptions::default())
+            .expect("discovery should succeed");
+        let output_path = root.join("loongclaw.toml");
+        let original_body =
+            crate::config::render(&crate::config::LoongClawConfig::default()).expect("render");
+        fs::write(&output_path, &original_body).expect("write original config");
+
+        let result = apply_import_selection(&ApplyImportSelection {
+            discovery: discovery.clone(),
+            output_path: output_path.clone(),
+            mode: ImportSelectionMode::RecommendedSingleSource {
+                source_id: "openclaw".to_owned(),
+            },
+        })
+        .expect("apply should succeed");
+
+        assert!(result.backup_path.exists());
+        assert!(result.manifest_path.exists());
+        assert_eq!(result.selected_primary_source_id, "openclaw");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn rollback_last_import_restores_previous_config() {
+        let root = unique_temp_dir("loongclaw-import-rollback");
+        fs::create_dir_all(&root).expect("create fixture root");
+
+        let openclaw_root = root.join("openclaw-workspace");
+        fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+        write_file(
+            &openclaw_root,
+            "SOUL.md",
+            "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+        );
+        write_file(
+            &openclaw_root,
+            "IDENTITY.md",
+            "# Identity\n\n- role: release copilot\n- tone: steady\n",
+        );
+
+        let discovery = discover_import_sources(&root, DiscoveryOptions::default())
+            .expect("discovery should succeed");
+        let output_path = root.join("loongclaw.toml");
+        let original_body =
+            crate::config::render(&crate::config::LoongClawConfig::default()).expect("render");
+        fs::write(&output_path, &original_body).expect("write original config");
+
+        apply_import_selection(&ApplyImportSelection {
+            discovery,
+            output_path: output_path.clone(),
+            mode: ImportSelectionMode::RecommendedSingleSource {
+                source_id: "openclaw".to_owned(),
+            },
+        })
+        .expect("apply should succeed");
+
+        rollback_last_import(&output_path).expect("rollback should succeed");
+        assert_eq!(
+            fs::read_to_string(&output_path).expect("read restored config"),
+            original_body
         );
 
         fs::remove_dir_all(&root).ok();

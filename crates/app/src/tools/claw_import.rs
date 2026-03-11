@@ -33,23 +33,17 @@ pub(super) fn execute_claw_import_tool_with_config(
         mode,
         "plan"
             | "apply"
+            | "apply_selected"
             | "discover"
             | "plan_many"
             | "recommend_primary"
             | "merge_profiles"
+            | "rollback_last_apply"
     ) {
         return Err(format!(
-            "claw.import payload.mode must be `plan`, `apply`, `discover`, `plan_many`, `recommend_primary`, or `merge_profiles`, got `{mode}`"
+            "claw.import payload.mode must be `plan`, `apply`, `apply_selected`, `discover`, `plan_many`, `recommend_primary`, `merge_profiles`, or `rollback_last_apply`, got `{mode}`"
         ));
     }
-
-    let input_path = payload
-        .get("input_path")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "claw.import requires payload.input_path".to_owned())?;
-    let input_path = resolve_safe_path_with_config(input_path, config)?;
 
     let output_path = payload
         .get("output_path")
@@ -59,9 +53,27 @@ pub(super) fn execute_claw_import_tool_with_config(
         .map(|value| resolve_safe_path_with_config(value, config))
         .transpose()?;
 
-    if mode == "apply" && output_path.is_none() {
-        return Err("claw.import apply mode requires payload.output_path".to_owned());
+    if matches!(mode, "apply" | "apply_selected" | "rollback_last_apply") && output_path.is_none()
+    {
+        return Err(format!(
+            "claw.import {mode} mode requires payload.output_path"
+        ));
     }
+
+    let input_path = if mode == "rollback_last_apply" {
+        None
+    } else {
+        Some(
+            payload
+                .get("input_path")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "claw.import requires payload.input_path".to_owned())
+                .and_then(|value| resolve_safe_path_with_config(value, config))?,
+        )
+    };
+    let input_path = input_path.as_ref();
 
     let force = payload
         .get("force")
@@ -73,6 +85,25 @@ pub(super) fn execute_claw_import_tool_with_config(
         .map(parse_source_hint)
         .transpose()?
         .flatten();
+
+    if mode == "rollback_last_apply" {
+        let output_path = output_path
+            .clone()
+            .expect("output path already required in rollback mode");
+        let restored_path = migration::rollback_last_import(&output_path)?;
+        return Ok(ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "adapter": "core-tools",
+                "tool_name": request.tool_name,
+                "mode": "rollback_last_apply",
+                "output_path": restored_path.display().to_string(),
+                "rolled_back": true,
+            }),
+        });
+    }
+
+    let input_path = input_path.expect("input path required for non-rollback modes");
 
     if mode == "discover" {
         let report = migration::discover_import_sources(
@@ -133,6 +164,33 @@ pub(super) fn execute_claw_import_tool_with_config(
                 "plans": summary.plans.iter().map(planned_source_payload).collect::<Vec<_>>(),
                 "recommendation": recommendation.as_ref().map(primary_recommendation_payload),
                 "result": merged_profile_plan_payload(&merged),
+            }),
+        });
+    }
+
+    if mode == "apply_selected" {
+        let report = migration::discover_import_sources(
+            input_path,
+            migration::DiscoveryOptions::default(),
+        )?;
+        let summary = migration::plan_import_sources(&report)?;
+        let selection = parse_apply_selection_mode(payload, &summary)?;
+        let result = migration::apply_import_selection(&migration::ApplyImportSelection {
+            discovery: report,
+            output_path: output_path
+                .clone()
+                .expect("output path already required in apply_selected mode"),
+            mode: selection,
+        })?;
+        return Ok(ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "adapter": "core-tools",
+                "tool_name": request.tool_name,
+                "mode": "apply_selected",
+                "input_path": input_path.display().to_string(),
+                "output_path": result.output_path.display().to_string(),
+                "result": apply_selection_result_payload(&result),
             }),
         });
     }
@@ -258,6 +316,19 @@ fn merged_profile_plan_payload(plan: &migration::MergedProfilePlan) -> Value {
     })
 }
 
+fn apply_selection_result_payload(result: &migration::ApplyImportSelectionResult) -> Value {
+    json!({
+        "output_path": result.output_path.display().to_string(),
+        "backup_path": result.backup_path.display().to_string(),
+        "manifest_path": result.manifest_path.display().to_string(),
+        "selected_primary_source_id": result.selected_primary_source_id,
+        "merged_source_ids": result.merged_source_ids,
+        "prompt_owner_source_id": result.prompt_owner_source_id,
+        "unresolved_conflicts": result.unresolved_conflicts,
+        "warnings": result.warnings,
+    })
+}
+
 fn parse_source_hint(raw: &str) -> Result<Option<LegacyClawSource>, String> {
     let parsed = LegacyClawSource::from_id(raw).ok_or_else(|| {
         format!("unsupported claw.import payload.source `{raw}`. supported: {SUPPORTED_SOURCES}")
@@ -267,6 +338,49 @@ fn parse_source_hint(raw: &str) -> Result<Option<LegacyClawSource>, String> {
     } else {
         Ok(Some(parsed))
     }
+}
+
+fn parse_apply_selection_mode(
+    payload: &serde_json::Map<String, Value>,
+    summary: &migration::DiscoveryPlanSummary,
+) -> Result<migration::ImportSelectionMode, String> {
+    if payload
+        .get("safe_profile_merge")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        let primary_source_id = payload
+            .get("primary_source_id")
+            .or_else(|| payload.get("source_id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                migration::recommend_primary_source(summary)
+                    .ok()
+                    .map(|recommendation| recommendation.source_id)
+            })
+            .ok_or_else(|| "apply_selected requires a primary source for safe profile merge".to_owned())?;
+        return Ok(migration::ImportSelectionMode::SafeProfileMerge { primary_source_id });
+    }
+
+    if let Some(source_id) = payload
+        .get("source_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(migration::ImportSelectionMode::SelectedSingleSource {
+            source_id: source_id.to_owned(),
+        });
+    }
+
+    let recommendation = migration::recommend_primary_source(summary)
+        .map_err(|error| format!("apply_selected could not recommend a primary source: {error}"))?;
+    Ok(migration::ImportSelectionMode::RecommendedSingleSource {
+        source_id: recommendation.source_id,
+    })
 }
 
 fn load_or_default_config(path: Option<&Path>) -> Result<LoongClawConfig, String> {

@@ -173,3 +173,28 @@ fn onboard_import_summary_shows_safe_merge_as_secondary_option() {
     assert!(summary_text.contains("Recommended import source: openclaw"));
     assert!(summary_text.contains("safe profile merge"));
 }
+
+#[test]
+fn non_interactive_onboard_blocks_multi_source_merge_without_explicit_opt_in() {
+    let strategy = crate::onboard_cli::OnboardImportStrategy {
+        mode: crate::onboard_cli::OnboardImportMode::SafeProfileMerge,
+        recommended_source_id: Some("openclaw".to_owned()),
+    };
+
+    let err = crate::onboard_cli::validate_non_interactive_import_strategy(&strategy, false)
+        .expect_err("should block");
+    assert!(err.contains("multi-source"));
+}
+
+#[test]
+fn non_interactive_onboard_allows_selected_single_source_strategy() {
+    let strategy = crate::onboard_cli::OnboardImportStrategy {
+        mode: crate::onboard_cli::OnboardImportMode::SelectedSingleSource {
+            source_id: "openclaw".to_owned(),
+        },
+        recommended_source_id: Some("openclaw".to_owned()),
+    };
+
+    crate::onboard_cli::validate_non_interactive_import_strategy(&strategy, false)
+        .expect("single-source strategy should pass");
+}
