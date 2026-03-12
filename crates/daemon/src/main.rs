@@ -160,60 +160,85 @@ enum Commands {
     },
     /// Guided onboarding for a fast first chat with preflight diagnostics
     Onboard {
+        /// Target config output path (defaults to ~/.loongclaw/config.toml)
         #[arg(long)]
         output: Option<String>,
+        /// Overwrite existing output config if present
         #[arg(long, default_value_t = false)]
         force: bool,
+        /// Run onboarding in non-interactive mode using provided flags/defaults
         #[arg(long, default_value_t = false)]
         non_interactive: bool,
+        /// Accept generated config values that may require manual hardening later
         #[arg(long, default_value_t = false)]
         accept_risk: bool,
+        /// Provider identifier to prefill in generated config
         #[arg(long)]
         provider: Option<String>,
+        /// Model identifier to prefill in generated config
         #[arg(long)]
         model: Option<String>,
+        /// Environment variable name holding the provider API key
         #[arg(long, alias = "api-key-env")]
         api_key: Option<String>,
+        /// Default personality profile for the generated config
         #[arg(long)]
         personality: Option<String>,
+        /// Default memory profile for the generated config
         #[arg(long)]
         memory_profile: Option<String>,
+        /// Override system prompt text in generated config
         #[arg(long)]
         system_prompt: Option<String>,
+        /// Skip provider model probe during onboarding diagnostics
         #[arg(long, default_value_t = false)]
         skip_model_probe: bool,
     },
     /// Import prompt/identity traits from another claw workspace into LoongClaw config
     ImportClaw {
+        /// Source config file to import from
         #[arg(long)]
         input: Option<String>,
+        /// Target config file to write import plan/apply result
         #[arg(long)]
         output: Option<String>,
+        /// Explicit source kind (auto-detected when omitted)
         #[arg(long)]
         source: Option<String>,
+        /// Import mode (`plan` preview or `apply` mutation)
         #[arg(long, value_enum, default_value = "plan")]
         mode: import_claw_cli::ImportClawMode,
+        /// Emit machine-readable JSON output
         #[arg(long, default_value_t = false)]
         json: bool,
+        /// Source selection identifier (alias: --selection-id)
         #[arg(long, visible_alias = "selection-id")]
         source_id: Option<String>,
+        /// Merge memory profiles conservatively to avoid destructive overwrites
         #[arg(long, default_value_t = false)]
         safe_profile_merge: bool,
+        /// Primary source identifier for multi-source imports
         #[arg(long, visible_alias = "primary-selection-id")]
         primary_source_id: Option<String>,
+        /// Apply external-skills import plan when running in apply mode
         #[arg(long, default_value_t = false)]
         apply_external_skills_plan: bool,
+        /// Force apply even when importer detects non-fatal safeguards
         #[arg(long, default_value_t = false)]
         force: bool,
     },
     /// Run configuration diagnostics and optionally apply safe config/path fixes
     Doctor {
+        /// Config file path to validate (defaults to auto-discovery)
         #[arg(long)]
         config: Option<String>,
+        /// Apply safe auto-fixes for detected diagnostics
         #[arg(long, default_value_t = false)]
         fix: bool,
+        /// Emit machine-readable JSON diagnostics
         #[arg(long, default_value_t = false)]
         json: bool,
+        /// Skip provider model probing during diagnostics
         #[arg(long, default_value_t = false)]
         skip_model_probe: bool,
     },
