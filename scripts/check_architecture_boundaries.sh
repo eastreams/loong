@@ -12,6 +12,29 @@ fi
 
 violations=0
 
+have_rg() {
+  command -v rg >/dev/null 2>&1
+}
+
+count_pattern_in_file() {
+  local pattern="$1"
+  local file="$2"
+  if have_rg; then
+    rg -n "$pattern" "$file" | wc -l | tr -d '[:space:]'
+  else
+    { grep -En "$pattern" "$file" || true; } | wc -l | tr -d '[:space:]'
+  fi
+}
+
+find_memory_literal_hits() {
+  local pattern="$1"
+  if have_rg; then
+    rg -n "$pattern" crates/app/src --glob '!crates/app/src/memory/**' || true
+  else
+    grep -REn "$pattern" crates/app/src --exclude-dir=memory || true
+  fi
+}
+
 check_file_budget() {
   local key="$1"
   local file="$2"
@@ -28,7 +51,7 @@ check_file_budget() {
   lines="$(wc -l <"$file" | tr -d '[:space:]')"
 
   local functions
-  functions="$(rg -n '^(pub\s+)?(async\s+)?fn\s+' "$file" | wc -l | tr -d '[:space:]')"
+  functions="$(count_pattern_in_file '^(pub[[:space:]]+)?(async[[:space:]]+)?fn[[:space:]]+' "$file")"
 
   local line_status="ok"
   local fn_status="ok"
@@ -51,7 +74,7 @@ check_file_budget "spec_execution" "crates/spec/src/spec_execution.rs" 3700 80
 check_file_budget "provider_mod" "crates/app/src/provider/mod.rs" 1000 20
 check_file_budget "memory_mod" "crates/app/src/memory/mod.rs" 650 16
 
-memory_literal_hits="$(rg -n '"append_turn"|"window"|"clear_session"' crates/app/src --glob '!crates/app/src/memory/**' || true)"
+memory_literal_hits="$(find_memory_literal_hits '"append_turn"|"window"|"clear_session"')"
 if [[ -n "$memory_literal_hits" ]]; then
   echo "[arch] over: memory operation literals found outside memory module boundary" >&2
   echo "$memory_literal_hits" >&2
