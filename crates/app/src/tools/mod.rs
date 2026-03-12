@@ -126,39 +126,40 @@ pub struct ToolRegistryEntry {
 
 /// Returns a sorted list of all registered tools, gated by feature flags.
 pub fn tool_registry() -> Vec<ToolRegistryEntry> {
-    let mut entries = Vec::new();
-    entries.push(ToolRegistryEntry {
-        name: "claw.import",
-        description: "Import legacy Claw configs into native LoongClaw settings",
-    });
-    entries.push(ToolRegistryEntry {
-        name: "external_skills.fetch",
-        description: "Download external skills artifacts with domain policy and approval guards",
-    });
-    entries.push(ToolRegistryEntry {
-        name: "external_skills.inspect",
-        description: "Read metadata for an installed external skill",
-    });
-    entries.push(ToolRegistryEntry {
-        name: "external_skills.install",
-        description: "Install a managed external skill from a local directory or archive",
-    });
-    entries.push(ToolRegistryEntry {
-        name: "external_skills.invoke",
-        description: "Load an installed external skill into the conversation loop",
-    });
-    entries.push(ToolRegistryEntry {
-        name: "external_skills.list",
-        description: "List managed external skills available for invocation",
-    });
-    entries.push(ToolRegistryEntry {
-        name: "external_skills.policy",
-        description: "Read/update external skills domain allow/block policy at runtime",
-    });
-    entries.push(ToolRegistryEntry {
-        name: "external_skills.remove",
-        description: "Remove an installed external skill from the managed runtime",
-    });
+    let mut entries = vec![
+        ToolRegistryEntry {
+            name: "claw.import",
+            description: "Import legacy Claw configs into native LoongClaw settings",
+        },
+        ToolRegistryEntry {
+            name: "external_skills.fetch",
+            description: "Download external skills artifacts with domain policy and approval guards",
+        },
+        ToolRegistryEntry {
+            name: "external_skills.inspect",
+            description: "Read metadata for an installed external skill",
+        },
+        ToolRegistryEntry {
+            name: "external_skills.install",
+            description: "Install a managed external skill from a local directory or archive",
+        },
+        ToolRegistryEntry {
+            name: "external_skills.invoke",
+            description: "Load an installed external skill into the conversation loop",
+        },
+        ToolRegistryEntry {
+            name: "external_skills.list",
+            description: "List managed external skills available for invocation",
+        },
+        ToolRegistryEntry {
+            name: "external_skills.policy",
+            description: "Read/update external skills domain allow/block policy at runtime",
+        },
+        ToolRegistryEntry {
+            name: "external_skills.remove",
+            description: "Remove an installed external skill from the managed runtime",
+        },
+    ];
     #[cfg(feature = "tool-file")]
     {
         entries.push(ToolRegistryEntry {

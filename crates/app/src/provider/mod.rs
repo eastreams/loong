@@ -919,15 +919,16 @@ mod tests {
             .filter_map(Value::as_str)
             .collect();
 
-        let mut expected = Vec::new();
-        expected.push("claw_import");
-        expected.push("external_skills_fetch");
-        expected.push("external_skills_inspect");
-        expected.push("external_skills_install");
-        expected.push("external_skills_invoke");
-        expected.push("external_skills_list");
-        expected.push("external_skills_policy");
-        expected.push("external_skills_remove");
+        let mut expected = vec![
+            "claw_import",
+            "external_skills_fetch",
+            "external_skills_inspect",
+            "external_skills_install",
+            "external_skills_invoke",
+            "external_skills_list",
+            "external_skills_policy",
+            "external_skills_remove",
+        ];
         #[cfg(feature = "tool-file")]
         {
             expected.push("file_read");
