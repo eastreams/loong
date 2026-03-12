@@ -1685,6 +1685,8 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     #[cfg(unix)]
     use std::path::{Path, PathBuf};
+    #[cfg(unix)]
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
     use crate::acp::{AcpConfigPatch, AcpSessionBootstrap, AcpSessionMode, AcpSessionState};
@@ -1692,8 +1694,11 @@ mod tests {
 
     #[cfg(unix)]
     fn unique_temp_dir(prefix: &str) -> PathBuf {
+        static NEXT_TEMP_DIR_SEED: AtomicU64 = AtomicU64::new(1);
+        let seed = NEXT_TEMP_DIR_SEED.fetch_add(1, Ordering::Relaxed);
         let temp_dir = std::env::temp_dir().join(format!(
-            "{prefix}-{}",
+            "{prefix}-{}-{}-{seed}",
+            std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("clock")
