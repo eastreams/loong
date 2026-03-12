@@ -93,6 +93,8 @@ cargo install --path crates/daemon
 ```
 </details>
 
+`--onboard` runs `loongclaw onboard` without `--force`, so rerunning this quickstart will stop before overwriting an existing config.
+
 ### First Chat in Under 5 Minutes
 
 1. Run guided onboarding:

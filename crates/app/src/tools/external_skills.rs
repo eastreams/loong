@@ -394,6 +394,7 @@ pub(super) fn execute_external_skills_install_tool_with_config(
     let summary = derive_skill_summary(skill_markdown.as_str());
 
     let mut index = load_installed_skill_index(&install_root)?;
+    let previous_index = index.clone();
     if !replace && index.skills.iter().any(|entry| entry.skill_id == skill_id) {
         return Err(format!(
             "external skill `{skill_id}` is already installed; pass payload.replace=true to replace it"
@@ -401,17 +402,12 @@ pub(super) fn execute_external_skills_install_tool_with_config(
     }
 
     let destination_root = managed_skill_install_path(&install_root, skill_id.as_str())?;
-    if destination_root.exists() {
-        fs::remove_dir_all(&destination_root).map_err(|error| {
-            format!(
-                "failed to remove existing installed skill {}: {error}",
-                destination_root.display()
-            )
-        })?;
-    }
-    copy_dir_recursive(&skill_root, &destination_root)?;
+    let incoming_root =
+        unique_managed_install_transition_path(&install_root, skill_id.as_str(), "incoming")?;
+    let _incoming_cleanup = ScopedDirCleanup::new(Some(incoming_root.clone()));
+    copy_dir_recursive(&skill_root, &incoming_root)?;
 
-    let installed_skill_md_path = destination_root.join(DEFAULT_SKILL_FILENAME);
+    let installed_skill_md_path = incoming_root.join(DEFAULT_SKILL_FILENAME);
     let installed_skill_markdown =
         fs::read_to_string(&installed_skill_md_path).map_err(|error| {
             format!(
@@ -433,12 +429,86 @@ pub(super) fn execute_external_skills_install_tool_with_config(
         source_kind: source_kind.to_owned(),
         source_path: source_path.display().to_string(),
         install_path: destination_root.display().to_string(),
-        skill_md_path: installed_skill_md_path.display().to_string(),
+        skill_md_path: destination_root
+            .join(DEFAULT_SKILL_FILENAME)
+            .display()
+            .to_string(),
         sha256: digest.clone(),
         installed_at_unix,
         active: true,
     });
-    persist_installed_skill_index(&install_root, &mut index)?;
+
+    let backup_root = if destination_root.exists() {
+        Some(unique_managed_install_transition_path(
+            &install_root,
+            skill_id.as_str(),
+            "backup",
+        )?)
+    } else {
+        None
+    };
+    if let Some(backup_root) = backup_root.as_ref() {
+        fs::rename(&destination_root, backup_root).map_err(|error| {
+            format!(
+                "failed to stage previous installed skill {} for replacement: {error}",
+                destination_root.display()
+            )
+        })?;
+    }
+
+    if let Err(error) = fs::rename(&incoming_root, &destination_root) {
+        if let Some(backup_root) = backup_root.as_ref() {
+            fs::rename(backup_root, &destination_root).ok();
+        }
+        return Err(format!(
+            "failed to activate managed external skill install {}: {error}",
+            destination_root.display()
+        ));
+    }
+
+    if let Err(error) = persist_installed_skill_index(&install_root, &mut index) {
+        let mut rollback_notes = vec![format!("failed to update external skills index: {error}")];
+
+        if destination_root.exists() {
+            fs::remove_dir_all(&destination_root).map_err(|remove_error| {
+                format!(
+                    "{}; rollback failed to remove incomplete install {}: {remove_error}",
+                    rollback_notes.join(""),
+                    destination_root.display()
+                )
+            })?;
+        }
+
+        if let Some(backup_root) = backup_root.as_ref() {
+            fs::rename(backup_root, &destination_root).map_err(|restore_error| {
+                format!(
+                    "{}; rollback failed to restore previous install from {}: {restore_error}",
+                    rollback_notes.join(""),
+                    backup_root.display()
+                )
+            })?;
+        }
+
+        let mut rollback_index = previous_index;
+        if let Err(restore_error) =
+            persist_installed_skill_index(&install_root, &mut rollback_index)
+        {
+            rollback_notes.push(format!(
+                "; rollback failed to restore previous index: {restore_error}"
+            ));
+        }
+
+        return Err(rollback_notes.join(""));
+    }
+
+    if let Some(backup_root) = backup_root {
+        fs::remove_dir_all(&backup_root).map_err(|error| {
+            format!(
+                "failed to remove replaced external skill backup {}: {error}",
+                backup_root.display()
+            )
+        })?;
+    }
 
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
@@ -449,7 +519,7 @@ pub(super) fn execute_external_skills_install_tool_with_config(
             "source_kind": source_kind,
             "source_path": source_path.display().to_string(),
             "install_path": destination_root.display().to_string(),
-            "skill_md_path": installed_skill_md_path.display().to_string(),
+            "skill_md_path": destination_root.join(DEFAULT_SKILL_FILENAME).display().to_string(),
             "sha256": digest,
             "replaced": replace,
         }),
@@ -877,6 +947,19 @@ fn unique_output_path(dir: &Path, filename: &str) -> PathBuf {
     } else {
         dir.join(format!("{stem}-{suffix}.{ext}"))
     }
+}
+
+fn unique_managed_install_transition_path(
+    install_root: &Path,
+    skill_id: &str,
+    phase: &str,
+) -> Result<PathBuf, String> {
+    let normalized_skill_id = normalize_skill_id(skill_id)?;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    Ok(install_root.join(format!(".{phase}-{normalized_skill_id}-{nanos}")))
 }
 
 fn split_stem_and_ext(filename: &str) -> (&str, &str) {
@@ -1979,6 +2062,108 @@ mod tests {
         .expect("list should succeed after remove");
         assert_eq!(list_outcome.payload["skills"], json!([]));
 
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replace_failed_install_preserves_previous_managed_skill() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_temp_dir("loongclaw-ext-skill-replace-rollback");
+        fs::create_dir_all(&root).expect("create fixture root");
+        write_file(
+            &root,
+            "source/demo-skill-v1/SKILL.md",
+            "# Demo Skill\n\nStable installed skill.\n",
+        );
+        write_file(
+            &root,
+            "source/demo-skill-v2/SKILL.md",
+            "# Demo Skill\n\nReplacement should fail safely.\n",
+        );
+        write_file(
+            &root,
+            "source/demo-skill-v2/private.txt",
+            "copy should fail on unreadable file",
+        );
+        let unreadable_path = root.join("source/demo-skill-v2/private.txt");
+        let mut perms = fs::metadata(&unreadable_path)
+            .expect("read metadata")
+            .permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&unreadable_path, perms).expect("set unreadable permissions");
+
+        let config = managed_runtime_config(&root);
+        crate::tools::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "external_skills.install".to_owned(),
+                payload: json!({
+                    "path": "source/demo-skill-v1",
+                    "skill_id": "demo-skill"
+                }),
+            },
+            &config,
+        )
+        .expect("initial install should succeed");
+
+        let error = crate::tools::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "external_skills.install".to_owned(),
+                payload: json!({
+                    "path": "source/demo-skill-v2",
+                    "skill_id": "demo-skill",
+                    "replace": true
+                }),
+            },
+            &config,
+        )
+        .expect_err("replacement install should fail");
+        assert!(
+            error.contains("failed to copy external skill file"),
+            "unexpected replacement failure: {error}"
+        );
+
+        let invoke_outcome = crate::tools::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "external_skills.invoke".to_owned(),
+                payload: json!({
+                    "skill_id": "demo-skill"
+                }),
+            },
+            &config,
+        )
+        .expect("previous install should remain available after failed replace");
+        assert!(
+            invoke_outcome.payload["instructions"]
+                .as_str()
+                .expect("instructions should be text")
+                .contains("Stable installed skill"),
+            "failed replace must preserve previous managed install"
+        );
+
+        let install_root = root.join("external-skills-installed");
+        let transient_entries = fs::read_dir(&install_root)
+            .expect("install root should exist")
+            .map(|entry| {
+                entry
+                    .expect("read install root entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .filter(|name| name.starts_with(".incoming-") || name.starts_with(".backup-"))
+            .collect::<Vec<_>>();
+        assert!(
+            transient_entries.is_empty(),
+            "failed replace must clean temporary directories: {transient_entries:?}"
+        );
+
+        let mut cleanup_perms = fs::metadata(&unreadable_path)
+            .expect("read metadata for cleanup")
+            .permissions();
+        cleanup_perms.set_mode(0o644);
+        fs::set_permissions(&unreadable_path, cleanup_perms).ok();
         fs::remove_dir_all(&root).ok();
     }
 

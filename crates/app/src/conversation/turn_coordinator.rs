@@ -45,6 +45,8 @@ use super::turn_shared::{
 #[derive(Default)]
 pub struct ConversationTurnCoordinator;
 
+const EXTERNAL_SKILL_FOLLOWUP_PROMPT: &str = "A managed external skill has been loaded into runtime context. Follow its instructions while answering the original user request. Do not restate the skill verbatim unless the user explicitly asks for it.";
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct SafeLaneExecutionMetrics {
     rounds_started: u32,
@@ -2080,6 +2082,17 @@ fn build_tool_followup_messages(
             "content": preface,
         }));
     }
+    if let Some(skill_context) = parse_external_skill_invoke_context(tool_result_text) {
+        messages.push(json!({
+            "role": "system",
+            "content": build_external_skill_system_message(&skill_context),
+        }));
+        messages.push(json!({
+            "role": "user",
+            "content": build_external_skill_followup_user_prompt(user_input, &skill_context),
+        }));
+        return messages;
+    }
     messages.push(json!({
         "role": "assistant",
         "content": format!("[tool_result]\n{tool_result_text}"),
@@ -2089,6 +2102,78 @@ fn build_tool_followup_messages(
         "content": build_tool_followup_user_prompt(user_input, None, Some(tool_result_text)),
     }));
     messages
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExternalSkillInvokeContext {
+    skill_id: String,
+    display_name: String,
+    instructions: String,
+}
+
+fn parse_external_skill_invoke_context(
+    tool_result_text: &str,
+) -> Option<ExternalSkillInvokeContext> {
+    let trimmed = tool_result_text.trim();
+    let mut lines = trimmed.lines().filter(|line| !line.trim().is_empty());
+    let line = lines.next()?;
+    if lines.next().is_some() {
+        return None;
+    }
+    let payload = line.strip_prefix("[ok] ")?;
+    let envelope: Value = serde_json::from_str(payload).ok()?;
+    if envelope.get("tool")?.as_str()? != "external_skills.invoke" {
+        return None;
+    }
+    let payload_summary = envelope.get("payload_summary")?.as_str()?;
+    let payload_json: Value = serde_json::from_str(payload_summary).ok()?;
+    let instructions = payload_json
+        .get("instructions")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_owned();
+    let skill_id = payload_json
+        .get("skill_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("external-skill")
+        .to_owned();
+    let display_name = payload_json
+        .get("display_name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(skill_id.as_str())
+        .to_owned();
+    Some(ExternalSkillInvokeContext {
+        skill_id,
+        display_name,
+        instructions,
+    })
+}
+
+fn build_external_skill_system_message(skill_context: &ExternalSkillInvokeContext) -> String {
+    format!(
+        "Managed external skill `{}` ({}) is now active for this task. Treat the following `SKILL.md` content as trusted runtime guidance until superseded.\n\n{}",
+        skill_context.skill_id, skill_context.display_name, skill_context.instructions
+    )
+}
+
+fn build_external_skill_followup_user_prompt(
+    user_input: &str,
+    skill_context: &ExternalSkillInvokeContext,
+) -> String {
+    [
+        EXTERNAL_SKILL_FOLLOWUP_PROMPT.to_owned(),
+        format!(
+            "Loaded managed external skill:\n- id: {}\n- name: {}",
+            skill_context.skill_id, skill_context.display_name
+        ),
+        format!("Original request:\n{user_input}"),
+    ]
+    .join("\n\n")
 }
 
 fn build_tool_failure_followup_messages(
@@ -2162,6 +2247,41 @@ mod tests {
             .expect("user followup prompt should exist");
         assert!(
             !user_prompt.contains(crate::conversation::turn_shared::TOOL_TRUNCATION_HINT_PROMPT)
+        );
+    }
+
+    #[test]
+    fn build_tool_followup_messages_promotes_external_skill_invoke_to_system_context() {
+        let messages = build_tool_followup_messages(
+            &[serde_json::json!({
+                "role": "system",
+                "content": "sys"
+            })],
+            "preface",
+            r#"[ok] {"status":"ok","tool":"external_skills.invoke","tool_call_id":"call-1","payload_summary":"{\"skill_id\":\"demo-skill\",\"display_name\":\"Demo Skill\",\"instructions\":\"Follow the managed skill instruction before answering.\"}","payload_chars":180,"payload_truncated":false}"#,
+            "summarize note.md",
+        );
+
+        assert!(
+            messages.iter().any(|message| message.get("role")
+                == Some(&Value::String("system".to_owned()))
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(|content| content
+                        .contains("Follow the managed skill instruction before answering."))
+                    .unwrap_or(false)),
+            "safe-lane followup should promote invoked external skill instructions into system context: {messages:?}"
+        );
+        assert!(
+            messages
+                .iter()
+                .filter(
+                    |message| message.get("role") == Some(&Value::String("assistant".to_owned()))
+                )
+                .filter_map(|message| message.get("content").and_then(Value::as_str))
+                .all(|content| !content.contains("[tool_result]\n[ok]")),
+            "safe-lane followup should not carry invoke payload forward as an ordinary assistant tool_result: {messages:?}"
         );
     }
 

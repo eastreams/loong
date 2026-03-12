@@ -92,6 +92,8 @@ cargo install --path crates/daemon
 ```
 </details>
 
+`--onboard` 现在调用的是不带 `--force` 的 `loongclaw onboard`，因此重复执行这条 quickstart 时会先停止，而不会直接覆盖已有配置。
+
 ### 5 分钟内开始首次对话
 
 1. 运行引导式首次配置：
