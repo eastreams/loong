@@ -150,7 +150,7 @@ tuning without forcing everything into the system prompt.
 ## Migration And Import
 
 LoongClaw can discover legacy claw homes during onboarding and offer an import
-before the rest of first-run setup continues.
+before the rest of onboarding continues.
 
 - Recommended path: import a single highest-confidence source.
 - Advanced path: plan multiple sources, merge only the profile lane, and keep prompt/system identity single-source.

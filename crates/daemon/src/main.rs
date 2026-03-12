@@ -5,6 +5,8 @@ use std::{collections::BTreeSet, fs, path::Path, sync::Arc};
 
 #[cfg(test)]
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+#[cfg(test)]
+use clap::CommandFactory;
 use clap::{Parser, Subcommand, ValueEnum};
 #[cfg(test)]
 use kernel::{AuditEventKind, ExecutionRoute, HarnessKind, PluginBridgeKind, VerticalPackManifest};
@@ -151,7 +153,7 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         fail_on_diagnostics: bool,
     },
-    /// Guided onboarding for fast first-chat setup with preflight diagnostics
+    /// Guided onboarding for a fast first chat with preflight diagnostics
     Onboard {
         #[arg(long)]
         output: Option<String>,
@@ -199,7 +201,7 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         force: bool,
     },
-    /// Run setup diagnostics and optionally apply safe config/path fixes
+    /// Run configuration diagnostics and optionally apply safe config/path fixes
     Doctor {
         #[arg(long)]
         config: Option<String>,
@@ -1054,6 +1056,19 @@ fn write_json_file<T: Serialize>(path: &str, value: &T) -> CliResult<()> {
 #[cfg(test)]
 mod cli_tests {
     use super::*;
+
+    #[test]
+    fn root_help_uses_onboarding_language() {
+        let mut command = Cli::command();
+        let mut rendered = Vec::new();
+        command
+            .write_long_help(&mut rendered)
+            .expect("render root help");
+        let help = String::from_utf8(rendered).expect("help is valid utf-8");
+
+        assert!(help.contains("onboarding"));
+        assert!(!help.contains("setup"));
+    }
 
     #[test]
     fn setup_subcommand_is_removed() {

@@ -171,7 +171,7 @@ pub(crate) async fn run_onboard_cli(options: OnboardCommandOptions) -> CliResult
         }
         if has_failures {
             return Err(
-                "onboard preflight failed. rerun with --skip-model-probe if your provider blocks model listing during setup"
+                "onboard preflight failed. rerun with --skip-model-probe if your provider blocks model listing during onboarding"
                     .to_owned(),
             );
         }
