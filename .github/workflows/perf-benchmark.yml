@@ -19,13 +19,13 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.93.0
+        uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26
 
       - name: Cache Cargo Artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c676846f29d98ff6b0106d3608c7ffd4048af17b
 
       - name: Run programmatic pressure benchmark
         run: ./scripts/benchmark_programmatic_pressure.sh
@@ -34,14 +34,14 @@ jobs:
         run: ./scripts/benchmark_wasm_cache.sh
 
       - name: Upload benchmark report
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: programmatic-pressure-report-${{ github.run_id }}
           path: target/benchmarks/programmatic-pressure-report.json
           retention-days: 30
 
       - name: Upload wasm cache benchmark report
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: wasm-cache-benchmark-report-${{ github.run_id }}
           path: target/benchmarks/wasm-cache-benchmark-report.json

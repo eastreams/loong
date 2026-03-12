@@ -22,17 +22,17 @@ jobs:
       contents: read
     steps:
       - name: Checkout source
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.93.0
+        uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26
         with:
           components: rustfmt, clippy
 
       - name: Cache Cargo Artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c676846f29d98ff6b0106d3608c7ffd4048af17b
 
       - name: Format check
         run: cargo fmt --all -- --check
@@ -83,17 +83,17 @@ jobs:
             archive: zip
     steps:
       - name: Checkout source
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.93.0
+        uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26
         with:
           targets: ${{ matrix.target }}
 
       - name: Cache Cargo Artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c676846f29d98ff6b0106d3608c7ffd4048af17b
 
       - name: Build release binary
         run: cargo build --release --locked -p loongclaw-daemon --bin ${{ env.BIN_NAME }} --target ${{ matrix.target }}
@@ -120,7 +120,7 @@ jobs:
           Compress-Archive -Path "target/${{ matrix.target }}/release/${env:BIN_NAME}${{ matrix.ext }}" -DestinationPath "dist/$archive" -Force
 
       - name: Upload packaged artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: ${{ matrix.target }}
           path: dist/*
@@ -134,13 +134,13 @@ jobs:
       contents: write
     steps:
       - name: Download packaged artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           path: dist
           merge-multiple: true
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           generate_release_notes: true

@@ -23,11 +23,11 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Detect Advanced Security availability
         id: ghas
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -47,18 +47,18 @@ jobs:
 
       - name: Initialize CodeQL
         if: steps.ghas.outputs.enabled == 'true'
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@0d579ffd059c29b07949a3cce3983f0780820c98
         with:
           languages: ${{ matrix.language }}
           queries: security-and-quality
 
       - name: Autobuild
         if: steps.ghas.outputs.enabled == 'true'
-        uses: github/codeql-action/autobuild@v4
+        uses: github/codeql-action/autobuild@0d579ffd059c29b07949a3cce3983f0780820c98
 
       - name: Analyze
         if: steps.ghas.outputs.enabled == 'true'
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@0d579ffd059c29b07949a3cce3983f0780820c98
         timeout-minutes: 10
 
       - name: Skip CodeQL when GHAS is unavailable
