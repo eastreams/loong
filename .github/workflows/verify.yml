@@ -31,3 +31,9 @@ jobs:
 
       - name: Test (all features)
         run: cargo test --workspace --all-features
+
+      - name: Dependency graph contract
+        run: ./scripts/check_dep_graph.sh
+
+      - name: Strict architecture contract
+        run: LOONGCLAW_ARCH_STRICT=true ./scripts/check_architecture_boundaries.sh
