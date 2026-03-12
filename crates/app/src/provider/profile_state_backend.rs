@@ -2,8 +2,8 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
     },
     time::Instant,
 };
@@ -84,8 +84,8 @@ pub(super) fn record_provider_profile_state_persist_outcome(
 }
 
 #[cfg(test)]
-pub(super) fn provider_profile_state_persistence_metrics_snapshot(
-) -> ProviderProfileStatePersistenceMetricsSnapshot {
+pub(super) fn provider_profile_state_persistence_metrics_snapshot()
+-> ProviderProfileStatePersistenceMetricsSnapshot {
     with_provider_profile_state_persistence_metrics(|metrics| metrics.snapshot())
 }
 

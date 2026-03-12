@@ -7,17 +7,16 @@ use crate::config::ProviderConfig;
 
 use super::{
     contracts::{
-        adapt_payload_mode_for_error, parse_provider_api_error, CompletionPayloadMode,
-        ProviderApiError, ProviderCapabilityContract, ProviderRuntimeContract,
+        CompletionPayloadMode, ProviderApiError, ProviderCapabilityContract,
+        ProviderRuntimeContract, adapt_payload_mode_for_error, parse_provider_api_error,
     },
     failover::{
-        build_model_request_error, ModelRequestError, ProviderFailoverReason, ProviderFailoverStage,
+        ModelRequestError, ProviderFailoverReason, ProviderFailoverStage, build_model_request_error,
     },
     policy,
     request_planner::{
-        classify_model_status_failure_reason_with_capability,
+        ModelRequestStatusPlan, classify_model_status_failure_reason_with_capability,
         plan_model_request_status_with_capability, plan_transport_error_retry,
-        ModelRequestStatusPlan,
     },
     transport,
 };

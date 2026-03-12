@@ -1,8 +1,8 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
+use crate::CliResult;
 use crate::config::LoongClawConfig;
 use crate::tools;
-use crate::CliResult;
 
 #[cfg(feature = "memory-sqlite")]
 use crate::memory;
@@ -58,9 +58,8 @@ pub(super) fn build_messages_for_session(
 
     #[cfg(feature = "memory-sqlite")]
     {
-        let mem_config = memory::runtime_config::MemoryRuntimeConfig {
-            sqlite_path: Some(config.memory.resolved_sqlite_path()),
-        };
+        let mem_config =
+            memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
         let turns = memory::window_direct(session_id, config.memory.sliding_window, &mem_config)
             .map_err(|error| format!("load memory window failed: {error}"))?;
         for turn in turns {

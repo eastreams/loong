@@ -1,16 +1,16 @@
 use std::future::Future;
 
-use crate::{config::ProviderConfig, CliResult, KernelContext};
+use crate::{CliResult, KernelContext, config::ProviderConfig};
 
 use super::auth_profile_runtime::ProviderAuthProfile;
 use super::failover::ModelRequestError;
 use super::failover_telemetry_runtime::record_provider_failover_audit_event;
 use super::model_candidate_cooldown_runtime::{
-    register_model_candidate_cooldown, ModelCandidateCooldownPolicy,
+    ModelCandidateCooldownPolicy, register_model_candidate_cooldown,
 };
 use super::profile_health_runtime::{
-    mark_provider_profile_failure, mark_provider_profile_success,
-    prioritize_provider_auth_profiles_by_health, ProviderProfileStatePolicy,
+    ProviderProfileStatePolicy, mark_provider_profile_failure, mark_provider_profile_success,
+    prioritize_provider_auth_profiles_by_health,
 };
 
 pub(super) async fn request_across_model_candidates<T, F, Fut>(

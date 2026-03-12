@@ -75,9 +75,9 @@ pub(super) fn prioritize_profiles_by_health(
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_profile_failure_reason_from_message, prioritize_profiles_by_health,
-        should_mark_provider_profile_failure, ProviderAuthProfile, ProviderFailoverReason,
-        ProviderProfileHealthMode, ProviderProfileHealthSnapshot,
+        ProviderAuthProfile, ProviderFailoverReason, ProviderProfileHealthMode,
+        ProviderProfileHealthSnapshot, classify_profile_failure_reason_from_message,
+        prioritize_profiles_by_health, should_mark_provider_profile_failure,
     };
     use std::time::{Duration, Instant};
 

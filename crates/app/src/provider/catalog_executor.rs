@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use tokio::time::sleep;
 
-use crate::{config::ProviderConfig, CliResult};
+use crate::{CliResult, config::ProviderConfig};
 
 use super::{
     http_client_runtime::build_http_client,

@@ -1,8 +1,8 @@
 use super::{
     contracts::{
+        ProviderApiError, ProviderCapabilityContract, ProviderRuntimeContract,
         classify_payload_adaptation_axis, should_disable_tool_schema_for_error,
-        should_try_next_model_on_error, ProviderApiError, ProviderCapabilityContract,
-        ProviderRuntimeContract,
+        should_try_next_model_on_error,
     },
     failover::ProviderFailoverReason,
     policy,

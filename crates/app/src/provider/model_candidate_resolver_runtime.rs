@@ -1,17 +1,17 @@
 use std::time::Duration;
 
 use crate::{
-    config::{LoongClawConfig, ProviderConfig},
     CliResult,
+    config::{LoongClawConfig, ProviderConfig},
 };
 
-use super::catalog_executor::{fetch_available_models_with_policy, ModelCatalogRequestRuntime};
+use super::catalog_executor::{ModelCatalogRequestRuntime, fetch_available_models_with_policy};
 use super::catalog_runtime::{
-    fetch_model_catalog_singleflight, load_cached_model_catalog, store_model_catalog,
-    ModelCatalogCacheLookup,
+    ModelCatalogCacheLookup, fetch_model_catalog_singleflight, load_cached_model_catalog,
+    store_model_catalog,
 };
 use super::model_candidate_cooldown_runtime::{
-    prioritize_model_candidates_by_cooldown, ModelCandidateCooldownPolicy,
+    ModelCandidateCooldownPolicy, prioritize_model_candidates_by_cooldown,
 };
 use super::policy;
 use super::provider_keyspace::build_model_catalog_cache_key;

@@ -1,18 +1,18 @@
 use std::time::Duration;
 
-use crate::{config::LoongClawConfig, CliResult};
+use crate::{CliResult, config::LoongClawConfig};
 
-use super::auth_profile_runtime::{resolve_provider_auth_profiles, ProviderAuthProfile};
+use super::auth_profile_runtime::{ProviderAuthProfile, resolve_provider_auth_profiles};
 use super::capability_profile_runtime::ProviderCapabilityProfile;
-use super::contracts::{provider_runtime_contract, ProviderRuntimeContract};
+use super::contracts::{ProviderRuntimeContract, provider_runtime_contract};
 use super::http_client_runtime::build_http_client;
 use super::model_candidate_cooldown_runtime::ModelCandidateCooldownPolicy;
 use super::model_candidate_resolver_runtime::resolve_request_models;
 use super::policy;
 use super::profile_health_policy::classify_profile_failure_reason_from_message;
 use super::profile_health_runtime::{
-    build_provider_profile_state_policy, mark_provider_profile_failure,
-    prioritize_provider_auth_profiles_by_health, ProviderProfileStatePolicy,
+    ProviderProfileStatePolicy, build_provider_profile_state_policy, mark_provider_profile_failure,
+    prioritize_provider_auth_profiles_by_health,
 };
 use super::profile_state_backend::ensure_provider_profile_state_backend;
 use super::provider_keyspace::build_model_candidate_cooldown_namespace;

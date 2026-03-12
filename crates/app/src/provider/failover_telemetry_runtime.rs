@@ -5,8 +5,8 @@ use std::sync::{Mutex, OnceLock};
 
 use loongclaw_kernel::AuditEventKind;
 
-use crate::config::ProviderConfig;
 use crate::KernelContext;
+use crate::config::ProviderConfig;
 
 use super::failover::ProviderFailoverSnapshot;
 

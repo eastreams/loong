@@ -7,8 +7,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use super::shared::{
-    default_loongclaw_home, expand_path, validate_env_pointer_field, ConfigValidationIssue,
-    EnvPointerValidationHint,
+    ConfigValidationIssue, EnvPointerValidationHint, default_loongclaw_home, expand_path,
+    parse_explicit_env_reference, read_secret_prefer_inline, validate_env_pointer_field,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,7 +198,7 @@ impl Default for ProviderConfig {
             endpoint: None,
             models_endpoint: None,
             api_key: None,
-            api_key_env: Some(default_provider_api_key_env().to_owned()),
+            api_key_env: None,
             oauth_access_token: None,
             oauth_access_token_env: None,
             preferred_models: Vec::new(),
@@ -516,7 +516,16 @@ impl ProviderConfig {
         };
 
         if let Some(raw) = self.api_key.as_deref() {
-            push_candidates(raw);
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                if parse_explicit_env_reference(trimmed).is_some() {
+                    if let Some(resolved) = read_secret_prefer_inline(Some(trimmed), None) {
+                        push_candidates(resolved.as_str());
+                    }
+                    return candidates;
+                }
+                push_candidates(trimmed);
+            }
         }
 
         let mut env_keys = Vec::new();
@@ -715,10 +724,6 @@ fn default_provider_model() -> String {
 
 fn default_provider_base_url() -> String {
     "https://api.openai.com".to_owned()
-}
-
-const fn default_provider_api_key_env() -> &'static str {
-    "OPENAI_API_KEY"
 }
 
 fn default_openai_chat_path() -> String {

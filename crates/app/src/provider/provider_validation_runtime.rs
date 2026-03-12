@@ -1,7 +1,7 @@
-use crate::config::{LoongClawConfig, ProviderConfig};
 use crate::CliResult;
+use crate::config::{LoongClawConfig, ProviderConfig};
 
-use super::contracts::{provider_runtime_contract, ProviderFeatureFamily};
+use super::contracts::{ProviderFeatureFamily, provider_runtime_contract};
 
 pub(super) fn validate_provider_feature_gate(config: &LoongClawConfig) -> CliResult<()> {
     let runtime_contract = provider_runtime_contract(&config.provider);

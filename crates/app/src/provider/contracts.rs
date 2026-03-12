@@ -675,9 +675,11 @@ mod tests {
             ProviderToolSchemaMode::Disabled
         );
         assert!(!disabled_tool_schema.capability.turn_tool_schema_enabled());
-        assert!(!disabled_tool_schema
-            .capability
-            .tool_schema_downgrade_on_unsupported());
+        assert!(
+            !disabled_tool_schema
+                .capability
+                .tool_schema_downgrade_on_unsupported()
+        );
 
         let strict_tool_schema = provider_runtime_contract(&ProviderConfig {
             kind: ProviderKind::Openai,
@@ -689,9 +691,11 @@ mod tests {
             ProviderToolSchemaMode::EnabledStrict
         );
         assert!(strict_tool_schema.capability.turn_tool_schema_enabled());
-        assert!(!strict_tool_schema
-            .capability
-            .tool_schema_downgrade_on_unsupported());
+        assert!(
+            !strict_tool_schema
+                .capability
+                .tool_schema_downgrade_on_unsupported()
+        );
 
         let forced_kimi_reasoning = provider_runtime_contract(&ProviderConfig {
             kind: ProviderKind::Openai,
@@ -702,9 +706,11 @@ mod tests {
             forced_kimi_reasoning.capability.reasoning_extra_body_mode,
             ProviderReasoningExtraBodyMode::KimiThinking
         );
-        assert!(forced_kimi_reasoning
-            .capability
-            .include_reasoning_extra_body());
+        assert!(
+            forced_kimi_reasoning
+                .capability
+                .include_reasoning_extra_body()
+        );
     }
 
     #[test]

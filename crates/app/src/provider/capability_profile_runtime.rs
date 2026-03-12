@@ -90,7 +90,7 @@ fn model_matches_any_hint(model: &str, hints: &[String]) -> bool {
 mod tests {
     use super::*;
     use crate::config::{ProviderConfig, ProviderKind};
-    use crate::provider::contracts::{provider_runtime_contract, ProviderToolSchemaMode};
+    use crate::provider::contracts::{ProviderToolSchemaMode, provider_runtime_contract};
 
     #[test]
     fn capability_profile_normalizes_deduplicates_hints() {

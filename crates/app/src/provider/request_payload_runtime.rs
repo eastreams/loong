@@ -1,11 +1,11 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::config::{LoongClawConfig, ReasoningEffort};
 
 use super::capability_profile_runtime::ProviderCapabilityProfile;
 use super::contracts::{
-    provider_runtime_contract, CompletionPayloadMode, ProviderCapabilityContract, ReasoningField,
-    TemperatureField, TokenLimitField,
+    CompletionPayloadMode, ProviderCapabilityContract, ReasoningField, TemperatureField,
+    TokenLimitField, provider_runtime_contract,
 };
 
 #[cfg_attr(not(test), allow(dead_code))]

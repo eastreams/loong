@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ProviderFailoverReason {
@@ -128,8 +128,8 @@ pub(super) fn build_model_request_error(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_model_request_error, ProviderFailoverReason, ProviderFailoverSnapshot,
-        ProviderFailoverStage,
+        ProviderFailoverReason, ProviderFailoverSnapshot, ProviderFailoverStage,
+        build_model_request_error,
     };
     use serde_json::json;
 

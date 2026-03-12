@@ -280,18 +280,26 @@ mod tests {
             default_cfg.resolved_reasoning_extra_body_mode_config(),
             ProviderReasoningExtraBodyModeConfig::ProviderDefault
         );
-        assert!(default_cfg
-            .resolved_tool_schema_disabled_model_hints()
-            .is_empty());
-        assert!(default_cfg
-            .resolved_tool_schema_strict_model_hints()
-            .is_empty());
-        assert!(default_cfg
-            .resolved_reasoning_extra_body_kimi_model_hints()
-            .is_empty());
-        assert!(default_cfg
-            .resolved_reasoning_extra_body_omit_model_hints()
-            .is_empty());
+        assert!(
+            default_cfg
+                .resolved_tool_schema_disabled_model_hints()
+                .is_empty()
+        );
+        assert!(
+            default_cfg
+                .resolved_tool_schema_strict_model_hints()
+                .is_empty()
+        );
+        assert!(
+            default_cfg
+                .resolved_reasoning_extra_body_kimi_model_hints()
+                .is_empty()
+        );
+        assert!(
+            default_cfg
+                .resolved_reasoning_extra_body_omit_model_hints()
+                .is_empty()
+        );
         assert_eq!(default_cfg.resolved_profile_state_sqlite_path(), None);
 
         let disabled = ProviderConfig {

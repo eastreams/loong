@@ -1,7 +1,7 @@
-use crate::{config::LoongClawConfig, CliResult};
+use crate::{CliResult, config::LoongClawConfig};
 
 use super::auth_profile_runtime::resolve_provider_auth_profiles;
-use super::catalog_executor::{fetch_available_models_with_policy, ModelCatalogRequestRuntime};
+use super::catalog_executor::{ModelCatalogRequestRuntime, fetch_available_models_with_policy};
 use super::policy;
 use super::profile_health_policy::classify_profile_failure_reason_from_message;
 use super::profile_health_runtime::{

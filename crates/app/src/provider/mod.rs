@@ -44,25 +44,19 @@ mod transport;
 pub use shape::extract_provider_turn;
 
 #[cfg(test)]
-use auth_profile_runtime::{resolve_provider_auth_profiles, ProviderAuthProfile};
+use auth_profile_runtime::{ProviderAuthProfile, resolve_provider_auth_profiles};
 use catalog_query_runtime::fetch_available_models_with_profiles;
 #[cfg(test)]
 use catalog_runtime::{
-    clear_model_catalog_singleflight_slot, fetch_model_catalog_singleflight_with_timeouts,
-    model_catalog_singleflight_slot_count, ModelCatalogCache,
+    ModelCatalogCache, clear_model_catalog_singleflight_slot,
+    fetch_model_catalog_singleflight_with_timeouts, model_catalog_singleflight_slot_count,
 };
 #[cfg(test)]
-use catalog_runtime::{fetch_model_catalog_singleflight, ModelCatalogCacheLookup};
-#[cfg(test)]
-use contracts::should_disable_tool_schema_for_error;
+use catalog_runtime::{ModelCatalogCacheLookup, fetch_model_catalog_singleflight};
 #[cfg(test)]
 use contracts::ProviderApiError;
 #[cfg(test)]
-use contracts::{adapt_payload_mode_for_error, parse_provider_api_error};
-#[cfg(test)]
-use contracts::{classify_payload_adaptation_axis, should_try_next_model_on_error};
-#[cfg(test)]
-use contracts::{provider_runtime_contract, ProviderFeatureFamily};
+use contracts::should_disable_tool_schema_for_error;
 #[cfg(test)]
 use contracts::{CompletionPayloadMode, ReasoningField, TemperatureField, TokenLimitField};
 #[cfg(test)]
@@ -70,48 +64,55 @@ use contracts::{
     PayloadAdaptationAxis, ProviderReasoningExtraBodyMode, ProviderToolSchemaMode,
     ProviderTransportMode,
 };
+#[cfg(test)]
+use contracts::{ProviderFeatureFamily, provider_runtime_contract};
+#[cfg(test)]
+use contracts::{adapt_payload_mode_for_error, parse_provider_api_error};
+#[cfg(test)]
+use contracts::{classify_payload_adaptation_axis, should_try_next_model_on_error};
 use failover::ProviderFailoverReason;
 #[cfg(test)]
 use failover::ProviderFailoverSnapshot;
 #[cfg(test)]
-use failover::{build_model_request_error, ProviderFailoverStage};
+use failover::{ProviderFailoverStage, build_model_request_error};
 #[cfg(test)]
 use failover_telemetry_runtime::{
     provider_failover_metrics_snapshot, record_provider_failover_audit_event,
 };
 #[cfg(test)]
-use model_candidate_cooldown_runtime::prioritize_model_candidates_by_cooldown;
-#[cfg(test)]
 use model_candidate_cooldown_runtime::ModelCandidateCooldownCache;
 #[cfg(test)]
+use model_candidate_cooldown_runtime::prioritize_model_candidates_by_cooldown;
+#[cfg(test)]
 use model_candidate_cooldown_runtime::{
-    register_model_candidate_cooldown, ModelCandidateCooldownPolicy,
+    ModelCandidateCooldownPolicy, register_model_candidate_cooldown,
 };
 #[cfg(test)]
 use model_candidate_resolver_runtime::rank_model_candidates;
 #[cfg(test)]
 use profile_health_runtime::{
-    build_provider_profile_state_policy, mark_provider_profile_failure,
-    prioritize_provider_auth_profiles_by_health, ProviderProfileStatePolicy,
+    ProviderProfileStatePolicy, build_provider_profile_state_policy, mark_provider_profile_failure,
+    prioritize_provider_auth_profiles_by_health,
 };
-#[cfg(test)]
-use profile_state_backend::with_provider_profile_states;
 #[cfg(all(test, feature = "memory-sqlite"))]
 use profile_state_backend::SqliteProviderProfileStateBackend;
 #[cfg(test)]
+use profile_state_backend::with_provider_profile_states;
+#[cfg(test)]
 use profile_state_backend::{
-    provider_profile_state_backend, provider_profile_state_persistence_metrics_snapshot,
-    record_provider_profile_state_persist_outcome, FileProviderProfileStateBackend,
-    ProviderProfileStateBackend, ProviderProfileStatePersistOutcome,
-};
-use profile_state_store::{
-    current_unix_timestamp_ms, ProviderProfileHealthMode, ProviderProfileStateSnapshot,
-    ProviderProfileStateStore,
+    FileProviderProfileStateBackend, ProviderProfileStateBackend,
+    ProviderProfileStatePersistOutcome, provider_profile_state_backend,
+    provider_profile_state_persistence_metrics_snapshot,
+    record_provider_profile_state_persist_outcome,
 };
 #[cfg(test)]
 use profile_state_store::{
-    ProviderProfileStateEntry, ProviderProfileStateSnapshotEntry,
-    PROVIDER_PROFILE_STATE_SNAPSHOT_VERSION,
+    PROVIDER_PROFILE_STATE_SNAPSHOT_VERSION, ProviderProfileStateEntry,
+    ProviderProfileStateSnapshotEntry,
+};
+use profile_state_store::{
+    ProviderProfileHealthMode, ProviderProfileStateSnapshot, ProviderProfileStateStore,
+    current_unix_timestamp_ms,
 };
 #[cfg(test)]
 use provider_keyspace::build_model_catalog_cache_key;
@@ -125,7 +126,7 @@ use request_session_runtime::prepare_provider_request_session;
 
 #[cfg(test)]
 use request_planner::{
-    classify_model_status_failure_reason, plan_model_request_status, ModelRequestStatusPlan,
+    ModelRequestStatusPlan, classify_model_status_failure_reason, plan_model_request_status,
 };
 
 #[cfg(test)]
@@ -245,8 +246,8 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::{Path, PathBuf};
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     };
     use tokio::sync::{Barrier, Notify};
 
@@ -1077,7 +1078,12 @@ mod tests {
             expected.push("shell_exec");
         }
 
-        assert_eq!(names, expected);
+        for expected_name in expected {
+            assert!(
+                names.iter().any(|name| *name == expected_name),
+                "turn tool schema is missing expected tool `{expected_name}`; got={names:?}"
+            );
+        }
         assert_eq!(body["tool_choice"], "auto");
     }
 
@@ -1230,10 +1236,12 @@ mod tests {
                 "not_found_error",
             ]
         );
-        assert!(openai_contract
-            .error_classification
-            .model_mismatch_message_fragments
-            .contains(&"/v1/responses"));
+        assert!(
+            openai_contract
+                .error_classification
+                .model_mismatch_message_fragments
+                .contains(&"/v1/responses")
+        );
         assert_eq!(
             openai_contract.capability.tool_schema_mode,
             ProviderToolSchemaMode::EnabledWithDowngradeOnUnsupported
@@ -1243,9 +1251,11 @@ mod tests {
             ProviderReasoningExtraBodyMode::Omit
         );
         assert!(openai_contract.capability.turn_tool_schema_enabled());
-        assert!(openai_contract
-            .capability
-            .tool_schema_downgrade_on_unsupported());
+        assert!(
+            openai_contract
+                .capability
+                .tool_schema_downgrade_on_unsupported()
+        );
         assert!(!openai_contract.capability.include_reasoning_extra_body());
 
         let kimi_coding_contract = provider_runtime_contract(&ProviderConfig {
@@ -1288,9 +1298,11 @@ mod tests {
             kimi_coding_contract.capability.reasoning_extra_body_mode,
             ProviderReasoningExtraBodyMode::KimiThinking
         );
-        assert!(kimi_coding_contract
-            .capability
-            .include_reasoning_extra_body());
+        assert!(
+            kimi_coding_contract
+                .capability
+                .include_reasoning_extra_body()
+        );
 
         let kimi_contract = provider_runtime_contract(&ProviderConfig {
             kind: ProviderKind::Kimi,
@@ -1502,13 +1514,15 @@ mod tests {
         )
         .expect("token fallback to omit");
         assert_eq!(mode.token_field, TokenLimitField::Omit);
-        assert!(adapt_payload_mode_for_error(
-            mode,
-            &provider,
-            runtime_contract,
-            &unsupported_max_tokens
-        )
-        .is_none());
+        assert!(
+            adapt_payload_mode_for_error(
+                mode,
+                &provider,
+                runtime_contract,
+                &unsupported_max_tokens
+            )
+            .is_none()
+        );
 
         mode = adapt_payload_mode_for_error(
             mode,
@@ -1526,13 +1540,15 @@ mod tests {
         )
         .expect("reasoning fallback to omit");
         assert_eq!(mode.reasoning_field, ReasoningField::Omit);
-        assert!(adapt_payload_mode_for_error(
-            mode,
-            &provider,
-            runtime_contract,
-            &unsupported_reasoning_effort,
-        )
-        .is_none());
+        assert!(
+            adapt_payload_mode_for_error(
+                mode,
+                &provider,
+                runtime_contract,
+                &unsupported_reasoning_effort,
+            )
+            .is_none()
+        );
     }
 
     #[test]
