@@ -30,7 +30,7 @@ $repoRoot = Resolve-Path (Join-Path $scriptDir "..")
 Write-Host "==> Building loongclaw (release)"
 Push-Location $repoRoot
 try {
-    cargo build -p loongclaw-daemon --bin loongclaw --release | Out-Host
+    cargo build -p loongclaw-daemon --bin loongclaw --release --locked | Out-Host
 } finally {
     Pop-Location
 }
