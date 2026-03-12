@@ -49,6 +49,9 @@ struct ExternalSkillsPolicyOverride {
     blocked_domains: Option<BTreeSet<String>>,
 }
 
+#[derive(Debug, Default)]
+struct ScopedDirCleanup(Option<PathBuf>);
+
 static EXTERNAL_SKILLS_POLICY_OVERRIDE: OnceLock<RwLock<ExternalSkillsPolicyOverride>> =
     OnceLock::new();
 
@@ -361,18 +364,19 @@ pub(super) fn execute_external_skills_install_tool_with_config(
         ));
     }
 
-    let (skill_root, source_kind) = if source_file_type.is_dir() {
+    let (skill_root, source_kind, cleanup_root) = if source_file_type.is_dir() {
         let skill_root = resolve_skill_root(&source_path)?;
-        (skill_root, "directory")
+        (skill_root, "directory", None)
     } else if source_file_type.is_file() {
-        let skill_root = extract_archive_to_staging(&source_path, &install_root)?;
-        (skill_root, "archive")
+        let (staging_root, skill_root) = extract_archive_to_staging(&source_path, &install_root)?;
+        (skill_root, "archive", Some(staging_root))
     } else {
         return Err(format!(
             "external skill source {} must be a directory or a regular file",
             source_path.display()
         ));
     };
+    let _cleanup_root = ScopedDirCleanup::new(cleanup_root);
 
     let skill_md_path = skill_root.join(DEFAULT_SKILL_FILENAME);
     let skill_markdown = fs::read_to_string(&skill_md_path).map_err(|error| {
@@ -436,10 +440,6 @@ pub(super) fn execute_external_skills_install_tool_with_config(
     });
     persist_installed_skill_index(&install_root, &mut index)?;
 
-    if source_kind == "archive" {
-        fs::remove_dir_all(&skill_root).ok();
-    }
-
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
         payload: json!({
@@ -463,12 +463,17 @@ pub(super) fn execute_external_skills_list_tool_with_config(
     require_enabled_runtime_policy(config)?;
     let install_root = resolve_install_root(config);
     let index = load_installed_skill_index(&install_root)?;
+    let skills = index
+        .skills
+        .into_iter()
+        .map(|entry| rehydrate_installed_skill_entry(&install_root, entry))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
         payload: json!({
             "adapter": "core-tools",
             "tool_name": request.tool_name,
-            "skills": index.skills,
+            "skills": skills,
         }),
     })
 }
@@ -491,13 +496,7 @@ pub(super) fn execute_external_skills_inspect_tool_with_config(
     require_enabled_runtime_policy(config)?;
 
     let install_root = resolve_install_root(config);
-    let entry = installed_skill_by_id(&load_installed_skill_index(&install_root)?, skill_id)?;
-    let instructions = fs::read_to_string(&entry.skill_md_path).map_err(|error| {
-        format!(
-            "failed to read installed skill {}: {error}",
-            entry.skill_md_path
-        )
-    })?;
+    let (entry, instructions) = load_installed_skill_material(&install_root, skill_id)?;
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
         payload: json!({
@@ -527,18 +526,12 @@ pub(super) fn execute_external_skills_invoke_tool_with_config(
     require_enabled_runtime_policy(config)?;
 
     let install_root = resolve_install_root(config);
-    let entry = installed_skill_by_id(&load_installed_skill_index(&install_root)?, skill_id)?;
+    let (entry, instructions) = load_installed_skill_material(&install_root, skill_id)?;
     if !entry.active {
         return Err(format!(
             "external skill `{skill_id}` is installed but inactive"
         ));
     }
-    let instructions = fs::read_to_string(&entry.skill_md_path).map_err(|error| {
-        format!(
-            "failed to read installed skill {}: {error}",
-            entry.skill_md_path
-        )
-    })?;
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
         payload: json!({
@@ -667,6 +660,20 @@ impl ExternalSkillsPolicyOverride {
             || self.require_download_approval.is_some()
             || self.allowed_domains.is_some()
             || self.blocked_domains.is_some()
+    }
+}
+
+impl ScopedDirCleanup {
+    fn new(path: Option<PathBuf>) -> Self {
+        Self(path)
+    }
+}
+
+impl Drop for ScopedDirCleanup {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            fs::remove_dir_all(path).ok();
+        }
     }
 }
 
@@ -911,7 +918,10 @@ fn resolve_skill_root(root: &Path) -> Result<PathBuf, String> {
     }
 }
 
-fn extract_archive_to_staging(archive_path: &Path, install_root: &Path) -> Result<PathBuf, String> {
+fn extract_archive_to_staging(
+    archive_path: &Path,
+    install_root: &Path,
+) -> Result<(PathBuf, PathBuf), String> {
     let filename = archive_path
         .file_name()
         .and_then(|value| value.to_str())
@@ -937,47 +947,57 @@ fn extract_archive_to_staging(archive_path: &Path, install_root: &Path) -> Resul
             staging_root.display()
         )
     })?;
-    let file = fs::File::open(archive_path).map_err(|error| {
-        format!(
-            "failed to open external skill archive {}: {error}",
-            archive_path.display()
-        )
-    })?;
-    let decoder = GzDecoder::new(file);
-    let mut archive = Archive::new(decoder);
-    for entry in archive.entries().map_err(|error| {
-        format!(
-            "failed to read external skill archive {}: {error}",
-            archive_path.display()
-        )
-    })? {
-        let mut entry = entry.map_err(|error| {
+    let extraction = (|| -> Result<PathBuf, String> {
+        let file = fs::File::open(archive_path).map_err(|error| {
             format!(
-                "failed to inspect external skill archive {}: {error}",
+                "failed to open external skill archive {}: {error}",
                 archive_path.display()
             )
         })?;
-        let entry_type = entry.header().entry_type();
-        if entry_type.is_symlink() || entry_type.is_hard_link() {
-            return Err(format!(
-                "external skill archive {} cannot contain symlinks or hard links",
-                archive_path.display()
-            ));
-        }
-        if !(entry_type.is_dir() || entry_type.is_file()) {
-            return Err(format!(
-                "external skill archive {} contains unsupported entry types; only files and directories are allowed",
-                archive_path.display()
-            ));
-        }
-        entry.unpack_in(&staging_root).map_err(|error| {
+        let decoder = GzDecoder::new(file);
+        let mut archive = Archive::new(decoder);
+        for entry in archive.entries().map_err(|error| {
             format!(
-                "failed to extract external skill archive {}: {error}",
+                "failed to read external skill archive {}: {error}",
                 archive_path.display()
             )
-        })?;
+        })? {
+            let mut entry = entry.map_err(|error| {
+                format!(
+                    "failed to inspect external skill archive {}: {error}",
+                    archive_path.display()
+                )
+            })?;
+            let entry_type = entry.header().entry_type();
+            if entry_type.is_symlink() || entry_type.is_hard_link() {
+                return Err(format!(
+                    "external skill archive {} cannot contain symlinks or hard links",
+                    archive_path.display()
+                ));
+            }
+            if !(entry_type.is_dir() || entry_type.is_file()) {
+                return Err(format!(
+                    "external skill archive {} contains unsupported entry types; only files and directories are allowed",
+                    archive_path.display()
+                ));
+            }
+            entry.unpack_in(&staging_root).map_err(|error| {
+                format!(
+                    "failed to extract external skill archive {}: {error}",
+                    archive_path.display()
+                )
+            })?;
+        }
+        resolve_skill_root(&staging_root)
+    })();
+
+    match extraction {
+        Ok(skill_root) => Ok((staging_root, skill_root)),
+        Err(error) => {
+            fs::remove_dir_all(&staging_root).ok();
+            Err(error)
+        }
     }
-    resolve_skill_root(&staging_root)
 }
 
 fn find_skill_roots(root: &Path) -> Result<Vec<PathBuf>, String> {
@@ -1277,8 +1297,14 @@ pub(super) fn installed_skill_snapshot_lines_with_config(
     Ok(index
         .skills
         .into_iter()
-        .filter(|entry| entry.active)
-        .map(|entry| format!("- {}: {}", entry.skill_id, INSTALLED_SKILL_SNAPSHOT_HINT))
+        .filter_map(|entry| {
+            if !entry.active {
+                return None;
+            }
+            rehydrate_installed_skill_entry(&install_root, entry)
+                .ok()
+                .map(|entry| format!("- {}: {}", entry.skill_id, INSTALLED_SKILL_SNAPSHOT_HINT))
+        })
         .collect())
 }
 
@@ -1326,6 +1352,71 @@ fn normalize_loaded_skill_entry(
     entry.install_path = install_path.display().to_string();
     entry.skill_md_path = skill_md_path.display().to_string();
     Ok(entry)
+}
+
+fn load_installed_skill_material(
+    install_root: &Path,
+    skill_id: &str,
+) -> Result<(InstalledSkillEntry, String), String> {
+    let entry = installed_skill_by_id(&load_installed_skill_index(install_root)?, skill_id)?;
+    let entry = rehydrate_installed_skill_entry(install_root, entry)?;
+    let instructions = load_managed_skill_markdown(&entry)?;
+    Ok((entry, instructions))
+}
+
+fn rehydrate_installed_skill_entry(
+    install_root: &Path,
+    mut entry: InstalledSkillEntry,
+) -> Result<InstalledSkillEntry, String> {
+    let install_path = managed_skill_install_path(install_root, entry.skill_id.as_str())?;
+    let install_metadata = fs::symlink_metadata(&install_path).map_err(|error| {
+        format!(
+            "failed to inspect managed external skill install {}: {error}",
+            install_path.display()
+        )
+    })?;
+    let install_file_type = install_metadata.file_type();
+    if install_file_type.is_symlink() {
+        return Err(format!(
+            "managed external skill install {} cannot be a symlink",
+            install_path.display()
+        ));
+    }
+    if !install_file_type.is_dir() {
+        return Err(format!(
+            "managed external skill install {} must be a directory",
+            install_path.display()
+        ));
+    }
+
+    entry.install_path = install_path.display().to_string();
+    entry.skill_md_path = install_path
+        .join(DEFAULT_SKILL_FILENAME)
+        .display()
+        .to_string();
+
+    let skill_markdown = load_managed_skill_markdown(&entry)?;
+    entry.display_name =
+        derive_skill_display_name(skill_markdown.as_str(), entry.skill_id.as_str());
+    entry.summary = derive_skill_summary(skill_markdown.as_str());
+    entry.sha256 = format!("{:x}", Sha256::digest(skill_markdown.as_bytes()));
+    Ok(entry)
+}
+
+fn load_managed_skill_markdown(entry: &InstalledSkillEntry) -> Result<String, String> {
+    let install_path = PathBuf::from(entry.install_path.as_str());
+    if !contains_regular_skill_markdown(&install_path)? {
+        return Err(format!(
+            "managed external skill install {} is missing `{DEFAULT_SKILL_FILENAME}`",
+            install_path.display()
+        ));
+    }
+    fs::read_to_string(&entry.skill_md_path).map_err(|error| {
+        format!(
+            "failed to read installed skill {}: {error}",
+            entry.skill_md_path
+        )
+    })
 }
 
 fn managed_skill_install_path(install_root: &Path, skill_id: &str) -> Result<PathBuf, String> {
@@ -1978,6 +2069,152 @@ mod tests {
     }
 
     #[test]
+    fn tampered_index_metadata_is_rehydrated_from_managed_skill_markdown() {
+        let root = unique_temp_dir("loongclaw-ext-skill-index-metadata");
+        fs::create_dir_all(&root).expect("create fixture root");
+        write_file(
+            &root,
+            "source/demo-skill/SKILL.md",
+            "# Demo Skill\n\nPrefer evidence over stale index metadata.\n",
+        );
+        let config = managed_runtime_config(&root);
+
+        crate::tools::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "external_skills.install".to_owned(),
+                payload: json!({
+                    "path": "source/demo-skill"
+                }),
+            },
+            &config,
+        )
+        .expect("install should succeed");
+
+        let install_root = root.join("external-skills-installed");
+        let index_path = install_root.join("index.json");
+        let mut index: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&index_path).expect("read index"))
+                .expect("parse index");
+        index["skills"][0]["display_name"] = json!("Forged Display");
+        index["skills"][0]["summary"] = json!("Forged summary");
+        index["skills"][0]["sha256"] = json!("forged-digest");
+        fs::write(
+            &index_path,
+            serde_json::to_string_pretty(&index).expect("encode tampered index"),
+        )
+        .expect("write tampered index");
+
+        let list_outcome = crate::tools::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "external_skills.list".to_owned(),
+                payload: json!({}),
+            },
+            &config,
+        )
+        .expect("list should succeed with rehydrated metadata");
+        assert_eq!(
+            list_outcome.payload["skills"][0]["display_name"],
+            "Demo Skill"
+        );
+        assert_eq!(
+            list_outcome.payload["skills"][0]["summary"],
+            "Prefer evidence over stale index metadata."
+        );
+        assert_ne!(list_outcome.payload["skills"][0]["sha256"], "forged-digest");
+
+        let invoke_outcome = crate::tools::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "external_skills.invoke".to_owned(),
+                payload: json!({
+                    "skill_id": "demo-skill"
+                }),
+            },
+            &config,
+        )
+        .expect("invoke should succeed with rehydrated metadata");
+        assert_eq!(invoke_outcome.payload["display_name"], "Demo Skill");
+        assert_eq!(
+            invoke_outcome.payload["summary"],
+            "Prefer evidence over stale index metadata."
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inspect_rejects_symlinked_managed_install_directory() {
+        use std::os::unix::fs::symlink;
+
+        let root = unique_temp_dir("loongclaw-ext-skill-install-symlink-swap");
+        fs::create_dir_all(&root).expect("create fixture root");
+        write_file(
+            &root,
+            "source/demo-skill/SKILL.md",
+            "# Demo Skill\n\nManaged install should stay real.\n",
+        );
+        let config = managed_runtime_config(&root);
+
+        crate::tools::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "external_skills.install".to_owned(),
+                payload: json!({
+                    "path": "source/demo-skill"
+                }),
+            },
+            &config,
+        )
+        .expect("install should succeed");
+
+        let install_path = root.join("external-skills-installed").join("demo-skill");
+        fs::remove_dir_all(&install_path).expect("remove managed install");
+
+        let escape_root = unique_temp_dir("loongclaw-ext-skill-install-symlink-target");
+        fs::create_dir_all(&escape_root).expect("create escape root");
+        write_file(
+            &escape_root,
+            "SKILL.md",
+            "# Escape Skill\n\nDo not follow symlinked installs.\n",
+        );
+        symlink(&escape_root, &install_path).expect("create managed install symlink");
+
+        let error = crate::tools::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "external_skills.inspect".to_owned(),
+                payload: json!({
+                    "skill_id": "demo-skill"
+                }),
+            },
+            &config,
+        )
+        .expect_err("inspect should reject symlinked managed installs");
+        assert!(error.contains("cannot be a symlink"));
+
+        crate::tools::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "external_skills.remove".to_owned(),
+                payload: json!({
+                    "skill_id": "demo-skill"
+                }),
+            },
+            &config,
+        )
+        .expect("remove should delete only the managed symlink");
+
+        assert!(
+            escape_root.exists(),
+            "managed remove must not delete the symlink target"
+        );
+        assert!(
+            !install_path.exists(),
+            "managed symlink should be removed from install root"
+        );
+
+        fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&escape_root).ok();
+    }
+
+    #[test]
     fn install_from_tar_gz_archive_extracts_wrapped_skill_root() {
         let root = unique_temp_dir("loongclaw-ext-skill-install-archive");
         fs::create_dir_all(&root).expect("create fixture root");
@@ -2016,6 +2253,22 @@ mod tests {
                 .join("demo-skill")
                 .join("SKILL.md")
                 .exists()
+        );
+        let install_root = root.join("external-skills-installed");
+        let staging_entries = fs::read_dir(&install_root)
+            .expect("install root should exist")
+            .map(|entry| {
+                entry
+                    .expect("read install root entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .filter(|name| name.starts_with(".staging-"))
+            .collect::<Vec<_>>();
+        assert!(
+            staging_entries.is_empty(),
+            "successful archive install must clean staging directories: {staging_entries:?}"
         );
 
         fs::remove_dir_all(&root).ok();
@@ -2071,6 +2324,22 @@ mod tests {
         )
         .expect_err("archive symlink should be rejected");
         assert!(error.contains("cannot contain symlinks or hard links"));
+        let install_root = root.join("external-skills-installed");
+        let staging_entries = fs::read_dir(&install_root)
+            .expect("install root should exist")
+            .map(|entry| {
+                entry
+                    .expect("read install root entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .filter(|name| name.starts_with(".staging-"))
+            .collect::<Vec<_>>();
+        assert!(
+            staging_entries.is_empty(),
+            "failed archive install must not leave staging directories behind: {staging_entries:?}"
+        );
 
         fs::remove_dir_all(&root).ok();
     }
