@@ -284,6 +284,35 @@ mod tests {
     }
 
     #[test]
+    fn allows_malformed_shell_payload_to_adapter_layer() {
+        let ext = ToolPolicyExtension::new(
+            BTreeSet::from(["rm".to_owned()]),
+            BTreeSet::new(),
+            BTreeSet::new(),
+            ShellPolicyDefault::Deny,
+        );
+        let pack = test_pack();
+        let token = test_token();
+        let caps = BTreeSet::from([Capability::InvokeTool]);
+
+        // payload is a string instead of an object — no command can be extracted,
+        // so the extension defers to the tool adapter for error handling.
+        let params = json!({"tool_name": "shell.exec", "payload": "not an object"});
+        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        assert!(ext.authorize_extension(&ctx).is_ok());
+
+        // payload.command is missing entirely
+        let params = json!({"tool_name": "shell.exec", "payload": {"args": ["hello"]}});
+        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        assert!(ext.authorize_extension(&ctx).is_ok());
+
+        // payload.command is empty after trimming
+        let params = json!({"tool_name": "shell.exec", "payload": {"command": "  "}});
+        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        assert!(ext.authorize_extension(&ctx).is_ok());
+    }
+
+    #[test]
     fn denies_absolute_path_command() {
         let ext = ToolPolicyExtension::new(
             BTreeSet::from(["rm".to_owned()]),
