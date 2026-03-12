@@ -621,7 +621,7 @@ fn external_skill_probe_roots(input_path: &Path) -> Vec<PathBuf> {
 
 fn external_skill_warning(artifact: &ExternalSkillArtifact) -> String {
     format!(
-        "detected external skills artifact `{}` ({}); LoongClaw imports prompt/profile content but does not auto-wire external skill runtimes",
+        "detected external skills artifact `{}` ({}); LoongClaw imports prompt/profile content but does not auto-install the runtime, so use the explicit external skills lifecycle (`fetch` -> `install` -> `list` -> `invoke`) when you want the skill available in chat",
         artifact.path.display(),
         artifact.kind.as_id()
     )
@@ -1274,6 +1274,17 @@ mod tests {
         assert!(addendum.contains("kind=codex_skills_dir"));
 
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn external_skill_warning_points_to_explicit_runtime_lifecycle() {
+        let warning = external_skill_warning(&ExternalSkillArtifact {
+            kind: ExternalSkillArtifactKind::SkillsDir,
+            path: PathBuf::from("/tmp/demo/skills"),
+        });
+        assert!(warning.contains("fetch"));
+        assert!(warning.contains("install"));
+        assert!(warning.contains("invoke"));
     }
 
     #[test]
