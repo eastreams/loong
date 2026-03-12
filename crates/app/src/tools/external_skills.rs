@@ -1539,12 +1539,28 @@ mod tests {
         f()
     }
 
+    struct PolicyOverrideResetGuard;
+
+    impl Drop for PolicyOverrideResetGuard {
+        fn drop(&mut self) {
+            reset_policy_override_for_test();
+        }
+    }
+
     fn reset_policy_override_for_test() {
         if let Some(store) = EXTERNAL_SKILLS_POLICY_OVERRIDE.get()
             && let Ok(mut guard) = store.write()
         {
             *guard = ExternalSkillsPolicyOverride::default();
         }
+    }
+
+    fn with_managed_runtime_test<T>(f: impl FnOnce() -> T) -> T {
+        with_policy_test_lock(|| {
+            reset_policy_override_for_test();
+            let _reset_guard = PolicyOverrideResetGuard;
+            f()
+        })
     }
 
     fn base_runtime_config() -> ToolRuntimeConfig {
@@ -1802,858 +1818,888 @@ mod tests {
 
     #[test]
     fn install_from_directory_writes_managed_index_and_copy() {
-        let root = unique_temp_dir("loongclaw-ext-skill-install-dir");
-        fs::create_dir_all(&root).expect("create fixture root");
-        write_file(
-            &root,
-            "source/demo-skill/SKILL.md",
-            "# Demo Skill\n\nUse this skill when the task needs deployment discipline.\n",
-        );
-        let config = managed_runtime_config(&root);
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-install-dir");
+            fs::create_dir_all(&root).expect("create fixture root");
+            write_file(
+                &root,
+                "source/demo-skill/SKILL.md",
+                "# Demo Skill\n\nUse this skill when the task needs deployment discipline.\n",
+            );
+            let config = managed_runtime_config(&root);
 
-        let outcome = crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.install".to_owned(),
-                payload: json!({
-                    "path": "source/demo-skill"
-                }),
-            },
-            &config,
-        )
-        .expect("install should succeed");
+            let outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "source/demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect("install should succeed");
 
-        assert_eq!(outcome.status, "ok");
-        assert_eq!(outcome.payload["skill_id"], "demo-skill");
-        assert!(
-            root.join("external-skills-installed")
-                .join("index.json")
-                .exists(),
-            "managed external skill index should exist"
-        );
-        assert!(
-            root.join("external-skills-installed")
-                .join("demo-skill")
-                .join("SKILL.md")
-                .exists(),
-            "managed external skill copy should exist"
-        );
+            assert_eq!(outcome.status, "ok");
+            assert_eq!(outcome.payload["skill_id"], "demo-skill");
+            assert!(
+                root.join("external-skills-installed")
+                    .join("index.json")
+                    .exists(),
+                "managed external skill index should exist"
+            );
+            assert!(
+                root.join("external-skills-installed")
+                    .join("demo-skill")
+                    .join("SKILL.md")
+                    .exists(),
+                "managed external skill copy should exist"
+            );
 
-        fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&root).ok();
+        });
     }
 
     #[test]
     fn install_requires_enabled_runtime() {
-        let root = unique_temp_dir("loongclaw-ext-skill-install-disabled");
-        fs::create_dir_all(&root).expect("create fixture root");
-        write_file(
-            &root,
-            "source/demo-skill/SKILL.md",
-            "# Demo Skill\n\nInstall should require enabled runtime.\n",
-        );
-        let mut config = managed_runtime_config(&root);
-        config.external_skills.enabled = false;
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-install-disabled");
+            fs::create_dir_all(&root).expect("create fixture root");
+            write_file(
+                &root,
+                "source/demo-skill/SKILL.md",
+                "# Demo Skill\n\nInstall should require enabled runtime.\n",
+            );
+            let mut config = managed_runtime_config(&root);
+            config.external_skills.enabled = false;
 
-        let error = crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.install".to_owned(),
-                payload: json!({
-                    "path": "source/demo-skill"
-                }),
-            },
-            &config,
-        )
-        .expect_err("disabled runtime should block install");
+            let error = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "source/demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect_err("disabled runtime should block install");
 
-        assert!(error.contains("external skills runtime is disabled"));
+            assert!(error.contains("external skills runtime is disabled"));
 
-        fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&root).ok();
+        });
     }
 
     #[test]
     fn list_inspect_and_remove_require_enabled_runtime() {
-        let root = unique_temp_dir("loongclaw-ext-skill-disabled-management");
-        fs::create_dir_all(&root).expect("create fixture root");
-        write_file(
-            &root,
-            "source/demo-skill/SKILL.md",
-            "# Demo Skill\n\nManagement operations should require enabled runtime.\n",
-        );
-        let enabled_config = managed_runtime_config(&root);
-
-        crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.install".to_owned(),
-                payload: json!({
-                    "path": "source/demo-skill"
-                }),
-            },
-            &enabled_config,
-        )
-        .expect("install should succeed");
-
-        let mut disabled_config = enabled_config;
-        disabled_config.external_skills.enabled = false;
-
-        for (tool_name, payload) in [
-            ("external_skills.list", json!({})),
-            (
-                "external_skills.inspect",
-                json!({ "skill_id": "demo-skill" }),
-            ),
-            (
-                "external_skills.remove",
-                json!({ "skill_id": "demo-skill" }),
-            ),
-        ] {
-            let error = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: tool_name.to_owned(),
-                    payload,
-                },
-                &disabled_config,
-            )
-            .expect_err("disabled runtime should block lifecycle management");
-            assert!(
-                error.contains("external skills runtime is disabled"),
-                "unexpected error for {tool_name}: {error}"
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-disabled-management");
+            fs::create_dir_all(&root).expect("create fixture root");
+            write_file(
+                &root,
+                "source/demo-skill/SKILL.md",
+                "# Demo Skill\n\nManagement operations should require enabled runtime.\n",
             );
-        }
+            let enabled_config = managed_runtime_config(&root);
 
-        fs::remove_dir_all(&root).ok();
+            crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "source/demo-skill"
+                    }),
+                },
+                &enabled_config,
+            )
+            .expect("install should succeed");
+
+            let mut disabled_config = enabled_config;
+            disabled_config.external_skills.enabled = false;
+
+            for (tool_name, payload) in [
+                ("external_skills.list", json!({})),
+                (
+                    "external_skills.inspect",
+                    json!({ "skill_id": "demo-skill" }),
+                ),
+                (
+                    "external_skills.remove",
+                    json!({ "skill_id": "demo-skill" }),
+                ),
+            ] {
+                let error = crate::tools::execute_tool_core_with_config(
+                    ToolCoreRequest {
+                        tool_name: tool_name.to_owned(),
+                        payload,
+                    },
+                    &disabled_config,
+                )
+                .expect_err("disabled runtime should block lifecycle management");
+                assert!(
+                    error.contains("external skills runtime is disabled"),
+                    "unexpected error for {tool_name}: {error}"
+                );
+            }
+
+            fs::remove_dir_all(&root).ok();
+        });
     }
 
     #[test]
     fn list_and_invoke_installed_skill_return_managed_metadata() {
-        let root = unique_temp_dir("loongclaw-ext-skill-list-invoke");
-        fs::create_dir_all(&root).expect("create fixture root");
-        write_file(
-            &root,
-            "source/demo-skill/SKILL.md",
-            "# Demo Skill\n\nPrefer explicit verification before completion.\n",
-        );
-        let config = managed_runtime_config(&root);
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-list-invoke");
+            fs::create_dir_all(&root).expect("create fixture root");
+            write_file(
+                &root,
+                "source/demo-skill/SKILL.md",
+                "# Demo Skill\n\nPrefer explicit verification before completion.\n",
+            );
+            let config = managed_runtime_config(&root);
 
-        crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.install".to_owned(),
-                payload: json!({
-                    "path": "source/demo-skill"
-                }),
-            },
-            &config,
-        )
-        .expect("install should succeed");
+            crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "source/demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect("install should succeed");
 
-        let list_outcome = crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.list".to_owned(),
-                payload: json!({}),
-            },
-            &config,
-        )
-        .expect("list should succeed");
-        assert_eq!(list_outcome.status, "ok");
-        assert_eq!(list_outcome.payload["skills"][0]["skill_id"], "demo-skill");
+            let list_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.list".to_owned(),
+                    payload: json!({}),
+                },
+                &config,
+            )
+            .expect("list should succeed");
+            assert_eq!(list_outcome.status, "ok");
+            assert_eq!(list_outcome.payload["skills"][0]["skill_id"], "demo-skill");
 
-        let invoke_outcome = crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.invoke".to_owned(),
-                payload: json!({
-                    "skill_id": "demo-skill"
-                }),
-            },
-            &config,
-        )
-        .expect("invoke should succeed");
-        assert_eq!(invoke_outcome.status, "ok");
-        assert_eq!(invoke_outcome.payload["skill_id"], "demo-skill");
-        assert!(
-            invoke_outcome.payload["instructions"]
-                .as_str()
-                .expect("instructions should be text")
-                .contains("Demo Skill")
-        );
+            let invoke_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.invoke".to_owned(),
+                    payload: json!({
+                        "skill_id": "demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect("invoke should succeed");
+            assert_eq!(invoke_outcome.status, "ok");
+            assert_eq!(invoke_outcome.payload["skill_id"], "demo-skill");
+            assert!(
+                invoke_outcome.payload["instructions"]
+                    .as_str()
+                    .expect("instructions should be text")
+                    .contains("Demo Skill")
+            );
 
-        fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&root).ok();
+        });
     }
 
     #[test]
     fn invoke_requires_enabled_runtime() {
-        let root = unique_temp_dir("loongclaw-ext-skill-invoke-disabled");
-        fs::create_dir_all(&root).expect("create fixture root");
-        write_file(
-            &root,
-            "source/demo-skill/SKILL.md",
-            "# Demo Skill\n\nInvoke should require enabled runtime.\n",
-        );
-        let enabled_config = managed_runtime_config(&root);
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-invoke-disabled");
+            fs::create_dir_all(&root).expect("create fixture root");
+            write_file(
+                &root,
+                "source/demo-skill/SKILL.md",
+                "# Demo Skill\n\nInvoke should require enabled runtime.\n",
+            );
+            let enabled_config = managed_runtime_config(&root);
 
-        crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.install".to_owned(),
-                payload: json!({
-                    "path": "source/demo-skill"
-                }),
-            },
-            &enabled_config,
-        )
-        .expect("install should succeed");
+            crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "source/demo-skill"
+                    }),
+                },
+                &enabled_config,
+            )
+            .expect("install should succeed");
 
-        let mut disabled_config = enabled_config;
-        disabled_config.external_skills.enabled = false;
-        let error = crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.invoke".to_owned(),
-                payload: json!({
-                    "skill_id": "demo-skill"
-                }),
-            },
-            &disabled_config,
-        )
-        .expect_err("disabled runtime should block invoke");
+            let mut disabled_config = enabled_config;
+            disabled_config.external_skills.enabled = false;
+            let error = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.invoke".to_owned(),
+                    payload: json!({
+                        "skill_id": "demo-skill"
+                    }),
+                },
+                &disabled_config,
+            )
+            .expect_err("disabled runtime should block invoke");
 
-        assert!(error.contains("external skills runtime is disabled"));
+            assert!(error.contains("external skills runtime is disabled"));
 
-        fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&root).ok();
+        });
     }
 
     #[test]
     fn remove_installed_skill_clears_managed_entry() {
-        let root = unique_temp_dir("loongclaw-ext-skill-remove");
-        fs::create_dir_all(&root).expect("create fixture root");
-        write_file(
-            &root,
-            "source/demo-skill/SKILL.md",
-            "# Demo Skill\n\nKeep output concise.\n",
-        );
-        let config = managed_runtime_config(&root);
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-remove");
+            fs::create_dir_all(&root).expect("create fixture root");
+            write_file(
+                &root,
+                "source/demo-skill/SKILL.md",
+                "# Demo Skill\n\nKeep output concise.\n",
+            );
+            let config = managed_runtime_config(&root);
 
-        crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.install".to_owned(),
-                payload: json!({
-                    "path": "source/demo-skill"
-                }),
-            },
-            &config,
-        )
-        .expect("install should succeed");
+            crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "source/demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect("install should succeed");
 
-        let remove_outcome = crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.remove".to_owned(),
-                payload: json!({
-                    "skill_id": "demo-skill"
-                }),
-            },
-            &config,
-        )
-        .expect("remove should succeed");
-        assert_eq!(remove_outcome.status, "ok");
-        assert_eq!(remove_outcome.payload["removed"], json!(true));
+            let remove_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.remove".to_owned(),
+                    payload: json!({
+                        "skill_id": "demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect("remove should succeed");
+            assert_eq!(remove_outcome.status, "ok");
+            assert_eq!(remove_outcome.payload["removed"], json!(true));
 
-        let list_outcome = crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.list".to_owned(),
-                payload: json!({}),
-            },
-            &config,
-        )
-        .expect("list should succeed after remove");
-        assert_eq!(list_outcome.payload["skills"], json!([]));
+            let list_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.list".to_owned(),
+                    payload: json!({}),
+                },
+                &config,
+            )
+            .expect("list should succeed after remove");
+            assert_eq!(list_outcome.payload["skills"], json!([]));
 
-        fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&root).ok();
+        });
     }
 
     #[cfg(unix)]
     #[test]
     fn replace_failed_install_preserves_previous_managed_skill() {
-        use std::os::unix::fs::PermissionsExt;
+        with_managed_runtime_test(|| {
+            use std::os::unix::fs::PermissionsExt;
 
-        let root = unique_temp_dir("loongclaw-ext-skill-replace-rollback");
-        fs::create_dir_all(&root).expect("create fixture root");
-        write_file(
-            &root,
-            "source/demo-skill-v1/SKILL.md",
-            "# Demo Skill\n\nStable installed skill.\n",
-        );
-        write_file(
-            &root,
-            "source/demo-skill-v2/SKILL.md",
-            "# Demo Skill\n\nReplacement should fail safely.\n",
-        );
-        write_file(
-            &root,
-            "source/demo-skill-v2/private.txt",
-            "copy should fail on unreadable file",
-        );
-        let unreadable_path = root.join("source/demo-skill-v2/private.txt");
-        let mut perms = fs::metadata(&unreadable_path)
-            .expect("read metadata")
-            .permissions();
-        perms.set_mode(0o000);
-        fs::set_permissions(&unreadable_path, perms).expect("set unreadable permissions");
+            let root = unique_temp_dir("loongclaw-ext-skill-replace-rollback");
+            fs::create_dir_all(&root).expect("create fixture root");
+            write_file(
+                &root,
+                "source/demo-skill-v1/SKILL.md",
+                "# Demo Skill\n\nStable installed skill.\n",
+            );
+            write_file(
+                &root,
+                "source/demo-skill-v2/SKILL.md",
+                "# Demo Skill\n\nReplacement should fail safely.\n",
+            );
+            write_file(
+                &root,
+                "source/demo-skill-v2/private.txt",
+                "copy should fail on unreadable file",
+            );
+            let unreadable_path = root.join("source/demo-skill-v2/private.txt");
+            let mut perms = fs::metadata(&unreadable_path)
+                .expect("read metadata")
+                .permissions();
+            perms.set_mode(0o000);
+            fs::set_permissions(&unreadable_path, perms).expect("set unreadable permissions");
 
-        let config = managed_runtime_config(&root);
-        crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.install".to_owned(),
-                payload: json!({
-                    "path": "source/demo-skill-v1",
-                    "skill_id": "demo-skill"
-                }),
-            },
-            &config,
-        )
-        .expect("initial install should succeed");
+            let config = managed_runtime_config(&root);
+            crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "source/demo-skill-v1",
+                        "skill_id": "demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect("initial install should succeed");
 
-        let error = crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.install".to_owned(),
-                payload: json!({
-                    "path": "source/demo-skill-v2",
-                    "skill_id": "demo-skill",
-                    "replace": true
-                }),
-            },
-            &config,
-        )
-        .expect_err("replacement install should fail");
-        assert!(
-            error.contains("failed to copy external skill file"),
-            "unexpected replacement failure: {error}"
-        );
+            let error = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "source/demo-skill-v2",
+                        "skill_id": "demo-skill",
+                        "replace": true
+                    }),
+                },
+                &config,
+            )
+            .expect_err("replacement install should fail");
+            assert!(
+                error.contains("failed to copy external skill file"),
+                "unexpected replacement failure: {error}"
+            );
 
-        let invoke_outcome = crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.invoke".to_owned(),
-                payload: json!({
-                    "skill_id": "demo-skill"
-                }),
-            },
-            &config,
-        )
-        .expect("previous install should remain available after failed replace");
-        assert!(
-            invoke_outcome.payload["instructions"]
-                .as_str()
-                .expect("instructions should be text")
-                .contains("Stable installed skill"),
-            "failed replace must preserve previous managed install"
-        );
+            let invoke_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.invoke".to_owned(),
+                    payload: json!({
+                        "skill_id": "demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect("previous install should remain available after failed replace");
+            assert!(
+                invoke_outcome.payload["instructions"]
+                    .as_str()
+                    .expect("instructions should be text")
+                    .contains("Stable installed skill"),
+                "failed replace must preserve previous managed install"
+            );
 
-        let install_root = root.join("external-skills-installed");
-        let transient_entries = fs::read_dir(&install_root)
-            .expect("install root should exist")
-            .map(|entry| {
-                entry
-                    .expect("read install root entry")
-                    .file_name()
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .filter(|name| name.starts_with(".incoming-") || name.starts_with(".backup-"))
-            .collect::<Vec<_>>();
-        assert!(
-            transient_entries.is_empty(),
-            "failed replace must clean temporary directories: {transient_entries:?}"
-        );
+            let install_root = root.join("external-skills-installed");
+            let transient_entries = fs::read_dir(&install_root)
+                .expect("install root should exist")
+                .map(|entry| {
+                    entry
+                        .expect("read install root entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .filter(|name| name.starts_with(".incoming-") || name.starts_with(".backup-"))
+                .collect::<Vec<_>>();
+            assert!(
+                transient_entries.is_empty(),
+                "failed replace must clean temporary directories: {transient_entries:?}"
+            );
 
-        let mut cleanup_perms = fs::metadata(&unreadable_path)
-            .expect("read metadata for cleanup")
-            .permissions();
-        cleanup_perms.set_mode(0o644);
-        fs::set_permissions(&unreadable_path, cleanup_perms).ok();
-        fs::remove_dir_all(&root).ok();
+            let mut cleanup_perms = fs::metadata(&unreadable_path)
+                .expect("read metadata for cleanup")
+                .permissions();
+            cleanup_perms.set_mode(0o644);
+            fs::set_permissions(&unreadable_path, cleanup_perms).ok();
+            fs::remove_dir_all(&root).ok();
+        });
     }
 
     #[test]
     fn tampered_index_paths_do_not_escape_managed_install_root() {
-        let root = unique_temp_dir("loongclaw-ext-skill-index-tamper");
-        fs::create_dir_all(&root).expect("create fixture root");
-        write_file(
-            &root,
-            "source/demo-skill/SKILL.md",
-            "# Demo Skill\n\nInspectable managed content.\n",
-        );
-        let config = managed_runtime_config(&root);
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-index-tamper");
+            fs::create_dir_all(&root).expect("create fixture root");
+            write_file(
+                &root,
+                "source/demo-skill/SKILL.md",
+                "# Demo Skill\n\nInspectable managed content.\n",
+            );
+            let config = managed_runtime_config(&root);
 
-        crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.install".to_owned(),
-                payload: json!({
-                    "path": "source/demo-skill"
-                }),
-            },
-            &config,
-        )
-        .expect("install should succeed");
+            crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "source/demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect("install should succeed");
 
-        let install_root = root.join("external-skills-installed");
-        let index_path = install_root.join("index.json");
-        let escape_root = unique_temp_dir("loongclaw-ext-skill-index-escape");
-        fs::create_dir_all(&escape_root).expect("create escape root");
-        write_file(
-            &escape_root,
-            "SKILL.md",
-            "# Escape Skill\n\nDo not trust me.\n",
-        );
+            let install_root = root.join("external-skills-installed");
+            let index_path = install_root.join("index.json");
+            let escape_root = unique_temp_dir("loongclaw-ext-skill-index-escape");
+            fs::create_dir_all(&escape_root).expect("create escape root");
+            write_file(
+                &escape_root,
+                "SKILL.md",
+                "# Escape Skill\n\nDo not trust me.\n",
+            );
 
-        let mut index: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&index_path).expect("read index"))
-                .expect("parse index");
-        index["skills"][0]["install_path"] = json!(escape_root.display().to_string());
-        index["skills"][0]["skill_md_path"] =
-            json!(escape_root.join("SKILL.md").display().to_string());
-        fs::write(
-            &index_path,
-            serde_json::to_string_pretty(&index).expect("encode tampered index"),
-        )
-        .expect("write tampered index");
+            let mut index: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&index_path).expect("read index"))
+                    .expect("parse index");
+            index["skills"][0]["install_path"] = json!(escape_root.display().to_string());
+            index["skills"][0]["skill_md_path"] =
+                json!(escape_root.join("SKILL.md").display().to_string());
+            fs::write(
+                &index_path,
+                serde_json::to_string_pretty(&index).expect("encode tampered index"),
+            )
+            .expect("write tampered index");
 
-        let inspect_outcome = crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.inspect".to_owned(),
-                payload: json!({
-                    "skill_id": "demo-skill"
-                }),
-            },
-            &config,
-        )
-        .expect("inspect should stay inside managed root");
-        assert!(
-            inspect_outcome.payload["instructions_preview"]
-                .as_str()
-                .expect("preview should exist")
-                .contains("Inspectable managed content"),
-            "inspect should read the managed skill content"
-        );
+            let inspect_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.inspect".to_owned(),
+                    payload: json!({
+                        "skill_id": "demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect("inspect should stay inside managed root");
+            assert!(
+                inspect_outcome.payload["instructions_preview"]
+                    .as_str()
+                    .expect("preview should exist")
+                    .contains("Inspectable managed content"),
+                "inspect should read the managed skill content"
+            );
 
-        crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.remove".to_owned(),
-                payload: json!({
-                    "skill_id": "demo-skill"
-                }),
-            },
-            &config,
-        )
-        .expect("remove should stay inside managed root");
+            crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.remove".to_owned(),
+                    payload: json!({
+                        "skill_id": "demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect("remove should stay inside managed root");
 
-        assert!(
-            escape_root.exists(),
-            "tampered install path outside managed root must not be removed"
-        );
-        assert!(
-            !install_root.join("demo-skill").exists(),
-            "managed install should be removed"
-        );
+            assert!(
+                escape_root.exists(),
+                "tampered install path outside managed root must not be removed"
+            );
+            assert!(
+                !install_root.join("demo-skill").exists(),
+                "managed install should be removed"
+            );
 
-        fs::remove_dir_all(&root).ok();
-        fs::remove_dir_all(&escape_root).ok();
+            fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&escape_root).ok();
+        });
     }
 
     #[test]
     fn tampered_index_metadata_is_rehydrated_from_managed_skill_markdown() {
-        let root = unique_temp_dir("loongclaw-ext-skill-index-metadata");
-        fs::create_dir_all(&root).expect("create fixture root");
-        write_file(
-            &root,
-            "source/demo-skill/SKILL.md",
-            "# Demo Skill\n\nPrefer evidence over stale index metadata.\n",
-        );
-        let config = managed_runtime_config(&root);
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-index-metadata");
+            fs::create_dir_all(&root).expect("create fixture root");
+            write_file(
+                &root,
+                "source/demo-skill/SKILL.md",
+                "# Demo Skill\n\nPrefer evidence over stale index metadata.\n",
+            );
+            let config = managed_runtime_config(&root);
 
-        crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.install".to_owned(),
-                payload: json!({
-                    "path": "source/demo-skill"
-                }),
-            },
-            &config,
-        )
-        .expect("install should succeed");
+            crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "source/demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect("install should succeed");
 
-        let install_root = root.join("external-skills-installed");
-        let index_path = install_root.join("index.json");
-        let mut index: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&index_path).expect("read index"))
-                .expect("parse index");
-        index["skills"][0]["display_name"] = json!("Forged Display");
-        index["skills"][0]["summary"] = json!("Forged summary");
-        index["skills"][0]["sha256"] = json!("forged-digest");
-        fs::write(
-            &index_path,
-            serde_json::to_string_pretty(&index).expect("encode tampered index"),
-        )
-        .expect("write tampered index");
+            let install_root = root.join("external-skills-installed");
+            let index_path = install_root.join("index.json");
+            let mut index: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&index_path).expect("read index"))
+                    .expect("parse index");
+            index["skills"][0]["display_name"] = json!("Forged Display");
+            index["skills"][0]["summary"] = json!("Forged summary");
+            index["skills"][0]["sha256"] = json!("forged-digest");
+            fs::write(
+                &index_path,
+                serde_json::to_string_pretty(&index).expect("encode tampered index"),
+            )
+            .expect("write tampered index");
 
-        let list_outcome = crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.list".to_owned(),
-                payload: json!({}),
-            },
-            &config,
-        )
-        .expect("list should succeed with rehydrated metadata");
-        assert_eq!(
-            list_outcome.payload["skills"][0]["display_name"],
-            "Demo Skill"
-        );
-        assert_eq!(
-            list_outcome.payload["skills"][0]["summary"],
-            "Prefer evidence over stale index metadata."
-        );
-        assert_ne!(list_outcome.payload["skills"][0]["sha256"], "forged-digest");
+            let list_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.list".to_owned(),
+                    payload: json!({}),
+                },
+                &config,
+            )
+            .expect("list should succeed with rehydrated metadata");
+            assert_eq!(
+                list_outcome.payload["skills"][0]["display_name"],
+                "Demo Skill"
+            );
+            assert_eq!(
+                list_outcome.payload["skills"][0]["summary"],
+                "Prefer evidence over stale index metadata."
+            );
+            assert_ne!(list_outcome.payload["skills"][0]["sha256"], "forged-digest");
 
-        let invoke_outcome = crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.invoke".to_owned(),
-                payload: json!({
-                    "skill_id": "demo-skill"
-                }),
-            },
-            &config,
-        )
-        .expect("invoke should succeed with rehydrated metadata");
-        assert_eq!(invoke_outcome.payload["display_name"], "Demo Skill");
-        assert_eq!(
-            invoke_outcome.payload["summary"],
-            "Prefer evidence over stale index metadata."
-        );
+            let invoke_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.invoke".to_owned(),
+                    payload: json!({
+                        "skill_id": "demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect("invoke should succeed with rehydrated metadata");
+            assert_eq!(invoke_outcome.payload["display_name"], "Demo Skill");
+            assert_eq!(
+                invoke_outcome.payload["summary"],
+                "Prefer evidence over stale index metadata."
+            );
 
-        fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&root).ok();
+        });
     }
 
     #[cfg(unix)]
     #[test]
     fn inspect_rejects_symlinked_managed_install_directory() {
-        use std::os::unix::fs::symlink;
+        with_managed_runtime_test(|| {
+            use std::os::unix::fs::symlink;
 
-        let root = unique_temp_dir("loongclaw-ext-skill-install-symlink-swap");
-        fs::create_dir_all(&root).expect("create fixture root");
-        write_file(
-            &root,
-            "source/demo-skill/SKILL.md",
-            "# Demo Skill\n\nManaged install should stay real.\n",
-        );
-        let config = managed_runtime_config(&root);
+            let root = unique_temp_dir("loongclaw-ext-skill-install-symlink-swap");
+            fs::create_dir_all(&root).expect("create fixture root");
+            write_file(
+                &root,
+                "source/demo-skill/SKILL.md",
+                "# Demo Skill\n\nManaged install should stay real.\n",
+            );
+            let config = managed_runtime_config(&root);
 
-        crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.install".to_owned(),
-                payload: json!({
-                    "path": "source/demo-skill"
-                }),
-            },
-            &config,
-        )
-        .expect("install should succeed");
+            crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "source/demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect("install should succeed");
 
-        let install_path = root.join("external-skills-installed").join("demo-skill");
-        fs::remove_dir_all(&install_path).expect("remove managed install");
+            let install_path = root.join("external-skills-installed").join("demo-skill");
+            fs::remove_dir_all(&install_path).expect("remove managed install");
 
-        let escape_root = unique_temp_dir("loongclaw-ext-skill-install-symlink-target");
-        fs::create_dir_all(&escape_root).expect("create escape root");
-        write_file(
-            &escape_root,
-            "SKILL.md",
-            "# Escape Skill\n\nDo not follow symlinked installs.\n",
-        );
-        symlink(&escape_root, &install_path).expect("create managed install symlink");
+            let escape_root = unique_temp_dir("loongclaw-ext-skill-install-symlink-target");
+            fs::create_dir_all(&escape_root).expect("create escape root");
+            write_file(
+                &escape_root,
+                "SKILL.md",
+                "# Escape Skill\n\nDo not follow symlinked installs.\n",
+            );
+            symlink(&escape_root, &install_path).expect("create managed install symlink");
 
-        let error = crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.inspect".to_owned(),
-                payload: json!({
-                    "skill_id": "demo-skill"
-                }),
-            },
-            &config,
-        )
-        .expect_err("inspect should reject symlinked managed installs");
-        assert!(error.contains("cannot be a symlink"));
+            let error = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.inspect".to_owned(),
+                    payload: json!({
+                        "skill_id": "demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect_err("inspect should reject symlinked managed installs");
+            assert!(error.contains("cannot be a symlink"));
 
-        crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.remove".to_owned(),
-                payload: json!({
-                    "skill_id": "demo-skill"
-                }),
-            },
-            &config,
-        )
-        .expect("remove should delete only the managed symlink");
+            crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.remove".to_owned(),
+                    payload: json!({
+                        "skill_id": "demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect("remove should delete only the managed symlink");
 
-        assert!(
-            escape_root.exists(),
-            "managed remove must not delete the symlink target"
-        );
-        assert!(
-            !install_path.exists(),
-            "managed symlink should be removed from install root"
-        );
+            assert!(
+                escape_root.exists(),
+                "managed remove must not delete the symlink target"
+            );
+            assert!(
+                !install_path.exists(),
+                "managed symlink should be removed from install root"
+            );
 
-        fs::remove_dir_all(&root).ok();
-        fs::remove_dir_all(&escape_root).ok();
+            fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&escape_root).ok();
+        });
     }
 
     #[test]
     fn install_from_tar_gz_archive_extracts_wrapped_skill_root() {
-        let root = unique_temp_dir("loongclaw-ext-skill-install-archive");
-        fs::create_dir_all(&root).expect("create fixture root");
-        let archive_source_root = root.join("archive-src");
-        write_file(
-            &archive_source_root,
-            "bundle/demo-skill/SKILL.md",
-            "# Demo Skill\n\nArchive-installed skill.\n",
-        );
-        let archive_path = root.join("demo-skill.tar.gz");
-        {
-            let tar_gz = fs::File::create(&archive_path).expect("create archive");
-            let encoder = flate2::write::GzEncoder::new(tar_gz, flate2::Compression::default());
-            let mut tar = tar::Builder::new(encoder);
-            tar.append_dir_all("bundle", archive_source_root.join("bundle"))
-                .expect("append archive directory");
-            tar.finish().expect("finish archive");
-        }
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-install-archive");
+            fs::create_dir_all(&root).expect("create fixture root");
+            let archive_source_root = root.join("archive-src");
+            write_file(
+                &archive_source_root,
+                "bundle/demo-skill/SKILL.md",
+                "# Demo Skill\n\nArchive-installed skill.\n",
+            );
+            let archive_path = root.join("demo-skill.tar.gz");
+            {
+                let tar_gz = fs::File::create(&archive_path).expect("create archive");
+                let encoder = flate2::write::GzEncoder::new(tar_gz, flate2::Compression::default());
+                let mut tar = tar::Builder::new(encoder);
+                tar.append_dir_all("bundle", archive_source_root.join("bundle"))
+                    .expect("append archive directory");
+                tar.finish().expect("finish archive");
+            }
 
-        let config = managed_runtime_config(&root);
-        let outcome = crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.install".to_owned(),
-                payload: json!({
-                    "path": "demo-skill.tar.gz"
-                }),
-            },
-            &config,
-        )
-        .expect("archive install should succeed");
+            let config = managed_runtime_config(&root);
+            let outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "demo-skill.tar.gz"
+                    }),
+                },
+                &config,
+            )
+            .expect("archive install should succeed");
 
-        assert_eq!(outcome.status, "ok");
-        assert_eq!(outcome.payload["source_kind"], "archive");
-        assert!(
-            root.join("external-skills-installed")
-                .join("demo-skill")
-                .join("SKILL.md")
-                .exists()
-        );
-        let install_root = root.join("external-skills-installed");
-        let staging_entries = fs::read_dir(&install_root)
-            .expect("install root should exist")
-            .map(|entry| {
-                entry
-                    .expect("read install root entry")
-                    .file_name()
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .filter(|name| name.starts_with(".staging-"))
-            .collect::<Vec<_>>();
-        assert!(
-            staging_entries.is_empty(),
-            "successful archive install must clean staging directories: {staging_entries:?}"
-        );
+            assert_eq!(outcome.status, "ok");
+            assert_eq!(outcome.payload["source_kind"], "archive");
+            assert!(
+                root.join("external-skills-installed")
+                    .join("demo-skill")
+                    .join("SKILL.md")
+                    .exists()
+            );
+            let install_root = root.join("external-skills-installed");
+            let staging_entries = fs::read_dir(&install_root)
+                .expect("install root should exist")
+                .map(|entry| {
+                    entry
+                        .expect("read install root entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .filter(|name| name.starts_with(".staging-"))
+                .collect::<Vec<_>>();
+            assert!(
+                staging_entries.is_empty(),
+                "successful archive install must clean staging directories: {staging_entries:?}"
+            );
 
-        fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&root).ok();
+        });
     }
 
     #[test]
     fn install_from_archive_rejects_symlink_entries() {
-        let root = unique_temp_dir("loongclaw-ext-skill-archive-symlink");
-        fs::create_dir_all(&root).expect("create fixture root");
-        let archive_path = root.join("demo-skill.tar.gz");
-        {
-            let tar_gz = fs::File::create(&archive_path).expect("create archive");
-            let encoder = flate2::write::GzEncoder::new(tar_gz, flate2::Compression::default());
-            let mut tar = tar::Builder::new(encoder);
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-archive-symlink");
+            fs::create_dir_all(&root).expect("create fixture root");
+            let archive_path = root.join("demo-skill.tar.gz");
+            {
+                let tar_gz = fs::File::create(&archive_path).expect("create archive");
+                let encoder = flate2::write::GzEncoder::new(tar_gz, flate2::Compression::default());
+                let mut tar = tar::Builder::new(encoder);
 
-            let skill_bytes = b"# Demo Skill\n\nArchive symlink should fail.\n";
-            let mut skill_header = tar::Header::new_gnu();
-            skill_header
-                .set_path("bundle/demo-skill/SKILL.md")
-                .expect("set skill path");
-            skill_header.set_size(skill_bytes.len() as u64);
-            skill_header.set_mode(0o644);
-            skill_header.set_cksum();
-            tar.append(&skill_header, &skill_bytes[..])
-                .expect("append skill file");
+                let skill_bytes = b"# Demo Skill\n\nArchive symlink should fail.\n";
+                let mut skill_header = tar::Header::new_gnu();
+                skill_header
+                    .set_path("bundle/demo-skill/SKILL.md")
+                    .expect("set skill path");
+                skill_header.set_size(skill_bytes.len() as u64);
+                skill_header.set_mode(0o644);
+                skill_header.set_cksum();
+                tar.append(&skill_header, &skill_bytes[..])
+                    .expect("append skill file");
 
-            let mut symlink_header = tar::Header::new_gnu();
-            symlink_header
-                .set_path("bundle/demo-skill/leak.txt")
-                .expect("set symlink path");
-            symlink_header.set_entry_type(tar::EntryType::Symlink);
-            symlink_header
-                .set_link_name("/etc/passwd")
-                .expect("set symlink target");
-            symlink_header.set_size(0);
-            symlink_header.set_mode(0o777);
-            symlink_header.set_cksum();
-            tar.append(&symlink_header, std::io::empty())
-                .expect("append symlink");
+                let mut symlink_header = tar::Header::new_gnu();
+                symlink_header
+                    .set_path("bundle/demo-skill/leak.txt")
+                    .expect("set symlink path");
+                symlink_header.set_entry_type(tar::EntryType::Symlink);
+                symlink_header
+                    .set_link_name("/etc/passwd")
+                    .expect("set symlink target");
+                symlink_header.set_size(0);
+                symlink_header.set_mode(0o777);
+                symlink_header.set_cksum();
+                tar.append(&symlink_header, std::io::empty())
+                    .expect("append symlink");
 
-            tar.finish().expect("finish archive");
-        }
+                tar.finish().expect("finish archive");
+            }
 
-        let config = managed_runtime_config(&root);
-        let error = crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.install".to_owned(),
-                payload: json!({
-                    "path": "demo-skill.tar.gz"
-                }),
-            },
-            &config,
-        )
-        .expect_err("archive symlink should be rejected");
-        assert!(error.contains("cannot contain symlinks or hard links"));
-        let install_root = root.join("external-skills-installed");
-        let staging_entries = fs::read_dir(&install_root)
-            .expect("install root should exist")
-            .map(|entry| {
-                entry
-                    .expect("read install root entry")
-                    .file_name()
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .filter(|name| name.starts_with(".staging-"))
-            .collect::<Vec<_>>();
-        assert!(
-            staging_entries.is_empty(),
-            "failed archive install must not leave staging directories behind: {staging_entries:?}"
-        );
+            let config = managed_runtime_config(&root);
+            let error = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "demo-skill.tar.gz"
+                    }),
+                },
+                &config,
+            )
+            .expect_err("archive symlink should be rejected");
+            assert!(error.contains("cannot contain symlinks or hard links"));
+            let install_root = root.join("external-skills-installed");
+            let staging_entries = fs::read_dir(&install_root)
+                .expect("install root should exist")
+                .map(|entry| {
+                    entry
+                        .expect("read install root entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .filter(|name| name.starts_with(".staging-"))
+                .collect::<Vec<_>>();
+            assert!(
+                staging_entries.is_empty(),
+                "failed archive install must not leave staging directories behind: {staging_entries:?}"
+            );
 
-        fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&root).ok();
+        });
     }
 
     #[test]
     fn inspect_returns_preview_and_missing_skill_md_is_rejected() {
-        let root = unique_temp_dir("loongclaw-ext-skill-inspect");
-        fs::create_dir_all(&root).expect("create fixture root");
-        write_file(
-            &root,
-            "source/demo-skill/SKILL.md",
-            "# Demo Skill\n\nInspectable skill content.\n",
-        );
-        let config = managed_runtime_config(&root);
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-inspect");
+            fs::create_dir_all(&root).expect("create fixture root");
+            write_file(
+                &root,
+                "source/demo-skill/SKILL.md",
+                "# Demo Skill\n\nInspectable skill content.\n",
+            );
+            let config = managed_runtime_config(&root);
 
-        crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.install".to_owned(),
-                payload: json!({
-                    "path": "source/demo-skill"
-                }),
-            },
-            &config,
-        )
-        .expect("install should succeed");
+            crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "source/demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect("install should succeed");
 
-        let inspect_outcome = crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.inspect".to_owned(),
-                payload: json!({
-                    "skill_id": "demo-skill"
-                }),
-            },
-            &config,
-        )
-        .expect("inspect should succeed");
-        assert_eq!(inspect_outcome.status, "ok");
-        assert!(
-            inspect_outcome.payload["instructions_preview"]
-                .as_str()
-                .expect("preview should exist")
-                .contains("Inspectable skill content")
-        );
+            let inspect_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.inspect".to_owned(),
+                    payload: json!({
+                        "skill_id": "demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect("inspect should succeed");
+            assert_eq!(inspect_outcome.status, "ok");
+            assert!(
+                inspect_outcome.payload["instructions_preview"]
+                    .as_str()
+                    .expect("preview should exist")
+                    .contains("Inspectable skill content")
+            );
 
-        let missing_root = unique_temp_dir("loongclaw-ext-skill-missing");
-        fs::create_dir_all(&missing_root).expect("create missing fixture root");
-        write_file(
-            &missing_root,
-            "source/not-a-skill/README.md",
-            "missing skill file",
-        );
-        let missing_config = managed_runtime_config(&missing_root);
-        let error = crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.install".to_owned(),
-                payload: json!({
-                    "path": "source/not-a-skill"
-                }),
-            },
-            &missing_config,
-        )
-        .expect_err("missing skill file should fail");
-        assert!(error.contains("SKILL.md"));
+            let missing_root = unique_temp_dir("loongclaw-ext-skill-missing");
+            fs::create_dir_all(&missing_root).expect("create missing fixture root");
+            write_file(
+                &missing_root,
+                "source/not-a-skill/README.md",
+                "missing skill file",
+            );
+            let missing_config = managed_runtime_config(&missing_root);
+            let error = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "source/not-a-skill"
+                    }),
+                },
+                &missing_config,
+            )
+            .expect_err("missing skill file should fail");
+            assert!(error.contains("SKILL.md"));
 
-        fs::remove_dir_all(&root).ok();
-        fs::remove_dir_all(&missing_root).ok();
+            fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&missing_root).ok();
+        });
     }
 
     #[cfg(unix)]
     #[test]
     fn install_rejects_symlinked_skill_markdown() {
-        use std::os::unix::fs::symlink;
+        with_managed_runtime_test(|| {
+            use std::os::unix::fs::symlink;
 
-        let root = unique_temp_dir("loongclaw-ext-skill-symlinked-skill-md");
-        fs::create_dir_all(root.join("source/demo-skill")).expect("create skill directory");
-        write_file(&root, "outside.md", "# Outside\n\nDo not follow.\n");
-        symlink(
-            root.join("outside.md"),
-            root.join("source/demo-skill").join("SKILL.md"),
-        )
-        .expect("create symlink");
+            let root = unique_temp_dir("loongclaw-ext-skill-symlinked-skill-md");
+            fs::create_dir_all(root.join("source/demo-skill")).expect("create skill directory");
+            write_file(&root, "outside.md", "# Outside\n\nDo not follow.\n");
+            symlink(
+                root.join("outside.md"),
+                root.join("source/demo-skill").join("SKILL.md"),
+            )
+            .expect("create symlink");
 
-        let config = managed_runtime_config(&root);
-        let error = crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.install".to_owned(),
-                payload: json!({
-                    "path": "source/demo-skill"
-                }),
-            },
-            &config,
-        )
-        .expect_err("symlinked skill markdown should be rejected");
-        assert!(error.contains("symlink"));
+            let config = managed_runtime_config(&root);
+            let error = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "source/demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect_err("symlinked skill markdown should be rejected");
+            assert!(error.contains("symlink"));
 
-        fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&root).ok();
+        });
     }
 
     #[test]
     fn installed_skill_snapshot_is_hidden_when_runtime_is_disabled() {
-        let root = unique_temp_dir("loongclaw-ext-skill-snapshot-disabled");
-        fs::create_dir_all(&root).expect("create fixture root");
-        write_file(
-            &root,
-            "source/demo-skill/SKILL.md",
-            "# Demo Skill\n\nSnapshot should not auto-expose disabled runtime.\n",
-        );
-        let enabled_config = managed_runtime_config(&root);
-        crate::tools::execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "external_skills.install".to_owned(),
-                payload: json!({
-                    "path": "source/demo-skill"
-                }),
-            },
-            &enabled_config,
-        )
-        .expect("install should succeed");
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-snapshot-disabled");
+            fs::create_dir_all(&root).expect("create fixture root");
+            write_file(
+                &root,
+                "source/demo-skill/SKILL.md",
+                "# Demo Skill\n\nSnapshot should not auto-expose disabled runtime.\n",
+            );
+            let enabled_config = managed_runtime_config(&root);
+            crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "source/demo-skill"
+                    }),
+                },
+                &enabled_config,
+            )
+            .expect("install should succeed");
 
-        let mut disabled_config = enabled_config;
-        disabled_config.external_skills.enabled = false;
+            let mut disabled_config = enabled_config;
+            disabled_config.external_skills.enabled = false;
 
-        let lines = installed_skill_snapshot_lines_with_config(&disabled_config)
-            .expect("snapshot should succeed");
-        assert!(
-            lines.is_empty(),
-            "disabled runtime should not expose skills"
-        );
+            let lines = installed_skill_snapshot_lines_with_config(&disabled_config)
+                .expect("snapshot should succeed");
+            assert!(
+                lines.is_empty(),
+                "disabled runtime should not expose skills"
+            );
 
-        fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&root).ok();
+        });
     }
 }
