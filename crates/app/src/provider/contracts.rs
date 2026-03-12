@@ -41,9 +41,10 @@ pub(super) enum ProviderTransportMode {
 
 impl ProviderTransportMode {
     fn for_provider(provider: &ProviderConfig) -> Self {
-        match provider.kind {
-            ProviderKind::KimiCoding => Self::KimiApi,
-            _ => Self::OpenAiChatCompletions,
+        if matches!(provider.kind, ProviderKind::KimiCoding) {
+            Self::KimiApi
+        } else {
+            Self::OpenAiChatCompletions
         }
     }
 }
@@ -138,33 +139,40 @@ pub(super) struct ProviderRuntimeContract {
 
 pub(super) fn provider_runtime_contract(provider: &ProviderConfig) -> ProviderRuntimeContract {
     let transport_mode = ProviderTransportMode::for_provider(provider);
-    let default_token_field = match provider.kind {
-        ProviderKind::Openai => TokenLimitField::MaxCompletionTokens,
-        _ => TokenLimitField::MaxTokens,
+    let default_token_field = if matches!(provider.kind, ProviderKind::Openai) {
+        TokenLimitField::MaxCompletionTokens
+    } else {
+        TokenLimitField::MaxTokens
     };
-    let feature_family = match provider.kind {
-        ProviderKind::Volcengine => ProviderFeatureFamily::VolcengineCompatible,
-        _ => ProviderFeatureFamily::OpenAiCompatible,
+    let feature_family = if matches!(provider.kind, ProviderKind::Volcengine) {
+        ProviderFeatureFamily::VolcengineCompatible
+    } else {
+        ProviderFeatureFamily::OpenAiCompatible
     };
-    let validation = match provider.kind {
-        ProviderKind::Kimi => ProviderValidationContract {
+    let validation = if matches!(provider.kind, ProviderKind::Kimi) {
+        ProviderValidationContract {
             forbid_kimi_coding_endpoint: true,
             require_kimi_cli_user_agent_prefix: false,
-        },
-        ProviderKind::KimiCoding => ProviderValidationContract {
+        }
+    } else if matches!(provider.kind, ProviderKind::KimiCoding) {
+        ProviderValidationContract {
             forbid_kimi_coding_endpoint: false,
             require_kimi_cli_user_agent_prefix: true,
-        },
-        _ => ProviderValidationContract {
+        }
+    } else {
+        ProviderValidationContract {
             forbid_kimi_coding_endpoint: false,
             require_kimi_cli_user_agent_prefix: false,
-        },
+        }
     };
     let profile_health_mode = match provider.resolved_profile_health_mode_config() {
-        ProviderProfileHealthModeConfig::ProviderDefault => match provider.kind {
-            ProviderKind::Openrouter => ProviderProfileHealthMode::ObserveOnly,
-            _ => ProviderProfileHealthMode::EnforceUnusableWindows,
-        },
+        ProviderProfileHealthModeConfig::ProviderDefault => {
+            if matches!(provider.kind, ProviderKind::Openrouter) {
+                ProviderProfileHealthMode::ObserveOnly
+            } else {
+                ProviderProfileHealthMode::EnforceUnusableWindows
+            }
+        }
         ProviderProfileHealthModeConfig::Enforce => {
             ProviderProfileHealthMode::EnforceUnusableWindows
         }
@@ -278,12 +286,13 @@ fn provider_capability_contract(
 fn provider_capability_overrides(
     provider_kind: ProviderKind,
 ) -> ProviderCapabilityContractOverrides {
-    match provider_kind {
-        ProviderKind::KimiCoding => ProviderCapabilityContractOverrides {
+    if matches!(provider_kind, ProviderKind::KimiCoding) {
+        ProviderCapabilityContractOverrides {
             reasoning_extra_body_mode: Some(ProviderReasoningExtraBodyMode::KimiThinking),
             ..ProviderCapabilityContractOverrides::default()
-        },
-        _ => ProviderCapabilityContractOverrides::default(),
+        }
+    } else {
+        ProviderCapabilityContractOverrides::default()
     }
 }
 
@@ -586,30 +595,31 @@ pub(super) fn adapt_payload_mode_for_error(
     runtime_contract: ProviderRuntimeContract,
     error: &ProviderApiError,
 ) -> Option<CompletionPayloadMode> {
-    match classify_payload_adaptation_axis(error, &runtime_contract.payload_adaptation)? {
-        PayloadAdaptationAxis::TokenField if provider.max_tokens.is_some() => {
-            next_progressive_value(
-                &runtime_contract.payload_adaptation.token_field_progression,
-                current.token_field,
-            )
-            .map(|token_field| CompletionPayloadMode {
-                token_field,
-                ..current
-            })
-        }
-        PayloadAdaptationAxis::ReasoningField if provider.reasoning_effort.is_some() => {
-            next_progressive_value(
-                &runtime_contract
-                    .payload_adaptation
-                    .reasoning_field_progression,
-                current.reasoning_field,
-            )
-            .map(|reasoning_field| CompletionPayloadMode {
-                reasoning_field,
-                ..current
-            })
-        }
-        PayloadAdaptationAxis::TemperatureField => next_progressive_value(
+    let axis = classify_payload_adaptation_axis(error, &runtime_contract.payload_adaptation)?;
+    if matches!(axis, PayloadAdaptationAxis::TokenField) && provider.max_tokens.is_some() {
+        next_progressive_value(
+            &runtime_contract.payload_adaptation.token_field_progression,
+            current.token_field,
+        )
+        .map(|token_field| CompletionPayloadMode {
+            token_field,
+            ..current
+        })
+    } else if matches!(axis, PayloadAdaptationAxis::ReasoningField)
+        && provider.reasoning_effort.is_some()
+    {
+        next_progressive_value(
+            &runtime_contract
+                .payload_adaptation
+                .reasoning_field_progression,
+            current.reasoning_field,
+        )
+        .map(|reasoning_field| CompletionPayloadMode {
+            reasoning_field,
+            ..current
+        })
+    } else if matches!(axis, PayloadAdaptationAxis::TemperatureField) {
+        next_progressive_value(
             &runtime_contract
                 .payload_adaptation
                 .temperature_field_progression,
@@ -618,8 +628,9 @@ pub(super) fn adapt_payload_mode_for_error(
         .map(|temperature_field| CompletionPayloadMode {
             temperature_field,
             ..current
-        }),
-        _ => None,
+        })
+    } else {
+        None
     }
 }
 
