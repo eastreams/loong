@@ -139,8 +139,9 @@ mod tests {
             id: "gamma".to_owned(),
             authorization_header: None,
         };
+        let profiles = [alpha, beta, gamma];
         let ordered = prioritize_profiles_by_health(
-            &[alpha.clone(), beta.clone(), gamma.clone()],
+            &profiles,
             ProviderProfileHealthMode::EnforceUnusableWindows,
             |profile| match profile.id.as_str() {
                 "alpha" => ProviderProfileHealthSnapshot {
@@ -178,8 +179,9 @@ mod tests {
             id: "beta".to_owned(),
             authorization_header: None,
         };
+        let profiles = [alpha, beta];
         let ordered = prioritize_profiles_by_health(
-            &[alpha.clone(), beta.clone()],
+            &profiles,
             ProviderProfileHealthMode::ObserveOnly,
             |profile| match profile.id.as_str() {
                 "alpha" => ProviderProfileHealthSnapshot {

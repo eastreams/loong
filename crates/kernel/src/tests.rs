@@ -751,8 +751,7 @@ fn record_audit_event_supports_security_scan_summary() {
 fn record_audit_event_supports_provider_failover_summary() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_123));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let kernel =
-        LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock.clone(), audit.clone());
+    let kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
 
     kernel
         .record_audit_event(

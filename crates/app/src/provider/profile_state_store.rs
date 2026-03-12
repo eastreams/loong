@@ -127,12 +127,11 @@ impl ProviderProfileStateStore {
         entry.failure_count = entry.failure_count.saturating_add(1);
 
         match policy.health_mode {
-            ProviderProfileHealthMode::EnforceUnusableWindows => match reason {
-                ProviderFailoverReason::AuthRejected => {
+            ProviderProfileHealthMode::EnforceUnusableWindows => {
+                if matches!(reason, ProviderFailoverReason::AuthRejected) {
                     entry.disabled_until = now.checked_add(policy.auth_reject_disable);
                     entry.cooldown_until = None;
-                }
-                _ => {
+                } else {
                     let bounded_max_cooldown = policy.max_cooldown.max(policy.cooldown);
                     let exponent = entry.failure_count.saturating_sub(1).min(20);
                     let multiplier = 1u32 << exponent;
@@ -142,7 +141,7 @@ impl ProviderProfileStateStore {
                         .min(bounded_max_cooldown);
                     entry.cooldown_until = now.checked_add(effective_cooldown);
                 }
-            },
+            }
             ProviderProfileHealthMode::ObserveOnly => {
                 // Observe-only mode keeps failure counters but avoids hard profile suppression.
                 entry.cooldown_until = None;

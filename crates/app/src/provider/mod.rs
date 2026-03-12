@@ -1668,8 +1668,8 @@ mod tests {
         let failover_event = audit
             .snapshot()
             .into_iter()
-            .find_map(|event| match event.kind {
-                AuditEventKind::ProviderFailover {
+            .find_map(|event| {
+                if let AuditEventKind::ProviderFailover {
                     pack_id,
                     provider_id,
                     reason,
@@ -1682,21 +1682,25 @@ mod tests {
                     auto_model_mode,
                     candidate_index,
                     candidate_count,
-                } => Some((
-                    pack_id,
-                    provider_id,
-                    reason,
-                    stage,
-                    model,
-                    attempt,
-                    max_attempts,
-                    status_code,
-                    try_next_model,
-                    auto_model_mode,
-                    candidate_index,
-                    candidate_count,
-                )),
-                _ => None,
+                } = event.kind
+                {
+                    Some((
+                        pack_id,
+                        provider_id,
+                        reason,
+                        stage,
+                        model,
+                        attempt,
+                        max_attempts,
+                        status_code,
+                        try_next_model,
+                        auto_model_mode,
+                        candidate_index,
+                        candidate_count,
+                    ))
+                } else {
+                    None
+                }
             })
             .expect("provider failover event should be recorded");
 
