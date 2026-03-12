@@ -437,6 +437,8 @@ async fn request_turn_with_model(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use super::model_selection::rank_model_candidates;
     use super::payload_adaptation::{ReasoningField, TemperatureField, TokenLimitField};
     use super::*;
@@ -445,6 +447,8 @@ mod tests {
         ProviderConfig, ProviderKind, ReasoningEffort, ToolConfig,
     };
     use serde_json::json;
+
+    static PROVIDER_TEST_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn write_provider_test_file(root: &std::path::Path, relative: &str, content: &str) {
         let path = root.join(relative);
@@ -461,8 +465,9 @@ mod tests {
         crate::tools::runtime_config::ToolRuntimeConfig,
         std::path::PathBuf,
     ) {
+        let sequence = PROVIDER_TEST_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
-            "loongclaw-provider-ext-skills-{}",
+            "loongclaw-provider-ext-skills-{}-{sequence}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("clock should be after epoch")
