@@ -52,7 +52,7 @@ repo_root="$(cd "${script_dir}/.." && pwd)"
 printf '==> Building loongclaw (release)\n'
 (
   cd "${repo_root}"
-  cargo build -p loongclaw-daemon --bin loongclaw --release
+  cargo build -p loongclaw-daemon --bin loongclaw --release --locked
 )
 
 mkdir -p "${prefix}"
