@@ -419,7 +419,7 @@ pub struct AcpBackendProfilesConfig {
     pub acpx: Option<AcpxBackendConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AcpxBackendConfig {
     #[serde(default)]
     pub command: Option<String>,
@@ -460,22 +460,6 @@ impl AcpxBackendConfig {
 
     pub fn non_interactive_permissions(&self) -> Option<String> {
         normalize_optional_string(self.non_interactive_permissions.as_deref())
-    }
-}
-
-impl Default for AcpxBackendConfig {
-    fn default() -> Self {
-        Self {
-            command: None,
-            expected_version: None,
-            cwd: None,
-            permission_mode: None,
-            non_interactive_permissions: None,
-            strict_windows_cmd_wrapper: None,
-            timeout_seconds: None,
-            queue_owner_ttl_seconds: None,
-            mcp_servers: BTreeMap::new(),
-        }
     }
 }
 

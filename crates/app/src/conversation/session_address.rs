@@ -46,25 +46,13 @@ impl ConversationSessionAddress {
 
     pub fn structured_channel_path(&self) -> Vec<String> {
         let mut path = Vec::new();
-        if let Some(account_id) = self
-            .account_id
-            .as_ref()
-            .and_then(|value| trimmed_non_empty(value))
-        {
+        if let Some(account_id) = self.account_id.as_ref().and_then(trimmed_non_empty) {
             path.push(account_id);
         }
-        if let Some(conversation_id) = self
-            .conversation_id
-            .as_ref()
-            .and_then(|value| trimmed_non_empty(value))
-        {
+        if let Some(conversation_id) = self.conversation_id.as_ref().and_then(trimmed_non_empty) {
             path.push(conversation_id);
         }
-        if let Some(thread_id) = self
-            .thread_id
-            .as_ref()
-            .and_then(|value| trimmed_non_empty(value))
-        {
+        if let Some(thread_id) = self.thread_id.as_ref().and_then(trimmed_non_empty) {
             path.push(thread_id);
         }
         path

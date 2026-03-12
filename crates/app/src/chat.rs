@@ -181,16 +181,18 @@ pub async fn run_cli_chat(
             continue;
         }
 
-        let acp_options = explicit_acp_request
-            .then_some(AcpConversationTurnOptions::explicit())
-            .unwrap_or_else(AcpConversationTurnOptions::automatic)
-            .with_event_sink(
-                acp_event_printer
-                    .as_ref()
-                    .map(|printer| printer as &dyn AcpTurnEventSink),
-            )
-            .with_additional_bootstrap_mcp_servers(&options.acp_bootstrap_mcp_servers)
-            .with_working_directory(options.acp_working_directory.as_deref());
+        let acp_options = if explicit_acp_request {
+            AcpConversationTurnOptions::explicit()
+        } else {
+            AcpConversationTurnOptions::automatic()
+        }
+        .with_event_sink(
+            acp_event_printer
+                .as_ref()
+                .map(|printer| printer as &dyn AcpTurnEventSink),
+        )
+        .with_additional_bootstrap_mcp_servers(&options.acp_bootstrap_mcp_servers)
+        .with_working_directory(options.acp_working_directory.as_deref());
         let assistant_text = turn_coordinator
             .handle_turn_with_address_and_acp_options(
                 &config,

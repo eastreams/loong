@@ -775,7 +775,6 @@ mod tests {
         let db_path = tmp.join("provider-summary.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-<<<<<<< HEAD
         let mut config = default_test_config();
         config.memory.sqlite_path = db_path.display().to_string();
         config.memory.profile = crate::config::MemoryProfile::WindowPlusSummary;

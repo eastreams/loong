@@ -19,7 +19,6 @@ use super::runtime::DefaultConversationRuntime;
 use super::*;
 use crate::CliResult;
 use crate::KernelContext;
-use crate::memory::MEMORY_OP_WINDOW;
 use crate::acp::{
     ACP_TURN_METADATA_ACK_CURSOR, ACP_TURN_METADATA_ROUTING_INTENT,
     ACP_TURN_METADATA_SOURCE_MESSAGE_ID, ACP_TURN_METADATA_TRACE_ID, AcpBackendMetadata,
@@ -27,6 +26,7 @@ use crate::acp::{
     AcpSessionBootstrap, AcpSessionHandle, AcpSessionState, AcpTurnEventSink, AcpTurnProvenance,
     AcpTurnRequest, AcpTurnResult, AcpTurnStopReason, register_acp_backend,
 };
+use crate::memory::MEMORY_OP_WINDOW;
 
 struct FakeRuntime {
     seed_messages: Vec<Value>,
@@ -355,7 +355,6 @@ fn register_routed_acp_backend_with_events(
     let shared = Arc::new(Mutex::new(RoutedAcpState::default()));
     register_acp_backend(backend_id, {
         let shared = shared.clone();
-        let emitted_events = emitted_events.clone();
         move || {
             Box::new(RoutedAcpBackend {
                 id: backend_id,
@@ -576,9 +575,7 @@ impl ConversationRuntime for FakeRuntime {
             .lock()
             .expect("compact lock")
             .push((session_id.to_owned(), messages.len()));
-        self.compact_result
-            .clone()
-            .map_err(|error| error.to_owned())
+        self.compact_result.clone()
     }
 }
 

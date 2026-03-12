@@ -549,18 +549,18 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
             }
         }
 
-        if let Some(cwd) = cwd.as_deref() {
-            if !Path::new(cwd).exists() {
-                diagnostics.insert("status".to_owned(), "missing_cwd".to_owned());
-                diagnostics.insert(
-                    "error".to_owned(),
-                    format!("ACP runtime working directory does not exist: {cwd}"),
-                );
-                return Ok(Some(AcpDoctorReport {
-                    healthy: false,
-                    diagnostics,
-                }));
-            }
+        if let Some(cwd) = cwd.as_deref()
+            && !Path::new(cwd).exists()
+        {
+            diagnostics.insert("status".to_owned(), "missing_cwd".to_owned());
+            diagnostics.insert(
+                "error".to_owned(),
+                format!("ACP runtime working directory does not exist: {cwd}"),
+            );
+            return Ok(Some(AcpDoctorReport {
+                healthy: false,
+                diagnostics,
+            }));
         }
 
         let mut probe = Command::new(&command);
@@ -574,8 +574,8 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
                 let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
                 let observed = match (stdout.is_empty(), stderr.is_empty()) {
-                    (false, true) => stdout.clone(),
-                    (true, false) => stderr.clone(),
+                    (false, true) => stdout,
+                    (true, false) => stderr,
                     (false, false) => format!("{stdout} | {stderr}"),
                     (true, true) => "(empty)".to_owned(),
                 };
@@ -1380,9 +1380,9 @@ async fn run_process(
 
     let output = timeout(Duration::from_millis(timeout_ms), child.wait_with_output())
         .await
-        .map_err(|_| {
+        .map_err(|error| {
             format!(
-                "ACPX command timed out after {timeout_ms}ms: {} {}",
+                "ACPX command timed out after {timeout_ms}ms: {} {} ({error})",
                 command,
                 args.join(" ")
             )
@@ -1584,7 +1584,7 @@ fn nested_text(value: &Value) -> Option<String> {
     match content {
         Value::String(text) => (!text.is_empty()).then(|| text.clone()),
         Value::Object(_) => raw_string(content, "text"),
-        _ => None,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_) => None,
     }
 }
 

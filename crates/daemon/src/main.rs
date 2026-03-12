@@ -1,7 +1,12 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)] // CLI daemon binary
 #[cfg(test)]
-use std::{collections::BTreeMap, time::Duration};
-use std::{collections::BTreeSet, fs, path::Path, sync::Arc};
+use std::time::Duration;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::Path,
+    sync::Arc,
+};
 
 #[cfg(test)]
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -1537,10 +1542,8 @@ fn run_acp_event_summary_cli(
 
     #[cfg(feature = "memory-sqlite")]
     {
-        let mem_config = mvp::memory::runtime_config::MemoryRuntimeConfig {
-            sqlite_path: Some(config.memory.resolved_sqlite_path()),
-            sliding_window: Some(config.memory.sliding_window),
-        };
+        let mem_config =
+            mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
         let turns = mvp::memory::window_direct(&session_id, limit, &mem_config)
             .map_err(|error| format!("load ACP event summary failed: {error}"))?;
         let summary = mvp::acp::summarize_turn_events(
@@ -1670,21 +1673,24 @@ fn build_acp_dispatch_address(
     let account_id = account_id.map(str::trim).filter(|value| !value.is_empty());
     let thread_id = thread_id.map(str::trim).filter(|value| !value.is_empty());
 
-    if channel.is_none() {
-        if conversation_id.is_some() || account_id.is_some() || thread_id.is_some() {
-            return Err(
-                "acp-dispatch requires --channel when using --conversation-id, --account-id, or --thread-id"
-                    .to_owned(),
-            );
+    let channel = match channel {
+        Some(channel) => channel,
+        None => {
+            if conversation_id.is_some() || account_id.is_some() || thread_id.is_some() {
+                return Err(
+                    "acp-dispatch requires --channel when using --conversation-id, --account-id, or --thread-id"
+                        .to_owned(),
+                );
+            }
+            return Ok(mvp::conversation::ConversationSessionAddress::from_session_id(session_id));
         }
-        return Ok(mvp::conversation::ConversationSessionAddress::from_session_id(session_id));
-    }
+    };
 
     let conversation_id = conversation_id.ok_or_else(|| {
         "acp-dispatch requires --conversation-id when --channel is provided".to_owned()
     })?;
     let mut address = mvp::conversation::ConversationSessionAddress::from_session_id(session_id)
-        .with_channel_scope(channel.expect("checked channel"), conversation_id);
+        .with_channel_scope(channel, conversation_id);
     if let Some(account_id) = account_id {
         address = address.with_account_id(account_id);
     }

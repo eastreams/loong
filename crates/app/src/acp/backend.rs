@@ -237,21 +237,11 @@ pub const ACP_TURN_METADATA_ROUTING_INTENT: &str = "loongclaw.acp.routing_intent
 pub const ACP_TURN_METADATA_ROUTING_ORIGIN: &str = "loongclaw.acp.routing_origin";
 pub const ACP_SESSION_METADATA_ACTIVATION_ORIGIN: &str = "loongclaw.acp.activation_origin";
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct AcpTurnProvenance<'a> {
     pub trace_id: Option<&'a str>,
     pub source_message_id: Option<&'a str>,
     pub ack_cursor: Option<&'a str>,
-}
-
-impl Default for AcpTurnProvenance<'_> {
-    fn default() -> Self {
-        Self {
-            trace_id: None,
-            source_message_id: None,
-            ack_cursor: None,
-        }
-    }
 }
 
 impl AcpTurnProvenance<'_> {

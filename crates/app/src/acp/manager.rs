@@ -290,10 +290,8 @@ impl AcpSessionManager {
                         status.state = AcpSessionState::Busy;
                     }
                 }
-                if active_turn {
-                    if status.active_turn_id.is_none() {
-                        status.active_turn_id = Some(metadata.runtime_session_name.clone());
-                    }
+                if active_turn && status.active_turn_id.is_none() {
+                    status.active_turn_id = Some(metadata.runtime_session_name.clone());
                 }
 
                 metadata.state = status.state;
@@ -605,35 +603,24 @@ impl AcpSessionManager {
         }
 
         if config.acp.bindings_enabled {
-            if let Some(binding) = AcpSessionBindingScope::from_bootstrap(bootstrap) {
-                if let Some(existing) = self
+            if let Some(binding) = AcpSessionBindingScope::from_bootstrap(bootstrap)
+                && let Some(existing) = self
                     .store
                     .get_by_binding_route_session_id(binding.route_session_id.as_str())?
-                {
-                    return self
-                        .validate_and_touch_existing_session(
-                            selected_backend_id,
-                            bootstrap,
-                            existing,
-                        )
-                        .map(Some);
-                }
+            {
+                return self
+                    .validate_and_touch_existing_session(selected_backend_id, bootstrap, existing)
+                    .map(Some);
             }
             if let Some(conversation_id) =
                 normalized_conversation_id(bootstrap.conversation_id.as_deref())
-            {
-                if let Some(existing) = self
+                && let Some(existing) = self
                     .store
                     .get_by_conversation_id(conversation_id.as_str())?
-                {
-                    return self
-                        .validate_and_touch_existing_session(
-                            selected_backend_id,
-                            bootstrap,
-                            existing,
-                        )
-                        .map(Some);
-                }
+            {
+                return self
+                    .validate_and_touch_existing_session(selected_backend_id, bootstrap, existing)
+                    .map(Some);
             }
         }
 
@@ -985,17 +972,17 @@ impl Drop for SessionActorGuard {
     fn drop(&mut self) {
         self.actor_guard.take();
 
-        if self.count_pending_turn {
-            if let Ok(mut guard) = self.pending_turns.write() {
-                match guard.get_mut(self.actor_key.as_str()) {
-                    Some(count) if *count <= 1 => {
-                        guard.remove(self.actor_key.as_str());
-                    }
-                    Some(count) => {
-                        *count -= 1;
-                    }
-                    None => {}
+        if self.count_pending_turn
+            && let Ok(mut guard) = self.pending_turns.write()
+        {
+            match guard.get_mut(self.actor_key.as_str()) {
+                Some(count) if *count <= 1 => {
+                    guard.remove(self.actor_key.as_str());
                 }
+                Some(count) => {
+                    *count -= 1;
+                }
+                None => {}
             }
         }
 
@@ -1016,10 +1003,8 @@ impl Drop for SessionActorGuard {
             .read()
             .map(|guard| !guard.contains_key(self.actor_key.as_str()))
             .unwrap_or(false);
-        if should_remove_actor {
-            if let Ok(mut guard) = self.session_actor_locks.write() {
-                guard.remove(self.actor_key.as_str());
-            }
+        if should_remove_actor && let Ok(mut guard) = self.session_actor_locks.write() {
+            guard.remove(self.actor_key.as_str());
         }
     }
 }

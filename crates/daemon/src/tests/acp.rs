@@ -25,7 +25,7 @@ fn resolve_acp_status_session_key_supports_conversation_lookup() {
         },
         ..mvp::config::LoongClawConfig::default()
     };
-    let store = mvp::acp::AcpSqliteSessionStore::new(Some(sqlite_path.clone()));
+    let store = mvp::acp::AcpSqliteSessionStore::new(Some(sqlite_path));
     mvp::acp::AcpSessionStore::upsert(
         &store,
         mvp::acp::AcpSessionMetadata {
@@ -70,7 +70,7 @@ fn resolve_acp_status_session_key_supports_binding_route_lookup() {
         },
         ..mvp::config::LoongClawConfig::default()
     };
-    let store = mvp::acp::AcpSqliteSessionStore::new(Some(sqlite_path.clone()));
+    let store = mvp::acp::AcpSqliteSessionStore::new(Some(sqlite_path));
     mvp::acp::AcpSessionStore::upsert(
         &store,
         mvp::acp::AcpSessionMetadata {

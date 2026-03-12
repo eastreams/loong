@@ -266,8 +266,9 @@ impl AcpSessionStore for AcpSqliteSessionStore {
                 metadata.activation_origin.map(AcpRoutingOrigin::as_str),
                 metadata.mode.map(encode_mode),
                 encode_state(metadata.state),
-                i64::try_from(metadata.last_activity_ms)
-                    .map_err(|_| "ACP last_activity_ms exceeds sqlite INTEGER range".to_owned())?,
+                i64::try_from(metadata.last_activity_ms).map_err(|error| {
+                    format!("ACP last_activity_ms exceeds sqlite INTEGER range: {error}")
+                })?,
                 metadata.last_error,
             ],
         )
@@ -311,11 +312,11 @@ impl AcpSessionStore for AcpSqliteSessionStore {
 
 #[cfg(feature = "memory-sqlite")]
 fn ensure_sqlite_schema(path: &PathBuf) -> CliResult<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .map_err(|error| format!("create ACP sqlite parent directory failed: {error}"))?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("create ACP sqlite parent directory failed: {error}"))?;
     }
 
     let conn = rusqlite::Connection::open(path)
