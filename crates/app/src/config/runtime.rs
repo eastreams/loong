@@ -668,12 +668,15 @@ api_key_env = "{secret}"
         assert!(raw.contains("[external_skills]"));
         assert!(raw.contains("enabled = false"));
         assert!(raw.contains("require_download_approval = true"));
+        assert!(raw.contains("auto_expose_installed = true"));
 
         let (_, loaded) = load(Some(&path_string)).expect("config load should pass");
         assert!(!loaded.external_skills.enabled);
         assert!(loaded.external_skills.require_download_approval);
         assert!(loaded.external_skills.allowed_domains.is_empty());
         assert!(loaded.external_skills.blocked_domains.is_empty());
+        assert!(loaded.external_skills.install_root.is_none());
+        assert!(loaded.external_skills.auto_expose_installed);
 
         let _ = fs::remove_file(path);
     }

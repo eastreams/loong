@@ -118,7 +118,7 @@ pub(super) fn execute_file_write_tool_with_config(
 }
 
 #[cfg(feature = "tool-file")]
-fn resolve_safe_file_path_with_config(
+pub(super) fn resolve_safe_file_path_with_config(
     raw: &str,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<PathBuf, String> {

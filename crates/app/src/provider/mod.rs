@@ -34,12 +34,24 @@ pub fn build_system_message(
     config: &LoongClawConfig,
     include_system_prompt: bool,
 ) -> Option<Value> {
+    build_system_message_with_tool_runtime_config(
+        config,
+        include_system_prompt,
+        crate::tools::runtime_config::get_tool_runtime_config(),
+    )
+}
+
+fn build_system_message_with_tool_runtime_config(
+    config: &LoongClawConfig,
+    include_system_prompt: bool,
+    tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
+) -> Option<Value> {
     if !include_system_prompt {
         return None;
     }
     let system_prompt = config.cli.resolved_system_prompt();
     let system = system_prompt.trim();
-    let snapshot = super::tools::capability_snapshot();
+    let snapshot = super::tools::capability_snapshot_with_config(tool_runtime_config);
     let content = if system.is_empty() {
         snapshot
     } else {
@@ -434,6 +446,71 @@ mod tests {
     };
     use serde_json::json;
 
+    fn write_provider_test_file(root: &std::path::Path, relative: &str, content: &str) {
+        let path = root.join(relative);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create parent directory");
+        }
+        std::fs::write(path, content).expect("write fixture");
+    }
+
+    fn install_skill_for_provider_snapshot_test(
+        auto_expose_installed: bool,
+    ) -> (
+        LoongClawConfig,
+        crate::tools::runtime_config::ToolRuntimeConfig,
+        std::path::PathBuf,
+    ) {
+        let root = std::env::temp_dir().join(format!(
+            "loongclaw-provider-ext-skills-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("create fixture root");
+        write_provider_test_file(
+            &root,
+            "skills/demo-skill/SKILL.md",
+            "# Demo Skill\n\nUse this skill for provider prompt verification.\n",
+        );
+
+        let tool_runtime_config = crate::tools::runtime_config::ToolRuntimeConfig {
+            shell_allowlist: std::collections::BTreeSet::new(),
+            file_root: Some(root.clone()),
+            external_skills: crate::tools::runtime_config::ExternalSkillsRuntimePolicy {
+                enabled: true,
+                require_download_approval: true,
+                allowed_domains: std::collections::BTreeSet::new(),
+                blocked_domains: std::collections::BTreeSet::new(),
+                install_root: None,
+                auto_expose_installed,
+            },
+        };
+        crate::tools::execute_tool_core_with_config(
+            loongclaw_contracts::ToolCoreRequest {
+                tool_name: "external_skills.install".to_owned(),
+                payload: json!({
+                    "path": "skills/demo-skill"
+                }),
+            },
+            &tool_runtime_config,
+        )
+        .expect("install should succeed");
+
+        let config = LoongClawConfig {
+            provider: ProviderConfig::default(),
+            cli: crate::config::CliChannelConfig::default(),
+            telegram: crate::config::TelegramChannelConfig::default(),
+            feishu: FeishuChannelConfig::default(),
+            conversation: ConversationConfig::default(),
+            tools: ToolConfig::default(),
+            external_skills: ExternalSkillsConfig::default(),
+            memory: MemoryConfig::default(),
+        };
+        (config, tool_runtime_config, root)
+    }
+
     fn default_test_config() -> LoongClawConfig {
         LoongClawConfig {
             provider: ProviderConfig::default(),
@@ -481,6 +558,39 @@ mod tests {
             system_content.contains("- file.write: Write file contents"),
             "system prompt should list file.write tool"
         );
+    }
+
+    #[test]
+    fn build_system_message_can_include_installed_external_skills_snapshot() {
+        let (config, tool_runtime_config, root) = install_skill_for_provider_snapshot_test(true);
+
+        let system_message =
+            build_system_message_with_tool_runtime_config(&config, true, &tool_runtime_config)
+                .expect("system message");
+        let system_content = system_message["content"].as_str().expect("system content");
+
+        assert!(system_content.contains("[available_external_skills]"));
+        assert!(
+            system_content
+                .contains("- demo-skill: Use this skill for provider prompt verification.")
+        );
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn build_system_message_omits_installed_external_skills_when_auto_expose_is_disabled() {
+        let (config, tool_runtime_config, root) = install_skill_for_provider_snapshot_test(false);
+
+        let system_message =
+            build_system_message_with_tool_runtime_config(&config, true, &tool_runtime_config)
+                .expect("system message");
+        let system_content = system_message["content"].as_str().expect("system content");
+
+        assert!(!system_content.contains("[available_external_skills]"));
+        assert!(!system_content.contains("demo-skill"));
+
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -812,7 +922,12 @@ mod tests {
         let mut expected = Vec::new();
         expected.push("claw_import");
         expected.push("external_skills_fetch");
+        expected.push("external_skills_inspect");
+        expected.push("external_skills_install");
+        expected.push("external_skills_invoke");
+        expected.push("external_skills_list");
         expected.push("external_skills_policy");
+        expected.push("external_skills_remove");
         #[cfg(feature = "tool-file")]
         {
             expected.push("file_read");

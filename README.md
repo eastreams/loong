@@ -206,6 +206,7 @@ enabled = true
 require_download_approval = true
 allowed_domains = ["skills.sh", "clawhub.io"]
 blocked_domains = ["*.evil.example"]
+auto_expose_installed = true
 ```
 
 Agent-facing tools:
@@ -219,6 +220,25 @@ Agent-facing tools:
   - Requires `approval_granted=true` when approval guard is enabled.
   - Saves artifact under `<tools.file_root>/external-skills-downloads/`.
   - Enforces allowlist/blocklist before network download.
+- `external_skills_install`
+  - Requires local `path`.
+  - Accepts a directory containing `SKILL.md` or a local `.tgz` / `.tar.gz` archive.
+  - Installs the skill under `<tools.file_root>/external-skills-installed/` by default.
+- `external_skills_list`
+  - Lists managed installed skills that are available for invocation.
+- `external_skills_inspect`
+  - Returns metadata and a short preview for an installed skill.
+- `external_skills_invoke`
+  - Loads an installed skill's `SKILL.md` instructions into the conversation loop.
+- `external_skills_remove`
+  - Removes a managed installed skill and updates the local index.
+
+Recommended runtime flow:
+
+1. Download with `external_skills.fetch`
+2. Install with `external_skills.install`
+3. Discover with `external_skills.list`
+4. Load instructions with `external_skills.invoke`
 
 ## Key Features
 
@@ -242,7 +262,7 @@ Agent-facing tools:
 - `onboard` -- guided first-run with preflight diagnostics
 - `doctor` -- diagnostics with optional safe fixes (`--fix`) and machine-readable output (`--json`)
 - `chat` -- interactive CLI with sliding-window conversation memory
-- Core tools: `shell.exec`, `file.read`, `file.write`, `external_skills.policy`, `external_skills.fetch`
+- Core tools: `shell.exec`, `file.read`, `file.write`, `external_skills.policy`, `external_skills.fetch`, `external_skills.install`, `external_skills.list`, `external_skills.inspect`, `external_skills.invoke`, `external_skills.remove`
 - Providers: OpenAI-compatible, Volcengine custom endpoint
 - Channels: CLI, Telegram polling, Feishu encrypted webhook
 
