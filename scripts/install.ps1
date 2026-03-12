@@ -1,17 +1,17 @@
 param(
     [string]$Prefix = "$HOME/.local/bin",
-    [switch]$Setup
+    [switch]$Onboard
 )
 
 $ErrorActionPreference = "Stop"
 
 function Write-Usage {
     @"
-Usage: pwsh ./scripts/install.ps1 [-Prefix <dir>] [-Setup]
+Usage: pwsh ./scripts/install.ps1 [-Prefix <dir>] [-Onboard]
 
 Options:
   -Prefix <dir>   Install directory for loongclaw (default: $HOME/.local/bin)
-  -Setup          Run 'loongclaw setup --force' after install
+  -Onboard        Run 'loongclaw onboard --force' after install
 "@
 }
 
@@ -45,9 +45,9 @@ Copy-Item -Force $sourceBinary $destBinary
 
 Write-Host "==> Installed loongclaw to $destBinary"
 
-if ($Setup) {
-    Write-Host "==> Running initial setup"
-    & $destBinary setup --force | Out-Host
+if ($Onboard) {
+    Write-Host "==> Running guided onboarding"
+    & $destBinary onboard --force | Out-Host
 }
 
 $pathItems = ($env:PATH -split [IO.Path]::PathSeparator)

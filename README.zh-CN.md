@@ -72,7 +72,7 @@ LoongClaw 是一个基于Rust构建的 Agentic OS 内核，专注于稳定且轻
 <summary>Linux / macOS</summary>
 
 ```bash
-./scripts/install.sh --setup
+./scripts/install.sh --onboard
 ```
 </details>
 
@@ -80,7 +80,7 @@ LoongClaw 是一个基于Rust构建的 Agentic OS 内核，专注于稳定且轻
 <summary>Windows (PowerShell)</summary>
 
 ```powershell
-pwsh ./scripts/install.ps1 -Setup
+pwsh ./scripts/install.ps1 -Onboard
 ```
 </details>
 
@@ -94,10 +94,10 @@ cargo install --path crates/daemon
 
 ### 5 分钟内开始首次对话
 
-1. 生成配置并引导本地状态：
+1. 运行引导式首次配置：
 
    ```bash
-   loongclaw setup
+   loongclaw onboard
    ```
 
 2. 设置 provider API 密钥：
@@ -205,7 +205,6 @@ blocked_domains = ["*.evil.example"]
 - 自动发现 provider 和已扫描插件中的可用工具
 
 **MVP 产品层**
-- `setup` -- 生成 TOML 配置并引导 SQLite 内存
 - `onboard` -- 引导式首次运行，带预检诊断
 - `doctor` -- 诊断工具，可选安全修复 (`--fix`) 和机器可读输出 (`--json`)
 - `chat` -- 交互式 CLI，滑动窗口对话记忆
@@ -302,7 +301,7 @@ cargo build -p loongclaw-daemon --no-default-features --features "channel-cli,pr
 
 ## 配置
 
-`loongclaw setup` 默认通过 `provider.api_key` 引用 provider 凭据，这样密钥不会直接落在配置文件里：
+`loongclaw onboard` 默认通过 `provider.api_key` 引用 provider 凭据，这样密钥不会直接落在配置文件里：
 
 ```toml
 [provider]

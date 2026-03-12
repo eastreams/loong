@@ -267,7 +267,7 @@ Focus: ship a low-friction daily-usable daemon entry for non-developers.
 
 Delivered in current baseline:
 
-- `setup` command to generate TOML configuration and bootstrap local state
+- `onboard` command as the primary first-run configuration and diagnostics flow
 - `chat` command as baseline CLI channel
 - first-party Telegram polling channel adapter
 - first-party Feishu webhook channel adapter
@@ -291,7 +291,7 @@ Remaining deliverables:
 - OpenAI-compatible protocol adapter hardening and Volcengine custom adapter profile
 - beginner installation pipeline:
   - prebuilt binaries
-  - one-command setup on macOS/Linux/Windows
+  - one-command onboarding on macOS/Linux/Windows
   - guided onboarding flow and diagnostics
 
 Acceptance criteria:

@@ -3,17 +3,17 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: ./scripts/install.sh [--prefix <dir>] [--setup]
+Usage: ./scripts/install.sh [--prefix <dir>] [--onboard]
 
 Options:
   --prefix <dir>   Install directory for loongclaw (default: $HOME/.local/bin)
-  --setup          Run `loongclaw setup --force` after install
+  --onboard        Run `loongclaw onboard --force` after install
   -h, --help       Show this help
 USAGE
 }
 
 prefix="${HOME}/.local/bin"
-run_setup=0
+run_onboard=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -25,8 +25,8 @@ while [[ $# -gt 0 ]]; do
       prefix="$2"
       shift 2
       ;;
-    --setup)
-      run_setup=1
+    --onboard)
+      run_onboard=1
       shift
       ;;
     -h|--help)
@@ -60,9 +60,9 @@ install -m 755 "${repo_root}/target/release/loongclaw" "${prefix}/loongclaw"
 
 printf '==> Installed loongclaw to %s\n' "${prefix}/loongclaw"
 
-if [[ "${run_setup}" -eq 1 ]]; then
-  printf '==> Running initial setup\n'
-  "${prefix}/loongclaw" setup --force
+if [[ "${run_onboard}" -eq 1 ]]; then
+  printf '==> Running guided onboarding\n'
+  "${prefix}/loongclaw" onboard --force
 fi
 
 case ":${PATH}:" in

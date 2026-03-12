@@ -138,13 +138,6 @@ enum Commands {
         #[arg(long, default_value_t = 1.5)]
         min_speedup_ratio: f64,
     },
-    /// Generate a beginner-friendly TOML config and bootstrap local state
-    Setup {
-        #[arg(long)]
-        output: Option<String>,
-        #[arg(long, default_value_t = false)]
-        force: bool,
-    },
     /// Validate config semantics and report structured diagnostics
     ValidateConfig {
         #[arg(long)]
@@ -349,7 +342,6 @@ async fn main() {
             enforce_gate,
             min_speedup_ratio,
         ),
-        Commands::Setup { output, force } => run_setup_cli(output.as_deref(), force),
         Commands::ValidateConfig {
             config,
             json,
@@ -651,35 +643,6 @@ async fn run_spec_cli(spec_path: &str, print_audit: bool) -> CliResult<()> {
     let pretty = serde_json::to_string_pretty(&report)
         .map_err(|error| format!("serialize spec run report failed: {error}"))?;
     println!("{pretty}");
-    Ok(())
-}
-
-fn run_setup_cli(output: Option<&str>, force: bool) -> CliResult<()> {
-    let path = mvp::config::write_template(output, force)?;
-    #[cfg(feature = "memory-sqlite")]
-    {
-        let path_str = path
-            .to_str()
-            .ok_or_else(|| format!("config path is not valid UTF-8: {}", path.display()))?;
-        let (_, parsed) = mvp::config::load(Some(path_str))?;
-        let mem_config =
-            mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&parsed.memory);
-        let memory_db = mvp::memory::ensure_memory_db_ready(
-            Some(parsed.memory.resolved_sqlite_path()),
-            &mem_config,
-        )
-        .map_err(|error| format!("failed to bootstrap sqlite memory: {error}"))?;
-        println!(
-            "setup complete\n- config: {}\n- sqlite memory: {}",
-            path.display(),
-            memory_db.display()
-        );
-    }
-    #[cfg(not(feature = "memory-sqlite"))]
-    {
-        println!("setup complete\n- config: {}", path.display());
-    }
-    println!("next step: loongclaw chat --config {}", path.display());
     Ok(())
 }
 
@@ -1091,6 +1054,17 @@ fn write_json_file<T: Serialize>(path: &str, value: &T) -> CliResult<()> {
 #[cfg(test)]
 mod cli_tests {
     use super::*;
+
+    #[test]
+    fn setup_subcommand_is_removed() {
+        let error = Cli::try_parse_from(["loongclaw", "setup"])
+            .expect_err("`setup` should no longer parse as a valid subcommand");
+        assert!(
+            error
+                .to_string()
+                .contains("unrecognized subcommand 'setup'")
+        );
+    }
 
     #[test]
     fn safe_lane_summary_cli_rejects_zero_limit() {

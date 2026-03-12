@@ -73,7 +73,7 @@ LoongClaw is a layered Agentic OS kernel focused on stable kernel contracts, str
 <summary>Linux / macOS</summary>
 
 ```bash
-./scripts/install.sh --setup
+./scripts/install.sh --onboard
 ```
 </details>
 
@@ -81,7 +81,7 @@ LoongClaw is a layered Agentic OS kernel focused on stable kernel contracts, str
 <summary>Windows (PowerShell)</summary>
 
 ```powershell
-pwsh ./scripts/install.ps1 -Setup
+pwsh ./scripts/install.ps1 -Onboard
 ```
 </details>
 
@@ -95,10 +95,10 @@ cargo install --path crates/daemon
 
 ### First Chat in Under 5 Minutes
 
-1. Generate config and bootstrap local state:
+1. Run guided onboarding:
 
    ```bash
-   loongclaw setup
+   loongclaw onboard
    ```
 
 2. Set your provider API key:
@@ -239,7 +239,6 @@ Agent-facing tools:
 - Tool discovery across providers and scanned plugin descriptors
 
 **MVP Product Layer**
-- `setup` -- generate TOML config and bootstrap SQLite memory
 - `onboard` -- guided first-run with preflight diagnostics
 - `doctor` -- diagnostics with optional safe fixes (`--fix`) and machine-readable output (`--json`)
 - `chat` -- interactive CLI with sliding-window conversation memory
@@ -337,7 +336,7 @@ cargo build -p loongclaw-daemon --no-default-features --features "channel-cli,pr
 
 ## Configuration
 
-`loongclaw setup` defaults to referencing provider credentials through `provider.api_key`, so secrets stay outside the config file:
+`loongclaw onboard` defaults to referencing provider credentials through `provider.api_key`, so secrets stay outside the config file:
 
 ```toml
 [provider]
