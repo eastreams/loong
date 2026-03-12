@@ -60,6 +60,103 @@ LoongClaw is a layered Agentic OS kernel focused on stable kernel contracts, str
   Thanks to <a href="https://www.volcengine.com">Volcengine</a> for sponsoring this project.
 </p>
 
+## Alpha-Test Highlights
+
+- `setup` bootstraps a beginner-friendly TOML config and local SQLite memory.
+- `chat` provides an interactive CLI channel with sliding-window conversation memory.
+- Core tool runtime currently ships `shell.exec`, `file.read`, and `file.write`.
+- Conversation runtime now exposes a pluggable `context engine` seam with explicit lifecycle hooks
+  (`bootstrap`, `ingest`, `assemble`, `after_turn`, `compact_context`) plus reserved subagent
+  hooks for future multi-agent orchestration.
+- Context assembly now carries richer metadata (`messages`, optional `estimated_tokens`, optional
+  `system_prompt_addition`) so policy-driven prompt shaping and compaction can evolve without
+  breaking the trait surface.
+- Context engine selection supports config and env override:
+  - config: `[conversation] context_engine = "default|legacy|<custom_id>"`
+  - env: `LOONGCLAW_CONTEXT_ENGINE=<engine_id>`
+- ACP is modeled as a separate control plane instead of being folded into provider turns or context
+  assembly.
+- Built-in `acpx` backend now supports session lifecycle, turn execution, cancellation, status
+  inspection, config patching, doctor diagnostics, and backend-local MCP server injection.
+- ACP agent selection is now an explicit control-plane policy instead of a backend heuristic:
+  - config: `[acp] default_agent = "codex"`
+  - config: `[acp] allowed_agents = ["codex", "claude"]`
+  - conversation routes now derive `session_key = agent:<selected_agent>:<session_id>` and reject
+    disallowed agent prefixes early.
+- ACP dispatch is now a separate policy seam instead of being implied by `[acp].enabled`:
+  - config: `[acp.dispatch] enabled = true`
+  - config: `[acp.dispatch] conversation_routing = "all"|"agent_prefixed_only"`
+  - config: `[acp.dispatch] allowed_channels = ["telegram", "feishu"]`
+  - config: `[acp.dispatch] allowed_account_ids = ["work-bot", "lark-prod"]`
+  - config: `[acp.dispatch] thread_routing = "all"|"thread_only"|"root_only"`
+  - this keeps “ACP control plane exists” separate from “which conversation turns default into ACP”
+    so mixed provider/ACP operation and future thread binding do not require a route-layer rewrite.
+  - channel filtering is evaluated against the underlying conversation route, even when the session
+    is already agent-prefixed.
+  - account filtering and thread/root filtering are evaluated against the typed conversation
+    address (`channel/account/conversation/thread`) when available, then fall back to legacy
+    `session_id` parsing for compatibility.
+- Channel-originated turns now pass a typed session address (`channel/account/conversation/thread`)
+  into ACP dispatch before any legacy `session_id` parsing, pre-embedding future account/thread
+  binding rules without changing the public conversation/runtime seams again.
+- ACP session bindings now persist a typed `binding_route_session_id` in addition to legacy
+  `conversation_id`, so future account/thread-scoped ACP reuse does not depend on opaque aliases.
+- ACP bootstrap now also carries an explicit typed binding scope into the control plane, so session
+  reuse does not depend on re-parsing metadata alone.
+- When `[acp].enabled = true` and ACP dispatch allows the session, CLI/channel turns route through
+  the ACP manager with stable `conversation_id` and derived `session_key`, pre-wiring future
+  persistent bindings and per-channel ACP routing without a conversation-runtime rewrite.
+- When `[acp].emit_runtime_events = true`, ACP-routed turns persist structured
+  `acp_turn_event` / `acp_turn_final` records into conversation history so daemon-side summaries
+  and future OpenClaw-style streaming or telemetry surfaces can evolve without changing the ACP
+  manager/backend seam again. Those persisted records now also carry explicit `agent_id`, so
+  observability does not need to reverse-engineer identity only from `session_key`. They also keep
+  `routing_intent` / `routing_origin`, while ACP session status surfaces keep
+  `activation_origin`, so operators can distinguish explicit ACP entry from automatic ACP routing.
+- The daemon now exposes operator-facing diagnostics for:
+  - `list-context-engines`
+  - `list-acp-backends`
+  - `list-acp-sessions`
+  - `acp-doctor`
+  - `acp-dispatch`
+  - `acp-event-summary`
+  - `acp-status`
+  - `acp-observability`
+
+  `acp-dispatch` now reports not only whether automatic ACP routing is allowed, but also the
+  predicted automatic routing origin (`automatic_agent_prefixed` vs `automatic_dispatch`) when the
+  session would enter ACP.
+
+### Runtime Introspection Commands
+
+```bash
+cargo run -p loongclaw-daemon --bin loongclawd -- list-models --json
+cargo run -p loongclaw-daemon --bin loongclawd -- list-context-engines --json
+cargo run -p loongclaw-daemon --bin loongclawd -- list-acp-backends --json
+cargo run -p loongclaw-daemon --bin loongclawd -- list-acp-sessions --json
+cargo run -p loongclaw-daemon --bin loongclawd -- acp-doctor --backend acpx --json
+cargo run -p loongclaw-daemon --bin loongclawd -- acp-dispatch --session opaque-session --channel feishu --conversation-id oc_123 --account-id lark-prod --thread-id om_thread_1 --json
+cargo run -p loongclaw-daemon --bin loongclawd -- acp-event-summary --session default --json
+cargo run -p loongclaw-daemon --bin loongclawd -- acp-observability --json
+# if an ACP session already exists:
+# cargo run -p loongclaw-daemon --bin loongclawd -- acp-status --conversation-id telegram:42 --json
+# cargo run -p loongclaw-daemon --bin loongclawd -- acp-status --route-session-id feishu:lark-prod:oc_123:om_thread_1 --json
+# optional ACP runtime-event persistence for summaries / future streaming:
+# [acp]
+# enabled = true
+# default_agent = "codex"
+# allowed_agents = ["codex", "claude"]
+# emit_runtime_events = true
+# [acp.dispatch]
+# enabled = true
+# conversation_routing = "all"
+# allowed_channels = ["telegram"]
+# allowed_account_ids = ["work-bot"]
+# thread_routing = "all"
+# optional env override demo:
+# LOONGCLAW_CONTEXT_ENGINE=legacy cargo run -p loongclaw-daemon --bin loongclawd -- list-context-engines --json
+```
+
 ## Quick Start
 
 ### Prerequisites
@@ -114,6 +211,10 @@ cargo install --path crates/daemon
    ```bash
    loongclaw chat
    ```
+
+   Use `loongclaw chat --acp` when you want this chat session to route turns through ACP
+   explicitly. Without `--acp` or other ACP-specific chat flags, normal chat stays on the default
+   provider/context-engine path.
 
 Run `loongclaw doctor --fix` if anything goes wrong.
 

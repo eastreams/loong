@@ -820,6 +820,12 @@ fn bootstrap_policy(spec: &RunnerSpec) -> Option<BootstrapPolicy> {
     if let Some(value) = bootstrap.allow_mcp_server_auto_apply {
         policy.allow_mcp_server_auto_apply = value;
     }
+    if let Some(value) = bootstrap.allow_acp_bridge_auto_apply {
+        policy.allow_acp_bridge_auto_apply = value;
+    }
+    if let Some(value) = bootstrap.allow_acp_runtime_auto_apply {
+        policy.allow_acp_runtime_auto_apply = value;
+    }
     if let Some(value) = bootstrap.enforce_ready_execution {
         policy.enforce_ready_execution = value;
     }
@@ -827,6 +833,33 @@ fn bootstrap_policy(spec: &RunnerSpec) -> Option<BootstrapPolicy> {
         policy.max_tasks = value.max(1);
     }
     Some(policy)
+}
+
+#[cfg(test)]
+mod bootstrap_policy_tests {
+    use super::*;
+    use crate::spec_runtime::BootstrapSpec;
+
+    #[test]
+    fn bootstrap_policy_maps_distinct_acp_bridge_and_runtime_flags() {
+        let mut spec = RunnerSpec::template();
+        spec.bootstrap = Some(BootstrapSpec {
+            enabled: true,
+            allow_http_json_auto_apply: None,
+            allow_process_stdio_auto_apply: None,
+            allow_native_ffi_auto_apply: None,
+            allow_wasm_component_auto_apply: None,
+            allow_mcp_server_auto_apply: None,
+            allow_acp_bridge_auto_apply: Some(true),
+            allow_acp_runtime_auto_apply: Some(false),
+            enforce_ready_execution: None,
+            max_tasks: None,
+        });
+
+        let policy = bootstrap_policy(&spec).expect("bootstrap policy should resolve");
+        assert!(policy.allow_acp_bridge_auto_apply);
+        assert!(!policy.allow_acp_runtime_auto_apply);
+    }
 }
 
 fn filter_scan_report_by_activation(

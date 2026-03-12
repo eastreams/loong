@@ -18,6 +18,8 @@ use crate::CliResult;
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
 use crate::KernelContext;
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+use crate::acp::{AcpConversationTurnOptions, AcpTurnProvenance};
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context};
 
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
@@ -26,7 +28,9 @@ use super::config::{
     ResolvedTelegramChannelConfig,
 };
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
-use super::conversation::{ConversationTurnCoordinator, ProviderErrorMode};
+use super::conversation::{
+    ConversationSessionAddress, ConversationTurnCoordinator, ProviderErrorMode,
+};
 
 #[cfg(feature = "channel-feishu")]
 mod feishu;
@@ -152,6 +156,18 @@ impl ChannelSession {
             (None, None) => format!("{}:{conversation_id}", self.platform.as_str()),
         }
     }
+
+    pub fn conversation_address(&self) -> ConversationSessionAddress {
+        let mut address = ConversationSessionAddress::from_session_id(self.session_key())
+            .with_channel_scope(self.platform.as_str(), self.conversation_id.clone());
+        if let Some(account_id) = self.account_id.as_deref() {
+            address = address.with_account_id(account_id);
+        }
+        if let Some(thread_id) = self.thread_id.as_deref() {
+            address = address.with_thread_id(thread_id);
+        }
+        address
+    }
 }
 
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
@@ -239,6 +255,13 @@ pub struct ChannelInboundMessage {
     pub reply_target: ChannelOutboundTarget,
     pub text: String,
     pub delivery: ChannelDelivery,
+}
+
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ChannelResolvedAcpTurnHints {
+    bootstrap_mcp_servers: Vec<String>,
+    working_directory: Option<PathBuf>,
 }
 
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
@@ -693,16 +716,62 @@ pub(super) async fn process_inbound_with_provider(
     message: &ChannelInboundMessage,
     kernel_ctx: Option<&KernelContext>,
 ) -> CliResult<String> {
-    let session_key = message.session.session_key();
+    let address = message.session.conversation_address();
+    let acp_turn_hints = resolve_channel_acp_turn_hints(config, &message.session)?;
+    let acp_options = AcpConversationTurnOptions::automatic()
+        .with_additional_bootstrap_mcp_servers(&acp_turn_hints.bootstrap_mcp_servers)
+        .with_working_directory(acp_turn_hints.working_directory.as_deref())
+        .with_provenance(channel_message_acp_turn_provenance(message));
     ConversationTurnCoordinator::new()
-        .handle_turn(
+        .handle_turn_with_address_and_acp_options(
             config,
-            &session_key,
+            &address,
             &message.text,
             ProviderErrorMode::Propagate,
+            &acp_options,
             kernel_ctx,
         )
         .await
+}
+
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+fn resolve_channel_acp_turn_hints(
+    config: &LoongClawConfig,
+    session: &ChannelSession,
+) -> CliResult<ChannelResolvedAcpTurnHints> {
+    match session.platform {
+        ChannelPlatform::Telegram => {
+            let resolved = config
+                .telegram
+                .resolve_account_for_session_account_id(session.account_id.as_deref())?;
+            let acp = resolved.acp;
+            let working_directory = acp.resolved_working_directory();
+            Ok(ChannelResolvedAcpTurnHints {
+                bootstrap_mcp_servers: acp.bootstrap_mcp_servers,
+                working_directory,
+            })
+        }
+        ChannelPlatform::Feishu => {
+            let resolved = config
+                .feishu
+                .resolve_account_for_session_account_id(session.account_id.as_deref())?;
+            let acp = resolved.acp;
+            let working_directory = acp.resolved_working_directory();
+            Ok(ChannelResolvedAcpTurnHints {
+                bootstrap_mcp_servers: acp.bootstrap_mcp_servers,
+                working_directory,
+            })
+        }
+    }
+}
+
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+fn channel_message_acp_turn_provenance(message: &ChannelInboundMessage) -> AcpTurnProvenance<'_> {
+    AcpTurnProvenance {
+        trace_id: None,
+        source_message_id: message.delivery.source_message_id.as_deref(),
+        ack_cursor: message.delivery.ack_cursor.as_deref(),
+    }
 }
 
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
@@ -1025,6 +1094,112 @@ mod tests {
             session.session_key(),
             "feishu:lark_cli_a1b2c3:oc_123:om_thread_1"
         );
+    }
+
+    #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+    #[test]
+    fn channel_session_exposes_structured_conversation_address() {
+        let session = ChannelSession::with_account_and_thread(
+            ChannelPlatform::Feishu,
+            "lark_cli_a1b2c3",
+            "oc_123",
+            "om_thread_1",
+        );
+
+        let address = session.conversation_address();
+
+        assert_eq!(
+            address.session_id,
+            "feishu:lark_cli_a1b2c3:oc_123:om_thread_1"
+        );
+        assert_eq!(address.channel_id.as_deref(), Some("feishu"));
+        assert_eq!(address.account_id.as_deref(), Some("lark_cli_a1b2c3"));
+        assert_eq!(address.conversation_id.as_deref(), Some("oc_123"));
+        assert_eq!(address.thread_id.as_deref(), Some("om_thread_1"));
+    }
+
+    #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+    #[test]
+    fn resolve_channel_acp_turn_hints_uses_telegram_runtime_account_identity() {
+        let config: crate::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "telegram": {
+                "default_account": "Work Bot",
+                "accounts": {
+                    "Work Bot": {
+                        "account_id": "Ops-Bot",
+                        "bot_token_env": "WORK_TELEGRAM_TOKEN",
+                        "allowed_chat_ids": [1001],
+                        "acp": {
+                            "bootstrap_mcp_servers": ["search"],
+                            "working_directory": " /workspace/ops "
+                        }
+                    }
+                }
+            }
+        }))
+        .expect("deserialize config");
+        let session = ChannelSession::with_account(ChannelPlatform::Telegram, "ops-bot", "1001");
+
+        let hints = resolve_channel_acp_turn_hints(&config, &session)
+            .expect("resolve telegram ACP turn hints");
+        assert_eq!(hints.bootstrap_mcp_servers, vec!["search".to_owned()]);
+        assert_eq!(
+            hints.working_directory,
+            Some(PathBuf::from("/workspace/ops"))
+        );
+    }
+
+    #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+    #[test]
+    fn resolve_channel_acp_turn_hints_uses_feishu_runtime_account_identity() {
+        let config: crate::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "feishu": {
+                "default_account": "Lark Prod",
+                "accounts": {
+                    "Lark Prod": {
+                        "domain": "lark",
+                        "app_id": "cli_lark_123",
+                        "app_secret": "secret",
+                        "allowed_chat_ids": ["oc_123"],
+                        "acp": {
+                            "bootstrap_mcp_servers": ["search"],
+                            "working_directory": "/workspace/lark"
+                        }
+                    }
+                }
+            }
+        }))
+        .expect("deserialize config");
+        let session =
+            ChannelSession::with_account(ChannelPlatform::Feishu, "lark_cli_lark_123", "oc_123");
+
+        let hints = resolve_channel_acp_turn_hints(&config, &session)
+            .expect("resolve feishu ACP turn hints");
+        assert_eq!(hints.bootstrap_mcp_servers, vec!["search".to_owned()]);
+        assert_eq!(
+            hints.working_directory,
+            Some(PathBuf::from("/workspace/lark"))
+        );
+    }
+
+    #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+    #[test]
+    fn channel_message_acp_turn_provenance_uses_delivery_identifiers() {
+        let message = ChannelInboundMessage {
+            session: ChannelSession::with_account(ChannelPlatform::Telegram, "ops-bot", "1001"),
+            reply_target: ChannelOutboundTarget::telegram_chat(1001),
+            text: "hello".to_owned(),
+            delivery: ChannelDelivery {
+                ack_cursor: Some("cursor-55".to_owned()),
+                source_message_id: Some("message-42".to_owned()),
+            },
+        };
+
+        let provenance = channel_message_acp_turn_provenance(&message);
+
+        assert_eq!(provenance.trace_id, None);
+        assert_eq!(provenance.source_message_id, Some("message-42"));
+        assert_eq!(provenance.ack_cursor, Some("cursor-55"));
     }
 
     #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]

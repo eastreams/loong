@@ -11,6 +11,8 @@ pub struct BootstrapPolicy {
     pub allow_native_ffi_auto_apply: bool,
     pub allow_wasm_component_auto_apply: bool,
     pub allow_mcp_server_auto_apply: bool,
+    pub allow_acp_bridge_auto_apply: bool,
+    pub allow_acp_runtime_auto_apply: bool,
     pub enforce_ready_execution: bool,
     pub max_tasks: usize,
 }
@@ -23,6 +25,8 @@ impl Default for BootstrapPolicy {
             allow_native_ffi_auto_apply: false,
             allow_wasm_component_auto_apply: false,
             allow_mcp_server_auto_apply: false,
+            allow_acp_bridge_auto_apply: false,
+            allow_acp_runtime_auto_apply: false,
             enforce_ready_execution: false,
             max_tasks: 256,
         }
@@ -159,6 +163,8 @@ fn bridge_auto_apply_allowed(bridge: PluginBridgeKind, policy: &BootstrapPolicy)
         PluginBridgeKind::NativeFfi => policy.allow_native_ffi_auto_apply,
         PluginBridgeKind::WasmComponent => policy.allow_wasm_component_auto_apply,
         PluginBridgeKind::McpServer => policy.allow_mcp_server_auto_apply,
+        PluginBridgeKind::AcpBridge => policy.allow_acp_bridge_auto_apply,
+        PluginBridgeKind::AcpRuntime => policy.allow_acp_runtime_auto_apply,
         PluginBridgeKind::Unknown => false,
     }
 }
@@ -243,5 +249,65 @@ mod tests {
         assert_eq!(report.applied_tasks, 2);
         assert_eq!(report.deferred_tasks, 0);
         assert!(!report.blocked);
+    }
+
+    #[test]
+    fn acp_bridge_and_runtime_auto_apply_are_gated_independently() {
+        let executor = PluginBootstrapExecutor::new();
+        let plan = PluginActivationPlan {
+            total_plugins: 2,
+            ready_plugins: 2,
+            blocked_plugins: 0,
+            candidates: vec![
+                PluginActivationCandidate {
+                    plugin_id: "acp-bridge-plugin".to_owned(),
+                    source_path: "/tmp/acp-bridge.rs".to_owned(),
+                    bridge_kind: PluginBridgeKind::AcpBridge,
+                    adapter_family: "acp-bridge-adapter".to_owned(),
+                    status: PluginActivationStatus::Ready,
+                    reason: "ready".to_owned(),
+                    bootstrap_hint: "register acp bridge".to_owned(),
+                },
+                PluginActivationCandidate {
+                    plugin_id: "acpx-runtime-plugin".to_owned(),
+                    source_path: "/tmp/acpx-runtime.rs".to_owned(),
+                    bridge_kind: PluginBridgeKind::AcpRuntime,
+                    adapter_family: "acp-runtime-adapter".to_owned(),
+                    status: PluginActivationStatus::Ready,
+                    reason: "ready".to_owned(),
+                    bootstrap_hint: "register acp runtime".to_owned(),
+                },
+            ],
+        };
+
+        let bridge_only = BootstrapPolicy {
+            allow_acp_bridge_auto_apply: true,
+            allow_acp_runtime_auto_apply: false,
+            ..BootstrapPolicy::default()
+        };
+        let bridge_report = executor.execute(&plan, &bridge_only);
+        assert!(bridge_report.applied_plugin_keys.contains(&(
+            "/tmp/acp-bridge.rs".to_owned(),
+            "acp-bridge-plugin".to_owned()
+        )));
+        assert!(!bridge_report.applied_plugin_keys.contains(&(
+            "/tmp/acpx-runtime.rs".to_owned(),
+            "acpx-runtime-plugin".to_owned()
+        )));
+
+        let runtime_only = BootstrapPolicy {
+            allow_acp_bridge_auto_apply: false,
+            allow_acp_runtime_auto_apply: true,
+            ..BootstrapPolicy::default()
+        };
+        let runtime_report = executor.execute(&plan, &runtime_only);
+        assert!(!runtime_report.applied_plugin_keys.contains(&(
+            "/tmp/acp-bridge.rs".to_owned(),
+            "acp-bridge-plugin".to_owned()
+        )));
+        assert!(runtime_report.applied_plugin_keys.contains(&(
+            "/tmp/acpx-runtime.rs".to_owned(),
+            "acpx-runtime-plugin".to_owned()
+        )));
     }
 }

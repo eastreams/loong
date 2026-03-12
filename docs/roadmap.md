@@ -354,6 +354,21 @@ Approach: split `build_messages_for_session` into prompt construction + kernel-r
 
 Trade-off: improves audit coverage for memory reads, but requires splitting a tightly coupled function.
 
+Status (alpha-test): implemented.
+- Added `ConversationContextEngine` seam and default implementation.
+- `build_messages` now assembles through context engine and routes memory window reads via `kernel.execute_memory_core(..., Capability::MemoryRead, ...)` when kernel context is present.
+- Added registry/selection hooks (`register_context_engine`, `resolve_context_engine`, `LOONGCLAW_CONTEXT_ENGINE`) plus config-based selector (`[conversation].context_engine`) for future multi-engine evolution without invasive runtime refactors.
+- Added built-in `legacy` engine for rollback and behavior comparison against pre-seam assembly path.
+- Added engine metadata surface (`id`, `api_version`, `capabilities`) for diagnostics and compatibility checks before introducing more advanced engines.
+- Added explicit post-turn context compaction hook (`compact_context`) to reserve an upgrade seam for summarization/compression without rewriting orchestrator flow.
+- Added reserved context-engine lifecycle hooks (`bootstrap`, `ingest`) as default no-op seams so future engine-owned import/indexing flows do not require another trait/runtime rewrite.
+- Added reserved subagent lifecycle hooks (`prepare_subagent_spawn`, `on_subagent_ended`) as default no-op seams so future multi-agent context wiring avoids trait-breaking refactors.
+- Added richer context assembly output (`messages`, optional `estimated_tokens`, optional `system_prompt_addition`) to pre-wire policy/runtime prompt augmentation without revisiting runtime boundaries.
+- Added compaction policy controls (`compact_enabled`, `compact_min_messages`, `compact_trigger_estimated_tokens`, `compact_fail_open`) so heavy future summarization can be enabled/tuned without orchestrator rewrites.
+- Added daemon observability command (`list-context-engines`) to show selected engine source (env/config/default) and available engine capabilities.
+- Added unified runtime snapshot assembly for context engine diagnostics (selected + available + compaction policy) to keep CLI/channel observability outputs consistent.
+- Added regression tests for kernel-routed window reads, runtime injection, and registry resolution.
+
 ### D5: Upgrade `InMemoryAuditSink` to queryable snapshot
 
 Current `InMemoryAuditSink::snapshot()` returns a full clone of all events. For long-running processes, this grows unboundedly.

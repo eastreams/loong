@@ -29,6 +29,7 @@ fn sign_security_scan_profile_for_test(profile: &SecurityScanProfile) -> (String
     (public_key_base64, signature_base64)
 }
 
+mod acp;
 mod architecture;
 mod import_claw_cli;
 mod onboard_cli;

@@ -298,6 +298,18 @@ fn build_telegram_snapshot_for_account(
         format!("account={}", resolved.account.label),
         format!("polling_timeout_s={}", resolved.polling_timeout_s),
     ];
+    if !resolved.acp.bootstrap_mcp_servers.is_empty() {
+        notes.push(format!(
+            "acp_bootstrap_mcp_servers={}",
+            resolved.acp.bootstrap_mcp_servers.join(",")
+        ));
+    }
+    if let Some(working_directory) = resolved.acp.resolved_working_directory() {
+        notes.push(format!(
+            "acp_working_directory={}",
+            working_directory.display()
+        ));
+    }
     if is_default_account {
         notes.push("default_account=true".to_owned());
     }
@@ -456,6 +468,18 @@ fn build_feishu_snapshot_for_account(
         format!("webhook_bind={}", resolved.webhook_bind),
         format!("webhook_path={}", resolved.webhook_path),
     ];
+    if !resolved.acp.bootstrap_mcp_servers.is_empty() {
+        notes.push(format!(
+            "acp_bootstrap_mcp_servers={}",
+            resolved.acp.bootstrap_mcp_servers.join(",")
+        ));
+    }
+    if let Some(working_directory) = resolved.acp.resolved_working_directory() {
+        notes.push(format!(
+            "acp_working_directory={}",
+            working_directory.display()
+        ));
+    }
     if is_default_account {
         notes.push("default_account=true".to_owned());
     }
@@ -849,6 +873,71 @@ mod tests {
                 .iter()
                 .any(|note| note.contains("account_id=bot_123456")),
             "telegram notes should expose the resolved account id"
+        );
+    }
+
+    #[test]
+    fn channel_status_snapshots_report_telegram_acp_bootstrap_mcp_servers_in_notes() {
+        let mut config = LoongClawConfig::default();
+        config.telegram.enabled = true;
+        config.telegram.bot_token = Some("123456:token".to_owned());
+        config.telegram.allowed_chat_ids = vec![123];
+        config.telegram.acp.bootstrap_mcp_servers = vec!["filesystem".to_owned()];
+        config.telegram.acp.working_directory = Some(" /workspace/telegram ".to_owned());
+
+        let snapshots = channel_status_snapshots(&config);
+        let telegram = snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == "telegram")
+            .expect("telegram snapshot");
+
+        assert!(
+            telegram
+                .notes
+                .iter()
+                .any(|note| note == "acp_bootstrap_mcp_servers=filesystem"),
+            "telegram notes should expose configured ACP bootstrap MCP servers"
+        );
+        assert!(
+            telegram
+                .notes
+                .iter()
+                .any(|note| note == "acp_working_directory=/workspace/telegram"),
+            "telegram notes should expose configured ACP working directory"
+        );
+    }
+
+    #[test]
+    fn channel_status_snapshots_report_feishu_acp_bootstrap_mcp_servers_in_notes() {
+        let mut config = LoongClawConfig::default();
+        config.feishu.enabled = true;
+        config.feishu.app_id = Some("cli_a1b2c3".to_owned());
+        config.feishu.app_secret = Some("app-secret".to_owned());
+        config.feishu.allowed_chat_ids = vec!["oc_123".to_owned()];
+        config.feishu.verification_token = Some("token".to_owned());
+        config.feishu.encrypt_key = Some("encrypt".to_owned());
+        config.feishu.acp.bootstrap_mcp_servers = vec!["search".to_owned()];
+        config.feishu.acp.working_directory = Some("/workspace/feishu".to_owned());
+
+        let snapshots = channel_status_snapshots(&config);
+        let feishu = snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == "feishu")
+            .expect("feishu snapshot");
+
+        assert!(
+            feishu
+                .notes
+                .iter()
+                .any(|note| note == "acp_bootstrap_mcp_servers=search"),
+            "feishu notes should expose configured ACP bootstrap MCP servers"
+        );
+        assert!(
+            feishu
+                .notes
+                .iter()
+                .any(|note| note == "acp_working_directory=/workspace/feishu"),
+            "feishu notes should expose configured ACP working directory"
         );
     }
 

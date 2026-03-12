@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use async_trait::async_trait;
 use loongclaw_contracts::{Capability, ExecutionRoute, HarnessKind, MemoryPlaneError};
@@ -19,17 +20,265 @@ use super::*;
 use crate::CliResult;
 use crate::KernelContext;
 use crate::memory::MEMORY_OP_WINDOW;
+use crate::acp::{
+    ACP_TURN_METADATA_ACK_CURSOR, ACP_TURN_METADATA_ROUTING_INTENT,
+    ACP_TURN_METADATA_SOURCE_MESSAGE_ID, ACP_TURN_METADATA_TRACE_ID, AcpBackendMetadata,
+    AcpCapability, AcpConversationTurnOptions, AcpRoutingIntent, AcpRuntimeBackend,
+    AcpSessionBootstrap, AcpSessionHandle, AcpSessionState, AcpTurnEventSink, AcpTurnProvenance,
+    AcpTurnRequest, AcpTurnResult, AcpTurnStopReason, register_acp_backend,
+};
 
 struct FakeRuntime {
     seed_messages: Vec<Value>,
     completion_responses: Mutex<VecDeque<Result<String, String>>>,
     turn_responses: Mutex<VecDeque<Result<ProviderTurn, String>>>,
+    compact_result: Result<(), String>,
     persisted: Mutex<Vec<(String, String, String)>>,
+    bootstrap_calls: Mutex<Vec<String>>,
+    ingested_messages: Mutex<Vec<(String, Value)>>,
     requested_messages: Mutex<Vec<Value>>,
     turn_requested_messages: Mutex<Vec<Vec<Value>>>,
     completion_requested_messages: Mutex<Vec<Vec<Value>>>,
     completion_calls: Mutex<usize>,
     turn_calls: Mutex<usize>,
+    after_turn_calls: Mutex<Vec<(String, String, String, usize)>>,
+    compact_calls: Mutex<Vec<(String, usize)>>,
+}
+
+struct StubContextEngine;
+struct StubEnvContextEngine;
+struct StubSystemPromptAdditionEngine;
+struct RecordingLifecycleContextEngine {
+    calls: Arc<Mutex<Vec<String>>>,
+}
+
+#[derive(Default)]
+struct RoutedAcpState {
+    ensure_calls: usize,
+    turn_calls: usize,
+    last_bootstrap: Option<AcpSessionBootstrap>,
+    last_request: Option<AcpTurnRequest>,
+}
+
+struct RoutedAcpBackend {
+    id: &'static str,
+    shared: Arc<Mutex<RoutedAcpState>>,
+    fail_turn: bool,
+    emitted_events: Vec<Value>,
+}
+
+#[derive(Default)]
+struct RecordingAcpEventSink {
+    events: Mutex<Vec<Value>>,
+}
+
+impl RecordingAcpEventSink {
+    fn snapshot(&self) -> Vec<Value> {
+        self.events
+            .lock()
+            .expect("recording ACP event sink lock")
+            .clone()
+    }
+}
+
+impl AcpTurnEventSink for RecordingAcpEventSink {
+    fn on_event(&self, event: &Value) -> CliResult<()> {
+        self.events
+            .lock()
+            .expect("recording ACP event sink lock")
+            .push(event.clone());
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl ConversationContextEngine for StubContextEngine {
+    fn id(&self) -> &'static str {
+        "stub-context-engine"
+    }
+
+    async fn assemble_messages(
+        &self,
+        _config: &LoongClawConfig,
+        _session_id: &str,
+        _include_system_prompt: bool,
+        _kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<Vec<Value>> {
+        Ok(vec![json!({
+            "role": "system",
+            "content": "stub-context-engine",
+        })])
+    }
+}
+
+#[async_trait]
+impl ConversationContextEngine for StubEnvContextEngine {
+    fn id(&self) -> &'static str {
+        "stub-env-context-engine"
+    }
+
+    async fn assemble_messages(
+        &self,
+        _config: &LoongClawConfig,
+        _session_id: &str,
+        _include_system_prompt: bool,
+        _kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<Vec<Value>> {
+        Ok(vec![json!({
+            "role": "system",
+            "content": "stub-env-context-engine",
+        })])
+    }
+}
+
+#[async_trait]
+impl ConversationContextEngine for StubSystemPromptAdditionEngine {
+    fn id(&self) -> &'static str {
+        "stub-system-prompt-addition"
+    }
+
+    fn metadata(&self) -> ContextEngineMetadata {
+        ContextEngineMetadata::new(self.id(), [ContextEngineCapability::SystemPromptAddition])
+    }
+
+    async fn assemble_context(
+        &self,
+        _config: &LoongClawConfig,
+        _session_id: &str,
+        _include_system_prompt: bool,
+        _kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<AssembledConversationContext> {
+        Ok(AssembledConversationContext {
+            messages: vec![json!({
+                "role": "system",
+                "content": "base-system-prompt",
+            })],
+            estimated_tokens: Some(42),
+            system_prompt_addition: Some("runtime-policy-addition".to_owned()),
+        })
+    }
+
+    async fn assemble_messages(
+        &self,
+        _config: &LoongClawConfig,
+        _session_id: &str,
+        _include_system_prompt: bool,
+        _kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<Vec<Value>> {
+        Ok(vec![json!({
+            "role": "system",
+            "content": "base-system-prompt",
+        })])
+    }
+}
+
+#[async_trait]
+impl ConversationContextEngine for RecordingLifecycleContextEngine {
+    fn id(&self) -> &'static str {
+        "recording-lifecycle-context-engine"
+    }
+
+    async fn bootstrap(
+        &self,
+        _config: &LoongClawConfig,
+        session_id: &str,
+        _kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<ContextEngineBootstrapResult> {
+        self.calls
+            .lock()
+            .expect("recording context engine lock")
+            .push(format!("bootstrap:{session_id}"));
+        Ok(ContextEngineBootstrapResult {
+            bootstrapped: true,
+            imported_messages: Some(0),
+            reason: None,
+        })
+    }
+
+    async fn ingest(
+        &self,
+        session_id: &str,
+        message: &Value,
+        _kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<ContextEngineIngestResult> {
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        self.calls
+            .lock()
+            .expect("recording context engine lock")
+            .push(format!("ingest:{session_id}:{role}"));
+        Ok(ContextEngineIngestResult { ingested: true })
+    }
+
+    async fn prepare_subagent_spawn(
+        &self,
+        parent_session_id: &str,
+        subagent_session_id: &str,
+        _kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<()> {
+        self.calls
+            .lock()
+            .expect("recording context engine lock")
+            .push(format!(
+                "prepare_subagent_spawn:{parent_session_id}:{subagent_session_id}"
+            ));
+        Ok(())
+    }
+
+    async fn on_subagent_ended(
+        &self,
+        parent_session_id: &str,
+        subagent_session_id: &str,
+        _kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<()> {
+        self.calls
+            .lock()
+            .expect("recording context engine lock")
+            .push(format!(
+                "on_subagent_ended:{parent_session_id}:{subagent_session_id}"
+            ));
+        Ok(())
+    }
+
+    async fn assemble_messages(
+        &self,
+        _config: &LoongClawConfig,
+        _session_id: &str,
+        _include_system_prompt: bool,
+        _kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<Vec<Value>> {
+        Ok(Vec::new())
+    }
+}
+
+fn context_engine_env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+struct ScopedEnvVar {
+    previous: Option<Option<String>>,
+}
+
+impl ScopedEnvVar {
+    fn set(key: &'static str, value: &str) -> Self {
+        assert_eq!(key, CONTEXT_ENGINE_ENV, "unexpected scoped env key");
+        let previous = Some(super::context_engine_registry::context_engine_id_from_env());
+        super::context_engine_registry::set_context_engine_env_override(Some(value));
+        Self { previous }
+    }
+}
+
+impl Drop for ScopedEnvVar {
+    fn drop(&mut self) {
+        if let Some(previous) = self.previous.as_ref() {
+            super::context_engine_registry::set_context_engine_env_override(previous.as_deref());
+        } else {
+            super::context_engine_registry::clear_context_engine_env_override();
+        }
+    }
 }
 
 impl FakeRuntime {
@@ -64,18 +313,173 @@ impl FakeRuntime {
             seed_messages,
             completion_responses: Mutex::new(VecDeque::from(completions)),
             turn_responses: Mutex::new(VecDeque::from(turns)),
+            compact_result: Ok(()),
             persisted: Mutex::new(Vec::new()),
+            bootstrap_calls: Mutex::new(Vec::new()),
+            ingested_messages: Mutex::new(Vec::new()),
             requested_messages: Mutex::new(Vec::new()),
             turn_requested_messages: Mutex::new(Vec::new()),
             completion_requested_messages: Mutex::new(Vec::new()),
             completion_calls: Mutex::new(0),
             turn_calls: Mutex::new(0),
+            after_turn_calls: Mutex::new(Vec::new()),
+            compact_calls: Mutex::new(Vec::new()),
         }
+    }
+}
+
+fn unique_acp_test_id(prefix: &str, suffix: &str) -> String {
+    format!(
+        "{prefix}-{suffix}-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    )
+}
+
+fn register_routed_acp_backend(
+    suffix: &str,
+    fail_turn: bool,
+) -> (&'static str, Arc<Mutex<RoutedAcpState>>) {
+    register_routed_acp_backend_with_events(suffix, fail_turn, Vec::new())
+}
+
+fn register_routed_acp_backend_with_events(
+    suffix: &str,
+    fail_turn: bool,
+    emitted_events: Vec<Value>,
+) -> (&'static str, Arc<Mutex<RoutedAcpState>>) {
+    let backend_id: &'static str =
+        Box::leak(unique_acp_test_id("conversation-acp-backend", suffix).into_boxed_str());
+    let shared = Arc::new(Mutex::new(RoutedAcpState::default()));
+    register_acp_backend(backend_id, {
+        let shared = shared.clone();
+        let emitted_events = emitted_events.clone();
+        move || {
+            Box::new(RoutedAcpBackend {
+                id: backend_id,
+                shared: shared.clone(),
+                fail_turn,
+                emitted_events: emitted_events.clone(),
+            })
+        }
+    })
+    .expect("register routed ACP backend");
+    (backend_id, shared)
+}
+
+fn unique_acp_sqlite_path(suffix: &str) -> String {
+    std::env::temp_dir()
+        .join(format!(
+            "{}.sqlite3",
+            unique_acp_test_id("conversation-acp", suffix)
+        ))
+        .display()
+        .to_string()
+}
+
+#[async_trait]
+impl AcpRuntimeBackend for RoutedAcpBackend {
+    fn id(&self) -> &'static str {
+        self.id
+    }
+
+    fn metadata(&self) -> AcpBackendMetadata {
+        AcpBackendMetadata::new(
+            self.id(),
+            [
+                AcpCapability::SessionLifecycle,
+                AcpCapability::TurnExecution,
+            ],
+            "Conversation ACP routing test backend",
+        )
+    }
+
+    async fn ensure_session(
+        &self,
+        _config: &LoongClawConfig,
+        request: &AcpSessionBootstrap,
+    ) -> CliResult<AcpSessionHandle> {
+        let mut guard = self.shared.lock().expect("routed ACP state lock");
+        guard.ensure_calls += 1;
+        guard.last_bootstrap = Some(request.clone());
+        Ok(AcpSessionHandle {
+            session_key: request.session_key.clone(),
+            backend_id: self.id().to_owned(),
+            runtime_session_name: format!("routed-{}", request.session_key),
+            working_directory: None,
+            backend_session_id: Some(format!("backend-{}", request.session_key)),
+            agent_session_id: Some(format!("agent-{}", request.session_key)),
+            binding: request.binding.clone(),
+        })
+    }
+
+    async fn run_turn(
+        &self,
+        _config: &LoongClawConfig,
+        _session: &AcpSessionHandle,
+        request: &AcpTurnRequest,
+    ) -> CliResult<AcpTurnResult> {
+        let mut guard = self.shared.lock().expect("routed ACP state lock");
+        guard.turn_calls += 1;
+        guard.last_request = Some(request.clone());
+        if self.fail_turn {
+            return Err("synthetic ACP routing failure".to_owned());
+        }
+        Ok(AcpTurnResult {
+            output_text: format!("acp: {}", request.input),
+            state: AcpSessionState::Ready,
+            usage: None,
+            events: self.emitted_events.clone(),
+            stop_reason: Some(AcpTurnStopReason::Completed),
+        })
+    }
+
+    async fn cancel(
+        &self,
+        _config: &LoongClawConfig,
+        _session: &AcpSessionHandle,
+    ) -> CliResult<()> {
+        Ok(())
+    }
+
+    async fn close(&self, _config: &LoongClawConfig, _session: &AcpSessionHandle) -> CliResult<()> {
+        Ok(())
     }
 }
 
 #[async_trait]
 impl ConversationRuntime for FakeRuntime {
+    async fn bootstrap(
+        &self,
+        _config: &LoongClawConfig,
+        session_id: &str,
+        _kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<ContextEngineBootstrapResult> {
+        self.bootstrap_calls
+            .lock()
+            .expect("bootstrap lock")
+            .push(session_id.to_owned());
+        Ok(ContextEngineBootstrapResult {
+            bootstrapped: true,
+            imported_messages: Some(0),
+            reason: None,
+        })
+    }
+
+    async fn ingest(
+        &self,
+        session_id: &str,
+        message: &Value,
+        _kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<ContextEngineIngestResult> {
+        self.ingested_messages
+            .lock()
+            .expect("ingest lock")
+            .push((session_id.to_owned(), message.clone()));
+        Ok(ContextEngineIngestResult { ingested: true })
+    }
     async fn build_messages(
         &self,
         _config: &LoongClawConfig,
@@ -140,6 +544,42 @@ impl ConversationRuntime for FakeRuntime {
         ));
         Ok(())
     }
+
+    async fn after_turn(
+        &self,
+        session_id: &str,
+        user_input: &str,
+        assistant_reply: &str,
+        messages: &[Value],
+        _kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<()> {
+        self.after_turn_calls
+            .lock()
+            .expect("after-turn lock")
+            .push((
+                session_id.to_owned(),
+                user_input.to_owned(),
+                assistant_reply.to_owned(),
+                messages.len(),
+            ));
+        Ok(())
+    }
+
+    async fn compact_context(
+        &self,
+        _config: &LoongClawConfig,
+        session_id: &str,
+        messages: &[Value],
+        _kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<()> {
+        self.compact_calls
+            .lock()
+            .expect("compact lock")
+            .push((session_id.to_owned(), messages.len()));
+        self.compact_result
+            .clone()
+            .map_err(|error| error.to_owned())
+    }
 }
 
 fn test_config() -> LoongClawConfig {
@@ -152,7 +592,237 @@ fn test_config() -> LoongClawConfig {
         tools: ToolConfig::default(),
         external_skills: ExternalSkillsConfig::default(),
         memory: MemoryConfig::default(),
+        acp: crate::config::AcpConfig::default(),
     }
+}
+
+#[tokio::test]
+async fn default_runtime_supports_injected_context_engine() {
+    let runtime = DefaultConversationRuntime::with_context_engine(StubContextEngine);
+    let messages = runtime
+        .build_messages(&test_config(), "session-injected", true, None)
+        .await
+        .expect("build messages via injected context engine");
+
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["role"], "system");
+    assert_eq!(messages[0]["content"], "stub-context-engine");
+}
+
+#[tokio::test]
+async fn default_runtime_can_resolve_context_engine_from_registry() {
+    register_context_engine("stub-registry", || Box::new(StubContextEngine))
+        .expect("register context engine");
+    let runtime = DefaultConversationRuntime::from_engine_id(Some("stub-registry"))
+        .expect("resolve context engine from registry");
+    let messages = runtime
+        .build_messages(&test_config(), "session-registry", true, None)
+        .await
+        .expect("build messages via registry context engine");
+
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["content"], "stub-context-engine");
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)] // env var mutation is process-global; keep lock for full test body.
+async fn default_runtime_prefers_configured_context_engine_when_env_not_set() {
+    let _env_lock = context_engine_env_lock().lock().expect("env lock");
+    register_context_engine("stub-config", || Box::new(StubContextEngine))
+        .expect("register context engine");
+    let _scoped_env = ScopedEnvVar::set(CONTEXT_ENGINE_ENV, "");
+    let mut config = test_config();
+    config.conversation.context_engine = Some("stub-config".to_owned());
+
+    let runtime = DefaultConversationRuntime::from_config_or_env(&config)
+        .expect("resolve context engine from config");
+    let messages = runtime
+        .build_messages(&config, "session-config", true, None)
+        .await
+        .expect("build messages via configured context engine");
+
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["content"], "stub-context-engine");
+}
+
+#[test]
+fn default_runtime_exposes_context_engine_metadata() {
+    let runtime = DefaultConversationRuntime::default();
+    let metadata = runtime.context_engine_metadata();
+    assert_eq!(metadata.id, DEFAULT_CONTEXT_ENGINE_ID);
+    assert_eq!(metadata.api_version, CONTEXT_ENGINE_API_VERSION);
+}
+
+#[tokio::test]
+async fn default_runtime_delegates_bootstrap_and_ingest_to_context_engine() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let runtime =
+        DefaultConversationRuntime::with_context_engine(RecordingLifecycleContextEngine {
+            calls: calls.clone(),
+        });
+
+    let bootstrap = runtime
+        .bootstrap(&test_config(), "session-lifecycle", None)
+        .await
+        .expect("bootstrap should delegate to context engine");
+    let ingest = runtime
+        .ingest(
+            "session-lifecycle",
+            &json!({
+                "role": "user",
+                "content": "hello",
+            }),
+            None,
+        )
+        .await
+        .expect("ingest should delegate to context engine");
+
+    assert!(bootstrap.bootstrapped);
+    assert!(ingest.ingested);
+    assert_eq!(
+        calls.lock().expect("recording calls lock").clone(),
+        vec![
+            "bootstrap:session-lifecycle".to_owned(),
+            "ingest:session-lifecycle:user".to_owned(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn default_runtime_delegates_subagent_lifecycle_to_context_engine() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let runtime =
+        DefaultConversationRuntime::with_context_engine(RecordingLifecycleContextEngine {
+            calls: calls.clone(),
+        });
+
+    runtime
+        .prepare_subagent_spawn("session-parent", "session-child", None)
+        .await
+        .expect("prepare_subagent_spawn should delegate to context engine");
+    runtime
+        .on_subagent_ended("session-parent", "session-child", None)
+        .await
+        .expect("on_subagent_ended should delegate to context engine");
+
+    assert_eq!(
+        calls.lock().expect("recording calls lock").clone(),
+        vec![
+            "prepare_subagent_spawn:session-parent:session-child".to_owned(),
+            "on_subagent_ended:session-parent:session-child".to_owned(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn default_runtime_build_context_applies_system_prompt_addition() {
+    let runtime = DefaultConversationRuntime::with_context_engine(StubSystemPromptAdditionEngine);
+    let assembled = runtime
+        .build_context(&test_config(), "session-system-addition", true, None)
+        .await
+        .expect("build context with system prompt addition");
+
+    assert_eq!(assembled.estimated_tokens, Some(42));
+    assert_eq!(
+        assembled.system_prompt_addition.as_deref(),
+        Some("runtime-policy-addition")
+    );
+    assert_eq!(assembled.messages.len(), 1);
+    assert_eq!(assembled.messages[0]["role"], "system");
+    let merged = assembled.messages[0]["content"]
+        .as_str()
+        .expect("system prompt should stay string");
+    assert_eq!(
+        merged, "runtime-policy-addition\n\nbase-system-prompt",
+        "system prompt addition should be prepended"
+    );
+}
+
+#[test]
+fn resolve_context_engine_selection_uses_default_when_unset() {
+    let _env_lock = context_engine_env_lock().lock().expect("env lock");
+    let _scoped_env = ScopedEnvVar::set(CONTEXT_ENGINE_ENV, "");
+    let config = test_config();
+    let selection = resolve_context_engine_selection(&config);
+    assert_eq!(selection.id, DEFAULT_CONTEXT_ENGINE_ID);
+    assert_eq!(selection.source, ContextEngineSelectionSource::Default);
+    assert_eq!(selection.source.as_str(), "default");
+}
+
+#[test]
+fn resolve_context_engine_selection_prefers_env_over_config() {
+    let _env_lock = context_engine_env_lock().lock().expect("env lock");
+    let _scoped_env = ScopedEnvVar::set(CONTEXT_ENGINE_ENV, "stub-env-priority");
+    let mut config = test_config();
+    config.conversation.context_engine = Some("stub-config".to_owned());
+
+    let selection = resolve_context_engine_selection(&config);
+    assert_eq!(selection.id, "stub-env-priority");
+    assert_eq!(selection.source, ContextEngineSelectionSource::Env);
+}
+
+#[test]
+fn resolve_context_engine_selection_uses_config_when_env_missing() {
+    let _env_lock = context_engine_env_lock().lock().expect("env lock");
+    let _scoped_env = ScopedEnvVar::set(CONTEXT_ENGINE_ENV, "");
+    let mut config = test_config();
+    config.conversation.context_engine = Some("legacy".to_owned());
+
+    let selection = resolve_context_engine_selection(&config);
+    assert_eq!(selection.id, "legacy");
+    assert_eq!(selection.source, ContextEngineSelectionSource::Config);
+}
+
+#[test]
+fn collect_context_engine_runtime_snapshot_reports_compaction_and_selection() {
+    let _env_lock = context_engine_env_lock().lock().expect("env lock");
+    let _scoped_env = ScopedEnvVar::set(CONTEXT_ENGINE_ENV, "");
+    let mut config = test_config();
+    config.conversation.compact_enabled = true;
+    config.conversation.compact_min_messages = Some(7);
+    config.conversation.compact_fail_open = false;
+
+    let snapshot = collect_context_engine_runtime_snapshot(&config)
+        .expect("collect context engine runtime snapshot");
+    assert_eq!(snapshot.selected.id, DEFAULT_CONTEXT_ENGINE_ID);
+    assert_eq!(
+        snapshot.selected.source,
+        ContextEngineSelectionSource::Default
+    );
+    assert_eq!(snapshot.selected_metadata.id, DEFAULT_CONTEXT_ENGINE_ID);
+    assert!(
+        snapshot
+            .available
+            .iter()
+            .any(|metadata| metadata.id == DEFAULT_CONTEXT_ENGINE_ID)
+    );
+    assert_eq!(snapshot.compaction.min_messages, Some(7));
+    assert_eq!(snapshot.compaction.trigger_estimated_tokens, None);
+    assert!(!snapshot.compaction.fail_open);
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)] // env var mutation is process-global; keep lock for full test body.
+async fn default_runtime_prefers_env_context_engine_over_config() {
+    let _env_lock = context_engine_env_lock().lock().expect("env lock");
+    register_context_engine("stub-config-env-priority", || Box::new(StubContextEngine))
+        .expect("register config context engine");
+    register_context_engine("stub-env-priority", || Box::new(StubEnvContextEngine))
+        .expect("register env context engine");
+    let _scoped_env = ScopedEnvVar::set(CONTEXT_ENGINE_ENV, "stub-env-priority");
+
+    let mut config = test_config();
+    config.conversation.context_engine = Some("stub-config-env-priority".to_owned());
+
+    let runtime = DefaultConversationRuntime::from_config_or_env(&config)
+        .expect("resolve context engine from env override");
+    let messages = runtime
+        .build_messages(&config, "session-env-priority", true, None)
+        .await
+        .expect("build messages via env-selected context engine");
+
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["content"], "stub-env-context-engine");
 }
 
 #[tokio::test]
@@ -175,6 +845,14 @@ async fn handle_turn_with_runtime_success_persists_user_and_assistant_turns() {
         .expect("handle turn success");
 
     assert_eq!(reply, "assistant-reply");
+    assert_eq!(
+        runtime
+            .bootstrap_calls
+            .lock()
+            .expect("bootstrap lock")
+            .as_slice(),
+        ["session-1"]
+    );
 
     let requested = runtime.requested_messages.lock().expect("requested lock");
     assert_eq!(requested.len(), 2);
@@ -199,6 +877,1361 @@ async fn handle_turn_with_runtime_success_persists_user_and_assistant_turns() {
             "assistant-reply".to_owned(),
         )
     );
+
+    let ingested = runtime
+        .ingested_messages
+        .lock()
+        .expect("ingest lock")
+        .clone();
+    assert_eq!(ingested.len(), 2);
+    assert_eq!(ingested[0].0, "session-1");
+    assert_eq!(ingested[0].1["role"], "user");
+    assert_eq!(ingested[0].1["content"], "hello");
+    assert_eq!(ingested[1].0, "session-1");
+    assert_eq!(ingested[1].1["role"], "assistant");
+    assert_eq!(ingested[1].1["content"], "assistant-reply");
+
+    let after_turn = runtime
+        .after_turn_calls
+        .lock()
+        .expect("after-turn lock")
+        .clone();
+    assert_eq!(after_turn.len(), 1);
+    assert_eq!(after_turn[0].0, "session-1");
+    assert_eq!(after_turn[0].1, "hello");
+    assert_eq!(after_turn[0].2, "assistant-reply");
+    assert_eq!(after_turn[0].3, 3);
+
+    let compact = runtime.compact_calls.lock().expect("compact lock").clone();
+    assert_eq!(compact.len(), 1);
+    assert_eq!(compact[0].0, "session-1");
+    assert_eq!(compact[0].1, 3);
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_keeps_provider_path_by_default_when_acp_enabled() {
+    let (backend_id, shared) = register_routed_acp_backend("success", false);
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("provider-normal-path".to_owned()),
+    );
+    let orchestrator = ConversationOrchestrator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.default_agent = Some("claude".to_owned());
+    config.acp.allowed_agents = vec!["claude".to_owned()];
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.bindings_enabled = true;
+    config.acp.dispatch.bootstrap_mcp_servers =
+        vec![" Filesystem ".to_owned(), "filesystem".to_owned()];
+    config.memory.sqlite_path = unique_acp_sqlite_path("success");
+
+    let reply = orchestrator
+        .handle_turn_with_runtime(
+            &config,
+            "telegram:42",
+            "hello from channel",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("default handle_turn should stay on provider path");
+
+    assert_eq!(reply, "provider-normal-path");
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 1);
+    assert_eq!(shared.lock().expect("ACP shared state").turn_calls, 0);
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_routes_explicit_acp_turns_through_acp() {
+    let (backend_id, shared) = register_routed_acp_backend("success-explicit", false);
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("provider-should-not-run".to_owned()),
+    );
+    let orchestrator = ConversationOrchestrator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.default_agent = Some("claude".to_owned());
+    config.acp.allowed_agents = vec!["claude".to_owned()];
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.bindings_enabled = true;
+    config.acp.dispatch.bootstrap_mcp_servers =
+        vec![" Filesystem ".to_owned(), "filesystem".to_owned()];
+    config.memory.sqlite_path = unique_acp_sqlite_path("success-explicit");
+
+    let reply = orchestrator
+        .handle_turn_with_runtime_and_address_and_acp_options(
+            &config,
+            &ConversationSessionAddress::from_session_id("telegram:42"),
+            "hello from channel",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            &AcpConversationTurnOptions {
+                routing_intent: AcpRoutingIntent::Explicit,
+                ..AcpConversationTurnOptions::default()
+            },
+            None,
+        )
+        .await
+        .expect("explicit ACP turn should route through ACP");
+
+    assert_eq!(reply, "acp: hello from channel");
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 0);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+    assert!(
+        runtime
+            .requested_messages
+            .lock()
+            .expect("requested messages lock")
+            .is_empty(),
+        "provider path should not build or request provider messages for explicit ACP turns"
+    );
+
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    assert_eq!(persisted.len(), 2);
+    assert_eq!(persisted[0].0, "telegram:42");
+    assert_eq!(persisted[0].1, "user");
+    assert_eq!(persisted[1].1, "assistant");
+    assert_eq!(persisted[1].2, "acp: hello from channel");
+    assert!(
+        runtime
+            .bootstrap_calls
+            .lock()
+            .expect("bootstrap lock")
+            .is_empty()
+    );
+    assert!(
+        runtime
+            .ingested_messages
+            .lock()
+            .expect("ingest lock")
+            .is_empty()
+    );
+    assert!(
+        runtime
+            .after_turn_calls
+            .lock()
+            .expect("after-turn lock")
+            .is_empty()
+    );
+    assert!(
+        runtime
+            .compact_calls
+            .lock()
+            .expect("compact lock")
+            .is_empty()
+    );
+
+    let state = shared.lock().expect("ACP shared state");
+    assert_eq!(state.ensure_calls, 1);
+    assert_eq!(state.turn_calls, 1);
+    let bootstrap = state
+        .last_bootstrap
+        .clone()
+        .expect("ACP bootstrap should be captured");
+    assert_eq!(bootstrap.conversation_id.as_deref(), Some("telegram:42"));
+    assert_eq!(
+        bootstrap
+            .binding
+            .as_ref()
+            .map(|binding| binding.route_session_id.as_str()),
+        Some("telegram:42")
+    );
+    assert_eq!(bootstrap.session_key, "agent:claude:telegram:42");
+    assert_eq!(bootstrap.mcp_servers, vec!["filesystem".to_owned()]);
+    assert_eq!(
+        bootstrap.metadata.get("acp_agent").map(String::as_str),
+        Some("claude")
+    );
+    assert_eq!(
+        bootstrap
+            .metadata
+            .get("loongclaw.acp.activation_origin")
+            .map(String::as_str),
+        Some("explicit_request")
+    );
+    let request = state
+        .last_request
+        .clone()
+        .expect("ACP request should be captured");
+    assert_eq!(request.session_key, "agent:claude:telegram:42");
+    assert_eq!(request.input, "hello from channel");
+    assert_eq!(
+        request
+            .metadata
+            .get("loongclaw.acp.routing_origin")
+            .map(String::as_str),
+        Some("explicit_request")
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_merges_additional_acp_bootstrap_mcp_servers_from_options() {
+    let (backend_id, shared) = register_routed_acp_backend("bootstrap-mcp-options", false);
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("provider-should-not-run".to_owned()),
+    );
+    let orchestrator = ConversationOrchestrator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.default_agent = Some("claude".to_owned());
+    config.acp.allowed_agents = vec!["claude".to_owned()];
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.dispatch.bootstrap_mcp_servers = vec![" Filesystem ".to_owned()];
+    config.memory.sqlite_path = unique_acp_sqlite_path("bootstrap-mcp-options");
+    let extra_servers = vec![
+        "search".to_owned(),
+        "filesystem".to_owned(),
+        " Search ".to_owned(),
+    ];
+
+    let reply = orchestrator
+        .handle_turn_with_runtime_and_address_and_acp_options(
+            &config,
+            &ConversationSessionAddress::from_session_id("telegram:4242"),
+            "hello with extra bootstrap mcp",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            &AcpConversationTurnOptions {
+                routing_intent: AcpRoutingIntent::Explicit,
+                additional_bootstrap_mcp_servers: Some(extra_servers.as_slice()),
+                ..AcpConversationTurnOptions::default()
+            },
+            None,
+        )
+        .await
+        .expect("ACP-routed turn with additional bootstrap MCP servers should succeed");
+
+    assert_eq!(reply, "acp: hello with extra bootstrap mcp");
+    let state = shared.lock().expect("ACP shared state");
+    let bootstrap = state
+        .last_bootstrap
+        .clone()
+        .expect("ACP bootstrap should be captured");
+    assert_eq!(
+        bootstrap.mcp_servers,
+        vec!["filesystem".to_owned(), "search".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_applies_acp_turn_provenance_metadata() {
+    let (backend_id, shared) = register_routed_acp_backend("turn-provenance", false);
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("provider-should-not-run".to_owned()),
+    );
+    let orchestrator = ConversationOrchestrator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.default_agent = Some("claude".to_owned());
+    config.acp.allowed_agents = vec!["claude".to_owned()];
+    config.acp.backend = Some(backend_id.to_owned());
+    config.memory.sqlite_path = unique_acp_sqlite_path("turn-provenance");
+
+    let reply = orchestrator
+        .handle_turn_with_runtime_and_address_and_acp_options(
+            &config,
+            &ConversationSessionAddress::from_session_id("telegram:4242"),
+            "hello with provenance",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            &AcpConversationTurnOptions {
+                routing_intent: AcpRoutingIntent::Explicit,
+                provenance: AcpTurnProvenance {
+                    trace_id: Some("trace-123"),
+                    source_message_id: Some("message-42"),
+                    ack_cursor: Some("cursor-9"),
+                },
+                ..AcpConversationTurnOptions::default()
+            },
+            None,
+        )
+        .await
+        .expect("ACP-routed turn with provenance should succeed");
+
+    assert_eq!(reply, "acp: hello with provenance");
+    let state = shared.lock().expect("ACP shared state");
+    let request = state
+        .last_request
+        .clone()
+        .expect("ACP request should be captured");
+    assert_eq!(
+        request
+            .metadata
+            .get(ACP_TURN_METADATA_TRACE_ID)
+            .map(String::as_str),
+        Some("trace-123")
+    );
+    assert_eq!(
+        request
+            .metadata
+            .get(ACP_TURN_METADATA_SOURCE_MESSAGE_ID)
+            .map(String::as_str),
+        Some("message-42")
+    );
+    assert_eq!(
+        request
+            .metadata
+            .get(ACP_TURN_METADATA_ACK_CURSOR)
+            .map(String::as_str),
+        Some("cursor-9")
+    );
+    assert_eq!(
+        request
+            .metadata
+            .get(ACP_TURN_METADATA_ROUTING_INTENT)
+            .map(String::as_str),
+        Some("explicit")
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_applies_acp_working_directory_from_options() {
+    let (backend_id, shared) = register_routed_acp_backend("turn-working-directory", false);
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("provider-should-not-run".to_owned()),
+    );
+    let orchestrator = ConversationOrchestrator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.default_agent = Some("claude".to_owned());
+    config.acp.allowed_agents = vec!["claude".to_owned()];
+    config.acp.backend = Some(backend_id.to_owned());
+    config.memory.sqlite_path = unique_acp_sqlite_path("turn-working-directory");
+    let working_directory = PathBuf::from("/workspace/project");
+
+    let reply = orchestrator
+        .handle_turn_with_runtime_and_address_and_acp_options(
+            &config,
+            &ConversationSessionAddress::from_session_id("telegram:4242"),
+            "hello with working directory",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            &AcpConversationTurnOptions {
+                routing_intent: AcpRoutingIntent::Explicit,
+                working_directory: Some(working_directory.as_path()),
+                ..AcpConversationTurnOptions::default()
+            },
+            None,
+        )
+        .await
+        .expect("ACP-routed turn with working directory should succeed");
+
+    assert_eq!(reply, "acp: hello with working directory");
+    let state = shared.lock().expect("ACP shared state");
+    let bootstrap = state
+        .last_bootstrap
+        .clone()
+        .expect("ACP bootstrap should be captured");
+    let request = state
+        .last_request
+        .clone()
+        .expect("ACP request should be captured");
+    assert_eq!(
+        bootstrap.working_directory.as_deref(),
+        Some(working_directory.as_path())
+    );
+    assert_eq!(
+        request.working_directory.as_deref(),
+        Some(working_directory.as_path())
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_falls_back_to_dispatch_acp_working_directory() {
+    let (backend_id, shared) = register_routed_acp_backend("dispatch-working-directory", false);
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("provider-should-not-run".to_owned()),
+    );
+    let orchestrator = ConversationOrchestrator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.default_agent = Some("claude".to_owned());
+    config.acp.allowed_agents = vec!["claude".to_owned()];
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.dispatch.working_directory = Some(" /workspace/dispatch ".to_owned());
+    config.memory.sqlite_path = unique_acp_sqlite_path("dispatch-working-directory");
+
+    let reply = orchestrator
+        .handle_turn_with_runtime_and_address_and_acp_options(
+            &config,
+            &ConversationSessionAddress::from_session_id("telegram:4343"),
+            "hello with dispatch working directory",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            &AcpConversationTurnOptions {
+                routing_intent: AcpRoutingIntent::Explicit,
+                ..AcpConversationTurnOptions::default()
+            },
+            None,
+        )
+        .await
+        .expect("ACP-routed turn should inherit dispatch working directory");
+
+    assert_eq!(reply, "acp: hello with dispatch working directory");
+    let state = shared.lock().expect("ACP shared state");
+    let bootstrap = state
+        .last_bootstrap
+        .clone()
+        .expect("ACP bootstrap should be captured");
+    let request = state
+        .last_request
+        .clone()
+        .expect("ACP request should be captured");
+    assert_eq!(
+        bootstrap.working_directory.as_deref(),
+        Some(std::path::Path::new("/workspace/dispatch"))
+    );
+    assert_eq!(
+        request.working_directory.as_deref(),
+        Some(std::path::Path::new("/workspace/dispatch"))
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_uses_provider_path_when_acp_dispatch_is_disabled() {
+    let (backend_id, shared) = register_routed_acp_backend("dispatch-disabled", false);
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("provider-path-reply".to_owned()),
+    );
+    let orchestrator = ConversationOrchestrator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.dispatch.enabled = false;
+    config.memory.sqlite_path = unique_acp_sqlite_path("dispatch-disabled");
+
+    let reply = orchestrator
+        .handle_turn_with_runtime(
+            &config,
+            "telegram:424242",
+            "hello provider path",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("provider path should remain available when ACP dispatch is disabled");
+
+    assert_eq!(reply, "provider-path-reply");
+    assert_eq!(
+        shared.lock().expect("ACP shared state").turn_calls,
+        0,
+        "ACP backend should not receive turns when dispatch is disabled"
+    );
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 1);
+    assert_eq!(
+        runtime
+            .bootstrap_calls
+            .lock()
+            .expect("bootstrap lock")
+            .as_slice(),
+        ["telegram:424242"]
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_explicit_acp_request_bypasses_dispatch_gate() {
+    let (backend_id, shared) = register_routed_acp_backend("dispatch-disabled-explicit", false);
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("provider-should-not-run".to_owned()),
+    );
+    let orchestrator = ConversationOrchestrator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.dispatch.enabled = false;
+    config.memory.sqlite_path = unique_acp_sqlite_path("dispatch-disabled-explicit");
+
+    let reply = orchestrator
+        .handle_turn_with_runtime_and_address_and_acp_options(
+            &config,
+            &ConversationSessionAddress::from_session_id("telegram:424242"),
+            "hello explicit acp path",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            &AcpConversationTurnOptions {
+                routing_intent: AcpRoutingIntent::Explicit,
+                ..AcpConversationTurnOptions::default()
+            },
+            None,
+        )
+        .await
+        .expect("explicit ACP requests should bypass automatic dispatch gating");
+
+    assert_eq!(reply, "acp: hello explicit acp path");
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 0);
+    assert_eq!(shared.lock().expect("ACP shared state").turn_calls, 1);
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_explicit_acp_request_fails_closed_when_acp_is_disabled() {
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("provider-should-not-run".to_owned()),
+    );
+    let orchestrator = ConversationOrchestrator::new();
+    let mut config = test_config();
+    config.acp.enabled = false;
+
+    let reply = orchestrator
+        .handle_turn_with_runtime_and_address_and_acp_options(
+            &config,
+            &ConversationSessionAddress::from_session_id("telegram:424242"),
+            "hello explicit disabled acp path",
+            ProviderErrorMode::InlineMessage,
+            &runtime,
+            &AcpConversationTurnOptions {
+                routing_intent: AcpRoutingIntent::Explicit,
+                ..AcpConversationTurnOptions::default()
+            },
+            None,
+        )
+        .await
+        .expect("inline mode should synthesize a clear ACP-disabled reply");
+
+    assert_eq!(
+        reply,
+        format_provider_error_reply("ACP is disabled by policy (`acp.enabled=false`)")
+    );
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 0);
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_routes_only_agent_prefixed_sessions_when_configured() {
+    let (backend_id, shared) = register_routed_acp_backend("prefixed-only", false);
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("provider-fallback".to_owned()),
+    );
+    let orchestrator = ConversationOrchestrator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.dispatch.conversation_routing =
+        crate::config::AcpConversationRoutingMode::AgentPrefixedOnly;
+    config.memory.sqlite_path = unique_acp_sqlite_path("prefixed-only");
+
+    let non_prefixed = orchestrator
+        .handle_turn_with_runtime(
+            &config,
+            "telegram:600",
+            "should stay on provider path",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("non-prefixed session should stay on provider path");
+    assert_eq!(non_prefixed, "provider-fallback");
+
+    let prefixed = orchestrator
+        .handle_turn_with_runtime(
+            &config,
+            "agent:codex:review-thread",
+            "should route through ACP",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("prefixed session should route through ACP");
+    assert_eq!(prefixed, "acp: should route through ACP");
+
+    let state = shared.lock().expect("ACP shared state");
+    assert_eq!(state.turn_calls, 1);
+    let bootstrap = state
+        .last_bootstrap
+        .clone()
+        .expect("ACP bootstrap should be captured for prefixed session");
+    assert_eq!(
+        bootstrap
+            .metadata
+            .get("loongclaw.acp.activation_origin")
+            .map(String::as_str),
+        Some("automatic_agent_prefixed")
+    );
+    let request = state
+        .last_request
+        .clone()
+        .expect("ACP request should be captured for prefixed session");
+    assert_eq!(request.session_key, "agent:codex:review-thread");
+    assert_eq!(
+        request
+            .metadata
+            .get("loongclaw.acp.routing_origin")
+            .map(String::as_str),
+        Some("automatic_agent_prefixed")
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_routes_only_allowed_channels_into_acp() {
+    let (backend_id, shared) = register_routed_acp_backend("channel-allowlist", false);
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("provider-feishu-reply".to_owned()),
+    );
+    let orchestrator = ConversationOrchestrator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.dispatch.conversation_routing = crate::config::AcpConversationRoutingMode::All;
+    config.acp.dispatch.allowed_channels = vec!["telegram".to_owned()];
+    config.memory.sqlite_path = unique_acp_sqlite_path("channel-allowlist");
+
+    let telegram = orchestrator
+        .handle_turn_with_runtime(
+            &config,
+            "telegram:100",
+            "hello telegram",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("telegram session should route through ACP");
+    assert_eq!(telegram, "acp: hello telegram");
+
+    {
+        let state = shared.lock().expect("ACP shared state");
+        let bootstrap = state
+            .last_bootstrap
+            .clone()
+            .expect("ACP bootstrap should be captured for allowlisted channel session");
+        assert_eq!(
+            bootstrap
+                .metadata
+                .get("loongclaw.acp.activation_origin")
+                .map(String::as_str),
+            Some("automatic_dispatch")
+        );
+        let request = state
+            .last_request
+            .clone()
+            .expect("ACP request should be captured for allowlisted channel session");
+        assert_eq!(
+            request
+                .metadata
+                .get("loongclaw.acp.routing_origin")
+                .map(String::as_str),
+            Some("automatic_dispatch")
+        );
+    }
+
+    let feishu = orchestrator
+        .handle_turn_with_runtime(
+            &config,
+            "feishu:oc_123",
+            "hello feishu",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("feishu session should stay on provider path");
+    assert_eq!(feishu, "provider-feishu-reply");
+
+    let state = shared.lock().expect("ACP shared state");
+    assert_eq!(state.turn_calls, 1);
+    let request = state
+        .last_request
+        .clone()
+        .expect("ACP request should exist for telegram session");
+    assert_eq!(request.session_key, "agent:codex:telegram:100");
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_and_address_routes_structured_channel_scope_into_acp() {
+    let (backend_id, shared) = register_routed_acp_backend("structured-channel-address", false);
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("provider-reply".to_owned()),
+    );
+    let orchestrator = ConversationOrchestrator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.dispatch.conversation_routing = crate::config::AcpConversationRoutingMode::All;
+    config.acp.dispatch.allowed_channels = vec!["telegram".to_owned()];
+    config.memory.sqlite_path = unique_acp_sqlite_path("structured-channel-address");
+    let address = ConversationSessionAddress::from_session_id("opaque-session")
+        .with_channel_scope("telegram", "100");
+
+    let reply = orchestrator
+        .handle_turn_with_runtime_and_address(
+            &config,
+            &address,
+            "hello structured route",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("structured channel address should route through ACP");
+
+    assert_eq!(reply, "acp: hello structured route");
+
+    let state = shared.lock().expect("ACP shared state");
+    assert_eq!(state.turn_calls, 1);
+    let request = state
+        .last_request
+        .clone()
+        .expect("ACP request should be captured");
+    let bootstrap = state
+        .last_bootstrap
+        .clone()
+        .expect("ACP bootstrap should be captured");
+    assert_eq!(request.session_key, "agent:codex:opaque-session");
+    assert_eq!(
+        bootstrap
+            .binding
+            .as_ref()
+            .map(|binding| binding.route_session_id.as_str()),
+        Some("telegram:100")
+    );
+    assert_eq!(
+        bootstrap
+            .binding
+            .as_ref()
+            .and_then(|binding| binding.channel_id.as_deref()),
+        Some("telegram")
+    );
+    assert_eq!(
+        request.metadata.get("channel").map(String::as_str),
+        Some("telegram")
+    );
+    assert_eq!(
+        request
+            .metadata
+            .get("channel_conversation_id")
+            .map(String::as_str),
+        Some("100")
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_and_address_enforces_account_and_thread_dispatch_scope() {
+    let (backend_id, shared) =
+        register_routed_acp_backend("structured-account-thread-scope", false);
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("provider-reply".to_owned()),
+    );
+    let orchestrator = ConversationOrchestrator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.dispatch.conversation_routing = crate::config::AcpConversationRoutingMode::All;
+    config.acp.dispatch.allowed_channels = vec!["feishu".to_owned()];
+    config.acp.dispatch.allowed_account_ids = vec!["lark-prod".to_owned()];
+    config.acp.dispatch.thread_routing = crate::config::AcpDispatchThreadRoutingMode::ThreadOnly;
+    config.memory.sqlite_path = unique_acp_sqlite_path("structured-account-thread-scope");
+
+    let allowed = ConversationSessionAddress::from_session_id("opaque-session")
+        .with_channel_scope("feishu", "oc_123")
+        .with_account_id("lark-prod")
+        .with_thread_id("om_thread_1");
+    let blocked = ConversationSessionAddress::from_session_id("opaque-session-root")
+        .with_channel_scope("feishu", "oc_123")
+        .with_account_id("lark-prod");
+
+    let allowed_reply = orchestrator
+        .handle_turn_with_runtime_and_address(
+            &config,
+            &allowed,
+            "hello allowed",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("thread-bound allowed address should route through ACP");
+    assert_eq!(allowed_reply, "acp: hello allowed");
+
+    let blocked_reply = orchestrator
+        .handle_turn_with_runtime_and_address(
+            &config,
+            &blocked,
+            "hello blocked",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("root conversation should stay on provider path");
+    assert_eq!(blocked_reply, "provider-reply");
+
+    let state = shared.lock().expect("ACP shared state");
+    assert_eq!(state.turn_calls, 1);
+    let bootstrap = state
+        .last_bootstrap
+        .clone()
+        .expect("ACP bootstrap should be captured");
+    assert_eq!(
+        bootstrap
+            .binding
+            .as_ref()
+            .map(|binding| binding.route_session_id.as_str()),
+        Some("feishu:lark-prod:oc_123:om_thread_1")
+    );
+    assert_eq!(
+        bootstrap
+            .binding
+            .as_ref()
+            .and_then(|binding| binding.account_id.as_deref()),
+        Some("lark-prod")
+    );
+    assert_eq!(
+        bootstrap
+            .binding
+            .as_ref()
+            .and_then(|binding| binding.thread_id.as_deref()),
+        Some("om_thread_1")
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_formats_acp_errors_inline_when_requested() {
+    let (backend_id, shared) = register_routed_acp_backend("inline-error", true);
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("provider-should-not-run".to_owned()),
+    );
+    let orchestrator = ConversationOrchestrator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.backend = Some(backend_id.to_owned());
+    config.memory.sqlite_path = unique_acp_sqlite_path("inline-error");
+
+    let reply = orchestrator
+        .handle_turn_with_runtime_and_address_and_acp_options(
+            &config,
+            &ConversationSessionAddress::from_session_id("feishu:oc_123"),
+            "hello from feishu",
+            ProviderErrorMode::InlineMessage,
+            &runtime,
+            &AcpConversationTurnOptions {
+                routing_intent: AcpRoutingIntent::Explicit,
+                ..AcpConversationTurnOptions::default()
+            },
+            None,
+        )
+        .await
+        .expect("ACP inline error mode should synthesize a reply");
+
+    assert_eq!(
+        reply,
+        format_provider_error_reply("synthetic ACP routing failure")
+    );
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 0);
+    assert_eq!(
+        shared.lock().expect("ACP shared state").turn_calls,
+        1,
+        "ACP backend should have received the routed turn"
+    );
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    assert_eq!(persisted.len(), 2);
+    assert_eq!(persisted[0].0, "feishu:oc_123");
+    assert_eq!(
+        persisted[1].2,
+        format_provider_error_reply("synthetic ACP routing failure")
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_reuses_shared_acp_session_between_turns() {
+    let (backend_id, shared) = register_routed_acp_backend("reuse", false);
+    let runtime = FakeRuntime::new(Vec::new(), Ok("provider-should-not-run".to_owned()));
+    let orchestrator = ConversationOrchestrator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.backend = Some(backend_id.to_owned());
+    config.memory.sqlite_path = unique_acp_sqlite_path("reuse");
+
+    let first = orchestrator
+        .handle_turn_with_runtime_and_address_and_acp_options(
+            &config,
+            &ConversationSessionAddress::from_session_id("telegram:4242"),
+            "first",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            &AcpConversationTurnOptions {
+                routing_intent: AcpRoutingIntent::Explicit,
+                ..AcpConversationTurnOptions::default()
+            },
+            None,
+        )
+        .await
+        .expect("first ACP-routed turn");
+    let second = orchestrator
+        .handle_turn_with_runtime_and_address_and_acp_options(
+            &config,
+            &ConversationSessionAddress::from_session_id("telegram:4242"),
+            "second",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            &AcpConversationTurnOptions {
+                routing_intent: AcpRoutingIntent::Explicit,
+                ..AcpConversationTurnOptions::default()
+            },
+            None,
+        )
+        .await
+        .expect("second ACP-routed turn");
+
+    assert_eq!(first, "acp: first");
+    assert_eq!(second, "acp: second");
+    let state = shared.lock().expect("ACP shared state");
+    assert_eq!(
+        state.ensure_calls, 1,
+        "ACP session should be reused through the shared control-plane manager"
+    );
+    assert_eq!(state.turn_calls, 2);
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_persists_acp_runtime_events_when_enabled() {
+    let (backend_id, _shared) = register_routed_acp_backend_with_events(
+        "runtime-events",
+        false,
+        vec![
+            json!({
+                "type": "text",
+                "content": "partial hello"
+            }),
+            json!({
+                "type": "done",
+                "stopReason": "completed"
+            }),
+        ],
+    );
+    let runtime = FakeRuntime::new(Vec::new(), Ok("provider-should-not-run".to_owned()));
+    let orchestrator = ConversationOrchestrator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.emit_runtime_events = true;
+    config.memory.sqlite_path = unique_acp_sqlite_path("runtime-events");
+
+    let reply = orchestrator
+        .handle_turn_with_runtime_and_address_and_acp_options(
+            &config,
+            &ConversationSessionAddress::from_session_id("telegram:777"),
+            "hello runtime events",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            &AcpConversationTurnOptions {
+                routing_intent: AcpRoutingIntent::Explicit,
+                ..AcpConversationTurnOptions::default()
+            },
+            None,
+        )
+        .await
+        .expect("ACP-routed turn with runtime events should succeed");
+
+    assert_eq!(reply, "acp: hello runtime events");
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    let event_records = persisted
+        .iter()
+        .filter_map(|(_, role, content)| {
+            if role != "assistant" {
+                return None;
+            }
+            let parsed = serde_json::from_str::<Value>(content).ok()?;
+            if parsed.get("type")?.as_str()? != "conversation_event" {
+                return None;
+            }
+            parsed.get("event")?.as_str().map(ToOwned::to_owned)
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        event_records.iter().any(|event| event == "acp_turn_event"),
+        "expected persisted ACP turn event records, got: {event_records:?}"
+    );
+    assert!(
+        event_records.iter().any(|event| event == "acp_turn_final"),
+        "expected persisted ACP turn final record, got: {event_records:?}"
+    );
+    let agent_ids = persisted
+        .iter()
+        .filter_map(|(_, role, content)| {
+            if role != "assistant" {
+                return None;
+            }
+            let parsed = serde_json::from_str::<Value>(content).ok()?;
+            if parsed.get("type")?.as_str()? != "conversation_event" {
+                return None;
+            }
+            parsed
+                .get("payload")?
+                .get("agent_id")?
+                .as_str()
+                .map(ToOwned::to_owned)
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        agent_ids.iter().any(|agent| agent == "codex"),
+        "expected persisted ACP runtime records to expose explicit agent_id, got: {agent_ids:?}"
+    );
+    let routing_intents = persisted
+        .iter()
+        .filter_map(|(_, role, content)| {
+            if role != "assistant" {
+                return None;
+            }
+            let parsed = serde_json::from_str::<Value>(content).ok()?;
+            if parsed.get("type")?.as_str()? != "conversation_event" {
+                return None;
+            }
+            parsed
+                .get("payload")?
+                .get("routing_intent")?
+                .as_str()
+                .map(ToOwned::to_owned)
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        routing_intents.iter().any(|intent| intent == "explicit"),
+        "expected persisted ACP runtime records to keep routing_intent, got: {routing_intents:?}"
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_streams_acp_runtime_events_to_external_sink_without_persisting() {
+    let (backend_id, _shared) = register_routed_acp_backend_with_events(
+        "external-runtime-events",
+        false,
+        vec![
+            json!({
+                "type": "text",
+                "content": "partial hello"
+            }),
+            json!({
+                "type": "done",
+                "stopReason": "completed"
+            }),
+        ],
+    );
+    let runtime = FakeRuntime::new(Vec::new(), Ok("provider-should-not-run".to_owned()));
+    let orchestrator = ConversationOrchestrator::new();
+    let sink = RecordingAcpEventSink::default();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.emit_runtime_events = false;
+    config.memory.sqlite_path = unique_acp_sqlite_path("external-runtime-events");
+
+    let acp_options = AcpConversationTurnOptions::from_event_sink(Some(&sink));
+    let reply = orchestrator
+        .handle_turn_with_runtime_and_address_and_acp_options(
+            &config,
+            &ConversationSessionAddress::from_session_id("telegram:778"),
+            "hello external runtime events",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            &acp_options,
+            None,
+        )
+        .await
+        .expect("ACP-routed turn with external event sink should succeed");
+
+    assert_eq!(reply, "acp: hello external runtime events");
+    assert_eq!(
+        sink.snapshot(),
+        vec![
+            json!({
+                "type": "text",
+                "content": "partial hello"
+            }),
+            json!({
+                "type": "done",
+                "stopReason": "completed"
+            }),
+        ]
+    );
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    assert_eq!(
+        persisted.len(),
+        2,
+        "only user/assistant turns should persist"
+    );
+    assert!(persisted.iter().all(|(_, role, content)| {
+        *role != "assistant"
+            || serde_json::from_str::<Value>(content)
+                .ok()
+                .and_then(|value| value.get("type").and_then(Value::as_str).map(str::to_owned))
+                .as_deref()
+                != Some("conversation_event")
+    }));
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_streams_and_persists_acp_runtime_events_when_both_enabled() {
+    let (backend_id, _shared) = register_routed_acp_backend_with_events(
+        "external-and-persisted-runtime-events",
+        false,
+        vec![
+            json!({
+                "type": "text",
+                "content": "partial hello"
+            }),
+            json!({
+                "type": "done",
+                "stopReason": "completed"
+            }),
+        ],
+    );
+    let runtime = FakeRuntime::new(Vec::new(), Ok("provider-should-not-run".to_owned()));
+    let orchestrator = ConversationOrchestrator::new();
+    let sink = RecordingAcpEventSink::default();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.emit_runtime_events = true;
+    config.memory.sqlite_path = unique_acp_sqlite_path("external-and-persisted-runtime-events");
+
+    let acp_options = AcpConversationTurnOptions::from_event_sink(Some(&sink));
+    let reply = orchestrator
+        .handle_turn_with_runtime_and_address_and_acp_options(
+            &config,
+            &ConversationSessionAddress::from_session_id("telegram:779"),
+            "hello external and persisted runtime events",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            &acp_options,
+            None,
+        )
+        .await
+        .expect("ACP-routed turn with external sink and persistence should succeed");
+
+    assert_eq!(reply, "acp: hello external and persisted runtime events");
+    assert_eq!(
+        sink.snapshot(),
+        vec![
+            json!({
+                "type": "text",
+                "content": "partial hello"
+            }),
+            json!({
+                "type": "done",
+                "stopReason": "completed"
+            }),
+        ]
+    );
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    let event_records = persisted
+        .iter()
+        .filter_map(|(_, role, content)| {
+            if role != "assistant" {
+                return None;
+            }
+            let parsed = serde_json::from_str::<Value>(content).ok()?;
+            if parsed.get("type")?.as_str()? != "conversation_event" {
+                return None;
+            }
+            parsed.get("event")?.as_str().map(ToOwned::to_owned)
+        })
+        .collect::<Vec<_>>();
+    assert!(event_records.iter().any(|event| event == "acp_turn_event"));
+    assert!(event_records.iter().any(|event| event == "acp_turn_final"));
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_skips_compaction_when_disabled() {
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("assistant-reply".to_owned()),
+    );
+    let mut config = test_config();
+    config.conversation.compact_enabled = false;
+
+    let orchestrator = ConversationOrchestrator::new();
+    let reply = orchestrator
+        .handle_turn_with_runtime(
+            &config,
+            "session-no-compact",
+            "hello",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("handle turn success");
+
+    assert_eq!(reply, "assistant-reply");
+    assert!(
+        runtime
+            .compact_calls
+            .lock()
+            .expect("compact lock")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_skips_compaction_below_min_messages() {
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("assistant-reply".to_owned()),
+    );
+    let mut config = test_config();
+    config.conversation.compact_min_messages = Some(10);
+
+    let orchestrator = ConversationOrchestrator::new();
+    let reply = orchestrator
+        .handle_turn_with_runtime(
+            &config,
+            "session-no-compact-threshold",
+            "hello",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("handle turn success");
+
+    assert_eq!(reply, "assistant-reply");
+    assert!(
+        runtime
+            .compact_calls
+            .lock()
+            .expect("compact lock")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_skips_compaction_below_token_threshold() {
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("assistant-reply".to_owned()),
+    );
+    let mut config = test_config();
+    config.conversation.compact_min_messages = None;
+    config.conversation.compact_trigger_estimated_tokens = Some(100_000);
+
+    let orchestrator = ConversationOrchestrator::new();
+    let reply = orchestrator
+        .handle_turn_with_runtime(
+            &config,
+            "session-no-compact-token-threshold",
+            "hello",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("handle turn success");
+
+    assert_eq!(reply, "assistant-reply");
+    assert!(
+        runtime
+            .compact_calls
+            .lock()
+            .expect("compact lock")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_compacts_when_token_threshold_reached() {
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("assistant-reply".to_owned()),
+    );
+    let mut config = test_config();
+    config.conversation.compact_min_messages = Some(999);
+    config.conversation.compact_trigger_estimated_tokens = Some(1);
+
+    let orchestrator = ConversationOrchestrator::new();
+    let reply = orchestrator
+        .handle_turn_with_runtime(
+            &config,
+            "session-compact-token-threshold",
+            "hello",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("handle turn success");
+
+    assert_eq!(reply, "assistant-reply");
+    let compact = runtime.compact_calls.lock().expect("compact lock").clone();
+    assert_eq!(compact.len(), 1);
+    assert_eq!(compact[0].0, "session-compact-token-threshold");
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_compaction_error_is_ignored_when_fail_open() {
+    let mut runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("assistant-reply".to_owned()),
+    );
+    runtime.compact_result = Err("compact failure".to_owned());
+    let mut config = test_config();
+    config.conversation.compact_fail_open = true;
+
+    let orchestrator = ConversationOrchestrator::new();
+    let reply = orchestrator
+        .handle_turn_with_runtime(
+            &config,
+            "session-compact-fail-open",
+            "hello",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("fail-open mode should keep turn successful");
+
+    assert_eq!(reply, "assistant-reply");
+    let compact = runtime.compact_calls.lock().expect("compact lock").clone();
+    assert_eq!(compact.len(), 1);
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_compaction_error_propagates_when_fail_closed() {
+    let mut runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("assistant-reply".to_owned()),
+    );
+    runtime.compact_result = Err("compact failure".to_owned());
+    let mut config = test_config();
+    config.conversation.compact_fail_open = false;
+
+    let orchestrator = ConversationOrchestrator::new();
+    let error = orchestrator
+        .handle_turn_with_runtime(
+            &config,
+            "session-compact-fail-closed",
+            "hello",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect_err("fail-closed mode should propagate compaction error");
+
+    assert!(
+        error.contains("compact failure"),
+        "unexpected error: {error}"
+    );
 }
 
 #[tokio::test]
@@ -218,7 +2251,36 @@ async fn handle_turn_with_runtime_propagates_error_without_persisting() {
         .expect_err("propagate mode should return error");
 
     assert!(error.contains("timeout"));
+    assert_eq!(
+        runtime
+            .bootstrap_calls
+            .lock()
+            .expect("bootstrap lock")
+            .as_slice(),
+        ["session-2"]
+    );
     assert!(runtime.persisted.lock().expect("persisted lock").is_empty());
+    assert!(
+        runtime
+            .ingested_messages
+            .lock()
+            .expect("ingest lock")
+            .is_empty()
+    );
+    assert!(
+        runtime
+            .after_turn_calls
+            .lock()
+            .expect("after-turn lock")
+            .is_empty()
+    );
+    assert!(
+        runtime
+            .compact_calls
+            .lock()
+            .expect("compact lock")
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -238,6 +2300,14 @@ async fn handle_turn_with_runtime_inline_mode_returns_synthetic_reply_and_persis
         .expect("inline mode should return synthetic reply");
 
     assert_eq!(output, "[provider_error] timeout");
+    assert_eq!(
+        runtime
+            .bootstrap_calls
+            .lock()
+            .expect("bootstrap lock")
+            .as_slice(),
+        ["session-3"]
+    );
 
     let persisted = runtime.persisted.lock().expect("persisted lock");
     assert_eq!(persisted.len(), 2);
@@ -257,6 +2327,33 @@ async fn handle_turn_with_runtime_inline_mode_returns_synthetic_reply_and_persis
             "[provider_error] timeout".to_owned(),
         )
     );
+
+    let ingested = runtime
+        .ingested_messages
+        .lock()
+        .expect("ingest lock")
+        .clone();
+    assert_eq!(ingested.len(), 2);
+    assert_eq!(ingested[0].1["role"], "user");
+    assert_eq!(ingested[0].1["content"], "hello");
+    assert_eq!(ingested[1].1["role"], "assistant");
+    assert_eq!(ingested[1].1["content"], "[provider_error] timeout");
+
+    let after_turn = runtime
+        .after_turn_calls
+        .lock()
+        .expect("after-turn lock")
+        .clone();
+    assert_eq!(after_turn.len(), 1);
+    assert_eq!(after_turn[0].0, "session-3");
+    assert_eq!(after_turn[0].1, "hello");
+    assert_eq!(after_turn[0].2, "[provider_error] timeout");
+    assert_eq!(after_turn[0].3, 2);
+
+    let compact = runtime.compact_calls.lock().expect("compact lock").clone();
+    assert_eq!(compact.len(), 1);
+    assert_eq!(compact[0].0, "session-3");
+    assert_eq!(compact[0].1, 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3131,7 +5228,7 @@ impl CoreMemoryAdapter for SharedTestMemoryAdapter {
                 "turns": [
                     {
                         "role": "assistant",
-                        "content": "history-from-kernel",
+                        "content": "kernel-memory-window",
                         "ts": 1
                     }
                 ]
@@ -3155,7 +5252,7 @@ async fn persist_turn_routes_through_kernel_when_context_provided() {
     let audit = Arc::new(InMemoryAuditSink::default());
     let (ctx, invocations) = build_kernel_context(audit.clone());
 
-    let runtime = DefaultConversationRuntime;
+    let runtime = DefaultConversationRuntime::default();
     runtime
         .persist_turn("session-k1", "user", "kernel-hello", Some(&ctx))
         .await
@@ -3187,11 +5284,10 @@ async fn persist_turn_routes_through_kernel_when_context_provided() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn build_messages_routes_window_through_kernel_when_context_provided() {
+async fn build_messages_routes_memory_window_through_kernel_when_context_provided() {
     let audit = Arc::new(InMemoryAuditSink::default());
     let (ctx, invocations) = build_kernel_context(audit.clone());
-
-    let runtime = DefaultConversationRuntime;
+    let runtime = DefaultConversationRuntime::default();
     let config = test_config();
     let messages = runtime
         .build_messages(&config, "session-k-window", true, Some(&ctx))
@@ -3206,7 +5302,7 @@ async fn build_messages_routes_window_through_kernel_when_context_provided() {
     assert!(
         messages
             .iter()
-            .any(|message| message["content"] == "history-from-kernel"),
+            .any(|message| message["content"] == "kernel-memory-window"),
         "messages should include history loaded from kernel window payload"
     );
 
@@ -3240,7 +5336,7 @@ async fn build_messages_routes_window_through_kernel_when_context_provided() {
 async fn persist_turn_without_memory_sqlite_is_noop_with_kernel_context() {
     let ctx = crate::context::bootstrap_kernel_context("test-agent-no-memory", 60)
         .expect("bootstrap kernel context without memory-sqlite");
-    let runtime = DefaultConversationRuntime;
+    let runtime = DefaultConversationRuntime::default();
     runtime
         .persist_turn("session-k0", "user", "no-memory", Some(&ctx))
         .await

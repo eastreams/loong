@@ -35,7 +35,7 @@ impl ConversationTurnLoop {
         error_mode: ProviderErrorMode,
         kernel_ctx: Option<&KernelContext>,
     ) -> CliResult<String> {
-        let runtime = DefaultConversationRuntime;
+        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
         self.handle_turn_with_runtime(
             config, session_id, user_input, error_mode, &runtime, kernel_ctx,
         )

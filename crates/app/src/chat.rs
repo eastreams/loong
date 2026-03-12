@@ -1,17 +1,25 @@
 #[cfg(feature = "memory-sqlite")]
 use std::collections::BTreeSet;
 use std::io::{self, Write};
+use std::path::PathBuf;
 
 #[cfg(feature = "memory-sqlite")]
 use loongclaw_contracts::Capability;
 
 use crate::CliResult;
+use crate::acp::{
+    AcpConversationTurnOptions, AcpTurnEventSink, JsonlAcpTurnEventSink,
+    resolve_acp_backend_selection,
+};
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context};
 
 use super::config::{self, ConversationConfig, LoongClawConfig};
 #[cfg(feature = "memory-sqlite")]
 use super::conversation::summarize_safe_lane_events;
-use super::conversation::{ConversationTurnCoordinator, ProviderErrorMode};
+use super::conversation::{
+    ConversationSessionAddress, ConversationTurnCoordinator, ProviderErrorMode,
+    resolve_context_engine_selection,
+};
 #[cfg(any(test, feature = "memory-sqlite"))]
 use super::conversation::{SafeLaneEventSummary, SafeLaneFinalStatus};
 #[cfg(feature = "memory-sqlite")]
@@ -19,8 +27,29 @@ use super::memory;
 #[cfg(feature = "memory-sqlite")]
 use super::memory::runtime_config::MemoryRuntimeConfig;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CliChatOptions {
+    pub acp_requested: bool,
+    pub acp_event_stream: bool,
+    pub acp_bootstrap_mcp_servers: Vec<String>,
+    pub acp_working_directory: Option<PathBuf>,
+}
+
+impl CliChatOptions {
+    fn requests_explicit_acp(&self) -> bool {
+        self.acp_requested
+            || self.acp_event_stream
+            || !self.acp_bootstrap_mcp_servers.is_empty()
+            || self.acp_working_directory.is_some()
+    }
+}
+
 #[allow(clippy::print_stdout)] // CLI REPL output
-pub async fn run_cli_chat(config_path: Option<&str>, session_hint: Option<&str>) -> CliResult<()> {
+pub async fn run_cli_chat(
+    config_path: Option<&str>,
+    session_hint: Option<&str>,
+    options: &CliChatOptions,
+) -> CliResult<()> {
     let (resolved_path, config) = config::load(config_path)?;
     if !config.cli.enabled {
         return Err("CLI channel is disabled by config.cli.enabled=false".to_owned());
@@ -56,8 +85,56 @@ pub async fn run_cli_chat(config_path: Option<&str>, session_hint: Option<&str>)
         .filter(|value| !value.is_empty())
         .unwrap_or("default")
         .to_owned();
+    let context_engine_selection = resolve_context_engine_selection(&config);
+    let acp_selection = resolve_acp_backend_selection(&config);
+    let dispatch_channels = config.acp.dispatch.allowed_channel_ids()?;
+    let effective_bootstrap_mcp_servers = config
+        .acp
+        .dispatch
+        .bootstrap_mcp_server_names_with_additions(&options.acp_bootstrap_mcp_servers)?;
+    let effective_working_directory = options
+        .acp_working_directory
+        .clone()
+        .or_else(|| config.acp.dispatch.resolved_working_directory());
+    let explicit_acp_request = options.requests_explicit_acp();
     println!("session={session_id} (type /help for commands, /exit to quit)");
+    println!(
+        "context_engine={} source={}",
+        context_engine_selection.id,
+        context_engine_selection.source.as_str()
+    );
+    println!(
+        "acp_enabled={} dispatch_enabled={} conversation_routing={} allowed_channels={} backend={} source={}",
+        config.acp.enabled,
+        config.acp.dispatch_enabled(),
+        config.acp.dispatch.conversation_routing.as_str(),
+        dispatch_channels.join(","),
+        acp_selection.id,
+        acp_selection.source.as_str()
+    );
+    if explicit_acp_request
+        || !effective_bootstrap_mcp_servers.is_empty()
+        || effective_working_directory.is_some()
+    {
+        let bootstrap_label = if effective_bootstrap_mcp_servers.is_empty() {
+            "-".to_owned()
+        } else {
+            effective_bootstrap_mcp_servers.join(",")
+        };
+        let cwd_label = effective_working_directory
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "-".to_owned());
+        println!(
+            "acp_turn_options explicit={} event_stream={} bootstrap_mcp_servers={bootstrap_label} cwd={cwd_label}",
+            explicit_acp_request, options.acp_event_stream,
+        );
+    }
     let turn_coordinator = ConversationTurnCoordinator::new();
+    let session_address = ConversationSessionAddress::from_session_id(session_id.clone());
+    let acp_event_printer = options
+        .acp_event_stream
+        .then(|| JsonlAcpTurnEventSink::stderr_with_prefix("acp-event> "));
 
     loop {
         print!("you> ");
@@ -104,12 +181,23 @@ pub async fn run_cli_chat(config_path: Option<&str>, session_hint: Option<&str>)
             continue;
         }
 
+        let acp_options = explicit_acp_request
+            .then_some(AcpConversationTurnOptions::explicit())
+            .unwrap_or_else(AcpConversationTurnOptions::automatic)
+            .with_event_sink(
+                acp_event_printer
+                    .as_ref()
+                    .map(|printer| printer as &dyn AcpTurnEventSink),
+            )
+            .with_additional_bootstrap_mcp_servers(&options.acp_bootstrap_mcp_servers)
+            .with_working_directory(options.acp_working_directory.as_deref());
         let assistant_text = turn_coordinator
-            .handle_turn(
+            .handle_turn_with_address_and_acp_options(
                 &config,
-                &session_id,
+                &session_address,
                 input,
                 ProviderErrorMode::InlineMessage,
+                &acp_options,
                 Some(&kernel_ctx),
             )
             .await?;
@@ -618,6 +706,39 @@ fn export_runtime_env(config: &LoongClawConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn cli_chat_options_detect_explicit_acp_requests() {
+        assert!(
+            CliChatOptions {
+                acp_requested: true,
+                ..CliChatOptions::default()
+            }
+            .requests_explicit_acp()
+        );
+
+        assert!(
+            CliChatOptions {
+                acp_bootstrap_mcp_servers: vec!["filesystem".to_owned()],
+                ..CliChatOptions::default()
+            }
+            .requests_explicit_acp()
+        );
+
+        assert!(
+            CliChatOptions {
+                acp_working_directory: Some(PathBuf::from("/workspace/project")),
+                ..CliChatOptions::default()
+            }
+            .requests_explicit_acp()
+        );
+    }
+
+    #[test]
+    fn cli_chat_options_keep_automatic_routing_without_explicit_acp_inputs() {
+        assert!(!CliChatOptions::default().requests_explicit_acp());
+    }
 
     #[test]
     fn parse_safe_lane_summary_limit_accepts_default_and_explicit_limit() {

@@ -7,7 +7,7 @@ mod tools_memory;
 
 #[allow(unused_imports)]
 pub use channels::{
-    ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource,
+    ChannelAcpConfig, ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource,
     ChannelResolvedAccountRoute, CliChannelConfig, FeishuAccountConfig, FeishuChannelConfig,
     FeishuDomain, ResolvedFeishuChannelConfig, ResolvedTelegramChannelConfig,
     TelegramAccountConfig, TelegramChannelConfig,
@@ -18,10 +18,13 @@ pub use conversation::{ConversationConfig, ConversationTurnLoopConfig};
 pub use provider::{ProviderConfig, ProviderKind, ReasoningEffort};
 #[allow(unused_imports)]
 pub use runtime::{
+    AcpBackendProfilesConfig, AcpConfig, AcpConversationRoutingMode, AcpDispatchConfig,
+    AcpDispatchThreadRoutingMode, AcpxBackendConfig, AcpxMcpServerConfig,
     ConfigValidationDiagnostic, LoongClawConfig, default_config_path, default_loongclaw_home, load,
     normalize_validation_locale, render, supported_validation_locales, validate_file,
     validate_file_with_locale, write, write_template,
 };
+pub(crate) use runtime::{normalize_dispatch_account_id, normalize_dispatch_channel_id};
 #[allow(unused_imports)]
 pub use shared::expand_path;
 #[allow(unused_imports)]
@@ -1061,5 +1064,366 @@ safe_lane_health_replan_warn_threshold = 0.55
         };
         assert_eq!(config.header_value("user-agent"), Some("KimiCLI/custom"));
         assert_eq!(config.header_value("USER-AGENT"), Some("KimiCLI/custom"));
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn conversation_context_engine_field_parses_and_normalizes() {
+        let raw = r#"
+[conversation]
+context_engine = " Legacy "
+"#;
+        let parsed =
+            toml::from_str::<LoongClawConfig>(raw).expect("parse conversation context_engine");
+        assert_eq!(
+            parsed.conversation.context_engine_id().as_deref(),
+            Some("legacy")
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn conversation_compaction_fields_parse_and_gate_compact_hook() {
+        let raw = r#"
+[conversation]
+compact_enabled = true
+compact_min_messages = 6
+compact_trigger_estimated_tokens = 120
+compact_fail_open = false
+"#;
+        let parsed =
+            toml::from_str::<LoongClawConfig>(raw).expect("parse conversation compaction config");
+        assert!(parsed.conversation.compact_enabled);
+        assert_eq!(parsed.conversation.compact_min_messages(), Some(6));
+        assert_eq!(
+            parsed.conversation.compact_trigger_estimated_tokens(),
+            Some(120)
+        );
+        assert!(!parsed.conversation.compaction_fail_open());
+        assert!(!parsed.conversation.should_compact(5));
+        assert!(parsed.conversation.should_compact(6));
+        assert!(
+            !parsed
+                .conversation
+                .should_compact_with_estimate(0, Some(119))
+        );
+        assert!(
+            parsed
+                .conversation
+                .should_compact_with_estimate(0, Some(120))
+        );
+    }
+
+    #[test]
+    fn conversation_compaction_defaults_are_backward_compatible() {
+        let config = ConversationConfig::default();
+        assert!(config.compact_enabled);
+        assert!(config.compaction_fail_open());
+        assert_eq!(config.compact_trigger_estimated_tokens(), None);
+        assert!(config.should_compact(0));
+        assert!(config.should_compact_with_estimate(0, None));
+    }
+
+    #[test]
+    fn conversation_compaction_token_gate_without_message_threshold() {
+        let config = ConversationConfig {
+            compact_enabled: true,
+            compact_min_messages: None,
+            compact_trigger_estimated_tokens: Some(50),
+            compact_fail_open: true,
+            context_engine: None,
+            ..ConversationConfig::default()
+        };
+        assert!(!config.should_compact_with_estimate(0, Some(49)));
+        assert!(config.should_compact_with_estimate(0, Some(50)));
+        assert!(!config.should_compact_with_estimate(100, None));
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn acp_fields_parse_and_normalize() {
+        let raw = r#"
+[acp]
+enabled = true
+backend = " ACPX "
+default_agent = " Claude "
+allowed_agents = ["Codex", "claude", " gemini "]
+max_concurrent_sessions = 12
+session_idle_ttl_ms = 45000
+startup_timeout_ms = 12000
+turn_timeout_ms = 99000
+queue_owner_ttl_ms = 7000
+bindings_enabled = true
+emit_runtime_events = true
+allow_mcp_server_injection = true
+
+[acp.dispatch]
+bootstrap_mcp_servers = [" Filesystem ", "search", "filesystem"]
+working_directory = " /workspace/dispatch "
+
+[acp.backends.acpx]
+command = " /usr/local/bin/acpx "
+expected_version = " 0.1.16 "
+cwd = " /workspace/project "
+permission_mode = " approve-reads "
+non_interactive_permissions = " fail "
+strict_windows_cmd_wrapper = true
+timeout_seconds = 45.5
+queue_owner_ttl_seconds = 0.25
+
+[acp.backends.acpx.mcp_servers.filesystem]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/workspace/project"]
+
+[acp.backends.acpx.mcp_servers.filesystem.env]
+MCP_LOG = "warn"
+"#;
+        let parsed = toml::from_str::<LoongClawConfig>(raw).expect("parse ACP config");
+        assert!(parsed.acp.enabled);
+        assert_eq!(parsed.acp.backend_id().as_deref(), Some("acpx"));
+        assert_eq!(parsed.acp.resolved_default_agent().as_deref(), Ok("claude"));
+        assert_eq!(
+            parsed.acp.allowed_agent_ids(),
+            Ok(vec![
+                "codex".to_owned(),
+                "claude".to_owned(),
+                "gemini".to_owned()
+            ])
+        );
+        assert_eq!(parsed.acp.max_concurrent_sessions(), 12);
+        assert_eq!(parsed.acp.session_idle_ttl_ms(), 45_000);
+        assert_eq!(parsed.acp.startup_timeout_ms(), 12_000);
+        assert_eq!(parsed.acp.turn_timeout_ms(), 99_000);
+        assert_eq!(parsed.acp.queue_owner_ttl_ms(), 7_000);
+        assert!(parsed.acp.bindings_enabled);
+        assert!(parsed.acp.emit_runtime_events);
+        assert!(parsed.acp.allow_mcp_server_injection);
+        assert_eq!(
+            parsed.acp.dispatch.bootstrap_mcp_server_names(),
+            Ok(vec!["filesystem".to_owned(), "search".to_owned()])
+        );
+        assert_eq!(
+            parsed.acp.dispatch.resolved_working_directory(),
+            Some(std::path::PathBuf::from("/workspace/dispatch"))
+        );
+        let acpx = parsed
+            .acp
+            .acpx_profile()
+            .expect("acpx profile should parse from backend-local config");
+        assert_eq!(acpx.command().as_deref(), Some("/usr/local/bin/acpx"));
+        assert_eq!(acpx.expected_version().as_deref(), Some("0.1.16"));
+        assert_eq!(acpx.cwd().as_deref(), Some("/workspace/project"));
+        assert_eq!(acpx.permission_mode().as_deref(), Some("approve-reads"));
+        assert_eq!(acpx.non_interactive_permissions().as_deref(), Some("fail"));
+        assert_eq!(acpx.strict_windows_cmd_wrapper, Some(true));
+        assert_eq!(acpx.timeout_seconds, Some(45.5));
+        assert_eq!(acpx.queue_owner_ttl_seconds, Some(0.25));
+        let mcp = acpx
+            .mcp_servers
+            .get("filesystem")
+            .expect("filesystem MCP server should parse");
+        assert_eq!(mcp.command, "npx");
+        assert_eq!(
+            mcp.args,
+            vec![
+                "-y".to_owned(),
+                "@modelcontextprotocol/server-filesystem".to_owned(),
+                "/workspace/project".to_owned()
+            ]
+        );
+        assert_eq!(mcp.env.get("MCP_LOG").map(String::as_str), Some("warn"));
+    }
+
+    #[test]
+    fn acp_dispatch_bootstrap_mcp_server_names_with_additions_merge_and_dedupe() {
+        let dispatch = AcpDispatchConfig {
+            bootstrap_mcp_servers: vec![" Filesystem ".to_owned()],
+            ..AcpDispatchConfig::default()
+        };
+
+        let resolved = dispatch
+            .bootstrap_mcp_server_names_with_additions(&[
+                " search ".to_owned(),
+                "filesystem".to_owned(),
+                "SEARCH".to_owned(),
+            ])
+            .expect("merged bootstrap MCP server names should normalize");
+
+        assert_eq!(resolved, vec!["filesystem".to_owned(), "search".to_owned()]);
+    }
+
+    #[test]
+    fn acp_defaults_are_control_plane_safe() {
+        let config = AcpConfig::default();
+        assert!(!config.enabled);
+        assert_eq!(config.backend_id(), None);
+        assert_eq!(config.resolved_default_agent().as_deref(), Ok("codex"));
+        assert_eq!(config.allowed_agent_ids(), Ok(vec!["codex".to_owned()]));
+        assert_eq!(config.max_concurrent_sessions(), 8);
+        assert_eq!(config.session_idle_ttl_ms(), 900_000);
+        assert_eq!(config.startup_timeout_ms(), 15_000);
+        assert_eq!(config.turn_timeout_ms(), 120_000);
+        assert_eq!(config.queue_owner_ttl_ms(), 30_000);
+        assert!(!config.bindings_enabled);
+        assert!(!config.emit_runtime_events);
+        assert!(!config.allow_mcp_server_injection);
+        assert!(config.acpx_profile().is_none());
+    }
+
+    #[test]
+    fn acp_allowed_agents_must_include_default_agent() {
+        let config = AcpConfig {
+            default_agent: Some("claude".to_owned()),
+            allowed_agents: vec!["codex".to_owned()],
+            ..AcpConfig::default()
+        };
+
+        let error = config
+            .allowed_agent_ids()
+            .expect_err("default ACP agent must be included in allowlist");
+        assert!(error.contains("default agent"));
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn acp_dispatch_fields_parse_and_preserve_backward_compatible_defaults() {
+        let raw = r#"
+[acp]
+enabled = true
+
+[acp.dispatch]
+enabled = false
+conversation_routing = "agent_prefixed_only"
+allowed_channels = [" Telegram ", "feishu"]
+allowed_account_ids = [" Work Bot ", "ops-bot"]
+thread_routing = "thread_only"
+"#;
+        let parsed = toml::from_str::<LoongClawConfig>(raw).expect("parse ACP dispatch config");
+        assert!(parsed.acp.enabled);
+        assert!(!parsed.acp.dispatch.enabled);
+        assert_eq!(
+            parsed.acp.dispatch.conversation_routing,
+            AcpConversationRoutingMode::AgentPrefixedOnly
+        );
+        assert_eq!(
+            parsed.acp.dispatch.allowed_channel_ids(),
+            Ok(vec!["telegram".to_owned(), "feishu".to_owned()])
+        );
+        assert_eq!(
+            parsed.acp.dispatch.allowed_account_ids(),
+            Ok(vec!["work-bot".to_owned(), "ops-bot".to_owned()])
+        );
+        assert_eq!(
+            parsed.acp.dispatch.thread_routing,
+            AcpDispatchThreadRoutingMode::ThreadOnly
+        );
+    }
+
+    #[test]
+    fn acp_dispatch_defaults_keep_normal_sessions_off_without_explicit_acp_route() {
+        let config = AcpConfig::default();
+        assert!(config.dispatch.enabled);
+        assert_eq!(
+            config.dispatch.conversation_routing,
+            AcpConversationRoutingMode::AgentPrefixedOnly
+        );
+        assert_eq!(config.dispatch.allowed_channel_ids(), Ok(Vec::new()));
+        assert_eq!(config.dispatch.allowed_account_ids(), Ok(Vec::new()));
+        assert_eq!(
+            config.dispatch.thread_routing,
+            AcpDispatchThreadRoutingMode::All
+        );
+        assert_eq!(config.dispatch.bootstrap_mcp_server_names(), Ok(Vec::new()));
+        assert_eq!(config.dispatch.resolved_working_directory(), None);
+    }
+
+    #[test]
+    fn acp_dispatch_normalizes_bootstrap_mcp_server_names() {
+        let config = AcpConfig {
+            dispatch: AcpDispatchConfig {
+                bootstrap_mcp_servers: vec![
+                    " Filesystem ".to_owned(),
+                    "search".to_owned(),
+                    "filesystem".to_owned(),
+                ],
+                ..AcpDispatchConfig::default()
+            },
+            ..AcpConfig::default()
+        };
+
+        assert_eq!(
+            config.dispatch.bootstrap_mcp_server_names(),
+            Ok(vec!["filesystem".to_owned(), "search".to_owned()])
+        );
+    }
+
+    #[test]
+    fn acp_dispatch_normalizes_working_directory() {
+        let config = AcpConfig {
+            dispatch: AcpDispatchConfig {
+                working_directory: Some(" /workspace/dispatch ".to_owned()),
+                ..AcpDispatchConfig::default()
+            },
+            ..AcpConfig::default()
+        };
+
+        assert_eq!(
+            config.dispatch.resolved_working_directory(),
+            Some(std::path::PathBuf::from("/workspace/dispatch"))
+        );
+    }
+
+    #[test]
+    fn acp_dispatch_rejects_invalid_allowed_channel_ids() {
+        let config = AcpConfig {
+            dispatch: AcpDispatchConfig {
+                allowed_channels: vec!["***".to_owned()],
+                ..AcpDispatchConfig::default()
+            },
+            ..AcpConfig::default()
+        };
+
+        let error = config
+            .dispatch
+            .allowed_channel_ids()
+            .expect_err("invalid ACP dispatch channel ids must be rejected");
+        assert!(error.contains("allowed channel"));
+    }
+
+    #[test]
+    fn acp_dispatch_normalizes_allowed_account_ids() {
+        let config = AcpConfig {
+            dispatch: AcpDispatchConfig {
+                allowed_account_ids: vec![
+                    " Work Bot ".to_owned(),
+                    "ops-bot".to_owned(),
+                    "OPS BOT".to_owned(),
+                ],
+                ..AcpDispatchConfig::default()
+            },
+            ..AcpConfig::default()
+        };
+
+        assert_eq!(
+            config.dispatch.allowed_account_ids(),
+            Ok(vec!["work-bot".to_owned(), "ops-bot".to_owned()])
+        );
+    }
+
+    #[test]
+    fn acp_dispatch_rejects_invalid_allowed_account_ids() {
+        let config = AcpConfig {
+            dispatch: AcpDispatchConfig {
+                allowed_account_ids: vec!["***".to_owned()],
+                ..AcpDispatchConfig::default()
+            },
+            ..AcpConfig::default()
+        };
+
+        let error = config
+            .dispatch
+            .allowed_account_ids()
+            .expect_err("invalid ACP dispatch account ids must be rejected");
+        assert!(error.contains("allowed account"));
     }
 }

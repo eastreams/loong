@@ -9,16 +9,22 @@ use tokio::sync::Mutex;
 
 use crate::CliResult;
 use crate::KernelContext;
+use crate::acp::{
+    AcpConversationTurnEntryDecision, AcpConversationTurnExecutionOutcome,
+    AcpConversationTurnOptions, AcpTurnEventSink, evaluate_acp_conversation_turn_entry_for_address,
+    execute_acp_conversation_turn_for_address,
+};
 
 use super::super::config::LoongClawConfig;
+use super::ConversationSessionAddress;
 use super::ProviderErrorMode;
 use super::analytics::{
     SafeLaneEventSummary, parse_conversation_event, summarize_safe_lane_events,
 };
 use super::lane_arbiter::{ExecutionLane, LaneArbiterPolicy, LaneDecision};
 use super::persistence::{
-    format_provider_error_reply, persist_conversation_event, persist_error_turns,
-    persist_success_turns,
+    format_provider_error_reply, persist_acp_runtime_events, persist_conversation_event,
+    persist_error_turns, persist_error_turns_raw, persist_success_turns, persist_success_turns_raw,
 };
 use super::plan_executor::{
     PlanExecutor, PlanNodeError, PlanNodeErrorKind, PlanNodeExecutor, PlanRunFailure, PlanRunStatus,
@@ -219,9 +225,119 @@ impl ConversationTurnCoordinator {
         error_mode: ProviderErrorMode,
         kernel_ctx: Option<&KernelContext>,
     ) -> CliResult<String> {
-        let runtime = DefaultConversationRuntime;
-        self.handle_turn_with_runtime(
-            config, session_id, user_input, error_mode, &runtime, kernel_ctx,
+        let acp_options = AcpConversationTurnOptions::automatic();
+        self.handle_turn_with_acp_options(
+            config,
+            session_id,
+            user_input,
+            error_mode,
+            &acp_options,
+            kernel_ctx,
+        )
+        .await
+    }
+
+    pub async fn handle_turn_with_acp_options(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<String> {
+        let address = ConversationSessionAddress::from_session_id(session_id);
+        self.handle_turn_with_address_and_acp_options(
+            config,
+            &address,
+            user_input,
+            error_mode,
+            acp_options,
+            kernel_ctx,
+        )
+        .await
+    }
+
+    pub async fn handle_turn_with_acp_event_sink(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        acp_event_sink: Option<&dyn AcpTurnEventSink>,
+        kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<String> {
+        let acp_options = AcpConversationTurnOptions::from_event_sink(acp_event_sink);
+        self.handle_turn_with_acp_options(
+            config,
+            session_id,
+            user_input,
+            error_mode,
+            &acp_options,
+            kernel_ctx,
+        )
+        .await
+    }
+
+    pub async fn handle_turn_with_address(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<String> {
+        let acp_options = AcpConversationTurnOptions::automatic();
+        self.handle_turn_with_address_and_acp_options(
+            config,
+            address,
+            user_input,
+            error_mode,
+            &acp_options,
+            kernel_ctx,
+        )
+        .await
+    }
+
+    pub async fn handle_turn_with_address_and_acp_event_sink(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        acp_event_sink: Option<&dyn AcpTurnEventSink>,
+        kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<String> {
+        let acp_options = AcpConversationTurnOptions::from_event_sink(acp_event_sink);
+        self.handle_turn_with_address_and_acp_options(
+            config,
+            address,
+            user_input,
+            error_mode,
+            &acp_options,
+            kernel_ctx,
+        )
+        .await
+    }
+
+    pub async fn handle_turn_with_address_and_acp_options(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<String> {
+        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        self.handle_turn_with_runtime_and_address_and_acp_options(
+            config,
+            address,
+            user_input,
+            error_mode,
+            &runtime,
+            acp_options,
+            kernel_ctx,
         )
         .await
     }
@@ -235,9 +351,136 @@ impl ConversationTurnCoordinator {
         runtime: &R,
         kernel_ctx: Option<&KernelContext>,
     ) -> CliResult<String> {
-        let mut messages = runtime
-            .build_messages(config, session_id, true, kernel_ctx)
+        let acp_options = AcpConversationTurnOptions::automatic();
+        self.handle_turn_with_runtime_and_acp_options(
+            config,
+            session_id,
+            user_input,
+            error_mode,
+            runtime,
+            &acp_options,
+            kernel_ctx,
+        )
+        .await
+    }
+
+    pub async fn handle_turn_with_runtime_and_acp_options<R: ConversationRuntime + ?Sized>(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        runtime: &R,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<String> {
+        let address = ConversationSessionAddress::from_session_id(session_id);
+        self.handle_turn_with_runtime_and_address_and_acp_options(
+            config,
+            &address,
+            user_input,
+            error_mode,
+            runtime,
+            acp_options,
+            kernel_ctx,
+        )
+        .await
+    }
+
+    pub async fn handle_turn_with_runtime_and_acp_event_sink<R: ConversationRuntime + ?Sized>(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        runtime: &R,
+        acp_event_sink: Option<&dyn AcpTurnEventSink>,
+        kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<String> {
+        let acp_options = AcpConversationTurnOptions::from_event_sink(acp_event_sink);
+        self.handle_turn_with_runtime_and_acp_options(
+            config,
+            session_id,
+            user_input,
+            error_mode,
+            runtime,
+            &acp_options,
+            kernel_ctx,
+        )
+        .await
+    }
+
+    pub async fn handle_turn_with_runtime_and_address<R: ConversationRuntime + ?Sized>(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        runtime: &R,
+        kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<String> {
+        let acp_options = AcpConversationTurnOptions::automatic();
+        self.handle_turn_with_runtime_and_address_and_acp_options(
+            config,
+            address,
+            user_input,
+            error_mode,
+            runtime,
+            &acp_options,
+            kernel_ctx,
+        )
+        .await
+    }
+
+    pub async fn handle_turn_with_runtime_and_address_and_acp_options<
+        R: ConversationRuntime + ?Sized,
+    >(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        runtime: &R,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<String> {
+        let session_id = address.session_id.as_str();
+        match evaluate_acp_conversation_turn_entry_for_address(config, address, acp_options)? {
+            AcpConversationTurnEntryDecision::RejectExplicitWhenDisabled => {
+                let error = "ACP is disabled by policy (`acp.enabled=false`)".to_owned();
+                return match error_mode {
+                    ProviderErrorMode::Propagate => Err(error),
+                    ProviderErrorMode::InlineMessage => {
+                        let synthetic = format_provider_error_reply(&error);
+                        persist_error_turns_raw(
+                            runtime, session_id, user_input, &synthetic, kernel_ctx,
+                        )
+                        .await?;
+                        Ok(synthetic)
+                    }
+                };
+            }
+            AcpConversationTurnEntryDecision::RouteViaAcp => {
+                return self
+                    .handle_turn_via_acp(
+                        config,
+                        address,
+                        user_input,
+                        error_mode,
+                        runtime,
+                        acp_options,
+                        kernel_ctx,
+                    )
+                    .await;
+            }
+            AcpConversationTurnEntryDecision::StayOnProvider => {}
+        }
+
+        runtime.bootstrap(config, session_id, kernel_ctx).await?;
+        let assembled_context = runtime
+            .build_context(config, session_id, true, kernel_ctx)
             .await?;
+        let mut messages = assembled_context.messages;
         messages.push(json!({
             "role": "user",
             "content": user_input,
@@ -375,6 +618,29 @@ impl ConversationTurnCoordinator {
                     ),
                 };
                 persist_success_turns(runtime, session_id, user_input, &reply, kernel_ctx).await?;
+                let mut after_turn_messages = messages.clone();
+                after_turn_messages.push(json!({
+                    "role": "assistant",
+                    "content": reply,
+                }));
+                runtime
+                    .after_turn(
+                        session_id,
+                        user_input,
+                        &reply,
+                        &after_turn_messages,
+                        kernel_ctx,
+                    )
+                    .await?;
+                maybe_compact_context(
+                    config,
+                    runtime,
+                    session_id,
+                    &after_turn_messages,
+                    assembled_context.estimated_tokens,
+                    kernel_ctx,
+                )
+                .await?;
                 Ok(reply)
             }
             Err(error) => match error_mode {
@@ -383,11 +649,167 @@ impl ConversationTurnCoordinator {
                     let synthetic = format_provider_error_reply(&error);
                     persist_error_turns(runtime, session_id, user_input, &synthetic, kernel_ctx)
                         .await?;
+                    let mut after_turn_messages = messages.clone();
+                    after_turn_messages.push(json!({
+                        "role": "assistant",
+                        "content": synthetic,
+                    }));
+                    runtime
+                        .after_turn(
+                            session_id,
+                            user_input,
+                            &synthetic,
+                            &after_turn_messages,
+                            kernel_ctx,
+                        )
+                        .await?;
+                    maybe_compact_context(
+                        config,
+                        runtime,
+                        session_id,
+                        &after_turn_messages,
+                        assembled_context.estimated_tokens,
+                        kernel_ctx,
+                    )
+                    .await?;
                     Ok(synthetic)
                 }
             },
         }
     }
+
+    pub async fn handle_turn_with_runtime_and_address_and_acp_event_sink<
+        R: ConversationRuntime + ?Sized,
+    >(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        runtime: &R,
+        acp_event_sink: Option<&dyn AcpTurnEventSink>,
+        kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<String> {
+        let acp_options = AcpConversationTurnOptions::from_event_sink(acp_event_sink);
+        self.handle_turn_with_runtime_and_address_and_acp_options(
+            config,
+            address,
+            user_input,
+            error_mode,
+            runtime,
+            &acp_options,
+            kernel_ctx,
+        )
+        .await
+    }
+
+    async fn handle_turn_via_acp<R: ConversationRuntime + ?Sized>(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        runtime: &R,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<String> {
+        let session_id = address.session_id.as_str();
+        let executed =
+            execute_acp_conversation_turn_for_address(config, address, user_input, acp_options)
+                .await?;
+        let persistence_context = &executed.persistence_context;
+
+        match executed.outcome {
+            AcpConversationTurnExecutionOutcome::Succeeded(success) => {
+                let reply = success.result.output_text.clone();
+                persist_success_turns_raw(runtime, session_id, user_input, &reply, kernel_ctx)
+                    .await?;
+                if config.acp.emit_runtime_events {
+                    let _ = persist_acp_runtime_events(
+                        runtime,
+                        session_id,
+                        persistence_context,
+                        &success.runtime_events,
+                        Some(&success.result),
+                        None,
+                        kernel_ctx,
+                    )
+                    .await;
+                }
+                Ok(reply)
+            }
+            AcpConversationTurnExecutionOutcome::Failed(failure) => {
+                if config.acp.emit_runtime_events {
+                    let _ = persist_acp_runtime_events(
+                        runtime,
+                        session_id,
+                        persistence_context,
+                        &failure.runtime_events,
+                        None,
+                        Some(failure.error.as_str()),
+                        kernel_ctx,
+                    )
+                    .await;
+                }
+                match error_mode {
+                    ProviderErrorMode::Propagate => Err(failure.error),
+                    ProviderErrorMode::InlineMessage => {
+                        let synthetic = format_provider_error_reply(&failure.error);
+                        persist_error_turns_raw(
+                            runtime, session_id, user_input, &synthetic, kernel_ctx,
+                        )
+                        .await?;
+                        Ok(synthetic)
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
+    config: &LoongClawConfig,
+    runtime: &R,
+    session_id: &str,
+    messages: &[Value],
+    estimated_tokens: Option<usize>,
+    kernel_ctx: Option<&KernelContext>,
+) -> CliResult<()> {
+    let estimated_tokens = estimated_tokens.or_else(|| estimate_tokens(messages));
+    if !config
+        .conversation
+        .should_compact_with_estimate(messages.len(), estimated_tokens)
+    {
+        return Ok(());
+    }
+
+    match runtime
+        .compact_context(config, session_id, messages, kernel_ctx)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(_error) if config.conversation.compaction_fail_open() => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn estimate_tokens(messages: &[Value]) -> Option<usize> {
+    if messages.is_empty() {
+        return Some(0);
+    }
+
+    let estimated = messages.iter().fold(0usize, |acc, message| {
+        let role_chars = message
+            .get("role")
+            .map_or(0usize, |value| value.to_string().chars().count());
+        let content_chars = message
+            .get("content")
+            .map_or(0usize, |value| value.to_string().chars().count());
+        let token_estimate = (role_chars + content_chars).div_ceil(4) + 4;
+        acc.saturating_add(token_estimate)
+    });
+
+    Some(estimated)
 }
 
 fn lane_policy_from_config(config: &LoongClawConfig) -> LaneArbiterPolicy {

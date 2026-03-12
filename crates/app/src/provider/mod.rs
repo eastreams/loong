@@ -512,6 +512,7 @@ mod tests {
             tools: ToolConfig::default(),
             external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
+            acp: crate::config::AcpConfig::default(),
         };
         (config, tool_runtime_config, root)
     }
@@ -526,6 +527,7 @@ mod tests {
             tools: ToolConfig::default(),
             external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
+            acp: crate::config::AcpConfig::default(),
         }
     }
 
