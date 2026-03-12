@@ -10,6 +10,7 @@ Product specs describe **what** the product does from the user's perspective, no
 
 - [Prompt And Personality](prompt-and-personality.md)
 - [Memory Profiles](memory-profiles.md)
+- [Tool Security](tool-security.md)
 
 Template for new specs:
 

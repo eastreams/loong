@@ -12,44 +12,44 @@ pub enum ExecutionLane {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaneDecision {
     pub lane: ExecutionLane,
-    pub risk_score: u32,
+    pub routing_score: u32,
     pub complexity_score: u32,
     pub reasons: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LaneArbiterPolicy {
-    #[serde(default = "default_safe_lane_risk_threshold")]
-    pub safe_lane_risk_threshold: u32,
+    #[serde(default = "default_safe_lane_routing_threshold")]
+    pub safe_lane_routing_threshold: u32,
     #[serde(default = "default_safe_lane_complexity_threshold")]
     pub safe_lane_complexity_threshold: u32,
     #[serde(default = "default_fast_lane_max_input_chars")]
     pub fast_lane_max_input_chars: usize,
-    #[serde(default = "default_high_risk_keywords")]
-    pub high_risk_keywords: BTreeSet<String>,
+    #[serde(default = "default_high_complexity_keywords")]
+    pub high_complexity_keywords: BTreeSet<String>,
 }
 
 impl Default for LaneArbiterPolicy {
     fn default() -> Self {
         Self {
-            safe_lane_risk_threshold: default_safe_lane_risk_threshold(),
+            safe_lane_routing_threshold: default_safe_lane_routing_threshold(),
             safe_lane_complexity_threshold: default_safe_lane_complexity_threshold(),
             fast_lane_max_input_chars: default_fast_lane_max_input_chars(),
-            high_risk_keywords: default_high_risk_keywords(),
+            high_complexity_keywords: default_high_complexity_keywords(),
         }
     }
 }
 
 impl LaneArbiterPolicy {
     pub fn decide(&self, user_input: &str) -> LaneDecision {
-        let risk_score = self.risk_score(user_input);
+        let routing_score = self.routing_score(user_input);
         let complexity_score = self.complexity_score(user_input);
         let mut reasons = Vec::new();
 
-        if risk_score >= self.safe_lane_risk_threshold {
+        if routing_score >= self.safe_lane_routing_threshold {
             reasons.push(format!(
-                "risk_score_exceeded score={risk_score} threshold={}",
-                self.safe_lane_risk_threshold
+                "routing_score_exceeded score={routing_score} threshold={}",
+                self.safe_lane_routing_threshold
             ));
         }
         if complexity_score >= self.safe_lane_complexity_threshold {
@@ -74,15 +74,15 @@ impl LaneArbiterPolicy {
 
         LaneDecision {
             lane,
-            risk_score,
+            routing_score,
             complexity_score,
             reasons,
         }
     }
 
-    fn risk_score(&self, user_input: &str) -> u32 {
+    fn routing_score(&self, user_input: &str) -> u32 {
         let normalized = user_input.to_ascii_lowercase();
-        self.high_risk_keywords
+        self.high_complexity_keywords
             .iter()
             .filter(|keyword| normalized.contains(keyword.as_str()))
             .count()
@@ -123,7 +123,7 @@ impl LaneArbiterPolicy {
     }
 }
 
-const fn default_safe_lane_risk_threshold() -> u32 {
+const fn default_safe_lane_routing_threshold() -> u32 {
     4
 }
 
@@ -135,14 +135,10 @@ const fn default_fast_lane_max_input_chars() -> usize {
     400
 }
 
-fn default_high_risk_keywords() -> BTreeSet<String> {
+fn default_high_complexity_keywords() -> BTreeSet<String> {
     [
-        "rm -rf",
         "drop table",
         "delete",
-        "credential",
-        "token",
-        "secret",
         "prod",
         "production",
         "deploy",
@@ -167,16 +163,16 @@ mod tests {
     }
 
     #[test]
-    fn high_risk_keywords_route_to_safe_lane() {
+    fn high_complexity_keywords_route_to_safe_lane() {
         let policy = LaneArbiterPolicy::default();
-        let decision = policy.decide("connect to production and deploy with secret token");
+        let decision = policy.decide("connect to production and deploy the update");
         assert_eq!(decision.lane, ExecutionLane::Safe);
         assert!(
             decision
                 .reasons
                 .iter()
-                .any(|reason| reason.contains("risk_score_exceeded")),
-            "expected risk reason, got: {:?}",
+                .any(|reason| reason.contains("routing_score_exceeded")),
+            "expected routing reason, got: {:?}",
             decision.reasons
         );
     }

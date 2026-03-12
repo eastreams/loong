@@ -76,14 +76,14 @@ pub struct ConversationConfig {
     pub safe_lane_backpressure_max_total_attempts: u64,
     #[serde(default = "default_safe_lane_backpressure_max_replans")]
     pub safe_lane_backpressure_max_replans: u32,
-    #[serde(default = "default_safe_lane_risk_threshold")]
-    pub safe_lane_risk_threshold: u32,
+    #[serde(alias = "safe_lane_risk_threshold", default = "default_safe_lane_routing_threshold")]
+    pub safe_lane_routing_threshold: u32,
     #[serde(default = "default_safe_lane_complexity_threshold")]
     pub safe_lane_complexity_threshold: u32,
     #[serde(default = "default_fast_lane_max_input_chars")]
     pub fast_lane_max_input_chars: usize,
-    #[serde(default = "default_high_risk_keywords")]
-    pub high_risk_keywords: Vec<String>,
+    #[serde(alias = "high_risk_keywords", default = "default_high_complexity_keywords")]
+    pub high_complexity_keywords: Vec<String>,
 }
 
 impl Default for ConversationConfig {
@@ -141,10 +141,10 @@ impl Default for ConversationConfig {
             safe_lane_backpressure_max_total_attempts:
                 default_safe_lane_backpressure_max_total_attempts(),
             safe_lane_backpressure_max_replans: default_safe_lane_backpressure_max_replans(),
-            safe_lane_risk_threshold: default_safe_lane_risk_threshold(),
+            safe_lane_routing_threshold: default_safe_lane_routing_threshold(),
             safe_lane_complexity_threshold: default_safe_lane_complexity_threshold(),
             fast_lane_max_input_chars: default_fast_lane_max_input_chars(),
-            high_risk_keywords: default_high_risk_keywords(),
+            high_complexity_keywords: default_high_complexity_keywords(),
         }
     }
 }
@@ -183,8 +183,8 @@ impl Default for ConversationTurnLoopConfig {
 }
 
 impl ConversationConfig {
-    pub fn normalized_high_risk_keywords(&self) -> Vec<String> {
-        self.high_risk_keywords
+    pub fn normalized_high_complexity_keywords(&self) -> Vec<String> {
+        self.high_complexity_keywords
             .iter()
             .map(|keyword| keyword.trim().to_ascii_lowercase())
             .filter(|keyword| !keyword.is_empty())
@@ -416,7 +416,7 @@ const fn default_safe_lane_backpressure_max_replans() -> u32 {
     8
 }
 
-const fn default_safe_lane_risk_threshold() -> u32 {
+const fn default_safe_lane_routing_threshold() -> u32 {
     4
 }
 
@@ -428,14 +428,10 @@ const fn default_fast_lane_max_input_chars() -> usize {
     400
 }
 
-fn default_high_risk_keywords() -> Vec<String> {
+fn default_high_complexity_keywords() -> Vec<String> {
     [
-        "rm -rf",
         "drop table",
         "delete",
-        "credential",
-        "token",
-        "secret",
         "prod",
         "production",
         "deploy",

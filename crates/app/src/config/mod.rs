@@ -926,12 +926,12 @@ max_followup_tool_payload_chars_total = 3200
         assert!(config.safe_lane_backpressure_guard_enabled);
         assert_eq!(config.safe_lane_backpressure_max_total_attempts, 32);
         assert_eq!(config.safe_lane_backpressure_max_replans, 8);
-        assert_eq!(config.safe_lane_risk_threshold, 4);
+        assert_eq!(config.safe_lane_routing_threshold, 4);
         assert_eq!(config.safe_lane_complexity_threshold, 6);
         assert_eq!(config.fast_lane_max_input_chars, 400);
         assert!(
             config
-                .high_risk_keywords
+                .high_complexity_keywords
                 .iter()
                 .any(|keyword| keyword == "production")
         );

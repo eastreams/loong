@@ -314,25 +314,25 @@ impl ConversationTurnCoordinator {
 }
 
 fn lane_policy_from_config(config: &LoongClawConfig) -> LaneArbiterPolicy {
-    let normalized_keywords = config.conversation.normalized_high_risk_keywords();
-    let high_risk_keywords = if normalized_keywords.is_empty() {
-        LaneArbiterPolicy::default().high_risk_keywords
+    let normalized_keywords = config.conversation.normalized_high_complexity_keywords();
+    let high_complexity_keywords = if normalized_keywords.is_empty() {
+        LaneArbiterPolicy::default().high_complexity_keywords
     } else {
         normalized_keywords.into_iter().collect::<BTreeSet<_>>()
     };
 
     LaneArbiterPolicy {
-        safe_lane_risk_threshold: config.conversation.safe_lane_risk_threshold,
+        safe_lane_routing_threshold: config.conversation.safe_lane_routing_threshold,
         safe_lane_complexity_threshold: config.conversation.safe_lane_complexity_threshold,
         fast_lane_max_input_chars: config.conversation.fast_lane_max_input_chars,
-        high_risk_keywords,
+        high_complexity_keywords,
     }
 }
 
 fn disabled_lane_decision(user_input: &str) -> LaneDecision {
     LaneDecision {
         lane: ExecutionLane::Fast,
-        risk_score: 0,
+        routing_score: 0,
         complexity_score: 0,
         reasons: vec![format!(
             "hybrid_lane_disabled chars={}",
@@ -370,7 +370,7 @@ async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?Sized>(
         "lane_selected",
         json!({
             "lane": "safe",
-            "risk_score": lane_decision.risk_score,
+            "routing_score": lane_decision.routing_score,
             "complexity_score": lane_decision.complexity_score,
             "reasons": lane_decision.reasons.clone(),
             "tool_intents": turn.tool_intents.len(),
@@ -888,17 +888,17 @@ fn build_safe_lane_plan_graph(
 fn select_safe_lane_risk_tier(config: &LoongClawConfig, lane_decision: &LaneDecision) -> RiskTier {
     let high_risk_bar = config
         .conversation
-        .safe_lane_risk_threshold
+        .safe_lane_routing_threshold
         .saturating_mul(2);
     let high_complexity_bar = config
         .conversation
         .safe_lane_complexity_threshold
         .saturating_mul(2);
-    if lane_decision.risk_score >= high_risk_bar
+    if lane_decision.routing_score >= high_risk_bar
         || lane_decision.complexity_score >= high_complexity_bar
     {
         RiskTier::High
-    } else if lane_decision.risk_score > 0 || lane_decision.complexity_score > 0 {
+    } else if lane_decision.routing_score > 0 || lane_decision.complexity_score > 0 {
         RiskTier::Medium
     } else {
         RiskTier::Low
