@@ -2822,6 +2822,106 @@ async fn turn_engine_truncates_oversized_tool_payload_summary() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_engine_keeps_external_skill_invoke_payloads_intact() {
+    use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, TurnEngine, TurnResult};
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loongclaw_kernel::CoreToolAdapter;
+
+    struct ExternalSkillInvokeAdapter;
+
+    #[async_trait]
+    impl CoreToolAdapter for ExternalSkillInvokeAdapter {
+        fn name(&self) -> &str {
+            "external-skill-invoke-adapter"
+        }
+
+        async fn execute_core_tool(
+            &self,
+            request: ToolCoreRequest,
+        ) -> Result<ToolCoreOutcome, ToolPlaneError> {
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "tool": request.tool_name,
+                    "instructions": "Follow the managed skill instruction. ".repeat(200),
+                    "invocation_summary": "Loaded managed external skill instructions."
+                }),
+            })
+        }
+    }
+
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+    kernel.register_core_tool_adapter(ExternalSkillInvokeAdapter);
+    kernel
+        .set_default_core_tool_adapter("external-skill-invoke-adapter")
+        .expect("set default");
+
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+
+    let ctx = KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    let engine = TurnEngine::new(5);
+    let turn = ProviderTurn {
+        assistant_text: "".to_owned(),
+        tool_intents: vec![ToolIntent {
+            tool_name: "external_skills.invoke".to_owned(),
+            args_json: json!({"skill_id": "demo-skill"}),
+            source: "provider_tool_call".to_owned(),
+            session_id: "s1".to_owned(),
+            turn_id: "t1".to_owned(),
+            tool_call_id: "c-skill".to_owned(),
+        }],
+        raw_meta: serde_json::Value::Null,
+    };
+
+    let result = engine.execute_turn(&turn, Some(&ctx)).await;
+    match result {
+        TurnResult::FinalText(text) => {
+            let line = text.lines().next().expect("tool result line should exist");
+            let payload = line
+                .strip_prefix("[ok] ")
+                .expect("tool result line should keep [ok] prefix");
+            let envelope: Value =
+                serde_json::from_str(payload).expect("tool result envelope should be valid json");
+            assert_eq!(envelope["tool"], "external_skills.invoke");
+            assert_eq!(envelope["payload_truncated"], json!(false));
+            assert!(
+                envelope["payload_summary"]
+                    .as_str()
+                    .expect("payload summary should be text")
+                    .contains("Follow the managed skill instruction."),
+                "payload summary should keep invoke instructions intact: {envelope:?}"
+            );
+        }
+        other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => panic!("unexpected result: {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_execute_turn_denied_without_capability() {
     use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, TurnEngine, TurnResult};
     use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};

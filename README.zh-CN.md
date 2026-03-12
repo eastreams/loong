@@ -92,6 +92,8 @@ cargo install --path crates/daemon
 ```
 </details>
 
+`--onboard` 现在调用的是不带 `--force` 的 `loongclaw onboard`，因此重复执行这条 quickstart 时会先停止，而不会直接覆盖已有配置。
+
 ### 5 分钟内开始首次对话
 
 1. 运行引导式首次配置：
@@ -172,6 +174,7 @@ enabled = true
 require_download_approval = true
 allowed_domains = ["skills.sh", "clawhub.io"]
 blocked_domains = ["*.evil.example"]
+auto_expose_installed = true
 ```
 
 面向 agent 的工具：
@@ -185,6 +188,25 @@ blocked_domains = ["*.evil.example"]
   - 当授权门禁开启时必须传 `approval_granted=true`。
   - 下载文件落在 `<tools.file_root>/external-skills-downloads/`。
   - 下载前强制执行白/黑名单校验。
+- `external_skills_install`
+  - 必填本地 `path`。
+  - 支持包含 `SKILL.md` 的目录，或本地 `.tgz` / `.tar.gz` 压缩包。
+  - 默认安装到 `<tools.file_root>/external-skills-installed/`。
+- `external_skills_list`
+  - 列出当前可调用的受管 skills。
+- `external_skills_inspect`
+  - 返回已安装 skill 的元数据与预览。
+- `external_skills_invoke`
+  - 把已安装 skill 的 `SKILL.md` 指令加载进对话流程。
+- `external_skills_remove`
+  - 删除受管 skill 并更新本地索引。
+
+推荐运行时流程：
+
+1. 先用 `external_skills.fetch` 下载
+2. 再用 `external_skills.install` 安装
+3. 用 `external_skills.list` 查看
+4. 用 `external_skills.invoke` 加载指令
 
 ## 核心功能
 
@@ -208,7 +230,7 @@ blocked_domains = ["*.evil.example"]
 - `onboard` -- 引导式首次运行，带预检诊断
 - `doctor` -- 诊断工具，可选安全修复 (`--fix`) 和机器可读输出 (`--json`)
 - `chat` -- 交互式 CLI，滑动窗口对话记忆
-- 核心工具：`shell.exec`、`file.read`、`file.write`、`external_skills.policy`、`external_skills.fetch`
+- 核心工具：`shell.exec`、`file.read`、`file.write`、`external_skills.policy`、`external_skills.fetch`、`external_skills.install`、`external_skills.list`、`external_skills.inspect`、`external_skills.invoke`、`external_skills.remove`
 - Provider：OpenAI 兼容、火山引擎自定义端点
 - 通道：CLI、Telegram 轮询、飞书加密 webhook
 

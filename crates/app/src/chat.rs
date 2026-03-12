@@ -614,6 +614,8 @@ fn export_runtime_env(config: &LoongClawConfig) {
                 .normalized_blocked_domains()
                 .into_iter()
                 .collect(),
+            install_root: config.external_skills.resolved_install_root(),
+            auto_expose_installed: config.external_skills.auto_expose_installed,
         },
     };
     let _ = crate::tools::runtime_config::init_tool_runtime_config(tool_rt);

@@ -7,7 +7,7 @@ authors.workspace = true
 
 [features]
 default = ["mvp"]
-mvp = ["loongclaw-app/default"]
+mvp = ["loongclaw-app/default", "memory-sqlite"]
 channel-cli = ["loongclaw-app/channel-cli"]
 channel-telegram = ["loongclaw-app/channel-telegram"]
 channel-feishu = ["loongclaw-app/channel-feishu"]

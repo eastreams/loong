@@ -63,6 +63,10 @@ pub struct ExternalSkillsConfig {
     pub allowed_domains: Vec<String>,
     #[serde(default)]
     pub blocked_domains: Vec<String>,
+    #[serde(default)]
+    pub install_root: Option<String>,
+    #[serde(default = "default_auto_expose_installed")]
+    pub auto_expose_installed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,6 +171,8 @@ impl Default for ExternalSkillsConfig {
             require_download_approval: default_require_download_approval(),
             allowed_domains: Vec::new(),
             blocked_domains: Vec::new(),
+            install_root: None,
+            auto_expose_installed: default_auto_expose_installed(),
         }
     }
 }
@@ -187,6 +193,10 @@ impl ExternalSkillsConfig {
 
     pub fn normalized_blocked_domains(&self) -> Vec<String> {
         normalize_domain_entries(&self.blocked_domains)
+    }
+
+    pub fn resolved_install_root(&self) -> Option<PathBuf> {
+        self.install_root.as_deref().map(expand_path)
     }
 }
 
@@ -254,6 +264,10 @@ fn default_sqlite_path() -> String {
 }
 
 const fn default_require_download_approval() -> bool {
+    true
+}
+
+const fn default_auto_expose_installed() -> bool {
     true
 }
 
@@ -348,6 +362,8 @@ mod tests {
         assert!(config.require_download_approval);
         assert!(config.allowed_domains.is_empty());
         assert!(config.blocked_domains.is_empty());
+        assert!(config.install_root.is_none());
+        assert!(config.auto_expose_installed);
     }
 
     #[test]
@@ -365,6 +381,8 @@ mod tests {
                 "bad.example".to_owned(),
                 " ".to_owned(),
             ],
+            install_root: Some("~/skills".to_owned()),
+            auto_expose_installed: true,
         };
         assert_eq!(
             config.normalized_allowed_domains(),
@@ -373,6 +391,21 @@ mod tests {
         assert_eq!(
             config.normalized_blocked_domains(),
             vec!["bad.example".to_owned()]
+        );
+    }
+
+    #[test]
+    fn external_skills_resolved_install_root_expands_user_home() {
+        let config = ExternalSkillsConfig {
+            install_root: Some("~/demo-skills".to_owned()),
+            ..ExternalSkillsConfig::default()
+        };
+
+        assert!(
+            config
+                .resolved_install_root()
+                .expect("install root should resolve")
+                .ends_with("demo-skills")
         );
     }
 }

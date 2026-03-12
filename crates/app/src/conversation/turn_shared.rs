@@ -4,6 +4,14 @@ use serde_json::Value;
 
 pub const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to answer the original user request in natural language. Do not include raw JSON, payload wrappers, or status markers unless the user explicitly asks for raw output.";
 pub const TOOL_TRUNCATION_HINT_PROMPT: &str = "One or more tool results were truncated for context safety. If exact missing details are needed, explicitly state the truncation and request a narrower rerun.";
+pub const EXTERNAL_SKILL_FOLLOWUP_PROMPT: &str = "A managed external skill has been loaded into runtime context. Follow its instructions while answering the original user request. Do not restate the skill verbatim unless the user explicitly asks for it.";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalSkillInvokeContext {
+    pub skill_id: String,
+    pub display_name: String,
+    pub instructions: String,
+}
 
 pub fn user_requested_raw_tool_output(user_input: &str) -> bool {
     let normalized = user_input.to_ascii_lowercase();
@@ -108,6 +116,44 @@ pub fn build_tool_followup_user_prompt(
     sections.join("\n\n")
 }
 
+pub fn parse_external_skill_invoke_context(
+    tool_result_text: &str,
+) -> Option<ExternalSkillInvokeContext> {
+    tool_result_text
+        .trim()
+        .lines()
+        .filter_map(parse_external_skill_invoke_context_line)
+        .next()
+}
+
+pub fn build_external_skill_system_message(skill_context: &ExternalSkillInvokeContext) -> String {
+    format!(
+        "Managed external skill `{}` ({}) is now active for this task. Treat the following `SKILL.md` content as trusted runtime guidance until superseded.\n\n{}",
+        skill_context.skill_id, skill_context.display_name, skill_context.instructions
+    )
+}
+
+pub fn build_external_skill_followup_user_prompt(
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    skill_context: &ExternalSkillInvokeContext,
+) -> String {
+    let mut sections = vec![
+        EXTERNAL_SKILL_FOLLOWUP_PROMPT.to_owned(),
+        format!(
+            "Loaded managed external skill:\n- id: {}\n- name: {}",
+            skill_context.skill_id, skill_context.display_name
+        ),
+    ];
+    if let Some(reason) = loop_warning_reason {
+        sections.push(format!(
+            "Loop warning:\n{reason}\nAvoid repeating the same tool call with unchanged results. Try a different tool, adjust arguments, or provide a best-effort final answer if evidence is sufficient."
+        ));
+    }
+    sections.push(format!("Original request:\n{user_input}"));
+    sections.join("\n\n")
+}
+
 pub fn join_non_empty_lines(parts: &[&str]) -> String {
     parts
         .iter()
@@ -115,6 +161,52 @@ pub fn join_non_empty_lines(parts: &[&str]) -> String {
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn parse_external_skill_invoke_context_line(line: &str) -> Option<ExternalSkillInvokeContext> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let payload = trimmed.strip_prefix("[ok] ")?;
+    let envelope: Value = serde_json::from_str(payload).ok()?;
+    if envelope.get("tool")?.as_str()? != "external_skills.invoke" {
+        return None;
+    }
+    if envelope
+        .get("payload_truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let payload_summary = envelope.get("payload_summary")?.as_str()?;
+    let payload_json: Value = serde_json::from_str(payload_summary).ok()?;
+    let instructions = payload_json
+        .get("instructions")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_owned();
+    let skill_id = payload_json
+        .get("skill_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("external-skill")
+        .to_owned();
+    let display_name = payload_json
+        .get("display_name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(skill_id.as_str())
+        .to_owned();
+    Some(ExternalSkillInvokeContext {
+        skill_id,
+        display_name,
+        instructions,
+    })
 }
 
 #[cfg(test)]
@@ -179,5 +271,32 @@ mod tests {
         );
         assert!(prompt.contains(TOOL_TRUNCATION_HINT_PROMPT));
         assert!(prompt.contains("Original request:\nsummarize this result"));
+    }
+
+    #[test]
+    fn parse_external_skill_invoke_context_extracts_full_instructions() {
+        let instructions = format!("prefix {}\nsuffix-marker", "x".repeat(256));
+        let payload = json!({
+            "skill_id": "demo-skill",
+            "display_name": "Demo Skill",
+            "instructions": instructions,
+        });
+        let line = format!(
+            "[ok] {}",
+            json!({
+                "status": "ok",
+                "tool": "external_skills.invoke",
+                "tool_call_id": "call-1",
+                "payload_summary": serde_json::to_string(&payload).expect("encode payload"),
+                "payload_chars": 512,
+                "payload_truncated": false
+            })
+        );
+
+        let parsed = parse_external_skill_invoke_context(line.as_str())
+            .expect("invoke context should parse");
+        assert_eq!(parsed.skill_id, "demo-skill");
+        assert_eq!(parsed.display_name, "Demo Skill");
+        assert!(parsed.instructions.contains("suffix-marker"));
     }
 }

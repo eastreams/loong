@@ -621,7 +621,7 @@ fn external_skill_probe_roots(input_path: &Path) -> Vec<PathBuf> {
 
 fn external_skill_warning(artifact: &ExternalSkillArtifact) -> String {
     format!(
-        "detected external skills artifact `{}` ({}); LoongClaw imports prompt/profile content but does not auto-wire external skill runtimes",
+        "detected external skills artifact `{}` ({}); LoongClaw imports prompt/profile content but does not auto-install the runtime, so use the explicit external skills lifecycle (`fetch` -> `install` -> `list` -> `invoke`) when you want the skill available in chat",
         artifact.path.display(),
         artifact.kind.as_id()
     )
@@ -881,9 +881,9 @@ fn render_external_skill_profile_note_addendum(
     let mut lines = vec!["## Imported External Skills Artifacts".to_owned()];
     for artifact in artifacts {
         lines.push(format!(
-            "- kind={} path={}",
+            "- kind={} label={}",
             artifact.kind.as_id(),
-            artifact.path.display()
+            external_skill_artifact_label(artifact)
         ));
     }
     if !declared_skills.is_empty() {
@@ -905,6 +905,17 @@ fn render_external_skill_profile_note_addendum(
         }
     }
     Some(lines.join("\n"))
+}
+
+fn external_skill_artifact_label(artifact: &ExternalSkillArtifact) -> String {
+    artifact
+        .path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(artifact.kind.as_id())
+        .to_owned()
 }
 
 fn merge_profile_note_addendum(existing: Option<&str>, addendum: &str) -> Option<String> {
@@ -1272,8 +1283,23 @@ mod tests {
         assert!(addendum.contains("kind=skills_catalog"));
         assert!(addendum.contains("kind=skills_lock"));
         assert!(addendum.contains("kind=codex_skills_dir"));
+        assert!(
+            !addendum.contains(root.display().to_string().as_str()),
+            "profile note addendum should not leak absolute local paths"
+        );
 
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn external_skill_warning_points_to_explicit_runtime_lifecycle() {
+        let warning = external_skill_warning(&ExternalSkillArtifact {
+            kind: ExternalSkillArtifactKind::SkillsDir,
+            path: PathBuf::from("/tmp/demo/skills"),
+        });
+        assert!(warning.contains("fetch"));
+        assert!(warning.contains("install"));
+        assert!(warning.contains("invoke"));
     }
 
     #[test]
@@ -1301,6 +1327,34 @@ mod tests {
             config.memory.profile_note.as_deref(),
             Some(first_note.as_str()),
             "profile note should remain stable after duplicate apply"
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn external_skill_profile_note_addendum_does_not_embed_absolute_paths() {
+        let root = unique_temp_dir("loongclaw-import-external-skill-redacted-paths");
+        fs::create_dir_all(&root).expect("create fixture root");
+        write_file(&root, "SKILLS.md", "# Skills\n\n- custom/skill-a\n");
+        fs::create_dir_all(root.join(".codex/skills")).expect("create codex skills dir");
+
+        let mapping = plan_external_skill_mapping(&root);
+        let addendum = mapping
+            .profile_note_addendum
+            .as_deref()
+            .expect("profile note addendum should exist");
+
+        assert!(
+            !addendum.contains(&root.display().to_string()),
+            "profile note addendum must not leak absolute import roots: {addendum}"
+        );
+        assert!(
+            !addendum.contains("/private/")
+                && !addendum.contains("/Users/")
+                && !addendum.contains("\\\\")
+                && !addendum.contains(":\\"),
+            "profile note addendum must not contain absolute local filesystem paths: {addendum}"
         );
 
         fs::remove_dir_all(&root).ok();
