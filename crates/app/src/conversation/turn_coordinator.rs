@@ -11,8 +11,6 @@ use crate::CliResult;
 use crate::KernelContext;
 
 use super::super::config::LoongClawConfig;
-#[cfg(feature = "memory-sqlite")]
-use super::super::memory;
 use super::ProviderErrorMode;
 use super::analytics::{
     SafeLaneEventSummary, parse_conversation_event, summarize_safe_lane_events,
@@ -1348,7 +1346,7 @@ async fn load_safe_lane_history_signals_for_governor(
         .safe_lane_session_governor_window_turns();
     if let Some(ctx) = kernel_ctx {
         let request = MemoryCoreRequest {
-            operation: memory::MEMORY_OP_WINDOW.to_owned(),
+            operation: crate::memory::MEMORY_OP_WINDOW.to_owned(),
             payload: json!({
                 "session_id": session_id,
                 "limit": window_turns,
@@ -1371,7 +1369,7 @@ async fn load_safe_lane_history_signals_for_governor(
 
     #[cfg(feature = "memory-sqlite")]
     {
-        if let Ok(turns) = memory::window_direct_extended(session_id, window_turns) {
+        if let Ok(turns) = crate::memory::window_direct_extended(session_id, window_turns) {
             let assistant_contents = turns
                 .iter()
                 .filter_map(|turn| (turn.role == "assistant").then_some(turn.content.as_str()))

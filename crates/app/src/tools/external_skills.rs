@@ -648,7 +648,7 @@ pub(super) fn execute_external_skills_remove_tool_with_config(
         return Err(format!("external skill `{skill_id}` is not installed"));
     };
     let entry = index.skills.remove(position);
-    let install_path = PathBuf::from(entry.install_path.clone());
+    let install_path = PathBuf::from(entry.install_path);
     if install_path.exists() {
         fs::remove_dir_all(&install_path).map_err(|error| {
             format!(
@@ -1891,7 +1891,7 @@ mod tests {
         )
         .expect("install should succeed");
 
-        let mut disabled_config = enabled_config.clone();
+        let mut disabled_config = enabled_config;
         disabled_config.external_skills.enabled = false;
 
         for (tool_name, payload) in [
@@ -1999,7 +1999,7 @@ mod tests {
         )
         .expect("install should succeed");
 
-        let mut disabled_config = enabled_config.clone();
+        let mut disabled_config = enabled_config;
         disabled_config.external_skills.enabled = false;
         let error = crate::tools::execute_tool_core_with_config(
             ToolCoreRequest {
@@ -2644,7 +2644,7 @@ mod tests {
         )
         .expect("install should succeed");
 
-        let mut disabled_config = enabled_config.clone();
+        let mut disabled_config = enabled_config;
         disabled_config.external_skills.enabled = false;
 
         let lines = installed_skill_snapshot_lines_with_config(&disabled_config)

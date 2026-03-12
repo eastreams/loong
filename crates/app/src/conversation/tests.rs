@@ -2914,7 +2914,10 @@ async fn turn_engine_keeps_external_skill_invoke_payloads_intact() {
                 "payload summary should keep invoke instructions intact: {envelope:?}"
             );
         }
-        other => panic!("unexpected result: {other:?}"),
+        other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => panic!("unexpected result: {other:?}"),
     }
 }
 
