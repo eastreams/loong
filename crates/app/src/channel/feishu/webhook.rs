@@ -276,7 +276,8 @@ impl RecentIdCache {
         }
         let encoded = serde_json::to_string(&PersistedReplayCache { completed })
             .map_err(|error| format!("serialize feishu replay cache failed: {error}"))?;
-        fs::write(path, encoded).map_err(|error| format!("write feishu replay cache failed: {error}"))
+        fs::write(path, encoded)
+            .map_err(|error| format!("write feishu replay cache failed: {error}"))
     }
 }
 
@@ -307,8 +308,7 @@ fn now_unix_timestamp_s() -> Result<i64, String> {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| format!("system clock before unix epoch: {error}"))?;
-    i64::try_from(duration.as_secs())
-        .map_err(|error| format!("unix timestamp overflow: {error}"))
+    i64::try_from(duration.as_secs()).map_err(|error| format!("unix timestamp overflow: {error}"))
 }
 
 pub(super) async fn feishu_webhook_handler(
@@ -574,8 +574,8 @@ fn read_header_required<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use sha2::{Digest, Sha256};
+    use std::path::PathBuf;
 
     fn temp_replay_cache_path(test_name: &str) -> PathBuf {
         let unique = format!(
@@ -706,14 +706,9 @@ mod tests {
         headers.insert("X-Lark-Signature", signature.parse().expect("header"));
 
         let payload = serde_json::from_str::<Value>(body).expect("payload");
-        let error = verify_feishu_signature_with_now(
-            &headers,
-            body,
-            &payload,
-            Some(encrypt_key),
-            now,
-        )
-        .expect_err("stale timestamp should fail");
+        let error =
+            verify_feishu_signature_with_now(&headers, body, &payload, Some(encrypt_key), now)
+                .expect_err("stale timestamp should fail");
         assert_eq!(error.0, StatusCode::UNAUTHORIZED);
         assert!(error.1.contains("outside allowed skew window"));
     }
