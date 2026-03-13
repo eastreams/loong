@@ -275,6 +275,9 @@ mod tests {
         ));
         assert!(snapshot.contains("- file.read: Read file contents"));
         assert!(snapshot.contains("- file.write: Write file contents"));
+        assert!(snapshot.contains(
+            "- memory_search: Search visible transcript memory across persisted session turns"
+        ));
         assert!(snapshot.contains("- shell.exec: Execute shell commands"));
         assert!(
             snapshot.contains("- sessions_list: List visible sessions and their high-level state")
@@ -302,34 +305,36 @@ mod tests {
 
         // Verify sorted canonical name order.
         let lines: Vec<&str> = snapshot.lines().skip(1).collect();
-        assert_eq!(lines.len(), 14);
+        assert_eq!(lines.len(), 15);
         assert!(lines[0].starts_with("- delegate"));
         assert!(lines[1].starts_with("- delegate_async"));
         assert!(lines[2].starts_with("- file.read"));
         assert!(lines[3].starts_with("- file.write"));
-        assert!(lines[4].starts_with("- session_archive"));
-        assert!(lines[5].starts_with("- session_cancel"));
-        assert!(lines[6].starts_with("- session_events"));
-        assert!(lines[7].starts_with("- session_recover"));
-        assert!(lines[8].starts_with("- session_status"));
-        assert!(lines[9].starts_with("- session_unarchive"));
-        assert!(lines[10].starts_with("- session_wait"));
-        assert!(lines[11].starts_with("- sessions_history"));
-        assert!(lines[12].starts_with("- sessions_list"));
-        assert!(lines[13].starts_with("- shell.exec"));
+        assert!(lines[4].starts_with("- memory_search"));
+        assert!(lines[5].starts_with("- session_archive"));
+        assert!(lines[6].starts_with("- session_cancel"));
+        assert!(lines[7].starts_with("- session_events"));
+        assert!(lines[8].starts_with("- session_recover"));
+        assert!(lines[9].starts_with("- session_status"));
+        assert!(lines[10].starts_with("- session_unarchive"));
+        assert!(lines[11].starts_with("- session_wait"));
+        assert!(lines[12].starts_with("- sessions_history"));
+        assert!(lines[13].starts_with("- sessions_list"));
+        assert!(lines[14].starts_with("- shell.exec"));
     }
 
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
     fn tool_registry_returns_all_known_tools() {
         let entries = tool_registry();
-        assert_eq!(entries.len(), 14);
+        assert_eq!(entries.len(), 15);
         let names: Vec<&str> = entries.iter().map(|e| e.name).collect();
         assert!(names.contains(&"delegate"));
         assert!(names.contains(&"delegate_async"));
         assert!(names.contains(&"shell.exec"));
         assert!(names.contains(&"file.read"));
         assert!(names.contains(&"file.write"));
+        assert!(names.contains(&"memory_search"));
         assert!(names.contains(&"session_archive"));
         assert!(names.contains(&"session_cancel"));
         assert!(names.contains(&"session_events"));
@@ -345,7 +350,7 @@ mod tests {
     #[test]
     fn provider_tool_definitions_are_stable_and_complete() {
         let defs = provider_tool_definitions();
-        assert_eq!(defs.len(), 14);
+        assert_eq!(defs.len(), 15);
 
         let names: Vec<&str> = defs
             .iter()
@@ -360,6 +365,7 @@ mod tests {
                 "delegate_async",
                 "file_read",
                 "file_write",
+                "memory_search",
                 "session_archive",
                 "session_cancel",
                 "session_events",
@@ -486,6 +492,26 @@ mod tests {
             2
         );
 
+        let memory_search = defs
+            .iter()
+            .find(|item| item["function"]["name"] == "memory_search")
+            .expect("memory_search definition");
+        let memory_search_properties = memory_search["function"]["parameters"]["properties"]
+            .as_object()
+            .expect("memory_search properties");
+        assert!(memory_search_properties.contains_key("query"));
+        assert!(memory_search_properties.contains_key("session_id"));
+        assert!(memory_search_properties.contains_key("session_ids"));
+        assert!(memory_search_properties.contains_key("limit"));
+        assert!(memory_search_properties.contains_key("excerpt_chars"));
+        assert_eq!(
+            memory_search["function"]["parameters"]["oneOf"]
+                .as_array()
+                .expect("memory_search oneOf")
+                .len(),
+            3
+        );
+
         let sessions_list = defs
             .iter()
             .find(|item| item["function"]["name"] == "sessions_list")
@@ -508,6 +534,7 @@ mod tests {
         assert_eq!(canonical_tool_name("file_write"), "file.write");
         assert_eq!(canonical_tool_name("shell_exec"), "shell.exec");
         assert_eq!(canonical_tool_name("shell"), "shell.exec");
+        assert_eq!(canonical_tool_name("memory_search"), "memory_search");
         assert_eq!(canonical_tool_name("file.read"), "file.read");
     }
 
@@ -594,6 +621,7 @@ mod tests {
         assert!(view.contains("sessions_history"));
         assert!(view.contains("session_status"));
         assert!(view.contains("session_events"));
+        assert!(view.contains("memory_search"));
         assert!(view.contains("session_archive"));
         assert!(view.contains("session_cancel"));
         assert!(view.contains("session_recover"));
@@ -648,6 +676,21 @@ mod tests {
     }
 
     #[test]
+    fn memory_search_is_visible_in_root_and_hidden_in_child_views() {
+        let root_view = runtime_tool_view();
+        assert!(root_view.contains("memory_search"));
+
+        let child_view = planned_delegate_child_tool_view();
+        assert!(!child_view.contains("memory_search"));
+
+        let child_with_depth = delegate_child_tool_view_for_config_with_delegate(
+            &crate::config::ToolConfig::default(),
+            true,
+        );
+        assert!(!child_with_depth.contains("memory_search"));
+    }
+
+    #[test]
     fn session_unarchive_is_visible_in_root_and_hidden_in_child_views() {
         let root_view = runtime_tool_view();
         assert!(root_view.contains("session_unarchive"));
@@ -677,6 +720,7 @@ mod tests {
         assert!(!view.contains("sessions_history"));
         assert!(!view.contains("session_status"));
         assert!(!view.contains("session_events"));
+        assert!(!view.contains("memory_search"));
         assert!(!view.contains("session_archive"));
         assert!(!view.contains("session_recover"));
         assert!(!view.contains("session_unarchive"));

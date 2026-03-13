@@ -150,7 +150,16 @@ pub fn tool_catalog() -> ToolCatalog {
         description: "Fetch session events for a visible session",
         execution_kind: ToolExecutionKind::App,
         availability: ToolAvailability::Runtime,
-        provider_definition_builder: session_events_definition,
+            provider_definition_builder: session_events_definition,
+    });
+    descriptors.push(ToolDescriptor {
+        name: "memory_search",
+        provider_name: "memory_search",
+        aliases: &[],
+        description: "Search visible transcript memory across persisted session turns",
+        execution_kind: ToolExecutionKind::App,
+        availability: ToolAvailability::Runtime,
+        provider_definition_builder: memory_search_definition,
     });
     descriptors.push(ToolDescriptor {
         name: "sessions_history",
@@ -324,8 +333,8 @@ pub fn delegate_child_tool_view_for_config_with_delegate(
 fn tool_is_enabled_for_runtime_view(tool_name: &str, config: &ToolConfig) -> bool {
     match tool_name {
         "sessions_list" | "sessions_history" | "session_status" | "session_events"
-        | "session_archive" | "session_cancel" | "session_recover" | "session_unarchive"
-        | "session_wait" => config.sessions.enabled,
+        | "memory_search" | "session_archive" | "session_cancel" | "session_recover"
+        | "session_unarchive" | "session_wait" => config.sessions.enabled,
         "sessions_send" => config.messages.enabled,
         "delegate" | "delegate_async" => config.delegate.enabled,
         _ => true,
@@ -487,6 +496,56 @@ fn sessions_history_definition(descriptor: &ToolDescriptor) -> Value {
                     }
                 },
                 "required": ["session_id"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn memory_search_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Non-empty transcript text to search for within visible session memory."
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Optional visible session identifier to search exclusively."
+                    },
+                    "session_ids": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "minItems": 1,
+                        "description": "Optional visible session identifiers to search in one request."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "description": "Maximum transcript matches to return."
+                    },
+                    "excerpt_chars": {
+                        "type": "integer",
+                        "minimum": 40,
+                        "maximum": 400,
+                        "description": "Approximate match snippet length in characters."
+                    }
+                },
+                "required": ["query"],
+                "oneOf": [
+                    { "required": ["query", "session_id"] },
+                    { "required": ["query", "session_ids"] },
+                    { "required": ["query"] }
+                ],
                 "additionalProperties": false
             }
         }
