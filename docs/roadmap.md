@@ -200,9 +200,10 @@ Delivered in current baseline:
   - per-session runtime tool views derived from config
   - sqlite-backed session registry and session event history
   - durable terminal outcomes for delegated child sessions
-  - `sessions_list`, `sessions_history`, `session_status`, `session_events`, and `session_wait`
+  - `sessions_list`, `sessions_history`, `session_status`, `session_events`, `session_recover`, and `session_wait`
     with optional incremental event-tail return via `after_id`, draining unseen events through the
     current cursor and terminal completion
+  - explicit recovery of overdue queued async delegate children into durable failed terminal state
   - synchronous `delegate` orchestration with timeout/error mapping
   - asynchronous `delegate_async` queueing with immediate child session id return as the durable handle
   - daemon `run-turn` one-shot worker for delegated child execution

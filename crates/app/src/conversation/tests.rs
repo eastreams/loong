@@ -814,6 +814,63 @@ async fn child_session_hidden_session_wait_is_rejected_by_default_dispatcher() {
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
+async fn child_session_hidden_session_recover_is_rejected_by_default_dispatcher() {
+    let (config, db_path) = isolated_test_config("child-hidden-session-recover");
+    let repo = SessionRepository::new(&crate::memory::runtime_config::MemoryRuntimeConfig {
+        sqlite_path: Some(db_path),
+    })
+    .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create child");
+
+    let dispatcher = DefaultAppToolDispatcher::new(
+        crate::memory::runtime_config::MemoryRuntimeConfig {
+            sqlite_path: Some(config.memory.resolved_sqlite_path()),
+        },
+        config.tools.clone(),
+    );
+    let session_context = SessionContext::child(
+        "child-session",
+        "root-session",
+        crate::tools::planned_delegate_child_tool_view(),
+    );
+
+    let error = dispatcher
+        .execute_app_tool(
+            &session_context,
+            loongclaw_contracts::ToolCoreRequest {
+                tool_name: "session_recover".to_owned(),
+                payload: json!({
+                    "session_id": "child-session"
+                }),
+            },
+            None,
+        )
+        .await
+        .expect_err("child should not execute hidden session_recover");
+
+    assert!(
+        error.contains("tool_not_visible: session_recover"),
+        "expected tool_not_visible for session_recover, got: {error}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
 async fn child_session_forged_root_tool_view_still_rejects_hidden_sessions_list() {
     let (config, db_path) = isolated_test_config("child-forged-root-view-sessions-list");
     let repo = SessionRepository::new(&crate::memory::runtime_config::MemoryRuntimeConfig {

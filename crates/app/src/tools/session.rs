@@ -8,7 +8,10 @@ use crate::config::{SessionVisibility, ToolConfig};
 use crate::memory;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
-use crate::session::recovery::{observe_missing_recovery, recovery_json, SessionRecoveryRecord};
+use crate::session::recovery::{
+    build_queued_async_overdue_recovery_payload, observe_missing_recovery, recovery_json,
+    SessionRecoveryRecord, RECOVERY_EVENT_KIND, RECOVERY_KIND_QUEUED_ASYNC_OVERDUE_MARKED_FAILED,
+};
 
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
@@ -52,6 +55,15 @@ struct SessionDelegateStalenessRecord {
     deadline_at: i64,
 }
 
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionRecoverPlan {
+    queued_at: i64,
+    elapsed_seconds: u64,
+    timeout_seconds: u64,
+    deadline_at: i64,
+}
+
 #[cfg(test)]
 pub fn execute_session_tool_with_config(
     request: ToolCoreRequest,
@@ -91,6 +103,9 @@ pub fn execute_session_tool_with_policies(
             }
             "session_status" => {
                 execute_session_status(request.payload, current_session_id, config, tool_config)
+            }
+            "session_recover" => {
+                execute_session_recover(request.payload, current_session_id, config, tool_config)
             }
             other => Err(format!(
                 "app_tool_not_found: unknown session tool `{other}`"
@@ -218,6 +233,97 @@ fn execute_session_status(
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
         payload: session_inspection_payload(snapshot),
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn execute_session_recover(
+    payload: Value,
+    current_session_id: &str,
+    config: &MemoryRuntimeConfig,
+    tool_config: &ToolConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let target_session_id = required_payload_string(&payload, "session_id")?;
+    let repo = SessionRepository::new(config)?;
+    ensure_visible(
+        &repo,
+        current_session_id,
+        &target_session_id,
+        tool_config.sessions.visibility,
+    )?;
+    let snapshot = inspect_visible_session_with_policies(
+        &target_session_id,
+        current_session_id,
+        config,
+        tool_config,
+        10,
+    )?;
+    let recover_plan = build_session_recover_plan(&snapshot, current_unix_ts())?;
+    let recovery_error = format!(
+        "delegate_async_queued_overdue_marked_failed: queued delegate child exceeded timeout after {}s (threshold {}s)",
+        recover_plan.elapsed_seconds, recover_plan.timeout_seconds
+    );
+    let outcome = crate::tools::delegate::delegate_error_outcome(
+        snapshot.session.session_id.clone(),
+        snapshot.session.label.clone(),
+        recovery_error.clone(),
+        recover_plan.elapsed_seconds.saturating_mul(1_000),
+    );
+    let finalized = repo.finalize_session_terminal_if_current(
+        &target_session_id,
+        SessionState::Ready,
+        crate::session::repository::FinalizeSessionTerminalRequest {
+            state: SessionState::Failed,
+            last_error: Some(recovery_error.clone()),
+            event_kind: RECOVERY_EVENT_KIND.to_owned(),
+            actor_session_id: Some(current_session_id.to_owned()),
+            event_payload_json: build_queued_async_overdue_recovery_payload(
+                snapshot.session.label.as_deref(),
+                recover_plan.queued_at,
+                recover_plan.elapsed_seconds,
+                recover_plan.timeout_seconds,
+                recover_plan.deadline_at,
+                &recovery_error,
+            ),
+            outcome_status: outcome.status.clone(),
+            outcome_payload_json: outcome.payload.clone(),
+        },
+    )?;
+    if finalized.is_none() {
+        let latest = repo
+            .load_session_summary_with_legacy_fallback(&target_session_id)?
+            .ok_or_else(|| format!("session_not_found: `{target_session_id}`"))?;
+        return Err(format!(
+            "session_recover_state_changed: session `{target_session_id}` is no longer recoverable from state `{}`",
+            latest.state.as_str()
+        ));
+    }
+    let recovered_snapshot = inspect_visible_session_with_policies(
+        &target_session_id,
+        current_session_id,
+        config,
+        tool_config,
+        10,
+    )?;
+    let mut payload = session_inspection_payload(recovered_snapshot);
+    if let Some(object) = payload.as_object_mut() {
+        object.insert(
+            "recovery_action".to_owned(),
+            json!({
+                "kind": RECOVERY_KIND_QUEUED_ASYNC_OVERDUE_MARKED_FAILED,
+                "previous_state": "ready",
+                "next_state": "failed",
+                "reference": "queued",
+                "elapsed_seconds": recover_plan.elapsed_seconds,
+                "timeout_seconds": recover_plan.timeout_seconds,
+                "deadline_at": recover_plan.deadline_at,
+            }),
+        );
+    }
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload,
     })
 }
 
@@ -351,6 +457,73 @@ fn session_terminal_outcome_missing_reason(
     recovery: Option<&SessionRecoveryRecord>,
 ) -> Option<String> {
     recovery.map(|recovery| recovery.kind.clone())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn build_session_recover_plan(
+    snapshot: &SessionInspectionSnapshot,
+    now_ts: i64,
+) -> Result<SessionRecoverPlan, String> {
+    if snapshot.session.kind != SessionKind::DelegateChild {
+        return Err(format!(
+            "session_recover_not_supported: session `{}` is not a delegate child",
+            snapshot.session.session_id
+        ));
+    }
+    if snapshot.terminal_outcome.is_some() || session_state_is_terminal(snapshot.session.state) {
+        return Err(format!(
+            "session_recover_not_recoverable: session `{}` is already terminal",
+            snapshot.session.session_id
+        ));
+    }
+    let lifecycle =
+        session_delegate_lifecycle_at(&snapshot.session, snapshot.recent_events.as_slice(), now_ts)
+            .ok_or_else(|| {
+                format!(
+            "session_recover_not_recoverable: session `{}` is missing delegate lifecycle metadata",
+            snapshot.session.session_id
+        )
+            })?;
+    if lifecycle.mode != "async"
+        || lifecycle.phase != "queued"
+        || snapshot.session.state != SessionState::Ready
+    {
+        return Err(format!(
+            "session_recover_not_recoverable: session `{}` is not an overdue queued async child",
+            snapshot.session.session_id
+        ));
+    }
+    let queued_at = lifecycle.queued_at.ok_or_else(|| {
+        format!(
+            "session_recover_not_recoverable: session `{}` is missing queued timestamp",
+            snapshot.session.session_id
+        )
+    })?;
+    let staleness = lifecycle.staleness.ok_or_else(|| {
+        format!(
+            "session_recover_not_recoverable: session `{}` is missing staleness metadata",
+            snapshot.session.session_id
+        )
+    })?;
+    if staleness.state != "overdue" {
+        return Err(format!(
+            "session_recover_not_recoverable: session `{}` is not overdue",
+            snapshot.session.session_id
+        ));
+    }
+    let timeout_seconds = lifecycle.timeout_seconds.ok_or_else(|| {
+        format!(
+            "session_recover_not_recoverable: session `{}` is missing timeout metadata",
+            snapshot.session.session_id
+        )
+    })?;
+
+    Ok(SessionRecoverPlan {
+        queued_at,
+        elapsed_seconds: staleness.elapsed_seconds,
+        timeout_seconds,
+        deadline_at: staleness.deadline_at,
+    })
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -581,6 +754,7 @@ mod tests {
     use std::fs;
 
     use loongclaw_contracts::ToolCoreRequest;
+    use rusqlite::params;
     use serde_json::{json, Value};
 
     use crate::config::{SessionVisibility, ToolConfig};
@@ -604,6 +778,28 @@ mod tests {
         MemoryRuntimeConfig {
             sqlite_path: Some(db_path),
         }
+    }
+
+    fn overwrite_session_event_ts(
+        config: &MemoryRuntimeConfig,
+        session_id: &str,
+        event_kind: &str,
+        ts: i64,
+    ) {
+        let db_path = config
+            .sqlite_path
+            .as_ref()
+            .expect("sqlite path for session tools test");
+        let conn = rusqlite::Connection::open(db_path).expect("open sqlite db");
+        let updated = conn
+            .execute(
+                "UPDATE session_events
+                 SET ts = ?3
+                 WHERE session_id = ?1 AND event_kind = ?2",
+                params![session_id, event_kind, ts],
+            )
+            .expect("update session event ts");
+        assert!(updated > 0, "expected at least one updated event row");
     }
 
     #[test]
@@ -1017,6 +1213,184 @@ mod tests {
         assert_eq!(outcome.payload["recovery"]["source"], "none");
         assert!(outcome.payload["recovery"]["recovery_error"].is_null());
         assert!(outcome.payload["recovery"]["event_kind"].is_null());
+    }
+
+    #[test]
+    fn session_recover_marks_overdue_queued_async_child_failed() {
+        let config = isolated_memory_config("session-recover-overdue");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create child");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_queued".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "task": "research",
+                "label": "Child",
+                "timeout_seconds": 30
+            }),
+        })
+        .expect("append queued event");
+        overwrite_session_event_ts(
+            &config,
+            "child-session",
+            "delegate_queued",
+            super::current_unix_ts() - 90,
+        );
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_recover".to_owned(),
+                payload: json!({
+                    "session_id": "child-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_recover outcome");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["session"]["state"], "failed");
+        assert_eq!(outcome.payload["delegate_lifecycle"]["phase"], "failed");
+        assert!(outcome.payload["delegate_lifecycle"]["staleness"].is_null());
+        assert_eq!(outcome.payload["terminal_outcome_state"], "present");
+        assert_eq!(outcome.payload["terminal_outcome"]["status"], "error");
+        assert_eq!(
+            outcome.payload["recovery_action"]["kind"],
+            "queued_async_overdue_marked_failed"
+        );
+        assert_eq!(
+            outcome.payload["recent_events"]
+                .as_array()
+                .expect("recent events array")
+                .last()
+                .expect("latest recent event")["event_kind"],
+            "delegate_recovery_applied"
+        );
+    }
+
+    #[test]
+    fn session_recover_rejects_fresh_queued_child() {
+        let config = isolated_memory_config("session-recover-fresh");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create child");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_queued".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "task": "research",
+                "timeout_seconds": 60
+            }),
+        })
+        .expect("append queued event");
+
+        let error = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_recover".to_owned(),
+                payload: json!({
+                    "session_id": "child-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect_err("fresh queued child should be rejected");
+
+        assert!(
+            error.contains("session_recover_not_recoverable"),
+            "expected recoverability rejection, got: {error}"
+        );
+    }
+
+    #[test]
+    fn session_recover_rejects_running_child() {
+        let config = isolated_memory_config("session-recover-running");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create child");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_queued".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "task": "research",
+                "timeout_seconds": 30
+            }),
+        })
+        .expect("append queued event");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_started".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "task": "research",
+                "timeout_seconds": 30
+            }),
+        })
+        .expect("append started event");
+
+        let error = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_recover".to_owned(),
+                payload: json!({
+                    "session_id": "child-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect_err("running child should be rejected");
+
+        assert!(
+            error.contains("session_recover_not_recoverable"),
+            "expected recoverability rejection, got: {error}"
+        );
     }
 
     #[test]

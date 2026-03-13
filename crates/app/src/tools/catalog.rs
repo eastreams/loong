@@ -171,6 +171,15 @@ pub fn tool_catalog() -> ToolCatalog {
         provider_definition_builder: session_status_definition,
     });
     descriptors.push(ToolDescriptor {
+        name: "session_recover",
+        provider_name: "session_recover",
+        aliases: &[],
+        description: "Recover an overdue queued async delegate child session by marking it failed",
+        execution_kind: ToolExecutionKind::App,
+        availability: ToolAvailability::Runtime,
+        provider_definition_builder: session_recover_definition,
+    });
+    descriptors.push(ToolDescriptor {
         name: "session_wait",
         provider_name: "session_wait",
         aliases: &[],
@@ -279,7 +288,7 @@ pub fn delegate_child_tool_view_for_config_with_delegate(
 fn tool_is_enabled_for_runtime_view(tool_name: &str, config: &ToolConfig) -> bool {
     match tool_name {
         "sessions_list" | "sessions_history" | "session_status" | "session_events"
-        | "session_wait" => config.sessions.enabled,
+        | "session_recover" | "session_wait" => config.sessions.enabled,
         "delegate" | "delegate_async" => config.delegate.enabled,
         _ => true,
     }
@@ -457,6 +466,27 @@ fn session_status_definition(descriptor: &ToolDescriptor) -> Value {
                     "session_id": {
                         "type": "string",
                         "description": "Visible session identifier to inspect."
+                    }
+                },
+                "required": ["session_id"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn session_recover_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Visible delegate child session identifier to recover when it is still queued and overdue."
                     }
                 },
                 "required": ["session_id"],

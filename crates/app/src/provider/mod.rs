@@ -1139,6 +1139,7 @@ mod tests {
             expected.push("file_write");
         }
         expected.push("session_events");
+        expected.push("session_recover");
         expected.push("session_status");
         expected.push("session_wait");
         expected.push("sessions_history");
@@ -1189,6 +1190,7 @@ mod tests {
         assert!(names.contains(&"file_read"));
         assert!(names.contains(&"file_write"));
         assert!(!names.contains(&"session_events"));
+        assert!(!names.contains(&"session_recover"));
         assert!(names.contains(&"session_status"));
         assert!(names.contains(&"sessions_history"));
         assert!(!names.contains(&"session_wait"));

@@ -824,6 +824,101 @@ impl SessionRepository {
         })
     }
 
+    pub fn finalize_session_terminal_if_current(
+        &self,
+        session_id: &str,
+        expected_state: SessionState,
+        request: FinalizeSessionTerminalRequest,
+    ) -> Result<Option<FinalizeSessionTerminalResult>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let event_kind = normalize_required_text(&request.event_kind, "event_kind")?;
+        let outcome_status = normalize_required_text(&request.outcome_status, "outcome_status")?;
+        let actor_session_id = normalize_optional_text(request.actor_session_id);
+        let last_error = normalize_optional_text(request.last_error);
+        let event_payload_json = request.event_payload_json;
+        let outcome_payload_json = request.outcome_payload_json;
+        let encoded_event_payload = serde_json::to_string(&event_payload_json)
+            .map_err(|error| format!("encode session terminal event payload failed: {error}"))?;
+        let encoded_outcome_payload = serde_json::to_string(&outcome_payload_json)
+            .map_err(|error| format!("encode session terminal outcome payload failed: {error}"))?;
+        let ts = unix_ts_now();
+
+        let mut conn = self.open_connection()?;
+        let tx = conn.transaction().map_err(|error| {
+            format!("open conditional session terminal transaction failed: {error}")
+        })?;
+        let affected = tx
+            .execute(
+                "UPDATE sessions
+                 SET state = ?3, updated_at = ?4, last_error = ?5
+                 WHERE session_id = ?1 AND state = ?2",
+                params![
+                    session_id,
+                    expected_state.as_str(),
+                    request.state.as_str(),
+                    ts,
+                    last_error.clone(),
+                ],
+            )
+            .map_err(|error| {
+                format!("conditionally update session state in terminal finalize failed: {error}")
+            })?;
+        if affected == 0 {
+            return Ok(None);
+        }
+        tx.execute(
+            "INSERT INTO session_events(
+                session_id, event_kind, actor_session_id, payload_json, ts
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                session_id,
+                event_kind,
+                actor_session_id.clone(),
+                encoded_event_payload,
+                ts
+            ],
+        )
+        .map_err(|error| format!("insert conditional session terminal event failed: {error}"))?;
+        let event_id = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO session_terminal_outcomes(session_id, status, payload_json, recorded_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(session_id) DO UPDATE SET
+                status = excluded.status,
+                payload_json = excluded.payload_json,
+                recorded_at = excluded.recorded_at",
+            params![session_id, outcome_status, encoded_outcome_payload, ts],
+        )
+        .map_err(|error| {
+            format!("upsert session terminal outcome in conditional finalize failed: {error}")
+        })?;
+        tx.commit().map_err(|error| {
+            format!("commit conditional session terminal finalize failed: {error}")
+        })?;
+
+        let session = self.load_session(&session_id)?.ok_or_else(|| {
+            format!("session `{session_id}` missing after conditional terminal finalize")
+        })?;
+
+        Ok(Some(FinalizeSessionTerminalResult {
+            session,
+            event: SessionEventRecord {
+                id: event_id,
+                session_id: session_id.clone(),
+                event_kind,
+                actor_session_id,
+                payload_json: event_payload_json,
+                ts,
+            },
+            terminal_outcome: SessionTerminalOutcomeRecord {
+                session_id,
+                status: outcome_status,
+                payload_json: outcome_payload_json,
+                recorded_at: ts,
+            },
+        }))
+    }
+
     pub fn append_event(&self, event: NewSessionEvent) -> Result<SessionEventRecord, String> {
         let session_id = normalize_required_text(&event.session_id, "session_id")?;
         let event_kind = normalize_required_text(&event.event_kind, "event_kind")?;
@@ -1976,6 +2071,124 @@ mod tests {
             .expect("terminal outcome row");
         assert_eq!(outcome.status, "timeout");
         assert_eq!(outcome.payload_json["error"], "delegate_timeout");
+    }
+
+    #[test]
+    fn finalize_session_terminal_if_current_writes_state_event_and_outcome_when_state_matches() {
+        let config = isolated_memory_config("finalize-session-terminal-if-current");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create child");
+
+        let finalized = repo
+            .finalize_session_terminal_if_current(
+                "child-session",
+                SessionState::Ready,
+                FinalizeSessionTerminalRequest {
+                    state: SessionState::Failed,
+                    last_error: Some("delegate_timeout".to_owned()),
+                    event_kind: "delegate_recovery_applied".to_owned(),
+                    actor_session_id: Some("root-session".to_owned()),
+                    event_payload_json: json!({
+                        "kind": "queued_async_overdue_marked_failed",
+                        "reference": "queued"
+                    }),
+                    outcome_status: "error".to_owned(),
+                    outcome_payload_json: json!({
+                        "error": "delegate_timeout"
+                    }),
+                },
+            )
+            .expect("conditionally finalize session")
+            .expect("conditional finalize result");
+
+        assert_eq!(finalized.session.state, SessionState::Failed);
+        assert_eq!(
+            finalized.session.last_error.as_deref(),
+            Some("delegate_timeout")
+        );
+        assert_eq!(finalized.event.event_kind, "delegate_recovery_applied");
+        assert_eq!(finalized.terminal_outcome.status, "error");
+
+        let child = repo
+            .load_session("child-session")
+            .expect("load child session")
+            .expect("child session row");
+        assert_eq!(child.state, SessionState::Failed);
+        assert_eq!(child.last_error.as_deref(), Some("delegate_timeout"));
+
+        let events = repo
+            .list_recent_events("child-session", 10)
+            .expect("list child events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_kind, "delegate_recovery_applied");
+
+        let outcome = repo
+            .load_terminal_outcome("child-session")
+            .expect("load terminal outcome")
+            .expect("terminal outcome row");
+        assert_eq!(outcome.status, "error");
+        assert_eq!(outcome.payload_json["error"], "delegate_timeout");
+    }
+
+    #[test]
+    fn finalize_session_terminal_if_current_writes_nothing_when_state_does_not_match() {
+        let config = isolated_memory_config("finalize-session-terminal-if-current-noop");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create child");
+
+        let finalized = repo
+            .finalize_session_terminal_if_current(
+                "child-session",
+                SessionState::Ready,
+                FinalizeSessionTerminalRequest {
+                    state: SessionState::Failed,
+                    last_error: Some("delegate_timeout".to_owned()),
+                    event_kind: "delegate_recovery_applied".to_owned(),
+                    actor_session_id: Some("root-session".to_owned()),
+                    event_payload_json: json!({
+                        "kind": "queued_async_overdue_marked_failed",
+                        "reference": "queued"
+                    }),
+                    outcome_status: "error".to_owned(),
+                    outcome_payload_json: json!({
+                        "error": "delegate_timeout"
+                    }),
+                },
+            )
+            .expect("conditionally finalize session");
+
+        assert!(finalized.is_none());
+
+        let child = repo
+            .load_session("child-session")
+            .expect("load child session")
+            .expect("child session row");
+        assert_eq!(child.state, SessionState::Running);
+        assert!(child.last_error.is_none());
+
+        let events = repo
+            .list_recent_events("child-session", 10)
+            .expect("list child events");
+        assert!(events.is_empty());
+
+        let outcome = repo
+            .load_terminal_outcome("child-session")
+            .expect("load terminal outcome");
+        assert!(outcome.is_none());
     }
 
     #[test]
