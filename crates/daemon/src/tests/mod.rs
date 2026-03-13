@@ -167,3 +167,58 @@ fn render_channel_snapshots_text_reports_catalog_only_channels() {
     assert!(rendered.contains("catalog op send (slack-send) tracks_runtime=false"));
     assert!(rendered.contains("catalog op serve (slack-serve) tracks_runtime=true"));
 }
+
+#[test]
+fn build_channels_cli_json_payload_includes_full_channel_catalog() {
+    let config = mvp::config::LoongClawConfig::default();
+    let snapshots = mvp::channel::channel_status_snapshots(&config);
+    let catalog_only = mvp::channel::catalog_only_channel_entries(&snapshots);
+
+    let payload = build_channels_cli_json_payload("/tmp/loongclaw.toml", &snapshots, &catalog_only);
+    let encoded = serde_json::to_value(&payload).expect("serialize payload");
+
+    assert_eq!(
+        encoded.get("config").and_then(serde_json::Value::as_str),
+        Some("/tmp/loongclaw.toml")
+    );
+    assert_eq!(
+        encoded
+            .get("channel_catalog")
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::len),
+        Some(4)
+    );
+    assert_eq!(
+        encoded
+            .get("catalog_only_channels")
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::len),
+        Some(2)
+    );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("telegram")
+                    && entry
+                        .get("implementation_status")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("runtime_backed")
+            })
+    );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("discord")
+                    && entry
+                        .get("implementation_status")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("stub")
+            })
+    );
+}
