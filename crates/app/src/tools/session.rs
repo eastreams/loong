@@ -743,7 +743,27 @@ fn execute_session_unarchive(
         });
     }
 
-    Err("session_unarchive_batch_not_implemented".to_owned())
+    let mut results = Vec::with_capacity(request.target.session_ids.len());
+    for target_session_id in &request.target.session_ids {
+        results.push(execute_session_unarchive_batch_result(
+            target_session_id,
+            current_session_id,
+            config,
+            tool_config,
+            request.dry_run,
+        )?);
+    }
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: session_batch_payload(
+            "session_unarchive",
+            current_session_id,
+            request.dry_run,
+            request.target.session_ids.len(),
+            results,
+        ),
+    })
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -882,6 +902,119 @@ fn apply_session_unarchive_plan(
         inspection: session_inspection_payload(unarchived_snapshot),
         action: session_unarchive_action_json(unarchive_plan),
     })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn execute_session_unarchive_batch_result(
+    target_session_id: &str,
+    current_session_id: &str,
+    config: &MemoryRuntimeConfig,
+    tool_config: &ToolConfig,
+    dry_run: bool,
+) -> Result<SessionBatchResultRecord, String> {
+    let repo = SessionRepository::new(config)?;
+    if let Err(error) = ensure_visible(
+        &repo,
+        current_session_id,
+        target_session_id,
+        tool_config.sessions.visibility,
+    ) {
+        return Ok(session_batch_result(
+            target_session_id.to_owned(),
+            "skipped_not_visible",
+            Some(error),
+            None,
+            None,
+        ));
+    }
+
+    let snapshot = match inspect_visible_session_with_policies(
+        target_session_id,
+        current_session_id,
+        config,
+        tool_config,
+        10,
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(error) if is_session_visibility_skip_error(&error) => {
+            return Ok(session_batch_result(
+                target_session_id.to_owned(),
+                "skipped_not_visible",
+                Some(error),
+                None,
+                None,
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+    let inspection = session_inspection_payload(snapshot.clone());
+    let unarchive_plan = match build_session_unarchive_plan(&snapshot) {
+        Ok(plan) => plan,
+        Err(error) if error.starts_with("session_unarchive_not_unarchivable:") => {
+            return Ok(session_batch_result(
+                target_session_id.to_owned(),
+                "skipped_not_archived",
+                Some(error),
+                None,
+                Some(inspection),
+            ));
+        }
+        Err(error) => {
+            return Ok(session_batch_result(
+                target_session_id.to_owned(),
+                "skipped_not_archivable",
+                Some(error),
+                None,
+                Some(inspection),
+            ));
+        }
+    };
+    let action = session_unarchive_action_json(&unarchive_plan);
+    if dry_run {
+        return Ok(session_batch_result(
+            target_session_id.to_owned(),
+            "would_apply",
+            None,
+            Some(action),
+            Some(inspection),
+        ));
+    }
+
+    match apply_session_unarchive_plan(
+        &repo,
+        target_session_id,
+        current_session_id,
+        config,
+        tool_config,
+        &snapshot,
+        &unarchive_plan,
+    ) {
+        Ok(outcome) => Ok(session_batch_result(
+            target_session_id.to_owned(),
+            "applied",
+            None,
+            Some(outcome.action),
+            Some(outcome.inspection),
+        )),
+        Err(error) if error.starts_with("session_unarchive_state_changed:") => {
+            Ok(session_batch_result(
+                target_session_id.to_owned(),
+                "skipped_state_changed",
+                Some(error),
+                Some(action),
+                inspect_visible_session_with_policies(
+                    target_session_id,
+                    current_session_id,
+                    config,
+                    tool_config,
+                    10,
+                )
+                .ok()
+                .map(session_inspection_payload),
+            ))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -5083,6 +5216,277 @@ mod tests {
 
         assert_eq!(status.payload["session"]["archived"], false);
         assert!(status.payload["session"]["archived_at"].is_null());
+    }
+
+    #[test]
+    fn session_unarchive_batch_dry_run_reports_mixed_results_without_mutation() {
+        let config = isolated_memory_config("session-unarchive-batch-dry-run");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "ready-to-unarchive".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Archived".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create archivable child");
+        repo.create_session(NewSessionRecord {
+            session_id: "already-visible".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Visible".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create visible child");
+        repo.create_session(NewSessionRecord {
+            session_id: "running-child".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Running".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create running child");
+        repo.create_session(NewSessionRecord {
+            session_id: "hidden-root".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Hidden".to_owned()),
+            state: SessionState::Completed,
+        })
+        .expect("create hidden root");
+
+        for session_id in ["ready-to-unarchive", "already-visible"] {
+            repo.finalize_session_terminal(
+                session_id,
+                FinalizeSessionTerminalRequest {
+                    state: SessionState::Completed,
+                    last_error: None,
+                    event_kind: "delegate_completed".to_owned(),
+                    actor_session_id: Some("root-session".to_owned()),
+                    event_payload_json: json!({ "result": "ok" }),
+                    outcome_status: "ok".to_owned(),
+                    outcome_payload_json: json!({ "child_session_id": session_id }),
+                },
+            )
+            .expect("finalize child");
+        }
+        execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_archive".to_owned(),
+                payload: json!({
+                    "session_id": "ready-to-unarchive"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("archive ready-to-unarchive child");
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_unarchive".to_owned(),
+                payload: json!({
+                    "session_ids": ["ready-to-unarchive", "already-visible", "running-child", "hidden-root"],
+                    "dry_run": true
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_unarchive batch dry_run outcome");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["tool"], "session_unarchive");
+        assert_eq!(outcome.payload["dry_run"], true);
+        assert_eq!(outcome.payload["requested_count"], 4);
+        assert_eq!(outcome.payload["result_counts"]["would_apply"], 1);
+        assert_eq!(
+            outcome.payload["result_counts"]["skipped_not_archived"],
+            1
+        );
+        assert_eq!(
+            outcome.payload["result_counts"]["skipped_not_archivable"],
+            1
+        );
+        assert_eq!(
+            outcome.payload["result_counts"]["skipped_not_visible"],
+            1
+        );
+
+        let ready = batch_result(&outcome.payload, "ready-to-unarchive");
+        assert_eq!(ready["result"], "would_apply");
+        assert_eq!(ready["inspection"]["session"]["archived"], true);
+        assert_eq!(ready["action"]["kind"], "session_unarchived");
+
+        let visible = batch_result(&outcome.payload, "already-visible");
+        assert_eq!(visible["result"], "skipped_not_archived");
+        assert_eq!(visible["inspection"]["session"]["archived"], false);
+
+        let running = batch_result(&outcome.payload, "running-child");
+        assert_eq!(running["result"], "skipped_not_archivable");
+        assert_eq!(running["inspection"]["session"]["state"], "running");
+
+        let hidden = batch_result(&outcome.payload, "hidden-root");
+        assert_eq!(hidden["result"], "skipped_not_visible");
+        assert!(hidden["inspection"].is_null());
+
+        assert!(repo
+            .load_session_summary_with_legacy_fallback("ready-to-unarchive")
+            .expect("load archived summary")
+            .expect("archived session")
+            .archived_at
+            .is_some());
+    }
+
+    #[test]
+    fn session_unarchive_batch_apply_reports_partial_success() {
+        let config = isolated_memory_config("session-unarchive-batch-apply");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "ready-to-unarchive".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Archived".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create archivable child");
+        repo.create_session(NewSessionRecord {
+            session_id: "already-visible".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Visible".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create visible child");
+        repo.create_session(NewSessionRecord {
+            session_id: "running-child".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Running".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create running child");
+        repo.create_session(NewSessionRecord {
+            session_id: "hidden-root".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Hidden".to_owned()),
+            state: SessionState::Completed,
+        })
+        .expect("create hidden root");
+
+        for session_id in ["ready-to-unarchive", "already-visible"] {
+            repo.finalize_session_terminal(
+                session_id,
+                FinalizeSessionTerminalRequest {
+                    state: SessionState::Completed,
+                    last_error: None,
+                    event_kind: "delegate_completed".to_owned(),
+                    actor_session_id: Some("root-session".to_owned()),
+                    event_payload_json: json!({ "result": "ok" }),
+                    outcome_status: "ok".to_owned(),
+                    outcome_payload_json: json!({ "child_session_id": session_id }),
+                },
+            )
+            .expect("finalize child");
+        }
+        execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_archive".to_owned(),
+                payload: json!({
+                    "session_id": "ready-to-unarchive"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("archive ready-to-unarchive child");
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_unarchive".to_owned(),
+                payload: json!({
+                    "session_ids": ["ready-to-unarchive", "already-visible", "running-child", "hidden-root"]
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_unarchive batch apply outcome");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["tool"], "session_unarchive");
+        assert_eq!(outcome.payload["dry_run"], false);
+        assert_eq!(outcome.payload["requested_count"], 4);
+        assert_eq!(outcome.payload["result_counts"]["applied"], 1);
+        assert_eq!(
+            outcome.payload["result_counts"]["skipped_not_archived"],
+            1
+        );
+        assert_eq!(
+            outcome.payload["result_counts"]["skipped_not_archivable"],
+            1
+        );
+        assert_eq!(
+            outcome.payload["result_counts"]["skipped_not_visible"],
+            1
+        );
+
+        let ready = batch_result(&outcome.payload, "ready-to-unarchive");
+        assert_eq!(ready["result"], "applied");
+        assert_eq!(ready["inspection"]["session"]["archived"], false);
+        assert_eq!(ready["action"]["kind"], "session_unarchived");
+        assert_eq!(
+            ready["inspection"]["recent_events"]
+                .as_array()
+                .expect("ready recent events")
+                .last()
+                .expect("ready latest event")["event_kind"],
+            "session_unarchived"
+        );
+
+        let visible = batch_result(&outcome.payload, "already-visible");
+        assert_eq!(visible["result"], "skipped_not_archived");
+        assert_eq!(visible["inspection"]["session"]["archived"], false);
+
+        let running = batch_result(&outcome.payload, "running-child");
+        assert_eq!(running["result"], "skipped_not_archivable");
+        assert_eq!(running["inspection"]["session"]["state"], "running");
+
+        let hidden = batch_result(&outcome.payload, "hidden-root");
+        assert_eq!(hidden["result"], "skipped_not_visible");
+        assert!(hidden["inspection"].is_null());
+
+        assert_eq!(
+            repo.load_session_summary_with_legacy_fallback("ready-to-unarchive")
+                .expect("load ready summary")
+                .expect("ready session")
+                .archived_at,
+            None
+        );
+        assert_eq!(
+            repo.load_session_summary_with_legacy_fallback("already-visible")
+                .expect("load visible summary")
+                .expect("visible session")
+                .archived_at,
+            None
+        );
     }
 
     #[test]
