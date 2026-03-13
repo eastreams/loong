@@ -14,7 +14,24 @@ pub struct ChannelCatalogOperation {
     pub id: &'static str,
     pub label: &'static str,
     pub command: &'static str,
+    pub availability: ChannelCatalogOperationAvailability,
     pub tracks_runtime: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelCatalogOperationAvailability {
+    Implemented,
+    Stub,
+}
+
+impl ChannelCatalogOperationAvailability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Implemented => "implemented",
+            Self::Stub => "stub",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -180,6 +197,7 @@ const TELEGRAM_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperatio
     id: "serve",
     label: "reply loop",
     command: "telegram-serve",
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
 };
 
@@ -201,6 +219,7 @@ const FEISHU_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: "send",
     label: "direct send",
     command: "feishu-send",
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
 };
 
@@ -208,6 +227,7 @@ const FEISHU_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
     id: "serve",
     label: "webhook reply server",
     command: "feishu-serve",
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
 };
 
@@ -237,6 +257,7 @@ const DISCORD_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
     id: "send",
     label: "direct send",
     command: "discord-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: false,
 };
 
@@ -244,6 +265,7 @@ const DISCORD_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
     id: "serve",
     label: "gateway reply loop",
     command: "discord-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
 };
 
@@ -260,6 +282,7 @@ const SLACK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: "send",
     label: "direct send",
     command: "slack-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: false,
 };
 
@@ -267,6 +290,7 @@ const SLACK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: "serve",
     label: "events reply loop",
     command: "slack-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
 };
 
@@ -1055,6 +1079,7 @@ mod tests {
     #[test]
     fn resolve_channel_catalog_entry_returns_stub_metadata_for_alias_lookup() {
         let discord = resolve_channel_catalog_entry("discord-bot").expect("discord stub entry");
+        let encoded = serde_json::to_value(&discord).expect("serialize discord entry");
 
         assert_eq!(discord.id, "discord");
         assert_eq!(
@@ -1064,6 +1089,19 @@ mod tests {
         assert_eq!(discord.transport, "discord_gateway");
         assert_eq!(discord.operations[0].command, "discord-send");
         assert_eq!(discord.operations[1].command, "discord-serve");
+        assert_eq!(
+            encoded
+                .get("operations")
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.get("availability"))
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                }),
+            Some(vec!["stub", "stub"])
+        );
     }
 
     #[test]
@@ -1100,6 +1138,7 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "feishu")
             .expect("feishu catalog entry");
+        let encoded = serde_json::to_value(feishu).expect("serialize feishu entry");
 
         assert_eq!(
             feishu.implementation_status,
@@ -1109,6 +1148,19 @@ mod tests {
         assert_eq!(feishu.operations.len(), 2);
         assert_eq!(feishu.operations[0].command, "feishu-send");
         assert_eq!(feishu.operations[1].command, "feishu-serve");
+        assert_eq!(
+            encoded
+                .get("operations")
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.get("availability"))
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                }),
+            Some(vec!["implemented", "implemented"])
+        );
     }
 
     #[test]
@@ -1299,6 +1351,7 @@ mod tests {
                     id: "serve",
                     label: "reply loop",
                     command: "telegram-serve",
+                    availability: ChannelCatalogOperationAvailability::Implemented,
                     tracks_runtime: true,
                 }],
             },
@@ -1317,6 +1370,7 @@ mod tests {
                     id: "send",
                     label: "direct send",
                     command: "discord-send",
+                    availability: ChannelCatalogOperationAvailability::Stub,
                     tracks_runtime: false,
                 }],
             },

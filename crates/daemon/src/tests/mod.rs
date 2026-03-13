@@ -164,13 +164,21 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
     assert!(rendered.contains(
         "Discord [discord] implementation_status=stub capabilities=send,serve,runtime_tracking aliases=discord-bot transport=discord_gateway"
     ));
-    assert!(rendered.contains("catalog op send (discord-send) tracks_runtime=false"));
-    assert!(rendered.contains("catalog op serve (discord-serve) tracks_runtime=true"));
+    assert!(
+        rendered.contains("catalog op send (discord-send) availability=stub tracks_runtime=false")
+    );
+    assert!(
+        rendered.contains("catalog op serve (discord-serve) availability=stub tracks_runtime=true")
+    );
     assert!(rendered.contains(
         "Slack [slack] implementation_status=stub capabilities=send,serve,runtime_tracking aliases=slack-bot transport=slack_events_api"
     ));
-    assert!(rendered.contains("catalog op send (slack-send) tracks_runtime=false"));
-    assert!(rendered.contains("catalog op serve (slack-serve) tracks_runtime=true"));
+    assert!(
+        rendered.contains("catalog op send (slack-send) availability=stub tracks_runtime=false")
+    );
+    assert!(
+        rendered.contains("catalog op serve (slack-serve) availability=stub tracks_runtime=true")
+    );
 }
 
 #[test]
@@ -256,6 +264,17 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                         .get("implementation_status")
                         .and_then(serde_json::Value::as_str)
                         == Some("stub")
+                    && entry
+                        .get("operations")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(|item| item.get("availability"))
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["stub", "stub"])
             })
     );
 }

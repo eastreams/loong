@@ -1107,8 +1107,11 @@ fn render_channel_surfaces_text(
             push_channel_surface_header(&mut lines, surface);
             for operation in &surface.catalog.operations {
                 lines.push(format!(
-                    "  catalog op {} ({}) tracks_runtime={}",
-                    operation.id, operation.command, operation.tracks_runtime
+                    "  catalog op {} ({}) availability={} tracks_runtime={}",
+                    operation.id,
+                    operation.command,
+                    operation.availability.as_str(),
+                    operation.tracks_runtime
                 ));
             }
         }
