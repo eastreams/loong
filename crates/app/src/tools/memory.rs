@@ -1,10 +1,10 @@
 use loongclaw_contracts::ToolCoreOutcome;
 use serde_json::{json, Value};
 
-use crate::config::ToolConfig;
-use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::config::SessionVisibility;
+use crate::config::ToolConfig;
+use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::SessionRepository;
 
@@ -115,7 +115,10 @@ fn parse_memory_search_request(payload: Value) -> Result<MemorySearchRequest, St
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let session_ids = object.get("session_ids").map(parse_session_ids).transpose()?;
+    let session_ids = object
+        .get("session_ids")
+        .map(parse_session_ids)
+        .transpose()?;
     if session_id.is_some() && session_ids.is_some() {
         return Err(
             "memory_search_invalid_request: session_id and session_ids are mutually exclusive"
@@ -127,10 +130,7 @@ fn parse_memory_search_request(payload: Value) -> Result<MemorySearchRequest, St
         query,
         session_id,
         session_ids,
-        limit: object
-            .get("limit")
-            .and_then(Value::as_u64)
-            .unwrap_or(20) as usize,
+        limit: object.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize,
         excerpt_chars: object
             .get("excerpt_chars")
             .and_then(Value::as_u64)
@@ -169,7 +169,12 @@ fn resolve_search_scope(
     tool_config: &ToolConfig,
 ) -> Result<(&'static str, Vec<String>, Vec<Value>), String> {
     if let Some(session_id) = &request.session_id {
-        ensure_target_visible(repo, current_session_id, session_id, tool_config.sessions.visibility)?;
+        ensure_target_visible(
+            repo,
+            current_session_id,
+            session_id,
+            tool_config.sessions.visibility,
+        )?;
         return Ok(("single", vec![session_id.clone()], Vec::new()));
     }
 
@@ -250,7 +255,9 @@ fn classify_target_visibility(
 
     let is_visible = match visibility {
         SessionVisibility::SelfOnly => false,
-        SessionVisibility::Children => repo.is_session_visible(current_session_id, target_session_id)?,
+        SessionVisibility::Children => {
+            repo.is_session_visible(current_session_id, target_session_id)?
+        }
     };
     if is_visible {
         Ok(TargetVisibility::Visible)
@@ -369,8 +376,13 @@ mod tests {
 
         append_turn_direct("root-session", "user", "timeout budget root", &config)
             .expect("append root turn");
-        append_turn_direct("child-session", "assistant", "timeout budget child", &config)
-            .expect("append child turn");
+        append_turn_direct(
+            "child-session",
+            "assistant",
+            "timeout budget child",
+            &config,
+        )
+        .expect("append child turn");
         append_turn_direct("other-root", "assistant", "timeout budget hidden", &config)
             .expect("append hidden turn");
 
@@ -389,7 +401,9 @@ mod tests {
 
         assert_eq!(outcome.payload["scope"]["mode"], "visible");
         assert_eq!(outcome.payload["returned_count"], 2);
-        let matches = outcome.payload["matches"].as_array().expect("matches array");
+        let matches = outcome.payload["matches"]
+            .as_array()
+            .expect("matches array");
         let session_ids: Vec<&str> = matches
             .iter()
             .filter_map(|item| item.get("session_id"))
@@ -474,8 +488,13 @@ mod tests {
         })
         .expect("create hidden");
 
-        append_turn_direct("child-session", "assistant", "timeout budget child", &config)
-            .expect("append child turn");
+        append_turn_direct(
+            "child-session",
+            "assistant",
+            "timeout budget child",
+            &config,
+        )
+        .expect("append child turn");
 
         let outcome = execute_app_tool_with_config(
             ToolCoreRequest {
@@ -525,8 +544,13 @@ mod tests {
             state: SessionState::Ready,
         })
         .expect("create archived child");
-        append_turn_direct("archived-child", "assistant", "restore inventory marker", &config)
-            .expect("append archived turn");
+        append_turn_direct(
+            "archived-child",
+            "assistant",
+            "restore inventory marker",
+            &config,
+        )
+        .expect("append archived turn");
         archive_completed_session(&repo, "archived-child", "root-session");
 
         let outcome = execute_app_tool_with_config(
@@ -542,7 +566,9 @@ mod tests {
         )
         .expect("memory_search outcome");
 
-        let matches = outcome.payload["matches"].as_array().expect("matches array");
+        let matches = outcome.payload["matches"]
+            .as_array()
+            .expect("matches array");
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0]["session_id"], "archived-child");
     }
@@ -574,7 +600,10 @@ mod tests {
         .expect("legacy memory_search outcome");
 
         assert_eq!(outcome.payload["returned_count"], 1);
-        assert_eq!(outcome.payload["matches"][0]["session_id"], "delegate:legacy-child");
+        assert_eq!(
+            outcome.payload["matches"][0]["session_id"],
+            "delegate:legacy-child"
+        );
     }
 
     #[test]
@@ -614,7 +643,12 @@ mod tests {
         )
         .expect("memory_search outcome");
 
-        let matches = outcome.payload["matches"].as_array().expect("matches array");
-        assert!(matches.is_empty(), "session events should not be searchable transcript hits");
+        let matches = outcome.payload["matches"]
+            .as_array()
+            .expect("matches array");
+        assert!(
+            matches.is_empty(),
+            "session events should not be searchable transcript hits"
+        );
     }
 }

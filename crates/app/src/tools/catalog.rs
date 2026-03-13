@@ -150,7 +150,7 @@ pub fn tool_catalog() -> ToolCatalog {
         description: "Fetch session events for a visible session",
         execution_kind: ToolExecutionKind::App,
         availability: ToolAvailability::Runtime,
-            provider_definition_builder: session_events_definition,
+        provider_definition_builder: session_events_definition,
     });
     descriptors.push(ToolDescriptor {
         name: "memory_search",

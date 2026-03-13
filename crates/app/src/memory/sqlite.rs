@@ -255,7 +255,9 @@ pub(super) fn search_transcript_direct(
     );
 
     let mut params = Vec::with_capacity(session_ids.len() + 2);
-    params.push(rusqlite::types::Value::from(format!("%{normalized_query}%")));
+    params.push(rusqlite::types::Value::from(format!(
+        "%{normalized_query}%"
+    )));
     params.extend(
         session_ids
             .iter()
@@ -285,8 +287,7 @@ pub(super) fn search_transcript_direct(
 
     let mut matches = Vec::new();
     for row in rows {
-        matches
-            .push(row.map_err(|error| format!("decode transcript search row failed: {error}"))?);
+        matches.push(row.map_err(|error| format!("decode transcript search row failed: {error}"))?);
     }
     Ok(matches)
 }

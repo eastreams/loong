@@ -299,8 +299,13 @@ mod tests {
             .expect("append first match");
         append_turn_direct("session-b", "assistant", "no relevant text here", &config)
             .expect("append unrelated turn");
-        append_turn_direct("session-a", "assistant", "latest timeout budget update", &config)
-            .expect("append latest match");
+        append_turn_direct(
+            "session-a",
+            "assistant",
+            "latest timeout budget update",
+            &config,
+        )
+        .expect("append latest match");
 
         let matches = search_transcript_direct(
             &["session-a".to_owned(), "session-b".to_owned()],
@@ -344,12 +349,16 @@ mod tests {
             sqlite_path: Some(db_path.clone()),
         };
 
-        append_turn_direct("session-a", "user", "archive inventory", &config)
-            .expect("append turn");
+        append_turn_direct("session-a", "user", "archive inventory", &config).expect("append turn");
 
-        let matches =
-            search_transcript_direct(&["session-a".to_owned()], "timeout budget", 20, 120, &config)
-                .expect("search transcript");
+        let matches = search_transcript_direct(
+            &["session-a".to_owned()],
+            "timeout budget",
+            20,
+            120,
+            &config,
+        )
+        .expect("search transcript");
 
         assert!(matches.is_empty(), "non-matching turns should be excluded");
 
