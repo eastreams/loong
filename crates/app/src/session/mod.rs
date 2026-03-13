@@ -4,6 +4,26 @@ pub mod recovery;
 #[cfg(feature = "memory-sqlite")]
 pub mod repository;
 
+pub(crate) const DELEGATE_CANCEL_REQUESTED_EVENT_KIND: &str = "delegate_cancel_requested";
+pub(crate) const DELEGATE_CANCELLED_EVENT_KIND: &str = "delegate_cancelled";
+pub(crate) const DELEGATE_CANCEL_REASON_OPERATOR_REQUESTED: &str = "operator_requested";
+pub(crate) const DELEGATE_CANCELLED_ERROR_PREFIX: &str = "delegate_cancelled:";
+
+pub(crate) fn delegate_cancelled_error(reason: &str) -> String {
+    format!(
+        "{DELEGATE_CANCELLED_ERROR_PREFIX} {}",
+        reason.trim().trim_matches(':')
+    )
+}
+
+pub(crate) fn parse_delegate_cancelled_reason(error: &str) -> Option<String> {
+    error
+        .strip_prefix(DELEGATE_CANCELLED_ERROR_PREFIX)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 #[cfg(all(test, feature = "memory-sqlite"))]
 mod recovery_tests {
     use serde_json::json;

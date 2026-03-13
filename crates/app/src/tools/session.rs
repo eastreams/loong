@@ -12,6 +12,11 @@ use crate::session::recovery::{
     build_queued_async_overdue_recovery_payload, observe_missing_recovery, recovery_json,
     SessionRecoveryRecord, RECOVERY_EVENT_KIND, RECOVERY_KIND_QUEUED_ASYNC_OVERDUE_MARKED_FAILED,
 };
+#[cfg(feature = "memory-sqlite")]
+use crate::session::{
+    delegate_cancelled_error, DELEGATE_CANCELLED_EVENT_KIND,
+    DELEGATE_CANCEL_REASON_OPERATOR_REQUESTED, DELEGATE_CANCEL_REQUESTED_EVENT_KIND,
+};
 
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
@@ -43,6 +48,7 @@ struct SessionDelegateLifecycleRecord {
     started_at: Option<i64>,
     timeout_seconds: Option<u64>,
     staleness: Option<SessionDelegateStalenessRecord>,
+    cancellation: Option<SessionDelegateCancellationRecord>,
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -57,11 +63,27 @@ struct SessionDelegateStalenessRecord {
 
 #[cfg(feature = "memory-sqlite")]
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionDelegateCancellationRecord {
+    state: &'static str,
+    reference: String,
+    requested_at: i64,
+    reason: String,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionRecoverPlan {
     queued_at: i64,
     elapsed_seconds: u64,
     timeout_seconds: u64,
     deadline_at: i64,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SessionCancelPlan {
+    Queued,
+    Running,
 }
 
 #[cfg(test)]
@@ -103,6 +125,9 @@ pub fn execute_session_tool_with_policies(
             }
             "session_status" => {
                 execute_session_status(request.payload, current_session_id, config, tool_config)
+            }
+            "session_cancel" => {
+                execute_session_cancel(request.payload, current_session_id, config, tool_config)
             }
             "session_recover" => {
                 execute_session_recover(request.payload, current_session_id, config, tool_config)
@@ -328,6 +353,142 @@ fn execute_session_recover(
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn execute_session_cancel(
+    payload: Value,
+    current_session_id: &str,
+    config: &MemoryRuntimeConfig,
+    tool_config: &ToolConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let target_session_id = required_payload_string(&payload, "session_id")?;
+    let repo = SessionRepository::new(config)?;
+    ensure_visible(
+        &repo,
+        current_session_id,
+        &target_session_id,
+        tool_config.sessions.visibility,
+    )?;
+    let snapshot = inspect_visible_session_with_policies(
+        &target_session_id,
+        current_session_id,
+        config,
+        tool_config,
+        10,
+    )?;
+
+    match build_session_cancel_plan(&snapshot)? {
+        SessionCancelPlan::Queued => {
+            let cancel_error = delegate_cancelled_error(DELEGATE_CANCEL_REASON_OPERATOR_REQUESTED);
+            let outcome = crate::tools::delegate::delegate_error_outcome(
+                snapshot.session.session_id.clone(),
+                snapshot.session.label.clone(),
+                cancel_error.clone(),
+                0,
+            );
+            let finalized = repo.finalize_session_terminal_if_current(
+                &target_session_id,
+                SessionState::Ready,
+                crate::session::repository::FinalizeSessionTerminalRequest {
+                    state: SessionState::Failed,
+                    last_error: Some(cancel_error),
+                    event_kind: DELEGATE_CANCELLED_EVENT_KIND.to_owned(),
+                    actor_session_id: Some(current_session_id.to_owned()),
+                    event_payload_json: json!({
+                        "reference": "queued",
+                        "cancel_reason": DELEGATE_CANCEL_REASON_OPERATOR_REQUESTED,
+                    }),
+                    outcome_status: outcome.status.clone(),
+                    outcome_payload_json: outcome.payload.clone(),
+                },
+            )?;
+            if finalized.is_none() {
+                let latest = repo
+                    .load_session_summary_with_legacy_fallback(&target_session_id)?
+                    .ok_or_else(|| format!("session_not_found: `{target_session_id}`"))?;
+                return Err(format!(
+                    "session_cancel_state_changed: session `{target_session_id}` is no longer cancellable from state `{}`",
+                    latest.state.as_str()
+                ));
+            }
+
+            let cancelled_snapshot = inspect_visible_session_with_policies(
+                &target_session_id,
+                current_session_id,
+                config,
+                tool_config,
+                10,
+            )?;
+            let mut response_payload = session_inspection_payload(cancelled_snapshot);
+            if let Some(object) = response_payload.as_object_mut() {
+                object.insert(
+                    "cancel_action".to_owned(),
+                    json!({
+                        "kind": "queued_async_cancelled",
+                        "previous_state": "ready",
+                        "next_state": "failed",
+                        "reference": "queued",
+                        "reason": DELEGATE_CANCEL_REASON_OPERATOR_REQUESTED,
+                    }),
+                );
+            }
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: response_payload,
+            })
+        }
+        SessionCancelPlan::Running => {
+            let requested = repo.transition_session_with_event_if_current(
+                &target_session_id,
+                crate::session::repository::TransitionSessionWithEventIfCurrentRequest {
+                    expected_state: SessionState::Running,
+                    next_state: SessionState::Running,
+                    last_error: None,
+                    event_kind: DELEGATE_CANCEL_REQUESTED_EVENT_KIND.to_owned(),
+                    actor_session_id: Some(current_session_id.to_owned()),
+                    event_payload_json: json!({
+                        "reference": "running",
+                        "cancel_reason": DELEGATE_CANCEL_REASON_OPERATOR_REQUESTED,
+                    }),
+                },
+            )?;
+            if requested.is_none() {
+                let latest = repo
+                    .load_session_summary_with_legacy_fallback(&target_session_id)?
+                    .ok_or_else(|| format!("session_not_found: `{target_session_id}`"))?;
+                return Err(format!(
+                    "session_cancel_state_changed: session `{target_session_id}` is no longer cancellable from state `{}`",
+                    latest.state.as_str()
+                ));
+            }
+
+            let requested_snapshot = inspect_visible_session_with_policies(
+                &target_session_id,
+                current_session_id,
+                config,
+                tool_config,
+                10,
+            )?;
+            let mut response_payload = session_inspection_payload(requested_snapshot);
+            if let Some(object) = response_payload.as_object_mut() {
+                object.insert(
+                    "cancel_action".to_owned(),
+                    json!({
+                        "kind": "running_async_cancel_requested",
+                        "previous_state": "running",
+                        "next_state": "running",
+                        "reference": "running",
+                        "reason": DELEGATE_CANCEL_REASON_OPERATOR_REQUESTED,
+                    }),
+                );
+            }
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: response_payload,
+            })
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
 pub(super) fn inspect_visible_session_with_policies(
     target_session_id: &str,
     current_session_id: &str,
@@ -527,6 +688,49 @@ fn build_session_recover_plan(
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn build_session_cancel_plan(
+    snapshot: &SessionInspectionSnapshot,
+) -> Result<SessionCancelPlan, String> {
+    if snapshot.session.kind != SessionKind::DelegateChild {
+        return Err(format!(
+            "session_cancel_not_supported: session `{}` is not a delegate child",
+            snapshot.session.session_id
+        ));
+    }
+    if snapshot.terminal_outcome.is_some() || session_state_is_terminal(snapshot.session.state) {
+        return Err(format!(
+            "session_cancel_not_cancellable: session `{}` is already terminal",
+            snapshot.session.session_id
+        ));
+    }
+    let lifecycle = session_delegate_lifecycle_at(
+        &snapshot.session,
+        snapshot.recent_events.as_slice(),
+        current_unix_ts(),
+    )
+    .ok_or_else(|| {
+        format!(
+            "session_cancel_not_cancellable: session `{}` is missing delegate lifecycle metadata",
+            snapshot.session.session_id
+        )
+    })?;
+    if lifecycle.mode != "async" {
+        return Err(format!(
+            "session_cancel_not_supported: session `{}` is not an async delegate child",
+            snapshot.session.session_id
+        ));
+    }
+    match (snapshot.session.state, lifecycle.phase) {
+        (SessionState::Ready, "queued") => Ok(SessionCancelPlan::Queued),
+        (SessionState::Running, "running") => Ok(SessionCancelPlan::Running),
+        _ => Err(format!(
+            "session_cancel_not_cancellable: session `{}` is not queued or running",
+            snapshot.session.session_id
+        )),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn session_delegate_lifecycle_at(
     session: &SessionSummaryRecord,
     recent_events: &[SessionEventRecord],
@@ -540,6 +744,7 @@ fn session_delegate_lifecycle_at(
     let mut started_at = None;
     let mut queued_timeout_seconds = None;
     let mut started_timeout_seconds = None;
+    let mut cancellation = None;
     for event in recent_events {
         match event.event_kind.as_str() {
             "delegate_queued" => {
@@ -555,6 +760,28 @@ fn session_delegate_lifecycle_at(
                     .payload_json
                     .get("timeout_seconds")
                     .and_then(Value::as_u64);
+            }
+            DELEGATE_CANCEL_REQUESTED_EVENT_KIND => {
+                let reason = event
+                    .payload_json
+                    .get("cancel_reason")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or(DELEGATE_CANCEL_REASON_OPERATOR_REQUESTED)
+                    .to_owned();
+                let reference = event
+                    .payload_json
+                    .get("reference")
+                    .and_then(Value::as_str)
+                    .filter(|value| *value == "running")
+                    .unwrap_or("running");
+                cancellation = Some(SessionDelegateCancellationRecord {
+                    state: "requested",
+                    reference: reference.to_owned(),
+                    requested_at: event.ts,
+                    reason,
+                });
             }
             _ => {}
         }
@@ -601,6 +828,11 @@ fn session_delegate_lifecycle_at(
         started_at,
         timeout_seconds,
         staleness,
+        cancellation: if session.state == SessionState::Running {
+            cancellation
+        } else {
+            None
+        },
     })
 }
 
@@ -639,6 +871,9 @@ fn session_delegate_lifecycle_json(lifecycle: SessionDelegateLifecycleRecord) ->
         "started_at": lifecycle.started_at,
         "timeout_seconds": lifecycle.timeout_seconds,
         "staleness": lifecycle.staleness.map(session_delegate_staleness_json),
+        "cancellation": lifecycle
+            .cancellation
+            .map(session_delegate_cancellation_json),
     })
 }
 
@@ -650,6 +885,16 @@ fn session_delegate_staleness_json(staleness: SessionDelegateStalenessRecord) ->
         "elapsed_seconds": staleness.elapsed_seconds,
         "threshold_seconds": staleness.threshold_seconds,
         "deadline_at": staleness.deadline_at,
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_delegate_cancellation_json(cancellation: SessionDelegateCancellationRecord) -> Value {
+    json!({
+        "state": cancellation.state,
+        "reference": cancellation.reference,
+        "requested_at": cancellation.requested_at,
+        "reason": cancellation.reason,
     })
 }
 
@@ -1390,6 +1635,218 @@ mod tests {
         assert!(
             error.contains("session_recover_not_recoverable"),
             "expected recoverability rejection, got: {error}"
+        );
+    }
+
+    #[test]
+    fn session_cancel_cancels_queued_async_child() {
+        let config = isolated_memory_config("session-cancel-queued");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create child");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_queued".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "task": "research",
+                "timeout_seconds": 60
+            }),
+        })
+        .expect("append queued event");
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_cancel".to_owned(),
+                payload: json!({
+                    "session_id": "child-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_cancel outcome");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["session"]["state"], "failed");
+        assert_eq!(outcome.payload["terminal_outcome_state"], "present");
+        assert_eq!(outcome.payload["terminal_outcome"]["status"], "error");
+        assert_eq!(
+            outcome.payload["cancel_action"]["kind"],
+            "queued_async_cancelled"
+        );
+        assert_eq!(
+            outcome.payload["recent_events"]
+                .as_array()
+                .expect("recent events array")
+                .last()
+                .expect("latest recent event")["event_kind"],
+            "delegate_cancelled"
+        );
+    }
+
+    #[test]
+    fn session_cancel_requests_running_async_child_cancellation() {
+        let config = isolated_memory_config("session-cancel-running");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create child");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_queued".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "task": "research",
+                "timeout_seconds": 60
+            }),
+        })
+        .expect("append queued event");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_started".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "task": "research",
+                "timeout_seconds": 60
+            }),
+        })
+        .expect("append started event");
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_cancel".to_owned(),
+                payload: json!({
+                    "session_id": "child-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_cancel outcome");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["session"]["state"], "running");
+        assert_eq!(outcome.payload["terminal_outcome_state"], "not_terminal");
+        assert_eq!(
+            outcome.payload["cancel_action"]["kind"],
+            "running_async_cancel_requested"
+        );
+        assert_eq!(
+            outcome.payload["recent_events"]
+                .as_array()
+                .expect("recent events array")
+                .last()
+                .expect("latest recent event")["event_kind"],
+            "delegate_cancel_requested"
+        );
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["cancellation"]["state"],
+            "requested"
+        );
+    }
+
+    #[test]
+    fn session_cancel_requested_state_is_visible_in_session_status() {
+        let config = isolated_memory_config("session-cancel-status");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create child");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_queued".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "task": "research",
+                "timeout_seconds": 60
+            }),
+        })
+        .expect("append queued event");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_started".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "task": "research",
+                "timeout_seconds": 60
+            }),
+        })
+        .expect("append started event");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_cancel_requested".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "reference": "running",
+                "cancel_reason": "operator_requested"
+            }),
+        })
+        .expect("append cancel requested event");
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_status".to_owned(),
+                payload: json!({
+                    "session_id": "child-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_status outcome");
+
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["cancellation"]["state"],
+            "requested"
+        );
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["cancellation"]["reference"],
+            "running"
+        );
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["cancellation"]["reason"],
+            "operator_requested"
         );
     }
 

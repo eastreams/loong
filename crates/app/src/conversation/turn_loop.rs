@@ -28,6 +28,11 @@ use crate::session::repository::{
     CreateSessionWithEventRequest, NewSessionRecord, SessionKind, SessionRepository, SessionState,
     TransitionSessionWithEventIfCurrentRequest,
 };
+#[cfg(feature = "memory-sqlite")]
+use crate::session::{
+    delegate_cancelled_error, parse_delegate_cancelled_reason, DELEGATE_CANCELLED_EVENT_KIND,
+    DELEGATE_CANCEL_REASON_OPERATOR_REQUESTED, DELEGATE_CANCEL_REQUESTED_EVENT_KIND,
+};
 use crate::tools::runtime_tool_view_for_config;
 
 #[derive(Default)]
@@ -142,6 +147,15 @@ impl ConversationTurnLoop {
         );
 
         for round_index in 0..policy.max_rounds {
+            #[cfg(feature = "memory-sqlite")]
+            if session_context.parent_session_id.is_some() {
+                if let Some(cancel_reason) =
+                    load_delegate_child_cancel_request(config, session_context)?
+                {
+                    return Err(delegate_cancelled_error(&cancel_reason));
+                }
+            }
+
             let turn = match runtime.request_turn(config, &messages, tool_view).await {
                 Ok(turn) => turn,
                 Err(error) => {
@@ -582,6 +596,30 @@ fn load_delegate_child_execution_context(
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn load_delegate_child_cancel_request(
+    config: &LoongClawConfig,
+    session_context: &SessionContext,
+) -> Result<Option<String>, String> {
+    let repo = SessionRepository::new(&memory_runtime_config_for(config))?;
+    let recent_events = repo.list_recent_events(&session_context.session_id, 1)?;
+    let Some(event) = recent_events.last() else {
+        return Ok(None);
+    };
+    if event.event_kind != DELEGATE_CANCEL_REQUESTED_EVENT_KIND {
+        return Ok(None);
+    }
+    let reason = event
+        .payload_json
+        .get("cancel_reason")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DELEGATE_CANCEL_REASON_OPERATOR_REQUESTED)
+        .to_owned();
+    Ok(Some(reason))
+}
+
+#[cfg(feature = "memory-sqlite")]
 async fn run_started_delegate_child_turn_with_runtime<R, D>(
     turn_loop: &ConversationTurnLoop,
     config: &LoongClawConfig,
@@ -661,18 +699,35 @@ where
                 error.clone(),
                 duration_ms,
             );
+            let (event_kind, event_payload_json) =
+                if let Some(cancel_reason) = parse_delegate_cancelled_reason(&error) {
+                    (
+                        DELEGATE_CANCELLED_EVENT_KIND.to_owned(),
+                        json!({
+                            "error": error,
+                            "duration_ms": duration_ms,
+                            "cancel_reason": cancel_reason,
+                            "reference": "running",
+                        }),
+                    )
+                } else {
+                    (
+                        "delegate_failed".to_owned(),
+                        json!({
+                            "error": error,
+                            "duration_ms": duration_ms,
+                        }),
+                    )
+                };
             finalize_delegate_child_terminal_with_recovery(
                 &repo,
                 child_session_id,
                 crate::session::repository::FinalizeSessionTerminalRequest {
                     state: SessionState::Failed,
                     last_error: Some(error.clone()),
-                    event_kind: "delegate_failed".to_owned(),
+                    event_kind,
                     actor_session_id: Some(child_execution.parent_session_id.clone()),
-                    event_payload_json: json!({
-                        "error": error,
-                        "duration_ms": duration_ms,
-                    }),
+                    event_payload_json,
                     outcome_status: outcome.status.clone(),
                     outcome_payload_json: outcome.payload.clone(),
                 },

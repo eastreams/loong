@@ -871,6 +871,208 @@ async fn child_session_hidden_session_recover_is_rejected_by_default_dispatcher(
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
+async fn child_session_hidden_session_cancel_is_rejected_by_default_dispatcher() {
+    let (config, db_path) = isolated_test_config("child-hidden-session-cancel");
+    let repo = SessionRepository::new(&crate::memory::runtime_config::MemoryRuntimeConfig {
+        sqlite_path: Some(db_path),
+    })
+    .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: crate::session::repository::SessionState::Running,
+    })
+    .expect("create child");
+
+    let dispatcher = DefaultAppToolDispatcher::new(
+        crate::memory::runtime_config::MemoryRuntimeConfig {
+            sqlite_path: Some(config.memory.resolved_sqlite_path()),
+        },
+        config.tools.clone(),
+    );
+    let session_context = SessionContext::child(
+        "child-session",
+        "root-session",
+        crate::tools::planned_delegate_child_tool_view(),
+    );
+
+    let error = dispatcher
+        .execute_app_tool(
+            &session_context,
+            loongclaw_contracts::ToolCoreRequest {
+                tool_name: "session_cancel".to_owned(),
+                payload: json!({
+                    "session_id": "child-session"
+                }),
+            },
+            None,
+        )
+        .await
+        .expect_err("child should not execute hidden session_cancel");
+
+    assert!(
+        error.contains("tool_not_visible: session_cancel"),
+        "expected tool_not_visible for session_cancel, got: {error}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+struct CancelRequestingAppToolDispatcher {
+    memory_config: crate::memory::runtime_config::MemoryRuntimeConfig,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[async_trait]
+impl AppToolDispatcher for CancelRequestingAppToolDispatcher {
+    async fn execute_app_tool(
+        &self,
+        session_context: &SessionContext,
+        request: loongclaw_contracts::ToolCoreRequest,
+        _kernel_ctx: Option<&KernelContext>,
+    ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+        if request.tool_name != "session_status" {
+            return Err(format!("unexpected app tool: {}", request.tool_name));
+        }
+        let repo = SessionRepository::new(&self.memory_config)?;
+        repo.transition_session_with_event_if_current(
+            &session_context.session_id,
+            crate::session::repository::TransitionSessionWithEventIfCurrentRequest {
+                expected_state: crate::session::repository::SessionState::Running,
+                next_state: crate::session::repository::SessionState::Running,
+                last_error: None,
+                event_kind: "delegate_cancel_requested".to_owned(),
+                actor_session_id: session_context.parent_session_id.clone(),
+                event_payload_json: json!({
+                    "reference": "running",
+                    "cancel_reason": "operator_requested"
+                }),
+            },
+        )?;
+        Ok(loongclaw_contracts::ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "cancel_requested": true
+            }),
+        })
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn delegate_child_background_cancel_request_stops_before_next_round() {
+    let (config, db_path) = isolated_test_config("delegate-child-background-cancel");
+    let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
+        sqlite_path: Some(db_path.clone()),
+    };
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: None,
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("bg-child".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create child session");
+
+    let runtime = FakeRuntime::with_turns(
+        vec![],
+        vec![Ok(ProviderTurn {
+            assistant_text: "Inspecting child session".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "session_status".to_owned(),
+                args_json: json!({
+                    "session_id": "child-session"
+                }),
+                source: "provider_tool_call".to_owned(),
+                session_id: "child-session".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                tool_call_id: "call-1".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        })],
+    );
+
+    let outcome = super::run_delegate_child_turn_with_runtime(
+        &ConversationTurnLoop::new(),
+        &config,
+        &runtime,
+        &CancelRequestingAppToolDispatcher {
+            memory_config: memory_config.clone(),
+        },
+        "child-session",
+        "child task",
+        60,
+        None,
+    )
+    .await
+    .expect("delegate child cancellation outcome");
+
+    assert_eq!(outcome.status, "error");
+    assert_eq!(
+        outcome.payload["error"],
+        "delegate_cancelled: operator_requested"
+    );
+    assert_eq!(
+        *runtime.turn_calls.lock().expect("turn calls lock"),
+        1,
+        "cancel should stop before a second provider round"
+    );
+
+    let child = repo
+        .load_session("child-session")
+        .expect("load child session")
+        .expect("child session row");
+    assert_eq!(
+        child.state,
+        crate::session::repository::SessionState::Failed
+    );
+    assert_eq!(
+        child.last_error.as_deref(),
+        Some("delegate_cancelled: operator_requested")
+    );
+
+    let events = repo
+        .list_recent_events("child-session", 10)
+        .expect("list child events");
+    let event_kinds: Vec<&str> = events
+        .iter()
+        .map(|event| event.event_kind.as_str())
+        .collect();
+    assert!(event_kinds.contains(&"delegate_started"));
+    assert!(event_kinds.contains(&"delegate_cancel_requested"));
+    assert!(event_kinds.contains(&"delegate_cancelled"));
+
+    let terminal_outcome = repo
+        .load_terminal_outcome("child-session")
+        .expect("load terminal outcome")
+        .expect("terminal outcome row");
+    assert_eq!(terminal_outcome.status, "error");
+    assert_eq!(
+        terminal_outcome.payload_json["error"],
+        "delegate_cancelled: operator_requested"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
 async fn child_session_forged_root_tool_view_still_rejects_hidden_sessions_list() {
     let (config, db_path) = isolated_test_config("child-forged-root-view-sessions-list");
     let repo = SessionRepository::new(&crate::memory::runtime_config::MemoryRuntimeConfig {
@@ -1254,6 +1456,104 @@ async fn session_wait_reports_delegate_lifecycle_for_queued_child() {
     );
     assert!(outcome.payload["delegate_lifecycle"]["queued_at"].is_number());
     assert!(outcome.payload["delegate_lifecycle"]["started_at"].is_null());
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn session_wait_reports_pending_cancel_request_for_running_child() {
+    let (config, db_path) = isolated_test_config("session-wait-cancel-requested");
+    let repo = SessionRepository::new(&crate::memory::runtime_config::MemoryRuntimeConfig {
+        sqlite_path: Some(db_path),
+    })
+    .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: crate::session::repository::SessionState::Running,
+    })
+    .expect("create child");
+    repo.append_event(crate::session::repository::NewSessionEvent {
+        session_id: "child-session".to_owned(),
+        event_kind: "delegate_queued".to_owned(),
+        actor_session_id: Some("root-session".to_owned()),
+        payload_json: json!({
+            "task": "research",
+            "timeout_seconds": 60
+        }),
+    })
+    .expect("append queued event");
+    repo.append_event(crate::session::repository::NewSessionEvent {
+        session_id: "child-session".to_owned(),
+        event_kind: "delegate_started".to_owned(),
+        actor_session_id: Some("root-session".to_owned()),
+        payload_json: json!({
+            "task": "research",
+            "timeout_seconds": 60
+        }),
+    })
+    .expect("append started event");
+    repo.append_event(crate::session::repository::NewSessionEvent {
+        session_id: "child-session".to_owned(),
+        event_kind: "delegate_cancel_requested".to_owned(),
+        actor_session_id: Some("root-session".to_owned()),
+        payload_json: json!({
+            "reference": "running",
+            "cancel_reason": "operator_requested"
+        }),
+    })
+    .expect("append cancel requested event");
+
+    let dispatcher = DefaultAppToolDispatcher::new(
+        crate::memory::runtime_config::MemoryRuntimeConfig {
+            sqlite_path: Some(config.memory.resolved_sqlite_path()),
+        },
+        config.tools.clone(),
+    );
+    let session_context = SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::runtime_tool_view_for_config(&config.tools),
+    );
+
+    let outcome = dispatcher
+        .execute_app_tool(
+            &session_context,
+            loongclaw_contracts::ToolCoreRequest {
+                tool_name: "session_wait".to_owned(),
+                payload: json!({
+                    "session_id": "child-session",
+                    "timeout_ms": 10
+                }),
+            },
+            None,
+        )
+        .await
+        .expect("session_wait outcome");
+
+    assert_eq!(outcome.status, "timeout");
+    assert_eq!(outcome.payload["wait_status"], "timeout");
+    assert_eq!(outcome.payload["delegate_lifecycle"]["phase"], "running");
+    assert_eq!(
+        outcome.payload["delegate_lifecycle"]["cancellation"]["state"],
+        "requested"
+    );
+    assert_eq!(
+        outcome.payload["delegate_lifecycle"]["cancellation"]["reference"],
+        "running"
+    );
+    assert_eq!(
+        outcome.payload["delegate_lifecycle"]["cancellation"]["reason"],
+        "operator_requested"
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]

@@ -74,7 +74,7 @@ pub fn execute_app_tool_with_config(
     };
     match canonical_name {
         "sessions_list" | "sessions_history" | "session_status" | "session_events"
-        | "session_recover" => session::execute_session_tool_with_policies(
+        | "session_cancel" | "session_recover" => session::execute_session_tool_with_policies(
             request,
             current_session_id,
             memory_config,
@@ -410,6 +410,9 @@ mod tests {
         assert!(
             snapshot.contains("- session_status: Inspect the current status of a visible session")
         );
+        assert!(
+            snapshot.contains("- session_cancel: Cancel a visible async delegate child session")
+        );
         assert!(snapshot.contains(
             "- session_recover: Recover an overdue queued async delegate child session by marking it failed"
         ));
@@ -419,31 +422,33 @@ mod tests {
 
         // Verify sorted canonical name order.
         let lines: Vec<&str> = snapshot.lines().skip(1).collect();
-        assert_eq!(lines.len(), 11);
+        assert_eq!(lines.len(), 12);
         assert!(lines[0].starts_with("- delegate"));
         assert!(lines[1].starts_with("- delegate_async"));
         assert!(lines[2].starts_with("- file.read"));
         assert!(lines[3].starts_with("- file.write"));
-        assert!(lines[4].starts_with("- session_events"));
-        assert!(lines[5].starts_with("- session_recover"));
-        assert!(lines[6].starts_with("- session_status"));
-        assert!(lines[7].starts_with("- session_wait"));
-        assert!(lines[8].starts_with("- sessions_history"));
-        assert!(lines[9].starts_with("- sessions_list"));
-        assert!(lines[10].starts_with("- shell.exec"));
+        assert!(lines[4].starts_with("- session_cancel"));
+        assert!(lines[5].starts_with("- session_events"));
+        assert!(lines[6].starts_with("- session_recover"));
+        assert!(lines[7].starts_with("- session_status"));
+        assert!(lines[8].starts_with("- session_wait"));
+        assert!(lines[9].starts_with("- sessions_history"));
+        assert!(lines[10].starts_with("- sessions_list"));
+        assert!(lines[11].starts_with("- shell.exec"));
     }
 
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
     fn tool_registry_returns_all_known_tools() {
         let entries = tool_registry();
-        assert_eq!(entries.len(), 11);
+        assert_eq!(entries.len(), 12);
         let names: Vec<&str> = entries.iter().map(|e| e.name).collect();
         assert!(names.contains(&"delegate"));
         assert!(names.contains(&"delegate_async"));
         assert!(names.contains(&"shell.exec"));
         assert!(names.contains(&"file.read"));
         assert!(names.contains(&"file.write"));
+        assert!(names.contains(&"session_cancel"));
         assert!(names.contains(&"session_events"));
         assert!(names.contains(&"session_recover"));
         assert!(names.contains(&"sessions_list"));
@@ -456,7 +461,7 @@ mod tests {
     #[test]
     fn provider_tool_definitions_are_stable_and_complete() {
         let defs = provider_tool_definitions();
-        assert_eq!(defs.len(), 11);
+        assert_eq!(defs.len(), 12);
 
         let names: Vec<&str> = defs
             .iter()
@@ -471,6 +476,7 @@ mod tests {
                 "delegate_async",
                 "file_read",
                 "file_write",
+                "session_cancel",
                 "session_events",
                 "session_recover",
                 "session_status",
@@ -505,6 +511,15 @@ mod tests {
             .as_object()
             .expect("session_recover properties");
         assert!(recover_properties.contains_key("session_id"));
+
+        let session_cancel = defs
+            .iter()
+            .find(|item| item["function"]["name"] == "session_cancel")
+            .expect("session_cancel definition");
+        let cancel_properties = session_cancel["function"]["parameters"]["properties"]
+            .as_object()
+            .expect("session_cancel properties");
+        assert!(cancel_properties.contains_key("session_id"));
     }
 
     #[test]
@@ -599,6 +614,7 @@ mod tests {
         assert!(view.contains("sessions_history"));
         assert!(view.contains("session_status"));
         assert!(view.contains("session_events"));
+        assert!(view.contains("session_cancel"));
         assert!(view.contains("session_recover"));
         assert!(view.contains("session_wait"));
         assert!(view.contains("delegate"));
@@ -613,9 +629,25 @@ mod tests {
         assert!(view.contains("sessions_history"));
         assert!(view.contains("session_status"));
         assert!(view.contains("session_events"));
+        assert!(view.contains("session_cancel"));
         assert!(view.contains("session_recover"));
         assert!(view.contains("session_wait"));
         assert!(view.contains("delegate_async"));
+    }
+
+    #[test]
+    fn session_cancel_is_visible_in_root_and_hidden_in_child_views() {
+        let root_view = runtime_tool_view();
+        assert!(root_view.contains("session_cancel"));
+
+        let child_view = planned_delegate_child_tool_view();
+        assert!(!child_view.contains("session_cancel"));
+
+        let child_with_depth = delegate_child_tool_view_for_config_with_delegate(
+            &crate::config::ToolConfig::default(),
+            true,
+        );
+        assert!(!child_with_depth.contains("session_cancel"));
     }
 
     #[test]
@@ -687,6 +719,7 @@ mod tests {
         assert!(!view.contains("delegate_async"));
         assert!(!view.contains("sessions_list"));
         assert!(!view.contains("session_events"));
+        assert!(!view.contains("session_cancel"));
         assert!(!view.contains("session_recover"));
         assert!(!view.contains("session_wait"));
     }
@@ -700,6 +733,7 @@ mod tests {
         assert!(view.contains("session_status"));
         assert!(!view.contains("sessions_list"));
         assert!(!view.contains("session_events"));
+        assert!(!view.contains("session_cancel"));
         assert!(!view.contains("session_recover"));
         assert!(!view.contains("session_wait"));
         assert!(!view.contains("delegate_async"));
