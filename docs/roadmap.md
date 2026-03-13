@@ -1,6 +1,6 @@
 # LoongClaw Roadmap
 
-Last updated: 2026-03-12
+Last updated: 2026-03-13
 
 This roadmap is execution-focused. Every stage has:
 
@@ -206,7 +206,7 @@ Delivered in current baseline:
   - cooperative cancellation requests for running async delegate children, surfaced through
     session lifecycle metadata and finalized as durable cancelled failures at the next safe
     turn-loop checkpoint
-  - explicit recovery of overdue queued async delegate children into durable failed terminal state
+  - explicit recovery of overdue queued or running async delegate children into durable failed terminal state
   - synchronous `delegate` orchestration with timeout/error mapping
   - asynchronous `delegate_async` queueing with immediate child session id return as the durable handle
   - daemon `run-turn` one-shot worker for delegated child execution

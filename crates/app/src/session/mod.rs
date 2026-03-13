@@ -106,4 +106,24 @@ mod recovery_tests {
         assert!(recovery.event_kind.is_empty());
         assert_eq!(recovery.recovery_error, None);
     }
+
+    #[test]
+    fn observe_missing_recovery_infers_running_async_overdue_from_last_error() {
+        let recovery = observe_missing_recovery(
+            &[],
+            Some(
+                "delegate_async_running_overdue_marked_failed: running delegate child exceeded timeout after 91s (threshold 30s)",
+            ),
+        );
+
+        assert_eq!(recovery.source, "last_error");
+        assert_eq!(recovery.kind, "running_async_overdue_marked_failed");
+        assert!(recovery.event_kind.is_empty());
+        assert_eq!(
+            recovery.recovery_error.as_deref(),
+            Some(
+                "delegate_async_running_overdue_marked_failed: running delegate child exceeded timeout after 91s (threshold 30s)",
+            )
+        );
+    }
 }
