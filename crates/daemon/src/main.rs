@@ -978,7 +978,7 @@ fn run_channels_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
 
     println!(
         "{}",
-        render_channel_snapshots_text(&resolved_path_display, &inventory)
+        render_channel_surfaces_text(&resolved_path_display, &inventory)
     );
     Ok(())
 }
@@ -1005,100 +1005,89 @@ fn build_channels_cli_json_payload(
     }
 }
 
-fn render_channel_snapshots_text(
+fn render_channel_surfaces_text(
     config_path: &str,
     inventory: &mvp::channel::ChannelInventory,
 ) -> String {
     let mut lines = vec![format!("config={config_path}")];
-    for snapshot in &inventory.channels {
-        let aliases = if snapshot.aliases.is_empty() {
-            "-".to_owned()
-        } else {
-            snapshot.aliases.join(",")
-        };
-        let api_base_url = snapshot.api_base_url.as_deref().unwrap_or("-");
-        lines.push(format!(
-            "{} [{}] configured_account={} default_account={} default_source={} compiled={} enabled={} aliases={} api_base_url={}",
-            snapshot.label,
-            snapshot.id,
-            snapshot.configured_account_id,
-            snapshot.is_default_account,
-            snapshot.default_account_source.as_str(),
-            snapshot.compiled,
-            snapshot.enabled,
-            aliases,
-            api_base_url
-        ));
-        lines.push(format!("  transport={}", snapshot.transport));
-        lines.push(format!(
-            "  configured_account_label={}",
-            snapshot.configured_account_label
-        ));
-        for note in &snapshot.notes {
-            lines.push(format!("  note: {note}"));
+    let mut catalog_only_surfaces = Vec::new();
+
+    for surface in &inventory.channel_surfaces {
+        if surface.catalog.implementation_status
+            == mvp::channel::ChannelCatalogImplementationStatus::Stub
+        {
+            catalog_only_surfaces.push(surface);
+            continue;
         }
-        for operation in &snapshot.operations {
+
+        push_channel_surface_header(&mut lines, surface);
+        for snapshot in &surface.configured_accounts {
+            let api_base_url = snapshot.api_base_url.as_deref().unwrap_or("-");
             lines.push(format!(
-                "  op {} ({}) {}: {}",
-                operation.id,
-                operation.command,
-                operation.health.as_str(),
-                operation.detail
+                "  account configured_account={} configured_account_label={} default_account={} default_source={} compiled={} enabled={} api_base_url={}",
+                snapshot.configured_account_id,
+                snapshot.configured_account_label,
+                snapshot.is_default_account,
+                snapshot.default_account_source.as_str(),
+                snapshot.compiled,
+                snapshot.enabled,
+                api_base_url
             ));
-            if let Some(runtime) = &operation.runtime {
-                lines.push(format!(
-                    "    runtime account={} account_id={} running={} stale={} busy={} active_runs={} instance_count={} running_instances={} stale_instances={} last_run_activity_at={} last_heartbeat_at={} pid={}",
-                    runtime
-                        .account_label
-                        .as_deref()
-                        .unwrap_or("-"),
-                    runtime
-                        .account_id
-                        .as_deref()
-                        .unwrap_or("-"),
-                    runtime.running,
-                    runtime.stale,
-                    runtime.busy,
-                    runtime.active_runs,
-                    runtime.instance_count,
-                    runtime.running_instances,
-                    runtime.stale_instances,
-                    runtime
-                        .last_run_activity_at
-                        .map(|value| value.to_string())
-                        .unwrap_or_else(|| "-".to_owned()),
-                    runtime
-                        .last_heartbeat_at
-                        .map(|value| value.to_string())
-                        .unwrap_or_else(|| "-".to_owned()),
-                    runtime
-                        .pid
-                        .map(|value| value.to_string())
-                        .unwrap_or_else(|| "-".to_owned())
-                ));
+            for note in &snapshot.notes {
+                lines.push(format!("    note: {note}"));
             }
-            for issue in &operation.issues {
-                lines.push(format!("    issue: {issue}"));
+            for operation in &snapshot.operations {
+                lines.push(format!(
+                    "    op {} ({}) {}: {}",
+                    operation.id,
+                    operation.command,
+                    operation.health.as_str(),
+                    operation.detail
+                ));
+                if let Some(runtime) = &operation.runtime {
+                    lines.push(format!(
+                        "      runtime account={} account_id={} running={} stale={} busy={} active_runs={} instance_count={} running_instances={} stale_instances={} last_run_activity_at={} last_heartbeat_at={} pid={}",
+                        runtime
+                            .account_label
+                            .as_deref()
+                            .unwrap_or("-"),
+                        runtime
+                            .account_id
+                            .as_deref()
+                            .unwrap_or("-"),
+                        runtime.running,
+                        runtime.stale,
+                        runtime.busy,
+                        runtime.active_runs,
+                        runtime.instance_count,
+                        runtime.running_instances,
+                        runtime.stale_instances,
+                        runtime
+                            .last_run_activity_at
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "-".to_owned()),
+                        runtime
+                            .last_heartbeat_at
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "-".to_owned()),
+                        runtime
+                            .pid
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "-".to_owned())
+                    ));
+                }
+                for issue in &operation.issues {
+                    lines.push(format!("      issue: {issue}"));
+                }
             }
         }
     }
-    if !inventory.catalog_only_channels.is_empty() {
+
+    if !catalog_only_surfaces.is_empty() {
         lines.push("catalog-only channels:".to_owned());
-        for entry in &inventory.catalog_only_channels {
-            let aliases = if entry.aliases.is_empty() {
-                "-".to_owned()
-            } else {
-                entry.aliases.join(",")
-            };
-            lines.push(format!(
-                "{} [{}] implementation_status={} aliases={} transport={}",
-                entry.label,
-                entry.id,
-                entry.implementation_status.as_str(),
-                aliases,
-                entry.transport
-            ));
-            for operation in &entry.operations {
+        for surface in catalog_only_surfaces {
+            push_channel_surface_header(&mut lines, surface);
+            for operation in &surface.catalog.operations {
                 lines.push(format!(
                     "  catalog op {} ({}) tracks_runtime={}",
                     operation.id, operation.command, operation.tracks_runtime
@@ -1107,6 +1096,27 @@ fn render_channel_snapshots_text(
         }
     }
     lines.join("\n")
+}
+
+fn push_channel_surface_header(lines: &mut Vec<String>, surface: &mvp::channel::ChannelSurface) {
+    let aliases = if surface.catalog.aliases.is_empty() {
+        "-".to_owned()
+    } else {
+        surface.catalog.aliases.join(",")
+    };
+    lines.push(format!(
+        "{} [{}] implementation_status={} aliases={} transport={} configured_accounts={} default_configured_account={}",
+        surface.catalog.label,
+        surface.catalog.id,
+        surface.catalog.implementation_status.as_str(),
+        aliases,
+        surface.catalog.transport,
+        surface.configured_accounts.len(),
+        surface
+            .default_configured_account_id
+            .as_deref()
+            .unwrap_or("-")
+    ));
 }
 
 fn run_list_context_engines_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {

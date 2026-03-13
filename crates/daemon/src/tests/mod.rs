@@ -70,17 +70,19 @@ fn resolve_validate_output_rejects_conflicting_json_and_output_flags() {
 }
 
 #[test]
-fn render_channel_snapshots_text_reports_aliases_and_operation_health() {
+fn render_channel_surfaces_text_reports_aliases_and_operation_health() {
     let mut config = mvp::config::LoongClawConfig::default();
     config.feishu.enabled = true;
     config.feishu.app_id = Some("cli_a1b2c3".to_owned());
     config.feishu.app_secret = Some("app-secret".to_owned());
 
     let inventory = mvp::channel::channel_inventory(&config);
-    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &inventory);
+    let rendered = render_channel_surfaces_text("/tmp/loongclaw.toml", &inventory);
 
     assert!(rendered.contains("config=/tmp/loongclaw.toml"));
     assert!(rendered.contains("Feishu/Lark [feishu]"));
+    assert!(rendered.contains("implementation_status=runtime_backed"));
+    assert!(rendered.contains("configured_accounts=1"));
     assert!(rendered.contains("aliases=lark"));
     assert!(rendered.contains("account=feishu:cli_a1b2c3"));
     assert!(rendered.contains("op send (feishu-send) ready"));
@@ -89,7 +91,7 @@ fn render_channel_snapshots_text_reports_aliases_and_operation_health() {
 }
 
 #[test]
-fn render_channel_snapshots_text_reports_configured_accounts_for_multi_account_channels() {
+fn render_channel_surfaces_text_reports_configured_accounts_for_multi_account_channels() {
     let config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
         "telegram": {
             "enabled": true,
@@ -111,14 +113,16 @@ fn render_channel_snapshots_text_reports_configured_accounts_for_multi_account_c
     .expect("deserialize multi-account config");
 
     let inventory = mvp::channel::channel_inventory(&config);
-    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &inventory);
+    let rendered = render_channel_surfaces_text("/tmp/loongclaw.toml", &inventory);
 
+    assert!(rendered.contains("configured_accounts=2"));
+    assert!(rendered.contains("default_configured_account=work-bot"));
     assert!(rendered.contains("configured_account=work-bot"));
     assert!(rendered.contains("configured_account=personal"));
 }
 
 #[test]
-fn render_channel_snapshots_text_reports_default_account_marker() {
+fn render_channel_surfaces_text_reports_default_account_marker() {
     let config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
         "telegram": {
             "enabled": true,
@@ -140,7 +144,7 @@ fn render_channel_snapshots_text_reports_default_account_marker() {
     .expect("deserialize multi-account config");
 
     let inventory = mvp::channel::channel_inventory(&config);
-    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &inventory);
+    let rendered = render_channel_surfaces_text("/tmp/loongclaw.toml", &inventory);
 
     assert!(rendered.contains("configured_account=work-bot"));
     assert!(rendered.contains("default_account=true"));
@@ -148,10 +152,10 @@ fn render_channel_snapshots_text_reports_default_account_marker() {
 }
 
 #[test]
-fn render_channel_snapshots_text_reports_catalog_only_channels() {
+fn render_channel_surfaces_text_reports_catalog_only_channels() {
     let config = mvp::config::LoongClawConfig::default();
     let inventory = mvp::channel::channel_inventory(&config);
-    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &inventory);
+    let rendered = render_channel_surfaces_text("/tmp/loongclaw.toml", &inventory);
 
     assert!(rendered.contains("catalog-only channels:"));
     assert!(rendered.contains(
