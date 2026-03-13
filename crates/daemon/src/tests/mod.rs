@@ -149,22 +149,17 @@ fn render_channel_snapshots_text_reports_default_account_marker() {
 
 #[test]
 fn render_channel_snapshots_text_reports_catalog_only_channels() {
-    let catalog_only = vec![mvp::channel::ChannelCatalogEntry {
-        id: "discord",
-        label: "Discord",
-        aliases: vec!["discord-bot"],
-        transport: "discord_gateway",
-        operations: vec![mvp::channel::ChannelCatalogOperation {
-            id: "send",
-            label: "direct send",
-            command: "discord-send",
-            tracks_runtime: false,
-        }],
-    }];
+    let config = mvp::config::LoongClawConfig::default();
+    let snapshots = mvp::channel::channel_status_snapshots(&config);
+    let catalog_only = mvp::channel::catalog_only_channel_entries(&snapshots);
 
-    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &[], &catalog_only);
+    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &snapshots, &catalog_only);
 
     assert!(rendered.contains("catalog-only channels:"));
     assert!(rendered.contains("Discord [discord] aliases=discord-bot transport=discord_gateway"));
     assert!(rendered.contains("catalog op send (discord-send) tracks_runtime=false"));
+    assert!(rendered.contains("catalog op serve (discord-serve) tracks_runtime=true"));
+    assert!(rendered.contains("Slack [slack] aliases=slack-bot transport=slack_events_api"));
+    assert!(rendered.contains("catalog op send (slack-send) tracks_runtime=false"));
+    assert!(rendered.contains("catalog op serve (slack-serve) tracks_runtime=true"));
 }

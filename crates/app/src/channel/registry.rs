@@ -88,7 +88,8 @@ impl ChannelStatusSnapshot {
 
 #[derive(Debug, Clone, Copy)]
 struct ChannelRegistryDescriptor {
-    platform: ChannelPlatform,
+    id: &'static str,
+    runtime_platform: Option<ChannelPlatform>,
     label: &'static str,
     aliases: &'static [&'static str],
     transport: &'static str,
@@ -121,20 +122,71 @@ const FEISHU_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
 const FEISHU_OPERATIONS: &[ChannelCatalogOperation] =
     &[FEISHU_SEND_OPERATION, FEISHU_SERVE_OPERATION];
 
+const DISCORD_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: "send",
+    label: "direct send",
+    command: "discord-send",
+    tracks_runtime: false,
+};
+
+const DISCORD_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: "serve",
+    label: "gateway reply loop",
+    command: "discord-serve",
+    tracks_runtime: true,
+};
+
+const DISCORD_OPERATIONS: &[ChannelCatalogOperation] =
+    &[DISCORD_SEND_OPERATION, DISCORD_SERVE_OPERATION];
+
+const SLACK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: "send",
+    label: "direct send",
+    command: "slack-send",
+    tracks_runtime: false,
+};
+
+const SLACK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: "serve",
+    label: "events reply loop",
+    command: "slack-serve",
+    tracks_runtime: true,
+};
+
+const SLACK_OPERATIONS: &[ChannelCatalogOperation] = &[SLACK_SEND_OPERATION, SLACK_SERVE_OPERATION];
+
 const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
-        platform: ChannelPlatform::Telegram,
+        id: "telegram",
+        runtime_platform: Some(ChannelPlatform::Telegram),
         label: "Telegram",
         aliases: &[],
         transport: "telegram_bot_api_polling",
         operations: TELEGRAM_OPERATIONS,
     },
     ChannelRegistryDescriptor {
-        platform: ChannelPlatform::Feishu,
+        id: "feishu",
+        runtime_platform: Some(ChannelPlatform::Feishu),
         label: "Feishu/Lark",
         aliases: &["lark"],
         transport: "feishu_openapi_webhook",
         operations: FEISHU_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "discord",
+        runtime_platform: None,
+        label: "Discord",
+        aliases: &["discord-bot"],
+        transport: "discord_gateway",
+        operations: DISCORD_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "slack",
+        runtime_platform: None,
+        label: "Slack",
+        aliases: &["slack-bot"],
+        transport: "slack_events_api",
+        operations: SLACK_OPERATIONS,
     },
 ];
 
@@ -142,7 +194,7 @@ pub fn list_channel_catalog() -> Vec<ChannelCatalogEntry> {
     CHANNEL_REGISTRY
         .iter()
         .map(|descriptor| ChannelCatalogEntry {
-            id: descriptor.platform.as_str(),
+            id: descriptor.id,
             label: descriptor.label,
             aliases: descriptor.aliases.to_vec(),
             transport: descriptor.transport,
@@ -180,15 +232,15 @@ pub fn normalize_channel_platform(raw: &str) -> Option<ChannelPlatform> {
     }
 
     CHANNEL_REGISTRY.iter().find_map(|descriptor| {
-        if descriptor.platform.as_str() == normalized {
-            return Some(descriptor.platform);
+        if descriptor.id == normalized {
+            return descriptor.runtime_platform;
         }
         descriptor
             .aliases
             .iter()
             .copied()
             .find(|alias| *alias == normalized)
-            .map(|_| descriptor.platform)
+            .and(descriptor.runtime_platform)
     })
 }
 
@@ -207,8 +259,8 @@ fn channel_status_snapshots_with_now(
 ) -> Vec<ChannelStatusSnapshot> {
     let mut snapshots = Vec::new();
     for descriptor in CHANNEL_REGISTRY {
-        match descriptor.platform {
-            ChannelPlatform::Telegram => {
+        match descriptor.runtime_platform {
+            Some(ChannelPlatform::Telegram) => {
                 snapshots.extend(build_telegram_snapshots(
                     descriptor,
                     config,
@@ -216,7 +268,7 @@ fn channel_status_snapshots_with_now(
                     now_ms,
                 ));
             }
-            ChannelPlatform::Feishu => {
+            Some(ChannelPlatform::Feishu) => {
                 snapshots.extend(build_feishu_snapshots(
                     descriptor,
                     config,
@@ -224,6 +276,7 @@ fn channel_status_snapshots_with_now(
                     now_ms,
                 ));
             }
+            None => {}
         }
     }
     snapshots
@@ -341,7 +394,7 @@ fn build_telegram_snapshot_for_account(
     ));
 
     ChannelStatusSnapshot {
-        id: descriptor.platform.as_str(),
+        id: descriptor.id,
         configured_account_id: resolved.configured_account_id.clone(),
         configured_account_label: resolved.configured_account_label.clone(),
         is_default_account,
@@ -511,7 +564,7 @@ fn build_feishu_snapshot_for_account(
     ));
 
     ChannelStatusSnapshot {
-        id: descriptor.platform.as_str(),
+        id: descriptor.id,
         configured_account_id: resolved.configured_account_id.clone(),
         configured_account_label: resolved.configured_account_label.clone(),
         is_default_account,
@@ -557,7 +610,7 @@ fn build_invalid_telegram_snapshot(
     ));
 
     ChannelStatusSnapshot {
-        id: descriptor.platform.as_str(),
+        id: descriptor.id,
         configured_account_id: configured_account_id.to_owned(),
         configured_account_label: configured_account_id.to_owned(),
         is_default_account,
@@ -611,7 +664,7 @@ fn build_invalid_feishu_snapshot(
     ));
 
     ChannelStatusSnapshot {
-        id: descriptor.platform.as_str(),
+        id: descriptor.id,
         configured_account_id: configured_account_id.to_owned(),
         configured_account_label: configured_account_id.to_owned(),
         is_default_account,
@@ -764,6 +817,50 @@ mod tests {
         assert_eq!(feishu.operations.len(), 2);
         assert_eq!(feishu.operations[0].command, "feishu-send");
         assert_eq!(feishu.operations[1].command, "feishu-serve");
+    }
+
+    #[test]
+    fn channel_catalog_includes_discord_and_slack_stub_surfaces() {
+        let catalog = list_channel_catalog();
+        let discord = catalog
+            .iter()
+            .find(|entry| entry.id == "discord")
+            .expect("discord catalog entry");
+        let slack = catalog
+            .iter()
+            .find(|entry| entry.id == "slack")
+            .expect("slack catalog entry");
+
+        assert_eq!(discord.transport, "discord_gateway");
+        assert_eq!(discord.aliases, vec!["discord-bot"]);
+        assert_eq!(discord.operations.len(), 2);
+        assert_eq!(discord.operations[0].command, "discord-send");
+        assert_eq!(discord.operations[1].command, "discord-serve");
+
+        assert_eq!(slack.transport, "slack_events_api");
+        assert_eq!(slack.aliases, vec!["slack-bot"]);
+        assert_eq!(slack.operations.len(), 2);
+        assert_eq!(slack.operations[0].command, "slack-send");
+        assert_eq!(slack.operations[1].command, "slack-serve");
+    }
+
+    #[test]
+    fn catalog_only_channel_entries_include_stub_surfaces_for_default_config() {
+        let config = LoongClawConfig::default();
+        let snapshots = channel_status_snapshots(&config);
+        let catalog_only = catalog_only_channel_entries(&snapshots);
+
+        assert_eq!(
+            catalog_only
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>(),
+            vec!["discord", "slack"]
+        );
+        assert_eq!(catalog_only[0].operations[0].command, "discord-send");
+        assert_eq!(catalog_only[0].operations[1].command, "discord-serve");
+        assert_eq!(catalog_only[1].operations[0].command, "slack-send");
+        assert_eq!(catalog_only[1].operations[1].command, "slack-serve");
     }
 
     #[test]
