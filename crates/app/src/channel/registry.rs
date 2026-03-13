@@ -103,6 +103,13 @@ impl ChannelStatusSnapshot {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChannelInventory {
+    pub channels: Vec<ChannelStatusSnapshot>,
+    pub catalog_only_channels: Vec<ChannelCatalogEntry>,
+    pub channel_catalog: Vec<ChannelCatalogEntry>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ChannelRuntimeDescriptor {
     platform: ChannelPlatform,
@@ -298,12 +305,35 @@ pub fn normalize_channel_platform(raw: &str) -> Option<ChannelPlatform> {
         .and_then(|descriptor| descriptor.runtime.map(|runtime| runtime.platform))
 }
 
+pub fn channel_inventory(config: &LoongClawConfig) -> ChannelInventory {
+    channel_inventory_with_now(
+        config,
+        runtime_state::default_channel_runtime_state_dir().as_path(),
+        now_ms(),
+    )
+}
+
 pub fn channel_status_snapshots(config: &LoongClawConfig) -> Vec<ChannelStatusSnapshot> {
     channel_status_snapshots_with_now(
         config,
         runtime_state::default_channel_runtime_state_dir().as_path(),
         now_ms(),
     )
+}
+
+fn channel_inventory_with_now(
+    config: &LoongClawConfig,
+    runtime_dir: &Path,
+    now_ms: u64,
+) -> ChannelInventory {
+    let channel_catalog = list_channel_catalog();
+    let channels = channel_status_snapshots_with_now(config, runtime_dir, now_ms);
+    let catalog_only_channels = catalog_only_channel_entries_from(&channel_catalog, &channels);
+    ChannelInventory {
+        channels,
+        catalog_only_channels,
+        channel_catalog,
+    }
 }
 
 fn channel_status_snapshots_with_now(
@@ -965,6 +995,37 @@ mod tests {
         assert_eq!(catalog_only[0].operations[1].command, "discord-serve");
         assert_eq!(catalog_only[1].operations[0].command, "slack-send");
         assert_eq!(catalog_only[1].operations[1].command, "slack-serve");
+    }
+
+    #[test]
+    fn channel_inventory_combines_runtime_and_catalog_surfaces() {
+        let config = LoongClawConfig::default();
+        let inventory = channel_inventory(&config);
+
+        assert_eq!(
+            inventory
+                .channels
+                .iter()
+                .map(|snapshot| snapshot.id)
+                .collect::<Vec<_>>(),
+            vec!["telegram", "feishu"]
+        );
+        assert_eq!(
+            inventory
+                .catalog_only_channels
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>(),
+            vec!["discord", "slack"]
+        );
+        assert_eq!(
+            inventory
+                .channel_catalog
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>(),
+            vec!["telegram", "feishu", "discord", "slack"]
+        );
     }
 
     #[test]

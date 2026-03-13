@@ -76,8 +76,8 @@ fn render_channel_snapshots_text_reports_aliases_and_operation_health() {
     config.feishu.app_id = Some("cli_a1b2c3".to_owned());
     config.feishu.app_secret = Some("app-secret".to_owned());
 
-    let snapshots = mvp::channel::channel_status_snapshots(&config);
-    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &snapshots, &[]);
+    let inventory = mvp::channel::channel_inventory(&config);
+    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &inventory);
 
     assert!(rendered.contains("config=/tmp/loongclaw.toml"));
     assert!(rendered.contains("Feishu/Lark [feishu]"));
@@ -110,8 +110,8 @@ fn render_channel_snapshots_text_reports_configured_accounts_for_multi_account_c
     }))
     .expect("deserialize multi-account config");
 
-    let snapshots = mvp::channel::channel_status_snapshots(&config);
-    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &snapshots, &[]);
+    let inventory = mvp::channel::channel_inventory(&config);
+    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &inventory);
 
     assert!(rendered.contains("configured_account=work-bot"));
     assert!(rendered.contains("configured_account=personal"));
@@ -139,8 +139,8 @@ fn render_channel_snapshots_text_reports_default_account_marker() {
     }))
     .expect("deserialize multi-account config");
 
-    let snapshots = mvp::channel::channel_status_snapshots(&config);
-    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &snapshots, &[]);
+    let inventory = mvp::channel::channel_inventory(&config);
+    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &inventory);
 
     assert!(rendered.contains("configured_account=work-bot"));
     assert!(rendered.contains("default_account=true"));
@@ -150,10 +150,8 @@ fn render_channel_snapshots_text_reports_default_account_marker() {
 #[test]
 fn render_channel_snapshots_text_reports_catalog_only_channels() {
     let config = mvp::config::LoongClawConfig::default();
-    let snapshots = mvp::channel::channel_status_snapshots(&config);
-    let catalog_only = mvp::channel::catalog_only_channel_entries(&snapshots);
-
-    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &snapshots, &catalog_only);
+    let inventory = mvp::channel::channel_inventory(&config);
+    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &inventory);
 
     assert!(rendered.contains("catalog-only channels:"));
     assert!(rendered.contains(
@@ -171,10 +169,8 @@ fn render_channel_snapshots_text_reports_catalog_only_channels() {
 #[test]
 fn build_channels_cli_json_payload_includes_full_channel_catalog() {
     let config = mvp::config::LoongClawConfig::default();
-    let snapshots = mvp::channel::channel_status_snapshots(&config);
-    let catalog_only = mvp::channel::catalog_only_channel_entries(&snapshots);
-
-    let payload = build_channels_cli_json_payload("/tmp/loongclaw.toml", &snapshots, &catalog_only);
+    let inventory = mvp::channel::channel_inventory(&config);
+    let payload = build_channels_cli_json_payload("/tmp/loongclaw.toml", &inventory);
     let encoded = serde_json::to_value(&payload).expect("serialize payload");
 
     assert_eq!(

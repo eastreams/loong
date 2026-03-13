@@ -965,13 +965,11 @@ async fn run_list_models_cli(config_path: Option<&str>, as_json: bool) -> CliRes
 
 fn run_channels_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
     let (resolved_path, config) = mvp::config::load(config_path)?;
-    let snapshots = mvp::channel::channel_status_snapshots(&config);
-    let catalog_only = mvp::channel::catalog_only_channel_entries(&snapshots);
+    let inventory = mvp::channel::channel_inventory(&config);
     let resolved_path_display = resolved_path.display().to_string();
 
     if as_json {
-        let payload =
-            build_channels_cli_json_payload(&resolved_path_display, &snapshots, &catalog_only);
+        let payload = build_channels_cli_json_payload(&resolved_path_display, &inventory);
         let pretty = serde_json::to_string_pretty(&payload)
             .map_err(|error| format!("serialize channel status output failed: {error}"))?;
         println!("{pretty}");
@@ -980,7 +978,7 @@ fn run_channels_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
 
     println!(
         "{}",
-        render_channel_snapshots_text(&resolved_path_display, &snapshots, &catalog_only,)
+        render_channel_snapshots_text(&resolved_path_display, &inventory)
     );
     Ok(())
 }
@@ -995,24 +993,22 @@ struct ChannelsCliJsonPayload {
 
 fn build_channels_cli_json_payload(
     config_path: &str,
-    snapshots: &[mvp::channel::ChannelStatusSnapshot],
-    catalog_only: &[mvp::channel::ChannelCatalogEntry],
+    inventory: &mvp::channel::ChannelInventory,
 ) -> ChannelsCliJsonPayload {
     ChannelsCliJsonPayload {
         config: config_path.to_owned(),
-        channels: snapshots.to_vec(),
-        catalog_only_channels: catalog_only.to_vec(),
-        channel_catalog: mvp::channel::list_channel_catalog(),
+        channels: inventory.channels.clone(),
+        catalog_only_channels: inventory.catalog_only_channels.clone(),
+        channel_catalog: inventory.channel_catalog.clone(),
     }
 }
 
 fn render_channel_snapshots_text(
     config_path: &str,
-    snapshots: &[mvp::channel::ChannelStatusSnapshot],
-    catalog_only: &[mvp::channel::ChannelCatalogEntry],
+    inventory: &mvp::channel::ChannelInventory,
 ) -> String {
     let mut lines = vec![format!("config={config_path}")];
-    for snapshot in snapshots {
+    for snapshot in &inventory.channels {
         let aliases = if snapshot.aliases.is_empty() {
             "-".to_owned()
         } else {
@@ -1084,9 +1080,9 @@ fn render_channel_snapshots_text(
             }
         }
     }
-    if !catalog_only.is_empty() {
+    if !inventory.catalog_only_channels.is_empty() {
         lines.push("catalog-only channels:".to_owned());
-        for entry in catalog_only {
+        for entry in &inventory.catalog_only_channels {
             let aliases = if entry.aliases.is_empty() {
                 "-".to_owned()
             } else {
