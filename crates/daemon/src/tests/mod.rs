@@ -183,6 +183,40 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
     );
     assert_eq!(
         encoded
+            .get("schema")
+            .and_then(|schema| schema.get("version"))
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        encoded
+            .get("schema")
+            .and_then(|schema| schema.get("primary_channel_view"))
+            .and_then(serde_json::Value::as_str),
+        Some("channel_surfaces")
+    );
+    assert_eq!(
+        encoded
+            .get("schema")
+            .and_then(|schema| schema.get("catalog_view"))
+            .and_then(serde_json::Value::as_str),
+        Some("channel_catalog")
+    );
+    assert_eq!(
+        encoded
+            .get("schema")
+            .and_then(|schema| schema.get("legacy_channel_views"))
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect::<Vec<_>>()
+            }),
+        Some(vec!["channels", "catalog_only_channels"])
+    );
+    assert_eq!(
+        encoded
             .get("channel_catalog")
             .and_then(serde_json::Value::as_array)
             .map(Vec::len),

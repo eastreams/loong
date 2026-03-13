@@ -984,13 +984,25 @@ fn run_channels_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct ChannelsCliJsonSchema {
+    version: u32,
+    primary_channel_view: &'static str,
+    catalog_view: &'static str,
+    legacy_channel_views: &'static [&'static str],
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct ChannelsCliJsonPayload {
     config: String,
+    schema: ChannelsCliJsonSchema,
     channels: Vec<mvp::channel::ChannelStatusSnapshot>,
     catalog_only_channels: Vec<mvp::channel::ChannelCatalogEntry>,
     channel_catalog: Vec<mvp::channel::ChannelCatalogEntry>,
     channel_surfaces: Vec<mvp::channel::ChannelSurface>,
 }
+
+const CHANNELS_CLI_JSON_SCHEMA_VERSION: u32 = 1;
+const CHANNELS_CLI_JSON_LEGACY_VIEWS: &[&str] = &["channels", "catalog_only_channels"];
 
 fn build_channels_cli_json_payload(
     config_path: &str,
@@ -998,6 +1010,12 @@ fn build_channels_cli_json_payload(
 ) -> ChannelsCliJsonPayload {
     ChannelsCliJsonPayload {
         config: config_path.to_owned(),
+        schema: ChannelsCliJsonSchema {
+            version: CHANNELS_CLI_JSON_SCHEMA_VERSION,
+            primary_channel_view: "channel_surfaces",
+            catalog_view: "channel_catalog",
+            legacy_channel_views: CHANNELS_CLI_JSON_LEGACY_VIEWS,
+        },
         channels: inventory.channels.clone(),
         catalog_only_channels: inventory.catalog_only_channels.clone(),
         channel_catalog: inventory.channel_catalog.clone(),
