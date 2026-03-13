@@ -562,10 +562,22 @@ impl SessionRepository {
                     MAX(t.ts) AS last_turn_at
                  FROM sessions s
                  LEFT JOIN (
-                    SELECT session_id, MAX(ts) AS archived_at
-                    FROM session_events
-                    WHERE event_kind = 'session_archived'
-                    GROUP BY session_id
+                    SELECT
+                        latest.session_id,
+                        CASE
+                            WHEN latest.event_kind = 'session_archived' THEN latest.ts
+                            ELSE NULL
+                        END AS archived_at
+                    FROM (
+                        SELECT se.session_id, se.event_kind, se.ts
+                        FROM session_events se
+                        JOIN (
+                            SELECT session_id, MAX(id) AS latest_id
+                            FROM session_events
+                            WHERE event_kind IN ('session_archived', 'session_unarchived')
+                            GROUP BY session_id
+                        ) selected ON selected.latest_id = se.id
+                    ) latest
                  ) archived ON archived.session_id = s.session_id
                  JOIN visible v ON v.session_id = s.session_id
                  LEFT JOIN turns t ON t.session_id = s.session_id
@@ -994,10 +1006,22 @@ impl SessionRepository {
                     MAX(t.ts) AS last_turn_at
                  FROM sessions s
                  LEFT JOIN (
-                    SELECT session_id, MAX(ts) AS archived_at
-                    FROM session_events
-                    WHERE event_kind = 'session_archived'
-                    GROUP BY session_id
+                    SELECT
+                        latest.session_id,
+                        CASE
+                            WHEN latest.event_kind = 'session_archived' THEN latest.ts
+                            ELSE NULL
+                        END AS archived_at
+                    FROM (
+                        SELECT se.session_id, se.event_kind, se.ts
+                        FROM session_events se
+                        JOIN (
+                            SELECT session_id, MAX(id) AS latest_id
+                            FROM session_events
+                            WHERE event_kind IN ('session_archived', 'session_unarchived')
+                            GROUP BY session_id
+                        ) selected ON selected.latest_id = se.id
+                    ) latest
                  ) archived ON archived.session_id = s.session_id
                  LEFT JOIN turns t ON t.session_id = s.session_id
                  WHERE s.session_id = ?1
