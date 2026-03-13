@@ -86,6 +86,9 @@ impl ChannelStatusSnapshot {
     }
 }
 
+type ChannelSnapshotBuilder =
+    fn(&ChannelRegistryDescriptor, &LoongClawConfig, &Path, u64) -> Vec<ChannelStatusSnapshot>;
+
 #[derive(Debug, Clone, Copy)]
 struct ChannelRegistryDescriptor {
     platform: ChannelPlatform,
@@ -93,6 +96,33 @@ struct ChannelRegistryDescriptor {
     aliases: &'static [&'static str],
     transport: &'static str,
     operations: &'static [ChannelCatalogOperation],
+    build_snapshots: ChannelSnapshotBuilder,
+}
+
+impl ChannelRegistryDescriptor {
+    fn id(self) -> &'static str {
+        self.platform.as_str()
+    }
+
+    fn catalog_entry(self) -> ChannelCatalogEntry {
+        ChannelCatalogEntry {
+            id: self.id(),
+            label: self.label,
+            aliases: self.aliases.to_vec(),
+            transport: self.transport,
+            operations: self.operations.to_vec(),
+        }
+    }
+
+    fn matches_normalized(self, normalized: &str) -> bool {
+        self.id() == normalized
+            || self.label.eq_ignore_ascii_case(normalized)
+            || self
+                .aliases
+                .iter()
+                .copied()
+                .any(|alias| alias.eq_ignore_ascii_case(normalized))
+    }
 }
 
 const TELEGRAM_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -128,6 +158,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
         aliases: &[],
         transport: "telegram_bot_api_polling",
         operations: TELEGRAM_OPERATIONS,
+        build_snapshots: build_telegram_snapshots,
     },
     ChannelRegistryDescriptor {
         platform: ChannelPlatform::Feishu,
@@ -135,19 +166,15 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
         aliases: &["lark"],
         transport: "feishu_openapi_webhook",
         operations: FEISHU_OPERATIONS,
+        build_snapshots: build_feishu_snapshots,
     },
 ];
 
 pub fn list_channel_catalog() -> Vec<ChannelCatalogEntry> {
     CHANNEL_REGISTRY
         .iter()
-        .map(|descriptor| ChannelCatalogEntry {
-            id: descriptor.platform.as_str(),
-            label: descriptor.label,
-            aliases: descriptor.aliases.to_vec(),
-            transport: descriptor.transport,
-            operations: descriptor.operations.to_vec(),
-        })
+        .copied()
+        .map(ChannelRegistryDescriptor::catalog_entry)
         .collect()
 }
 
@@ -157,17 +184,11 @@ pub fn normalize_channel_platform(raw: &str) -> Option<ChannelPlatform> {
         return None;
     }
 
-    CHANNEL_REGISTRY.iter().find_map(|descriptor| {
-        if descriptor.platform.as_str() == normalized {
-            return Some(descriptor.platform);
-        }
-        descriptor
-            .aliases
-            .iter()
-            .copied()
-            .find(|alias| *alias == normalized)
-            .map(|_| descriptor.platform)
-    })
+    CHANNEL_REGISTRY
+        .iter()
+        .copied()
+        .find(|descriptor| descriptor.matches_normalized(normalized.as_str()))
+        .map(|descriptor| descriptor.platform)
 }
 
 pub fn channel_status_snapshots(config: &LoongClawConfig) -> Vec<ChannelStatusSnapshot> {
@@ -183,28 +204,12 @@ fn channel_status_snapshots_with_now(
     runtime_dir: &Path,
     now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
-    let mut snapshots = Vec::new();
-    for descriptor in CHANNEL_REGISTRY {
-        match descriptor.platform {
-            ChannelPlatform::Telegram => {
-                snapshots.extend(build_telegram_snapshots(
-                    descriptor,
-                    config,
-                    runtime_dir,
-                    now_ms,
-                ));
-            }
-            ChannelPlatform::Feishu => {
-                snapshots.extend(build_feishu_snapshots(
-                    descriptor,
-                    config,
-                    runtime_dir,
-                    now_ms,
-                ));
-            }
-        }
-    }
-    snapshots
+    CHANNEL_REGISTRY
+        .iter()
+        .flat_map(|descriptor| {
+            (descriptor.build_snapshots)(descriptor, config, runtime_dir, now_ms)
+        })
+        .collect()
 }
 
 fn build_telegram_snapshots(
@@ -721,6 +726,10 @@ mod tests {
     fn normalize_channel_platform_maps_lark_alias_to_feishu() {
         assert_eq!(
             normalize_channel_platform("lark"),
+            Some(ChannelPlatform::Feishu)
+        );
+        assert_eq!(
+            normalize_channel_platform(" Feishu/Lark "),
             Some(ChannelPlatform::Feishu)
         );
         assert_eq!(
