@@ -28,6 +28,7 @@ As an operator using LoongClaw's tool-calling runtime, I want to inspect active 
 - [x] `session_status` and `session_wait` expose a normalized `delegate_lifecycle` summary for real delegate children, including queued vs running phase, inline vs async mode, and timeout-based staleness hints when the child is still non-terminal.
 - [x] `sessions_list` supports machine-readable filtering for visible-session discovery and can surface `delegate_lifecycle` metadata when requested or when filtering overdue delegate children.
 - [x] `session_status` accepts either `session_id` or `session_ids` and returns per-target inspection results for batch flows while preserving the legacy single-target response shape.
+- [x] `session_wait` accepts either `session_id` or `session_ids`, preserves the legacy single-target response shape, and returns per-target wait results for batch flows with shared `timeout_ms` / `after_id` request context.
 - [x] `session_status` and `session_wait` surface pending cancellation metadata for running async delegate children after an operator requests cancellation.
 - [x] `session_cancel` can immediately cancel a visible queued async delegate child and can request cooperative cancellation for a visible running async delegate child without broadening child-session authority.
 - [x] `session_recover` can mark a visible overdue queued or overdue running async delegate child as failed and persist both a terminal outcome and structured recovery event without broadening child-session authority.

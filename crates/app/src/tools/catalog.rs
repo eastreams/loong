@@ -609,6 +609,14 @@ fn session_wait_definition(descriptor: &ToolDescriptor) -> Value {
                         "type": "string",
                         "description": "Visible session identifier to wait on."
                     },
+                    "session_ids": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "minItems": 1,
+                        "description": "Visible session identifiers to wait on in one request."
+                    },
                     "after_id": {
                         "type": "integer",
                         "description": "Optional event cursor. When present, the response also returns session events with id greater than this value."
@@ -620,7 +628,10 @@ fn session_wait_definition(descriptor: &ToolDescriptor) -> Value {
                         "description": "Bounded wait timeout in milliseconds."
                     }
                 },
-                "required": ["session_id"],
+                "oneOf": [
+                    { "required": ["session_id"] },
+                    { "required": ["session_ids"] }
+                ],
                 "additionalProperties": false
             }
         }

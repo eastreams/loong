@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use loongclaw_contracts::{Capability, ToolCoreOutcome, ToolCoreRequest};
 use serde_json::{json, Value};
-use tokio::time::{sleep, Duration, Instant};
 
 use crate::KernelContext;
 
@@ -109,149 +108,14 @@ pub async fn wait_for_session_with_config(
         if !tool_config.sessions.enabled {
             return Err("app_tool_disabled: session tools are disabled by config".to_owned());
         }
-
-        let target_session_id = payload
-            .get("session_id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| "session tool requires payload.session_id".to_owned())?
-            .to_owned();
-        let after_id = payload.get("after_id").and_then(Value::as_i64);
-        let timeout_ms = payload
-            .get("timeout_ms")
-            .and_then(Value::as_u64)
-            .unwrap_or(1_000)
-            .clamp(1, 30_000);
-        let event_limit = tool_config.sessions.history_limit.min(50);
-        let started_at = Instant::now();
-        let mut next_after_id = after_id.unwrap_or(0).max(0);
-        let mut observed_events = Vec::new();
-
-        loop {
-            let observation = session::observe_visible_session_with_policies(
-                &target_session_id,
-                current_session_id,
-                memory_config,
-                tool_config,
-                5,
-                after_id.map(|_| next_after_id),
-                event_limit,
-            )?;
-            let snapshot = observation.inspection;
-            if let Some(last_tail_event_id) = observation.tail_events.last().map(|event| event.id) {
-                next_after_id = last_tail_event_id;
-            }
-            observed_events.extend(observation.tail_events);
-            let is_terminal = session::session_state_is_terminal(snapshot.session.state);
-            if is_terminal {
-                return Ok(wait_outcome(
-                    "ok",
-                    snapshot,
-                    after_id,
-                    timeout_ms,
-                    match after_id {
-                        Some(_) => observed_events,
-                        None => Vec::new(),
-                    },
-                    next_after_id,
-                ));
-            }
-
-            let elapsed_ms = started_at.elapsed().as_millis() as u64;
-            if elapsed_ms >= timeout_ms {
-                return Ok(ToolCoreOutcome {
-                    status: "timeout".to_owned(),
-                    payload: wait_payload(
-                        snapshot,
-                        "timeout",
-                        after_id,
-                        timeout_ms,
-                        match after_id {
-                            Some(_) => observed_events,
-                            None => Vec::new(),
-                        },
-                        next_after_id,
-                    ),
-                });
-            }
-
-            let remaining_ms = timeout_ms - elapsed_ms;
-            sleep(Duration::from_millis(remaining_ms.min(25))).await;
-        }
+        session::wait_for_session_tool_with_policies(
+            payload,
+            current_session_id,
+            memory_config,
+            tool_config,
+        )
+        .await
     }
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn wait_outcome(
-    status: &str,
-    snapshot: session::SessionInspectionSnapshot,
-    after_id: Option<i64>,
-    timeout_ms: u64,
-    observed_events: Vec<crate::session::repository::SessionEventRecord>,
-    next_after_id: i64,
-) -> ToolCoreOutcome {
-    ToolCoreOutcome {
-        status: status.to_owned(),
-        payload: wait_payload(
-            snapshot,
-            if status == "ok" {
-                "completed"
-            } else {
-                "timeout"
-            },
-            after_id,
-            timeout_ms,
-            observed_events,
-            next_after_id,
-        ),
-    }
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn wait_payload(
-    snapshot: session::SessionInspectionSnapshot,
-    wait_status: &str,
-    after_id: Option<i64>,
-    timeout_ms: u64,
-    observed_events: Vec<crate::session::repository::SessionEventRecord>,
-    next_after_id: i64,
-) -> Value {
-    let next_after_id = match after_id {
-        Some(_) => next_after_id,
-        None => snapshot
-            .recent_events
-            .last()
-            .map(|event| event.id)
-            .unwrap_or(0),
-    };
-    let events = match after_id {
-        Some(_) => observed_events,
-        None => snapshot.recent_events.clone(),
-    };
-    let mut payload = session::session_inspection_payload(snapshot);
-    if let Some(object) = payload.as_object_mut() {
-        object.insert(
-            "wait_status".to_owned(),
-            Value::String(wait_status.to_owned()),
-        );
-        object.insert("timeout_ms".to_owned(), Value::from(timeout_ms));
-        object.insert(
-            "after_id".to_owned(),
-            after_id.map(Value::from).unwrap_or(Value::Null),
-        );
-        object.insert("next_after_id".to_owned(), Value::from(next_after_id));
-        object.insert(
-            "events".to_owned(),
-            Value::Array(
-                events
-                    .into_iter()
-                    .map(session::session_event_json)
-                    .collect::<Vec<_>>(),
-            ),
-        );
-    }
-    payload
 }
 
 pub fn canonical_tool_name(raw: &str) -> &str {
@@ -500,8 +364,16 @@ mod tests {
             .as_object()
             .expect("session_wait properties");
         assert!(properties.contains_key("session_id"));
+        assert!(properties.contains_key("session_ids"));
         assert!(properties.contains_key("timeout_ms"));
         assert!(properties.contains_key("after_id"));
+        assert_eq!(
+            session_wait["function"]["parameters"]["oneOf"]
+                .as_array()
+                .expect("session_wait oneOf")
+                .len(),
+            2
+        );
 
         let session_recover = defs
             .iter()

@@ -207,6 +207,9 @@ Delivered in current baseline:
     and stable lifecycle-anchor reads that do not depend on recent-event windows
   - batch `session_status` inspection targeting with `session_ids`, reusing the existing
     inspection payload while preserving legacy single-target response shape
+  - batch `session_wait` targeting with `session_ids`, shared bounded wait context, and per-target
+    `ok` / `timeout` / `skipped_not_visible` classification while preserving legacy single-target
+    response shape
   - cooperative cancellation requests for running async delegate children, surfaced through
     session lifecycle metadata and finalized as durable cancelled failures at the next safe
     turn-loop checkpoint

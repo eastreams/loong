@@ -1380,6 +1380,127 @@ async fn session_wait_times_out_for_non_terminal_session() {
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
+async fn session_wait_batch_returns_mixed_completed_timeout_and_hidden_results() {
+    let (config, db_path) = isolated_test_config("session-wait-batch");
+    let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
+        sqlite_path: Some(db_path),
+    };
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "completed-child".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Completed".to_owned()),
+        state: crate::session::repository::SessionState::Completed,
+    })
+    .expect("create completed child");
+    repo.upsert_terminal_outcome(
+        "completed-child",
+        "ok",
+        json!({
+            "child_session_id": "completed-child",
+            "final_output": "done"
+        }),
+    )
+    .expect("upsert terminal outcome");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "running-child".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Running".to_owned()),
+        state: crate::session::repository::SessionState::Running,
+    })
+    .expect("create running child");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "hidden-root".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Hidden".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create hidden root");
+
+    let dispatcher = DefaultAppToolDispatcher::new(memory_config, config.tools.clone());
+    let session_context = SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::runtime_tool_view_for_config(&config.tools),
+    );
+
+    let outcome = dispatcher
+        .execute_app_tool(
+            &session_context,
+            loongclaw_contracts::ToolCoreRequest {
+                tool_name: "session_wait".to_owned(),
+                payload: json!({
+                    "session_ids": ["hidden-root", "completed-child", "running-child"],
+                    "timeout_ms": 10
+                }),
+            },
+            None,
+        )
+        .await
+        .expect("session_wait batch outcome");
+
+    assert_eq!(outcome.status, "ok");
+    assert_eq!(outcome.payload["tool"], "session_wait");
+    assert_eq!(outcome.payload["current_session_id"], "root-session");
+    assert_eq!(outcome.payload["requested_count"], 3);
+    assert_eq!(outcome.payload["timeout_ms"], 10);
+    assert!(outcome.payload["after_id"].is_null());
+    assert_eq!(outcome.payload["result_counts"]["ok"], 1);
+    assert_eq!(outcome.payload["result_counts"]["timeout"], 1);
+    assert_eq!(outcome.payload["result_counts"]["skipped_not_visible"], 1);
+
+    let results = outcome.payload["results"]
+        .as_array()
+        .expect("batch results array");
+    let ids: Vec<&str> = results
+        .iter()
+        .filter_map(|item| item.get("session_id"))
+        .filter_map(Value::as_str)
+        .collect();
+    assert_eq!(ids, vec!["hidden-root", "completed-child", "running-child"]);
+
+    let hidden = results
+        .iter()
+        .find(|item| item["session_id"] == "hidden-root")
+        .expect("hidden batch result");
+    assert_eq!(hidden["result"], "skipped_not_visible");
+    assert!(hidden["inspection"].is_null());
+    assert!(hidden["message"]
+        .as_str()
+        .expect("hidden message")
+        .contains("visibility_denied"));
+
+    let completed = results
+        .iter()
+        .find(|item| item["session_id"] == "completed-child")
+        .expect("completed batch result");
+    assert_eq!(completed["result"], "ok");
+    assert_eq!(completed["inspection"]["wait_status"], "completed");
+    assert_eq!(completed["inspection"]["session"]["state"], "completed");
+    assert_eq!(completed["inspection"]["terminal_outcome"]["status"], "ok");
+
+    let running = results
+        .iter()
+        .find(|item| item["session_id"] == "running-child")
+        .expect("running batch result");
+    assert_eq!(running["result"], "timeout");
+    assert_eq!(running["inspection"]["wait_status"], "timeout");
+    assert_eq!(running["inspection"]["session"]["state"], "running");
+    assert!(running["inspection"]["terminal_outcome"].is_null());
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
 async fn session_wait_reports_delegate_lifecycle_for_queued_child() {
     let (config, db_path) = isolated_test_config("session-wait-delegate-lifecycle");
     let repo = SessionRepository::new(&crate::memory::runtime_config::MemoryRuntimeConfig {

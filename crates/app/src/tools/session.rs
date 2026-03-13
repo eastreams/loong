@@ -3,6 +3,8 @@ use std::{
     collections::BTreeMap,
     time::{SystemTime, UNIX_EPOCH},
 };
+#[cfg(feature = "memory-sqlite")]
+use tokio::time::{sleep, Duration, Instant};
 
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::{json, Value};
@@ -152,6 +154,16 @@ struct SessionBatchResultRecord {
     inspection: Option<Value>,
 }
 
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq)]
+struct SessionWaitTargetState {
+    index: usize,
+    session_id: String,
+    next_after_id: i64,
+    observed_events: Vec<SessionEventRecord>,
+    latest_inspection: Option<SessionInspectionSnapshot>,
+}
+
 #[cfg(test)]
 pub fn execute_session_tool_with_config(
     request: ToolCoreRequest,
@@ -205,6 +217,51 @@ pub fn execute_session_tool_with_policies(
             )),
         }
     }
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(super) async fn wait_for_session_tool_with_policies(
+    payload: Value,
+    current_session_id: &str,
+    config: &MemoryRuntimeConfig,
+    tool_config: &ToolConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let request = parse_session_target_request(&payload)?;
+    let after_id = payload.get("after_id").and_then(Value::as_i64);
+    let timeout_ms = payload
+        .get("timeout_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(1_000)
+        .clamp(1, 30_000);
+    let event_limit = tool_config.sessions.history_limit.min(50);
+
+    if request.legacy_single {
+        let target_session_id = request
+            .session_ids
+            .first()
+            .expect("legacy single request requires one session id");
+        return wait_for_single_session_with_policies(
+            target_session_id,
+            current_session_id,
+            config,
+            tool_config,
+            after_id,
+            timeout_ms,
+            event_limit,
+        )
+        .await;
+    }
+
+    wait_for_session_batch_with_policies(
+        request.session_ids,
+        current_session_id,
+        config,
+        tool_config,
+        after_id,
+        timeout_ms,
+        event_limit,
+    )
+    .await
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -563,6 +620,231 @@ pub(super) fn inspect_visible_session_with_policies(
         0,
     )?
     .inspection)
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn wait_for_single_session_with_policies(
+    target_session_id: &str,
+    current_session_id: &str,
+    config: &MemoryRuntimeConfig,
+    tool_config: &ToolConfig,
+    after_id: Option<i64>,
+    timeout_ms: u64,
+    event_limit: usize,
+) -> Result<ToolCoreOutcome, String> {
+    let started_at = Instant::now();
+    let mut next_after_id = after_id.unwrap_or(0).max(0);
+    let mut observed_events = Vec::new();
+
+    loop {
+        let observation = observe_visible_session_with_policies(
+            target_session_id,
+            current_session_id,
+            config,
+            tool_config,
+            event_limit,
+            after_id.map(|_| next_after_id),
+            event_limit,
+        )?;
+        let snapshot = observation.inspection;
+        if let Some(last_tail_event_id) = observation.tail_events.last().map(|event| event.id) {
+            next_after_id = last_tail_event_id;
+        }
+        observed_events.extend(observation.tail_events);
+        if session_state_is_terminal(snapshot.session.state) {
+            return Ok(wait_outcome(
+                "ok",
+                snapshot,
+                after_id,
+                timeout_ms,
+                if after_id.is_some() {
+                    observed_events
+                } else {
+                    Vec::new()
+                },
+                next_after_id,
+            ));
+        }
+
+        let elapsed_ms = started_at.elapsed().as_millis() as u64;
+        if elapsed_ms >= timeout_ms {
+            return Ok(ToolCoreOutcome {
+                status: "timeout".to_owned(),
+                payload: wait_payload(
+                    snapshot,
+                    "timeout",
+                    after_id,
+                    timeout_ms,
+                    if after_id.is_some() {
+                        observed_events
+                    } else {
+                        Vec::new()
+                    },
+                    next_after_id,
+                ),
+            });
+        }
+
+        let remaining_ms = timeout_ms - elapsed_ms;
+        sleep(Duration::from_millis(remaining_ms.min(25))).await;
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn wait_for_session_batch_with_policies(
+    target_session_ids: Vec<String>,
+    current_session_id: &str,
+    config: &MemoryRuntimeConfig,
+    tool_config: &ToolConfig,
+    after_id: Option<i64>,
+    timeout_ms: u64,
+    event_limit: usize,
+) -> Result<ToolCoreOutcome, String> {
+    let repo = SessionRepository::new(config)?;
+    let mut results = vec![None; target_session_ids.len()];
+    let mut pending = Vec::new();
+    for (index, target_session_id) in target_session_ids.into_iter().enumerate() {
+        if let Err(error) = ensure_visible(
+            &repo,
+            current_session_id,
+            &target_session_id,
+            tool_config.sessions.visibility,
+        ) {
+            results[index] = Some(session_batch_result(
+                target_session_id,
+                "skipped_not_visible",
+                Some(error),
+                None,
+                None,
+            ));
+            continue;
+        }
+        pending.push(SessionWaitTargetState {
+            index,
+            session_id: target_session_id,
+            next_after_id: after_id.unwrap_or(0).max(0),
+            observed_events: Vec::new(),
+            latest_inspection: None,
+        });
+    }
+    drop(repo);
+
+    let started_at = Instant::now();
+    loop {
+        let mut next_pending = Vec::with_capacity(pending.len());
+        for mut target in pending.into_iter() {
+            let observation = match observe_visible_session_with_policies(
+                &target.session_id,
+                current_session_id,
+                config,
+                tool_config,
+                event_limit,
+                after_id.map(|_| target.next_after_id),
+                event_limit,
+            ) {
+                Ok(observation) => observation,
+                Err(error) if is_session_visibility_skip_error(&error) => {
+                    results[target.index] = Some(session_batch_result(
+                        target.session_id,
+                        "skipped_not_visible",
+                        Some(error),
+                        None,
+                        None,
+                    ));
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            let snapshot = observation.inspection;
+            if let Some(last_tail_event_id) = observation.tail_events.last().map(|event| event.id) {
+                target.next_after_id = last_tail_event_id;
+            }
+            target.observed_events.extend(observation.tail_events);
+            target.latest_inspection = Some(snapshot.clone());
+            if session_state_is_terminal(snapshot.session.state) {
+                results[target.index] = Some(session_batch_result(
+                    target.session_id,
+                    "ok",
+                    None,
+                    None,
+                    Some(wait_payload(
+                        snapshot,
+                        "completed",
+                        after_id,
+                        timeout_ms,
+                        if after_id.is_some() {
+                            std::mem::take(&mut target.observed_events)
+                        } else {
+                            Vec::new()
+                        },
+                        target.next_after_id,
+                    )),
+                ));
+                continue;
+            }
+            next_pending.push(target);
+        }
+        pending = next_pending;
+
+        if pending.is_empty() {
+            return Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: session_wait_batch_payload(
+                    current_session_id,
+                    after_id,
+                    timeout_ms,
+                    results
+                        .into_iter()
+                        .map(|result| result.expect("batch wait result"))
+                        .collect::<Vec<_>>(),
+                ),
+            });
+        }
+
+        let elapsed_ms = started_at.elapsed().as_millis() as u64;
+        if elapsed_ms >= timeout_ms {
+            for mut target in pending.into_iter() {
+                let snapshot = target
+                    .latest_inspection
+                    .take()
+                    .expect("pending batch wait target inspection");
+                results[target.index] = Some(session_batch_result(
+                    target.session_id,
+                    "timeout",
+                    None,
+                    None,
+                    Some(wait_payload(
+                        snapshot,
+                        "timeout",
+                        after_id,
+                        timeout_ms,
+                        if after_id.is_some() {
+                            target.observed_events
+                        } else {
+                            Vec::new()
+                        },
+                        target.next_after_id,
+                    )),
+                ));
+            }
+
+            return Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: session_wait_batch_payload(
+                    current_session_id,
+                    after_id,
+                    timeout_ms,
+                    results
+                        .into_iter()
+                        .map(|result| result.expect("batch wait result"))
+                        .collect::<Vec<_>>(),
+                ),
+            });
+        }
+
+        let remaining_ms = timeout_ms - elapsed_ms;
+        sleep(Duration::from_millis(remaining_ms.min(25))).await;
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -1732,6 +2014,33 @@ fn session_batch_payload_with_optional_dry_run(
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn session_wait_batch_payload(
+    current_session_id: &str,
+    after_id: Option<i64>,
+    timeout_ms: u64,
+    results: Vec<SessionBatchResultRecord>,
+) -> Value {
+    let mut payload = session_batch_payload_without_dry_run(
+        "session_wait",
+        current_session_id,
+        results.len(),
+        results,
+    );
+    payload
+        .as_object_mut()
+        .expect("session wait batch payload object")
+        .insert("timeout_ms".to_owned(), Value::from(timeout_ms));
+    payload
+        .as_object_mut()
+        .expect("session wait batch payload object")
+        .insert(
+            "after_id".to_owned(),
+            after_id.map(Value::from).unwrap_or(Value::Null),
+        );
+    payload
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn session_batch_result(
     session_id: String,
     result: &'static str,
@@ -1746,6 +2055,78 @@ fn session_batch_result(
         action,
         inspection,
     }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn wait_outcome(
+    status: &str,
+    snapshot: SessionInspectionSnapshot,
+    after_id: Option<i64>,
+    timeout_ms: u64,
+    observed_events: Vec<SessionEventRecord>,
+    next_after_id: i64,
+) -> ToolCoreOutcome {
+    ToolCoreOutcome {
+        status: status.to_owned(),
+        payload: wait_payload(
+            snapshot,
+            if status == "ok" {
+                "completed"
+            } else {
+                "timeout"
+            },
+            after_id,
+            timeout_ms,
+            observed_events,
+            next_after_id,
+        ),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn wait_payload(
+    snapshot: SessionInspectionSnapshot,
+    wait_status: &str,
+    after_id: Option<i64>,
+    timeout_ms: u64,
+    observed_events: Vec<SessionEventRecord>,
+    next_after_id: i64,
+) -> Value {
+    let next_after_id = match after_id {
+        Some(_) => next_after_id,
+        None => snapshot
+            .recent_events
+            .last()
+            .map(|event| event.id)
+            .unwrap_or(0),
+    };
+    let events = match after_id {
+        Some(_) => observed_events,
+        None => snapshot.recent_events.clone(),
+    };
+    let mut payload = session_inspection_payload(snapshot);
+    if let Some(object) = payload.as_object_mut() {
+        object.insert(
+            "wait_status".to_owned(),
+            Value::String(wait_status.to_owned()),
+        );
+        object.insert("timeout_ms".to_owned(), Value::from(timeout_ms));
+        object.insert(
+            "after_id".to_owned(),
+            after_id.map(Value::from).unwrap_or(Value::Null),
+        );
+        object.insert("next_after_id".to_owned(), Value::from(next_after_id));
+        object.insert(
+            "events".to_owned(),
+            Value::Array(
+                events
+                    .into_iter()
+                    .map(session_event_json)
+                    .collect::<Vec<_>>(),
+            ),
+        );
+    }
+    payload
 }
 
 #[cfg(feature = "memory-sqlite")]
