@@ -18,13 +18,13 @@ authors = ["chumyin"]
 
 [workspace.dependencies]
 async-trait = "0.1"
-chrono = { version = "0.4.44", default-features = false, features = ["clock", "std"] }
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.9"
 semver = "1"
 thiserror = "2"
+time = { version = "0.3.47", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "io-util", "io-std", "process", "signal"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 futures-util = "0.3"

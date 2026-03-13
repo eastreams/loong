@@ -3,9 +3,14 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use chrono::Local;
 use loongclaw_app as mvp;
+use time::OffsetDateTime;
+use time::format_description::FormatItem;
+use time::macros::format_description;
 use loongclaw_spec::CliResult;
+
+const BACKUP_TIMESTAMP_FORMAT: &[FormatItem<'static>] =
+    format_description!("[year][month][day]-[hour][minute][second]");
 
 #[derive(Debug, Clone)]
 pub(crate) struct OnboardCommandOptions {
@@ -1234,14 +1239,25 @@ fn resolve_force_write(output_path: &Path, options: &OnboardCommandOptions) -> C
 }
 
 fn resolve_backup_path(original: &Path) -> CliResult<PathBuf> {
+    let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+    resolve_backup_path_at(original, now)
+}
+
+fn resolve_backup_path_at(original: &Path, timestamp: OffsetDateTime) -> CliResult<PathBuf> {
     let parent = original.parent().unwrap_or(Path::new("."));
     let file_stem = original
         .file_stem()
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_else(|| "config".to_owned());
 
-    let timestamp = Local::now().format("%Y%m%d-%H%M%S").to_string();
-    Ok(parent.join(format!("{}.toml.bak-{}", file_stem, timestamp)))
+    let formatted_timestamp = format_backup_timestamp_at(timestamp)?;
+    Ok(parent.join(format!("{}.toml.bak-{}", file_stem, formatted_timestamp)))
+}
+
+fn format_backup_timestamp_at(timestamp: OffsetDateTime) -> CliResult<String> {
+    timestamp
+        .format(BACKUP_TIMESTAMP_FORMAT)
+        .map_err(|error| format!("format backup timestamp failed: {error}"))
 }
 
 fn load_or_default_onboard_config(path: &Path) -> CliResult<mvp::config::LoongClawConfig> {
@@ -1251,4 +1267,37 @@ fn load_or_default_onboard_config(path: &Path) -> CliResult<mvp::config::LoongCl
     let path_string = path.display().to_string();
     let (_, config) = mvp::config::load(Some(&path_string))?;
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_backup_timestamp_at_matches_existing_filename_shape() {
+        let timestamp = time::macros::datetime!(2026-03-14 01:23:45 +08:00);
+
+        let formatted = match format_backup_timestamp_at(timestamp) {
+            Ok(value) => value,
+            Err(error) => panic!("formatting should succeed: {error}"),
+        };
+
+        assert_eq!(formatted, "20260314-012345");
+    }
+
+    #[test]
+    fn resolve_backup_path_at_uses_formatted_timestamp() {
+        let original = Path::new("/tmp/loongclaw.toml");
+        let timestamp = time::macros::datetime!(2026-03-14 01:23:45 +08:00);
+
+        let path = match resolve_backup_path_at(original, timestamp) {
+            Ok(value) => value,
+            Err(error) => panic!("backup path should resolve: {error}"),
+        };
+
+        assert_eq!(
+            path,
+            PathBuf::from("/tmp/loongclaw.toml.bak-20260314-012345")
+        );
+    }
 }

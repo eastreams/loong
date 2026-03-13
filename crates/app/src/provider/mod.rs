@@ -105,6 +105,8 @@ use profile_state_backend::{
     provider_profile_state_persistence_metrics_snapshot,
     record_provider_profile_state_persist_outcome,
 };
+#[cfg(any(test, feature = "memory-sqlite"))]
+use profile_state_store::current_unix_timestamp_ms;
 #[cfg(test)]
 use profile_state_store::{
     PROVIDER_PROFILE_STATE_SNAPSHOT_VERSION, ProviderProfileStateEntry,

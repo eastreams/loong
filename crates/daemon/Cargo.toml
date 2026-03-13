@@ -27,7 +27,7 @@ loongclaw-spec = { path = "../spec" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-chrono.workspace = true
+time.workspace = true
 
 [[bin]]
 name = "loongclaw"

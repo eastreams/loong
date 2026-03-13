@@ -1,6 +1,8 @@
 use crate::config::ProviderConfig;
-use chrono::{DateTime, Utc};
 use reqwest::header::{HeaderMap, RETRY_AFTER};
+use std::time::{Duration, SystemTime};
+use time::OffsetDateTime;
+use time::format_description::well_known::{Rfc2822, Rfc3339};
 
 const MIN_BACKOFF_MS: u64 = 50;
 
@@ -61,10 +63,10 @@ pub(super) fn next_backoff_ms(current: u64, max_backoff_ms: u64) -> u64 {
 }
 
 fn parse_retry_after_ms(response_headers: &HeaderMap) -> Option<u64> {
-    parse_retry_after_ms_at(response_headers, Utc::now())
+    parse_retry_after_ms_at(response_headers, SystemTime::now())
 }
 
-fn parse_retry_after_ms_at(response_headers: &HeaderMap, now: DateTime<Utc>) -> Option<u64> {
+fn parse_retry_after_ms_at(response_headers: &HeaderMap, now: SystemTime) -> Option<u64> {
     let raw = response_headers.get(RETRY_AFTER)?.to_str().ok()?.trim();
     if raw.is_empty() {
         return None;
@@ -74,19 +76,25 @@ fn parse_retry_after_ms_at(response_headers: &HeaderMap, now: DateTime<Utc>) -> 
         return Some(seconds.saturating_mul(1_000));
     }
 
-    let retry_at = DateTime::parse_from_rfc2822(raw)
-        .or_else(|_| DateTime::parse_from_rfc3339(raw))
+    let retry_at = OffsetDateTime::parse(raw, &Rfc2822)
+        .or_else(|_| OffsetDateTime::parse(raw, &Rfc3339))
         .ok()?
-        .with_timezone(&Utc);
-    let wait = retry_at.signed_duration_since(now);
-    if wait <= chrono::Duration::zero() {
-        return Some(0);
-    }
-    let wait_std = wait.to_std().ok()?;
-    match u64::try_from(wait_std.as_millis()) {
+        .to_offset(time::UtcOffset::UTC);
+    let retry_at = offset_date_time_to_system_time(retry_at)?;
+    let wait = match retry_at.duration_since(now) {
+        Ok(duration) => duration,
+        Err(_) => return Some(0),
+    };
+    match u64::try_from(wait.as_millis()) {
         Ok(ms) => Some(ms),
         Err(_) => Some(u64::MAX),
     }
+}
+
+fn offset_date_time_to_system_time(value: OffsetDateTime) -> Option<SystemTime> {
+    let seconds = u64::try_from(value.unix_timestamp()).ok()?;
+    let system_time = SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(seconds))?;
+    system_time.checked_add(Duration::from_nanos(u64::from(value.nanosecond())))
 }
 
 #[cfg(test)]
@@ -141,16 +149,44 @@ mod tests {
 
     #[test]
     fn retry_delay_uses_retry_after_http_date_hint_when_present() {
-        let now = DateTime::parse_from_rfc3339("2026-03-11T10:00:00Z")
-            .expect("valid test timestamp")
-            .with_timezone(&Utc);
-        let retry_at = (now + chrono::Duration::seconds(2)).to_rfc2822();
+        let now = time::macros::datetime!(2026-03-11 10:00:00 UTC);
+        let retry_at = (now + time::Duration::seconds(2))
+            .format(&Rfc2822)
+            .unwrap_or_else(|error| panic!("retry-after test date should format: {error}"));
         let mut headers = HeaderMap::new();
         headers.insert(
             RETRY_AFTER,
             HeaderValue::from_str(retry_at.as_str()).expect("valid retry-after header"),
         );
-        assert_eq!(parse_retry_after_ms_at(&headers, now), Some(2_000));
+        let now_system_time = match offset_date_time_to_system_time(now) {
+            Some(value) => value,
+            None => panic!("test timestamp should convert to SystemTime"),
+        };
+        assert_eq!(
+            parse_retry_after_ms_at(&headers, now_system_time),
+            Some(2_000)
+        );
+    }
+
+    #[test]
+    fn retry_delay_uses_retry_after_rfc3339_hint_when_present() {
+        let now = time::macros::datetime!(2026-03-11 10:00:00 UTC);
+        let retry_at = (now + time::Duration::seconds(2))
+            .format(&Rfc3339)
+            .unwrap_or_else(|error| panic!("retry-after test date should format: {error}"));
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            RETRY_AFTER,
+            HeaderValue::from_str(retry_at.as_str()).expect("valid retry-after header"),
+        );
+        let now_system_time = match offset_date_time_to_system_time(now) {
+            Some(value) => value,
+            None => panic!("test timestamp should convert to SystemTime"),
+        };
+        assert_eq!(
+            parse_retry_after_ms_at(&headers, now_system_time),
+            Some(2_000)
+        );
     }
 
     #[test]
