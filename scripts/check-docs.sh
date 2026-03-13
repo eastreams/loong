@@ -5,6 +5,7 @@ set -euo pipefail
 # Referenced by: task check:docs (Taskfile.yml)
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$REPO_ROOT/scripts/release_artifact_lib.sh"
 ERRORS=0
 WARNINGS=0
 PUBLIC_GITHUB_REPO="${LOONGCLAW_PUBLIC_REPO:-loongclaw-ai/loongclaw}"
@@ -47,7 +48,10 @@ fi
 # --- 2. Dead internal links in docs/ ---
 DEAD_LINK_FILE=$(mktemp)
 RELEASE_TAGS_FILE=$(mktemp)
-trap 'rm -f "$DEAD_LINK_FILE" "$RELEASE_TAGS_FILE"' EXIT
+RELEASE_TRACE_EXPECTATIONS_FILE=$(mktemp)
+LATEST_RELEASE_VERSION=""
+LATEST_RELEASE_TRACE_PATH=""
+trap 'rm -f "$DEAD_LINK_FILE" "$RELEASE_TAGS_FILE" "$RELEASE_TRACE_EXPECTATIONS_FILE"' EXIT
 
 find "$REPO_ROOT/docs" "$REPO_ROOT/CLAUDE.md" "$REPO_ROOT/AGENTS.md" -name '*.md' 2>/dev/null | while IFS= read -r md_file; do
     dir="$(dirname "$md_file")"
@@ -74,13 +78,13 @@ else
 fi
 
 # --- 3. Release docs map to released versions ---
-RELEASE_VERSIONS="$(grep -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' "$REPO_ROOT/CHANGELOG.md" | sed -E 's/^## \[([0-9]+\.[0-9]+\.[0-9]+)\]$/\1/' || true)"
+RELEASE_VERSIONS="$(release_versions_from_changelog "$REPO_ROOT/CHANGELOG.md" || true)"
 if [ -z "$RELEASE_VERSIONS" ]; then
     echo "OK: No released versions found in CHANGELOG.md"
 else
     while IFS= read -r version; do
         [ -z "$version" ] && continue
-        tag="v${version}"
+        tag="$(release_tag_from_version "$version")"
         doc_path="$REPO_ROOT/docs/releases/${tag}.md"
 
         if [ ! -f "$doc_path" ]; then
@@ -97,6 +101,7 @@ else
             "## Process"
             "## Artifacts"
             "## Verification"
+            "## Refactor Budget"
             "## Known Issues"
             "## Rollback"
             "## Detail Links"
@@ -117,8 +122,40 @@ else
             echo "FAIL: ${doc_path} missing trace summary field 'Trace ID:'"
             ERRORS=$((ERRORS + 1))
         fi
+        trace_id_field="$(release_doc_backticked_field "$doc_path" "Trace ID")"
+        if [ -z "$trace_id_field" ]; then
+            echo "FAIL: ${doc_path} missing exact backticked 'Trace ID' value"
+            ERRORS=$((ERRORS + 1))
+        fi
         if ! grep -Fq "Trace path:" "$doc_path"; then
             echo "FAIL: ${doc_path} missing trace summary field 'Trace path:'"
+            ERRORS=$((ERRORS + 1))
+        fi
+        trace_path_field="$(release_doc_backticked_field "$doc_path" "Trace path")"
+        if [ -z "$trace_path_field" ]; then
+            echo "FAIL: ${doc_path} missing exact backticked 'Trace path' value"
+            ERRORS=$((ERRORS + 1))
+        fi
+        if [ -n "$trace_path_field" ] && [ -n "$trace_id_field" ]; then
+            if ! release_trace_path_matches_contract "$tag" "$trace_id_field" "$trace_path_field"; then
+                trace_path_basename="$(basename "$trace_path_field" 2>/dev/null || true)"
+                expected_trace_suffix="$(release_trace_expected_suffix "$tag" "$trace_id_field")"
+                if [[ "$trace_path_field" != .docs/traces/* ]]; then
+                    echo "FAIL: ${doc_path} Trace path must stay under .docs/traces/: ${trace_path_field}"
+                elif ! release_trace_path_segments_safe "$trace_path_field"; then
+                    echo "FAIL: ${doc_path} Trace path must stay under .docs/traces/ without '.' or '..' segments or symlink prefixes: ${trace_path_field}"
+                elif ! release_trace_path_symlink_prefixes_safe "$trace_path_field"; then
+                    echo "FAIL: ${doc_path} Trace path must stay under .docs/traces/ without '.' or '..' segments or symlink prefixes: ${trace_path_field}"
+                elif [[ "$trace_path_basename" != *"-post-release-"* ]]; then
+                    echo "FAIL: ${doc_path} Trace path basename must include -post-release-"
+                else
+                    echo "FAIL: ${doc_path} trace identity must align with Trace path suffix ${expected_trace_suffix}"
+                fi
+                ERRORS=$((ERRORS + 1))
+            fi
+        fi
+        if ! grep -Fq "Refactor budget item:" "$doc_path"; then
+            echo "FAIL: ${doc_path} missing explicit process field 'Refactor budget item:'"
             ERRORS=$((ERRORS + 1))
         fi
 
@@ -128,17 +165,43 @@ else
             echo "FAIL: ${doc_path} needs at least three markdown links under '## Detail Links'"
             ERRORS=$((ERRORS + 1))
         fi
+        trace_detail_path="$(sed -n -E 's/^- Trace directory: `([^`]+)`$/\1/p' "$doc_path" | head -n 1)"
+        if [ -z "$trace_detail_path" ]; then
+            echo "FAIL: ${doc_path} missing detail link field 'Trace directory:'"
+            ERRORS=$((ERRORS + 1))
+        elif [ -n "$trace_path_field" ] && [ "$trace_detail_path" != "$trace_path_field" ]; then
+            echo "FAIL: ${doc_path} trace detail link must match Trace path (${trace_path_field})"
+            ERRORS=$((ERRORS + 1))
+        fi
+        expected_debug_doc_rel="$(release_debug_doc_relpath "$tag")"
+        debug_detail_path="$(sed -n -E 's/^- Local debug log: `([^`]+)`$/\1/p' "$doc_path" | head -n 1)"
+        if [ -z "$debug_detail_path" ]; then
+            echo "FAIL: ${doc_path} missing detail link field 'Local debug log:'"
+            ERRORS=$((ERRORS + 1))
+        elif [ "$debug_detail_path" != "$expected_debug_doc_rel" ]; then
+            echo "FAIL: ${doc_path} local debug log detail link must be ${expected_debug_doc_rel}"
+            ERRORS=$((ERRORS + 1))
+        fi
 
         debug_doc_path="$REPO_ROOT/.docs/releases/${tag}-debug.md"
         if [ ! -f "$debug_doc_path" ]; then
             artifact_gate_fail_or_warn "missing local debug doc for ${tag}: .docs/releases/${tag}-debug.md"
         else
-            if ! grep -Fq "Trace path:" "$debug_doc_path"; then
-                echo "FAIL: ${debug_doc_path} missing trace field 'Trace path:'"
+            if ! grep -Fq "Trace ID: \`${trace_id_field}\`" "$debug_doc_path"; then
+                echo "FAIL: ${debug_doc_path} debug doc trace id must match release doc (${trace_id_field})"
+                ERRORS=$((ERRORS + 1))
+            fi
+            if ! grep -Fq "Trace path: \`${trace_path_field}\`" "$debug_doc_path"; then
+                echo "FAIL: ${debug_doc_path} debug doc trace path must match release doc (${trace_path_field})"
                 ERRORS=$((ERRORS + 1))
             fi
         fi
 
+        printf '%s|%s|%s|%s\n' "$tag" "$trace_id_field" "$trace_path_field" "$doc_path" >> "$RELEASE_TRACE_EXPECTATIONS_FILE"
+        if [ -z "$LATEST_RELEASE_VERSION" ] || version_is_greater "$version" "$LATEST_RELEASE_VERSION"; then
+            LATEST_RELEASE_VERSION="$version"
+            LATEST_RELEASE_TRACE_PATH="$trace_path_field"
+        fi
         echo "$tag" >> "$RELEASE_TAGS_FILE"
     done <<< "$RELEASE_VERSIONS"
 fi
@@ -152,15 +215,57 @@ if [ -s "$RELEASE_TAGS_FILE" ]; then
     fi
     if [ ! -f "$TRACE_LATEST" ]; then
         artifact_gate_fail_or_warn "missing latest trace pointer: .docs/traces/latest"
+    elif [ -n "$LATEST_RELEASE_TRACE_PATH" ]; then
+        trace_latest_value="$(cat "$TRACE_LATEST")"
+        if [ "$trace_latest_value" != "$LATEST_RELEASE_TRACE_PATH" ]; then
+            echo "FAIL: .docs/traces/latest trace latest pointer must match highest released Trace path (${LATEST_RELEASE_TRACE_PATH})"
+            ERRORS=$((ERRORS + 1))
+        fi
     fi
 
-    while IFS= read -r tag; do
+    while IFS='|' read -r tag trace_id trace_path source_release_doc; do
         [ -z "$tag" ] && continue
         by_tag_latest="$REPO_ROOT/.docs/traces/by-tag/${tag}/latest"
         if [ ! -f "$by_tag_latest" ]; then
             artifact_gate_fail_or_warn "missing by-tag latest pointer for ${tag}: .docs/traces/by-tag/${tag}/latest"
+        else
+            by_tag_latest_value="$(cat "$by_tag_latest")"
+            if [ "$by_tag_latest_value" != "$trace_path" ]; then
+                echo "FAIL: ${by_tag_latest} by-tag latest pointer must match Trace path (${trace_path})"
+                ERRORS=$((ERRORS + 1))
+            fi
         fi
 
+        if [ -f "$TRACE_INDEX" ]; then
+            if ! grep -F "\"tag\":\"${tag}\"" "$TRACE_INDEX" | \
+                grep -F "\"trace_id\":\"${trace_id}\"" | \
+                grep -F "\"trace_path\":\"${trace_path}\"" | \
+                grep -F "\"command\":\"post-release\"" | \
+                grep -F "\"status\":\"success\"" | \
+                grep -F "\"source_release_doc\":\"${source_release_doc#"$REPO_ROOT/"}\"" > /dev/null; then
+                echo "FAIL: ${TRACE_INDEX} trace index record must exactly match release doc for ${tag}"
+                ERRORS=$((ERRORS + 1))
+            fi
+        fi
+
+        trace_metadata_path="$REPO_ROOT/${trace_path}/metadata.json"
+        if [ ! -f "$trace_metadata_path" ]; then
+            artifact_gate_fail_or_warn "missing trace metadata for ${tag}: ${trace_path}/metadata.json"
+        else
+            if ! grep -F "\"tag\":\"${tag}\"" "$trace_metadata_path" | \
+                grep -F "\"trace_id\":\"${trace_id}\"" | \
+                grep -F "\"trace_path\":\"${trace_path}\"" | \
+                grep -F "\"command\":\"post-release\"" | \
+                grep -F "\"status\":\"success\"" | \
+                grep -F "\"source_release_doc\":\"${source_release_doc#"$REPO_ROOT/"}\"" > /dev/null; then
+                echo "FAIL: ${trace_metadata_path} trace metadata must exactly match release doc for ${tag}"
+                ERRORS=$((ERRORS + 1))
+            fi
+        fi
+    done < "$RELEASE_TRACE_EXPECTATIONS_FILE"
+
+    while IFS= read -r tag; do
+        [ -z "$tag" ] && continue
         if [ -f "$TRACE_INDEX" ]; then
             if ! grep -F "\"tag\":\"${tag}\"" "$TRACE_INDEX" | grep -F "\"command\":\"post-release\"" | grep -F "\"status\":\"success\"" > /dev/null; then
                 artifact_gate_fail_or_warn "trace index missing successful post-release record for ${tag}"

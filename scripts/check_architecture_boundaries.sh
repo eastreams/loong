@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
+. "$REPO_ROOT/scripts/architecture_budget_lib.sh"
 
 STRICT="${LOONGCLAW_ARCH_STRICT:-false}"
 if [[ "$STRICT" != "true" && "$STRICT" != "false" ]]; then
@@ -11,77 +12,34 @@ if [[ "$STRICT" != "true" && "$STRICT" != "false" ]]; then
 fi
 
 violations=0
+hotspot_rows="$(architecture_hotspot_rows)" || exit 1
 
-have_rg() {
-  command -v rg >/dev/null 2>&1
-}
-
-count_pattern_in_file() {
-  local pattern="$1"
-  local file="$2"
-  if have_rg; then
-    rg -n "$pattern" "$file" | wc -l | tr -d '[:space:]'
-  else
-    { grep -En "$pattern" "$file" || true; } | wc -l | tr -d '[:space:]'
-  fi
-}
-
-find_memory_literal_hits() {
-  local pattern="$1"
-  if have_rg; then
-    rg -n "$pattern" crates/app/src --glob '!crates/app/src/memory/**' || true
-  else
-    grep -REn "$pattern" crates/app/src --exclude-dir=memory || true
-  fi
-}
-
-check_file_budget() {
-  local key="$1"
-  local file="$2"
-  local max_lines="$3"
-  local max_functions="$4"
-
-  if [[ ! -f "$file" ]]; then
-    echo "[arch] missing file: $file" >&2
-    violations=$((violations + 1))
-    return
-  fi
-
-  local lines
-  lines="$(wc -l <"$file" | tr -d '[:space:]')"
-
-  local functions
-  functions="$(count_pattern_in_file '^(pub[[:space:]]+)?(async[[:space:]]+)?fn[[:space:]]+' "$file")"
-
-  local line_status="ok"
-  local fn_status="ok"
-
-  if (( lines > max_lines )); then
-    line_status="over"
+while IFS='|' read -r key file lines max_lines line_status functions max_functions fn_status; do
+  if [[ "$line_status" == "over" ]]; then
     violations=$((violations + 1))
   fi
-  if (( functions > max_functions )); then
-    fn_status="over"
+  if [[ "$fn_status" == "over" ]]; then
     violations=$((violations + 1))
   fi
-
   printf '[arch] %-16s lines=%4s/%-4s (%s) fns=%3s/%-3s (%s) file=%s\n' \
     "$key" "$lines" "$max_lines" "$line_status" "$functions" "$max_functions" "$fn_status" "$file"
-}
+done <<EOF_ROWS
+${hotspot_rows}
+EOF_ROWS
 
-check_file_budget "spec_runtime" "crates/spec/src/spec_runtime.rs" 3600 65
-check_file_budget "spec_execution" "crates/spec/src/spec_execution.rs" 3700 80
-check_file_budget "provider_mod" "crates/app/src/provider/mod.rs" 1000 20
-check_file_budget "memory_mod" "crates/app/src/memory/mod.rs" 650 16
-
-memory_literal_hits="$(find_memory_literal_hits '"append_turn"|"window"|"clear_session"')"
-if [[ -n "$memory_literal_hits" ]]; then
-  echo "[arch] over: memory operation literals found outside memory module boundary" >&2
-  echo "$memory_literal_hits" >&2
-  violations=$((violations + 1))
-else
-  echo "[arch] ok: memory operation literals are centralized in crates/app/src/memory/*"
-fi
+while IFS= read -r boundary_key; do
+  [[ -z "$boundary_key" ]] && continue
+  boundary_status="$(architecture_boundary_status "$boundary_key")"
+  if [[ "$boundary_status" == "FAIL" ]]; then
+    echo "[arch] over: $(architecture_boundary_fail_summary "$boundary_key")" >&2
+    architecture_boundary_hits "$boundary_key" >&2
+    violations=$((violations + 1))
+  else
+    echo "[arch] ok: $(architecture_boundary_pass_summary "$boundary_key")"
+  fi
+done <<EOF_BOUNDARIES
+$(architecture_boundary_check_keys)
+EOF_BOUNDARIES
 
 if (( violations > 0 )); then
   if [[ "$STRICT" == "true" ]]; then

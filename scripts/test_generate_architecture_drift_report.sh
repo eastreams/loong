@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_UNDER_TEST="$REPO_ROOT/scripts/generate_architecture_drift_report.sh"
+
+assert_contains() {
+  local file="$1"
+  local needle="$2"
+  if ! grep -Fq "$needle" "$file"; then
+    echo "expected to find '$needle' in $file" >&2
+    cat "$file" >&2
+    exit 1
+  fi
+}
+
+run_no_baseline_test() {
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' RETURN
+
+  local output_file="$tmp_dir/architecture-drift-2099-01.md"
+  LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+    "$SCRIPT_UNDER_TEST" "$output_file"
+
+  [[ -f "$output_file" ]] || {
+    echo "expected generated report at $output_file" >&2
+    exit 1
+  }
+
+  assert_contains "$output_file" "# Architecture Drift Report 2099-01"
+  assert_contains "$output_file" "SLO status: PASS"
+  assert_contains "$output_file" "Baseline report: none"
+  assert_contains "$output_file" "| spec_runtime |"
+  assert_contains "$output_file" "<!-- arch-hotspot key=spec_runtime"
+  assert_contains "$output_file" "<!-- arch-boundary key=memory_literals status=PASS -->"
+  assert_contains "$output_file" "<!-- arch-boundary key=provider_mod_helper_definitions status=PASS -->"
+}
+
+run_breach_baseline_test() {
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' RETURN
+
+  local baseline_file="$tmp_dir/architecture-drift-2098-12.md"
+  cat >"$baseline_file" <<'BASELINE'
+<!-- arch-hotspot key=spec_runtime lines=1 functions=1 -->
+<!-- arch-boundary key=memory_literals status=PASS -->
+<!-- arch-boundary key=provider_mod_helper_definitions status=PASS -->
+BASELINE
+
+  local output_file="$tmp_dir/architecture-drift-2099-01.md"
+  LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+    LOONGCLAW_ARCH_DRIFT_BASELINE_REPORT="$baseline_file" \
+    "$SCRIPT_UNDER_TEST" "$output_file"
+
+  [[ -f "$output_file" ]] || {
+    echo "expected generated report at $output_file" >&2
+    exit 1
+  }
+
+  assert_contains "$output_file" "Baseline report: $baseline_file"
+  assert_contains "$output_file" "SLO status: FAIL"
+  assert_contains "$output_file" "| spec_runtime |"
+  assert_contains "$output_file" "BREACH"
+}
+
+run_no_baseline_test
+run_breach_baseline_test
+
+echo "generate_architecture_drift_report.sh checks passed"

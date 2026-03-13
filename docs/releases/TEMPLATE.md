@@ -13,6 +13,7 @@
 - Owner:
 - Scope summary:
 - Gates run:
+- Refactor budget item:
 
 ## Artifacts
 | Asset | Size (bytes) | SHA256 | Download |
@@ -24,6 +25,11 @@
 |---|---|---|
 | Release workflow completed | PASS/FAIL | [workflow run](https://github.com/loongclaw-ai/loongclaw/actions/runs/<id>) |
 | Release is not draft | PASS/FAIL | [release page](https://github.com/loongclaw-ai/loongclaw/releases/tag/vX.Y.Z) |
+
+## Refactor Budget
+- Hotspot metric paid down:
+- Evidence:
+- If no paydown shipped, rationale:
 
 ## Known Issues
 - None / describe issue and mitigation.
