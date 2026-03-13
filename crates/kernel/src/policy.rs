@@ -115,7 +115,6 @@ impl PolicyEngine for StaticPolicyEngine {
             issued_at_epoch_s: now_epoch_s,
             expires_at_epoch_s: now_epoch_s.saturating_add(ttl_s),
             generation,
-            membrane: None,
         })
     }
 

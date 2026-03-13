@@ -1668,17 +1668,6 @@ async fn generation_revoke_below_threshold_denies_old_tokens() {
 }
 
 #[test]
-fn token_membrane_is_none_by_default() {
-    let engine = StaticPolicyEngine::default();
-    let pack = sample_pack();
-    let token = engine
-        .issue_token(&pack, "agent-1", 1_000_000, 3600)
-        .unwrap();
-    assert_eq!(token.membrane, None);
-    assert!(token.generation > 0);
-}
-
-#[test]
 fn token_generation_increments_on_each_issue() {
     let engine = StaticPolicyEngine::default();
     let pack = sample_pack();

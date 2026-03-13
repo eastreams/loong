@@ -37,8 +37,6 @@ pub struct CapabilityToken {
     pub issued_at_epoch_s: u64,
     pub expires_at_epoch_s: u64,
     pub generation: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub membrane: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
