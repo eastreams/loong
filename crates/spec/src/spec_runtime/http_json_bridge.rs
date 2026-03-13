@@ -58,7 +58,7 @@ pub fn execute_http_json_bridge(
     });
     let url = channel.endpoint.clone();
     let request_payload_for_runtime = request_payload.clone();
-    let request_payload_for_worker = request_payload.clone();
+    let request_payload_for_worker = request_payload;
     let request_method_for_worker = protocol_context.request_method.clone();
     let request_id_for_worker = protocol_context.request_id.clone();
 

@@ -20,12 +20,14 @@ contracts (leaf — zero internal deps)
 ├── kernel → contracts
 ├── protocol (independent leaf)
 ├── app → contracts, kernel
-├── spec → contracts, kernel, protocol
+├── spec → contracts, kernel, protocol (+ app: known deviation, tracked as D1)
 ├── bench → contracts, kernel, spec
 └── daemon (binary) → all of the above
 ```
 
 Non-negotiable: no dependency cycles. See [Core Beliefs](docs/design-docs/core-beliefs.md).
+Current tracked deviation: D1 keeps `spec -> app` temporary and must be retired by architectural
+refactor, not normalized as permanent layering.
 
 ## 3. Commands
 

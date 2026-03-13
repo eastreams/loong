@@ -29,6 +29,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 futures-util = "0.3"
 sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
 wasmparser = "0.245"
 base64 = "0.22"
 ed25519-dalek = "2.2"
@@ -82,6 +84,12 @@ print_stderr = "deny"
 
 # Error quality
 map_err_ignore = "deny"
+
+# Exhaustiveness: catch-all match arms hide new enum variants
+wildcard_enum_match_arm = "deny"
+
+# Clone hygiene: flag unnecessary clones
+redundant_clone = "deny"
 
 # Missing docs (allow for now — large existing surface)
 missing_errors_doc = "allow"

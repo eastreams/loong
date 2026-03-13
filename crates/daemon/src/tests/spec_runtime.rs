@@ -54,7 +54,7 @@ async fn execute_spec_returns_blocked_instead_of_panicking_on_operation_error() 
         },
     };
 
-    let report = execute_spec(spec.clone(), true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     assert!(
         report
@@ -452,7 +452,7 @@ async fn execute_spec_blocks_when_security_scan_profile_sha256_mismatches() {
         },
     };
 
-    let report = execute_spec(spec.clone(), true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     assert!(
         report
@@ -673,7 +673,7 @@ async fn execute_spec_blocks_when_security_scan_profile_signature_mismatches() {
         },
     };
 
-    let report = execute_spec(spec.clone(), true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     assert!(
         report
@@ -722,7 +722,7 @@ async fn execute_spec_runs_runtime_extension_and_captures_audit() {
         },
     };
 
-    let report = execute_spec(spec.clone(), true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "runtime_extension");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     let events = report.audit_events.expect("audit should be included");
@@ -778,7 +778,7 @@ async fn execute_spec_auto_provisions_provider_and_channel_when_missing() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(
@@ -833,7 +833,7 @@ async fn execute_spec_applies_hotfix_endpoint_before_invocation() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(
         report.outcome["outcome"]["payload"]["endpoint"],
@@ -905,7 +905,7 @@ async fn execute_spec_scans_plugin_files_and_absorbs_them_for_hotplug() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(report.plugin_scan_reports.len(), 1);
@@ -1002,7 +1002,7 @@ async fn execute_spec_blocks_when_bridge_matrix_does_not_support_plugin() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     assert_eq!(report.outcome["status"], "blocked");
     assert_eq!(report.plugin_activation_plans.len(), 1);
@@ -1113,7 +1113,7 @@ async fn execute_spec_skips_blocked_plugins_when_bridge_enforcement_is_disabled(
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(report.plugin_activation_plans.len(), 1);
@@ -1221,6 +1221,8 @@ async fn execute_spec_bootstrap_applies_only_bridges_allowed_by_bootstrap_policy
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(false),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(false),
             max_tasks: Some(10),
         }),
@@ -1234,7 +1236,7 @@ async fn execute_spec_bootstrap_applies_only_bridges_allowed_by_bootstrap_policy
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(report.plugin_activation_plans.len(), 1);
@@ -1335,6 +1337,8 @@ async fn execute_spec_bootstrap_enforcement_blocks_when_ready_plugins_are_deferr
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(false),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -1348,7 +1352,7 @@ async fn execute_spec_bootstrap_enforcement_blocks_when_ready_plugins_are_deferr
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     assert_eq!(report.outcome["status"], "blocked");
     assert!(
@@ -1419,7 +1423,7 @@ async fn execute_spec_blocks_on_bridge_support_checksum_mismatch() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     assert_eq!(report.outcome["status"], "blocked");
     assert!(
@@ -1481,7 +1485,7 @@ async fn execute_spec_blocks_on_bridge_support_sha256_mismatch() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     assert_eq!(report.outcome["status"], "blocked");
     assert!(
@@ -1542,7 +1546,7 @@ async fn execute_spec_allows_execution_when_bridge_support_sha256_matches() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "task");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert!(report.blocked_reason.is_none());
@@ -1625,6 +1629,8 @@ async fn execute_spec_enriches_plugin_bridge_metadata_and_emits_bridge_execution
             allow_native_ffi_auto_apply: Some(true),
             allow_wasm_component_auto_apply: Some(false),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -1638,7 +1644,7 @@ async fn execute_spec_enriches_plugin_bridge_metadata_and_emits_bridge_execution
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(
@@ -1766,6 +1772,8 @@ async fn execute_spec_wasm_component_bridge_executes_when_runtime_enabled() {
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(true),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -1779,7 +1787,7 @@ async fn execute_spec_wasm_component_bridge_executes_when_runtime_enabled() {
         },
     };
 
-    let report = execute_spec(spec.clone(), true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(
@@ -1848,7 +1856,7 @@ async fn execute_spec_wasm_component_bridge_executes_when_runtime_enabled() {
     assert!(provider.metadata.contains_key("plugin_source_path"));
     assert!(provider.metadata.contains_key("component_resolved_path"));
 
-    let cached_report = execute_spec(spec, true).await;
+    let cached_report = execute_spec(&spec, true).await;
     assert_eq!(
         cached_report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["cache_hit"],
         true
@@ -1974,6 +1982,8 @@ async fn execute_spec_wasm_component_bridge_blocks_when_component_sha256_mismatc
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(true),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -1987,7 +1997,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_component_sha256_mismatc
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     let security = report
         .security_scan_report
@@ -2110,6 +2120,8 @@ async fn execute_spec_wasm_component_bridge_blocks_when_metadata_pin_conflicts_w
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(true),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -2123,7 +2135,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_metadata_pin_conflicts_w
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(
@@ -2242,6 +2254,8 @@ async fn execute_spec_wasm_component_bridge_blocks_when_hash_pin_required_but_mi
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(true),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -2255,7 +2269,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_hash_pin_required_but_mi
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     let security = report
         .security_scan_report
@@ -2379,6 +2393,8 @@ async fn execute_spec_wasm_component_bridge_blocks_artifact_outside_runtime_pref
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(true),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -2392,7 +2408,7 @@ async fn execute_spec_wasm_component_bridge_blocks_artifact_outside_runtime_pref
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(
@@ -2520,6 +2536,8 @@ async fn execute_spec_wasm_component_bridge_blocks_symlink_escape_under_allowed_
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(true),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -2533,7 +2551,7 @@ async fn execute_spec_wasm_component_bridge_blocks_symlink_escape_under_allowed_
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(
@@ -2652,6 +2670,8 @@ async fn execute_spec_wasm_component_bridge_blocks_non_regular_artifact_path() {
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(true),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -2665,7 +2685,7 @@ async fn execute_spec_wasm_component_bridge_blocks_non_regular_artifact_path() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(
@@ -2785,6 +2805,8 @@ async fn execute_spec_wasm_component_bridge_blocks_when_module_size_exceeds_runt
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(true),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -2798,7 +2820,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_module_size_exceeds_runt
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(
@@ -2890,7 +2912,7 @@ async fn execute_spec_blocks_when_wasm_runtime_enabled_without_allowed_prefixes(
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     assert!(
         report
@@ -3003,6 +3025,8 @@ async fn execute_spec_security_scan_blocks_wasm_plugin_with_wasi_import() {
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(true),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -3016,7 +3040,7 @@ async fn execute_spec_security_scan_blocks_wasm_plugin_with_wasi_import() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     assert!(
         report
@@ -3150,6 +3174,8 @@ async fn execute_spec_security_scan_allows_clean_wasm_with_hash_pin() {
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(true),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -3163,7 +3189,7 @@ async fn execute_spec_security_scan_allows_clean_wasm_with_hash_pin() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "task");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     let security = report
@@ -3279,6 +3305,8 @@ async fn execute_spec_security_scan_allows_clean_wasm_with_metadata_hash_pin() {
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(true),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -3292,7 +3320,7 @@ async fn execute_spec_security_scan_allows_clean_wasm_with_metadata_hash_pin() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "task");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     let security = report
@@ -3413,6 +3441,8 @@ async fn execute_spec_security_scan_blocks_when_metadata_hash_pin_is_invalid() {
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(true),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -3426,7 +3456,7 @@ async fn execute_spec_security_scan_blocks_when_metadata_hash_pin_is_invalid() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     let security = report
         .security_scan_report
@@ -3544,6 +3574,8 @@ async fn execute_spec_security_scan_blocks_when_metadata_pin_conflicts_with_poli
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(true),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -3557,7 +3589,7 @@ async fn execute_spec_security_scan_blocks_when_metadata_pin_conflicts_with_poli
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     let security = report
         .security_scan_report
@@ -3666,6 +3698,8 @@ async fn execute_spec_security_scan_emits_audit_summary_when_not_blocking() {
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(false),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(false),
             max_tasks: Some(5),
         }),
@@ -3679,7 +3713,7 @@ async fn execute_spec_security_scan_emits_audit_summary_when_not_blocking() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "task");
     let security = report
         .security_scan_report
@@ -3688,6 +3722,7 @@ async fn execute_spec_security_scan_emits_audit_summary_when_not_blocking() {
     assert!(security.high_findings >= 1);
 
     let audit = report.audit_events.expect("audit events should exist");
+    #[allow(clippy::wildcard_enum_match_arm)]
     let summary = audit.iter().find_map(|event| match &event.kind {
         AuditEventKind::SecurityScanEvaluated {
             blocked,
@@ -3820,6 +3855,8 @@ async fn execute_spec_security_scan_exports_siem_record_with_truncation() {
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(false),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(false),
             max_tasks: Some(5),
         }),
@@ -3833,7 +3870,7 @@ async fn execute_spec_security_scan_exports_siem_record_with_truncation() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "task");
     let security = report
         .security_scan_report
@@ -3961,6 +3998,8 @@ async fn execute_spec_security_scan_siem_fail_closed_blocks_execution() {
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(false),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(false),
             max_tasks: Some(5),
         }),
@@ -3974,7 +4013,7 @@ async fn execute_spec_security_scan_siem_fail_closed_blocks_execution() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     assert!(
         report
@@ -4109,6 +4148,8 @@ async fn execute_spec_security_scan_covers_deferred_plugins_not_only_applied_sub
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(false),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(false),
             max_tasks: Some(1),
         }),
@@ -4122,7 +4163,7 @@ async fn execute_spec_security_scan_covers_deferred_plugins_not_only_applied_sub
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     assert!(
         report
@@ -4181,7 +4222,7 @@ async fn execute_spec_default_medium_policy_blocks_high_risk_tool_call_without_a
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     assert_eq!(report.outcome["status"], "blocked");
     assert!(report.approval_guard.requires_human_approval);
@@ -4232,7 +4273,7 @@ async fn execute_spec_per_call_approval_allows_high_risk_tool_call() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "tool_core");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert!(report.approval_guard.requires_human_approval);
@@ -4277,7 +4318,7 @@ async fn execute_spec_one_time_full_access_allows_high_risk_tool_call() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "tool_core");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert!(report.approval_guard.requires_human_approval);
@@ -4321,7 +4362,7 @@ async fn execute_spec_strict_mode_requires_approval_for_low_risk_tool_call() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     assert!(report.approval_guard.requires_human_approval);
     assert!(!report.approval_guard.approved);
@@ -4360,7 +4401,7 @@ async fn execute_spec_default_medium_policy_allows_low_risk_tool_call_without_ap
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "tool_core");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert!(!report.approval_guard.requires_human_approval);
@@ -4440,7 +4481,7 @@ async fn execute_spec_tool_core_can_run_claw_import_plan_via_native_tool_runtime
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "tool_core");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(report.outcome["outcome"]["payload"]["source"], "nanobot");
@@ -4525,7 +4566,7 @@ async fn execute_spec_tool_extension_can_hot_handle_claw_import_via_core_wrapper
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "tool_extension");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(
@@ -4626,7 +4667,7 @@ async fn execute_spec_tool_extension_can_discover_multiple_sources() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "tool_extension");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(report.outcome["outcome"]["payload"]["action"], "discover");
@@ -4723,7 +4764,7 @@ async fn execute_spec_tool_extension_can_merge_profiles_without_merging_prompt_l
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "tool_extension");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(
@@ -4829,7 +4870,7 @@ async fn execute_spec_tool_extension_apply_selected_safe_merge_keeps_native_prom
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "tool_extension");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(
@@ -4898,7 +4939,7 @@ async fn execute_spec_denylist_overrides_other_approvals() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     assert!(report.approval_guard.denylisted);
     assert!(!report.approval_guard.approved);
@@ -4951,7 +4992,7 @@ async fn execute_spec_one_time_full_access_expired_is_rejected() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     assert!(!report.approval_guard.approved);
     assert!(report.approval_guard.reason.contains("expired"));
@@ -4996,7 +5037,7 @@ async fn execute_spec_one_time_full_access_with_zero_remaining_uses_is_rejected(
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     assert!(!report.approval_guard.approved);
     assert!(report.approval_guard.reason.contains("no remaining uses"));
@@ -5097,6 +5138,8 @@ async fn execute_spec_bootstrap_max_tasks_limits_applied_plugins() {
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(false),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(false),
             max_tasks: Some(1),
         }),
@@ -5110,7 +5153,7 @@ async fn execute_spec_bootstrap_max_tasks_limits_applied_plugins() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "task");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(report.plugin_bootstrap_reports.len(), 1);
@@ -5217,6 +5260,8 @@ async fn execute_spec_scans_multiple_roots_and_absorbs_per_root() {
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(false),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(8),
         }),
@@ -5230,7 +5275,7 @@ async fn execute_spec_scans_multiple_roots_and_absorbs_per_root() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "task");
     assert_eq!(report.plugin_scan_reports.len(), 2);
     assert_eq!(report.plugin_absorb_reports.len(), 2);
@@ -5345,7 +5390,7 @@ async fn execute_spec_plugin_scan_is_transactional_when_blocked() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     assert!(
         report
@@ -5456,6 +5501,8 @@ async fn execute_spec_bootstrap_budget_is_global_across_multiple_roots() {
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(false),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(false),
             max_tasks: Some(1),
         }),
@@ -5469,7 +5516,7 @@ async fn execute_spec_bootstrap_budget_is_global_across_multiple_roots() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "task");
     assert_eq!(report.plugin_bootstrap_reports.len(), 2);
     let total_applied: usize = report
@@ -5598,6 +5645,8 @@ async fn execute_spec_tool_search_honors_deferred_filter_and_examples() {
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(false),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(false),
             max_tasks: Some(10),
         }),
@@ -5611,7 +5660,7 @@ async fn execute_spec_tool_search_honors_deferred_filter_and_examples() {
         },
     };
 
-    let report_hidden_deferred = execute_spec(base_spec.clone(), true).await;
+    let report_hidden_deferred = execute_spec(&base_spec, true).await;
     assert_eq!(
         report_hidden_deferred.operation_kind, "tool_search",
         "blocked_reason={:?}, outcome={}",
@@ -5627,7 +5676,7 @@ async fn execute_spec_tool_search_honors_deferred_filter_and_examples() {
         include_examples: true,
     };
 
-    let report_visible_deferred = execute_spec(visible_spec, true).await;
+    let report_visible_deferred = execute_spec(&visible_spec, true).await;
     assert_eq!(
         report_visible_deferred.operation_kind, "tool_search",
         "blocked_reason={:?}, outcome={}",
@@ -5721,6 +5770,8 @@ async fn execute_spec_tool_search_uses_translation_bridge_kind_for_unabsorbed_pl
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(false),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(false),
             max_tasks: Some(8),
         }),
@@ -5734,7 +5785,7 @@ async fn execute_spec_tool_search_uses_translation_bridge_kind_for_unabsorbed_pl
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "tool_search");
     assert_eq!(report.outcome["returned"], 1);
     assert_eq!(report.outcome["results"][0]["provider_id"], "rusty-search");

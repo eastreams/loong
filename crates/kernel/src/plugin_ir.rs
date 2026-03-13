@@ -15,6 +15,8 @@ pub enum PluginBridgeKind {
     NativeFfi,
     WasmComponent,
     McpServer,
+    AcpBridge,
+    AcpRuntime,
     Unknown,
 }
 
@@ -27,6 +29,8 @@ impl PluginBridgeKind {
             Self::NativeFfi => "native_ffi",
             Self::WasmComponent => "wasm_component",
             Self::McpServer => "mcp_server",
+            Self::AcpBridge => "acp_bridge",
+            Self::AcpRuntime => "acp_runtime",
             Self::Unknown => "unknown",
         }
     }
@@ -109,6 +113,8 @@ impl Default for BridgeSupportMatrix {
                 PluginBridgeKind::NativeFfi,
                 PluginBridgeKind::WasmComponent,
                 PluginBridgeKind::McpServer,
+                PluginBridgeKind::AcpBridge,
+                PluginBridgeKind::AcpRuntime,
             ]),
             supported_adapter_families: BTreeSet::new(),
         }
@@ -285,6 +291,8 @@ fn parse_bridge_kind(raw: &str) -> Option<PluginBridgeKind> {
         "native_ffi" | "ffi" => Some(PluginBridgeKind::NativeFfi),
         "wasm_component" | "wasm" => Some(PluginBridgeKind::WasmComponent),
         "mcp_server" | "mcp" => Some(PluginBridgeKind::McpServer),
+        "acp_bridge" | "acp" => Some(PluginBridgeKind::AcpBridge),
+        "acp_runtime" | "acpx" => Some(PluginBridgeKind::AcpRuntime),
         "unknown" => Some(PluginBridgeKind::Unknown),
         _ => None,
     }
@@ -313,6 +321,8 @@ fn default_adapter_family(language: &str, bridge_kind: PluginBridgeKind) -> Stri
         PluginBridgeKind::NativeFfi => format!("{language}-ffi-adapter"),
         PluginBridgeKind::WasmComponent => "wasm-component-adapter".to_owned(),
         PluginBridgeKind::McpServer => "mcp-adapter".to_owned(),
+        PluginBridgeKind::AcpBridge => "acp-bridge-adapter".to_owned(),
+        PluginBridgeKind::AcpRuntime => "acp-runtime-adapter".to_owned(),
         PluginBridgeKind::Unknown => format!("{language}-unknown-adapter"),
     }
 }
@@ -329,6 +339,8 @@ fn default_entrypoint_hint(
         PluginBridgeKind::NativeFfi => Some("lib::invoke".to_owned()),
         PluginBridgeKind::WasmComponent => Some("component::run".to_owned()),
         PluginBridgeKind::McpServer => Some("mcp::stdio".to_owned()),
+        PluginBridgeKind::AcpBridge => Some("acp::bridge".to_owned()),
+        PluginBridgeKind::AcpRuntime => Some("acp::turn".to_owned()),
         PluginBridgeKind::Unknown => None,
     }
 }
@@ -356,6 +368,12 @@ fn bootstrap_hint(ir: &PluginIR) -> String {
         }
         PluginBridgeKind::McpServer => {
             "register MCP server bridge and handshake capability schema".to_owned()
+        }
+        PluginBridgeKind::AcpBridge => {
+            "register ACP bridge surface and bind the external gateway/runtime contract".to_owned()
+        }
+        PluginBridgeKind::AcpRuntime => {
+            "register ACP runtime backend and bind a session-aware control plane".to_owned()
         }
         PluginBridgeKind::Unknown => {
             "inspect plugin metadata and define explicit bridge_kind override".to_owned()
@@ -430,6 +448,36 @@ mod tests {
         assert_eq!(ir.runtime.bridge_kind, PluginBridgeKind::McpServer);
         assert_eq!(ir.runtime.entrypoint_hint, "custom::run");
         assert_eq!(ir.runtime.adapter_family, "mcp-adapter");
+    }
+
+    #[test]
+    fn translator_accepts_acpx_runtime_alias() {
+        let descriptor = descriptor(
+            "js",
+            BTreeMap::from([("bridge_kind".to_owned(), "acpx".to_owned())]),
+        );
+
+        let translator = PluginTranslator::new();
+        let ir = translator.translate_descriptor(&descriptor);
+
+        assert_eq!(ir.runtime.bridge_kind, PluginBridgeKind::AcpRuntime);
+        assert_eq!(ir.runtime.adapter_family, "acp-runtime-adapter");
+        assert_eq!(ir.runtime.entrypoint_hint, "acp::turn");
+    }
+
+    #[test]
+    fn translator_maps_acp_alias_to_bridge_surface() {
+        let descriptor = descriptor(
+            "js",
+            BTreeMap::from([("bridge_kind".to_owned(), "acp".to_owned())]),
+        );
+
+        let translator = PluginTranslator::new();
+        let ir = translator.translate_descriptor(&descriptor);
+
+        assert_eq!(ir.runtime.bridge_kind, PluginBridgeKind::AcpBridge);
+        assert_eq!(ir.runtime.adapter_family, "acp-bridge-adapter");
+        assert_eq!(ir.runtime.entrypoint_hint, "acp::bridge");
     }
 
     #[test]

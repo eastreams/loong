@@ -476,7 +476,7 @@ mod tests {
         };
         let default_window = execute_memory_core_with_config(
             MemoryCoreRequest {
-                operation: "window".to_owned(),
+                operation: MEMORY_OP_WINDOW.to_owned(),
                 payload: json!({
                     "session_id": "window-semantics-session",
                 }),
@@ -504,7 +504,7 @@ mod tests {
         };
         let capped_window = execute_memory_core_with_config(
             MemoryCoreRequest {
-                operation: "window".to_owned(),
+                operation: MEMORY_OP_WINDOW.to_owned(),
                 payload: json!({
                     "session_id": "window-semantics-session",
                 }),

@@ -4,3 +4,7 @@
 /.loongclaw.local.toml
 /.env.local
 .worktrees/
+.idea
+.vscode
+.zed
+.claude

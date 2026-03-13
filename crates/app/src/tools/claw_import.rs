@@ -87,7 +87,7 @@ pub(super) fn execute_claw_import_tool_with_config(
         .flatten();
 
     if mode == "rollback_last_apply" {
-        let output_path = output_path.clone().ok_or_else(|| {
+        let output_path = output_path.ok_or_else(|| {
             "claw.import rollback_last_apply mode requires payload.output_path".to_owned()
         })?;
         let restored_path = migration::rollback_last_import(&output_path)?;
@@ -192,7 +192,7 @@ pub(super) fn execute_claw_import_tool_with_config(
             .get("apply_external_skills_plan")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let selected_output_path = output_path.clone().ok_or_else(|| {
+        let selected_output_path = output_path.ok_or_else(|| {
             "claw.import apply_selected mode requires payload.output_path".to_owned()
         })?;
         let result = migration::apply_import_selection(&migration::ApplyImportSelection {

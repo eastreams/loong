@@ -78,6 +78,8 @@ async fn execute_spec_process_stdio_bridge_executes_when_enabled_and_allowed() {
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(false),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -91,7 +93,7 @@ async fn execute_spec_process_stdio_bridge_executes_when_enabled_and_allowed() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     let runtime = &report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"];
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
@@ -201,6 +203,8 @@ async fn execute_spec_process_stdio_bridge_blocks_when_command_not_allowlisted()
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(false),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -214,7 +218,7 @@ async fn execute_spec_process_stdio_bridge_blocks_when_command_not_allowlisted()
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(
@@ -308,6 +312,8 @@ async fn execute_spec_process_stdio_bridge_fails_on_invalid_json_line_response()
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(false),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -321,7 +327,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_invalid_json_line_response()
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(
@@ -423,6 +429,8 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_id_mismatch() {
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(false),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -436,7 +444,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_id_mismatch() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(
@@ -532,6 +540,8 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_method_mismatch() {
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(false),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -545,7 +555,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_method_mismatch() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(
@@ -640,6 +650,8 @@ async fn execute_spec_process_stdio_bridge_blocks_when_protocol_authorization_fa
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(false),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -653,7 +665,7 @@ async fn execute_spec_process_stdio_bridge_blocks_when_protocol_authorization_fa
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(
@@ -764,6 +776,8 @@ async fn execute_spec_process_stdio_bridge_fails_on_recv_timeout() {
             allow_native_ffi_auto_apply: Some(false),
             allow_wasm_component_auto_apply: Some(false),
             allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -777,7 +791,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_recv_timeout() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(

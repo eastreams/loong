@@ -76,20 +76,26 @@ tasks:
     cmds:
       - GO111MODULE=off go run {{.SKILL_DIR}}/scripts/main.go --repo-root . --config {{.CONFIG_FILE}} --json
 
+  check:dep-graph:
+    desc: Validate workspace crate dependency graph against architecture contract
+    cmds:
+      - scripts/check_dep_graph.sh
+
   check:deny:
     desc: Run cargo-deny (advisories, bans, sources)
     preconditions:
       - sh: command -v cargo-deny
         msg: "cargo-deny not installed. Run: cargo install cargo-deny"
     cmds:
-      - cargo deny check advisories bans sources
+      - cargo deny check advisories bans licenses sources
 
   verify:
     desc: Canonical local verification gate (strict superset of CI checks)
     cmds:
       - task: fmt
       - task: lint:strict
-      - task: check:architecture
+      - task: check:architecture:strict
+      - task: check:dep-graph
       - task: check:conventions
       - task: test
       - task: test:all-features

@@ -35,6 +35,8 @@ const SHELL_APPROVAL_REQUIRED_COMMANDS: &[&str] = &[
     "perl",
     "ruby",
     "php",
+    "cat",
+    "ls",
     "pwsh",
     "powershell",
 ];
@@ -277,6 +279,24 @@ mod tests {
         );
         let decision = default_tool_policy(&request);
         assert!(matches!(decision, PolicyDecision::RequireApproval(_)));
+    }
+
+    #[test]
+    fn static_policy_requires_approval_for_file_listing_commands() {
+        let cat_request = policy_request(
+            "shell.exec",
+            json!({"command": "cat", "args": ["/etc/hosts"]}),
+        );
+        let ls_request = policy_request("shell.exec", json!({"command": "ls", "args": ["/"]}));
+
+        assert!(matches!(
+            default_tool_policy(&cat_request),
+            PolicyDecision::RequireApproval(_)
+        ));
+        assert!(matches!(
+            default_tool_policy(&ls_request),
+            PolicyDecision::RequireApproval(_)
+        ));
     }
 
     #[test]

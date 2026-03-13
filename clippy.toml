@@ -21,13 +21,13 @@ allow-dbg-in-tests = true
 allow-print-in-tests = true
 allow-indexing-slicing-in-tests = true
 
-# Disallowed methods — enforce project conventions
-# TODO: enable once existing violations are fixed
-# disallowed-methods = [
-#     { path = "std::env::set_var", reason = "not thread-safe; use a config struct" },
-#     { path = "std::env::remove_var", reason = "not thread-safe; use a config struct" },
-#     { path = "std::thread::sleep", reason = "use tokio::time::sleep in async context" },
-# ]
+# Disallowed methods — enforce project conventions.
+# Reason fields give agents actionable remediation in compiler output.
+disallowed-methods = [
+    { path = "std::env::set_var", reason = "Thread-unsafe in multi-threaded context. Use crate::process_env::set_var or a config struct." },
+    { path = "std::env::remove_var", reason = "Thread-unsafe in multi-threaded context. Use crate::process_env::remove_var or a config struct." },
+    { path = "std::thread::sleep", reason = "Blocks the async runtime. Use tokio::time::sleep instead." },
+]
 
 # Boolean parameter limits
 max-fn-params-bools = 3

@@ -15,8 +15,49 @@ env:
   PACKAGE_NAME: loongclaw
 
 jobs:
+  verify-release:
+    name: Verify release gates
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.93.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo Artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy check
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Test (workspace)
+        run: cargo test --workspace --locked
+
+      - name: Test (all features)
+        run: cargo test --workspace --all-features --locked
+
+      - name: Docs build
+        run: cargo doc --workspace --no-deps
+
+      - name: Dependency graph contract
+        run: ./scripts/check_dep_graph.sh
+
+      - name: Strict architecture contract
+        run: LOONGCLAW_ARCH_STRICT=true ./scripts/check_architecture_boundaries.sh
+
   build-binaries:
     name: Build ${{ matrix.target }} on ${{ matrix.os }}
+    needs: verify-release
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -47,7 +88,7 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.93.0
         with:
           targets: ${{ matrix.target }}
 

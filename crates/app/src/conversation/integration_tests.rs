@@ -239,6 +239,7 @@ mod tests {
             .build();
         let result = harness.execute(&turn).await;
 
+        #[allow(clippy::wildcard_enum_match_arm)]
         match result {
             TurnResult::FinalText(text) => {
                 assert!(
@@ -262,6 +263,7 @@ mod tests {
             )
             .build();
         let write_result = harness.execute(&write_turn).await;
+        #[allow(clippy::wildcard_enum_match_arm)]
         match &write_result {
             TurnResult::FinalText(text) => {
                 assert!(
@@ -277,6 +279,7 @@ mod tests {
             .with_tool_call("file.read", json!({"path": "round-trip.txt"}))
             .build();
         let read_result = harness.execute(&read_turn).await;
+        #[allow(clippy::wildcard_enum_match_arm)]
         match read_result {
             TurnResult::FinalText(text) => {
                 assert!(
@@ -297,6 +300,7 @@ mod tests {
             .build();
         let result = harness.execute(&turn).await;
 
+        #[allow(clippy::wildcard_enum_match_arm)]
         match result {
             TurnResult::FinalText(text) => {
                 assert!(
@@ -317,6 +321,7 @@ mod tests {
             .build();
         let result = harness.execute(&turn).await;
 
+        #[allow(clippy::wildcard_enum_match_arm)]
         match result {
             TurnResult::ToolDenied(err) => {
                 assert!(
@@ -337,6 +342,7 @@ mod tests {
             .build();
         let result = harness.execute(&turn).await;
 
+        #[allow(clippy::wildcard_enum_match_arm)]
         match result {
             TurnResult::ToolError(err) => {
                 assert!(
@@ -357,6 +363,7 @@ mod tests {
             .build();
         let result = harness.execute(&turn).await;
 
+        #[allow(clippy::wildcard_enum_match_arm)]
         match result {
             TurnResult::ToolDenied(reason) => {
                 let lower = reason.to_lowercase();
@@ -411,6 +418,7 @@ mod tests {
             .build();
         let result = harness.execute(&turn).await;
 
+        #[allow(clippy::wildcard_enum_match_arm)]
         match result {
             TurnResult::ToolError(err) => {
                 assert!(

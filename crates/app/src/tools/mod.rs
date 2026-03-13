@@ -44,8 +44,13 @@ pub fn execute_tool_core(request: ToolCoreRequest) -> Result<ToolCoreOutcome, St
 pub fn canonical_tool_name(raw: &str) -> &str {
     match raw {
         "claw_import" | "import_claw" => "claw.import",
+        "external_skills_inspect" => "external_skills.inspect",
+        "external_skills_install" => "external_skills.install",
+        "external_skills_invoke" => "external_skills.invoke",
+        "external_skills_list" => "external_skills.list",
         "external_skills_policy" => "external_skills.policy",
         "external_skills_fetch" => "external_skills.fetch",
+        "external_skills_remove" => "external_skills.remove",
         "file_read" => "file.read",
         "file_write" => "file.write",
         "shell_exec" | "shell" => "shell.exec",
@@ -57,8 +62,13 @@ pub fn is_known_tool_name(raw: &str) -> bool {
     matches!(
         canonical_tool_name(raw),
         "claw.import"
+            | "external_skills.inspect"
+            | "external_skills.install"
+            | "external_skills.invoke"
+            | "external_skills.list"
             | "external_skills.policy"
             | "external_skills.fetch"
+            | "external_skills.remove"
             | "shell.exec"
             | "file.read"
             | "file.write"
@@ -76,11 +86,26 @@ pub fn execute_tool_core_with_config(
     };
     match canonical_name {
         "claw.import" => claw_import::execute_claw_import_tool_with_config(request, config),
+        "external_skills.inspect" => {
+            external_skills::execute_external_skills_inspect_tool_with_config(request, config)
+        }
+        "external_skills.install" => {
+            external_skills::execute_external_skills_install_tool_with_config(request, config)
+        }
+        "external_skills.invoke" => {
+            external_skills::execute_external_skills_invoke_tool_with_config(request, config)
+        }
+        "external_skills.list" => {
+            external_skills::execute_external_skills_list_tool_with_config(request, config)
+        }
         "external_skills.policy" => {
             external_skills::execute_external_skills_policy_tool_with_config(request, config)
         }
         "external_skills.fetch" => {
             external_skills::execute_external_skills_fetch_tool_with_config(request, config)
+        }
+        "external_skills.remove" => {
+            external_skills::execute_external_skills_remove_tool_with_config(request, config)
         }
         "shell.exec" => shell::execute_shell_tool_with_config(request, config),
         "file.read" => file::execute_file_read_tool_with_config(request, config),
@@ -101,19 +126,40 @@ pub struct ToolRegistryEntry {
 
 /// Returns a sorted list of all registered tools, gated by feature flags.
 pub fn tool_registry() -> Vec<ToolRegistryEntry> {
-    let mut entries = Vec::new();
-    entries.push(ToolRegistryEntry {
-        name: "claw.import",
-        description: "Import legacy Claw configs into native LoongClaw settings",
-    });
-    entries.push(ToolRegistryEntry {
-        name: "external_skills.fetch",
-        description: "Download external skills artifacts with domain policy and approval guards",
-    });
-    entries.push(ToolRegistryEntry {
-        name: "external_skills.policy",
-        description: "Read/update external skills domain allow/block policy at runtime",
-    });
+    let mut entries = vec![
+        ToolRegistryEntry {
+            name: "claw.import",
+            description: "Import legacy Claw configs into native LoongClaw settings",
+        },
+        ToolRegistryEntry {
+            name: "external_skills.fetch",
+            description: "Download external skills artifacts with domain policy and approval guards",
+        },
+        ToolRegistryEntry {
+            name: "external_skills.inspect",
+            description: "Read metadata for an installed external skill",
+        },
+        ToolRegistryEntry {
+            name: "external_skills.install",
+            description: "Install a managed external skill from a local directory or archive",
+        },
+        ToolRegistryEntry {
+            name: "external_skills.invoke",
+            description: "Load an installed external skill into the conversation loop",
+        },
+        ToolRegistryEntry {
+            name: "external_skills.list",
+            description: "List managed external skills available for invocation",
+        },
+        ToolRegistryEntry {
+            name: "external_skills.policy",
+            description: "Read/update external skills domain allow/block policy at runtime",
+        },
+        ToolRegistryEntry {
+            name: "external_skills.remove",
+            description: "Remove an installed external skill from the managed runtime",
+        },
+    ];
     #[cfg(feature = "tool-file")]
     {
         entries.push(ToolRegistryEntry {
@@ -139,10 +185,21 @@ pub fn tool_registry() -> Vec<ToolRegistryEntry> {
 /// Produce a deterministic text block listing available tools,
 /// suitable for appending to the system prompt.
 pub fn capability_snapshot() -> String {
+    capability_snapshot_with_config(runtime_config::get_tool_runtime_config())
+}
+
+pub fn capability_snapshot_with_config(config: &runtime_config::ToolRuntimeConfig) -> String {
     let entries = tool_registry();
     let mut lines = vec!["[available_tools]".to_owned()];
     for entry in &entries {
         lines.push(format!("- {}: {}", entry.name, entry.description));
+    }
+    if let Ok(skill_lines) = external_skills::installed_skill_snapshot_lines_with_config(config)
+        && !skill_lines.is_empty()
+    {
+        lines.push(String::new());
+        lines.push("[available_external_skills]".to_owned());
+        lines.extend(skill_lines);
     }
     lines.join("\n")
 }
@@ -295,6 +352,104 @@ pub fn provider_tool_definitions() -> Vec<Value> {
                     }
                 },
                 "required": ["url"],
+                "additionalProperties": false
+            }
+        }
+    }));
+
+    tools.push(json!({
+        "type": "function",
+        "function": {
+            "name": "external_skills_inspect",
+            "description": "Read metadata and a short preview for an installed external skill.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "skill_id": {
+                        "type": "string",
+                        "description": "Managed external skill identifier."
+                    }
+                },
+                "required": ["skill_id"],
+                "additionalProperties": false
+            }
+        }
+    }));
+
+    tools.push(json!({
+        "type": "function",
+        "function": {
+            "name": "external_skills_install",
+            "description": "Install a managed external skill from a local directory or local .tgz/.tar.gz archive under the configured file root.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to a local directory containing SKILL.md or a local .tgz/.tar.gz archive."
+                    },
+                    "skill_id": {
+                        "type": "string",
+                        "description": "Optional explicit managed skill id override."
+                    },
+                    "replace": {
+                        "type": "boolean",
+                        "description": "Replace an existing installed skill with the same id. Defaults to false."
+                    }
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            }
+        }
+    }));
+
+    tools.push(json!({
+        "type": "function",
+        "function": {
+            "name": "external_skills_invoke",
+            "description": "Load an installed external skill's SKILL.md instructions into the conversation loop.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "skill_id": {
+                        "type": "string",
+                        "description": "Managed external skill identifier."
+                    }
+                },
+                "required": ["skill_id"],
+                "additionalProperties": false
+            }
+        }
+    }));
+
+    tools.push(json!({
+        "type": "function",
+        "function": {
+            "name": "external_skills_list",
+            "description": "List managed external skills available for invocation.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+            }
+        }
+    }));
+
+    tools.push(json!({
+        "type": "function",
+        "function": {
+            "name": "external_skills_remove",
+            "description": "Remove an installed external skill from the managed runtime.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "skill_id": {
+                        "type": "string",
+                        "description": "Managed external skill identifier."
+                    }
+                },
+                "required": ["skill_id"],
                 "additionalProperties": false
             }
         }
@@ -464,6 +619,70 @@ mod tests {
         assert_eq!(snapshot, snapshot2);
     }
 
+    #[test]
+    fn capability_snapshot_can_include_installed_external_skills() {
+        use std::{
+            fs,
+            path::{Path, PathBuf},
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        fn unique_temp_dir(prefix: &str) -> PathBuf {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos();
+            std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+        }
+
+        fn write_file(root: &Path, relative: &str, content: &str) {
+            let path = root.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create parent directory");
+            }
+            fs::write(path, content).expect("write fixture");
+        }
+
+        let root = unique_temp_dir("loongclaw-tool-capability-snapshot-skills");
+        fs::create_dir_all(&root).expect("create fixture root");
+        write_file(
+            &root,
+            "skills/demo-skill/SKILL.md",
+            "# Demo Skill\n\nUse this skill for explicit verification.\n",
+        );
+
+        let config = runtime_config::ToolRuntimeConfig {
+            shell_allowlist: BTreeSet::new(),
+            file_root: Some(root.clone()),
+            external_skills: runtime_config::ExternalSkillsRuntimePolicy {
+                enabled: true,
+                require_download_approval: true,
+                allowed_domains: BTreeSet::new(),
+                blocked_domains: BTreeSet::new(),
+                install_root: None,
+                auto_expose_installed: true,
+            },
+        };
+        execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "external_skills.install".to_owned(),
+                payload: json!({
+                    "path": "skills/demo-skill"
+                }),
+            },
+            &config,
+        )
+        .expect("install should succeed");
+
+        let snapshot = capability_snapshot_with_config(&config);
+        assert!(snapshot.contains("[available_external_skills]"));
+        assert!(snapshot.contains(
+            "- demo-skill: installed managed external skill; use external_skills.inspect or external_skills.invoke for details"
+        ));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
     fn capability_snapshot_lists_all_tools_when_all_features_enabled() {
@@ -474,31 +693,56 @@ mod tests {
             )
         );
         assert!(snapshot.contains("- external_skills.fetch: Download external skills artifacts with domain policy and approval guards"));
+        assert!(snapshot.contains("- external_skills.install: Install a managed external skill from a local directory or archive"));
+        assert!(
+            snapshot.contains(
+                "- external_skills.inspect: Read metadata for an installed external skill"
+            )
+        );
+        assert!(snapshot.contains(
+            "- external_skills.invoke: Load an installed external skill into the conversation loop"
+        ));
+        assert!(snapshot.contains(
+            "- external_skills.list: List managed external skills available for invocation"
+        ));
         assert!(snapshot.contains("- external_skills.policy: Read/update external skills domain allow/block policy at runtime"));
+        assert!(snapshot.contains(
+            "- external_skills.remove: Remove an installed external skill from the managed runtime"
+        ));
         assert!(snapshot.contains("- file.read: Read file contents"));
         assert!(snapshot.contains("- file.write: Write file contents"));
         assert!(snapshot.contains("- shell.exec: Execute shell commands"));
 
         // Verify sorted order: claw.import < external_skills.* < file.* < shell.exec
         let lines: Vec<&str> = snapshot.lines().skip(1).collect();
-        assert_eq!(lines.len(), 6);
+        assert_eq!(lines.len(), 11);
         assert!(lines[0].starts_with("- claw.import"));
         assert!(lines[1].starts_with("- external_skills.fetch"));
-        assert!(lines[2].starts_with("- external_skills.policy"));
-        assert!(lines[3].starts_with("- file.read"));
-        assert!(lines[4].starts_with("- file.write"));
-        assert!(lines[5].starts_with("- shell.exec"));
+        assert!(lines[2].starts_with("- external_skills.inspect"));
+        assert!(lines[3].starts_with("- external_skills.install"));
+        assert!(lines[4].starts_with("- external_skills.invoke"));
+        assert!(lines[5].starts_with("- external_skills.list"));
+        assert!(lines[6].starts_with("- external_skills.policy"));
+        assert!(lines[7].starts_with("- external_skills.remove"));
+        assert!(lines[8].starts_with("- file.read"));
+        assert!(lines[9].starts_with("- file.write"));
+        assert!(lines[10].starts_with("- shell.exec"));
     }
 
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
     fn tool_registry_returns_all_known_tools() {
         let entries = tool_registry();
-        assert_eq!(entries.len(), 6);
+        assert_eq!(entries.len(), 11);
         let names: Vec<&str> = entries.iter().map(|e| e.name).collect();
         assert!(names.contains(&"claw.import"));
         assert!(names.contains(&"external_skills.fetch"));
+        assert!(names.contains(&"external_skills.install"));
+        assert!(names.contains(&"external_skills.inspect"));
+        assert!(names.contains(&"external_skills.invoke"));
+        assert!(names.contains(&"external_skills.list"));
         assert!(names.contains(&"external_skills.policy"));
+        assert!(names.contains(&"external_skills.remove"));
         assert!(names.contains(&"shell.exec"));
         assert!(names.contains(&"file.read"));
         assert!(names.contains(&"file.write"));
@@ -508,7 +752,7 @@ mod tests {
     #[test]
     fn provider_tool_definitions_are_stable_and_complete() {
         let defs = provider_tool_definitions();
-        assert_eq!(defs.len(), 6);
+        assert_eq!(defs.len(), 11);
 
         let names: Vec<&str> = defs
             .iter()
@@ -521,7 +765,12 @@ mod tests {
             vec![
                 "claw_import",
                 "external_skills_fetch",
+                "external_skills_inspect",
+                "external_skills_install",
+                "external_skills_invoke",
+                "external_skills_list",
                 "external_skills_policy",
+                "external_skills_remove",
                 "file_read",
                 "file_write",
                 "shell_exec"
@@ -582,6 +831,26 @@ mod tests {
             canonical_tool_name("external_skills_fetch"),
             "external_skills.fetch"
         );
+        assert_eq!(
+            canonical_tool_name("external_skills_install"),
+            "external_skills.install"
+        );
+        assert_eq!(
+            canonical_tool_name("external_skills_list"),
+            "external_skills.list"
+        );
+        assert_eq!(
+            canonical_tool_name("external_skills_inspect"),
+            "external_skills.inspect"
+        );
+        assert_eq!(
+            canonical_tool_name("external_skills_invoke"),
+            "external_skills.invoke"
+        );
+        assert_eq!(
+            canonical_tool_name("external_skills_remove"),
+            "external_skills.remove"
+        );
         assert_eq!(canonical_tool_name("file_read"), "file.read");
         assert_eq!(canonical_tool_name("file_write"), "file.write");
         assert_eq!(canonical_tool_name("shell_exec"), "shell.exec");
@@ -597,6 +866,16 @@ mod tests {
         assert!(is_known_tool_name("external_skills_policy"));
         assert!(is_known_tool_name("external_skills.fetch"));
         assert!(is_known_tool_name("external_skills_fetch"));
+        assert!(is_known_tool_name("external_skills.install"));
+        assert!(is_known_tool_name("external_skills_install"));
+        assert!(is_known_tool_name("external_skills.list"));
+        assert!(is_known_tool_name("external_skills_list"));
+        assert!(is_known_tool_name("external_skills.inspect"));
+        assert!(is_known_tool_name("external_skills_inspect"));
+        assert!(is_known_tool_name("external_skills.invoke"));
+        assert!(is_known_tool_name("external_skills_invoke"));
+        assert!(is_known_tool_name("external_skills.remove"));
+        assert!(is_known_tool_name("external_skills_remove"));
         assert!(is_known_tool_name("file.read"));
         assert!(is_known_tool_name("file_read"));
         assert!(is_known_tool_name("file.write"));

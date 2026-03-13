@@ -6,7 +6,12 @@ Thanks for contributing. This guide defines the baseline workflow for external a
 
 - Rust stable toolchain installed.
 - `cargo` available in shell.
+- `task` CLI installed (`go-task`), required for `task verify` / `task verify:full`.
+- Go toolchain installed (required by `task check:conventions`).
+- `cargo-deny` installed (required by `task check:deny`).
 - GitHub account with fork access.
+- Convention checks require the `convention-engineering` skill script at
+  `~/.claude/skills/convention-engineering/scripts/main.go` (see `Taskfile.yml`).
 
 ## Contribution Tracks
 
@@ -26,6 +31,24 @@ Required checks:
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
+```
+
+Canonical local gate:
+
+```bash
+task verify
+```
+
+If `task`/`go`/convention skill dependencies are unavailable locally, run at least CI parity plus
+architecture/dep-graph checks directly:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace
+cargo test --workspace --all-features
+scripts/check_architecture_boundaries.sh
+scripts/check_dep_graph.sh
 ```
 
 ### Track B: Higher-risk changes

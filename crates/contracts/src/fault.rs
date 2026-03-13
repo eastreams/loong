@@ -119,8 +119,18 @@ impl Fault {
                 token_id: format!("pack:{pack_id}"),
                 capability,
             },
-            other => Self::Panic {
-                message: other.to_string(),
+            KernelError::PackNotFound(_)
+            | KernelError::DuplicatePack(_)
+            | KernelError::ConnectorNotAllowed { .. }
+            | KernelError::Pack(_)
+            | KernelError::Harness(_)
+            | KernelError::Connector(_)
+            | KernelError::RuntimePlane(_)
+            | KernelError::ToolPlane(_)
+            | KernelError::MemoryPlane(_)
+            | KernelError::Integration(_)
+            | KernelError::Audit(_) => Self::Panic {
+                message: err.to_string(),
             },
         }
     }

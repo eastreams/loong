@@ -1490,6 +1490,7 @@ fn resolve_programmatic_template_string(
         let end = start + 2 + end_rel;
         let expr = &raw[start + 2..end];
         let value = resolve_programmatic_template_expr(expr, outputs)?;
+        #[allow(clippy::wildcard_enum_match_arm)]
         match value {
             Value::String(string) => rendered.push_str(&string),
             other => rendered.push_str(&other.to_string()),
@@ -1565,6 +1566,7 @@ fn attach_programmatic_payload_provenance(
     step_index: usize,
     call_id: Option<&str>,
 ) -> Value {
+    #[allow(clippy::wildcard_enum_match_arm)]
     let mut payload_map = match payload {
         Value::Object(map) => map,
         other => {

@@ -68,7 +68,7 @@ pub(super) async fn run_feishu_channel(
             .unwrap_or(resolved.webhook_path.as_str()),
     );
 
-    let state = FeishuWebhookState::new(config.clone(), resolved, adapter, kernel_ctx, runtime);
+    let state = FeishuWebhookState::new(config.clone(), resolved, adapter, kernel_ctx, runtime)?;
     let app = Router::new()
         .route(path.as_str(), post(feishu_webhook_handler))
         .with_state(state);

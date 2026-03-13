@@ -288,7 +288,7 @@ pub fn apply_import_selection(
         ImportSelectionMode::SafeProfileMerge { .. } => {
             let primary_plan =
                 plan_import_from_path(&selected_primary.path, Some(selected_primary.source))?;
-            warnings.extend(primary_plan.warnings.clone());
+            warnings.extend(primary_plan.warnings);
 
             for source in &request.discovery.sources {
                 if source.path == selected_primary.path {
@@ -948,8 +948,8 @@ mod tests {
         fs::write(&output_path, &original_body).expect("write original config");
 
         let result = apply_import_selection(&ApplyImportSelection {
-            discovery: discovery.clone(),
-            output_path: output_path.clone(),
+            discovery,
+            output_path,
             mode: ImportSelectionMode::RecommendedSingleSource {
                 source_id: "openclaw".to_owned(),
             },

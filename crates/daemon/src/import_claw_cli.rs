@@ -244,7 +244,7 @@ pub(crate) fn run_import_claw_cli(options: ImportClawCommandOptions) -> CliResul
             let result =
                 mvp::migration::apply_import_selection(&mvp::migration::ApplyImportSelection {
                     discovery: report,
-                    output_path: output_path.clone(),
+                    output_path,
                     mode: selection.clone(),
                     apply_external_skills_plan: options.apply_external_skills_plan,
                     external_skills_input_path: if options.apply_external_skills_plan {

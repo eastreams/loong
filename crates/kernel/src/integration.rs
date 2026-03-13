@@ -333,7 +333,7 @@ impl AutoProvisionAgent {
             }
         };
 
-        let connector_name = provider.connector_name.clone();
+        let connector_name = provider.connector_name;
         if !pack.allowed_connectors.contains(&connector_name) {
             plan.pack_connector_additions.insert(connector_name);
         }

@@ -33,6 +33,7 @@ impl TaskSupervisor {
         token: &CapabilityToken,
     ) -> Result<KernelDispatch, Fault> {
         // Extract intent from Runnable state
+        #[allow(clippy::wildcard_enum_match_arm)]
         let intent = match std::mem::replace(
             &mut self.state,
             TaskState::InSend {

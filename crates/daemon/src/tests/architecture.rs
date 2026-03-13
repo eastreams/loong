@@ -51,7 +51,7 @@ async fn execute_spec_allows_execution_with_clean_architecture_guard() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "task");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert!(report.blocked_reason.is_none());
@@ -119,7 +119,7 @@ async fn execute_spec_blocks_when_architecture_guard_detects_core_mutation() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
     assert_eq!(report.outcome["status"], "blocked");
     assert!(report.blocked_reason.is_some());

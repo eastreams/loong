@@ -337,6 +337,7 @@ fn sanitize_risk_scoring(mut scoring: ApprovalRiskScoring) -> ApprovalRiskScorin
 }
 
 fn operation_tool_name(operation: &OperationSpec) -> Option<&str> {
+    #[allow(clippy::wildcard_enum_match_arm)]
     match operation {
         OperationSpec::ToolCore { tool_name, .. } => Some(tool_name.as_str()),
         OperationSpec::ToolExtension {

@@ -125,6 +125,7 @@ pub fn parse_clamped_timeout_ms(
 pub fn protocol_capabilities_for_connector_command(command: &ConnectorCommand) -> BTreeSet<String> {
     let mut capabilities = BTreeSet::new();
     for capability in &command.required_capabilities {
+        #[allow(clippy::wildcard_enum_match_arm)]
         match capability {
             Capability::MemoryRead
             | Capability::FilesystemRead

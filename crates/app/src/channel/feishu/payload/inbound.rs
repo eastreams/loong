@@ -148,6 +148,7 @@ fn verify_feishu_token(payload: &Value, verification_token: Option<&str>) -> Cli
 }
 
 fn parse_feishu_text_content(content: &Value) -> Option<String> {
+    #[allow(clippy::wildcard_enum_match_arm)]
     match content {
         Value::String(raw) => {
             let trimmed = raw.trim();

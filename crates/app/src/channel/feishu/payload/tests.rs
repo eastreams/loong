@@ -26,6 +26,7 @@ fn feishu_url_verification_payload_parses() {
     )
     .expect("parse feishu url verification");
 
+    #[allow(clippy::wildcard_enum_match_arm)]
     match action {
         FeishuWebhookAction::UrlVerification { challenge } => assert_eq!(challenge, "abc"),
         _ => panic!("unexpected action"),
@@ -64,6 +65,7 @@ fn feishu_message_event_parses_text_payload() {
     )
     .expect("parse feishu event");
 
+    #[allow(clippy::wildcard_enum_match_arm)]
     match action {
         FeishuWebhookAction::Inbound(event) => {
             assert_eq!(event.event_id, "evt_1");
@@ -198,6 +200,7 @@ fn feishu_encrypted_payload_parses_with_encrypt_key() {
     )
     .expect("parse encrypted payload");
 
+    #[allow(clippy::wildcard_enum_match_arm)]
     match parsed {
         FeishuWebhookAction::Inbound(event) => {
             assert_eq!(event.event_id, "evt_encrypted_1");

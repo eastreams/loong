@@ -29,7 +29,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.93.0
 
       - name: Cache Cargo Artifacts
         uses: Swatinem/rust-cache@v2

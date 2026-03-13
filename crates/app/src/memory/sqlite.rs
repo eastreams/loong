@@ -182,7 +182,7 @@ pub(super) fn window_direct_with_options(
     config: &MemoryRuntimeConfig,
 ) -> Result<Vec<ConversationTurn>, String> {
     let request = MemoryCoreRequest {
-        operation: "window".to_owned(),
+        operation: MEMORY_OP_WINDOW.to_owned(),
         payload: json!({
             "session_id": session_id,
             "limit": limit,

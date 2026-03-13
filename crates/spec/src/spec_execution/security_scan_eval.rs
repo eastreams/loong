@@ -115,6 +115,10 @@ pub(super) fn evaluate_plugin_security_scan(
                 );
                 accumulate_security_findings(&mut delta, findings);
             }
+            // ACP bridge/runtime descriptors are routed through the ACP control plane, where
+            // backend bootstrap and session policy enforcement happen later. This scan phase only
+            // enforces direct plugin transport/runtime risks already modeled above.
+            PluginBridgeKind::AcpBridge | PluginBridgeKind::AcpRuntime => {}
             PluginBridgeKind::HttpJson
             | PluginBridgeKind::McpServer
             | PluginBridgeKind::Unknown
@@ -580,4 +584,59 @@ fn descriptor_wasm_artifact(descriptor: &PluginDescriptor) -> Option<String> {
                 .clone()
                 .filter(|value| value.to_ascii_lowercase().ends_with(".wasm"))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use kernel::{Capability, PluginManifest};
+
+    use super::*;
+
+    fn test_descriptor(plugin_id: &str, bridge_kind: PluginBridgeKind) -> PluginDescriptor {
+        PluginDescriptor {
+            path: format!("/tmp/{plugin_id}.plugin.json"),
+            language: "json".to_owned(),
+            manifest: PluginManifest {
+                plugin_id: plugin_id.to_owned(),
+                provider_id: "test-provider".to_owned(),
+                connector_name: "test-connector".to_owned(),
+                channel_id: None,
+                endpoint: None,
+                capabilities: BTreeSet::from([Capability::InvokeConnector]),
+                metadata: BTreeMap::from([(
+                    "bridge_kind".to_owned(),
+                    bridge_kind.as_str().to_owned(),
+                )]),
+                summary: None,
+                tags: Vec::new(),
+                input_examples: Vec::new(),
+                output_examples: Vec::new(),
+                defer_loading: false,
+            },
+        }
+    }
+
+    #[test]
+    fn acp_bridge_and_runtime_descriptors_do_not_break_security_scan_evaluation() {
+        let report = PluginScanReport {
+            scanned_files: 2,
+            matched_plugins: 2,
+            descriptors: vec![
+                test_descriptor("acp-bridge-plugin", PluginBridgeKind::AcpBridge),
+                test_descriptor("acp-runtime-plugin", PluginBridgeKind::AcpRuntime),
+            ],
+        };
+
+        let delta =
+            evaluate_plugin_security_scan(&report, &SecurityScanSpec::default(), &BTreeSet::new());
+
+        assert_eq!(delta.scanned_plugins, 2);
+        assert_eq!(delta.high_findings, 0);
+        assert_eq!(delta.medium_findings, 0);
+        assert_eq!(delta.low_findings, 0);
+        assert!(delta.findings.is_empty());
+        assert!(delta.block_reason.is_none());
+    }
 }

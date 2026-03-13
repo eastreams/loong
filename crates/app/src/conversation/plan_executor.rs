@@ -537,6 +537,7 @@ mod tests {
         let executor = RecordingExecutor::always_fail("n2");
         let report = PlanExecutor::execute(&graph, &executor).await;
 
+        #[allow(clippy::wildcard_enum_match_arm)]
         match report.status {
             PlanRunStatus::Failed(PlanRunFailure::NodeFailed {
                 node_id,
@@ -593,6 +594,7 @@ mod tests {
         let executor = TimeoutAlwaysExecutor::new("n2");
         let report = PlanExecutor::execute(&graph, &executor).await;
 
+        #[allow(clippy::wildcard_enum_match_arm)]
         match report.status {
             PlanRunStatus::Failed(PlanRunFailure::NodeFailed {
                 node_id,
@@ -619,6 +621,7 @@ mod tests {
         let executor = RecordingExecutor::succeed_all();
         let report = PlanExecutor::execute(&graph, &executor).await;
 
+        #[allow(clippy::wildcard_enum_match_arm)]
         match report.status {
             PlanRunStatus::Failed(PlanRunFailure::ValidationFailed(error)) => {
                 assert!(error.contains("attempt budget exceeded"), "error={error}");
@@ -637,6 +640,7 @@ mod tests {
 
         let executor = RecordingExecutor::succeed_all();
         let report = PlanExecutor::execute(&graph, &executor).await;
+        #[allow(clippy::wildcard_enum_match_arm)]
         match report.status {
             PlanRunStatus::Failed(PlanRunFailure::ValidationFailed(error)) => {
                 assert!(error.contains("unknown `to` node"), "error={error}");

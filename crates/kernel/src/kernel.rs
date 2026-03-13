@@ -808,15 +808,7 @@ impl<P: PolicyEngine> LoongClawKernel<P> {
                     tool_name: tool_name.to_owned(),
                     reason,
                 };
-                self.audit.record(self.new_event(
-                    now_epoch_s,
-                    Some(token.agent_id.clone()),
-                    AuditEventKind::AuthorizationDenied {
-                        pack_id: pack.pack_id.clone(),
-                        token_id: token.token_id.clone(),
-                        reason: error.to_string(),
-                    },
-                ))?;
+                self.record_tool_call_denial(pack, token, now_epoch_s, &error)?;
                 Err(KernelError::Policy(error))
             }
             PolicyDecision::RequireApproval(prompt) => {
@@ -824,22 +816,37 @@ impl<P: PolicyEngine> LoongClawKernel<P> {
                     tool_name: tool_name.to_owned(),
                     prompt,
                 };
-                self.audit.record(self.new_event(
-                    now_epoch_s,
-                    Some(token.agent_id.clone()),
-                    AuditEventKind::AuthorizationDenied {
-                        pack_id: pack.pack_id.clone(),
-                        token_id: token.token_id.clone(),
-                        reason: error.to_string(),
-                    },
-                ))?;
+                self.record_tool_call_denial(pack, token, now_epoch_s, &error)?;
                 Err(KernelError::Policy(error))
             }
-            _ => Err(KernelError::Policy(PolicyError::ExtensionDenied {
-                extension: "policy".to_owned(),
-                reason: format!("unexpected policy decision for tool `{tool_name}`"),
-            })),
+            _ => {
+                let error = PolicyError::ExtensionDenied {
+                    extension: "policy".to_owned(),
+                    reason: format!("unexpected policy decision for tool `{tool_name}`"),
+                };
+                self.record_tool_call_denial(pack, token, now_epoch_s, &error)?;
+                Err(KernelError::Policy(error))
+            }
         }
+    }
+
+    pub(crate) fn record_tool_call_denial(
+        &self,
+        pack: &VerticalPackManifest,
+        token: &CapabilityToken,
+        now_epoch_s: u64,
+        error: &PolicyError,
+    ) -> Result<(), KernelError> {
+        self.audit.record(self.new_event(
+            now_epoch_s,
+            Some(token.agent_id.clone()),
+            AuditEventKind::AuthorizationDenied {
+                pack_id: pack.pack_id.clone(),
+                token_id: token.token_id.clone(),
+                reason: error.to_string(),
+            },
+        ))?;
+        Ok(())
     }
 
     fn authorize_or_audit_denial(

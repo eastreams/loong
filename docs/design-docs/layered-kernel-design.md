@@ -203,7 +203,7 @@ Rules:
 Scope:
 
 - `plugin_ir` canonical representation
-- bridge-kind inference (`http_json`, `process_stdio`, `native_ffi`, `wasm_component`, `mcp_server`)
+- bridge-kind inference (`http_json`, `process_stdio`, `native_ffi`, `wasm_component`, `mcp_server`, `acp_bridge`, `acp_runtime`)
 - adapter family / entrypoint hint normalization
 
 Responsibilities:
@@ -224,6 +224,9 @@ Rules:
   to prevent silent policy drift.
 - Bridge policy can optionally enable local bridge runtime execution in controlled mode
   (`process_stdio` allowlist and strict execution enforcement).
+- ACP-related bridge taxonomy must preserve the distinction between an ACP bridge surface
+  (`acp_bridge`) and a session-aware ACP runtime backend (`acp_runtime`), so runtime backends such
+  as ACPX do not collapse into the same abstraction bucket as bridge/gateway entrypoints.
 - WASM runtime execution is policy-driven through `security_scan.runtime` with fail-closed
   guards (`execute_wasm_component`, `allowed_path_prefixes`, `max_component_bytes`,
   `fuel_limit`) so enabling execution never requires hardcoded kernel branches.
@@ -267,6 +270,9 @@ Rules:
 - Multi-root plugin bootstrap/absorb should be transactional to avoid partial commit under blocked states.
 - Bootstrap `max_tasks` should be interpreted as a run-level budget across all scan roots.
 - Deferred/skipped tasks must remain observable for follow-up orchestration.
+- ACP-related bootstrap policy must preserve separate auto-apply gates for bridge surfaces and
+  runtime-backend surfaces, so `acp_bridge` rollout and `acp_runtime` rollout can be governed
+  independently.
 - Applied plugins should expose a normalized bridge execution contract (`bridge_execution`) so runtime
   behavior remains deterministic and inspectable after hotplug.
 - Local bridge execution must be opt-in and allowlisted; default mode remains plan-only.

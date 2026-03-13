@@ -12,8 +12,9 @@ use super::persistence::{format_provider_error_reply, persist_error_turns, persi
 use super::runtime::{ConversationRuntime, DefaultConversationRuntime};
 use super::turn_engine::{ProviderTurn, ToolIntent, TurnEngine, TurnResult};
 use super::turn_shared::{
+    build_external_skill_followup_user_prompt, build_external_skill_system_message,
     build_tool_followup_user_prompt, compose_assistant_reply, join_non_empty_lines,
-    user_requested_raw_tool_output,
+    parse_external_skill_invoke_context, user_requested_raw_tool_output,
 };
 
 #[derive(Default)]
@@ -34,7 +35,7 @@ impl ConversationTurnLoop {
         error_mode: ProviderErrorMode,
         kernel_ctx: Option<&KernelContext>,
     ) -> CliResult<String> {
-        let runtime = DefaultConversationRuntime;
+        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
         self.handle_turn_with_runtime(
             config, session_id, user_input, error_mode, &runtime, kernel_ctx,
         )
@@ -67,7 +68,7 @@ impl ConversationTurnLoop {
         );
 
         for round_index in 0..policy.max_rounds {
-            let turn = match runtime.request_turn(config, &messages).await {
+            let turn = match runtime.request_turn(config, &messages, kernel_ctx).await {
                 Ok(turn) => turn,
                 Err(error) => {
                     return match error_mode {
@@ -115,6 +116,7 @@ impl ConversationTurnLoop {
                 None
             };
 
+            #[allow(clippy::wildcard_enum_match_arm)]
             let reply = match turn_result {
                 TurnResult::FinalText(tool_text) if had_tool_intents => {
                     let raw_reply =
@@ -138,6 +140,7 @@ impl ConversationTurnLoop {
                                 runtime,
                                 config,
                                 &messages,
+                                kernel_ctx,
                                 raw_reply.as_str(),
                             )
                             .await
@@ -167,6 +170,7 @@ impl ConversationTurnLoop {
                                 runtime,
                                 config,
                                 &messages,
+                                kernel_ctx,
                                 raw_reply.as_str(),
                             )
                             .await
@@ -199,6 +203,7 @@ impl ConversationTurnLoop {
                                 runtime,
                                 config,
                                 &messages,
+                                kernel_ctx,
                                 raw_reply.as_str(),
                             )
                             .await
@@ -228,6 +233,7 @@ impl ConversationTurnLoop {
                                 runtime,
                                 config,
                                 &messages,
+                                kernel_ctx,
                                 raw_reply.as_str(),
                             )
                             .await
@@ -260,6 +266,7 @@ impl ConversationTurnLoop {
                                 runtime,
                                 config,
                                 &messages,
+                                kernel_ctx,
                                 raw_reply.as_str(),
                             )
                             .await
@@ -289,6 +296,7 @@ impl ConversationTurnLoop {
                                 runtime,
                                 config,
                                 &messages,
+                                kernel_ctx,
                                 raw_reply.as_str(),
                             )
                             .await
@@ -327,6 +335,27 @@ fn append_tool_followup_messages(
             "role": "assistant",
             "content": preface,
         }));
+    }
+    if let Some(skill_context) = parse_external_skill_invoke_context(tool_result_text) {
+        messages.push(json!({
+            "role": "system",
+            "content": build_external_skill_system_message(&skill_context),
+        }));
+        if let Some(reason) = loop_warning_reason {
+            messages.push(json!({
+                "role": "assistant",
+                "content": format!("[tool_loop_warning]\n{reason}"),
+            }));
+        }
+        messages.push(json!({
+            "role": "user",
+            "content": build_external_skill_followup_user_prompt(
+                user_input,
+                loop_warning_reason,
+                &skill_context,
+            ),
+        }));
+        return;
     }
     let bounded_result = followup_payload_budget.truncate_payload("tool_result", tool_result_text);
     messages.push(json!({
@@ -424,9 +453,13 @@ async fn request_completion_with_raw_fallback<R: ConversationRuntime + ?Sized>(
     runtime: &R,
     config: &LoongClawConfig,
     messages: &[Value],
+    kernel_ctx: Option<&KernelContext>,
     raw_reply: &str,
 ) -> String {
-    match runtime.request_completion(config, messages).await {
+    match runtime
+        .request_completion(config, messages, kernel_ctx)
+        .await
+    {
         Ok(final_reply) => {
             let trimmed = final_reply.trim();
             if trimmed.is_empty() {
@@ -623,7 +656,7 @@ impl ToolLoopSupervisor {
         }
 
         self.recent_rounds.push_back(ToolLoopObservation {
-            pattern: pattern.clone(),
+            pattern,
             tool_name_signature: tool_name_signature.to_owned(),
             failed,
         });
@@ -788,6 +821,80 @@ mod tests {
             .expect("user followup prompt should exist");
         assert!(
             !user_prompt.contains(crate::conversation::turn_shared::TOOL_TRUNCATION_HINT_PROMPT)
+        );
+    }
+
+    #[test]
+    fn append_tool_followup_messages_promotes_external_skill_invoke_into_system_context() {
+        let mut messages = Vec::new();
+        let mut budget = FollowupPayloadBudget::new(64, 64);
+
+        append_tool_followup_messages(
+            &mut messages,
+            "preface",
+            r#"[ok] {"status":"ok","tool":"external_skills.invoke","tool_call_id":"call-1","payload_summary":"{\"skill_id\":\"demo-skill\",\"display_name\":\"Demo Skill\",\"instructions\":\"Follow the managed skill instruction before answering.\"}","payload_chars":180,"payload_truncated":false}"#,
+            "summarize note.md",
+            &mut budget,
+            None,
+        );
+
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[1]["role"], "system");
+        let system_content = messages[1]["content"]
+            .as_str()
+            .expect("system content should exist");
+        assert!(system_content.contains("Demo Skill"));
+        assert!(system_content.contains("Follow the managed skill instruction before answering."));
+        assert!(
+            !system_content.contains("[tool_result_truncated]"),
+            "invoke instructions should not be funneled through followup truncation markers"
+        );
+
+        let user_prompt = messages[2]["content"]
+            .as_str()
+            .expect("user prompt should exist");
+        assert!(user_prompt.contains("managed external skill"));
+        assert!(user_prompt.contains("Original request:\nsummarize note.md"));
+    }
+
+    #[test]
+    fn append_tool_followup_messages_keeps_large_external_skill_instructions_intact() {
+        let mut messages = Vec::new();
+        let mut budget = FollowupPayloadBudget::new(32, 32);
+        let instructions = format!("prefix {}\nsuffix-marker", "x".repeat(512));
+        let payload_summary = serde_json::json!({
+            "skill_id": "demo-skill",
+            "display_name": "Demo Skill",
+            "instructions": instructions,
+        })
+        .to_string();
+        let tool_result = format!(
+            "[ok] {}",
+            serde_json::json!({
+                "status": "ok",
+                "tool": "external_skills.invoke",
+                "tool_call_id": "call-2",
+                "payload_summary": payload_summary,
+                "payload_chars": 2048,
+                "payload_truncated": false
+            })
+        );
+
+        append_tool_followup_messages(
+            &mut messages,
+            "",
+            tool_result.as_str(),
+            "apply the skill",
+            &mut budget,
+            None,
+        );
+
+        let system_content = messages[0]["content"]
+            .as_str()
+            .expect("system content should exist");
+        assert!(
+            system_content.contains("suffix-marker"),
+            "system context should preserve the tail of large invoke instructions"
         );
     }
 }

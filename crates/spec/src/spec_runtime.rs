@@ -914,6 +914,10 @@ pub struct BootstrapSpec {
     #[serde(default)]
     pub allow_mcp_server_auto_apply: Option<bool>,
     #[serde(default)]
+    pub allow_acp_bridge_auto_apply: Option<bool>,
+    #[serde(default)]
+    pub allow_acp_runtime_auto_apply: Option<bool>,
+    #[serde(default)]
     pub enforce_ready_execution: Option<bool>,
     #[serde(default)]
     pub max_tasks: Option<usize>,
@@ -1414,6 +1418,29 @@ pub async fn bridge_execution_payload(
                     .cloned()
                     .unwrap_or_else(|| "stdio".to_owned()),
                 "handshake": "capability_schema_exchange",
+            }
+        }),
+        PluginBridgeKind::AcpBridge => json!({
+            "status": "planned",
+            "bridge_kind": bridge_kind.as_str(),
+            "adapter_family": adapter_family,
+            "entrypoint": entrypoint,
+            "acp": {
+                "surface": "bridge",
+                "gateway_contract": "external_bridge_runtime",
+                "turn_contract": "bridge_forwarded_prompt_response",
+            }
+        }),
+        PluginBridgeKind::AcpRuntime => json!({
+            "status": "planned",
+            "bridge_kind": bridge_kind.as_str(),
+            "adapter_family": adapter_family,
+            "entrypoint": entrypoint,
+            "acp": {
+                "surface": "runtime",
+                "session_bootstrap": "required",
+                "control_plane": "external_runtime",
+                "turn_contract": "session_scoped_prompt_response",
             }
         }),
         PluginBridgeKind::Unknown => json!({
@@ -1998,7 +2025,7 @@ pub fn execute_wasm_component_bridge(
                 "cache_total_module_bytes": cache_lookup.cache_total_module_bytes,
                 "cache_max_bytes": cache_lookup.cache_max_bytes,
                 "cache_inserted": cache_lookup.inserted,
-                "expected_sha256": expected_sha256.clone(),
+                "expected_sha256": expected_sha256,
                 "artifact_sha256": cached_module.artifact_sha256.clone(),
                 "integrity_check_required": expected_sha256.is_some(),
                 "integrity_check_passed": expected_sha256.is_none() || cached_module.artifact_sha256.is_some(),
@@ -2024,7 +2051,7 @@ pub fn execute_wasm_component_bridge(
                 "cache_total_module_bytes": cache_lookup.cache_total_module_bytes,
                 "cache_max_bytes": cache_lookup.cache_max_bytes,
                 "cache_inserted": cache_lookup.inserted,
-                "expected_sha256": expected_sha256.clone(),
+                "expected_sha256": expected_sha256,
                 "artifact_sha256": cached_module.artifact_sha256.clone(),
                 "integrity_check_required": expected_sha256.is_some(),
                 "integrity_check_passed": expected_sha256.is_none() || cached_module.artifact_sha256.is_some(),
@@ -2188,6 +2215,8 @@ pub fn parse_bridge_kind_label(raw: &str) -> Option<PluginBridgeKind> {
         "native_ffi" | "ffi" => Some(PluginBridgeKind::NativeFfi),
         "wasm_component" | "wasm" => Some(PluginBridgeKind::WasmComponent),
         "mcp_server" | "mcp" => Some(PluginBridgeKind::McpServer),
+        "acp_bridge" | "acp" => Some(PluginBridgeKind::AcpBridge),
+        "acp_runtime" | "acpx" => Some(PluginBridgeKind::AcpRuntime),
         "unknown" => Some(PluginBridgeKind::Unknown),
         _ => None,
     }
@@ -2200,6 +2229,8 @@ pub fn default_bridge_adapter_family(bridge_kind: PluginBridgeKind) -> String {
         PluginBridgeKind::NativeFfi => "ffi-adapter".to_owned(),
         PluginBridgeKind::WasmComponent => "wasm-component-adapter".to_owned(),
         PluginBridgeKind::McpServer => "mcp-adapter".to_owned(),
+        PluginBridgeKind::AcpBridge => "acp-bridge-adapter".to_owned(),
+        PluginBridgeKind::AcpRuntime => "acp-runtime-adapter".to_owned(),
         PluginBridgeKind::Unknown => "unknown-adapter".to_owned(),
     }
 }
@@ -2211,7 +2242,54 @@ pub fn default_bridge_entrypoint(bridge_kind: PluginBridgeKind, endpoint: &str) 
         PluginBridgeKind::NativeFfi => "lib::invoke".to_owned(),
         PluginBridgeKind::WasmComponent => "component::run".to_owned(),
         PluginBridgeKind::McpServer => "mcp::stdio".to_owned(),
+        PluginBridgeKind::AcpBridge => "acp::bridge".to_owned(),
+        PluginBridgeKind::AcpRuntime => "acp::turn".to_owned(),
         PluginBridgeKind::Unknown => "unknown::invoke".to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod bridge_kind_tests {
+    use super::*;
+
+    #[test]
+    fn parse_bridge_kind_label_distinguishes_acp_bridge_and_runtime() {
+        assert_eq!(
+            parse_bridge_kind_label("acp"),
+            Some(PluginBridgeKind::AcpBridge)
+        );
+        assert_eq!(
+            parse_bridge_kind_label("acp_bridge"),
+            Some(PluginBridgeKind::AcpBridge)
+        );
+        assert_eq!(
+            parse_bridge_kind_label("acpx"),
+            Some(PluginBridgeKind::AcpRuntime)
+        );
+        assert_eq!(
+            parse_bridge_kind_label("acp_runtime"),
+            Some(PluginBridgeKind::AcpRuntime)
+        );
+    }
+
+    #[test]
+    fn default_bridge_defaults_keep_acp_surfaces_distinct() {
+        assert_eq!(
+            default_bridge_adapter_family(PluginBridgeKind::AcpBridge),
+            "acp-bridge-adapter"
+        );
+        assert_eq!(
+            default_bridge_adapter_family(PluginBridgeKind::AcpRuntime),
+            "acp-runtime-adapter"
+        );
+        assert_eq!(
+            default_bridge_entrypoint(PluginBridgeKind::AcpBridge, "https://example.test"),
+            "acp::bridge"
+        );
+        assert_eq!(
+            default_bridge_entrypoint(PluginBridgeKind::AcpRuntime, "https://example.test"),
+            "acp::turn"
+        );
     }
 }
 
@@ -2494,7 +2572,7 @@ impl ToolExtensionAdapter for ClawMigrationToolExtension {
                 response.entry(key.clone()).or_insert_with(|| value.clone());
             }
         } else {
-            response.insert("result".to_owned(), core_outcome.payload.clone());
+            response.insert("result".to_owned(), core_outcome.payload);
         }
         Ok(ToolExtensionOutcome {
             status: "ok".to_owned(),
@@ -2769,7 +2847,7 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert_eq!(cache.total_module_bytes(), 6);
 
-        let second = cache.insert(key_b.clone(), compiled.clone(), 6, 8, 10);
+        let second = cache.insert(key_b.clone(), compiled, 6, 8, 10);
         assert!(second.inserted);
         assert_eq!(second.evicted_entries, 1);
         assert_eq!(cache.len(), 1);

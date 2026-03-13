@@ -7,7 +7,7 @@ Usage: ./scripts/install.sh [--prefix <dir>] [--onboard]
 
 Options:
   --prefix <dir>   Install directory for loongclaw (default: $HOME/.local/bin)
-  --onboard        Run `loongclaw onboard --force` after install
+  --onboard        Run `loongclaw onboard` after install
   -h, --help       Show this help
 USAGE
 }
@@ -52,7 +52,7 @@ repo_root="$(cd "${script_dir}/.." && pwd)"
 printf '==> Building loongclaw (release)\n'
 (
   cd "${repo_root}"
-  cargo build -p loongclaw-daemon --bin loongclaw --release
+  cargo build -p loongclaw-daemon --bin loongclaw --release --locked
 )
 
 mkdir -p "${prefix}"
@@ -62,7 +62,7 @@ printf '==> Installed loongclaw to %s\n' "${prefix}/loongclaw"
 
 if [[ "${run_onboard}" -eq 1 ]]; then
   printf '==> Running guided onboarding\n'
-  "${prefix}/loongclaw" onboard --force
+  "${prefix}/loongclaw" onboard
 fi
 
 case ":${PATH}:" in

@@ -705,8 +705,7 @@ async fn audit_sink_receives_core_lifecycle_events() {
 fn record_audit_event_supports_security_scan_summary() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_123));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let kernel =
-        LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock.clone(), audit.clone());
+    let kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
 
     kernel
         .record_audit_event(
@@ -745,6 +744,67 @@ fn record_audit_event_supports_security_scan_summary() {
             blocked,
             ..
         } if pack_id == "pack-security" && *scanned_plugins == 2 && *blocked
+    ));
+}
+
+#[test]
+fn record_audit_event_supports_provider_failover_summary() {
+    let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_123));
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
+
+    kernel
+        .record_audit_event(
+            Some("agent-provider"),
+            AuditEventKind::ProviderFailover {
+                pack_id: "pack-provider".to_owned(),
+                provider_id: "openai".to_owned(),
+                reason: "rate_limited".to_owned(),
+                stage: "status_failure".to_owned(),
+                model: "gpt-5".to_owned(),
+                attempt: 2,
+                max_attempts: 3,
+                status_code: Some(429),
+                try_next_model: true,
+                auto_model_mode: true,
+                candidate_index: 1,
+                candidate_count: 4,
+            },
+        )
+        .expect("provider failover audit event should record");
+
+    let events = audit.snapshot();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event_id, "evt-0000000000000001");
+    assert_eq!(events[0].timestamp_epoch_s, 1_700_000_123);
+    assert_eq!(events[0].agent_id.as_deref(), Some("agent-provider"));
+    assert!(matches!(
+        &events[0].kind,
+        AuditEventKind::ProviderFailover {
+            pack_id,
+            provider_id,
+            reason,
+            stage,
+            model,
+            attempt,
+            max_attempts,
+            status_code,
+            try_next_model,
+            auto_model_mode,
+            candidate_index,
+            candidate_count,
+        } if pack_id == "pack-provider"
+            && provider_id == "openai"
+            && reason == "rate_limited"
+            && stage == "status_failure"
+            && model == "gpt-5"
+            && *attempt == 2
+            && *max_attempts == 3
+            && *status_code == Some(429)
+            && *try_next_model
+            && *auto_model_mode
+            && *candidate_index == 1
+            && *candidate_count == 4
     ));
 }
 
@@ -1396,6 +1456,7 @@ async fn plane_audit_records_resolved_default_core_adapter_names() {
 
     let snapshot = audit.snapshot();
 
+    #[allow(clippy::wildcard_enum_match_arm)]
     let connector_ext_event = snapshot
         .iter()
         .find_map(|event| match &event.kind {
@@ -1412,6 +1473,7 @@ async fn plane_audit_records_resolved_default_core_adapter_names() {
     assert_eq!(connector_ext_event.0, "shielded-bridge");
     assert_eq!(connector_ext_event.1.as_deref(), Some("grpc-core"));
 
+    #[allow(clippy::wildcard_enum_match_arm)]
     let runtime_core_event = snapshot
         .iter()
         .find_map(|event| match &event.kind {
@@ -1617,6 +1679,39 @@ async fn tool_extension_call_reports_approval_required_when_policy_requires_huma
             if pack_id == "tool-gate-approval"
                 && token_id == &token.token_id
                 && reason.contains("requires approval")
+    ));
+}
+
+#[test]
+fn record_tool_call_denial_audits_extension_denied_errors() {
+    let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_004_000));
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let mut kernel =
+        LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
+    let pack = sample_pack();
+    kernel
+        .register_pack(pack.clone())
+        .expect("pack should register");
+    let token = kernel
+        .issue_token(&pack.pack_id, "agent-extension-denied", 120)
+        .expect("token should issue");
+    let error = PolicyError::ExtensionDenied {
+        extension: "policy".to_owned(),
+        reason: "unexpected policy decision for tool `shell.exec`".to_owned(),
+    };
+
+    kernel
+        .record_tool_call_denial(&pack, &token, 1_700_004_000, &error)
+        .expect("audit record should succeed");
+
+    let events = audit.snapshot();
+    assert_eq!(events.len(), 2);
+    assert!(matches!(
+        &events[1].kind,
+        AuditEventKind::AuthorizationDenied { pack_id, token_id, reason }
+            if pack_id == &pack.pack_id
+                && token_id == &token.token_id
+                && reason.contains("unexpected policy decision for tool `shell.exec`")
     ));
 }
 

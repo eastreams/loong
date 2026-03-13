@@ -10,8 +10,8 @@
 <p align="center">
   <a href="https://github.com/loongclaw-ai/loongclaw/actions/workflows/ci.yml"><img src="https://github.com/loongclaw-ai/loongclaw/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
-  <img src="https://img.shields.io/badge/rust-edition%202021-orange.svg" alt="Rust Edition 2021" />
-  <img src="https://img.shields.io/badge/version-0.1.2--pre-yellow.svg" alt="Version: 0.1.2-pre" />
+  <img src="https://img.shields.io/badge/rust-edition%202024-orange.svg" alt="Rust Edition 2024" />
+  <img src="https://img.shields.io/badge/version-0.1.2-yellow.svg" alt="Version: 0.1.2" />
 </p>
 
 <p align="center">
@@ -63,7 +63,7 @@ LoongClaw 是一个基于Rust构建的 Agentic OS 内核，专注于稳定且轻
 
 ### 前置条件
 
-- Rust 稳定工具链（edition 2021）
+- Rust 稳定工具链（edition 2024）
 - `cargo` 在 PATH 中可用
 
 ### 从源码安装
@@ -92,6 +92,8 @@ cargo install --path crates/daemon
 ```
 </details>
 
+`--onboard` 现在调用的是不带 `--force` 的 `loongclaw onboard`，因此重复执行这条 quickstart 时会先停止，而不会直接覆盖已有配置。
+
 ### 5 分钟内开始首次对话
 
 1. 运行引导式首次配置：
@@ -111,6 +113,9 @@ cargo install --path crates/daemon
    ```bash
    loongclaw chat
    ```
+
+   如果你希望这次 CLI chat 显式走 ACP，可以使用 `loongclaw chat --acp`。没有 `--acp`
+   或其他 ACP 专用 chat 参数时，普通聊天仍然保持默认的 provider/context-engine 路径。
 
 遇到问题请运行 `loongclaw doctor --fix`。
 
@@ -172,6 +177,7 @@ enabled = true
 require_download_approval = true
 allowed_domains = ["skills.sh", "clawhub.io"]
 blocked_domains = ["*.evil.example"]
+auto_expose_installed = true
 ```
 
 面向 agent 的工具：
@@ -185,6 +191,25 @@ blocked_domains = ["*.evil.example"]
   - 当授权门禁开启时必须传 `approval_granted=true`。
   - 下载文件落在 `<tools.file_root>/external-skills-downloads/`。
   - 下载前强制执行白/黑名单校验。
+- `external_skills_install`
+  - 必填本地 `path`。
+  - 支持包含 `SKILL.md` 的目录，或本地 `.tgz` / `.tar.gz` 压缩包。
+  - 默认安装到 `<tools.file_root>/external-skills-installed/`。
+- `external_skills_list`
+  - 列出当前可调用的受管 skills。
+- `external_skills_inspect`
+  - 返回已安装 skill 的元数据与预览。
+- `external_skills_invoke`
+  - 把已安装 skill 的 `SKILL.md` 指令加载进对话流程。
+- `external_skills_remove`
+  - 删除受管 skill 并更新本地索引。
+
+推荐运行时流程：
+
+1. 先用 `external_skills.fetch` 下载
+2. 再用 `external_skills.install` 安装
+3. 用 `external_skills.list` 查看
+4. 用 `external_skills.invoke` 加载指令
 
 ## 核心功能
 
@@ -208,9 +233,35 @@ blocked_domains = ["*.evil.example"]
 - `onboard` -- 引导式首次运行，带预检诊断
 - `doctor` -- 诊断工具，可选安全修复 (`--fix`) 和机器可读输出 (`--json`)
 - `chat` -- 交互式 CLI，滑动窗口对话记忆
-- 核心工具：`shell.exec`、`file.read`、`file.write`、`external_skills.policy`、`external_skills.fetch`
+- 核心工具：`shell.exec`、`file.read`、`file.write`、`external_skills.policy`、`external_skills.fetch`、`external_skills.install`、`external_skills.list`、`external_skills.inspect`、`external_skills.invoke`、`external_skills.remove`
 - Provider：OpenAI 兼容、火山引擎自定义端点
 - 通道：CLI、Telegram 轮询、飞书加密 webhook
+- ACP 现在作为独立 control plane 建模，不再混入 provider 或 context engine
+- ACP agent 选择支持显式策略配置：
+  - `[acp] default_agent = "codex"`
+  - `[acp] allowed_agents = ["codex", "claude"]`
+  - 非 agent 前缀的会话会派生为 `agent:<selected_agent>:<session_id>`，非法 agent 前缀会被提前拒绝
+- ACP dispatch 现在也独立成策略层，而不是继续复用 `[acp].enabled`：
+  - `[acp.dispatch] enabled = true`
+  - `[acp.dispatch] conversation_routing = "all"|"agent_prefixed_only"`
+  - `[acp.dispatch] allowed_channels = ["telegram", "feishu"]`
+  - `[acp.dispatch] allowed_account_ids = ["work-bot", "lark-prod"]`
+  - `[acp.dispatch] thread_routing = "all"|"thread_only"|"root_only"`
+  - 这样可以把“ACP control plane 已启用”和“哪些普通会话默认进入 ACP”分开，后续做 mixed provider/ACP、thread binding、显式 agent 路由时不需要重写 turn 入口
+  - channel 过滤会基于底层 conversation route 计算，即使 session 已经是 `agent:<id>:` 前缀形式也不会把 `agent` 误判成 channel
+  - account 过滤和 thread/root 过滤会优先基于结构化会话地址（`channel/account/conversation/thread`）计算，再回退到兼容性的 `session_id` 解析
+- 来自 channel 的 turn 现在会先传入一个结构化会话地址（`channel/account/conversation/thread`），ACP dispatch
+  优先消费这层 typed scope，再回退到兼容性的 `session_id` 字符串解析，后续加 account/thread 级绑定策略时不需要再改 conversation/runtime 对外接口
+- ACP session 绑定现在除了 legacy `conversation_id`，还会持久化 typed
+  `binding_route_session_id`，后续做 account/thread 级 ACP 复用时不再依赖 opaque alias
+- ACP bootstrap 现在也会显式携带 typed binding scope 进入 control plane，session 复用不再只靠
+  metadata 反推
+- 当 `[acp].emit_runtime_events = true` 时，持久化的 ACP runtime 事件现在也会显式带上
+  `agent_id`，后续做按 agent 维度的观测、绑定诊断和审计时，不需要再只靠 `session_key`
+  反推 identity。同时这些事件还会保留 `routing_intent` / `routing_origin`，而 ACP session
+  状态面会保留 `activation_origin`，这样运维侧可以区分“显式请求进入 ACP”和“自动路由进入 ACP”。
+- `acp-dispatch` 现在除了给出“是否允许自动进入 ACP”的结论，还会给出允许时的自动路由来源
+  （`automatic_agent_prefixed` 或 `automatic_dispatch`），避免 operator 再去读 route 细节反推。
 
 **协议基础**
 - 类型化的传输协议与方法路由

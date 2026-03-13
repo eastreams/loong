@@ -104,7 +104,7 @@ async fn execute_spec_http_json_bridge_executes_against_local_server() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     server.join().expect("join local http server");
     let runtime = &report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"];
 
@@ -215,7 +215,7 @@ async fn execute_spec_http_json_bridge_blocks_when_protocol_authorization_fails(
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     let runtime = &report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"];
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(
@@ -353,7 +353,7 @@ async fn execute_spec_http_json_bridge_strict_contract_fails_on_method_mismatch(
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     server.join().expect("join local http server");
     let runtime = &report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"];
 
@@ -477,7 +477,7 @@ async fn execute_spec_http_json_bridge_strict_contract_fails_on_id_mismatch() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     server.join().expect("join local http server");
     let runtime = &report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"];
 
@@ -605,7 +605,7 @@ async fn execute_spec_http_json_bridge_strict_contract_executes_on_matching_fram
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     server.join().expect("join local http server");
     let runtime = &report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"];
 

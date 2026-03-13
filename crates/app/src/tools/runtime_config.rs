@@ -8,6 +8,8 @@ pub struct ExternalSkillsRuntimePolicy {
     pub require_download_approval: bool,
     pub allowed_domains: BTreeSet<String>,
     pub blocked_domains: BTreeSet<String>,
+    pub install_root: Option<PathBuf>,
+    pub auto_expose_installed: bool,
 }
 
 impl Default for ExternalSkillsRuntimePolicy {
@@ -17,6 +19,8 @@ impl Default for ExternalSkillsRuntimePolicy {
             require_download_approval: true,
             allowed_domains: BTreeSet::new(),
             blocked_domains: BTreeSet::new(),
+            install_root: None,
+            auto_expose_installed: true,
         }
     }
 }
@@ -40,7 +44,7 @@ impl ToolRuntimeConfig {
     pub fn from_env() -> Self {
         let shell_allowlist = std::env::var("LOONGCLAW_SHELL_ALLOWLIST")
             .ok()
-            .unwrap_or_else(|| "echo,cat,ls,pwd".to_owned())
+            .unwrap_or_else(|| "echo,pwd".to_owned())
             .split([',', ';', ' '])
             .map(str::trim)
             .filter(|v| !v.is_empty())
@@ -53,6 +57,11 @@ impl ToolRuntimeConfig {
             parse_env_bool("LOONGCLAW_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL").unwrap_or(true);
         let allowed_domains = parse_env_domain_list("LOONGCLAW_EXTERNAL_SKILLS_ALLOWED_DOMAINS");
         let blocked_domains = parse_env_domain_list("LOONGCLAW_EXTERNAL_SKILLS_BLOCKED_DOMAINS");
+        let install_root = std::env::var("LOONGCLAW_EXTERNAL_SKILLS_INSTALL_ROOT")
+            .ok()
+            .map(PathBuf::from);
+        let auto_expose_installed =
+            parse_env_bool("LOONGCLAW_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED").unwrap_or(true);
 
         Self {
             shell_allowlist,
@@ -62,6 +71,8 @@ impl ToolRuntimeConfig {
                 require_download_approval,
                 allowed_domains,
                 blocked_domains,
+                install_root,
+                auto_expose_installed,
             },
         }
     }
@@ -123,6 +134,8 @@ mod tests {
         assert!(config.external_skills.require_download_approval);
         assert!(config.external_skills.allowed_domains.is_empty());
         assert!(config.external_skills.blocked_domains.is_empty());
+        assert!(config.external_skills.install_root.is_none());
+        assert!(config.external_skills.auto_expose_installed);
     }
 
     #[test]
@@ -137,6 +150,8 @@ mod tests {
                 require_download_approval: false,
                 allowed_domains: BTreeSet::from(["skills.sh".to_owned()]),
                 blocked_domains: BTreeSet::new(),
+                install_root: Some(PathBuf::from("/tmp/test-root/skills")),
+                auto_expose_installed: false,
             },
         };
         assert!(config.shell_allowlist.contains("git"));
@@ -146,12 +161,17 @@ mod tests {
         assert!(config.external_skills.enabled);
         assert!(!config.external_skills.require_download_approval);
         assert!(config.external_skills.allowed_domains.contains("skills.sh"));
+        assert_eq!(
+            config.external_skills.install_root,
+            Some(PathBuf::from("/tmp/test-root/skills"))
+        );
+        assert!(!config.external_skills.auto_expose_installed);
     }
 
     #[test]
     fn from_env_parses_default_allowlist() {
         // When the env var is not set, from_env falls back to the hardcoded
-        // defaults: echo, cat, ls, pwd.
+        // defaults: echo, pwd.
         let config = ToolRuntimeConfig::from_env();
         // We can't guarantee the env var is unset in all CI environments,
         // but the parser itself should produce a non-empty set either way.
@@ -198,6 +218,11 @@ mod tests {
             "LOONGCLAW_EXTERNAL_SKILLS_BLOCKED_DOMAINS",
             "malicious.example",
         );
+        crate::process_env::set_var(
+            "LOONGCLAW_EXTERNAL_SKILLS_INSTALL_ROOT",
+            "/tmp/managed-skills",
+        );
+        crate::process_env::set_var("LOONGCLAW_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED", "false");
 
         let config = ToolRuntimeConfig::from_env();
         assert!(config.external_skills.enabled);
@@ -215,10 +240,17 @@ mod tests {
                 .blocked_domains
                 .contains("malicious.example")
         );
+        assert_eq!(
+            config.external_skills.install_root,
+            Some(PathBuf::from("/tmp/managed-skills"))
+        );
+        assert!(!config.external_skills.auto_expose_installed);
 
         crate::process_env::remove_var("LOONGCLAW_EXTERNAL_SKILLS_ENABLED");
         crate::process_env::remove_var("LOONGCLAW_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL");
         crate::process_env::remove_var("LOONGCLAW_EXTERNAL_SKILLS_ALLOWED_DOMAINS");
         crate::process_env::remove_var("LOONGCLAW_EXTERNAL_SKILLS_BLOCKED_DOMAINS");
+        crate::process_env::remove_var("LOONGCLAW_EXTERNAL_SKILLS_INSTALL_ROOT");
+        crate::process_env::remove_var("LOONGCLAW_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED");
     }
 }

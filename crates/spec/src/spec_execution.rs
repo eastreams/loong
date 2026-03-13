@@ -42,8 +42,8 @@ pub use bridge_support_policy::{
 };
 pub use security_scan_policy::{load_security_scan_profile_from_path, security_scan_policy};
 
-pub async fn execute_spec(spec: RunnerSpec, include_audit: bool) -> SpecRunReport {
-    let mut spec = spec;
+pub async fn execute_spec(spec: &RunnerSpec, include_audit: bool) -> SpecRunReport {
+    let mut pack = spec.pack.clone();
     let audit_sink = Arc::new(InMemoryAuditSink::default());
     let mut kernel = crate::kernel_bootstrap::KernelBuilder::default()
         .clock(Arc::new(SystemClock) as Arc<dyn Clock>)
@@ -54,7 +54,7 @@ pub async fn execute_spec(spec: RunnerSpec, include_audit: bool) -> SpecRunRepor
     let mut blocked_reason = None;
     let mut bridge_support_checksum = None;
     let mut bridge_support_sha256 = None;
-    let approval_guard = evaluate_approval_guard(&spec);
+    let approval_guard = evaluate_approval_guard(spec);
     let mut self_awareness = None;
     let mut architecture_guard = None;
     let mut plugin_scan_reports = Vec::new();
@@ -63,7 +63,7 @@ pub async fn execute_spec(spec: RunnerSpec, include_audit: bool) -> SpecRunRepor
     let mut plugin_bootstrap_reports = Vec::new();
     let mut plugin_bootstrap_queue = Vec::new();
     let mut plugin_absorb_reports = Vec::new();
-    let security_scan_policy = match security_scan_policy(&spec) {
+    let security_scan_policy = match security_scan_policy(spec) {
         Ok(policy) => policy,
         Err(error) => {
             blocked_reason = Some(match blocked_reason {
@@ -73,7 +73,7 @@ pub async fn execute_spec(spec: RunnerSpec, include_audit: bool) -> SpecRunRepor
             None
         }
     };
-    let security_process_allowlist = security_scan_process_allowlist(&spec);
+    let security_process_allowlist = security_scan_process_allowlist(spec);
     let mut security_scan_report = security_scan_policy
         .as_ref()
         .map(|_| SecurityScanReport::default());
@@ -156,8 +156,8 @@ pub async fn execute_spec(spec: RunnerSpec, include_audit: bool) -> SpecRunRepor
 
     if let Some(reason) = blocked_reason.clone() {
         return build_blocked_spec_run_report(
-            spec.pack.pack_id,
-            spec.agent_id,
+            pack.pack_id.clone(),
+            spec.agent_id.clone(),
             reason,
             approval_guard,
             bridge_support_checksum,
@@ -184,8 +184,8 @@ pub async fn execute_spec(spec: RunnerSpec, include_audit: bool) -> SpecRunRepor
         let scanner = PluginScanner::new();
         let translator = PluginTranslator::new();
         let bootstrap_executor = PluginBootstrapExecutor::new();
-        let bootstrap_policy = bootstrap_policy(&spec);
-        let (bridge_matrix, enforce_bridge_support) = bridge_support_matrix(&spec);
+        let bootstrap_policy = bootstrap_policy(spec);
+        let (bridge_matrix, enforce_bridge_support) = bridge_support_matrix(spec);
         let mut pending_absorb_inputs = Vec::new();
         let mut remaining_bootstrap_budget =
             bootstrap_policy.as_ref().map(|policy| policy.max_tasks);
@@ -280,7 +280,7 @@ pub async fn execute_spec(spec: RunnerSpec, include_audit: bool) -> SpecRunRepor
 
         if blocked_reason.is_none() {
             for pending in pending_absorb_inputs {
-                match scanner.absorb(&mut integration_catalog, &mut spec.pack, &pending) {
+                match scanner.absorb(&mut integration_catalog, &mut pack, &pending) {
                     Ok(absorb) => plugin_absorb_reports.push(absorb),
                     Err(error) => {
                         blocked_reason = Some(format!("plugin absorb failed: {error}"));
@@ -295,12 +295,7 @@ pub async fn execute_spec(spec: RunnerSpec, include_audit: bool) -> SpecRunRepor
         (security_scan_policy.as_ref(), security_scan_report.as_mut())
         && let Some(export_spec) = policy.siem_export.as_ref().filter(|value| value.enabled)
     {
-        match emit_security_scan_siem_record(
-            &spec.pack.pack_id,
-            &spec.agent_id,
-            report,
-            export_spec,
-        ) {
+        match emit_security_scan_siem_record(&pack.pack_id, &spec.agent_id, report, export_spec) {
             Ok(export_report) => report.siem_export = Some(export_report),
             Err(error) => {
                 report.siem_export = Some(SecuritySiemExportReport {
@@ -321,7 +316,7 @@ pub async fn execute_spec(spec: RunnerSpec, include_audit: bool) -> SpecRunRepor
 
     if let Some(report) = security_scan_report.as_ref()
         && let Err(error) =
-            emit_security_scan_audit_event(&kernel, &spec.pack.pack_id, &spec.agent_id, report)
+            emit_security_scan_audit_event(&kernel, &pack.pack_id, &spec.agent_id, report)
         && blocked_reason.is_none()
     {
         blocked_reason = Some(error);
@@ -329,8 +324,8 @@ pub async fn execute_spec(spec: RunnerSpec, include_audit: bool) -> SpecRunRepor
 
     if let Some(reason) = blocked_reason.clone() {
         return build_blocked_spec_run_report(
-            spec.pack.pack_id,
-            spec.agent_id,
+            pack.pack_id.clone(),
+            spec.agent_id.clone(),
             reason,
             approval_guard,
             bridge_support_checksum,
@@ -367,10 +362,10 @@ pub async fn execute_spec(spec: RunnerSpec, include_audit: bool) -> SpecRunRepor
             required_capabilities: auto.required_capabilities.clone(),
         };
 
-        match agent.plan(&integration_catalog, &spec.pack, &request) {
+        match agent.plan(&integration_catalog, &pack, &request) {
             Ok(plan) => {
                 if !plan.is_noop() {
-                    if let Err(error) = integration_catalog.apply_plan(&mut spec.pack, &plan) {
+                    if let Err(error) = integration_catalog.apply_plan(&mut pack, &plan) {
                         blocked_reason =
                             Some(format!("applying auto-provision plan failed: {error}"));
                     } else {
@@ -395,8 +390,8 @@ pub async fn execute_spec(spec: RunnerSpec, include_audit: bool) -> SpecRunRepor
 
     if let Some(reason) = blocked_reason.clone() {
         return build_blocked_spec_run_report(
-            spec.pack.pack_id,
-            spec.agent_id,
+            pack.pack_id.clone(),
+            spec.agent_id.clone(),
             reason,
             approval_guard,
             bridge_support_checksum,
@@ -418,14 +413,14 @@ pub async fn execute_spec(spec: RunnerSpec, include_audit: bool) -> SpecRunRepor
     }
 
     let shared_catalog = Arc::new(Mutex::new(integration_catalog.clone()));
-    let bridge_runtime_policy = bridge_runtime_policy(&spec, security_scan_policy.as_ref());
+    let bridge_runtime_policy = bridge_runtime_policy(spec, security_scan_policy.as_ref());
     register_dynamic_catalog_connectors(&mut kernel, shared_catalog, bridge_runtime_policy);
 
-    if let Err(error) = kernel.register_pack(spec.pack.clone()) {
+    if let Err(error) = kernel.register_pack(pack.clone()) {
         let reason = format!("spec pack registration failed: {error}");
         return build_blocked_spec_run_report(
-            spec.pack.pack_id,
-            spec.agent_id,
+            pack.pack_id.clone(),
+            spec.agent_id.clone(),
             reason,
             approval_guard,
             bridge_support_checksum,
@@ -447,8 +442,8 @@ pub async fn execute_spec(spec: RunnerSpec, include_audit: bool) -> SpecRunRepor
     }
     if let Err(error) = apply_default_selection(&mut kernel, spec.defaults.as_ref()) {
         return build_blocked_spec_run_report(
-            spec.pack.pack_id,
-            spec.agent_id,
+            pack.pack_id.clone(),
+            spec.agent_id.clone(),
             error,
             approval_guard,
             bridge_support_checksum,
@@ -469,13 +464,13 @@ pub async fn execute_spec(spec: RunnerSpec, include_audit: bool) -> SpecRunRepor
         );
     }
 
-    let token = match kernel.issue_token(&spec.pack.pack_id, &spec.agent_id, spec.ttl_s) {
+    let token = match kernel.issue_token(&pack.pack_id, &spec.agent_id, spec.ttl_s) {
         Ok(token) => token,
         Err(error) => {
             let reason = format!("token issue for spec failed: {error}");
             return build_blocked_spec_run_report(
-                spec.pack.pack_id,
-                spec.agent_id,
+                pack.pack_id.clone(),
+                spec.agent_id.clone(),
                 reason,
                 approval_guard,
                 bridge_support_checksum,
@@ -499,7 +494,7 @@ pub async fn execute_spec(spec: RunnerSpec, include_audit: bool) -> SpecRunRepor
 
     let (operation_kind, outcome) = match execute_spec_operation(
         &kernel,
-        &spec.pack.pack_id,
+        &pack.pack_id,
         &token,
         &integration_catalog,
         &plugin_scan_reports,
@@ -511,8 +506,8 @@ pub async fn execute_spec(spec: RunnerSpec, include_audit: bool) -> SpecRunRepor
         Ok(result) => result,
         Err(error) => {
             return build_blocked_spec_run_report(
-                spec.pack.pack_id,
-                spec.agent_id,
+                pack.pack_id.clone(),
+                spec.agent_id.clone(),
                 error,
                 approval_guard,
                 bridge_support_checksum,
@@ -535,8 +530,8 @@ pub async fn execute_spec(spec: RunnerSpec, include_audit: bool) -> SpecRunRepor
     };
 
     SpecRunReport {
-        pack_id: spec.pack.pack_id,
-        agent_id: spec.agent_id,
+        pack_id: pack.pack_id.clone(),
+        agent_id: spec.agent_id.clone(),
         operation_kind,
         blocked_reason,
         approval_guard,
@@ -830,6 +825,12 @@ fn bootstrap_policy(spec: &RunnerSpec) -> Option<BootstrapPolicy> {
     if let Some(value) = bootstrap.allow_mcp_server_auto_apply {
         policy.allow_mcp_server_auto_apply = value;
     }
+    if let Some(value) = bootstrap.allow_acp_bridge_auto_apply {
+        policy.allow_acp_bridge_auto_apply = value;
+    }
+    if let Some(value) = bootstrap.allow_acp_runtime_auto_apply {
+        policy.allow_acp_runtime_auto_apply = value;
+    }
     if let Some(value) = bootstrap.enforce_ready_execution {
         policy.enforce_ready_execution = value;
     }
@@ -1062,6 +1063,7 @@ fn register_dynamic_catalog_connectors(
 }
 
 fn operation_connector_name(operation: &OperationSpec) -> Option<String> {
+    #[allow(clippy::wildcard_enum_match_arm)]
     match operation {
         OperationSpec::ConnectorLegacy { connector_name, .. }
         | OperationSpec::ConnectorCore { connector_name, .. }
@@ -1434,4 +1436,31 @@ fn apply_default_selection(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod bootstrap_policy_tests {
+    use super::*;
+    use crate::spec_runtime::BootstrapSpec;
+
+    #[test]
+    fn bootstrap_policy_maps_distinct_acp_bridge_and_runtime_flags() {
+        let mut spec = RunnerSpec::template();
+        spec.bootstrap = Some(BootstrapSpec {
+            enabled: true,
+            allow_http_json_auto_apply: None,
+            allow_process_stdio_auto_apply: None,
+            allow_native_ffi_auto_apply: None,
+            allow_wasm_component_auto_apply: None,
+            allow_mcp_server_auto_apply: None,
+            allow_acp_bridge_auto_apply: Some(true),
+            allow_acp_runtime_auto_apply: Some(false),
+            enforce_ready_execution: None,
+            max_tasks: None,
+        });
+
+        let policy = bootstrap_policy(&spec).expect("bootstrap policy should resolve");
+        assert!(policy.allow_acp_bridge_auto_apply);
+        assert!(!policy.allow_acp_runtime_auto_apply);
+    }
 }

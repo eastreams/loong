@@ -3,6 +3,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationConfig {
     #[serde(default)]
+    pub context_engine: Option<String>,
+    #[serde(default = "default_true")]
+    pub compact_enabled: bool,
+    #[serde(default)]
+    pub compact_min_messages: Option<usize>,
+    #[serde(default)]
+    pub compact_trigger_estimated_tokens: Option<usize>,
+    #[serde(default = "default_true")]
+    pub compact_fail_open: bool,
+    #[serde(default)]
     pub turn_loop: ConversationTurnLoopConfig,
     #[serde(default = "default_true")]
     pub hybrid_lane_enabled: bool,
@@ -99,6 +109,11 @@ pub struct ConversationConfig {
 impl Default for ConversationConfig {
     fn default() -> Self {
         Self {
+            context_engine: None,
+            compact_enabled: default_true(),
+            compact_min_messages: None,
+            compact_trigger_estimated_tokens: None,
+            compact_fail_open: default_true(),
             turn_loop: ConversationTurnLoopConfig::default(),
             hybrid_lane_enabled: default_true(),
             safe_lane_plan_execution_enabled: false,
@@ -203,6 +218,55 @@ impl Default for ConversationTurnLoopConfig {
 }
 
 impl ConversationConfig {
+    pub fn context_engine_id(&self) -> Option<String> {
+        self.context_engine
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_ascii_lowercase())
+    }
+
+    pub fn compact_min_messages(&self) -> Option<usize> {
+        self.compact_min_messages.filter(|value| *value > 0)
+    }
+
+    pub fn compact_trigger_estimated_tokens(&self) -> Option<usize> {
+        self.compact_trigger_estimated_tokens
+            .filter(|value| *value > 0)
+    }
+
+    pub fn should_compact(&self, message_count: usize) -> bool {
+        self.should_compact_with_estimate(message_count, None)
+    }
+
+    pub fn should_compact_with_estimate(
+        &self,
+        message_count: usize,
+        estimated_tokens: Option<usize>,
+    ) -> bool {
+        if !self.compact_enabled {
+            return false;
+        }
+
+        let min_messages = self.compact_min_messages();
+        let trigger_tokens = self.compact_trigger_estimated_tokens();
+        if min_messages.is_none() && trigger_tokens.is_none() {
+            return true;
+        }
+
+        let message_threshold_hit = min_messages.is_some_and(|min| message_count >= min);
+        let token_threshold_hit = match (trigger_tokens, estimated_tokens) {
+            (Some(threshold), Some(tokens)) => tokens >= threshold,
+            _ => false,
+        };
+
+        message_threshold_hit || token_threshold_hit
+    }
+
+    pub fn compaction_fail_open(&self) -> bool {
+        self.compact_fail_open
+    }
+
     pub fn normalized_high_risk_keywords(&self) -> Vec<String> {
         self.high_risk_keywords
             .iter()

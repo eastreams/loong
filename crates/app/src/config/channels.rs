@@ -35,6 +35,24 @@ pub struct CliChannelConfig {
     pub exit_commands: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelAcpConfig {
+    #[serde(default)]
+    pub bootstrap_mcp_servers: Vec<String>,
+    #[serde(default)]
+    pub working_directory: Option<String>,
+}
+
+impl ChannelAcpConfig {
+    pub fn resolved_working_directory(&self) -> Option<std::path::PathBuf> {
+        self.working_directory
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(std::path::PathBuf::from)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelegramChannelConfig {
     #[serde(default)]
@@ -53,6 +71,8 @@ pub struct TelegramChannelConfig {
     pub polling_timeout_s: u64,
     #[serde(default)]
     pub allowed_chat_ids: Vec<i64>,
+    #[serde(default)]
+    pub acp: ChannelAcpConfig,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, TelegramAccountConfig>,
 }
@@ -158,6 +178,8 @@ pub struct TelegramAccountConfig {
     pub polling_timeout_s: Option<u64>,
     #[serde(default)]
     pub allowed_chat_ids: Option<Vec<i64>>,
+    #[serde(default)]
+    pub acp: Option<ChannelAcpConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,6 +193,7 @@ pub struct ResolvedTelegramChannelConfig {
     pub base_url: String,
     pub polling_timeout_s: u64,
     pub allowed_chat_ids: Vec<i64>,
+    pub acp: ChannelAcpConfig,
 }
 
 impl ResolvedTelegramChannelConfig {
@@ -215,6 +238,8 @@ pub struct FeishuAccountConfig {
     pub allowed_chat_ids: Option<Vec<String>>,
     #[serde(default)]
     pub ignore_bot_messages: Option<bool>,
+    #[serde(default)]
+    pub acp: Option<ChannelAcpConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,6 +263,7 @@ pub struct ResolvedFeishuChannelConfig {
     pub encrypt_key_env: Option<String>,
     pub allowed_chat_ids: Vec<String>,
     pub ignore_bot_messages: bool,
+    pub acp: ChannelAcpConfig,
 }
 
 impl ResolvedFeishuChannelConfig {
@@ -308,6 +334,8 @@ pub struct FeishuChannelConfig {
     pub allowed_chat_ids: Vec<String>,
     #[serde(default = "default_true")]
     pub ignore_bot_messages: bool,
+    #[serde(default)]
+    pub acp: ChannelAcpConfig,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, FeishuAccountConfig>,
 }
@@ -379,6 +407,7 @@ impl Default for TelegramChannelConfig {
             base_url: default_telegram_base_url(),
             polling_timeout_s: default_telegram_timeout_seconds(),
             allowed_chat_ids: Vec::new(),
+            acp: ChannelAcpConfig::default(),
             accounts: BTreeMap::new(),
         }
     }
@@ -485,6 +514,10 @@ impl TelegramChannelConfig {
             allowed_chat_ids: account_override
                 .and_then(|account| account.allowed_chat_ids.clone())
                 .unwrap_or_else(|| self.allowed_chat_ids.clone()),
+            acp: resolve_channel_acp_config(
+                &self.acp,
+                account_override.and_then(|account| account.acp.as_ref()),
+            ),
             accounts: BTreeMap::new(),
         };
         let account = merged.resolved_account_identity();
@@ -499,7 +532,21 @@ impl TelegramChannelConfig {
             base_url: merged.base_url,
             polling_timeout_s: merged.polling_timeout_s,
             allowed_chat_ids: merged.allowed_chat_ids,
+            acp: merged.acp,
         })
+    }
+
+    pub fn resolve_account_for_session_account_id(
+        &self,
+        session_account_id: Option<&str>,
+    ) -> CliResult<ResolvedTelegramChannelConfig> {
+        resolve_account_for_session_account_id(
+            session_account_id,
+            || self.resolve_account(session_account_id),
+            || self.configured_account_ids(),
+            |configured_id| self.resolve_account(Some(configured_id)),
+            |resolved| resolved.account.id.as_str(),
+        )
     }
 
     pub fn resolved_account_identity(&self) -> ChannelAccountIdentity {
@@ -560,6 +607,7 @@ impl Default for FeishuChannelConfig {
             encrypt_key_env: Some(FEISHU_ENCRYPT_KEY_ENV.to_owned()),
             allowed_chat_ids: Vec::new(),
             ignore_bot_messages: true,
+            acp: ChannelAcpConfig::default(),
             accounts: BTreeMap::new(),
         }
     }
@@ -745,6 +793,10 @@ impl FeishuChannelConfig {
             ignore_bot_messages: account_override
                 .and_then(|account| account.ignore_bot_messages)
                 .unwrap_or(self.ignore_bot_messages),
+            acp: resolve_channel_acp_config(
+                &self.acp,
+                account_override.and_then(|account| account.acp.as_ref()),
+            ),
             accounts: BTreeMap::new(),
         };
         let account = merged.resolved_account_identity();
@@ -769,7 +821,21 @@ impl FeishuChannelConfig {
             encrypt_key_env: merged.encrypt_key_env,
             allowed_chat_ids: merged.allowed_chat_ids,
             ignore_bot_messages: merged.ignore_bot_messages,
+            acp: merged.acp,
         })
+    }
+
+    pub fn resolve_account_for_session_account_id(
+        &self,
+        session_account_id: Option<&str>,
+    ) -> CliResult<ResolvedFeishuChannelConfig> {
+        resolve_account_for_session_account_id(
+            session_account_id,
+            || self.resolve_account(session_account_id),
+            || self.configured_account_ids(),
+            |configured_id| self.resolve_account(Some(configured_id)),
+            |resolved| resolved.account.id.as_str(),
+        )
     }
 
     pub fn resolved_account_identity(&self) -> ChannelAccountIdentity {
@@ -1030,7 +1096,7 @@ fn validate_channel_account_integrity<'a, I>(
     let mut extra_message_variables = BTreeMap::new();
     extra_message_variables.insert(
         "requested_account_id".to_owned(),
-        normalized_default_account.clone(),
+        normalized_default_account,
     );
     extra_message_variables.insert(
         "configured_account_ids".to_owned(),
@@ -1134,6 +1200,38 @@ where
         configured_account_count: ids.len(),
         selected_configured_account_id: normalize_account_id(selected_configured_account_id),
         default_account_source: default_selection.source,
+    }
+}
+
+fn resolve_channel_acp_config(
+    base: &ChannelAcpConfig,
+    account_override: Option<&ChannelAcpConfig>,
+) -> ChannelAcpConfig {
+    account_override.cloned().unwrap_or_else(|| base.clone())
+}
+
+fn resolve_account_for_session_account_id<R>(
+    session_account_id: Option<&str>,
+    resolve_direct: impl FnOnce() -> CliResult<R>,
+    configured_ids: impl FnOnce() -> Vec<String>,
+    resolve_configured: impl Fn(&str) -> CliResult<R>,
+    runtime_account_id: impl Fn(&R) -> &str,
+) -> CliResult<R> {
+    let Some(requested) = normalize_optional_account_id(session_account_id) else {
+        return resolve_direct();
+    };
+
+    match resolve_direct() {
+        Ok(resolved) => Ok(resolved),
+        Err(original_error) => {
+            for configured_id in configured_ids() {
+                let resolved = resolve_configured(configured_id.as_str())?;
+                if normalize_account_id(runtime_account_id(&resolved)) == requested {
+                    return Ok(resolved);
+                }
+            }
+            Err(original_error)
+        }
     }
 }
 
@@ -1274,12 +1372,20 @@ mod tests {
             "bot_token_env": "BASE_TELEGRAM_TOKEN",
             "polling_timeout_s": 25,
             "allowed_chat_ids": [1001],
+            "acp": {
+                "bootstrap_mcp_servers": ["filesystem"],
+                "working_directory": " /workspace/base "
+            },
             "default_account": "Work Bot",
             "accounts": {
                 "Work Bot": {
                     "account_id": "Ops-Bot",
                     "bot_token_env": "WORK_TELEGRAM_TOKEN",
-                    "allowed_chat_ids": [2002]
+                    "allowed_chat_ids": [2002],
+                    "acp": {
+                        "bootstrap_mcp_servers": ["search"],
+                        "working_directory": "/workspace/work-bot"
+                    }
                 },
                 "Personal": {
                     "enabled": false,
@@ -1306,6 +1412,14 @@ mod tests {
             Some("WORK_TELEGRAM_TOKEN")
         );
         assert_eq!(resolved.allowed_chat_ids, vec![2002]);
+        assert_eq!(
+            resolved.acp.bootstrap_mcp_servers,
+            vec!["search".to_owned()]
+        );
+        assert_eq!(
+            resolved.acp.resolved_working_directory(),
+            Some(std::path::PathBuf::from("/workspace/work-bot"))
+        );
         assert_eq!(resolved.polling_timeout_s, 25);
 
         let disabled = config
@@ -1314,6 +1428,46 @@ mod tests {
         assert_eq!(disabled.configured_account_id, "personal");
         assert!(!disabled.enabled);
         assert_eq!(disabled.allowed_chat_ids, vec![1001]);
+        assert_eq!(
+            disabled.acp.bootstrap_mcp_servers,
+            vec!["filesystem".to_owned()]
+        );
+        assert_eq!(
+            disabled.acp.resolved_working_directory(),
+            Some(std::path::PathBuf::from("/workspace/base"))
+        );
+    }
+
+    #[test]
+    fn telegram_resolve_account_for_session_account_id_matches_runtime_identity() {
+        let config: TelegramChannelConfig = serde_json::from_value(json!({
+            "default_account": "Work Bot",
+            "accounts": {
+                "Work Bot": {
+                    "account_id": "Ops-Bot",
+                    "bot_token_env": "WORK_TELEGRAM_TOKEN",
+                    "acp": {
+                        "bootstrap_mcp_servers": ["search"],
+                        "working_directory": "/workspace/work-bot"
+                    }
+                }
+            }
+        }))
+        .expect("deserialize telegram config");
+
+        let resolved = config
+            .resolve_account_for_session_account_id(Some("ops-bot"))
+            .expect("resolve telegram runtime account identity");
+        assert_eq!(resolved.configured_account_id, "work-bot");
+        assert_eq!(resolved.account.id, "ops-bot");
+        assert_eq!(
+            resolved.acp.bootstrap_mcp_servers,
+            vec!["search".to_owned()]
+        );
+        assert_eq!(
+            resolved.acp.resolved_working_directory(),
+            Some(std::path::PathBuf::from("/workspace/work-bot"))
+        );
     }
 
     #[test]
@@ -1474,6 +1628,10 @@ mod tests {
             "webhook_bind": "127.0.0.1:8080",
             "webhook_path": "/feishu/events",
             "allowed_chat_ids": ["oc_base"],
+            "acp": {
+                "bootstrap_mcp_servers": ["filesystem"],
+                "working_directory": " /workspace/base "
+            },
             "default_account": "Lark Prod",
             "accounts": {
                 "Lark Prod": {
@@ -1482,7 +1640,11 @@ mod tests {
                     "app_secret": "secret",
                     "verification_token": "verify",
                     "encrypt_key": "encrypt",
-                    "allowed_chat_ids": ["oc_lark"]
+                    "allowed_chat_ids": ["oc_lark"],
+                    "acp": {
+                        "bootstrap_mcp_servers": ["search"],
+                        "working_directory": "/workspace/lark-prod"
+                    }
                 },
                 "Feishu Backup": {
                     "enabled": false,
@@ -1507,6 +1669,14 @@ mod tests {
         assert_eq!(resolved.account.id, "lark_cli_lark_123");
         assert_eq!(resolved.account.label, "lark:cli_lark_123");
         assert_eq!(resolved.allowed_chat_ids, vec!["oc_lark".to_owned()]);
+        assert_eq!(
+            resolved.acp.bootstrap_mcp_servers,
+            vec!["search".to_owned()]
+        );
+        assert_eq!(
+            resolved.acp.resolved_working_directory(),
+            Some(std::path::PathBuf::from("/workspace/lark-prod"))
+        );
         assert_eq!(resolved.receive_id_type, "chat_id");
         assert_eq!(resolved.resolved_base_url(), "https://open.larksuite.com");
 
@@ -1516,6 +1686,47 @@ mod tests {
         assert_eq!(disabled.configured_account_id, "feishu-backup");
         assert!(!disabled.enabled);
         assert_eq!(disabled.allowed_chat_ids, vec!["oc_base".to_owned()]);
+        assert_eq!(
+            disabled.acp.bootstrap_mcp_servers,
+            vec!["filesystem".to_owned()]
+        );
+        assert_eq!(
+            disabled.acp.resolved_working_directory(),
+            Some(std::path::PathBuf::from("/workspace/base"))
+        );
+    }
+
+    #[test]
+    fn feishu_resolve_account_for_session_account_id_matches_runtime_identity() {
+        let config: FeishuChannelConfig = serde_json::from_value(json!({
+            "default_account": "Lark Prod",
+            "accounts": {
+                "Lark Prod": {
+                    "domain": "lark",
+                    "app_id": "cli_lark_123",
+                    "app_secret": "secret",
+                    "acp": {
+                        "bootstrap_mcp_servers": ["search"],
+                        "working_directory": "/workspace/lark-prod"
+                    }
+                }
+            }
+        }))
+        .expect("deserialize feishu config");
+
+        let resolved = config
+            .resolve_account_for_session_account_id(Some("lark_cli_lark_123"))
+            .expect("resolve feishu runtime account identity");
+        assert_eq!(resolved.configured_account_id, "lark-prod");
+        assert_eq!(resolved.account.id, "lark_cli_lark_123");
+        assert_eq!(
+            resolved.acp.bootstrap_mcp_servers,
+            vec!["search".to_owned()]
+        );
+        assert_eq!(
+            resolved.acp.resolved_working_directory(),
+            Some(std::path::PathBuf::from("/workspace/lark-prod"))
+        );
     }
 
     #[test]

@@ -257,6 +257,7 @@ fn run_import_claw_cli_apply_selected_mode_can_apply_external_skill_plan() {
 fn import_claw_cli_defaults_to_plan_mode() {
     let cli = Cli::try_parse_from(["loongclaw", "import-claw", "--input", "/tmp/legacy"])
         .expect("import-claw args should parse");
+    #[allow(clippy::wildcard_enum_match_arm)]
     match cli.command.expect("subcommand should exist") {
         Commands::ImportClaw { mode, .. } => {
             assert_eq!(mode, crate::import_claw_cli::ImportClawMode::Plan);
@@ -282,6 +283,7 @@ fn import_claw_cli_accepts_selection_alias_flags() {
     ])
     .expect("selection alias flags should parse");
 
+    #[allow(clippy::wildcard_enum_match_arm)]
     match cli.command.expect("subcommand should exist") {
         Commands::ImportClaw {
             source_id,

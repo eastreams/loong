@@ -190,6 +190,7 @@ pub(crate) enum KernelFailureClass {
 }
 
 pub(crate) fn classify_kernel_error(error: &KernelError) -> KernelFailureClass {
+    #[allow(clippy::wildcard_enum_match_arm)]
     match error {
         KernelError::Policy(_)
         | KernelError::PackCapabilityBoundary { .. }
@@ -228,10 +229,11 @@ fn build_tool_result_envelope(
     outcome: &ToolCoreOutcome,
     payload_summary_limit_chars: usize,
 ) -> ToolResultEnvelope {
-    let normalized_limit = payload_summary_limit_chars.clamp(
-        MIN_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
-        MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
-    );
+    let normalized_limit = effective_payload_summary_limit(intent, payload_summary_limit_chars)
+        .clamp(
+            MIN_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
+            MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
+        );
     let payload_text = serde_json::to_string(&outcome.payload)
         .unwrap_or_else(|_| "[tool_payload_unserializable]".to_owned());
     let (payload_summary, payload_chars, payload_truncated) =
@@ -245,6 +247,13 @@ fn build_tool_result_envelope(
         payload_chars,
         payload_truncated,
     }
+}
+
+fn effective_payload_summary_limit(intent: &ToolIntent, default_limit: usize) -> usize {
+    if crate::tools::canonical_tool_name(intent.tool_name.as_str()) == "external_skills.invoke" {
+        return MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS;
+    }
+    default_limit
 }
 
 fn truncate_by_chars(value: &str, limit: usize) -> (String, usize, bool) {

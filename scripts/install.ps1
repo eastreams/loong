@@ -11,7 +11,7 @@ Usage: pwsh ./scripts/install.ps1 [-Prefix <dir>] [-Onboard]
 
 Options:
   -Prefix <dir>   Install directory for loongclaw (default: $HOME/.local/bin)
-  -Onboard        Run 'loongclaw onboard --force' after install
+  -Onboard        Run 'loongclaw onboard' after install
 "@
 }
 
@@ -30,7 +30,7 @@ $repoRoot = Resolve-Path (Join-Path $scriptDir "..")
 Write-Host "==> Building loongclaw (release)"
 Push-Location $repoRoot
 try {
-    cargo build -p loongclaw-daemon --bin loongclaw --release | Out-Host
+    cargo build -p loongclaw-daemon --bin loongclaw --release --locked | Out-Host
 } finally {
     Pop-Location
 }
@@ -47,7 +47,7 @@ Write-Host "==> Installed loongclaw to $destBinary"
 
 if ($Onboard) {
     Write-Host "==> Running guided onboarding"
-    & $destBinary onboard --force | Out-Host
+    & $destBinary onboard | Out-Host
 }
 
 $pathItems = ($env:PATH -split [IO.Path]::PathSeparator)

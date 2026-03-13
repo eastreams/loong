@@ -1,4 +1,3 @@
-#[cfg(feature = "tool-file")]
 use std::{
     ffi::OsString,
     fs,
@@ -117,8 +116,7 @@ pub(super) fn execute_file_write_tool_with_config(
     }
 }
 
-#[cfg(feature = "tool-file")]
-fn resolve_safe_file_path_with_config(
+pub(super) fn resolve_safe_file_path_with_config(
     raw: &str,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<PathBuf, String> {
@@ -138,7 +136,6 @@ fn resolve_safe_file_path_with_config(
     resolve_path_within_root(&root, &normalized)
 }
 
-#[cfg(feature = "tool-file")]
 fn canonicalize_or_fallback(path: PathBuf) -> Result<PathBuf, String> {
     if path.exists() {
         return fs::canonicalize(&path)
@@ -147,7 +144,6 @@ fn canonicalize_or_fallback(path: PathBuf) -> Result<PathBuf, String> {
     Ok(normalize_without_fs_access(&path))
 }
 
-#[cfg(feature = "tool-file")]
 fn resolve_path_within_root(root: &Path, normalized: &Path) -> Result<PathBuf, String> {
     ensure_path_within_root(root, normalized)?;
 
@@ -179,7 +175,6 @@ fn resolve_path_within_root(root: &Path, normalized: &Path) -> Result<PathBuf, S
     Ok(reconstructed)
 }
 
-#[cfg(feature = "tool-file")]
 fn ensure_path_within_root(root: &Path, path: &Path) -> Result<(), String> {
     if path.starts_with(root) {
         return Ok(());
@@ -191,7 +186,6 @@ fn ensure_path_within_root(root: &Path, path: &Path) -> Result<(), String> {
     ))
 }
 
-#[cfg(feature = "tool-file")]
 fn split_existing_ancestor(path: &Path) -> Result<(PathBuf, Vec<OsString>), String> {
     let mut cursor = path.to_path_buf();
     let mut suffix = Vec::new();
@@ -219,7 +213,6 @@ fn split_existing_ancestor(path: &Path) -> Result<(PathBuf, Vec<OsString>), Stri
     }
 }
 
-#[cfg(feature = "tool-file")]
 fn normalize_without_fs_access(path: &Path) -> PathBuf {
     let mut parts = Vec::new();
     for component in path.components() {
@@ -280,7 +273,7 @@ mod tests {
 
         let config = ToolRuntimeConfig {
             shell_allowlist: Default::default(),
-            file_root: Some(root.clone()),
+            file_root: Some(root),
             external_skills: Default::default(),
         };
         let error =
@@ -304,7 +297,7 @@ mod tests {
 
         let config = ToolRuntimeConfig {
             shell_allowlist: Default::default(),
-            file_root: Some(root.clone()),
+            file_root: Some(root),
             external_skills: Default::default(),
         };
         let request = ToolCoreRequest {

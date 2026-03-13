@@ -7,7 +7,7 @@ mod tools_memory;
 
 #[allow(unused_imports)]
 pub use channels::{
-    ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource,
+    ChannelAcpConfig, ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource,
     ChannelResolvedAccountRoute, CliChannelConfig, FeishuAccountConfig, FeishuChannelConfig,
     FeishuDomain, ResolvedFeishuChannelConfig, ResolvedTelegramChannelConfig,
     TelegramAccountConfig, TelegramChannelConfig,
@@ -15,13 +15,19 @@ pub use channels::{
 #[allow(unused_imports)]
 pub use conversation::{ConversationConfig, ConversationTurnLoopConfig};
 #[allow(unused_imports)]
-pub use provider::{ProviderConfig, ProviderKind, ReasoningEffort};
+pub use provider::{
+    ProviderConfig, ProviderKind, ProviderProfileHealthModeConfig, ProviderProfileStateBackendKind,
+    ProviderReasoningExtraBodyModeConfig, ProviderToolSchemaModeConfig, ReasoningEffort,
+};
 #[allow(unused_imports)]
 pub use runtime::{
+    AcpBackendProfilesConfig, AcpConfig, AcpConversationRoutingMode, AcpDispatchConfig,
+    AcpDispatchThreadRoutingMode, AcpxBackendConfig, AcpxMcpServerConfig,
     ConfigValidationDiagnostic, LoongClawConfig, default_config_path, default_loongclaw_home, load,
     normalize_validation_locale, render, supported_validation_locales, validate_file,
     validate_file_with_locale, write, write_template,
 };
+pub(crate) use runtime::{normalize_dispatch_account_id, normalize_dispatch_channel_id};
 #[allow(unused_imports)]
 pub use shared::expand_path;
 #[allow(unused_imports)]
@@ -234,6 +240,277 @@ mod tests {
     }
 
     #[test]
+    fn model_catalog_cache_ttl_default_and_clamp_are_stable() {
+        let default_cfg = ProviderConfig::default();
+        assert_eq!(default_cfg.resolved_model_catalog_cache_ttl_ms(), 30_000);
+        assert_eq!(
+            default_cfg.resolved_model_catalog_stale_if_error_ms(),
+            120_000
+        );
+        assert_eq!(default_cfg.resolved_model_catalog_cache_max_entries(), 32);
+        assert_eq!(default_cfg.resolved_model_candidate_cooldown_ms(), 300_000);
+        assert_eq!(
+            default_cfg.resolved_model_candidate_cooldown_max_ms(),
+            3_600_000
+        );
+        assert_eq!(
+            default_cfg.resolved_model_candidate_cooldown_max_entries(),
+            64
+        );
+        assert_eq!(default_cfg.resolved_profile_cooldown_ms(), 60_000);
+        assert_eq!(default_cfg.resolved_profile_cooldown_max_ms(), 3_600_000);
+        assert_eq!(
+            default_cfg.resolved_profile_auth_reject_disable_ms(),
+            21_600_000
+        );
+        assert_eq!(default_cfg.resolved_profile_state_max_entries(), 256);
+        assert_eq!(
+            default_cfg.resolved_profile_state_backend(),
+            ProviderProfileStateBackendKind::File
+        );
+        assert_eq!(
+            default_cfg.resolved_profile_health_mode_config(),
+            ProviderProfileHealthModeConfig::ProviderDefault
+        );
+        assert_eq!(
+            default_cfg.resolved_tool_schema_mode_config(),
+            ProviderToolSchemaModeConfig::ProviderDefault
+        );
+        assert_eq!(
+            default_cfg.resolved_reasoning_extra_body_mode_config(),
+            ProviderReasoningExtraBodyModeConfig::ProviderDefault
+        );
+        assert!(
+            default_cfg
+                .resolved_tool_schema_disabled_model_hints()
+                .is_empty()
+        );
+        assert!(
+            default_cfg
+                .resolved_tool_schema_strict_model_hints()
+                .is_empty()
+        );
+        assert!(
+            default_cfg
+                .resolved_reasoning_extra_body_kimi_model_hints()
+                .is_empty()
+        );
+        assert!(
+            default_cfg
+                .resolved_reasoning_extra_body_omit_model_hints()
+                .is_empty()
+        );
+        assert_eq!(default_cfg.resolved_profile_state_sqlite_path(), None);
+
+        let disabled = ProviderConfig {
+            model_catalog_cache_ttl_ms: 0,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(disabled.resolved_model_catalog_cache_ttl_ms(), 0);
+
+        let no_stale_fallback = ProviderConfig {
+            model_catalog_stale_if_error_ms: 0,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            no_stale_fallback.resolved_model_catalog_stale_if_error_ms(),
+            0
+        );
+
+        let min_entries = ProviderConfig {
+            model_catalog_cache_max_entries: 0,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(min_entries.resolved_model_catalog_cache_max_entries(), 1);
+
+        let clamped = ProviderConfig {
+            model_catalog_cache_ttl_ms: 999_999,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(clamped.resolved_model_catalog_cache_ttl_ms(), 300_000);
+
+        let stale_clamped = ProviderConfig {
+            model_catalog_stale_if_error_ms: 9_999_999,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            stale_clamped.resolved_model_catalog_stale_if_error_ms(),
+            600_000
+        );
+
+        let max_entries_clamped = ProviderConfig {
+            model_catalog_cache_max_entries: 9_999,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            max_entries_clamped.resolved_model_catalog_cache_max_entries(),
+            256
+        );
+
+        let disabled_cooldown = ProviderConfig {
+            model_candidate_cooldown_ms: 0,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(disabled_cooldown.resolved_model_candidate_cooldown_ms(), 0);
+
+        let cooldown_clamped = ProviderConfig {
+            model_candidate_cooldown_ms: 9_999_999,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            cooldown_clamped.resolved_model_candidate_cooldown_ms(),
+            3_600_000
+        );
+
+        let cooldown_max_clamped = ProviderConfig {
+            model_candidate_cooldown_max_ms: 999_999_999,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            cooldown_max_clamped.resolved_model_candidate_cooldown_max_ms(),
+            86_400_000
+        );
+
+        let cooldown_max_uses_base_floor = ProviderConfig {
+            model_candidate_cooldown_ms: 120_000,
+            model_candidate_cooldown_max_ms: 30_000,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            cooldown_max_uses_base_floor.resolved_model_candidate_cooldown_max_ms(),
+            120_000
+        );
+
+        let cooldown_entries_min = ProviderConfig {
+            model_candidate_cooldown_max_entries: 0,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            cooldown_entries_min.resolved_model_candidate_cooldown_max_entries(),
+            1
+        );
+
+        let cooldown_entries_clamped = ProviderConfig {
+            model_candidate_cooldown_max_entries: 99_999,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            cooldown_entries_clamped.resolved_model_candidate_cooldown_max_entries(),
+            512
+        );
+
+        let profile_cooldown_disabled = ProviderConfig {
+            profile_cooldown_ms: 0,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(profile_cooldown_disabled.resolved_profile_cooldown_ms(), 0);
+
+        let profile_cooldown_clamped = ProviderConfig {
+            profile_cooldown_ms: 9_999_999,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            profile_cooldown_clamped.resolved_profile_cooldown_ms(),
+            3_600_000
+        );
+
+        let profile_cooldown_max_clamped = ProviderConfig {
+            profile_cooldown_max_ms: 999_999_999,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            profile_cooldown_max_clamped.resolved_profile_cooldown_max_ms(),
+            86_400_000
+        );
+
+        let profile_cooldown_max_uses_base_floor = ProviderConfig {
+            profile_cooldown_ms: 120_000,
+            profile_cooldown_max_ms: 30_000,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            profile_cooldown_max_uses_base_floor.resolved_profile_cooldown_max_ms(),
+            120_000
+        );
+
+        let profile_auth_disable_min = ProviderConfig {
+            profile_auth_reject_disable_ms: 10,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            profile_auth_disable_min.resolved_profile_auth_reject_disable_ms(),
+            60_000
+        );
+
+        let profile_auth_disable_max = ProviderConfig {
+            profile_auth_reject_disable_ms: 999_999_999,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            profile_auth_disable_max.resolved_profile_auth_reject_disable_ms(),
+            604_800_000
+        );
+
+        let profile_entries_min = ProviderConfig {
+            profile_state_max_entries: 0,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(profile_entries_min.resolved_profile_state_max_entries(), 1);
+
+        let profile_entries_max = ProviderConfig {
+            profile_state_max_entries: 99_999,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            profile_entries_max.resolved_profile_state_max_entries(),
+            1024
+        );
+
+        let profile_sqlite_memory = ProviderConfig {
+            profile_state_sqlite_path: Some("memory".to_owned()),
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            profile_sqlite_memory.resolved_profile_state_sqlite_path(),
+            Some(std::path::PathBuf::from(":memory:"))
+        );
+
+        let profile_sqlite_explicit_memory = ProviderConfig {
+            profile_state_sqlite_path: Some(":memory:".to_owned()),
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            profile_sqlite_explicit_memory.resolved_profile_state_sqlite_path(),
+            Some(std::path::PathBuf::from(":memory:"))
+        );
+
+        let profile_sqlite_default = ProviderConfig::default();
+        let expected_default = default_loongclaw_home().join("provider-profile-state.sqlite3");
+        assert_eq!(
+            profile_sqlite_default.resolved_profile_state_sqlite_path_with_default(),
+            expected_default
+        );
+
+        let profile_health_enforce = ProviderConfig {
+            profile_health_mode: ProviderProfileHealthModeConfig::Enforce,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            profile_health_enforce.resolved_profile_health_mode_config(),
+            ProviderProfileHealthModeConfig::Enforce
+        );
+
+        let profile_health_observe_only = ProviderConfig {
+            profile_health_mode: ProviderProfileHealthModeConfig::ObserveOnly,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            profile_health_observe_only.resolved_profile_health_mode_config(),
+            ProviderProfileHealthModeConfig::ObserveOnly
+        );
+    }
+
+    #[test]
     fn openai_codex_oauth_can_override_api_key_auth() {
         let config = ProviderConfig {
             kind: ProviderKind::Openai,
@@ -401,6 +678,222 @@ kind = "kimi_coding"
     }
 
     #[test]
+    #[cfg(feature = "config-toml")]
+    fn provider_profile_health_mode_parses_from_toml() {
+        let raw = r#"
+[provider]
+kind = "openrouter"
+profile_health_mode = "enforce"
+"#;
+        let parsed =
+            toml::from_str::<LoongClawConfig>(raw).expect("parse profile health mode should pass");
+        assert_eq!(parsed.provider.kind, ProviderKind::Openrouter);
+        assert_eq!(
+            parsed.provider.resolved_profile_health_mode_config(),
+            ProviderProfileHealthModeConfig::Enforce
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn provider_profile_health_mode_supports_all_config_values() {
+        let observe_only_raw = r#"
+[provider]
+kind = "openai"
+profile_health_mode = "observe_only"
+"#;
+        let observe_only = toml::from_str::<LoongClawConfig>(observe_only_raw)
+            .expect("parse observe_only profile health mode should pass");
+        assert_eq!(
+            observe_only.provider.resolved_profile_health_mode_config(),
+            ProviderProfileHealthModeConfig::ObserveOnly
+        );
+
+        let provider_default_raw = r#"
+[provider]
+kind = "openrouter"
+profile_health_mode = "provider_default"
+"#;
+        let provider_default = toml::from_str::<LoongClawConfig>(provider_default_raw)
+            .expect("parse provider_default profile health mode should pass");
+        assert_eq!(
+            provider_default
+                .provider
+                .resolved_profile_health_mode_config(),
+            ProviderProfileHealthModeConfig::ProviderDefault
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn provider_tool_schema_mode_parses_from_toml() {
+        let raw = r#"
+[provider]
+kind = "openai"
+tool_schema_mode = "enabled_strict"
+"#;
+        let parsed =
+            toml::from_str::<LoongClawConfig>(raw).expect("parse tool schema mode should pass");
+        assert_eq!(parsed.provider.kind, ProviderKind::Openai);
+        assert_eq!(
+            parsed.provider.resolved_tool_schema_mode_config(),
+            ProviderToolSchemaModeConfig::EnabledStrict
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn provider_tool_schema_mode_supports_all_config_values() {
+        let disabled_raw = r#"
+[provider]
+kind = "openai"
+tool_schema_mode = "disabled"
+"#;
+        let disabled = toml::from_str::<LoongClawConfig>(disabled_raw)
+            .expect("parse disabled tool schema mode should pass");
+        assert_eq!(
+            disabled.provider.resolved_tool_schema_mode_config(),
+            ProviderToolSchemaModeConfig::Disabled
+        );
+
+        let downgraded_raw = r#"
+[provider]
+kind = "openai"
+tool_schema_mode = "enabled_with_downgrade"
+"#;
+        let downgraded = toml::from_str::<LoongClawConfig>(downgraded_raw)
+            .expect("parse enabled_with_downgrade tool schema mode should pass");
+        assert_eq!(
+            downgraded.provider.resolved_tool_schema_mode_config(),
+            ProviderToolSchemaModeConfig::EnabledWithDowngrade
+        );
+
+        let provider_default_raw = r#"
+[provider]
+kind = "openai"
+tool_schema_mode = "provider_default"
+"#;
+        let provider_default = toml::from_str::<LoongClawConfig>(provider_default_raw)
+            .expect("parse provider_default tool schema mode should pass");
+        assert_eq!(
+            provider_default.provider.resolved_tool_schema_mode_config(),
+            ProviderToolSchemaModeConfig::ProviderDefault
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn provider_reasoning_extra_body_mode_supports_all_config_values() {
+        let kimi_thinking_raw = r#"
+[provider]
+kind = "openai"
+reasoning_extra_body_mode = "kimi_thinking"
+"#;
+        let kimi_thinking = toml::from_str::<LoongClawConfig>(kimi_thinking_raw)
+            .expect("parse kimi_thinking reasoning mode should pass");
+        assert_eq!(
+            kimi_thinking
+                .provider
+                .resolved_reasoning_extra_body_mode_config(),
+            ProviderReasoningExtraBodyModeConfig::KimiThinking
+        );
+
+        let omit_raw = r#"
+[provider]
+kind = "openai"
+reasoning_extra_body_mode = "omit"
+"#;
+        let omit = toml::from_str::<LoongClawConfig>(omit_raw)
+            .expect("parse omit reasoning mode should pass");
+        assert_eq!(
+            omit.provider.resolved_reasoning_extra_body_mode_config(),
+            ProviderReasoningExtraBodyModeConfig::Omit
+        );
+
+        let provider_default_raw = r#"
+[provider]
+kind = "openai"
+reasoning_extra_body_mode = "provider_default"
+"#;
+        let provider_default = toml::from_str::<LoongClawConfig>(provider_default_raw)
+            .expect("parse provider_default reasoning mode should pass");
+        assert_eq!(
+            provider_default
+                .provider
+                .resolved_reasoning_extra_body_mode_config(),
+            ProviderReasoningExtraBodyModeConfig::ProviderDefault
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn provider_capability_model_hints_parse_from_toml() {
+        let raw = r#"
+[provider]
+kind = "openai"
+tool_schema_disabled_model_hints = ["no-tools", "legacy-plain-text"]
+tool_schema_strict_model_hints = ["strict-schema"]
+reasoning_extra_body_kimi_model_hints = ["enable-thinking"]
+reasoning_extra_body_omit_model_hints = ["disable-thinking"]
+"#;
+        let parsed = toml::from_str::<LoongClawConfig>(raw)
+            .expect("parse provider capability model hints should pass");
+
+        assert_eq!(
+            parsed.provider.resolved_tool_schema_disabled_model_hints(),
+            vec!["no-tools", "legacy-plain-text"]
+        );
+        assert_eq!(
+            parsed.provider.resolved_tool_schema_strict_model_hints(),
+            vec!["strict-schema"]
+        );
+        assert_eq!(
+            parsed
+                .provider
+                .resolved_reasoning_extra_body_kimi_model_hints(),
+            vec!["enable-thinking"]
+        );
+        assert_eq!(
+            parsed
+                .provider
+                .resolved_reasoning_extra_body_omit_model_hints(),
+            vec!["disable-thinking"]
+        );
+    }
+
+    #[test]
+    fn provider_capability_model_hints_normalize_empty_entries() {
+        let provider = ProviderConfig {
+            tool_schema_disabled_model_hints: vec![
+                "".to_owned(),
+                "  no-tools  ".to_owned(),
+                "   ".to_owned(),
+            ],
+            tool_schema_strict_model_hints: vec![" strict-schema ".to_owned()],
+            reasoning_extra_body_kimi_model_hints: vec![" enable-thinking ".to_owned()],
+            reasoning_extra_body_omit_model_hints: vec![" disable-thinking ".to_owned()],
+            ..ProviderConfig::default()
+        };
+
+        assert_eq!(
+            provider.resolved_tool_schema_disabled_model_hints(),
+            vec!["no-tools"]
+        );
+        assert_eq!(
+            provider.resolved_tool_schema_strict_model_hints(),
+            vec!["strict-schema"]
+        );
+        assert_eq!(
+            provider.resolved_reasoning_extra_body_kimi_model_hints(),
+            vec!["enable-thinking"]
+        );
+        assert_eq!(
+            provider.resolved_reasoning_extra_body_omit_model_hints(),
+            vec!["disable-thinking"]
+        );
+    }
+
+    #[test]
     #[cfg(feature = "channel-telegram")]
     fn telegram_token_prefers_inline_secret() {
         let config = TelegramChannelConfig {
@@ -409,6 +902,28 @@ kind = "kimi_coding"
             ..TelegramChannelConfig::default()
         };
         assert_eq!(config.bot_token().as_deref(), Some("inline-token"));
+    }
+
+    #[test]
+    fn provider_api_key_candidates_support_delimited_key_pool() {
+        let config = ProviderConfig {
+            kind: ProviderKind::Ollama,
+            api_key: Some("key-a, key-b;key-c\nkey-d\r\nkey-e".to_owned()),
+            api_key_env: None,
+            ..ProviderConfig::default()
+        };
+
+        assert_eq!(
+            config.api_key_candidates(),
+            vec![
+                "key-a".to_owned(),
+                "key-b".to_owned(),
+                "key-c".to_owned(),
+                "key-d".to_owned(),
+                "key-e".to_owned()
+            ]
+        );
+        assert_eq!(config.api_key(), Some("key-a".to_owned()));
     }
 
     #[test]
@@ -1061,5 +1576,366 @@ safe_lane_health_replan_warn_threshold = 0.55
         };
         assert_eq!(config.header_value("user-agent"), Some("KimiCLI/custom"));
         assert_eq!(config.header_value("USER-AGENT"), Some("KimiCLI/custom"));
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn conversation_context_engine_field_parses_and_normalizes() {
+        let raw = r#"
+[conversation]
+context_engine = " Legacy "
+"#;
+        let parsed =
+            toml::from_str::<LoongClawConfig>(raw).expect("parse conversation context_engine");
+        assert_eq!(
+            parsed.conversation.context_engine_id().as_deref(),
+            Some("legacy")
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn conversation_compaction_fields_parse_and_gate_compact_hook() {
+        let raw = r#"
+[conversation]
+compact_enabled = true
+compact_min_messages = 6
+compact_trigger_estimated_tokens = 120
+compact_fail_open = false
+"#;
+        let parsed =
+            toml::from_str::<LoongClawConfig>(raw).expect("parse conversation compaction config");
+        assert!(parsed.conversation.compact_enabled);
+        assert_eq!(parsed.conversation.compact_min_messages(), Some(6));
+        assert_eq!(
+            parsed.conversation.compact_trigger_estimated_tokens(),
+            Some(120)
+        );
+        assert!(!parsed.conversation.compaction_fail_open());
+        assert!(!parsed.conversation.should_compact(5));
+        assert!(parsed.conversation.should_compact(6));
+        assert!(
+            !parsed
+                .conversation
+                .should_compact_with_estimate(0, Some(119))
+        );
+        assert!(
+            parsed
+                .conversation
+                .should_compact_with_estimate(0, Some(120))
+        );
+    }
+
+    #[test]
+    fn conversation_compaction_defaults_are_backward_compatible() {
+        let config = ConversationConfig::default();
+        assert!(config.compact_enabled);
+        assert!(config.compaction_fail_open());
+        assert_eq!(config.compact_trigger_estimated_tokens(), None);
+        assert!(config.should_compact(0));
+        assert!(config.should_compact_with_estimate(0, None));
+    }
+
+    #[test]
+    fn conversation_compaction_token_gate_without_message_threshold() {
+        let config = ConversationConfig {
+            compact_enabled: true,
+            compact_min_messages: None,
+            compact_trigger_estimated_tokens: Some(50),
+            compact_fail_open: true,
+            context_engine: None,
+            ..ConversationConfig::default()
+        };
+        assert!(!config.should_compact_with_estimate(0, Some(49)));
+        assert!(config.should_compact_with_estimate(0, Some(50)));
+        assert!(!config.should_compact_with_estimate(100, None));
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn acp_fields_parse_and_normalize() {
+        let raw = r#"
+[acp]
+enabled = true
+backend = " ACPX "
+default_agent = " Claude "
+allowed_agents = ["Codex", "claude", " gemini "]
+max_concurrent_sessions = 12
+session_idle_ttl_ms = 45000
+startup_timeout_ms = 12000
+turn_timeout_ms = 99000
+queue_owner_ttl_ms = 7000
+bindings_enabled = true
+emit_runtime_events = true
+allow_mcp_server_injection = true
+
+[acp.dispatch]
+bootstrap_mcp_servers = [" Filesystem ", "search", "filesystem"]
+working_directory = " /workspace/dispatch "
+
+[acp.backends.acpx]
+command = " /usr/local/bin/acpx "
+expected_version = " 0.1.16 "
+cwd = " /workspace/project "
+permission_mode = " approve-reads "
+non_interactive_permissions = " fail "
+strict_windows_cmd_wrapper = true
+timeout_seconds = 45.5
+queue_owner_ttl_seconds = 0.25
+
+[acp.backends.acpx.mcp_servers.filesystem]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/workspace/project"]
+
+[acp.backends.acpx.mcp_servers.filesystem.env]
+MCP_LOG = "warn"
+"#;
+        let parsed = toml::from_str::<LoongClawConfig>(raw).expect("parse ACP config");
+        assert!(parsed.acp.enabled);
+        assert_eq!(parsed.acp.backend_id().as_deref(), Some("acpx"));
+        assert_eq!(parsed.acp.resolved_default_agent().as_deref(), Ok("claude"));
+        assert_eq!(
+            parsed.acp.allowed_agent_ids(),
+            Ok(vec![
+                "codex".to_owned(),
+                "claude".to_owned(),
+                "gemini".to_owned()
+            ])
+        );
+        assert_eq!(parsed.acp.max_concurrent_sessions(), 12);
+        assert_eq!(parsed.acp.session_idle_ttl_ms(), 45_000);
+        assert_eq!(parsed.acp.startup_timeout_ms(), 12_000);
+        assert_eq!(parsed.acp.turn_timeout_ms(), 99_000);
+        assert_eq!(parsed.acp.queue_owner_ttl_ms(), 7_000);
+        assert!(parsed.acp.bindings_enabled);
+        assert!(parsed.acp.emit_runtime_events);
+        assert!(parsed.acp.allow_mcp_server_injection);
+        assert_eq!(
+            parsed.acp.dispatch.bootstrap_mcp_server_names(),
+            Ok(vec!["filesystem".to_owned(), "search".to_owned()])
+        );
+        assert_eq!(
+            parsed.acp.dispatch.resolved_working_directory(),
+            Some(std::path::PathBuf::from("/workspace/dispatch"))
+        );
+        let acpx = parsed
+            .acp
+            .acpx_profile()
+            .expect("acpx profile should parse from backend-local config");
+        assert_eq!(acpx.command().as_deref(), Some("/usr/local/bin/acpx"));
+        assert_eq!(acpx.expected_version().as_deref(), Some("0.1.16"));
+        assert_eq!(acpx.cwd().as_deref(), Some("/workspace/project"));
+        assert_eq!(acpx.permission_mode().as_deref(), Some("approve-reads"));
+        assert_eq!(acpx.non_interactive_permissions().as_deref(), Some("fail"));
+        assert_eq!(acpx.strict_windows_cmd_wrapper, Some(true));
+        assert_eq!(acpx.timeout_seconds, Some(45.5));
+        assert_eq!(acpx.queue_owner_ttl_seconds, Some(0.25));
+        let mcp = acpx
+            .mcp_servers
+            .get("filesystem")
+            .expect("filesystem MCP server should parse");
+        assert_eq!(mcp.command, "npx");
+        assert_eq!(
+            mcp.args,
+            vec![
+                "-y".to_owned(),
+                "@modelcontextprotocol/server-filesystem".to_owned(),
+                "/workspace/project".to_owned()
+            ]
+        );
+        assert_eq!(mcp.env.get("MCP_LOG").map(String::as_str), Some("warn"));
+    }
+
+    #[test]
+    fn acp_dispatch_bootstrap_mcp_server_names_with_additions_merge_and_dedupe() {
+        let dispatch = AcpDispatchConfig {
+            bootstrap_mcp_servers: vec![" Filesystem ".to_owned()],
+            ..AcpDispatchConfig::default()
+        };
+
+        let resolved = dispatch
+            .bootstrap_mcp_server_names_with_additions(&[
+                " search ".to_owned(),
+                "filesystem".to_owned(),
+                "SEARCH".to_owned(),
+            ])
+            .expect("merged bootstrap MCP server names should normalize");
+
+        assert_eq!(resolved, vec!["filesystem".to_owned(), "search".to_owned()]);
+    }
+
+    #[test]
+    fn acp_defaults_are_control_plane_safe() {
+        let config = AcpConfig::default();
+        assert!(!config.enabled);
+        assert_eq!(config.backend_id(), None);
+        assert_eq!(config.resolved_default_agent().as_deref(), Ok("codex"));
+        assert_eq!(config.allowed_agent_ids(), Ok(vec!["codex".to_owned()]));
+        assert_eq!(config.max_concurrent_sessions(), 8);
+        assert_eq!(config.session_idle_ttl_ms(), 900_000);
+        assert_eq!(config.startup_timeout_ms(), 15_000);
+        assert_eq!(config.turn_timeout_ms(), 120_000);
+        assert_eq!(config.queue_owner_ttl_ms(), 30_000);
+        assert!(!config.bindings_enabled);
+        assert!(!config.emit_runtime_events);
+        assert!(!config.allow_mcp_server_injection);
+        assert!(config.acpx_profile().is_none());
+    }
+
+    #[test]
+    fn acp_allowed_agents_must_include_default_agent() {
+        let config = AcpConfig {
+            default_agent: Some("claude".to_owned()),
+            allowed_agents: vec!["codex".to_owned()],
+            ..AcpConfig::default()
+        };
+
+        let error = config
+            .allowed_agent_ids()
+            .expect_err("default ACP agent must be included in allowlist");
+        assert!(error.contains("default agent"));
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn acp_dispatch_fields_parse_and_preserve_backward_compatible_defaults() {
+        let raw = r#"
+[acp]
+enabled = true
+
+[acp.dispatch]
+enabled = false
+conversation_routing = "agent_prefixed_only"
+allowed_channels = [" Telegram ", "feishu"]
+allowed_account_ids = [" Work Bot ", "ops-bot"]
+thread_routing = "thread_only"
+"#;
+        let parsed = toml::from_str::<LoongClawConfig>(raw).expect("parse ACP dispatch config");
+        assert!(parsed.acp.enabled);
+        assert!(!parsed.acp.dispatch.enabled);
+        assert_eq!(
+            parsed.acp.dispatch.conversation_routing,
+            AcpConversationRoutingMode::AgentPrefixedOnly
+        );
+        assert_eq!(
+            parsed.acp.dispatch.allowed_channel_ids(),
+            Ok(vec!["telegram".to_owned(), "feishu".to_owned()])
+        );
+        assert_eq!(
+            parsed.acp.dispatch.allowed_account_ids(),
+            Ok(vec!["work-bot".to_owned(), "ops-bot".to_owned()])
+        );
+        assert_eq!(
+            parsed.acp.dispatch.thread_routing,
+            AcpDispatchThreadRoutingMode::ThreadOnly
+        );
+    }
+
+    #[test]
+    fn acp_dispatch_defaults_keep_normal_sessions_off_without_explicit_acp_route() {
+        let config = AcpConfig::default();
+        assert!(config.dispatch.enabled);
+        assert_eq!(
+            config.dispatch.conversation_routing,
+            AcpConversationRoutingMode::AgentPrefixedOnly
+        );
+        assert_eq!(config.dispatch.allowed_channel_ids(), Ok(Vec::new()));
+        assert_eq!(config.dispatch.allowed_account_ids(), Ok(Vec::new()));
+        assert_eq!(
+            config.dispatch.thread_routing,
+            AcpDispatchThreadRoutingMode::All
+        );
+        assert_eq!(config.dispatch.bootstrap_mcp_server_names(), Ok(Vec::new()));
+        assert_eq!(config.dispatch.resolved_working_directory(), None);
+    }
+
+    #[test]
+    fn acp_dispatch_normalizes_bootstrap_mcp_server_names() {
+        let config = AcpConfig {
+            dispatch: AcpDispatchConfig {
+                bootstrap_mcp_servers: vec![
+                    " Filesystem ".to_owned(),
+                    "search".to_owned(),
+                    "filesystem".to_owned(),
+                ],
+                ..AcpDispatchConfig::default()
+            },
+            ..AcpConfig::default()
+        };
+
+        assert_eq!(
+            config.dispatch.bootstrap_mcp_server_names(),
+            Ok(vec!["filesystem".to_owned(), "search".to_owned()])
+        );
+    }
+
+    #[test]
+    fn acp_dispatch_normalizes_working_directory() {
+        let config = AcpConfig {
+            dispatch: AcpDispatchConfig {
+                working_directory: Some(" /workspace/dispatch ".to_owned()),
+                ..AcpDispatchConfig::default()
+            },
+            ..AcpConfig::default()
+        };
+
+        assert_eq!(
+            config.dispatch.resolved_working_directory(),
+            Some(std::path::PathBuf::from("/workspace/dispatch"))
+        );
+    }
+
+    #[test]
+    fn acp_dispatch_rejects_invalid_allowed_channel_ids() {
+        let config = AcpConfig {
+            dispatch: AcpDispatchConfig {
+                allowed_channels: vec!["***".to_owned()],
+                ..AcpDispatchConfig::default()
+            },
+            ..AcpConfig::default()
+        };
+
+        let error = config
+            .dispatch
+            .allowed_channel_ids()
+            .expect_err("invalid ACP dispatch channel ids must be rejected");
+        assert!(error.contains("allowed channel"));
+    }
+
+    #[test]
+    fn acp_dispatch_normalizes_allowed_account_ids() {
+        let config = AcpConfig {
+            dispatch: AcpDispatchConfig {
+                allowed_account_ids: vec![
+                    " Work Bot ".to_owned(),
+                    "ops-bot".to_owned(),
+                    "OPS BOT".to_owned(),
+                ],
+                ..AcpDispatchConfig::default()
+            },
+            ..AcpConfig::default()
+        };
+
+        assert_eq!(
+            config.dispatch.allowed_account_ids(),
+            Ok(vec!["work-bot".to_owned(), "ops-bot".to_owned()])
+        );
+    }
+
+    #[test]
+    fn acp_dispatch_rejects_invalid_allowed_account_ids() {
+        let config = AcpConfig {
+            dispatch: AcpDispatchConfig {
+                allowed_account_ids: vec!["***".to_owned()],
+                ..AcpDispatchConfig::default()
+            },
+            ..AcpConfig::default()
+        };
+
+        let error = config
+            .dispatch
+            .allowed_account_ids()
+            .expect_err("invalid ACP dispatch account ids must be rejected");
+        assert!(error.contains("allowed account"));
     }
 }

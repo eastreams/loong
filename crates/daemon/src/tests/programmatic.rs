@@ -66,7 +66,7 @@ async fn execute_spec_programmatic_tool_call_supports_templates_and_steps() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "programmatic_tool_call",
         "blocked_reason={:?}, outcome={}",
@@ -147,7 +147,7 @@ async fn execute_spec_programmatic_tool_call_enforces_max_call_budget() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "blocked",
         "blocked_reason={:?}, outcome={}",
@@ -258,7 +258,7 @@ async fn execute_spec_programmatic_tool_call_blocks_when_caller_not_allowlisted(
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "blocked",
         "blocked_reason={:?}, outcome={}",
@@ -344,7 +344,7 @@ async fn execute_spec_programmatic_tool_call_connector_batch_parallel_succeeds()
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "programmatic_tool_call",
         "blocked_reason={:?}, outcome={}",
@@ -449,7 +449,7 @@ async fn execute_spec_programmatic_tool_call_connector_batch_continue_on_error()
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "programmatic_tool_call",
         "blocked_reason={:?}, outcome={}",
@@ -545,7 +545,7 @@ async fn execute_spec_programmatic_tool_call_conditional_step_routes_branch() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "programmatic_tool_call",
         "blocked_reason={:?}, outcome={}",
@@ -626,7 +626,7 @@ async fn execute_spec_programmatic_tool_call_connector_batch_budget_checks_total
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "blocked",
         "blocked_reason={:?}, outcome={}",
@@ -712,7 +712,7 @@ async fn execute_spec_programmatic_tool_call_retry_recovers_transient_failure() 
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "programmatic_tool_call",
         "blocked_reason={:?}, outcome={}",
@@ -791,7 +791,7 @@ async fn execute_spec_programmatic_tool_call_applies_connector_rate_limits() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "programmatic_tool_call",
         "blocked_reason={:?}, outcome={}",
@@ -859,7 +859,7 @@ async fn execute_spec_programmatic_tool_call_rejects_invalid_rate_limit_policy()
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "blocked",
         "blocked_reason={:?}, outcome={}",
@@ -970,7 +970,7 @@ async fn execute_spec_programmatic_tool_call_circuit_breaker_blocks_followup_bat
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "programmatic_tool_call",
         "blocked_reason={:?}, outcome={}",
@@ -1046,7 +1046,7 @@ async fn execute_spec_programmatic_tool_call_rejects_invalid_circuit_policy() {
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "blocked",
         "blocked_reason={:?}, outcome={}",
@@ -1131,7 +1131,7 @@ async fn execute_spec_programmatic_tool_call_retry_jitter_tracks_backoff_budget(
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "programmatic_tool_call",
         "blocked_reason={:?}, outcome={}",
@@ -1259,7 +1259,7 @@ async fn execute_spec_programmatic_tool_call_parallel_batch_caps_peak_inflight_b
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "programmatic_tool_call",
         "blocked_reason={:?}, outcome={}",
@@ -1380,7 +1380,7 @@ async fn execute_spec_programmatic_tool_call_weighted_fairness_avoids_low_priori
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "programmatic_tool_call",
         "blocked_reason={:?}, outcome={}",
@@ -1519,7 +1519,7 @@ async fn execute_spec_programmatic_tool_call_adaptive_budget_reduces_on_failures
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "programmatic_tool_call",
         "blocked_reason={:?}, outcome={}",
@@ -1629,7 +1629,7 @@ async fn execute_spec_programmatic_tool_call_default_adaptive_policy_skips_not_f
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "programmatic_tool_call",
         "blocked_reason={:?}, outcome={}",
@@ -1742,7 +1742,7 @@ async fn execute_spec_programmatic_tool_call_adaptive_policy_can_reduce_on_any_e
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "programmatic_tool_call",
         "blocked_reason={:?}, outcome={}",
@@ -1827,7 +1827,7 @@ async fn execute_spec_programmatic_tool_call_rejects_invalid_concurrency_policy(
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "blocked",
         "blocked_reason={:?}, outcome={}",
@@ -1902,7 +1902,7 @@ async fn execute_spec_programmatic_tool_call_rejects_empty_adaptive_reduce_on_po
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "blocked",
         "blocked_reason={:?}, outcome={}",
@@ -2112,7 +2112,7 @@ async fn execute_spec_programmatic_tool_call_adaptive_budget_respects_min_floor_
         },
     };
 
-    let report = execute_spec(spec, true).await;
+    let report = execute_spec(&spec, true).await;
     assert_eq!(
         report.operation_kind, "programmatic_tool_call",
         "blocked_reason={:?}, outcome={}",

@@ -7,7 +7,7 @@ use std::ffi::OsStr;
 pub(crate) fn set_var(key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) {
     // SAFETY: LoongClaw only mutates process env during single-threaded startup
     // or in tests that serialize env access behind a global mutex.
-    #[allow(unsafe_code)]
+    #[allow(unsafe_code, clippy::disallowed_methods)]
     unsafe {
         std::env::set_var(key, value);
     }
@@ -19,7 +19,7 @@ pub(crate) fn set_var(key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) {
 pub(crate) fn remove_var(key: impl AsRef<OsStr>) {
     // SAFETY: See `set_var`; removals happen under the same startup/test-only
     // serialization constraints.
-    #[allow(unsafe_code)]
+    #[allow(unsafe_code, clippy::disallowed_methods)]
     unsafe {
         std::env::remove_var(key);
     }
