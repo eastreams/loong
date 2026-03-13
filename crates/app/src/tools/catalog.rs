@@ -187,6 +187,15 @@ pub fn tool_catalog() -> ToolCatalog {
         provider_definition_builder: session_archive_definition,
     });
     descriptors.push(ToolDescriptor {
+        name: "session_unarchive",
+        provider_name: "session_unarchive",
+        aliases: &[],
+        description: "Restore a visible archived terminal session to default session listings",
+        execution_kind: ToolExecutionKind::App,
+        availability: ToolAvailability::Runtime,
+        provider_definition_builder: session_unarchive_definition,
+    });
+    descriptors.push(ToolDescriptor {
         name: "session_cancel",
         provider_name: "session_cancel",
         aliases: &[],
@@ -313,7 +322,8 @@ pub fn delegate_child_tool_view_for_config_with_delegate(
 fn tool_is_enabled_for_runtime_view(tool_name: &str, config: &ToolConfig) -> bool {
     match tool_name {
         "sessions_list" | "sessions_history" | "session_status" | "session_events"
-        | "session_archive" | "session_cancel" | "session_recover" | "session_wait" => {
+        | "session_archive" | "session_cancel" | "session_recover" | "session_unarchive"
+        | "session_wait" => {
             config.sessions.enabled
         }
         "sessions_send" => config.messages.enabled,
@@ -607,6 +617,42 @@ fn session_archive_definition(descriptor: &ToolDescriptor) -> Value {
                     "dry_run": {
                         "type": "boolean",
                         "description": "When true, preview which targets are archivable without mutating state."
+                    }
+                },
+                "oneOf": [
+                    { "required": ["session_id"] },
+                    { "required": ["session_ids"] }
+                ],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn session_unarchive_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Visible archived terminal session identifier to restore to default listings."
+                    },
+                    "session_ids": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "minItems": 1,
+                        "description": "Visible archived terminal session identifiers to restore in one request."
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "When true, preview which targets are unarchivable without mutating state."
                     }
                 },
                 "oneOf": [

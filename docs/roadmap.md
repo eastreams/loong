@@ -200,13 +200,14 @@ Delivered in current baseline:
   - per-session runtime tool views derived from config
   - sqlite-backed session registry and session event history
   - durable terminal outcomes for delegated child sessions
-  - `sessions_list`, `sessions_history`, `session_status`, `session_events`, `session_archive`, `session_cancel`, `session_recover`, `session_wait`, and `sessions_send`
+  - `sessions_list`, `sessions_history`, `session_status`, `session_events`, `session_archive`, `session_unarchive`, `session_cancel`, `session_recover`, `session_wait`, and `sessions_send`
     with optional incremental event-tail return via `after_id`, draining unseen events through the
     current cursor and terminal completion
   - filtered `sessions_list` discovery for visible stale delegates, with optional lifecycle payloads
     and stable lifecycle-anchor reads that do not depend on recent-event windows
-  - durable session archival for visible terminal sessions, including default list exclusion,
-    `include_archived` rediscovery, and batch / `dry_run` operator flows
+  - durable session archive / unarchive lifecycle for visible terminal sessions, including default
+    list exclusion, `include_archived` rediscovery, latest-control-event archive derivation, and
+    batch / `dry_run` operator flows
   - batch `session_status` inspection targeting with `session_ids`, reusing the existing
     inspection payload while preserving legacy single-target response shape
   - batch `session_wait` targeting with `session_ids`, shared bounded wait context, and per-target

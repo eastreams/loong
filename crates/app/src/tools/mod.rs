@@ -74,7 +74,7 @@ pub fn execute_app_tool_with_config(
     };
     match canonical_name {
         "sessions_list" | "sessions_history" | "session_status" | "session_events"
-        | "session_cancel" | "session_archive" | "session_recover" => {
+        | "session_cancel" | "session_archive" | "session_recover" | "session_unarchive" => {
             session::execute_session_tool_with_policies(
                 request,
                 current_session_id,
@@ -292,12 +292,14 @@ mod tests {
             "- session_recover: Recover an overdue queued async delegate child session by marking it failed"
         ));
         assert!(snapshot
+            .contains("- session_unarchive: Restore a visible archived terminal session to default session listings"));
+        assert!(snapshot
             .contains("- session_wait: Wait for a visible session to reach a terminal state"));
         assert!(snapshot.contains("- session_events: Fetch session events for a visible session"));
 
         // Verify sorted canonical name order.
         let lines: Vec<&str> = snapshot.lines().skip(1).collect();
-        assert_eq!(lines.len(), 13);
+        assert_eq!(lines.len(), 14);
         assert!(lines[0].starts_with("- delegate"));
         assert!(lines[1].starts_with("- delegate_async"));
         assert!(lines[2].starts_with("- file.read"));
@@ -307,17 +309,18 @@ mod tests {
         assert!(lines[6].starts_with("- session_events"));
         assert!(lines[7].starts_with("- session_recover"));
         assert!(lines[8].starts_with("- session_status"));
-        assert!(lines[9].starts_with("- session_wait"));
-        assert!(lines[10].starts_with("- sessions_history"));
-        assert!(lines[11].starts_with("- sessions_list"));
-        assert!(lines[12].starts_with("- shell.exec"));
+        assert!(lines[9].starts_with("- session_unarchive"));
+        assert!(lines[10].starts_with("- session_wait"));
+        assert!(lines[11].starts_with("- sessions_history"));
+        assert!(lines[12].starts_with("- sessions_list"));
+        assert!(lines[13].starts_with("- shell.exec"));
     }
 
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
     fn tool_registry_returns_all_known_tools() {
         let entries = tool_registry();
-        assert_eq!(entries.len(), 13);
+        assert_eq!(entries.len(), 14);
         let names: Vec<&str> = entries.iter().map(|e| e.name).collect();
         assert!(names.contains(&"delegate"));
         assert!(names.contains(&"delegate_async"));
@@ -328,6 +331,7 @@ mod tests {
         assert!(names.contains(&"session_cancel"));
         assert!(names.contains(&"session_events"));
         assert!(names.contains(&"session_recover"));
+        assert!(names.contains(&"session_unarchive"));
         assert!(names.contains(&"sessions_list"));
         assert!(names.contains(&"sessions_history"));
         assert!(names.contains(&"session_status"));
@@ -338,7 +342,7 @@ mod tests {
     #[test]
     fn provider_tool_definitions_are_stable_and_complete() {
         let defs = provider_tool_definitions();
-        assert_eq!(defs.len(), 13);
+        assert_eq!(defs.len(), 14);
 
         let names: Vec<&str> = defs
             .iter()
@@ -358,6 +362,7 @@ mod tests {
                 "session_events",
                 "session_recover",
                 "session_status",
+                "session_unarchive",
                 "session_wait",
                 "sessions_history",
                 "sessions_list",
@@ -439,6 +444,24 @@ mod tests {
             session_archive["function"]["parameters"]["oneOf"]
                 .as_array()
                 .expect("session_archive oneOf")
+                .len(),
+            2
+        );
+
+        let session_unarchive = defs
+            .iter()
+            .find(|item| item["function"]["name"] == "session_unarchive")
+            .expect("session_unarchive definition");
+        let unarchive_properties = session_unarchive["function"]["parameters"]["properties"]
+            .as_object()
+            .expect("session_unarchive properties");
+        assert!(unarchive_properties.contains_key("session_id"));
+        assert!(unarchive_properties.contains_key("session_ids"));
+        assert!(unarchive_properties.contains_key("dry_run"));
+        assert_eq!(
+            session_unarchive["function"]["parameters"]["oneOf"]
+                .as_array()
+                .expect("session_unarchive oneOf")
                 .len(),
             2
         );
@@ -622,6 +645,21 @@ mod tests {
     }
 
     #[test]
+    fn session_unarchive_is_visible_in_root_and_hidden_in_child_views() {
+        let root_view = runtime_tool_view();
+        assert!(root_view.contains("session_unarchive"));
+
+        let child_view = planned_delegate_child_tool_view();
+        assert!(!child_view.contains("session_unarchive"));
+
+        let child_with_depth = delegate_child_tool_view_for_config_with_delegate(
+            &crate::config::ToolConfig::default(),
+            true,
+        );
+        assert!(!child_with_depth.contains("session_unarchive"));
+    }
+
+    #[test]
     fn runtime_tool_view_for_config_omits_disabled_session_and_delegate_tools() {
         let mut config = crate::config::ToolConfig::default();
         config.sessions.enabled = false;
@@ -638,6 +676,7 @@ mod tests {
         assert!(!view.contains("session_events"));
         assert!(!view.contains("session_archive"));
         assert!(!view.contains("session_recover"));
+        assert!(!view.contains("session_unarchive"));
         assert!(!view.contains("session_wait"));
     }
 
