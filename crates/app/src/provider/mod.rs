@@ -1138,6 +1138,7 @@ mod tests {
             expected.push("file_read");
             expected.push("file_write");
         }
+        expected.push("memory_search");
         expected.push("session_archive");
         expected.push("session_cancel");
         expected.push("session_events");
@@ -1264,6 +1265,37 @@ mod tests {
             .collect();
 
         assert!(names.contains(&"session_archive"));
+    }
+
+    #[test]
+    fn memory_search_appears_in_root_turn_request_body() {
+        let config = LoongClawConfig {
+            provider: ProviderConfig::default(),
+            cli: crate::config::CliChannelConfig::default(),
+            telegram: crate::config::TelegramChannelConfig::default(),
+            feishu: FeishuChannelConfig::default(),
+            tools: ToolConfig::default(),
+            memory: MemoryConfig::default(),
+            conversation: crate::config::ConversationConfig::default(),
+        };
+        let tool_definitions = crate::tools::provider_tool_definitions();
+        let body = build_turn_request_body(
+            &config,
+            &[],
+            "model-latest",
+            CompletionPayloadMode::default_for(&config.provider),
+            true,
+            &tool_definitions,
+        );
+        let tools = body["tools"].as_array().expect("tools array");
+        let names: Vec<&str> = tools
+            .iter()
+            .filter_map(|item| item.get("function"))
+            .filter_map(|function| function.get("name"))
+            .filter_map(Value::as_str)
+            .collect();
+
+        assert!(names.contains(&"memory_search"));
     }
 
     #[test]
