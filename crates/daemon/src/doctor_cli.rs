@@ -34,12 +34,6 @@ struct DoctorSummary {
     fail: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct DoctorChannelCheckSpec {
-    config_name: &'static str,
-    runtime_name: Option<&'static str>,
-}
-
 pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
     let (config_path, mut config) = mvp::config::load(options.config.as_deref())?;
     let mut checks = Vec::new();
@@ -306,7 +300,10 @@ fn build_channel_surface_checks(
 
         for snapshot in &surface.configured_accounts {
             for operation in &snapshot.operations {
-                let Some(spec) = doctor_check_spec(surface.catalog.id, operation.id) else {
+                let Some(spec) = mvp::channel::resolve_channel_doctor_operation_spec(
+                    surface.catalog.id,
+                    operation.id,
+                ) else {
                     continue;
                 };
                 checks.push(DoctorCheck {
@@ -339,24 +336,6 @@ fn scoped_doctor_check_name(
         return base_name.to_owned();
     }
     format!("{base_name} [{}]", snapshot.configured_account_label)
-}
-
-fn doctor_check_spec(channel_id: &str, operation_id: &str) -> Option<DoctorChannelCheckSpec> {
-    match (channel_id, operation_id) {
-        ("telegram", "serve") => Some(DoctorChannelCheckSpec {
-            config_name: "telegram channel",
-            runtime_name: Some("telegram channel runtime"),
-        }),
-        ("feishu", "send") => Some(DoctorChannelCheckSpec {
-            config_name: "feishu channel",
-            runtime_name: None,
-        }),
-        ("feishu", "serve") => Some(DoctorChannelCheckSpec {
-            config_name: "feishu webhook verification",
-            runtime_name: Some("feishu webhook runtime"),
-        }),
-        _ => None,
-    }
 }
 
 fn doctor_check_level_for_health(health: mvp::channel::ChannelOperationHealth) -> DoctorCheckLevel {
