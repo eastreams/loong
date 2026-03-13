@@ -323,9 +323,7 @@ fn tool_is_enabled_for_runtime_view(tool_name: &str, config: &ToolConfig) -> boo
     match tool_name {
         "sessions_list" | "sessions_history" | "session_status" | "session_events"
         | "session_archive" | "session_cancel" | "session_recover" | "session_unarchive"
-        | "session_wait" => {
-            config.sessions.enabled
-        }
+        | "session_wait" => config.sessions.enabled,
         "sessions_send" => config.messages.enabled,
         "delegate" | "delegate_async" => config.delegate.enabled,
         _ => true,
