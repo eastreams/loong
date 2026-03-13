@@ -967,13 +967,11 @@ fn run_channels_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
     let (resolved_path, config) = mvp::config::load(config_path)?;
     let snapshots = mvp::channel::channel_status_snapshots(&config);
     let catalog_only = mvp::channel::catalog_only_channel_entries(&snapshots);
+    let resolved_path_display = resolved_path.display().to_string();
 
     if as_json {
-        let payload = json!({
-            "config": resolved_path.display().to_string(),
-            "channels": snapshots,
-            "catalog_only_channels": catalog_only,
-        });
+        let payload =
+            build_channels_cli_json_payload(&resolved_path_display, &snapshots, &catalog_only);
         let pretty = serde_json::to_string_pretty(&payload)
             .map_err(|error| format!("serialize channel status output failed: {error}"))?;
         println!("{pretty}");
@@ -982,13 +980,30 @@ fn run_channels_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
 
     println!(
         "{}",
-        render_channel_snapshots_text(
-            &resolved_path.display().to_string(),
-            &snapshots,
-            &catalog_only,
-        )
+        render_channel_snapshots_text(&resolved_path_display, &snapshots, &catalog_only,)
     );
     Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ChannelsCliJsonPayload {
+    config: String,
+    channels: Vec<mvp::channel::ChannelStatusSnapshot>,
+    catalog_only_channels: Vec<mvp::channel::ChannelCatalogEntry>,
+    channel_catalog: Vec<mvp::channel::ChannelCatalogEntry>,
+}
+
+fn build_channels_cli_json_payload(
+    config_path: &str,
+    snapshots: &[mvp::channel::ChannelStatusSnapshot],
+    catalog_only: &[mvp::channel::ChannelCatalogEntry],
+) -> ChannelsCliJsonPayload {
+    ChannelsCliJsonPayload {
+        config: config_path.to_owned(),
+        channels: snapshots.to_vec(),
+        catalog_only_channels: catalog_only.to_vec(),
+        channel_catalog: mvp::channel::list_channel_catalog(),
+    }
 }
 
 fn render_channel_snapshots_text(
