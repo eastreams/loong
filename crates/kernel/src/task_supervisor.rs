@@ -25,6 +25,19 @@ impl TaskSupervisor {
         matches!(self.state, TaskState::Runnable(_))
     }
 
+    /// Swap the current state out, leaving a placeholder Faulted value.
+    ///
+    /// The caller MUST assign a new valid state back to `self.state`
+    /// before returning.
+    fn take_state(&mut self) -> TaskState {
+        std::mem::replace(
+            &mut self.state,
+            TaskState::Faulted(Fault::ProtocolViolation {
+                detail: "state taken for transition".to_owned(),
+            }),
+        )
+    }
+
     /// Execute the task through the kernel, tracking state transitions.
     pub async fn execute<P: PolicyEngine>(
         &mut self,
@@ -32,41 +45,44 @@ impl TaskSupervisor {
         pack_id: &str,
         token: &CapabilityToken,
     ) -> Result<KernelDispatch, Fault> {
-        // Extract intent from Runnable state
-        let intent = match std::mem::replace(
-            &mut self.state,
-            TaskState::InSend {
-                task_id: String::new(),
-            },
-        ) {
-            TaskState::Runnable(intent) => intent,
-            other => {
-                self.state = other;
+        // Clone the intent before transitioning, since we need it for the
+        // kernel call and transition_to_in_send consumes it.
+        let intent = match &self.state {
+            TaskState::Runnable(intent) => intent.clone(),
+            _ => {
                 return Err(Fault::ProtocolViolation {
                     detail: "task is not in Runnable state".to_owned(),
                 });
             }
         };
 
-        let task_id = intent.task_id.clone();
-        self.state = TaskState::InSend {
-            task_id: task_id.clone(),
-        };
+        // Runnable -> InSend (guarded transition)
+        let taken = self.take_state();
+        self.state = taken
+            .transition_to_in_send()
+            .map_err(|detail| Fault::ProtocolViolation { detail })?;
 
-        // Transition to InReply
-        self.state = TaskState::InReply {
-            task_id: task_id.clone(),
-        };
+        // InSend -> InReply (guarded transition)
+        let taken = self.take_state();
+        self.state = taken
+            .transition_to_in_reply()
+            .map_err(|detail| Fault::ProtocolViolation { detail })?;
 
         // Execute through kernel
         match kernel.execute_task(pack_id, token, intent).await {
             Ok(dispatch) => {
-                self.state = TaskState::Completed(dispatch.outcome.clone());
+                // InReply -> Completed (guarded transition)
+                let taken = self.take_state();
+                self.state = taken
+                    .transition_to_completed(dispatch.outcome.clone())
+                    .map_err(|detail| Fault::ProtocolViolation { detail })?;
                 Ok(dispatch)
             }
             Err(kernel_err) => {
                 let fault = Fault::from_kernel_error(kernel_err);
-                self.state = TaskState::Faulted(fault.clone());
+                // Any non-terminal -> Faulted
+                let taken = self.take_state();
+                self.state = taken.transition_to_faulted(fault.clone());
                 Err(fault)
             }
         }
