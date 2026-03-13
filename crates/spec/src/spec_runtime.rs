@@ -21,7 +21,9 @@ use kernel::{
     ToolCoreRequest, ToolExtensionAdapter, ToolExtensionOutcome, ToolExtensionRequest,
     VerticalPackManifest,
 };
-use loongclaw_protocol::{OutboundFrame, ProtocolRouter, RouteAuthorizationRequest};
+use loongclaw_protocol::{
+    OutboundFrame, PROTOCOL_VERSION, ProtocolRouter, RouteAuthorizationRequest,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};

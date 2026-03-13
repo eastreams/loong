@@ -34,6 +34,7 @@ impl ConnectorProtocolContext {
             method: self.request_method.clone(),
             id: self.request_id.clone(),
             payload,
+            version: PROTOCOL_VERSION,
         }
     }
 }

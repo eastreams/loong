@@ -8,6 +8,12 @@ use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, stdin, stdout};
 use tokio::sync::{Mutex, mpsc};
 
+pub const PROTOCOL_VERSION: u32 = 1;
+
+fn default_frame_version() -> u32 {
+    1
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransportInfo {
     pub name: String,
@@ -20,6 +26,8 @@ pub struct InboundFrame {
     pub method: String,
     pub id: Option<String>,
     pub payload: Value,
+    #[serde(default = "default_frame_version")]
+    pub version: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -27,6 +35,8 @@ pub struct OutboundFrame {
     pub method: String,
     pub id: Option<String>,
     pub payload: Value,
+    #[serde(default = "default_frame_version")]
+    pub version: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,6 +217,8 @@ pub enum TransportError {
     Closed,
     #[error("transport failure: {0}")]
     Failure(String),
+    #[error("protocol error: {0}")]
+    Protocol(String),
 }
 
 pub fn validate_method_name(method: &str) -> Result<(), RouterError> {
@@ -313,6 +325,7 @@ impl Transport for ChannelTransport {
                 method: frame.method,
                 id: frame.id,
                 payload: frame.payload,
+                version: frame.version,
             })
             .await
             .map_err(|_err| TransportError::Closed);
@@ -407,6 +420,12 @@ where
             let frame = serde_json::from_str::<InboundFrame>(trimmed).map_err(|error| {
                 TransportError::Failure(format!("failed to decode inbound frame: {error}"))
             })?;
+            if frame.version > PROTOCOL_VERSION {
+                return Err(TransportError::Protocol(format!(
+                    "unsupported frame version {} (max supported: {})",
+                    frame.version, PROTOCOL_VERSION
+                )));
+            }
             return Ok(Some(frame));
         }
     }
@@ -571,6 +590,7 @@ mod tests {
             method: "tools/call".to_owned(),
             id: Some("req-1".to_owned()),
             payload: serde_json::json!({"tool":"search"}),
+            version: PROTOCOL_VERSION,
         })
         .await
         .expect("send should succeed");
@@ -597,6 +617,7 @@ mod tests {
                 method: "ping".to_owned(),
                 id: None,
                 payload: serde_json::json!({}),
+                version: PROTOCOL_VERSION,
             })
             .await
             .expect_err("send after close should fail");
@@ -624,6 +645,7 @@ mod tests {
             method: "tools/call".to_owned(),
             id: Some("req-1".to_owned()),
             payload: serde_json::json!({"seq":1}),
+            version: PROTOCOL_VERSION,
         })
         .await
         .expect("first send should fill queue");
@@ -633,6 +655,7 @@ mod tests {
                 method: "tools/call".to_owned(),
                 id: Some("req-2".to_owned()),
                 payload: serde_json::json!({"seq":2}),
+                version: PROTOCOL_VERSION,
             })
             .await
         });
@@ -686,6 +709,7 @@ mod tests {
             method: "tools/call".to_owned(),
             id: Some("left-1".to_owned()),
             payload: serde_json::json!({"side":"left"}),
+            version: PROTOCOL_VERSION,
         })
         .await
         .expect("left send should succeed");
@@ -703,6 +727,7 @@ mod tests {
                 method: "resources/read".to_owned(),
                 id: Some("right-1".to_owned()),
                 payload: serde_json::json!({"side":"right"}),
+                version: PROTOCOL_VERSION,
             })
             .await
             .expect("right send should succeed");
@@ -768,9 +793,61 @@ mod tests {
                 method: "ping".to_owned(),
                 id: None,
                 payload: serde_json::json!({}),
+                version: PROTOCOL_VERSION,
             })
             .await
             .expect_err("send after close should fail");
         assert!(matches!(error, TransportError::Closed));
+    }
+
+    #[test]
+    fn frame_without_version_deserializes_with_default() {
+        let json = r#"{"method":"ping","id":null,"payload":{}}"#;
+        let frame: InboundFrame = serde_json::from_str(json).expect("should deserialize");
+        assert_eq!(frame.version, 1);
+    }
+
+    #[test]
+    fn frame_with_explicit_version_is_preserved() {
+        let json = r#"{"method":"ping","id":null,"payload":{},"version":1}"#;
+        let frame: InboundFrame = serde_json::from_str(json).expect("should deserialize");
+        assert_eq!(frame.version, 1);
+    }
+
+    #[test]
+    fn outbound_frame_serializes_version() {
+        let frame = OutboundFrame {
+            method: "ping".to_owned(),
+            id: None,
+            payload: serde_json::json!({}),
+            version: PROTOCOL_VERSION,
+        };
+        let serialized = serde_json::to_value(&frame).expect("should serialize");
+        assert_eq!(serialized["version"], PROTOCOL_VERSION);
+    }
+
+    #[tokio::test]
+    async fn json_line_transport_rejects_unsupported_version() {
+        let (transport_stream, mut peer_stream) = duplex(1024);
+        let (reader, writer) = split(transport_stream);
+        let transport = JsonLineTransport::new(test_transport_info("json-version"), reader, writer);
+
+        let future_frame = format!(
+            r#"{{"method":"ping","id":null,"payload":{{}},"version":{}}}"#,
+            PROTOCOL_VERSION + 1
+        );
+        peer_stream
+            .write_all(format!("{future_frame}\n").as_bytes())
+            .await
+            .expect("peer write should succeed");
+
+        let error = transport
+            .recv()
+            .await
+            .expect_err("future version should be rejected");
+        assert!(
+            matches!(error, TransportError::Protocol(ref msg) if msg.contains("unsupported frame version")),
+            "unexpected error: {error}"
+        );
     }
 }
