@@ -41,8 +41,8 @@ mod telegram;
 
 pub use registry::{
     ChannelCatalogEntry, ChannelCatalogOperation, ChannelOperationHealth, ChannelOperationStatus,
-    ChannelStatusSnapshot, channel_status_snapshots, list_channel_catalog,
-    normalize_channel_platform,
+    ChannelStatusSnapshot, catalog_only_channel_entries, channel_status_snapshots,
+    list_channel_catalog, normalize_channel_platform,
 };
 pub use runtime_state::ChannelOperationRuntime;
 use runtime_state::ChannelOperationRuntimeTracker;

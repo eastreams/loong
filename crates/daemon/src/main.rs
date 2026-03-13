@@ -966,11 +966,13 @@ async fn run_list_models_cli(config_path: Option<&str>, as_json: bool) -> CliRes
 fn run_channels_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
     let (resolved_path, config) = mvp::config::load(config_path)?;
     let snapshots = mvp::channel::channel_status_snapshots(&config);
+    let catalog_only = mvp::channel::catalog_only_channel_entries(&snapshots);
 
     if as_json {
         let payload = json!({
             "config": resolved_path.display().to_string(),
             "channels": snapshots,
+            "catalog_only_channels": catalog_only,
         });
         let pretty = serde_json::to_string_pretty(&payload)
             .map_err(|error| format!("serialize channel status output failed: {error}"))?;
@@ -980,7 +982,11 @@ fn run_channels_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
 
     println!(
         "{}",
-        render_channel_snapshots_text(&resolved_path.display().to_string(), &snapshots)
+        render_channel_snapshots_text(
+            &resolved_path.display().to_string(),
+            &snapshots,
+            &catalog_only,
+        )
     );
     Ok(())
 }
@@ -988,6 +994,7 @@ fn run_channels_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
 fn render_channel_snapshots_text(
     config_path: &str,
     snapshots: &[mvp::channel::ChannelStatusSnapshot],
+    catalog_only: &[mvp::channel::ChannelCatalogEntry],
 ) -> String {
     let mut lines = vec![format!("config={config_path}")];
     for snapshot in snapshots {
@@ -1059,6 +1066,26 @@ fn render_channel_snapshots_text(
             }
             for issue in &operation.issues {
                 lines.push(format!("    issue: {issue}"));
+            }
+        }
+    }
+    if !catalog_only.is_empty() {
+        lines.push("catalog-only channels:".to_owned());
+        for entry in catalog_only {
+            let aliases = if entry.aliases.is_empty() {
+                "-".to_owned()
+            } else {
+                entry.aliases.join(",")
+            };
+            lines.push(format!(
+                "{} [{}] aliases={} transport={}",
+                entry.label, entry.id, aliases, entry.transport
+            ));
+            for operation in &entry.operations {
+                lines.push(format!(
+                    "  catalog op {} ({}) tracks_runtime={}",
+                    operation.id, operation.command, operation.tracks_runtime
+                ));
             }
         }
     }

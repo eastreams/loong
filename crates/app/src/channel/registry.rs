@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{collections::BTreeSet, path::Path};
 
 use serde::Serialize;
 
@@ -148,6 +148,28 @@ pub fn list_channel_catalog() -> Vec<ChannelCatalogEntry> {
             transport: descriptor.transport,
             operations: descriptor.operations.to_vec(),
         })
+        .collect()
+}
+
+pub fn catalog_only_channel_entries(
+    snapshots: &[ChannelStatusSnapshot],
+) -> Vec<ChannelCatalogEntry> {
+    let catalog = list_channel_catalog();
+    catalog_only_channel_entries_from(&catalog, snapshots)
+}
+
+fn catalog_only_channel_entries_from(
+    catalog: &[ChannelCatalogEntry],
+    snapshots: &[ChannelStatusSnapshot],
+) -> Vec<ChannelCatalogEntry> {
+    let snapshot_ids = snapshots
+        .iter()
+        .map(|snapshot| snapshot.id)
+        .collect::<BTreeSet<_>>();
+    catalog
+        .iter()
+        .filter(|entry| !snapshot_ids.contains(entry.id))
+        .cloned()
         .collect()
 }
 
@@ -742,6 +764,65 @@ mod tests {
         assert_eq!(feishu.operations.len(), 2);
         assert_eq!(feishu.operations[0].command, "feishu-send");
         assert_eq!(feishu.operations[1].command, "feishu-serve");
+    }
+
+    #[test]
+    fn catalog_only_channel_entries_skip_platforms_that_already_have_status_snapshots() {
+        let catalog = vec![
+            ChannelCatalogEntry {
+                id: "telegram",
+                label: "Telegram",
+                aliases: vec![],
+                transport: "telegram_bot_api_polling",
+                operations: vec![ChannelCatalogOperation {
+                    id: "serve",
+                    label: "reply loop",
+                    command: "telegram-serve",
+                    tracks_runtime: true,
+                }],
+            },
+            ChannelCatalogEntry {
+                id: "discord",
+                label: "Discord",
+                aliases: vec![],
+                transport: "discord_gateway",
+                operations: vec![ChannelCatalogOperation {
+                    id: "send",
+                    label: "direct send",
+                    command: "discord-send",
+                    tracks_runtime: false,
+                }],
+            },
+        ];
+        let snapshots = vec![ChannelStatusSnapshot {
+            id: "telegram",
+            configured_account_id: "default".to_owned(),
+            configured_account_label: "default".to_owned(),
+            is_default_account: true,
+            default_account_source: ChannelDefaultAccountSelectionSource::Fallback,
+            label: "Telegram",
+            aliases: vec![],
+            transport: "telegram_bot_api_polling",
+            compiled: true,
+            enabled: false,
+            api_base_url: Some("https://api.telegram.org".to_owned()),
+            notes: vec![],
+            operations: vec![ChannelOperationStatus {
+                id: "serve",
+                label: "reply loop",
+                command: "telegram-serve",
+                health: ChannelOperationHealth::Disabled,
+                detail: "disabled".to_owned(),
+                issues: vec![],
+                runtime: None,
+            }],
+        }];
+
+        let catalog_only = catalog_only_channel_entries_from(&catalog, &snapshots);
+
+        assert_eq!(catalog_only.len(), 1);
+        assert_eq!(catalog_only[0].id, "discord");
+        assert_eq!(catalog_only[0].operations[0].command, "discord-send");
     }
 
     #[test]

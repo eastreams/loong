@@ -77,7 +77,7 @@ fn render_channel_snapshots_text_reports_aliases_and_operation_health() {
     config.feishu.app_secret = Some("app-secret".to_owned());
 
     let snapshots = mvp::channel::channel_status_snapshots(&config);
-    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &snapshots);
+    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &snapshots, &[]);
 
     assert!(rendered.contains("config=/tmp/loongclaw.toml"));
     assert!(rendered.contains("Feishu/Lark [feishu]"));
@@ -111,7 +111,7 @@ fn render_channel_snapshots_text_reports_configured_accounts_for_multi_account_c
     .expect("deserialize multi-account config");
 
     let snapshots = mvp::channel::channel_status_snapshots(&config);
-    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &snapshots);
+    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &snapshots, &[]);
 
     assert!(rendered.contains("configured_account=work-bot"));
     assert!(rendered.contains("configured_account=personal"));
@@ -140,9 +140,31 @@ fn render_channel_snapshots_text_reports_default_account_marker() {
     .expect("deserialize multi-account config");
 
     let snapshots = mvp::channel::channel_status_snapshots(&config);
-    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &snapshots);
+    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &snapshots, &[]);
 
     assert!(rendered.contains("configured_account=work-bot"));
     assert!(rendered.contains("default_account=true"));
     assert!(rendered.contains("default_source=explicit_default"));
+}
+
+#[test]
+fn render_channel_snapshots_text_reports_catalog_only_channels() {
+    let catalog_only = vec![mvp::channel::ChannelCatalogEntry {
+        id: "discord",
+        label: "Discord",
+        aliases: vec!["discord-bot"],
+        transport: "discord_gateway",
+        operations: vec![mvp::channel::ChannelCatalogOperation {
+            id: "send",
+            label: "direct send",
+            command: "discord-send",
+            tracks_runtime: false,
+        }],
+    }];
+
+    let rendered = render_channel_snapshots_text("/tmp/loongclaw.toml", &[], &catalog_only);
+
+    assert!(rendered.contains("catalog-only channels:"));
+    assert!(rendered.contains("Discord [discord] aliases=discord-bot transport=discord_gateway"));
+    assert!(rendered.contains("catalog op send (discord-send) tracks_runtime=false"));
 }
