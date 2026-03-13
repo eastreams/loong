@@ -1,7 +1,9 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     fs,
     path::{Path, PathBuf},
+    sync::{Mutex, MutexGuard},
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -22,7 +24,10 @@ pub(super) struct TelegramAdapter {
     timeout_s: u64,
     offset_tracker: TelegramOffsetTracker,
     allowlist: BTreeSet<i64>,
+    typing_handles: Mutex<HashMap<i64, tokio::task::JoinHandle<()>>>,
 }
+
+const TELEGRAM_TYPING_REFRESH_INTERVAL: Duration = Duration::from_secs(4);
 
 struct TelegramOffsetTracker {
     offset_path: PathBuf,
@@ -92,6 +97,7 @@ impl TelegramAdapter {
             timeout_s: config.polling_timeout_s.clamp(1, 50),
             offset_tracker: TelegramOffsetTracker::new(offset_path, next_offset),
             allowlist: config.allowed_chat_ids.iter().copied().collect(),
+            typing_handles: Mutex::new(HashMap::new()),
         }
     }
 
@@ -102,6 +108,53 @@ impl TelegramAdapter {
             self.token,
             method
         )
+    }
+
+    fn parse_conversation_chat_id(target: &ChannelOutboundTarget) -> CliResult<i64> {
+        if target.platform != ChannelPlatform::Telegram {
+            return Err(format!(
+                "telegram adapter cannot send to {} target",
+                target.platform.as_str()
+            ));
+        }
+        if target.kind != ChannelOutboundTargetKind::Conversation {
+            return Err(format!(
+                "telegram adapter requires conversation target, got {}",
+                target.kind.as_str()
+            ));
+        }
+
+        target
+            .trimmed_id()?
+            .parse::<i64>()
+            .map_err(|error| format!("invalid telegram chat id `{}`: {error}", target.id))
+    }
+
+    fn stop_typing_handle(&self, chat_id: i64) {
+        let handle = self.typing_handles_guard().remove(&chat_id);
+        if let Some(handle) = handle {
+            handle.abort();
+        }
+    }
+
+    fn abort_all_typing_handles(&self) {
+        let mut handles = self.typing_handles_guard();
+        for (_, handle) in handles.drain() {
+            handle.abort();
+        }
+    }
+
+    fn typing_handles_guard(&self) -> MutexGuard<'_, HashMap<i64, tokio::task::JoinHandle<()>>> {
+        match self.typing_handles.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+}
+
+impl Drop for TelegramAdapter {
+    fn drop(&mut self) {
+        self.abort_all_typing_handles();
     }
 }
 
@@ -141,23 +194,7 @@ impl ChannelAdapter for TelegramAdapter {
     }
 
     async fn send_text(&self, target: &ChannelOutboundTarget, text: &str) -> CliResult<()> {
-        if target.platform != ChannelPlatform::Telegram {
-            return Err(format!(
-                "telegram adapter cannot send to {} target",
-                target.platform.as_str()
-            ));
-        }
-        if target.kind != ChannelOutboundTargetKind::Conversation {
-            return Err(format!(
-                "telegram adapter requires conversation target, got {}",
-                target.kind.as_str()
-            ));
-        }
-
-        let chat_id = target
-            .trimmed_id()?
-            .parse::<i64>()
-            .map_err(|error| format!("invalid telegram chat id `{}`: {error}", target.id))?;
+        let chat_id = Self::parse_conversation_chat_id(target)?;
 
         let url = self.api_url("sendMessage");
         let client = reqwest::Client::new();
@@ -180,6 +217,33 @@ impl ChannelAdapter for TelegramAdapter {
         if !payload.get("ok").and_then(Value::as_bool).unwrap_or(false) {
             return Err(format!("telegram sendMessage not ok: {payload}"));
         }
+        Ok(())
+    }
+
+    async fn start_typing(&self, target: &ChannelOutboundTarget) -> CliResult<()> {
+        let chat_id = Self::parse_conversation_chat_id(target)?;
+        self.stop_typing_handle(chat_id);
+
+        let client = reqwest::Client::new();
+        let url = self.api_url("sendChatAction");
+        let handle = tokio::spawn(async move {
+            loop {
+                let body = json!({
+                    "chat_id": chat_id,
+                    "action": "typing",
+                });
+                let _ = client.post(&url).json(&body).send().await;
+                tokio::time::sleep(TELEGRAM_TYPING_REFRESH_INTERVAL).await;
+            }
+        });
+
+        self.typing_handles_guard().insert(chat_id, handle);
+        Ok(())
+    }
+
+    async fn stop_typing(&self, target: &ChannelOutboundTarget) -> CliResult<()> {
+        let chat_id = Self::parse_conversation_chat_id(target)?;
+        self.stop_typing_handle(chat_id);
         Ok(())
     }
 
@@ -296,6 +360,38 @@ fn save_offset(path: &Path, next_offset: i64) -> CliResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn test_adapter() -> TelegramAdapter {
+        let unique = format!(
+            "loongclaw-telegram-typing-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        );
+        let path = std::env::temp_dir().join(unique).join("offset.txt");
+        TelegramAdapter {
+            account_id: "bot_123456".to_owned(),
+            token: "fake-token".to_owned(),
+            base_url: "http://127.0.0.1:9".to_owned(),
+            timeout_s: 1,
+            offset_tracker: TelegramOffsetTracker::new(path, 0),
+            allowlist: BTreeSet::from([123_i64]),
+            typing_handles: Mutex::new(HashMap::new()),
+        }
+    }
 
     #[test]
     fn offset_file_roundtrip() {
@@ -447,5 +543,142 @@ mod tests {
 
         let offset = load_offset_for_account(home.as_path(), "bot_123456");
         assert_eq!(offset, Some(77));
+    }
+
+    #[tokio::test]
+    async fn telegram_stop_typing_is_idempotent_and_clears_handle() {
+        let adapter = test_adapter();
+        let target = ChannelOutboundTarget::telegram_chat(123);
+
+        adapter
+            .start_typing(&target)
+            .await
+            .expect("start typing should succeed");
+        adapter
+            .stop_typing(&target)
+            .await
+            .expect("first stop typing should succeed");
+        adapter
+            .stop_typing(&target)
+            .await
+            .expect("second stop typing should succeed");
+
+        assert!(
+            adapter
+                .typing_handles
+                .lock()
+                .expect("typing handles lock")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn telegram_start_typing_replaces_existing_handle_for_chat() {
+        let adapter = test_adapter();
+        let target = ChannelOutboundTarget::telegram_chat(123);
+        let dropped = Arc::new(AtomicBool::new(false));
+        let dropped_for_task = Arc::clone(&dropped);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn(async move {
+            let _flag = DropFlag(dropped_for_task);
+            let _ = started_tx.send(());
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        });
+
+        adapter
+            .typing_handles
+            .lock()
+            .expect("typing handles lock")
+            .insert(123, handle);
+
+        started_rx.await.expect("typing task should start");
+
+        adapter
+            .start_typing(&target)
+            .await
+            .expect("start typing should succeed");
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        assert!(dropped.load(Ordering::SeqCst));
+        assert_eq!(
+            adapter
+                .typing_handles
+                .lock()
+                .expect("typing handles lock")
+                .len(),
+            1
+        );
+
+        adapter
+            .stop_typing(&target)
+            .await
+            .expect("stop typing should succeed");
+    }
+
+    #[tokio::test]
+    async fn telegram_adapter_drop_aborts_active_typing_handles() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let dropped_for_task = Arc::clone(&dropped);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn(async move {
+            let _flag = DropFlag(dropped_for_task);
+            let _ = started_tx.send(());
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        });
+
+        let adapter = test_adapter();
+        adapter
+            .typing_handles
+            .lock()
+            .expect("typing handles lock")
+            .insert(123, handle);
+
+        started_rx.await.expect("typing task should start");
+
+        drop(adapter);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "dropping the adapter should abort active typing handles"
+        );
+    }
+
+    #[tokio::test]
+    async fn telegram_typing_rejects_non_telegram_target() {
+        let adapter = test_adapter();
+        let target = ChannelOutboundTarget::new(
+            ChannelPlatform::Feishu,
+            ChannelOutboundTargetKind::Conversation,
+            "oc_123",
+        );
+
+        let error = adapter
+            .start_typing(&target)
+            .await
+            .expect_err("non telegram target should fail");
+
+        assert_eq!(error, "telegram adapter cannot send to feishu target");
+    }
+
+    #[tokio::test]
+    async fn telegram_typing_rejects_non_conversation_target() {
+        let adapter = test_adapter();
+        let target = ChannelOutboundTarget::new(
+            ChannelPlatform::Telegram,
+            ChannelOutboundTargetKind::MessageReply,
+            "123",
+        );
+
+        let error = adapter
+            .start_typing(&target)
+            .await
+            .expect_err("non conversation target should fail");
+
+        assert_eq!(
+            error,
+            "telegram adapter requires conversation target, got message_reply"
+        );
     }
 }

@@ -271,6 +271,12 @@ pub trait ChannelAdapter {
     fn name(&self) -> &str;
     async fn receive_batch(&mut self) -> CliResult<Vec<ChannelInboundMessage>>;
     async fn send_text(&self, target: &ChannelOutboundTarget, text: &str) -> CliResult<()>;
+    async fn start_typing(&self, _target: &ChannelOutboundTarget) -> CliResult<()> {
+        Ok(())
+    }
+    async fn stop_typing(&self, _target: &ChannelOutboundTarget) -> CliResult<()> {
+        Ok(())
+    }
     async fn ack_inbound(&mut self, _message: &ChannelInboundMessage) -> CliResult<()> {
         Ok(())
     }
@@ -290,7 +296,7 @@ async fn process_channel_batch<A, F>(
     mut process: F,
 ) -> CliResult<bool>
 where
-    A: ChannelAdapter + Send + ?Sized,
+    A: ChannelAdapter + Send + Sync + ?Sized,
     F: FnMut(ChannelInboundMessage) -> ChannelProcessFuture,
 {
     if batch.is_empty() {
@@ -303,6 +309,8 @@ where
             runtime.mark_run_start().await?;
         }
 
+        let _ = adapter.start_typing(&message.reply_target).await;
+
         let result = async {
             let reply = process(message.clone()).await?;
             adapter.send_text(&message.reply_target, &reply).await?;
@@ -310,6 +318,8 @@ where
             Ok::<(), String>(())
         }
         .await;
+
+        let _ = adapter.stop_typing(&message.reply_target).await;
 
         if let Some(runtime) = runtime {
             runtime.mark_run_end().await?;
@@ -936,6 +946,8 @@ mod tests {
         sent: Arc<Mutex<Vec<(ChannelOutboundTarget, String)>>>,
         acked: Arc<Mutex<Vec<Option<String>>>>,
         completed_batches: Arc<Mutex<usize>>,
+        typing_events: Arc<Mutex<Vec<String>>>,
+        fail_send: Arc<Mutex<bool>>,
     }
 
     #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
@@ -950,10 +962,29 @@ mod tests {
         }
 
         async fn send_text(&self, target: &ChannelOutboundTarget, text: &str) -> CliResult<()> {
+            if *self.fail_send.lock().expect("fail send flag") {
+                return Err("send failed".to_owned());
+            }
             self.sent
                 .lock()
                 .expect("sent log")
                 .push((target.clone(), text.to_owned()));
+            Ok(())
+        }
+
+        async fn start_typing(&self, target: &ChannelOutboundTarget) -> CliResult<()> {
+            self.typing_events
+                .lock()
+                .expect("typing log")
+                .push(format!("start:{}", target.id));
+            Ok(())
+        }
+
+        async fn stop_typing(&self, target: &ChannelOutboundTarget) -> CliResult<()> {
+            self.typing_events
+                .lock()
+                .expect("typing log")
+                .push(format!("stop:{}", target.id));
             Ok(())
         }
 
@@ -1015,6 +1046,14 @@ mod tests {
             .await
             .expect("default ack hook should succeed");
         adapter
+            .start_typing(&message.reply_target)
+            .await
+            .expect("default typing start hook should succeed");
+        adapter
+            .stop_typing(&message.reply_target)
+            .await
+            .expect("default typing stop hook should succeed");
+        adapter
             .complete_batch()
             .await
             .expect("default batch completion hook should succeed");
@@ -1057,7 +1096,76 @@ mod tests {
             adapter.acked.lock().expect("ack log").as_slice(),
             &[Some("101".to_owned())]
         );
+        assert_eq!(
+            adapter.typing_events.lock().expect("typing log").as_slice(),
+            &["start:1".to_owned(), "stop:1".to_owned()]
+        );
         assert_eq!(*adapter.completed_batches.lock().expect("completed"), 1);
+    }
+
+    #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+    #[tokio::test]
+    async fn process_channel_batch_stops_typing_when_processing_fails() {
+        let mut adapter = RecordingAdapter::default();
+        let batch = vec![ChannelInboundMessage {
+            session: ChannelSession::new(ChannelPlatform::Telegram, "1"),
+            reply_target: ChannelOutboundTarget::telegram_chat(1),
+            text: "hello".to_owned(),
+            delivery: ChannelDelivery {
+                ack_cursor: Some("101".to_owned()),
+                source_message_id: Some("55".to_owned()),
+            },
+        }];
+
+        let error = process_channel_batch(&mut adapter, batch, None, |_message| {
+            Box::pin(async move { Err("process failed".to_owned()) })
+        })
+        .await
+        .expect_err("batch should fail");
+
+        assert_eq!(error, "process failed");
+        assert!(adapter.sent.lock().expect("sent log").is_empty());
+        assert!(adapter.acked.lock().expect("ack log").is_empty());
+        assert_eq!(
+            adapter.typing_events.lock().expect("typing log").as_slice(),
+            &["start:1".to_owned(), "stop:1".to_owned()]
+        );
+        assert_eq!(*adapter.completed_batches.lock().expect("completed"), 0);
+    }
+
+    #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+    #[tokio::test]
+    async fn process_channel_batch_stops_typing_when_send_fails() {
+        let mut adapter = RecordingAdapter::default();
+        *adapter.fail_send.lock().expect("fail send flag") = true;
+        let batch = vec![ChannelInboundMessage {
+            session: ChannelSession::new(ChannelPlatform::Telegram, "1"),
+            reply_target: ChannelOutboundTarget::telegram_chat(1),
+            text: "hello".to_owned(),
+            delivery: ChannelDelivery {
+                ack_cursor: Some("101".to_owned()),
+                source_message_id: Some("55".to_owned()),
+            },
+        }];
+
+        let error = process_channel_batch(
+            &mut adapter,
+            batch,
+            None,
+            |message: ChannelInboundMessage| {
+                Box::pin(async move { Ok(format!("reply: {}", message.text)) })
+            },
+        )
+        .await
+        .expect_err("batch should fail");
+
+        assert_eq!(error, "send failed");
+        assert!(adapter.acked.lock().expect("ack log").is_empty());
+        assert_eq!(
+            adapter.typing_events.lock().expect("typing log").as_slice(),
+            &["start:1".to_owned(), "stop:1".to_owned()]
+        );
+        assert_eq!(*adapter.completed_batches.lock().expect("completed"), 0);
     }
 
     #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
