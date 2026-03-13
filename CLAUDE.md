@@ -73,8 +73,13 @@ Use `task verify` for the stricter local superset (architecture, conventions, do
 |------|-------|
 | Core principles | `docs/design-docs/core-beliefs.md` |
 | Layered architecture | `docs/design-docs/layered-kernel-design.md` |
+| Design decisions & patterns | `docs/DESIGN.md` |
+| Design docs catalog | `docs/design-docs/index.md` |
+| Harness engineering | `docs/design-docs/harness-engineering.md` |
 | Roadmap | `docs/roadmap.md` |
 | Reliability invariants | `docs/RELIABILITY.md` |
+| Quality scores & gaps | `docs/QUALITY_SCORE.md` |
+| Tech debt tracker | `docs/plans/tech-debt-tracker.md` |
 | Release process docs | `docs/releases/` |
 | Product requirements | `docs/product-specs/` |
 | Contributing recipes | `CONTRIBUTING.md` |

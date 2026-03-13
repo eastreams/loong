@@ -116,7 +116,10 @@ mechanically where possible.
 | Topic | Document |
 |-------|----------|
 | Full layer specification (L0-L9) | [Layered Kernel Design](docs/design-docs/layered-kernel-design.md) |
+| Harness engineering & backpressure | [Harness Engineering](docs/design-docs/harness-engineering.md) |
+| Design decisions & patterns | [Design Index](docs/DESIGN.md) |
 | Stage-based roadmap | [Roadmap](docs/roadmap.md) |
 | Build and kernel invariants | [Reliability](docs/RELIABILITY.md) |
+| Domain quality grades | [Quality Score](docs/QUALITY_SCORE.md) |
 | Contributor workflow and recipes | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Examples and spec files | [Examples](examples/README.md) |
