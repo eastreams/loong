@@ -1,8 +1,5 @@
 use async_trait::async_trait;
-use futures_util::FutureExt;
-use std::any::Any;
 use std::collections::BTreeSet;
-use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 #[cfg(feature = "memory-sqlite")]
 use std::{
@@ -13,19 +10,18 @@ use std::{
 
 use loongclaw_contracts::{Capability, KernelError, ToolCoreOutcome, ToolCoreRequest};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use crate::config::{LoongClawConfig, SessionVisibility, ToolConfig};
 use crate::context::KernelContext;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
-#[cfg(feature = "memory-sqlite")]
-use crate::session::recovery::{build_async_spawn_failure_recovery_payload, RECOVERY_EVENT_KIND};
 use crate::tools::{
     delegate_child_tool_view_for_config, delegate_child_tool_view_for_config_with_delegate,
     runtime_tool_view, runtime_tool_view_for_config, tool_catalog, ToolExecutionKind, ToolView,
 };
 
 use super::runtime::SessionContext;
+
+pub use crate::tools::delegate::{AsyncDelegateSpawnRequest, AsyncDelegateSpawner};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderTurn {
@@ -81,20 +77,6 @@ pub trait AppToolDispatcher: Send + Sync {
     ) -> Result<ToolCoreOutcome, String>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AsyncDelegateSpawnRequest {
-    pub child_session_id: String,
-    pub parent_session_id: String,
-    pub task: String,
-    pub label: Option<String>,
-    pub timeout_seconds: u64,
-}
-
-#[async_trait]
-pub trait AsyncDelegateSpawner: Send + Sync {
-    async fn spawn(&self, request: AsyncDelegateSpawnRequest) -> Result<(), String>;
-}
-
 #[cfg(feature = "memory-sqlite")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AsyncDelegateSubprocessPlan {
@@ -106,7 +88,7 @@ struct AsyncDelegateSubprocessPlan {
 fn build_async_delegate_subprocess_plan(
     executable_path: &Path,
     config_path: Option<&str>,
-    request: &AsyncDelegateSpawnRequest,
+    request: &crate::tools::delegate::AsyncDelegateSpawnRequest,
 ) -> AsyncDelegateSubprocessPlan {
     let mut args = vec!["run-turn".to_owned()];
     if let Some(config_path) = config_path.map(str::trim).filter(|value| !value.is_empty()) {
@@ -154,8 +136,11 @@ impl SubprocessAsyncDelegateSpawner {
 
 #[cfg(feature = "memory-sqlite")]
 #[async_trait]
-impl AsyncDelegateSpawner for SubprocessAsyncDelegateSpawner {
-    async fn spawn(&self, request: AsyncDelegateSpawnRequest) -> Result<(), String> {
+impl crate::tools::delegate::AsyncDelegateSpawner for SubprocessAsyncDelegateSpawner {
+    async fn spawn(
+        &self,
+        request: crate::tools::delegate::AsyncDelegateSpawnRequest,
+    ) -> Result<(), String> {
         let plan = build_async_delegate_subprocess_plan(
             &self.executable_path,
             self.config_path.as_deref(),
@@ -323,7 +308,6 @@ fn spawn_async_delegate_detached(
         }
     });
 }
-
 pub struct NoopAppToolDispatcher;
 
 #[async_trait]
@@ -343,7 +327,7 @@ pub struct DefaultAppToolDispatcher {
     memory_config: MemoryRuntimeConfig,
     tool_config: ToolConfig,
     app_config: Option<Arc<LoongClawConfig>>,
-    async_delegate_spawner: Option<Arc<dyn AsyncDelegateSpawner>>,
+    async_delegate_spawner: Option<Arc<dyn crate::tools::delegate::AsyncDelegateSpawner>>,
 }
 
 impl DefaultAppToolDispatcher {
@@ -397,7 +381,7 @@ impl DefaultAppToolDispatcher {
     pub fn with_async_delegate_spawner(
         memory_config: MemoryRuntimeConfig,
         tool_config: ToolConfig,
-        async_delegate_spawner: Arc<dyn AsyncDelegateSpawner>,
+        async_delegate_spawner: Arc<dyn crate::tools::delegate::AsyncDelegateSpawner>,
     ) -> Self {
         Self {
             memory_config,
@@ -469,100 +453,6 @@ impl DefaultAppToolDispatcher {
     ) -> Result<ToolView, String> {
         Ok(runtime_tool_view_for_config(&self.tool_config))
     }
-
-    #[cfg(feature = "memory-sqlite")]
-    async fn execute_delegate_async(
-        &self,
-        session_context: &SessionContext,
-        payload: serde_json::Value,
-    ) -> Result<ToolCoreOutcome, String> {
-        if !self.tool_config.delegate.enabled {
-            return Err("app_tool_disabled: delegate is disabled by config".to_owned());
-        }
-
-        let delegate_request = crate::tools::delegate::parse_delegate_request_with_default_timeout(
-            &payload,
-            self.tool_config.delegate.timeout_seconds,
-        )?;
-        let spawner = self
-            .async_delegate_spawner
-            .as_ref()
-            .ok_or_else(|| "delegate_async_not_configured".to_owned())?;
-        let runtime_handle = tokio::runtime::Handle::try_current()
-            .map_err(|error| format!("delegate_async_runtime_unavailable: {error}"))?;
-        let repo = crate::session::repository::SessionRepository::new(&self.memory_config)?;
-        let current_depth = repo.session_lineage_depth(&session_context.session_id)?;
-        let next_child_depth = current_depth.saturating_add(1);
-        if next_child_depth > self.tool_config.delegate.max_depth {
-            return Err(format!(
-                "delegate_depth_exceeded: next child depth {next_child_depth} exceeds configured max_depth {}",
-                self.tool_config.delegate.max_depth
-            ));
-        }
-
-        let child_session_id = crate::tools::delegate::next_delegate_session_id();
-        let child_label = delegate_request.label.clone();
-        repo.create_session_with_event(
-            crate::session::repository::CreateSessionWithEventRequest {
-                session: crate::session::repository::NewSessionRecord {
-                    session_id: child_session_id.clone(),
-                    kind: crate::session::repository::SessionKind::DelegateChild,
-                    parent_session_id: Some(session_context.session_id.clone()),
-                    label: child_label.clone(),
-                    state: crate::session::repository::SessionState::Ready,
-                },
-                event_kind: "delegate_queued".to_owned(),
-                actor_session_id: Some(session_context.session_id.clone()),
-                event_payload_json: json!({
-                    "task": delegate_request.task.clone(),
-                    "label": child_label.clone(),
-                    "timeout_seconds": delegate_request.timeout_seconds,
-                }),
-            },
-        )?;
-
-        let spawn_request = AsyncDelegateSpawnRequest {
-            child_session_id: child_session_id.clone(),
-            parent_session_id: session_context.session_id.clone(),
-            task: delegate_request.task,
-            label: child_label.clone(),
-            timeout_seconds: delegate_request.timeout_seconds,
-        };
-
-        spawn_async_delegate_detached(
-            runtime_handle,
-            self.memory_config.clone(),
-            Arc::clone(spawner),
-            spawn_request,
-        );
-
-        Ok(crate::tools::delegate::delegate_async_queued_outcome(
-            child_session_id,
-            delegate_request.label,
-            delegate_request.timeout_seconds,
-        ))
-    }
-
-    #[cfg(feature = "memory-sqlite")]
-    async fn execute_sessions_send(
-        &self,
-        session_context: &SessionContext,
-        payload: serde_json::Value,
-    ) -> Result<ToolCoreOutcome, String> {
-        let app_config = self
-            .app_config
-            .as_ref()
-            .ok_or_else(|| "sessions_send_not_configured".to_owned())?;
-        let effective_tool_config = self.effective_tool_config_for_session(session_context);
-        crate::tools::messaging::execute_sessions_send_with_config(
-            payload,
-            &session_context.session_id,
-            &self.memory_config,
-            &effective_tool_config,
-            app_config.as_ref(),
-        )
-        .await
-    }
 }
 
 impl Default for DefaultAppToolDispatcher {
@@ -590,33 +480,17 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
             }
         }
         let effective_tool_config = self.effective_tool_config_for_session(session_context);
-        if canonical_tool_name == "session_wait" {
-            return crate::tools::wait_for_session_with_config(
-                request.payload,
-                &session_context.session_id,
-                &self.memory_config,
-                &effective_tool_config,
-            )
-            .await;
-        }
-        #[cfg(feature = "memory-sqlite")]
-        if canonical_tool_name == "sessions_send" {
-            return self
-                .execute_sessions_send(session_context, request.payload)
-                .await;
-        }
-        #[cfg(feature = "memory-sqlite")]
-        if canonical_tool_name == "delegate_async" {
-            return self
-                .execute_delegate_async(session_context, request.payload)
-                .await;
-        }
-        crate::tools::execute_app_tool_with_config(
+        crate::tools::execute_app_tool_with_runtime_support(
             request,
             &session_context.session_id,
             &self.memory_config,
             &effective_tool_config,
+            crate::tools::AppToolRuntimeSupport {
+                app_config: self.app_config.as_deref(),
+                async_delegate_spawner: self.async_delegate_spawner.clone(),
+            },
         )
+        .await
     }
 }
 
@@ -792,7 +666,7 @@ mod tests {
 
     #[test]
     fn delegate_async_subprocess_plan_includes_config_path_and_delegate_child_flag() {
-        let request = AsyncDelegateSpawnRequest {
+        let request = crate::tools::delegate::AsyncDelegateSpawnRequest {
             child_session_id: "delegate:child-1".to_owned(),
             parent_session_id: "root-session".to_owned(),
             task: "child task".to_owned(),

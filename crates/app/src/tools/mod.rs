@@ -1,8 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use loongclaw_contracts::{Capability, ToolCoreOutcome, ToolCoreRequest};
 use serde_json::{json, Value};
 
+use crate::config::{LoongClawConfig, ToolConfig};
+use crate::memory::runtime_config::MemoryRuntimeConfig;
 use crate::KernelContext;
 
 mod catalog;
@@ -65,8 +68,8 @@ pub fn execute_app_tool(
 pub fn execute_app_tool_with_config(
     request: ToolCoreRequest,
     current_session_id: &str,
-    memory_config: &crate::memory::runtime_config::MemoryRuntimeConfig,
-    tool_config: &crate::config::ToolConfig,
+    memory_config: &MemoryRuntimeConfig,
+    tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let canonical_name = canonical_tool_name(request.tool_name.as_str());
     let request = ToolCoreRequest {
@@ -89,9 +92,89 @@ pub fn execute_app_tool_with_config(
             memory_config,
             tool_config,
         ),
-        "sessions_send" => Err("app_tool_not_implemented: sessions_send".to_owned()),
-        "session_wait" => Err("app_tool_not_implemented: session_wait".to_owned()),
-        "delegate" => Err("app_tool_not_implemented: delegate".to_owned()),
+        "sessions_send" => Err("app_tool_requires_runtime_support: sessions_send".to_owned()),
+        "session_wait" => Err("app_tool_requires_async_runtime_support: session_wait".to_owned()),
+        "delegate_async" => {
+            Err("app_tool_requires_async_runtime_support: delegate_async".to_owned())
+        }
+        "delegate" => Err("app_tool_requires_turn_loop_dispatch: delegate".to_owned()),
+        _ => Err(format!(
+            "app_tool_not_found: unknown tool `{}`",
+            request.tool_name
+        )),
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct AppToolRuntimeSupport<'a> {
+    pub app_config: Option<&'a LoongClawConfig>,
+    pub async_delegate_spawner: Option<Arc<dyn delegate::AsyncDelegateSpawner>>,
+}
+
+pub async fn execute_app_tool_with_runtime_support(
+    request: ToolCoreRequest,
+    current_session_id: &str,
+    memory_config: &MemoryRuntimeConfig,
+    tool_config: &ToolConfig,
+    runtime_support: AppToolRuntimeSupport<'_>,
+) -> Result<ToolCoreOutcome, String> {
+    let canonical_name = canonical_tool_name(request.tool_name.as_str());
+    let request = ToolCoreRequest {
+        tool_name: canonical_name.to_owned(),
+        payload: request.payload,
+    };
+    match canonical_name {
+        "sessions_list" | "sessions_history" | "session_status" | "session_events"
+        | "session_cancel" | "session_archive" | "session_recover" | "session_unarchive" => {
+            session::execute_session_tool_with_policies(
+                request,
+                current_session_id,
+                memory_config,
+                tool_config,
+            )
+        }
+        "memory_search" => memory::execute_memory_search_tool_with_policies(
+            request.payload,
+            current_session_id,
+            memory_config,
+            tool_config,
+        ),
+        "session_wait" => {
+            wait_for_session_with_config(
+                request.payload,
+                current_session_id,
+                memory_config,
+                tool_config,
+            )
+            .await
+        }
+        "sessions_send" => {
+            let app_config = runtime_support
+                .app_config
+                .ok_or_else(|| "sessions_send_not_configured".to_owned())?;
+            messaging::execute_sessions_send_with_config(
+                request.payload,
+                current_session_id,
+                memory_config,
+                tool_config,
+                app_config,
+            )
+            .await
+        }
+        "delegate_async" => {
+            let spawner = runtime_support
+                .async_delegate_spawner
+                .ok_or_else(|| "delegate_async_not_configured".to_owned())?;
+            delegate::execute_delegate_async_with_config(
+                request.payload,
+                current_session_id,
+                memory_config,
+                tool_config,
+                spawner,
+            )
+            .await
+        }
+        "delegate" => Err("app_tool_requires_turn_loop_dispatch: delegate".to_owned()),
         _ => Err(format!(
             "app_tool_not_found: unknown tool `{}`",
             request.tool_name
@@ -102,8 +185,8 @@ pub fn execute_app_tool_with_config(
 pub async fn wait_for_session_with_config(
     payload: Value,
     current_session_id: &str,
-    memory_config: &crate::memory::runtime_config::MemoryRuntimeConfig,
-    tool_config: &crate::config::ToolConfig,
+    memory_config: &MemoryRuntimeConfig,
+    tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     #[cfg(not(feature = "memory-sqlite"))]
     {
@@ -887,6 +970,120 @@ enabled = true
             .expect("sessions_send properties");
         assert!(properties.contains_key("session_id"));
         assert!(properties.contains_key("text"));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn isolated_memory_config(
+        test_name: &str,
+    ) -> crate::memory::runtime_config::MemoryRuntimeConfig {
+        let base = std::env::temp_dir().join(format!(
+            "loongclaw-tools-mod-{test_name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).expect("create tools test directory");
+        crate::memory::runtime_config::MemoryRuntimeConfig {
+            sqlite_path: Some(base.join("memory.sqlite3")),
+        }
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn execute_app_tool_runtime_support_routes_session_wait() {
+        let memory_config = isolated_memory_config("runtime-session-wait");
+        let repo =
+            crate::session::repository::SessionRepository::new(&memory_config).expect("repo");
+        repo.create_session(crate::session::repository::NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: crate::session::repository::SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: crate::session::repository::SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(crate::session::repository::NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: crate::session::repository::SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: crate::session::repository::SessionState::Ready,
+        })
+        .expect("create child");
+
+        let outcome = execute_app_tool_with_runtime_support(
+            ToolCoreRequest {
+                tool_name: "session_wait".to_owned(),
+                payload: json!({
+                    "session_id": "child-session",
+                    "timeout_ms": 1
+                }),
+            },
+            "root-session",
+            &memory_config,
+            &crate::config::ToolConfig::default(),
+            AppToolRuntimeSupport::default(),
+        )
+        .await
+        .expect("session_wait outcome");
+
+        assert_eq!(outcome.status, "timeout");
+        assert_eq!(outcome.payload["session"]["session_id"], "child-session");
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn execute_app_tool_runtime_support_reports_sessions_send_not_configured() {
+        let memory_config = isolated_memory_config("runtime-sessions-send");
+
+        let error = execute_app_tool_with_runtime_support(
+            ToolCoreRequest {
+                tool_name: "sessions_send".to_owned(),
+                payload: json!({
+                    "session_id": "telegram:123",
+                    "text": "hello"
+                }),
+            },
+            "root-session",
+            &memory_config,
+            &crate::config::ToolConfig::default(),
+            AppToolRuntimeSupport::default(),
+        )
+        .await
+        .expect_err("missing app config should be rejected");
+
+        assert!(
+            error.contains("sessions_send_not_configured"),
+            "expected sessions_send_not_configured, got: {error}"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn execute_app_tool_runtime_support_rejects_delegate_without_turn_loop() {
+        let memory_config = isolated_memory_config("runtime-delegate");
+
+        let error = execute_app_tool_with_runtime_support(
+            ToolCoreRequest {
+                tool_name: "delegate".to_owned(),
+                payload: json!({
+                    "task": "research the runtime"
+                }),
+            },
+            "root-session",
+            &memory_config,
+            &crate::config::ToolConfig::default(),
+            AppToolRuntimeSupport::default(),
+        )
+        .await
+        .expect_err("delegate should require turn-loop dispatch");
+
+        assert!(
+            error.contains("app_tool_requires_turn_loop_dispatch: delegate"),
+            "expected delegate turn-loop error, got: {error}"
+        );
     }
 
     // --- Kernel-routed tool tests ---
