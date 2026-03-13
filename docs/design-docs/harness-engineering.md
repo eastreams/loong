@@ -30,11 +30,13 @@ Harness engineering is designing the full environment of scaffolding, constraint
 
 ### Stage 2: Tool Call Execution
 
-Every tool call passes through the capability gate:
+The intended capability gate for every tool call:
 
 ```
 CapabilityToken → PolicyEngine → PolicyExtensionChain → ToolPlane → CoreToolAdapter → Audit
 ```
+
+**Current reality**: Only `shell.exec` passes through the full PolicyEngine check. `file.read` and `file.write` have path sandboxing but bypass the policy engine entirely (TD-002). This means the Rule of Two (LLM intent + deterministic policy approval) is only enforced for shell commands.
 
 Current tool registry: `shell.exec`, `file.read`, `file.write`.
 
@@ -119,13 +121,29 @@ Progressive disclosure hierarchy:
 
 ## Key Gaps for Harness Maturity
 
-Ranked by impact on agent reliability:
+Ranked by impact on agent reliability. All tracked in [Tech Debt Tracker](../plans/tech-debt-tracker.md).
 
-1. **Context Engine** — No pluggable context assembly. Conversation loop hardcodes sliding window.
-2. **Observation Masking** — Old tool outputs not replaced with placeholders when context nears limits.
-3. **Token-Aware Budgets** — Current payload budget tracks characters, not tokens.
-4. **Persistent Audit Sink** — Audit events are in-memory only, lost on restart.
-5. **Structured Progress Artifacts** — No mechanism for agents to persist progress across sessions.
+### High Priority
+
+1. **Rule of Two incomplete** (TD-002) — Policy engine only gates `shell.exec`. File and runtime tools bypass policy entirely.
+2. **No process isolation** (TD-019) — Shell commands run without seccomp/Landlock/sandbox_init.
+3. **Audit forgeable** (TD-020) — Signing key shares process with plugins.
+4. **Persistent Audit Sink** (TD-006) — Audit events are in-memory only, lost on restart.
+5. **No HMAC chain** (TD-007) — Audit events have no tamper evidence.
+
+### Medium Priority
+
+6. **Context Engine** (TD-008) — No pluggable context assembly. Conversation loop hardcodes sliding window.
+7. **Observation Masking** (TD-021) — Old tool outputs not replaced with placeholders when context nears limits.
+8. **Memory scopes absent** (TD-010) — Flat session_id, no Task/Session/Agent/Global scoping.
+9. **MemoryStore trait** (TD-022) — String dispatch instead of typed methods.
+10. **Provenance absent** (TD-014) — Memory entries lack the 10 mandatory fields from D-019.
+
+### Lower Priority
+
+11. **Token-Aware Budgets** (TD-009) — Payload budget tracks characters, not tokens.
+12. **No FTS5 index** (TD-011) — Recency-only retrieval, no full-text search.
+13. **No materialized views** (TD-018) — Event log exists but no derived state.
 
 ---
 

@@ -451,10 +451,11 @@ cargo build -p loongclaw-daemon --no-default-features --features "channel-cli,pr
 | [Architecture](ARCHITECTURE.md) | Crate structure and layered execution model |
 | [Core Beliefs](docs/design-docs/core-beliefs.md) | 10 core engineering principles |
 | [Layered Kernel Design](docs/design-docs/layered-kernel-design.md) | Full L0-L9 layer specification |
-| [Roadmap](docs/roadmap.md) | Stage-based milestones and acceptance criteria |
+| [Roadmap](docs/ROADMAP.md) | Stage-based milestones and acceptance criteria |
 | [Reliability](docs/RELIABILITY.md) | Build and kernel invariants |
 | [Examples](examples/README.md) | Spec files, plugin samples, benchmarks |
 | [Product Specs](docs/product-specs/index.md) | User-facing requirements (in progress) |
+| [Skills](skills/) | Agent skills (`update-harness.skill`, `harness-engineering.skill`) |
 | [Changelog](CHANGELOG.md) | Release history |
 
 ## Configuration

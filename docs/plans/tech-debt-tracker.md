@@ -19,6 +19,15 @@ Living record of known architectural drift and technical debt. Updated as items 
 | TD-011 | No FTS5 index for full-text search on memory | Low | Context/Memory | 2026-03-10 |
 | TD-012 | Plugin security scanner type exists but scanner logic absent | Medium | Integration (L6) | 2026-03-10 |
 | TD-013 | WASM fuel metering / epoch interruption not implemented | Medium | Execution (L2) | 2026-03-10 |
+| TD-014 | No mandatory provenance fields on memory entries (D-019 requires 10 fields) | Medium | Context/Memory | 2026-03-13 |
+| TD-015 | No trust scoring on memory entries (D-020: Tier 0-3 calibration) | Low | Context/Memory | 2026-03-13 |
+| TD-016 | No Blake3 content hashing for memory integrity (D-021) | Low | Context/Memory | 2026-03-13 |
+| TD-017 | No tombstone audit trail for deletions (D-022: capability-scoped cascades) | Medium | Context/Memory | 2026-03-13 |
+| TD-018 | No materialized views from event log (D-004) | Low | Runtime Core | 2026-03-13 |
+| TD-019 | No process isolation for shell.exec (seccomp/Landlock/sandbox_init) | High | Security (L1) | 2026-03-13 |
+| TD-020 | Audit signing key shares process with plugins — forgeable audit log | High | Security (L1) | 2026-03-13 |
+| TD-021 | No observation masking when context nears limits | Medium | Context/Memory | 2026-03-13 |
+| TD-022 | MemoryStore trait not implemented — using string dispatch instead of typed methods (D-016) | Medium | Context/Memory | 2026-03-13 |
 
 ## Resolved
 
