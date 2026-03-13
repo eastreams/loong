@@ -520,6 +520,20 @@ mod tests {
             .as_object()
             .expect("session_cancel properties");
         assert!(cancel_properties.contains_key("session_id"));
+
+        let sessions_list = defs
+            .iter()
+            .find(|item| item["function"]["name"] == "sessions_list")
+            .expect("sessions_list definition");
+        let list_properties = sessions_list["function"]["parameters"]["properties"]
+            .as_object()
+            .expect("sessions_list properties");
+        assert!(list_properties.contains_key("limit"));
+        assert!(list_properties.contains_key("state"));
+        assert!(list_properties.contains_key("kind"));
+        assert!(list_properties.contains_key("parent_session_id"));
+        assert!(list_properties.contains_key("overdue_only"));
+        assert!(list_properties.contains_key("include_delegate_lifecycle"));
     }
 
     #[test]

@@ -695,6 +695,15 @@ impl SessionRepository {
         Self::list_events_after_with_conn(&conn, &session_id, after_id, limit)
     }
 
+    pub fn list_delegate_lifecycle_events(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionEventRecord>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let conn = self.open_connection()?;
+        Self::list_delegate_lifecycle_events_with_conn(&conn, &session_id)
+    }
+
     pub fn load_terminal_outcome(
         &self,
         session_id: &str,
@@ -1082,6 +1091,45 @@ impl SessionRepository {
         let mut events = Vec::new();
         for row in rows {
             let raw = row.map_err(|error| format!("decode session event row failed: {error}"))?;
+            events.push(SessionEventRecord::try_from_raw(raw)?);
+        }
+        Ok(events)
+    }
+
+    fn list_delegate_lifecycle_events_with_conn(
+        conn: &Connection,
+        session_id: &str,
+    ) -> Result<Vec<SessionEventRecord>, String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, session_id, event_kind, actor_session_id, payload_json, ts
+                 FROM session_events
+                 WHERE session_id = ?1
+                   AND event_kind IN (
+                        'delegate_queued',
+                        'delegate_started',
+                        'delegate_cancel_requested'
+                   )
+                 ORDER BY id ASC",
+            )
+            .map_err(|error| format!("prepare delegate lifecycle event query failed: {error}"))?;
+        let rows = stmt
+            .query_map(params![session_id], |row| {
+                Ok(RawSessionEventRecord {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    event_kind: row.get(2)?,
+                    actor_session_id: row.get(3)?,
+                    payload_json: row.get(4)?,
+                    ts: row.get(5)?,
+                })
+            })
+            .map_err(|error| format!("query delegate lifecycle events failed: {error}"))?;
+
+        let mut events = Vec::new();
+        for row in rows {
+            let raw = row
+                .map_err(|error| format!("decode delegate lifecycle event row failed: {error}"))?;
             events.push(SessionEventRecord::try_from_raw(raw)?);
         }
         Ok(events)

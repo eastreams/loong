@@ -203,6 +203,8 @@ Delivered in current baseline:
   - `sessions_list`, `sessions_history`, `session_status`, `session_events`, `session_cancel`, `session_recover`, and `session_wait`
     with optional incremental event-tail return via `after_id`, draining unseen events through the
     current cursor and terminal completion
+  - filtered `sessions_list` discovery for visible stale delegates, with optional lifecycle payloads
+    and stable lifecycle-anchor reads that do not depend on recent-event windows
   - cooperative cancellation requests for running async delegate children, surfaced through
     session lifecycle metadata and finalized as durable cancelled failures at the next safe
     turn-loop checkpoint

@@ -32,6 +32,7 @@ pub(super) struct SessionInspectionSnapshot {
     pub session: SessionSummaryRecord,
     pub terminal_outcome: Option<SessionTerminalOutcomeRecord>,
     pub recent_events: Vec<SessionEventRecord>,
+    pub delegate_events: Vec<SessionEventRecord>,
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -70,6 +71,24 @@ struct SessionDelegateCancellationRecord {
     reference: String,
     requested_at: i64,
     reason: String,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionsListRequest {
+    limit: usize,
+    state: Option<SessionState>,
+    kind: Option<SessionKind>,
+    parent_session_id: Option<String>,
+    overdue_only: bool,
+    include_delegate_lifecycle: bool,
+}
+
+#[cfg(feature = "memory-sqlite")]
+impl SessionsListRequest {
+    fn effective_include_delegate_lifecycle(&self) -> bool {
+        self.include_delegate_lifecycle || self.overdue_only
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -122,7 +141,9 @@ pub fn execute_session_tool_with_policies(
             return Err("app_tool_disabled: session tools are disabled by config".to_owned());
         }
         match request.tool_name.as_str() {
-            "sessions_list" => execute_sessions_list(current_session_id, config, tool_config),
+            "sessions_list" => {
+                execute_sessions_list(request.payload, current_session_id, config, tool_config)
+            }
             "session_events" => {
                 execute_session_events(request.payload, current_session_id, config, tool_config)
             }
@@ -147,21 +168,69 @@ pub fn execute_session_tool_with_policies(
 
 #[cfg(feature = "memory-sqlite")]
 fn execute_sessions_list(
+    payload: Value,
     current_session_id: &str,
     config: &MemoryRuntimeConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let repo = SessionRepository::new(config)?;
+    let request = parse_sessions_list_request(&payload, tool_config)?;
+    let include_delegate_lifecycle = request.effective_include_delegate_lifecycle();
+    let now_ts = current_unix_ts();
     let mut sessions = repo.list_visible_sessions(current_session_id)?;
     if tool_config.sessions.visibility == SessionVisibility::SelfOnly {
         sessions.retain(|session| session.session_id == current_session_id);
     }
-    sessions.truncate(tool_config.sessions.list_limit);
+    if let Some(state) = request.state {
+        sessions.retain(|session| session.state == state);
+    }
+    if let Some(kind) = request.kind {
+        sessions.retain(|session| session.kind == kind);
+    }
+    if let Some(parent_session_id) = request.parent_session_id.as_deref() {
+        sessions.retain(|session| session.parent_session_id.as_deref() == Some(parent_session_id));
+    }
+
+    let mut listed_sessions = Vec::new();
+    for session in sessions {
+        let delegate_lifecycle = if include_delegate_lifecycle {
+            let delegate_events = load_delegate_lifecycle_events(&repo, &session)?;
+            session_delegate_lifecycle_at(&session, delegate_events.as_slice(), now_ts)
+        } else {
+            None
+        };
+        if request.overdue_only
+            && !delegate_lifecycle
+                .as_ref()
+                .and_then(|lifecycle| lifecycle.staleness.as_ref())
+                .map(|staleness| staleness.state == "overdue")
+                .unwrap_or(false)
+        {
+            continue;
+        }
+        listed_sessions.push((session, delegate_lifecycle));
+    }
+
+    let matched_count = listed_sessions.len();
+    listed_sessions.truncate(request.limit);
+    let returned_count = listed_sessions.len();
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
         payload: json!({
             "current_session_id": current_session_id,
-            "sessions": sessions.into_iter().map(session_summary_json).collect::<Vec<_>>(),
+            "filters": sessions_list_filters_json(&request),
+            "matched_count": matched_count,
+            "returned_count": returned_count,
+            "sessions": listed_sessions
+                .into_iter()
+                .map(|(session, delegate_lifecycle)| {
+                    session_summary_json_with_delegate_lifecycle(
+                        session,
+                        delegate_lifecycle,
+                        include_delegate_lifecycle,
+                    )
+                })
+                .collect::<Vec<_>>(),
         }),
     })
 }
@@ -562,15 +631,28 @@ pub(super) fn observe_visible_session_with_policies(
             tail_page_limit,
         )?
         .ok_or_else(|| format!("session_not_found: `{target_session_id}`"))?;
+    let delegate_events = load_delegate_lifecycle_events(&repo, &session)?;
 
     Ok(SessionObservationSnapshot {
         inspection: SessionInspectionSnapshot {
             session,
             terminal_outcome,
             recent_events,
+            delegate_events,
         },
         tail_events,
     })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn load_delegate_lifecycle_events(
+    repo: &SessionRepository,
+    session: &SessionSummaryRecord,
+) -> Result<Vec<SessionEventRecord>, String> {
+    if session.kind != SessionKind::DelegateChild {
+        return Ok(Vec::new());
+    }
+    repo.list_delegate_lifecycle_events(&session.session_id)
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -587,7 +669,7 @@ pub(super) fn session_inspection_payload(snapshot: SessionInspectionSnapshot) ->
         session_terminal_outcome_state(snapshot.session.state, snapshot.terminal_outcome.is_some());
     let delegate_lifecycle = session_delegate_lifecycle_at(
         &snapshot.session,
-        snapshot.recent_events.as_slice(),
+        snapshot.delegate_events.as_slice(),
         current_unix_ts(),
     );
     let recovery = match terminal_outcome_state {
@@ -660,14 +742,17 @@ fn build_session_recover_plan(
             snapshot.session.session_id
         ));
     }
-    let lifecycle =
-        session_delegate_lifecycle_at(&snapshot.session, snapshot.recent_events.as_slice(), now_ts)
-            .ok_or_else(|| {
-                format!(
+    let lifecycle = session_delegate_lifecycle_at(
+        &snapshot.session,
+        snapshot.delegate_events.as_slice(),
+        now_ts,
+    )
+    .ok_or_else(|| {
+        format!(
             "session_recover_not_recoverable: session `{}` is missing delegate lifecycle metadata",
             snapshot.session.session_id
         )
-            })?;
+    })?;
     if lifecycle.mode != "async" {
         return Err(format!(
             "session_recover_not_recoverable: session `{}` is not an overdue async child",
@@ -762,7 +847,7 @@ fn build_session_cancel_plan(
     }
     let lifecycle = session_delegate_lifecycle_at(
         &snapshot.session,
-        snapshot.recent_events.as_slice(),
+        snapshot.delegate_events.as_slice(),
         current_unix_ts(),
     )
     .ok_or_else(|| {
@@ -1012,6 +1097,86 @@ fn optional_payload_limit(payload: &Value, field: &str, default: usize, max: usi
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn parse_sessions_list_request(
+    payload: &Value,
+    tool_config: &ToolConfig,
+) -> Result<SessionsListRequest, String> {
+    Ok(SessionsListRequest {
+        limit: optional_payload_limit(
+            payload,
+            "limit",
+            tool_config.sessions.list_limit,
+            tool_config.sessions.list_limit,
+        ),
+        state: optional_payload_session_state(payload, "state")?,
+        kind: optional_payload_session_kind(payload, "kind")?,
+        parent_session_id: optional_payload_string(payload, "parent_session_id"),
+        overdue_only: payload
+            .get("overdue_only")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        include_delegate_lifecycle: payload
+            .get("include_delegate_lifecycle")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn optional_payload_session_state(
+    payload: &Value,
+    field: &str,
+) -> Result<Option<SessionState>, String> {
+    let Some(raw) = optional_payload_string(payload, field) else {
+        return Ok(None);
+    };
+    match raw.as_str() {
+        "ready" => Ok(Some(SessionState::Ready)),
+        "running" => Ok(Some(SessionState::Running)),
+        "completed" => Ok(Some(SessionState::Completed)),
+        "failed" => Ok(Some(SessionState::Failed)),
+        "timed_out" => Ok(Some(SessionState::TimedOut)),
+        _ => Err(format!("invalid session tool payload.{field}: `{raw}`")),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn optional_payload_session_kind(
+    payload: &Value,
+    field: &str,
+) -> Result<Option<SessionKind>, String> {
+    let Some(raw) = optional_payload_string(payload, field) else {
+        return Ok(None);
+    };
+    match raw.as_str() {
+        "root" => Ok(Some(SessionKind::Root)),
+        "delegate_child" => Ok(Some(SessionKind::DelegateChild)),
+        _ => Err(format!("invalid session tool payload.{field}: `{raw}`")),
+    }
+}
+
+fn optional_payload_string(payload: &Value, field: &str) -> Option<String> {
+    payload
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn sessions_list_filters_json(request: &SessionsListRequest) -> Value {
+    json!({
+        "limit": request.limit,
+        "state": request.state.map(SessionState::as_str),
+        "kind": request.kind.map(SessionKind::as_str),
+        "parent_session_id": request.parent_session_id.clone(),
+        "overdue_only": request.overdue_only,
+        "include_delegate_lifecycle": request.effective_include_delegate_lifecycle(),
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn session_summary_json(session: SessionSummaryRecord) -> Value {
     json!({
         "session_id": session.session_id,
@@ -1025,6 +1190,27 @@ fn session_summary_json(session: SessionSummaryRecord) -> Value {
         "last_turn_at": session.last_turn_at,
         "last_error": session.last_error,
     })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_summary_json_with_delegate_lifecycle(
+    session: SessionSummaryRecord,
+    delegate_lifecycle: Option<SessionDelegateLifecycleRecord>,
+    include_delegate_lifecycle: bool,
+) -> Value {
+    let mut payload = session_summary_json(session);
+    if include_delegate_lifecycle {
+        payload
+            .as_object_mut()
+            .expect("session summary json object")
+            .insert(
+                "delegate_lifecycle".to_owned(),
+                delegate_lifecycle
+                    .map(session_delegate_lifecycle_json)
+                    .unwrap_or(Value::Null),
+            );
+    }
+    payload
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -1206,6 +1392,185 @@ mod tests {
             .filter_map(Value::as_str)
             .collect();
         assert_eq!(ids, vec!["root-session"]);
+    }
+
+    #[test]
+    fn sessions_list_filters_visible_sessions_by_state_kind_and_parent() {
+        let config = isolated_memory_config("sessions-list-filtered");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-running".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Running Child".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create running child");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-completed".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Completed Child".to_owned()),
+            state: SessionState::Completed,
+        })
+        .expect("create completed child");
+        repo.create_session(NewSessionRecord {
+            session_id: "grandchild-running".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("child-running".to_owned()),
+            label: Some("Grandchild".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create grandchild");
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "sessions_list".to_owned(),
+                payload: json!({
+                    "state": "running",
+                    "kind": "delegate_child",
+                    "parent_session_id": "root-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("sessions_list outcome");
+
+        let sessions = outcome.payload["sessions"]
+            .as_array()
+            .expect("sessions array");
+        let ids: Vec<&str> = sessions
+            .iter()
+            .filter_map(|item: &Value| item.get("session_id"))
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(ids, vec!["child-running"]);
+        assert_eq!(outcome.payload["matched_count"], 1);
+        assert_eq!(outcome.payload["returned_count"], 1);
+    }
+
+    #[test]
+    fn sessions_list_overdue_only_uses_lifecycle_anchor_events() {
+        let config = isolated_memory_config("sessions-list-overdue-only");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "overdue-child".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Overdue".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create overdue child");
+        repo.create_session(NewSessionRecord {
+            session_id: "fresh-child".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Fresh".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create fresh child");
+
+        repo.append_event(NewSessionEvent {
+            session_id: "overdue-child".to_owned(),
+            event_kind: "delegate_queued".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({ "timeout_seconds": 30 }),
+        })
+        .expect("append overdue queued");
+        repo.append_event(NewSessionEvent {
+            session_id: "overdue-child".to_owned(),
+            event_kind: "delegate_started".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({ "timeout_seconds": 30 }),
+        })
+        .expect("append overdue started");
+        overwrite_session_event_ts(
+            &config,
+            "overdue-child",
+            "delegate_queued",
+            super::current_unix_ts() - 120,
+        );
+        overwrite_session_event_ts(
+            &config,
+            "overdue-child",
+            "delegate_started",
+            super::current_unix_ts() - 90,
+        );
+        for step in 0..20 {
+            repo.append_event(NewSessionEvent {
+                session_id: "overdue-child".to_owned(),
+                event_kind: format!("delegate_progress_{step}"),
+                actor_session_id: Some("root-session".to_owned()),
+                payload_json: json!({ "step": step }),
+            })
+            .expect("append overdue progress");
+        }
+
+        repo.append_event(NewSessionEvent {
+            session_id: "fresh-child".to_owned(),
+            event_kind: "delegate_queued".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({ "timeout_seconds": 300 }),
+        })
+        .expect("append fresh queued");
+        repo.append_event(NewSessionEvent {
+            session_id: "fresh-child".to_owned(),
+            event_kind: "delegate_started".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({ "timeout_seconds": 300 }),
+        })
+        .expect("append fresh started");
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "sessions_list".to_owned(),
+                payload: json!({
+                    "kind": "delegate_child",
+                    "overdue_only": true
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("sessions_list outcome");
+
+        let sessions = outcome.payload["sessions"]
+            .as_array()
+            .expect("sessions array");
+        let ids: Vec<&str> = sessions
+            .iter()
+            .filter_map(|item: &Value| item.get("session_id"))
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(ids, vec!["overdue-child"]);
+        assert_eq!(outcome.payload["matched_count"], 1);
+        assert_eq!(sessions[0]["delegate_lifecycle"]["mode"], "async");
+        assert_eq!(sessions[0]["delegate_lifecycle"]["phase"], "running");
+        assert_eq!(
+            sessions[0]["delegate_lifecycle"]["staleness"]["state"],
+            "overdue"
+        );
+        assert_eq!(
+            sessions[0]["delegate_lifecycle"]["staleness"]["reference"],
+            "started"
+        );
     }
 
     #[test]
@@ -2096,6 +2461,88 @@ mod tests {
         );
         assert!(outcome.payload["delegate_lifecycle"]["queued_at"].is_number());
         assert!(outcome.payload["delegate_lifecycle"]["started_at"].is_null());
+    }
+
+    #[test]
+    fn session_status_uses_delegate_lifecycle_anchor_events_when_recent_window_is_noisy() {
+        let config = isolated_memory_config("session-status-lifecycle-noisy-window");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create child");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_queued".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({ "timeout_seconds": 30 }),
+        })
+        .expect("append queued event");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_started".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({ "timeout_seconds": 30 }),
+        })
+        .expect("append started event");
+        overwrite_session_event_ts(
+            &config,
+            "child-session",
+            "delegate_queued",
+            super::current_unix_ts() - 120,
+        );
+        overwrite_session_event_ts(
+            &config,
+            "child-session",
+            "delegate_started",
+            super::current_unix_ts() - 90,
+        );
+        for step in 0..20 {
+            repo.append_event(NewSessionEvent {
+                session_id: "child-session".to_owned(),
+                event_kind: format!("delegate_progress_{step}"),
+                actor_session_id: Some("root-session".to_owned()),
+                payload_json: json!({ "step": step }),
+            })
+            .expect("append progress event");
+        }
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_status".to_owned(),
+                payload: json!({
+                    "session_id": "child-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_status outcome");
+
+        assert_eq!(outcome.payload["delegate_lifecycle"]["mode"], "async");
+        assert_eq!(outcome.payload["delegate_lifecycle"]["phase"], "running");
+        assert_eq!(outcome.payload["delegate_lifecycle"]["timeout_seconds"], 30);
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["staleness"]["reference"],
+            "started"
+        );
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["staleness"]["state"],
+            "overdue"
+        );
+        assert!(outcome.payload["delegate_lifecycle"]["started_at"].is_number());
     }
 
     #[test]

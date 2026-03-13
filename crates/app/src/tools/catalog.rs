@@ -397,7 +397,36 @@ fn sessions_list_definition(descriptor: &ToolDescriptor) -> Value {
             "description": descriptor.description,
             "parameters": {
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "description": "Maximum visible sessions to return after filtering."
+                    },
+                    "state": {
+                        "type": "string",
+                        "enum": ["ready", "running", "completed", "failed", "timed_out"],
+                        "description": "Optional lifecycle state filter."
+                    },
+                    "kind": {
+                        "type": "string",
+                        "enum": ["root", "delegate_child"],
+                        "description": "Optional session kind filter."
+                    },
+                    "parent_session_id": {
+                        "type": "string",
+                        "description": "Optional direct parent session filter."
+                    },
+                    "overdue_only": {
+                        "type": "boolean",
+                        "description": "When true, only return async delegate children whose lifecycle staleness is overdue."
+                    },
+                    "include_delegate_lifecycle": {
+                        "type": "boolean",
+                        "description": "When true, include normalized delegate lifecycle metadata for returned sessions."
+                    }
+                },
                 "additionalProperties": false
             }
         }

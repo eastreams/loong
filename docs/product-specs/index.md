@@ -26,6 +26,7 @@ As an operator using LoongClaw's tool-calling runtime, I want to inspect active 
 - [x] `session_wait` can optionally continue an event cursor via `after_id` and return the full unseen incremental tail plus `next_after_id` together with the wait snapshot, including the terminal event when the session completes during the wait.
 - [x] `session_status` and `session_wait` expose machine-readable terminal outcome record state plus normalized recovery metadata, preferring structured recovery events and falling back to synthesized `last_error` metadata when recovery event persistence also fails.
 - [x] `session_status` and `session_wait` expose a normalized `delegate_lifecycle` summary for real delegate children, including queued vs running phase, inline vs async mode, and timeout-based staleness hints when the child is still non-terminal.
+- [x] `sessions_list` supports machine-readable filtering for visible-session discovery and can surface `delegate_lifecycle` metadata when requested or when filtering overdue delegate children.
 - [x] `session_status` and `session_wait` surface pending cancellation metadata for running async delegate children after an operator requests cancellation.
 - [x] `session_cancel` can immediately cancel a visible queued async delegate child and can request cooperative cancellation for a visible running async delegate child without broadening child-session authority.
 - [x] `session_recover` can mark a visible overdue queued or overdue running async delegate child as failed and persist both a terminal outcome and structured recovery event without broadening child-session authority.
@@ -36,6 +37,7 @@ As an operator using LoongClaw's tool-calling runtime, I want to inspect active 
 - `session_cancel` cancels queued async children immediately, but running cancellation is cooperative at turn-loop checkpoints rather than hard process preemption.
 - `session_recover` only handles overdue async delegate children in `ready` or `running`; it is an operator-driven recovery path, not hard kill, retry, or automatic restart recovery.
 - `session_wait` is bounded polling over sqlite-backed session state, not a push stream.
+- `sessions_list` is a bounded filtered snapshot, not a paginated or push-based session inventory stream.
 - Async delegation has no hard kill, retry queue, or post-restart recovery semantics in this phase.
 - Legacy fallback is best-effort for the current session only. Historical rows without `sessions` metadata cannot recover descendant lineage because `turns` do not encode parentage.
 - Child tool allowlists only activate runtime-supported tools. Unknown or planned tool names are ignored.
