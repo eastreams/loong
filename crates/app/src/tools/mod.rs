@@ -9,6 +9,7 @@ mod catalog;
 pub(crate) mod delegate;
 mod file;
 mod kernel_adapter;
+pub(crate) mod messaging;
 pub mod runtime_config;
 mod session;
 mod shell;

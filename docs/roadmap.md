@@ -196,11 +196,11 @@ Delivered in current baseline:
 - active `http_json` runtime execution lane (no longer plan-only):
   - timeout-controlled request execution
   - structured runtime evidence (`status_code`, `response_json`)
-- app-layer session and delegation tool surface:
+  - app-layer session and delegation tool surface:
   - per-session runtime tool views derived from config
   - sqlite-backed session registry and session event history
   - durable terminal outcomes for delegated child sessions
-  - `sessions_list`, `sessions_history`, `session_status`, `session_events`, `session_cancel`, `session_recover`, and `session_wait`
+  - `sessions_list`, `sessions_history`, `session_status`, `session_events`, `session_cancel`, `session_recover`, `session_wait`, and `sessions_send`
     with optional incremental event-tail return via `after_id`, draining unseen events through the
     current cursor and terminal completion
   - filtered `sessions_list` discovery for visible stale delegates, with optional lifecycle payloads
@@ -210,6 +210,8 @@ Delivered in current baseline:
   - batch `session_wait` targeting with `session_ids`, shared bounded wait context, and per-target
     `ok` / `timeout` / `skipped_not_visible` classification while preserving legacy single-target
     response shape
+  - constrained outbound `sessions_send` delivery for known channel-backed root sessions, with
+    allowlist enforcement, legacy-session fallback materialization, and non-transcript control events
   - cooperative cancellation requests for running async delegate children, surfaced through
     session lifecycle metadata and finalized as durable cancelled failures at the next safe
     turn-loop checkpoint

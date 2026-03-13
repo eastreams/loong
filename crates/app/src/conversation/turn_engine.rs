@@ -14,7 +14,7 @@ use loongclaw_contracts::{Capability, KernelError, ToolCoreOutcome, ToolCoreRequ
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::config::{SessionVisibility, ToolConfig};
+use crate::config::{LoongClawConfig, SessionVisibility, ToolConfig};
 use crate::context::KernelContext;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
@@ -339,6 +339,7 @@ impl AppToolDispatcher for NoopAppToolDispatcher {
 pub struct DefaultAppToolDispatcher {
     memory_config: MemoryRuntimeConfig,
     tool_config: ToolConfig,
+    app_config: Option<Arc<LoongClawConfig>>,
     async_delegate_spawner: Option<Arc<dyn AsyncDelegateSpawner>>,
 }
 
@@ -347,6 +348,16 @@ impl DefaultAppToolDispatcher {
         Self {
             memory_config,
             tool_config,
+            app_config: None,
+            async_delegate_spawner: None,
+        }
+    }
+
+    pub fn with_config(memory_config: MemoryRuntimeConfig, config: LoongClawConfig) -> Self {
+        Self {
+            memory_config,
+            tool_config: config.tools.clone(),
+            app_config: Some(Arc::new(config)),
             async_delegate_spawner: None,
         }
     }
@@ -359,6 +370,23 @@ impl DefaultAppToolDispatcher {
         Self {
             memory_config,
             tool_config,
+            app_config: None,
+            async_delegate_spawner,
+        }
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    pub fn production_with_config(
+        memory_config: MemoryRuntimeConfig,
+        config: LoongClawConfig,
+    ) -> Self {
+        let async_delegate_spawner = SubprocessAsyncDelegateSpawner::from_current_process()
+            .ok()
+            .map(|spawner| Arc::new(spawner) as Arc<dyn AsyncDelegateSpawner>);
+        Self {
+            memory_config,
+            tool_config: config.tools.clone(),
+            app_config: Some(Arc::new(config)),
             async_delegate_spawner,
         }
     }
@@ -371,6 +399,7 @@ impl DefaultAppToolDispatcher {
         Self {
             memory_config,
             tool_config,
+            app_config: None,
             async_delegate_spawner: Some(async_delegate_spawner),
         }
     }
@@ -510,6 +539,27 @@ impl DefaultAppToolDispatcher {
             delegate_request.timeout_seconds,
         ))
     }
+
+    #[cfg(feature = "memory-sqlite")]
+    async fn execute_sessions_send(
+        &self,
+        session_context: &SessionContext,
+        payload: serde_json::Value,
+    ) -> Result<ToolCoreOutcome, String> {
+        let app_config = self
+            .app_config
+            .as_ref()
+            .ok_or_else(|| "sessions_send_not_configured".to_owned())?;
+        let effective_tool_config = self.effective_tool_config_for_session(session_context);
+        crate::tools::messaging::execute_sessions_send_with_config(
+            payload,
+            &session_context.session_id,
+            &self.memory_config,
+            &effective_tool_config,
+            app_config.as_ref(),
+        )
+        .await
+    }
 }
 
 impl Default for DefaultAppToolDispatcher {
@@ -545,6 +595,12 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                 &effective_tool_config,
             )
             .await;
+        }
+        #[cfg(feature = "memory-sqlite")]
+        if canonical_tool_name == "sessions_send" {
+            return self
+                .execute_sessions_send(session_context, request.payload)
+                .await;
         }
         #[cfg(feature = "memory-sqlite")]
         if canonical_tool_name == "delegate_async" {
