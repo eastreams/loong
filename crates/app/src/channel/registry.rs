@@ -212,18 +212,48 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     },
 ];
 
+fn find_channel_registry_descriptor(raw: &str) -> Option<&'static ChannelRegistryDescriptor> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    CHANNEL_REGISTRY.iter().find(|descriptor| {
+        descriptor.id == normalized
+            || descriptor
+                .aliases
+                .iter()
+                .copied()
+                .any(|alias| alias == normalized)
+    })
+}
+
+fn channel_catalog_entry_from_descriptor(
+    descriptor: &ChannelRegistryDescriptor,
+) -> ChannelCatalogEntry {
+    ChannelCatalogEntry {
+        id: descriptor.id,
+        label: descriptor.label,
+        implementation_status: descriptor.implementation_status,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        operations: descriptor.operations.to_vec(),
+    }
+}
+
 pub fn list_channel_catalog() -> Vec<ChannelCatalogEntry> {
     CHANNEL_REGISTRY
         .iter()
-        .map(|descriptor| ChannelCatalogEntry {
-            id: descriptor.id,
-            label: descriptor.label,
-            implementation_status: descriptor.implementation_status,
-            aliases: descriptor.aliases.to_vec(),
-            transport: descriptor.transport,
-            operations: descriptor.operations.to_vec(),
-        })
+        .map(channel_catalog_entry_from_descriptor)
         .collect()
+}
+
+pub fn normalize_channel_catalog_id(raw: &str) -> Option<&'static str> {
+    find_channel_registry_descriptor(raw).map(|descriptor| descriptor.id)
+}
+
+pub fn resolve_channel_catalog_entry(raw: &str) -> Option<ChannelCatalogEntry> {
+    find_channel_registry_descriptor(raw).map(channel_catalog_entry_from_descriptor)
 }
 
 pub fn catalog_only_channel_entries(
@@ -249,22 +279,7 @@ fn catalog_only_channel_entries_from(
 }
 
 pub fn normalize_channel_platform(raw: &str) -> Option<ChannelPlatform> {
-    let normalized = raw.trim().to_ascii_lowercase();
-    if normalized.is_empty() {
-        return None;
-    }
-
-    CHANNEL_REGISTRY.iter().find_map(|descriptor| {
-        if descriptor.id == normalized {
-            return descriptor.runtime_platform;
-        }
-        descriptor
-            .aliases
-            .iter()
-            .copied()
-            .find(|alias| *alias == normalized)
-            .and(descriptor.runtime_platform)
-    })
+    find_channel_registry_descriptor(raw).and_then(|descriptor| descriptor.runtime_platform)
 }
 
 pub fn channel_status_snapshots(config: &LoongClawConfig) -> Vec<ChannelStatusSnapshot> {
@@ -826,6 +841,29 @@ mod tests {
             Some(ChannelPlatform::Telegram)
         );
         assert_eq!(normalize_channel_platform("discord"), None);
+    }
+
+    #[test]
+    fn normalize_channel_catalog_id_maps_runtime_and_stub_aliases() {
+        assert_eq!(normalize_channel_catalog_id("lark"), Some("feishu"));
+        assert_eq!(normalize_channel_catalog_id(" TELEGRAM "), Some("telegram"));
+        assert_eq!(normalize_channel_catalog_id("discord-bot"), Some("discord"));
+        assert_eq!(normalize_channel_catalog_id("slack"), Some("slack"));
+        assert_eq!(normalize_channel_catalog_id("unknown"), None);
+    }
+
+    #[test]
+    fn resolve_channel_catalog_entry_returns_stub_metadata_for_alias_lookup() {
+        let discord = resolve_channel_catalog_entry("discord-bot").expect("discord stub entry");
+
+        assert_eq!(discord.id, "discord");
+        assert_eq!(
+            discord.implementation_status,
+            ChannelCatalogImplementationStatus::Stub
+        );
+        assert_eq!(discord.transport, "discord_gateway");
+        assert_eq!(discord.operations[0].command, "discord-send");
+        assert_eq!(discord.operations[1].command, "discord-serve");
     }
 
     #[test]
