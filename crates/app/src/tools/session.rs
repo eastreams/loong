@@ -145,6 +145,12 @@ struct SessionArchivePlan {
 }
 
 #[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionUnarchivePlan {
+    expected_state: SessionState,
+}
+
+#[cfg(feature = "memory-sqlite")]
 #[derive(Debug, Clone, PartialEq)]
 struct SessionToolActionOutcome {
     inspection: Value,
@@ -249,6 +255,9 @@ pub fn execute_session_tool_with_policies(
             }
             "session_archive" => {
                 execute_session_archive(request.payload, current_session_id, config, tool_config)
+            }
+            "session_unarchive" => {
+                execute_session_unarchive(request.payload, current_session_id, config, tool_config)
             }
             "session_recover" => {
                 execute_session_recover(request.payload, current_session_id, config, tool_config)
@@ -700,6 +709,57 @@ fn execute_session_archive(
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn execute_session_unarchive(
+    payload: Value,
+    current_session_id: &str,
+    config: &MemoryRuntimeConfig,
+    tool_config: &ToolConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let request = parse_session_mutation_request(&payload)?;
+    if request.use_legacy_single_response() {
+        let target_session_id = request
+            .target
+            .session_ids
+            .first()
+            .expect("legacy single request requires one session id");
+        let repo = SessionRepository::new(config)?;
+        ensure_visible(
+            &repo,
+            current_session_id,
+            target_session_id,
+            tool_config.sessions.visibility,
+        )?;
+        let snapshot = inspect_visible_session_with_policies(
+            target_session_id,
+            current_session_id,
+            config,
+            tool_config,
+            10,
+        )?;
+        let unarchive_plan = build_session_unarchive_plan(&snapshot)?;
+        let outcome = apply_session_unarchive_plan(
+            &repo,
+            target_session_id,
+            current_session_id,
+            config,
+            tool_config,
+            &snapshot,
+            &unarchive_plan,
+        )?;
+        let mut payload = outcome.inspection;
+        if let Some(object) = payload.as_object_mut() {
+            object.insert("unarchive_action".to_owned(), outcome.action);
+        }
+        return Ok(ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload,
+        });
+    }
+
+    Err("session_unarchive_batch_not_implemented".to_owned())
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn build_session_archive_plan(
     snapshot: &SessionInspectionSnapshot,
 ) -> Result<SessionArchivePlan, String> {
@@ -717,6 +777,28 @@ fn build_session_archive_plan(
     }
 
     Ok(SessionArchivePlan {
+        expected_state: snapshot.session.state,
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn build_session_unarchive_plan(
+    snapshot: &SessionInspectionSnapshot,
+) -> Result<SessionUnarchivePlan, String> {
+    if !session_state_is_terminal(snapshot.session.state) {
+        return Err(format!(
+            "session_unarchive_not_archivable: session `{}` is not terminal",
+            snapshot.session.session_id
+        ));
+    }
+    if snapshot.session.archived_at.is_none() {
+        return Err(format!(
+            "session_unarchive_not_unarchivable: session `{}` is not archived",
+            snapshot.session.session_id
+        ));
+    }
+
+    Ok(SessionUnarchivePlan {
         expected_state: snapshot.session.state,
     })
 }
@@ -765,6 +847,53 @@ fn apply_session_archive_plan(
     Ok(SessionToolActionOutcome {
         inspection: session_inspection_payload(archived_snapshot),
         action: session_archive_action_json(archive_plan),
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn apply_session_unarchive_plan(
+    repo: &SessionRepository,
+    target_session_id: &str,
+    current_session_id: &str,
+    config: &MemoryRuntimeConfig,
+    tool_config: &ToolConfig,
+    snapshot: &SessionInspectionSnapshot,
+    unarchive_plan: &SessionUnarchivePlan,
+) -> Result<SessionToolActionOutcome, String> {
+    let transitioned = repo.transition_session_with_event_if_current(
+        target_session_id,
+        crate::session::repository::TransitionSessionWithEventIfCurrentRequest {
+            expected_state: unarchive_plan.expected_state,
+            next_state: unarchive_plan.expected_state,
+            last_error: snapshot.session.last_error.clone(),
+            event_kind: "session_unarchived".to_owned(),
+            actor_session_id: Some(current_session_id.to_owned()),
+            event_payload_json: json!({
+                "previous_state": unarchive_plan.expected_state.as_str(),
+                "restores_to_sessions_list": true,
+            }),
+        },
+    )?;
+    if transitioned.is_none() {
+        let latest = repo
+            .load_session_summary_with_legacy_fallback(target_session_id)?
+            .ok_or_else(|| format!("session_not_found: `{target_session_id}`"))?;
+        return Err(format!(
+            "session_unarchive_state_changed: session `{target_session_id}` is no longer unarchivable from state `{}`",
+            latest.state.as_str()
+        ));
+    }
+
+    let unarchived_snapshot = inspect_visible_session_with_policies(
+        target_session_id,
+        current_session_id,
+        config,
+        tool_config,
+        10,
+    )?;
+    Ok(SessionToolActionOutcome {
+        inspection: session_inspection_payload(unarchived_snapshot),
+        action: session_unarchive_action_json(unarchive_plan),
     })
 }
 
@@ -891,6 +1020,16 @@ fn session_archive_action_json(plan: &SessionArchivePlan) -> Value {
         "previous_state": plan.expected_state.as_str(),
         "next_state": plan.expected_state.as_str(),
         "hides_from_sessions_list": true,
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_unarchive_action_json(plan: &SessionUnarchivePlan) -> Value {
+    json!({
+        "kind": "session_unarchived",
+        "previous_state": plan.expected_state.as_str(),
+        "next_state": plan.expected_state.as_str(),
+        "restores_to_sessions_list": true,
     })
 }
 
@@ -4891,6 +5030,94 @@ mod tests {
 
         assert_eq!(status.payload["session"]["archived"], true);
         assert!(status.payload["session"]["archived_at"].is_number());
+    }
+
+    #[test]
+    fn session_unarchive_restores_archived_terminal_visible_session() {
+        let config = isolated_memory_config("session-unarchive-single");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create child");
+        repo.finalize_session_terminal(
+            "child-session",
+            FinalizeSessionTerminalRequest {
+                state: SessionState::Completed,
+                last_error: None,
+                event_kind: "delegate_completed".to_owned(),
+                actor_session_id: Some("root-session".to_owned()),
+                event_payload_json: json!({
+                    "result": "ok"
+                }),
+                outcome_status: "ok".to_owned(),
+                outcome_payload_json: json!({
+                    "child_session_id": "child-session",
+                    "result": "ok"
+                }),
+            },
+        )
+        .expect("finalize child");
+        execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_archive".to_owned(),
+                payload: json!({
+                    "session_id": "child-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("archive child");
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_unarchive".to_owned(),
+                payload: json!({
+                    "session_id": "child-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_unarchive outcome");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["session"]["session_id"], "child-session");
+        assert_eq!(outcome.payload["session"]["state"], "completed");
+        assert_eq!(outcome.payload["session"]["archived"], false);
+        assert!(outcome.payload["session"]["archived_at"].is_null());
+        assert_eq!(
+            outcome.payload["unarchive_action"]["kind"],
+            "session_unarchived"
+        );
+
+        let status = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_status".to_owned(),
+                payload: json!({
+                    "session_id": "child-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_status outcome");
+
+        assert_eq!(status.payload["session"]["archived"], false);
+        assert!(status.payload["session"]["archived_at"].is_null());
     }
 
     #[test]
