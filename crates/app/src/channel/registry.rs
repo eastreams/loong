@@ -17,6 +17,28 @@ pub struct ChannelCatalogOperation {
     pub tracks_runtime: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelCapability {
+    RuntimeBacked,
+    MultiAccount,
+    Send,
+    Serve,
+    RuntimeTracking,
+}
+
+impl ChannelCapability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RuntimeBacked => "runtime_backed",
+            Self::MultiAccount => "multi_account",
+            Self::Send => "send",
+            Self::Serve => "serve",
+            Self::RuntimeTracking => "runtime_tracking",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelDoctorOperationSpec {
     pub config_name: &'static str,
@@ -44,6 +66,7 @@ pub struct ChannelCatalogEntry {
     pub id: &'static str,
     pub label: &'static str,
     pub implementation_status: ChannelCatalogImplementationStatus,
+    pub capabilities: Vec<ChannelCapability>,
     pub aliases: Vec<&'static str>,
     pub transport: &'static str,
     pub operations: Vec<ChannelCatalogOperation>,
@@ -145,6 +168,7 @@ struct ChannelRegistryDescriptor {
     id: &'static str,
     runtime: Option<ChannelRuntimeDescriptor>,
     implementation_status: ChannelCatalogImplementationStatus,
+    capabilities: &'static [ChannelCapability],
     label: &'static str,
     aliases: &'static [&'static str],
     transport: &'static str,
@@ -160,6 +184,12 @@ const TELEGRAM_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperatio
 };
 
 const TELEGRAM_OPERATIONS: &[ChannelCatalogOperation] = &[TELEGRAM_SERVE_OPERATION];
+const TELEGRAM_CAPABILITIES: &[ChannelCapability] = &[
+    ChannelCapability::RuntimeBacked,
+    ChannelCapability::MultiAccount,
+    ChannelCapability::Serve,
+    ChannelCapability::RuntimeTracking,
+];
 const TELEGRAM_DOCTOR_OPERATIONS: &[ChannelRegistryDoctorOperationDescriptor] =
     &[ChannelRegistryDoctorOperationDescriptor {
         operation_id: "serve",
@@ -183,6 +213,13 @@ const FEISHU_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
 
 const FEISHU_OPERATIONS: &[ChannelCatalogOperation] =
     &[FEISHU_SEND_OPERATION, FEISHU_SERVE_OPERATION];
+const FEISHU_CAPABILITIES: &[ChannelCapability] = &[
+    ChannelCapability::RuntimeBacked,
+    ChannelCapability::MultiAccount,
+    ChannelCapability::Send,
+    ChannelCapability::Serve,
+    ChannelCapability::RuntimeTracking,
+];
 const FEISHU_DOCTOR_OPERATIONS: &[ChannelRegistryDoctorOperationDescriptor] = &[
     ChannelRegistryDoctorOperationDescriptor {
         operation_id: "send",
@@ -212,6 +249,11 @@ const DISCORD_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
 
 const DISCORD_OPERATIONS: &[ChannelCatalogOperation] =
     &[DISCORD_SEND_OPERATION, DISCORD_SERVE_OPERATION];
+const DISCORD_CAPABILITIES: &[ChannelCapability] = &[
+    ChannelCapability::Send,
+    ChannelCapability::Serve,
+    ChannelCapability::RuntimeTracking,
+];
 const DISCORD_DOCTOR_OPERATIONS: &[ChannelRegistryDoctorOperationDescriptor] = &[];
 
 const SLACK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -229,6 +271,11 @@ const SLACK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
 };
 
 const SLACK_OPERATIONS: &[ChannelCatalogOperation] = &[SLACK_SEND_OPERATION, SLACK_SERVE_OPERATION];
+const SLACK_CAPABILITIES: &[ChannelCapability] = &[
+    ChannelCapability::Send,
+    ChannelCapability::Serve,
+    ChannelCapability::RuntimeTracking,
+];
 const SLACK_DOCTOR_OPERATIONS: &[ChannelRegistryDoctorOperationDescriptor] = &[];
 
 const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
@@ -239,6 +286,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
             snapshot_builder: build_telegram_snapshots,
         }),
         implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
+        capabilities: TELEGRAM_CAPABILITIES,
         label: "Telegram",
         aliases: &[],
         transport: "telegram_bot_api_polling",
@@ -252,6 +300,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
             snapshot_builder: build_feishu_snapshots,
         }),
         implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
+        capabilities: FEISHU_CAPABILITIES,
         label: "Feishu/Lark",
         aliases: &["lark"],
         transport: "feishu_openapi_webhook",
@@ -262,6 +311,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
         id: "discord",
         runtime: None,
         implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: DISCORD_CAPABILITIES,
         label: "Discord",
         aliases: &["discord-bot"],
         transport: "discord_gateway",
@@ -272,6 +322,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
         id: "slack",
         runtime: None,
         implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: SLACK_CAPABILITIES,
         label: "Slack",
         aliases: &["slack-bot"],
         transport: "slack_events_api",
@@ -303,6 +354,7 @@ fn channel_catalog_entry_from_descriptor(
         id: descriptor.id,
         label: descriptor.label,
         implementation_status: descriptor.implementation_status,
+        capabilities: descriptor.capabilities.to_vec(),
         aliases: descriptor.aliases.to_vec(),
         transport: descriptor.transport,
         operations: descriptor.operations.to_vec(),
@@ -1062,6 +1114,10 @@ mod tests {
     #[test]
     fn channel_catalog_includes_discord_and_slack_stub_surfaces() {
         let catalog = list_channel_catalog();
+        let telegram = catalog
+            .iter()
+            .find(|entry| entry.id == "telegram")
+            .expect("telegram catalog entry");
         let discord = catalog
             .iter()
             .find(|entry| entry.id == "discord")
@@ -1070,6 +1126,9 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "slack")
             .expect("slack catalog entry");
+        let telegram_json = serde_json::to_value(telegram).expect("serialize telegram entry");
+        let discord_json = serde_json::to_value(discord).expect("serialize discord entry");
+        let slack_json = serde_json::to_value(slack).expect("serialize slack entry");
 
         assert_eq!(
             discord.implementation_status,
@@ -1090,6 +1149,47 @@ mod tests {
         assert_eq!(slack.operations.len(), 2);
         assert_eq!(slack.operations[0].command, "slack-send");
         assert_eq!(slack.operations[1].command, "slack-serve");
+        assert_eq!(
+            telegram_json
+                .get("capabilities")
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                }),
+            Some(vec![
+                "runtime_backed",
+                "multi_account",
+                "serve",
+                "runtime_tracking",
+            ])
+        );
+        assert_eq!(
+            discord_json
+                .get("capabilities")
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                }),
+            Some(vec!["send", "serve", "runtime_tracking"])
+        );
+        assert_eq!(
+            slack_json
+                .get("capabilities")
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                }),
+            Some(vec!["send", "serve", "runtime_tracking"])
+        );
     }
 
     #[test]
@@ -1188,6 +1288,11 @@ mod tests {
                 id: "telegram",
                 label: "Telegram",
                 implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
+                capabilities: vec![
+                    ChannelCapability::RuntimeBacked,
+                    ChannelCapability::Serve,
+                    ChannelCapability::RuntimeTracking,
+                ],
                 aliases: vec![],
                 transport: "telegram_bot_api_polling",
                 operations: vec![ChannelCatalogOperation {
@@ -1201,6 +1306,11 @@ mod tests {
                 id: "discord",
                 label: "Discord",
                 implementation_status: ChannelCatalogImplementationStatus::Stub,
+                capabilities: vec![
+                    ChannelCapability::Send,
+                    ChannelCapability::Serve,
+                    ChannelCapability::RuntimeTracking,
+                ],
                 aliases: vec![],
                 transport: "discord_gateway",
                 operations: vec![ChannelCatalogOperation {

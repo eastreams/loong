@@ -1122,11 +1122,23 @@ fn push_channel_surface_header(lines: &mut Vec<String>, surface: &mvp::channel::
     } else {
         surface.catalog.aliases.join(",")
     };
+    let capabilities = if surface.catalog.capabilities.is_empty() {
+        "-".to_owned()
+    } else {
+        surface
+            .catalog
+            .capabilities
+            .iter()
+            .map(|capability| capability.as_str())
+            .collect::<Vec<_>>()
+            .join(",")
+    };
     lines.push(format!(
-        "{} [{}] implementation_status={} aliases={} transport={} configured_accounts={} default_configured_account={}",
+        "{} [{}] implementation_status={} capabilities={} aliases={} transport={} configured_accounts={} default_configured_account={}",
         surface.catalog.label,
         surface.catalog.id,
         surface.catalog.implementation_status.as_str(),
+        capabilities,
         aliases,
         surface.catalog.transport,
         surface.configured_accounts.len(),

@@ -629,8 +629,9 @@ fn check_level_json(level: DoctorCheckLevel) -> &'static str {
 mod tests {
     use super::*;
     use mvp::channel::{
-        ChannelCatalogEntry, ChannelCatalogImplementationStatus, ChannelOperationHealth,
-        ChannelOperationRuntime, ChannelOperationStatus, ChannelStatusSnapshot, ChannelSurface,
+        ChannelCapability, ChannelCatalogEntry, ChannelCatalogImplementationStatus,
+        ChannelOperationHealth, ChannelOperationRuntime, ChannelOperationStatus,
+        ChannelStatusSnapshot, ChannelSurface,
     };
 
     fn runtime_channel_surface(
@@ -649,6 +650,11 @@ mod tests {
                 id,
                 label,
                 implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
+                capabilities: vec![
+                    ChannelCapability::RuntimeBacked,
+                    ChannelCapability::Serve,
+                    ChannelCapability::RuntimeTracking,
+                ],
                 aliases,
                 transport,
                 operations: Vec::new(),
@@ -1054,6 +1060,11 @@ mod tests {
                 id: "discord",
                 label: "Discord",
                 implementation_status: ChannelCatalogImplementationStatus::Stub,
+                capabilities: vec![
+                    ChannelCapability::Send,
+                    ChannelCapability::Serve,
+                    ChannelCapability::RuntimeTracking,
+                ],
                 aliases: vec!["discord-bot"],
                 transport: "discord_gateway",
                 operations: Vec::new(),

@@ -82,6 +82,9 @@ fn render_channel_surfaces_text_reports_aliases_and_operation_health() {
     assert!(rendered.contains("config=/tmp/loongclaw.toml"));
     assert!(rendered.contains("Feishu/Lark [feishu]"));
     assert!(rendered.contains("implementation_status=runtime_backed"));
+    assert!(
+        rendered.contains("capabilities=runtime_backed,multi_account,send,serve,runtime_tracking")
+    );
     assert!(rendered.contains("configured_accounts=1"));
     assert!(rendered.contains("aliases=lark"));
     assert!(rendered.contains("account=feishu:cli_a1b2c3"));
@@ -159,12 +162,12 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
 
     assert!(rendered.contains("catalog-only channels:"));
     assert!(rendered.contains(
-        "Discord [discord] implementation_status=stub aliases=discord-bot transport=discord_gateway"
+        "Discord [discord] implementation_status=stub capabilities=send,serve,runtime_tracking aliases=discord-bot transport=discord_gateway"
     ));
     assert!(rendered.contains("catalog op send (discord-send) tracks_runtime=false"));
     assert!(rendered.contains("catalog op serve (discord-serve) tracks_runtime=true"));
     assert!(rendered.contains(
-        "Slack [slack] implementation_status=stub aliases=slack-bot transport=slack_events_api"
+        "Slack [slack] implementation_status=stub capabilities=send,serve,runtime_tracking aliases=slack-bot transport=slack_events_api"
     ));
     assert!(rendered.contains("catalog op send (slack-send) tracks_runtime=false"));
     assert!(rendered.contains("catalog op serve (slack-serve) tracks_runtime=true"));
@@ -287,6 +290,22 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
                 .and_then(serde_json::Value::as_str)
                 == Some("default")
             && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("capabilities"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(vec![
+                    "runtime_backed",
+                    "multi_account",
+                    "serve",
+                    "runtime_tracking",
+                ])
+            && surface
                 .get("configured_accounts")
                 .and_then(serde_json::Value::as_array)
                 .map(Vec::len)
@@ -299,6 +318,17 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
             .and_then(|catalog| catalog.get("id"))
             .and_then(serde_json::Value::as_str)
             == Some("discord")
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("capabilities"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(vec!["send", "serve", "runtime_tracking"])
             && surface
                 .get("configured_accounts")
                 .and_then(serde_json::Value::as_array)
