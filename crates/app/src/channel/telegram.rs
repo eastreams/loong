@@ -124,7 +124,6 @@ impl TelegramAdapter {
         thread_id: Option<i64>,
         text: &str,
     ) -> CliResult<()> {
-        let thread_id = telegram_forum_topic_id(thread_id);
         let url = self.api_url("sendMessage");
         let client = reqwest::Client::new();
         let mut body = json!({
@@ -132,9 +131,7 @@ impl TelegramAdapter {
             "text": text,
             "disable_web_page_preview": true,
         });
-        if let Some(thread_id) = thread_id {
-            body["message_thread_id"] = json!(thread_id);
-        }
+        insert_telegram_thread_id(&mut body, thread_id);
 
         let payload = client
             .post(url)
@@ -212,6 +209,16 @@ fn telegram_inbound_thread_id(message: &Value) -> Option<i64> {
         return None;
     }
     telegram_forum_topic_id(message.get("message_thread_id").and_then(Value::as_i64))
+}
+
+fn insert_telegram_thread_id(body: &mut Value, thread_id: Option<i64>) {
+    let Some(thread_id) = telegram_forum_topic_id(thread_id) else {
+        return;
+    };
+    let Some(object) = body.as_object_mut() else {
+        return;
+    };
+    object.insert("message_thread_id".to_owned(), json!(thread_id));
 }
 
 fn telegram_typing_target(chat_id: i64, thread_id: Option<i64>) -> TelegramTypingTarget {
@@ -305,11 +312,7 @@ impl ChannelAdapter for TelegramAdapter {
                     "chat_id": chat_id,
                     "action": "typing",
                 });
-                if let Some(thread_id) = thread_id {
-                    if let Some(thread_id) = telegram_forum_topic_id(Some(thread_id)) {
-                        body["message_thread_id"] = json!(thread_id);
-                    }
-                }
+                insert_telegram_thread_id(&mut body, thread_id);
                 let _ = client.post(&url).json(&body).send().await;
                 tokio::time::sleep(TELEGRAM_TYPING_REFRESH_INTERVAL).await;
             }
