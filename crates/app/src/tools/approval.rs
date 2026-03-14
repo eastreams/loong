@@ -19,6 +19,10 @@ use crate::KernelContext;
 const APPROVAL_REQUEST_EVIDENCE_EVENT_LIMIT: usize = 64;
 #[cfg(feature = "memory-sqlite")]
 const APPROVAL_REQUEST_EVIDENCE_EVENT_BUDGET_PER_RETURNED_REQUEST: usize = 4;
+#[cfg(feature = "memory-sqlite")]
+const APPROVAL_ATTENTION_FRESH_MAX_SECONDS: i64 = 15 * 60;
+#[cfg(feature = "memory-sqlite")]
+const APPROVAL_ATTENTION_STALE_MAX_SECONDS: i64 = 4 * 60 * 60;
 
 #[cfg(feature = "memory-sqlite")]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +33,8 @@ struct ApprovalRequestsListRequest {
     needs_attention: Option<bool>,
     attention_reason: Option<ApprovalAttentionReason>,
     recommended_action: Option<ApprovalRecommendedAction>,
+    attention_age_bucket: Option<ApprovalAttentionAgeBucket>,
+    escalation_level: Option<ApprovalEscalationLevel>,
     prioritize_attention: bool,
     limit: usize,
 }
@@ -88,6 +94,42 @@ impl ApprovalRecommendedAction {
             Self::InspectReplayPersistence => "inspect_replay_persistence",
             Self::InspectToolExecutionFailure => "inspect_tool_execution_failure",
             Self::InspectApprovalIntegrity => "inspect_approval_integrity",
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApprovalAttentionAgeBucket {
+    Fresh,
+    Stale,
+    Overdue,
+}
+
+#[cfg(feature = "memory-sqlite")]
+impl ApprovalAttentionAgeBucket {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Fresh => "fresh",
+            Self::Stale => "stale",
+            Self::Overdue => "overdue",
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApprovalEscalationLevel {
+    Elevated,
+    Critical,
+}
+
+#[cfg(feature = "memory-sqlite")]
+impl ApprovalEscalationLevel {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Elevated => "elevated",
+            Self::Critical => "critical",
         }
     }
 }
@@ -300,10 +342,28 @@ fn execute_approval_requests_list(
                 == Some(recommended_action)
         });
     }
+    if let Some(attention_age_bucket) = request.attention_age_bucket {
+        request_summaries.retain(|item| {
+            item.get("execution_integrity")
+                .and_then(approval_request_attention_age_bucket_from_json)
+                == Some(attention_age_bucket)
+        });
+    }
+    if let Some(escalation_level) = request.escalation_level {
+        request_summaries.retain(|item| {
+            item.get("execution_integrity")
+                .and_then(approval_request_escalation_level_from_json)
+                == Some(escalation_level)
+        });
+    }
     if request.prioritize_attention {
         request_summaries.sort_by(|left, right| {
-            approval_request_attention_priority(left)
-                .cmp(&approval_request_attention_priority(right))
+            approval_request_escalation_priority(left)
+                .cmp(&approval_request_escalation_priority(right))
+                .then_with(|| {
+                    approval_request_attention_priority(left)
+                        .cmp(&approval_request_attention_priority(right))
+                })
                 .then_with(|| {
                     approval_request_requested_at(right).cmp(&approval_request_requested_at(left))
                 })
@@ -326,6 +386,8 @@ fn execute_approval_requests_list(
                 "needs_attention": request.needs_attention,
                 "attention_reason": request.attention_reason.map(ApprovalAttentionReason::as_str),
                 "recommended_action": request.recommended_action.map(ApprovalRecommendedAction::as_str),
+                "attention_age_bucket": request.attention_age_bucket.map(ApprovalAttentionAgeBucket::as_str),
+                "escalation_level": request.escalation_level.map(ApprovalEscalationLevel::as_str),
                 "prioritize_attention": request.prioritize_attention,
                 "limit": request.limit,
             },
@@ -467,6 +529,15 @@ fn approval_request_list_integrity_summary_json(requests: &[Value]) -> Value {
         ("inspect_tool_execution_failure".to_owned(), 0usize),
         ("inspect_approval_integrity".to_owned(), 0usize),
     ]);
+    let mut age_bucket_counts = BTreeMap::from([
+        ("fresh".to_owned(), 0usize),
+        ("stale".to_owned(), 0usize),
+        ("overdue".to_owned(), 0usize),
+    ]);
+    let mut counts_by_escalation = BTreeMap::from([
+        ("elevated".to_owned(), 0usize),
+        ("critical".to_owned(), 0usize),
+    ]);
 
     for request in requests {
         let execution_integrity = request.get("execution_integrity").unwrap_or(&Value::Null);
@@ -502,6 +573,20 @@ fn approval_request_list_integrity_summary_json(requests: &[Value]) -> Value {
                     .entry(action.to_owned())
                     .or_default() += 1;
             }
+            if let Some(age_bucket) = execution_integrity
+                .get("attention_age_bucket")
+                .and_then(Value::as_str)
+            {
+                *age_bucket_counts.entry(age_bucket.to_owned()).or_default() += 1;
+            }
+            if let Some(escalation) = execution_integrity
+                .get("escalation_level")
+                .and_then(Value::as_str)
+            {
+                *counts_by_escalation
+                    .entry(escalation.to_owned())
+                    .or_default() += 1;
+            }
         }
     }
 
@@ -512,6 +597,8 @@ fn approval_request_list_integrity_summary_json(requests: &[Value]) -> Value {
             "needs_attention_count": needs_attention_count,
             "counts_by_reason": counts_by_reason,
             "recommended_action_counts": recommended_action_counts,
+            "age_bucket_counts": age_bucket_counts,
+            "counts_by_escalation": counts_by_escalation,
         },
     })
 }
@@ -712,7 +799,15 @@ fn approval_request_execution_integrity_json(
             (false, Value::Null)
         };
     let recommended_action =
-        approval_request_recommended_action_json(status, gap.as_str(), execution_error.is_null());
+        approval_request_recommended_action(status, gap.as_str(), execution_error.is_null());
+    let attention_age_seconds = if needs_attention {
+        Some((approval_unix_ts_now() - record.requested_at).max(0))
+    } else {
+        None
+    };
+    let attention_age_bucket = approval_request_attention_age_bucket(attention_age_seconds);
+    let escalation_level =
+        approval_request_escalation_level(attention_age_bucket, recommended_action);
 
     json!({
         "status": status.as_str(),
@@ -722,7 +817,10 @@ fn approval_request_execution_integrity_json(
         "evidence_complete": evidence_complete,
         "needs_attention": needs_attention,
         "attention_reason": attention_reason,
-        "recommended_action": recommended_action,
+        "recommended_action": recommended_action.map(ApprovalRecommendedAction::as_str),
+        "attention_age_seconds": attention_age_seconds,
+        "attention_age_bucket": attention_age_bucket.map(ApprovalAttentionAgeBucket::as_str),
+        "escalation_level": escalation_level.map(ApprovalEscalationLevel::as_str),
     })
 }
 
@@ -846,39 +944,27 @@ fn approval_request_attention_reason_from_json(
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn approval_request_recommended_action_json(
+fn approval_request_recommended_action(
     status: ApprovalExecutionIntegrityStatus,
     gap: Option<&str>,
     execution_error_is_null: bool,
-) -> Value {
+) -> Option<ApprovalRecommendedAction> {
     match status {
-        ApprovalExecutionIntegrityStatus::Incomplete => match gap {
+        ApprovalExecutionIntegrityStatus::Incomplete => Some(match gap {
             Some("started_event_missing")
             | Some("terminal_event_missing")
-            | Some("execution_events_missing") => Value::String(
+            | Some("execution_events_missing") => {
                 ApprovalRecommendedAction::InspectExecutionEventStream
-                    .as_str()
-                    .to_owned(),
-            ),
+            }
             Some("replay_decision_and_outcome_missing")
             | Some("replay_decision_missing")
-            | Some("replay_outcome_missing") => Value::String(
-                ApprovalRecommendedAction::InspectReplayPersistence
-                    .as_str()
-                    .to_owned(),
-            ),
-            Some(_) | None => Value::String(
-                ApprovalRecommendedAction::InspectApprovalIntegrity
-                    .as_str()
-                    .to_owned(),
-            ),
-        },
-        ApprovalExecutionIntegrityStatus::Complete if !execution_error_is_null => Value::String(
-            ApprovalRecommendedAction::InspectToolExecutionFailure
-                .as_str()
-                .to_owned(),
-        ),
-        _ => Value::Null,
+            | Some("replay_outcome_missing") => ApprovalRecommendedAction::InspectReplayPersistence,
+            Some(_) | None => ApprovalRecommendedAction::InspectApprovalIntegrity,
+        }),
+        ApprovalExecutionIntegrityStatus::Complete if !execution_error_is_null => {
+            Some(ApprovalRecommendedAction::InspectToolExecutionFailure)
+        }
+        _ => None,
     }
 }
 
@@ -890,6 +976,58 @@ fn approval_request_recommended_action_from_json(
         .get("recommended_action")
         .and_then(Value::as_str)
         .and_then(|value| parse_approval_recommended_action(value).ok())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_attention_age_bucket_from_json(
+    execution_integrity: &Value,
+) -> Option<ApprovalAttentionAgeBucket> {
+    execution_integrity
+        .get("attention_age_bucket")
+        .and_then(Value::as_str)
+        .and_then(|value| parse_approval_attention_age_bucket(value).ok())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_escalation_level_from_json(
+    execution_integrity: &Value,
+) -> Option<ApprovalEscalationLevel> {
+    execution_integrity
+        .get("escalation_level")
+        .and_then(Value::as_str)
+        .and_then(|value| parse_approval_escalation_level(value).ok())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_attention_age_bucket(
+    attention_age_seconds: Option<i64>,
+) -> Option<ApprovalAttentionAgeBucket> {
+    let attention_age_seconds = attention_age_seconds?;
+    if attention_age_seconds < APPROVAL_ATTENTION_FRESH_MAX_SECONDS {
+        Some(ApprovalAttentionAgeBucket::Fresh)
+    } else if attention_age_seconds < APPROVAL_ATTENTION_STALE_MAX_SECONDS {
+        Some(ApprovalAttentionAgeBucket::Stale)
+    } else {
+        Some(ApprovalAttentionAgeBucket::Overdue)
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_escalation_level(
+    attention_age_bucket: Option<ApprovalAttentionAgeBucket>,
+    recommended_action: Option<ApprovalRecommendedAction>,
+) -> Option<ApprovalEscalationLevel> {
+    let attention_age_bucket = attention_age_bucket?;
+    if matches!(attention_age_bucket, ApprovalAttentionAgeBucket::Overdue)
+        || matches!(
+            recommended_action,
+            Some(ApprovalRecommendedAction::InspectExecutionEventStream)
+        )
+    {
+        Some(ApprovalEscalationLevel::Critical)
+    } else {
+        Some(ApprovalEscalationLevel::Elevated)
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -913,11 +1051,31 @@ fn approval_request_attention_priority(request: &Value) -> u8 {
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn approval_request_escalation_priority(request: &Value) -> u8 {
+    match request
+        .get("execution_integrity")
+        .and_then(approval_request_escalation_level_from_json)
+    {
+        Some(ApprovalEscalationLevel::Critical) => 0,
+        Some(ApprovalEscalationLevel::Elevated) => 1,
+        None => 2,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn approval_request_requested_at(request: &Value) -> i64 {
     request
         .get("requested_at")
         .and_then(Value::as_i64)
         .unwrap_or(i64::MIN)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_unix_ts_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default()
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -946,6 +1104,11 @@ fn parse_approval_requests_list_request(
             payload,
             "recommended_action",
         )?,
+        attention_age_bucket: optional_payload_approval_attention_age_bucket(
+            payload,
+            "attention_age_bucket",
+        )?,
+        escalation_level: optional_payload_approval_escalation_level(payload, "escalation_level")?,
         prioritize_attention: payload
             .get("prioritize_attention")
             .and_then(Value::as_bool)
@@ -1074,6 +1237,26 @@ fn optional_payload_approval_recommended_action(
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn optional_payload_approval_attention_age_bucket(
+    payload: &Value,
+    field: &str,
+) -> Result<Option<ApprovalAttentionAgeBucket>, String> {
+    optional_payload_string(payload, field)
+        .map(|value| parse_approval_attention_age_bucket(value.as_str()))
+        .transpose()
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn optional_payload_approval_escalation_level(
+    payload: &Value,
+    field: &str,
+) -> Result<Option<ApprovalEscalationLevel>, String> {
+    optional_payload_string(payload, field)
+        .map(|value| parse_approval_escalation_level(value.as_str()))
+        .transpose()
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn parse_approval_request_status(value: &str) -> Result<ApprovalRequestStatus, String> {
     match value {
         "pending" => Ok(ApprovalRequestStatus::Pending),
@@ -1133,6 +1316,29 @@ fn parse_approval_recommended_action(value: &str) -> Result<ApprovalRecommendedA
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn parse_approval_attention_age_bucket(value: &str) -> Result<ApprovalAttentionAgeBucket, String> {
+    match value {
+        "fresh" => Ok(ApprovalAttentionAgeBucket::Fresh),
+        "stale" => Ok(ApprovalAttentionAgeBucket::Stale),
+        "overdue" => Ok(ApprovalAttentionAgeBucket::Overdue),
+        _ => Err(format!(
+            "approval_requests_list_invalid_request: unknown attention_age_bucket `{value}`"
+        )),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn parse_approval_escalation_level(value: &str) -> Result<ApprovalEscalationLevel, String> {
+    match value {
+        "elevated" => Ok(ApprovalEscalationLevel::Elevated),
+        "critical" => Ok(ApprovalEscalationLevel::Critical),
+        _ => Err(format!(
+            "approval_requests_list_invalid_request: unknown escalation_level `{value}`"
+        )),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn parse_approval_decision(value: &str) -> Result<ApprovalDecision, String> {
     match value {
         "approve_once" => Ok(ApprovalDecision::ApproveOnce),
@@ -1147,8 +1353,10 @@ fn parse_approval_decision(value: &str) -> Result<ApprovalDecision, String> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use loongclaw_contracts::ToolCoreRequest;
+    use rusqlite::params;
     use serde_json::json;
     use serde_json::Value;
 
@@ -1244,6 +1452,36 @@ mod tests {
     }
 
     #[cfg(feature = "memory-sqlite")]
+    fn test_unix_ts_now() -> i64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs() as i64)
+            .unwrap_or_default()
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn overwrite_request_requested_at(
+        config: &MemoryRuntimeConfig,
+        approval_request_id: &str,
+        requested_at: i64,
+    ) {
+        let db_path = config
+            .sqlite_path
+            .as_ref()
+            .expect("sqlite path should be configured");
+        let conn = rusqlite::Connection::open(db_path).expect("open sqlite db");
+        let affected = conn
+            .execute(
+                "UPDATE approval_requests
+                 SET requested_at = ?2
+                 WHERE approval_request_id = ?1",
+                params![approval_request_id, requested_at],
+            )
+            .expect("overwrite approval request requested_at");
+        assert_eq!(affected, 1, "expected to update one approval request row");
+    }
+
+    #[cfg(feature = "memory-sqlite")]
     #[test]
     fn approval_request_tool_query_list_returns_only_visible_requests() {
         let config = isolated_memory_config("approval-query-list-visible");
@@ -1329,6 +1567,18 @@ mod tests {
             root_request["execution_integrity"]["recommended_action"],
             Value::Null
         );
+        assert_eq!(
+            root_request["execution_integrity"]["attention_age_seconds"],
+            Value::Null
+        );
+        assert_eq!(
+            root_request["execution_integrity"]["attention_age_bucket"],
+            Value::Null
+        );
+        assert_eq!(
+            root_request["execution_integrity"]["escalation_level"],
+            Value::Null
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -1402,6 +1652,9 @@ mod tests {
         assert_eq!(integrity["needs_attention"], false);
         assert_eq!(integrity["attention_reason"], Value::Null);
         assert_eq!(integrity["recommended_action"], Value::Null);
+        assert_eq!(integrity["attention_age_seconds"], Value::Null);
+        assert_eq!(integrity["attention_age_bucket"], Value::Null);
+        assert_eq!(integrity["escalation_level"], Value::Null);
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -1733,6 +1986,9 @@ mod tests {
             }),
         })
         .expect("append in-progress started event");
+        let now = test_unix_ts_now();
+        overwrite_request_requested_at(&config, "apr-attention-integrity-gap", now - 7_200);
+        overwrite_request_requested_at(&config, "apr-attention-execution-failed", now - 300);
 
         let needs_attention_outcome = crate::tools::execute_app_tool_with_config(
             ToolCoreRequest {
@@ -1833,6 +2089,69 @@ mod tests {
             replay_persistence_requests[0]["execution_integrity"]["recommended_action"],
             "inspect_replay_persistence"
         );
+
+        let stale_age_bucket_outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "attention_age_bucket": "stale",
+                    "limit": 10,
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list outcome for attention_age_bucket");
+
+        assert_eq!(
+            stale_age_bucket_outcome.payload["filter"]["attention_age_bucket"],
+            "stale"
+        );
+        assert_eq!(stale_age_bucket_outcome.payload["matched_count"], 1);
+        assert_eq!(stale_age_bucket_outcome.payload["returned_count"], 1);
+        let stale_age_bucket_requests = stale_age_bucket_outcome.payload["requests"]
+            .as_array()
+            .expect("attention_age_bucket requests array");
+        assert_eq!(stale_age_bucket_requests.len(), 1);
+        assert_eq!(
+            stale_age_bucket_requests[0]["approval_request_id"],
+            "apr-attention-integrity-gap"
+        );
+        assert_eq!(
+            stale_age_bucket_requests[0]["execution_integrity"]["attention_age_bucket"],
+            "stale"
+        );
+
+        let elevated_escalation_outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "escalation_level": "elevated",
+                    "limit": 10,
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list outcome for escalation_level");
+
+        assert_eq!(
+            elevated_escalation_outcome.payload["filter"]["escalation_level"],
+            "elevated"
+        );
+        assert_eq!(elevated_escalation_outcome.payload["matched_count"], 2);
+        assert_eq!(elevated_escalation_outcome.payload["returned_count"], 2);
+        let elevated_escalation_requests = elevated_escalation_outcome.payload["requests"]
+            .as_array()
+            .expect("escalation_level requests array");
+        let elevated_escalation_ids = elevated_escalation_requests
+            .iter()
+            .filter_map(|item| item["approval_request_id"].as_str())
+            .collect::<Vec<_>>();
+        assert!(elevated_escalation_ids.contains(&"apr-attention-integrity-gap"));
+        assert!(elevated_escalation_ids.contains(&"apr-attention-execution-failed"));
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -1869,6 +2188,13 @@ mod tests {
             "session_cancel",
             "governed_tool_requires_per_call_approval",
         );
+        seed_request(
+            &repo,
+            "apr-priority-missing-events",
+            "root-session",
+            "session_cancel",
+            "governed_tool_requires_per_call_approval",
+        );
 
         transition_request_status(
             &repo,
@@ -1890,6 +2216,13 @@ mod tests {
             ApprovalRequestStatus::Pending,
             ApprovalRequestStatus::Executed,
             Some("tool failed for domain reasons"),
+        );
+        transition_request_status(
+            &repo,
+            "apr-priority-missing-events",
+            ApprovalRequestStatus::Pending,
+            ApprovalRequestStatus::Executed,
+            Some("approval request executed without persisted execution events"),
         );
 
         repo.append_event(crate::session::repository::NewSessionEvent {
@@ -1961,6 +2294,10 @@ mod tests {
             }),
         })
         .expect("append execution-failed terminal event");
+        let now = test_unix_ts_now();
+        overwrite_request_requested_at(&config, "apr-priority-integrity-gap", now - 7_200);
+        overwrite_request_requested_at(&config, "apr-priority-execution-failed", now - 300);
+        overwrite_request_requested_at(&config, "apr-priority-missing-events", now - 172_800);
 
         let outcome = crate::tools::execute_app_tool_with_config(
             ToolCoreRequest {
@@ -1980,25 +2317,41 @@ mod tests {
         let requests = outcome.payload["requests"]
             .as_array()
             .expect("requests array");
-        assert_eq!(requests.len(), 4);
+        assert_eq!(requests.len(), 5);
         assert_eq!(
             requests[0]["approval_request_id"],
-            "apr-priority-integrity-gap"
+            "apr-priority-missing-events"
         );
         assert_eq!(
-            requests[0]["execution_integrity"]["attention_reason"],
-            "integrity_gap"
+            requests[0]["execution_integrity"]["escalation_level"],
+            "critical"
         );
         assert_eq!(
             requests[1]["approval_request_id"],
-            "apr-priority-execution-failed"
+            "apr-priority-integrity-gap"
         );
         assert_eq!(
             requests[1]["execution_integrity"]["attention_reason"],
+            "integrity_gap"
+        );
+        assert_eq!(
+            requests[1]["execution_integrity"]["escalation_level"],
+            "elevated"
+        );
+        assert_eq!(
+            requests[2]["approval_request_id"],
+            "apr-priority-execution-failed"
+        );
+        assert_eq!(
+            requests[2]["execution_integrity"]["attention_reason"],
             "execution_failed"
         );
-        assert_eq!(requests[2]["execution_integrity"]["needs_attention"], false);
+        assert_eq!(
+            requests[2]["execution_integrity"]["escalation_level"],
+            "elevated"
+        );
         assert_eq!(requests[3]["execution_integrity"]["needs_attention"], false);
+        assert_eq!(requests[4]["execution_integrity"]["needs_attention"], false);
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -2166,6 +2519,10 @@ mod tests {
             }),
         })
         .expect("append execution-failed terminal event");
+        let now = test_unix_ts_now();
+        overwrite_request_requested_at(&config, "apr-summary-incomplete", now - 7_200);
+        overwrite_request_requested_at(&config, "apr-summary-execution-failed", now - 300);
+        overwrite_request_requested_at(&config, "apr-summary-missing-events", now - 172_800);
 
         let outcome = crate::tools::execute_app_tool_with_config(
             ToolCoreRequest {
@@ -2214,6 +2571,26 @@ mod tests {
         assert_eq!(
             summary["attention_summary"]["recommended_action_counts"]
                 ["inspect_tool_execution_failure"],
+            1
+        );
+        assert_eq!(
+            summary["attention_summary"]["age_bucket_counts"]["fresh"],
+            1
+        );
+        assert_eq!(
+            summary["attention_summary"]["age_bucket_counts"]["stale"],
+            1
+        );
+        assert_eq!(
+            summary["attention_summary"]["age_bucket_counts"]["overdue"],
+            1
+        );
+        assert_eq!(
+            summary["attention_summary"]["counts_by_escalation"]["elevated"],
+            2
+        );
+        assert_eq!(
+            summary["attention_summary"]["counts_by_escalation"]["critical"],
             1
         );
     }
@@ -2267,6 +2644,58 @@ mod tests {
         assert!(
             error.contains("approval_requests_list_invalid_request: unknown recommended_action"),
             "expected recommended_action validation error, got: {error}"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_tool_query_list_rejects_unknown_attention_age_bucket() {
+        let config = isolated_memory_config("approval-query-list-invalid-attention-age-bucket");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+
+        let error = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "attention_age_bucket": "broken",
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect_err("unknown attention_age_bucket should be rejected");
+
+        assert!(
+            error.contains("approval_requests_list_invalid_request: unknown attention_age_bucket"),
+            "expected attention_age_bucket validation error, got: {error}"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_tool_query_list_rejects_unknown_escalation_level() {
+        let config = isolated_memory_config("approval-query-list-invalid-escalation-level");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+
+        let error = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "escalation_level": "broken",
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect_err("unknown escalation_level should be rejected");
+
+        assert!(
+            error.contains("approval_requests_list_invalid_request: unknown escalation_level"),
+            "expected escalation_level validation error, got: {error}"
         );
     }
 
@@ -2364,6 +2793,18 @@ mod tests {
             request["execution_integrity"]["recommended_action"],
             Value::Null
         );
+        assert_eq!(
+            request["execution_integrity"]["attention_age_seconds"],
+            Value::Null
+        );
+        assert_eq!(
+            request["execution_integrity"]["attention_age_bucket"],
+            Value::Null
+        );
+        assert_eq!(
+            request["execution_integrity"]["escalation_level"],
+            Value::Null
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -2402,6 +2843,8 @@ mod tests {
             }),
         })
         .expect("append finished event");
+        let now = test_unix_ts_now();
+        overwrite_request_requested_at(&config, "apr-visible-evidence", now - 7_200);
 
         let outcome = crate::tools::execute_app_tool_with_config(
             ToolCoreRequest {
@@ -2441,6 +2884,14 @@ mod tests {
             "inspect_replay_persistence"
         );
         assert!(
+            integrity["attention_age_seconds"]
+                .as_i64()
+                .is_some_and(|value| value >= 7_200),
+            "expected stale attention age in integrity payload, got: {integrity}"
+        );
+        assert_eq!(integrity["attention_age_bucket"], "stale");
+        assert_eq!(integrity["escalation_level"], "elevated");
+        assert!(
             integrity["integrity_error"]
                 .as_str()
                 .is_some_and(|error| error.contains("persist assistant turn via kernel failed")),
@@ -2469,6 +2920,8 @@ mod tests {
             ApprovalRequestStatus::Executed,
             Some("approval request executed without persisted execution events"),
         );
+        let now = test_unix_ts_now();
+        overwrite_request_requested_at(&config, "apr-visible-missing-events", now - 172_800);
 
         let outcome = crate::tools::execute_app_tool_with_config(
             ToolCoreRequest {
@@ -2490,6 +2943,14 @@ mod tests {
             integrity["recommended_action"],
             "inspect_execution_event_stream"
         );
+        assert!(
+            integrity["attention_age_seconds"]
+                .as_i64()
+                .is_some_and(|value| value >= 172_800),
+            "expected overdue attention age in integrity payload, got: {integrity}"
+        );
+        assert_eq!(integrity["attention_age_bucket"], "overdue");
+        assert_eq!(integrity["escalation_level"], "critical");
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -2528,6 +2989,8 @@ mod tests {
             }),
         })
         .expect("append failed event");
+        let now = test_unix_ts_now();
+        overwrite_request_requested_at(&config, "apr-visible-execution-failure", now - 300);
 
         let outcome = crate::tools::execute_app_tool_with_config(
             ToolCoreRequest {
@@ -2556,6 +3019,14 @@ mod tests {
             integrity["recommended_action"],
             "inspect_tool_execution_failure"
         );
+        assert!(
+            integrity["attention_age_seconds"]
+                .as_i64()
+                .is_some_and(|value| value >= 300),
+            "expected fresh attention age in integrity payload, got: {integrity}"
+        );
+        assert_eq!(integrity["attention_age_bucket"], "fresh");
+        assert_eq!(integrity["escalation_level"], "elevated");
     }
 
     #[cfg(feature = "memory-sqlite")]
