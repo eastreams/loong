@@ -1,4 +1,6 @@
 use std::any::Any;
+#[cfg(feature = "memory-sqlite")]
+use std::io::{self, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -277,7 +279,9 @@ fn spawn_async_delegate_detached(
                 label,
                 error.clone(),
             ) {
-                eprintln!(
+                let mut stderr = io::stderr().lock();
+                let _ = writeln!(
+                    &mut stderr,
                     "error: async delegate spawn failure persistence failed for `{child_session_id}`: {finalize_error}; original spawn error: {error}"
                 );
             }

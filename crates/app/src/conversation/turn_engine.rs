@@ -1,25 +1,18 @@
 use async_trait::async_trait;
-use futures_util::FutureExt;
-use std::any::Any;
 use std::collections::BTreeSet;
-use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 #[cfg(feature = "memory-sqlite")]
 use std::{
-    io::{self, Write},
     path::{Path, PathBuf},
     process::Stdio,
 };
 
 use loongclaw_contracts::{Capability, KernelError, ToolCoreOutcome, ToolCoreRequest};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use crate::config::{LoongClawConfig, SessionVisibility, ToolConfig};
 use crate::context::KernelContext;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
-#[cfg(feature = "memory-sqlite")]
-use crate::session::recovery::{build_async_spawn_failure_recovery_payload, RECOVERY_EVENT_KIND};
 use crate::tools::{
     delegate_child_tool_view_for_config, delegate_child_tool_view_for_config_with_delegate,
     runtime_tool_view, runtime_tool_view_for_config, tool_catalog, ToolExecutionKind, ToolView,
@@ -165,155 +158,6 @@ impl crate::tools::delegate::AsyncDelegateSpawner for SubprocessAsyncDelegateSpa
     }
 }
 
-#[cfg(feature = "memory-sqlite")]
-fn finalize_async_delegate_spawn_failure(
-    memory_config: &MemoryRuntimeConfig,
-    child_session_id: &str,
-    parent_session_id: &str,
-    label: Option<String>,
-    error: String,
-) -> Result<(), String> {
-    let repo = crate::session::repository::SessionRepository::new(memory_config)?;
-    let outcome = crate::tools::delegate::delegate_error_outcome(
-        child_session_id.to_owned(),
-        label,
-        error.clone(),
-        0,
-    );
-    repo.finalize_session_terminal(
-        child_session_id,
-        crate::session::repository::FinalizeSessionTerminalRequest {
-            state: crate::session::repository::SessionState::Failed,
-            last_error: Some(error.clone()),
-            event_kind: "delegate_spawn_failed".to_owned(),
-            actor_session_id: Some(parent_session_id.to_owned()),
-            event_payload_json: json!({
-                "error": error,
-            }),
-            outcome_status: outcome.status,
-            outcome_payload_json: outcome.payload,
-        },
-    )?;
-    Ok(())
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn finalize_async_delegate_spawn_failure_with_recovery(
-    memory_config: &MemoryRuntimeConfig,
-    child_session_id: &str,
-    parent_session_id: &str,
-    label: Option<String>,
-    error: String,
-) -> Result<(), String> {
-    let recovery_label = label.clone();
-    match finalize_async_delegate_spawn_failure(
-        memory_config,
-        child_session_id,
-        parent_session_id,
-        label,
-        error.clone(),
-    ) {
-        Ok(()) => Ok(()),
-        Err(finalize_error) => {
-            let repo = crate::session::repository::SessionRepository::new(memory_config)?;
-            let recovery_error = format!(
-                "delegate_async_spawn_failure_persist_failed: {finalize_error}; original spawn error: {error}"
-            );
-            match repo.transition_session_with_event_if_current(
-                child_session_id,
-                crate::session::repository::TransitionSessionWithEventIfCurrentRequest {
-                    expected_state: crate::session::repository::SessionState::Ready,
-                    next_state: crate::session::repository::SessionState::Failed,
-                    last_error: Some(recovery_error.clone()),
-                    event_kind: RECOVERY_EVENT_KIND.to_owned(),
-                    actor_session_id: Some(parent_session_id.to_owned()),
-                    event_payload_json: build_async_spawn_failure_recovery_payload(
-                        recovery_label.as_deref(),
-                        &error,
-                        &recovery_error,
-                    ),
-                },
-            ) {
-                Ok(Some(_)) => Ok(()),
-                Ok(None) => {
-                    let current_state = repo
-                        .load_session(child_session_id)?
-                        .map(|session| session.state.as_str().to_owned())
-                        .unwrap_or_else(|| "missing".to_owned());
-                    Err(format!(
-                        "{recovery_error}; delegate_async_spawn_recovery_skipped_from_state: {current_state}"
-                    ))
-                }
-                Err(recovery_event_error) => match repo.update_session_state_if_current(
-                    child_session_id,
-                    crate::session::repository::SessionState::Ready,
-                    crate::session::repository::SessionState::Failed,
-                    Some(recovery_error.clone()),
-                ) {
-                    Ok(Some(_)) => Ok(()),
-                    Ok(None) => {
-                        let current_state = repo
-                            .load_session(child_session_id)?
-                            .map(|session| session.state.as_str().to_owned())
-                            .unwrap_or_else(|| "missing".to_owned());
-                        Err(format!(
-                            "{recovery_error}; delegate_async_spawn_recovery_skipped_from_state: {current_state}"
-                        ))
-                    }
-                    Err(mark_error) => Err(format!(
-                        "{recovery_error}; delegate_async_spawn_recovery_failed: {mark_error}; delegate_async_spawn_recovery_event_failed: {recovery_event_error}"
-                    )),
-                },
-            }
-        }
-    }
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn format_async_delegate_spawn_panic(panic_payload: Box<dyn Any + Send>) -> String {
-    let panic_payload = match panic_payload.downcast::<String>() {
-        Ok(message) => return format!("delegate_async_spawn_panic: {}", *message),
-        Err(panic_payload) => panic_payload,
-    };
-    match panic_payload.downcast::<&'static str>() {
-        Ok(message) => format!("delegate_async_spawn_panic: {}", *message),
-        Err(_) => "delegate_async_spawn_panic".to_owned(),
-    }
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn spawn_async_delegate_detached(
-    runtime_handle: tokio::runtime::Handle,
-    memory_config: MemoryRuntimeConfig,
-    spawner: Arc<dyn AsyncDelegateSpawner>,
-    request: AsyncDelegateSpawnRequest,
-) {
-    let child_session_id = request.child_session_id.clone();
-    let parent_session_id = request.parent_session_id.clone();
-    let label = request.label.clone();
-    runtime_handle.spawn(async move {
-        let spawn_failure = match AssertUnwindSafe(spawner.spawn(request)).catch_unwind().await {
-            Ok(Ok(())) => None,
-            Ok(Err(error)) => Some(error),
-            Err(panic_payload) => Some(format_async_delegate_spawn_panic(panic_payload)),
-        };
-        if let Some(error) = spawn_failure {
-            if let Err(finalize_error) = finalize_async_delegate_spawn_failure_with_recovery(
-                &memory_config,
-                &child_session_id,
-                &parent_session_id,
-                label,
-                error.clone(),
-            ) {
-                let mut stderr = io::stderr().lock();
-                let _ = writeln!(
-                    &mut stderr,
-                    "error: async delegate spawn failure persistence failed for `{child_session_id}`: {finalize_error}; original spawn error: {error}"
-                );
-            }
-        }
-    });
-}
 pub struct NoopAppToolDispatcher;
 
 #[async_trait]
