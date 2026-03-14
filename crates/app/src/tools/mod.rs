@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use crate::KernelContext;
 
+mod catalog;
 mod claw_import;
 mod external_skills;
 mod file;
@@ -16,6 +17,10 @@ pub mod runtime_config;
 mod shell;
 pub mod shell_policy_ext;
 
+pub use catalog::{
+    ToolAvailability, ToolCatalog, ToolDescriptor, ToolExecutionKind, ToolView,
+    planned_root_tool_view, runtime_tool_view, tool_catalog,
+};
 pub use kernel_adapter::MvpToolAdapter;
 
 /// Execute a tool request, routing through the kernel for
@@ -103,37 +108,19 @@ pub(super) fn normalize_without_fs(path: &Path) -> PathBuf {
 }
 
 pub fn canonical_tool_name(raw: &str) -> &str {
-    match raw {
-        "claw_import" | "import_claw" => "claw.import",
-        "external_skills_inspect" => "external_skills.inspect",
-        "external_skills_install" => "external_skills.install",
-        "external_skills_invoke" => "external_skills.invoke",
-        "external_skills_list" => "external_skills.list",
-        "external_skills_policy" => "external_skills.policy",
-        "external_skills_fetch" => "external_skills.fetch",
-        "external_skills_remove" => "external_skills.remove",
-        "file_read" => "file.read",
-        "file_write" => "file.write",
-        "shell_exec" | "shell" => "shell.exec",
-        other => other,
+    let catalog = tool_catalog();
+    match catalog.resolve(raw) {
+        Some(descriptor) => descriptor.name,
+        None => raw,
     }
 }
 
 pub fn is_known_tool_name(raw: &str) -> bool {
-    matches!(
-        canonical_tool_name(raw),
-        "claw.import"
-            | "external_skills.inspect"
-            | "external_skills.install"
-            | "external_skills.invoke"
-            | "external_skills.list"
-            | "external_skills.policy"
-            | "external_skills.fetch"
-            | "external_skills.remove"
-            | "shell.exec"
-            | "file.read"
-            | "file.write"
-    )
+    is_known_tool_name_in_view(raw, &runtime_tool_view())
+}
+
+pub fn is_known_tool_name_in_view(raw: &str, view: &ToolView) -> bool {
+    view.contains(canonical_tool_name(raw))
 }
 
 pub fn execute_tool_core_with_config(
@@ -187,60 +174,14 @@ pub struct ToolRegistryEntry {
 
 /// Returns a sorted list of all registered tools, gated by feature flags.
 pub fn tool_registry() -> Vec<ToolRegistryEntry> {
-    let mut entries = vec![
-        ToolRegistryEntry {
-            name: "claw.import",
-            description: "Import legacy Claw configs into native LoongClaw settings",
-        },
-        ToolRegistryEntry {
-            name: "external_skills.fetch",
-            description: "Download external skills artifacts with domain policy and approval guards",
-        },
-        ToolRegistryEntry {
-            name: "external_skills.inspect",
-            description: "Read metadata for an installed external skill",
-        },
-        ToolRegistryEntry {
-            name: "external_skills.install",
-            description: "Install a managed external skill from a local directory or archive",
-        },
-        ToolRegistryEntry {
-            name: "external_skills.invoke",
-            description: "Load an installed external skill into the conversation loop",
-        },
-        ToolRegistryEntry {
-            name: "external_skills.list",
-            description: "List managed external skills available for invocation",
-        },
-        ToolRegistryEntry {
-            name: "external_skills.policy",
-            description: "Read/update external skills domain allow/block policy at runtime",
-        },
-        ToolRegistryEntry {
-            name: "external_skills.remove",
-            description: "Remove an installed external skill from the managed runtime",
-        },
-    ];
-    #[cfg(feature = "tool-file")]
-    {
-        entries.push(ToolRegistryEntry {
-            name: "file.read",
-            description: "Read file contents",
-        });
-        entries.push(ToolRegistryEntry {
-            name: "file.write",
-            description: "Write file contents",
-        });
-    }
-    #[cfg(feature = "tool-shell")]
-    {
-        entries.push(ToolRegistryEntry {
-            name: "shell.exec",
-            description: "Execute shell commands",
-        });
-    }
-    entries.sort_by_key(|entry| entry.name);
-    entries
+    let catalog = tool_catalog();
+    runtime_tool_view()
+        .iter(&catalog)
+        .map(|descriptor| ToolRegistryEntry {
+            name: descriptor.name,
+            description: descriptor.description,
+        })
+        .collect()
 }
 
 /// Produce a deterministic text block listing available tools,
@@ -250,12 +191,27 @@ pub fn capability_snapshot() -> String {
 }
 
 pub fn capability_snapshot_with_config(config: &runtime_config::ToolRuntimeConfig) -> String {
-    let entries = tool_registry();
+    capability_snapshot_for_view_with_config(&runtime_tool_view(), config)
+}
+
+pub fn capability_snapshot_for_view(view: &ToolView) -> String {
+    capability_snapshot_for_view_with_config(view, runtime_config::get_tool_runtime_config())
+}
+
+fn capability_snapshot_for_view_with_config(
+    view: &ToolView,
+    config: &runtime_config::ToolRuntimeConfig,
+) -> String {
+    let catalog = tool_catalog();
     let mut lines = vec!["[available_tools]".to_owned()];
-    for entry in &entries {
-        lines.push(format!("- {}: {}", entry.name, entry.description));
+    for descriptor in view.iter(&catalog) {
+        lines.push(format!("- {}: {}", descriptor.name, descriptor.description));
     }
-    if let Ok(skill_lines) = external_skills::installed_skill_snapshot_lines_with_config(config)
+    let includes_external_skills = view
+        .iter(&catalog)
+        .any(|descriptor| descriptor.name.starts_with("external_skills."));
+    if includes_external_skills
+        && let Ok(skill_lines) = external_skills::installed_skill_snapshot_lines_with_config(config)
         && !skill_lines.is_empty()
     {
         lines.push(String::new());
@@ -270,346 +226,29 @@ pub fn capability_snapshot_with_config(config: &runtime_config::ToolRuntimeConfi
 /// The output shape matches OpenAI-compatible `tools=[{type:function,...}]`.
 /// Order is deterministic for stable prompting/tests.
 pub fn provider_tool_definitions() -> Vec<Value> {
-    let mut tools = Vec::new();
-
-    tools.push(json!({
-        "type": "function",
-        "function": {
-            "name": "claw_import",
-            "description": "Import, discover, plan, merge, apply, and rollback legacy Claw workspace migration into native LoongClaw config.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "input_path": {
-                        "type": "string",
-                        "description": "Path to the legacy Claw workspace, config root, or portable import file. Required for all modes except rollback_last_apply."
-                    },
-                    "mode": {
-                        "type": "string",
-                        "enum": [
-                            "plan",
-                            "apply",
-                            "discover",
-                            "plan_many",
-                            "recommend_primary",
-                            "merge_profiles",
-                            "map_external_skills",
-                            "apply_selected",
-                            "rollback_last_apply"
-                        ],
-                        "description": "Migration mode. Defaults to `plan` when omitted."
-                    },
-                    "source": {
-                        "type": "string",
-                        "enum": ["auto", "nanobot", "openclaw", "picoclaw", "zeroclaw", "nanoclaw"],
-                        "description": "Optional source hint for plan/apply modes. Defaults to automatic detection."
-                    },
-                    "source_id": {
-                        "type": "string",
-                        "description": "Selected source identifier for apply_selected mode."
-                    },
-                    "selection_id": {
-                        "type": "string",
-                        "description": "Alias of source_id for apply_selected mode."
-                    },
-                    "primary_source_id": {
-                        "type": "string",
-                        "description": "Primary source identifier for safe profile merge in apply_selected mode."
-                    },
-                    "primary_selection_id": {
-                        "type": "string",
-                        "description": "Alias of primary_source_id for safe profile merge in apply_selected mode."
-                    },
-                    "safe_profile_merge": {
-                        "type": "boolean",
-                        "description": "Enable safe multi-source profile merge in apply_selected mode."
-                    },
-                    "apply_external_skills_plan": {
-                        "type": "boolean",
-                        "description": "When true, apply a generated external-skills mapping addendum into profile_note during apply_selected."
-                    },
-                    "output_path": {
-                        "type": "string",
-                        "description": "Target config path. Required in apply/apply_selected/rollback_last_apply modes."
-                    },
-                    "force": {
-                        "type": "boolean",
-                        "description": "Overwrite an existing target config when applying. Defaults to false."
-                    }
-                },
-                "required": [],
-                "additionalProperties": false
-            }
-        }
-    }));
-
-    tools.push(json!({
-        "type": "function",
-        "function": {
-            "name": "external_skills_policy",
-            "description": "Get, set, or reset runtime policy for external skills downloads (enabled flag, approval gate, domain allowlist/blocklist).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["get", "set", "reset"],
-                        "description": "Policy action. Defaults to `get`."
-                    },
-                    "policy_update_approved": {
-                        "type": "boolean",
-                        "description": "Explicit user authorization for policy updates. Required for `set` and `reset`."
-                    },
-                    "enabled": {
-                        "type": "boolean",
-                        "description": "Whether external skills runtime/download is enabled."
-                    },
-                    "require_download_approval": {
-                        "type": "boolean",
-                        "description": "When true, every external skills download requires explicit approval_granted=true."
-                    },
-                    "allowed_domains": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional domain allowlist (supports exact domains and wildcard forms like *.example.com). Empty list means allow all domains unless blocked."
-                    },
-                    "blocked_domains": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional domain blocklist (supports exact domains and wildcard forms like *.example.com). Blocklist always takes precedence."
-                    }
-                },
-                "required": [],
-                "additionalProperties": false
-            }
-        }
-    }));
-
-    tools.push(json!({
-        "type": "function",
-        "function": {
-            "name": "external_skills_fetch",
-            "description": "Download an external skill artifact with strict domain policy checks and explicit approval gating.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "HTTPS URL to download."
-                    },
-                    "approval_granted": {
-                        "type": "boolean",
-                        "description": "Explicit user authorization for this download. Required when require_download_approval=true."
-                    },
-                    "save_as": {
-                        "type": "string",
-                        "description": "Optional output filename (stored under configured file root / external-skills-downloads)."
-                    },
-                    "max_bytes": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 20971520,
-                        "description": "Maximum download size in bytes. Defaults to 5242880 and is capped at 20971520."
-                    }
-                },
-                "required": ["url"],
-                "additionalProperties": false
-            }
-        }
-    }));
-
-    tools.push(json!({
-        "type": "function",
-        "function": {
-            "name": "external_skills_inspect",
-            "description": "Read metadata and a short preview for an installed external skill.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "skill_id": {
-                        "type": "string",
-                        "description": "Managed external skill identifier."
-                    }
-                },
-                "required": ["skill_id"],
-                "additionalProperties": false
-            }
-        }
-    }));
-
-    tools.push(json!({
-        "type": "function",
-        "function": {
-            "name": "external_skills_install",
-            "description": "Install a managed external skill from a local directory or local .tgz/.tar.gz archive under the configured file root.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path to a local directory containing SKILL.md or a local .tgz/.tar.gz archive."
-                    },
-                    "skill_id": {
-                        "type": "string",
-                        "description": "Optional explicit managed skill id override."
-                    },
-                    "replace": {
-                        "type": "boolean",
-                        "description": "Replace an existing installed skill with the same id. Defaults to false."
-                    }
-                },
-                "required": ["path"],
-                "additionalProperties": false
-            }
-        }
-    }));
-
-    tools.push(json!({
-        "type": "function",
-        "function": {
-            "name": "external_skills_invoke",
-            "description": "Load an installed external skill's SKILL.md instructions into the conversation loop.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "skill_id": {
-                        "type": "string",
-                        "description": "Managed external skill identifier."
-                    }
-                },
-                "required": ["skill_id"],
-                "additionalProperties": false
-            }
-        }
-    }));
-
-    tools.push(json!({
-        "type": "function",
-        "function": {
-            "name": "external_skills_list",
-            "description": "List managed external skills available for invocation.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-                "additionalProperties": false
-            }
-        }
-    }));
-
-    tools.push(json!({
-        "type": "function",
-        "function": {
-            "name": "external_skills_remove",
-            "description": "Remove an installed external skill from the managed runtime.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "skill_id": {
-                        "type": "string",
-                        "description": "Managed external skill identifier."
-                    }
-                },
-                "required": ["skill_id"],
-                "additionalProperties": false
-            }
-        }
-    }));
-
-    #[cfg(feature = "tool-file")]
-    {
-        tools.push(json!({
-            "type": "function",
-            "function": {
-                "name": "file_read",
-                "description": "Read file contents",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Path to read (absolute or relative to configured file root)."
-                        },
-                        "max_bytes": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 8_388_608,
-                            "description": "Optional read limit in bytes. Defaults to 1048576."
-                        }
-                    },
-                    "required": ["path"],
-                    "additionalProperties": false
-                }
-            }
-        }));
-        tools.push(json!({
-            "type": "function",
-            "function": {
-                "name": "file_write",
-                "description": "Write file contents",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Path to write (absolute or relative to configured file root)."
-                        },
-                        "content": {
-                            "type": "string",
-                            "description": "File content to write."
-                        },
-                        "create_dirs": {
-                            "type": "boolean",
-                            "description": "Create parent directories when missing. Defaults to true."
-                        }
-                    },
-                    "required": ["path", "content"],
-                    "additionalProperties": false
-                }
-            }
-        }));
-    }
-
-    #[cfg(feature = "tool-shell")]
-    {
-        tools.push(json!({
-            "type": "function",
-            "function": {
-                "name": "shell_exec",
-                "description": "Execute shell commands",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "command": {
-                            "type": "string",
-                            "description": "Executable command name. Must be allowlisted."
-                        },
-                        "args": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Optional command arguments."
-                        },
-                        "cwd": {
-                            "type": "string",
-                            "description": "Optional working directory."
-                        }
-                    },
-                    "required": ["command"],
-                    "additionalProperties": false
-                }
-            }
-        }));
-    }
-
-    tools.sort_by(|left, right| tool_function_name(left).cmp(tool_function_name(right)));
-    tools
+    let catalog = tool_catalog();
+    runtime_tool_view()
+        .iter(&catalog)
+        .map(|descriptor| {
+            debug_assert_eq!(descriptor.availability, ToolAvailability::Runtime);
+            descriptor.provider_definition()
+        })
+        .collect()
 }
 
-fn tool_function_name(tool: &Value) -> &str {
-    tool.get("function")
-        .and_then(|value| value.get("name"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
+pub fn try_provider_tool_definitions_for_view(view: &ToolView) -> Result<Vec<Value>, String> {
+    let catalog = tool_catalog();
+    let mut tools = Vec::new();
+    for descriptor in view.iter(&catalog) {
+        if descriptor.availability != ToolAvailability::Runtime {
+            return Err(format!(
+                "tool_not_advertisable: `{}` is still planned and cannot be exposed yet",
+                descriptor.name
+            ));
+        }
+        tools.push(descriptor.provider_definition());
+    }
+    Ok(tools)
 }
 
 #[allow(dead_code)]
@@ -807,6 +446,44 @@ mod tests {
         assert!(names.contains(&"shell.exec"));
         assert!(names.contains(&"file.read"));
         assert!(names.contains(&"file.write"));
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
+    #[test]
+    fn capability_snapshot_for_view_only_lists_selected_tools() {
+        let view = ToolView::from_tool_names(["claw.import", "shell.exec"]);
+        let snapshot = capability_snapshot_for_view(&view);
+
+        assert!(snapshot.contains("- claw.import:"));
+        assert!(snapshot.contains("- shell.exec:"));
+        assert!(!snapshot.contains("- file.read:"));
+        assert!(!snapshot.contains("- external_skills.list:"));
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
+    #[test]
+    fn try_provider_tool_definitions_for_view_returns_sorted_subset() {
+        let view = ToolView::from_tool_names(["shell.exec", "claw.import"]);
+        let defs = try_provider_tool_definitions_for_view(&view)
+            .expect("restricted runtime view should be advertisable");
+        let names: Vec<&str> = defs
+            .iter()
+            .filter_map(|item| item.get("function"))
+            .filter_map(|function| function.get("name"))
+            .filter_map(Value::as_str)
+            .collect();
+
+        assert_eq!(names, vec!["claw_import", "shell_exec"]);
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
+    #[test]
+    fn planned_root_tool_view_cannot_be_advertised() {
+        let err = try_provider_tool_definitions_for_view(&planned_root_tool_view())
+            .expect_err("planned tools must stay hidden from provider schema");
+
+        assert!(err.contains("tool_not_advertisable"), "error: {err}");
+        assert!(err.contains("delegate"), "error: {err}");
     }
 
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
