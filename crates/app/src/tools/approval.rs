@@ -1,5 +1,5 @@
 #[cfg(feature = "memory-sqlite")]
-use std::collections::BTreeMap;
+use std::{cmp::Ordering, collections::BTreeMap};
 
 use async_trait::async_trait;
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
@@ -29,6 +29,7 @@ const APPROVAL_ATTENTION_STALE_MAX_SECONDS: i64 = 4 * 60 * 60;
 struct ApprovalRequestsListRequest {
     session_id: Option<String>,
     status: Option<ApprovalRequestStatus>,
+    pending_age_bucket: Option<ApprovalAttentionAgeBucket>,
     tool_name: Option<String>,
     approval_key: Option<String>,
     rule_id: Option<String>,
@@ -40,6 +41,7 @@ struct ApprovalRequestsListRequest {
     recommended_action: Option<ApprovalRecommendedAction>,
     attention_age_bucket: Option<ApprovalAttentionAgeBucket>,
     escalation_level: Option<ApprovalEscalationLevel>,
+    prioritize_pending: bool,
     prioritize_attention: bool,
     limit: usize,
 }
@@ -362,6 +364,11 @@ fn execute_approval_requests_list(
         request_summaries
             .retain(|item| item.get("rule_id").and_then(Value::as_str) == Some(rule_id));
     }
+    if let Some(pending_age_bucket) = request.pending_age_bucket {
+        request_summaries.retain(|item| {
+            approval_request_pending_age_bucket_from_json(item) == Some(pending_age_bucket)
+        });
+    }
     if let Some(replay_result) = request.replay_result {
         request_summaries
             .retain(|item| approval_request_replay_result_from_json(item) == Some(replay_result));
@@ -402,20 +409,36 @@ fn execute_approval_requests_list(
                 == Some(escalation_level)
         });
     }
-    if request.prioritize_attention {
+    if request.prioritize_pending || request.prioritize_attention {
         request_summaries.sort_by(|left, right| {
-            approval_request_escalation_priority(left)
-                .cmp(&approval_request_escalation_priority(right))
-                .then_with(|| {
-                    approval_request_attention_priority(left)
-                        .cmp(&approval_request_attention_priority(right))
-                })
+            let mut ordering = Ordering::Equal;
+            if request.prioritize_pending {
+                ordering = approval_request_pending_priority(left)
+                    .cmp(&approval_request_pending_priority(right))
+                    .then_with(|| {
+                        approval_request_pending_age_seconds(right)
+                            .cmp(&approval_request_pending_age_seconds(left))
+                    });
+            }
+            if request.prioritize_attention {
+                ordering = ordering
+                    .then_with(|| {
+                        approval_request_escalation_priority(left)
+                            .cmp(&approval_request_escalation_priority(right))
+                    })
+                    .then_with(|| {
+                        approval_request_attention_priority(left)
+                            .cmp(&approval_request_attention_priority(right))
+                    });
+            }
+            ordering
                 .then_with(|| {
                     approval_request_requested_at(right).cmp(&approval_request_requested_at(left))
                 })
                 .then_with(|| approval_request_id(left).cmp(approval_request_id(right)))
         });
     }
+    let pending_summary = approval_request_list_pending_summary_json(&request_summaries);
     let integrity_summary = approval_request_list_integrity_summary_json(&request_summaries);
     let resolution_summary = approval_request_list_resolution_summary_json(&request_summaries);
     let correlation_summary = approval_request_list_correlation_summary_json(&request_summaries);
@@ -430,6 +453,7 @@ fn execute_approval_requests_list(
             "filter": {
                 "session_id": request.session_id,
                 "status": request.status.map(ApprovalRequestStatus::as_str),
+                "pending_age_bucket": request.pending_age_bucket.map(ApprovalAttentionAgeBucket::as_str),
                 "tool_name": request.tool_name,
                 "approval_key": request.approval_key,
                 "rule_id": request.rule_id,
@@ -441,12 +465,14 @@ fn execute_approval_requests_list(
                 "recommended_action": request.recommended_action.map(ApprovalRecommendedAction::as_str),
                 "attention_age_bucket": request.attention_age_bucket.map(ApprovalAttentionAgeBucket::as_str),
                 "escalation_level": request.escalation_level.map(ApprovalEscalationLevel::as_str),
+                "prioritize_pending": request.prioritize_pending,
                 "prioritize_attention": request.prioritize_attention,
                 "limit": request.limit,
             },
             "visible_session_ids": target_session_ids,
             "matched_count": matched_count,
             "returned_count": returned_count,
+            "pending_summary": pending_summary,
             "integrity_summary": integrity_summary,
             "resolution_summary": resolution_summary,
             "correlation_summary": correlation_summary,
@@ -545,6 +571,7 @@ fn approval_request_summary_json_with_evidence(
 ) -> Value {
     let resolution =
         approval_request_resolution_json(record, &execution_evidence, &execution_integrity);
+    let pending_queue = approval_request_pending_queue_json(record);
     json!({
         "approval_request_id": record.approval_request_id,
         "session_id": record.session_id,
@@ -567,9 +594,76 @@ fn approval_request_summary_json_with_evidence(
             .governance_snapshot_json
             .get("rule_id")
             .and_then(Value::as_str),
+        "pending_queue": pending_queue,
         "resolution": resolution,
         "execution_evidence": execution_evidence,
         "execution_integrity": execution_integrity,
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_pending_queue_json(record: &ApprovalRequestRecord) -> Value {
+    let awaiting_decision = matches!(record.status, ApprovalRequestStatus::Pending);
+    let age_seconds = if awaiting_decision {
+        Some((approval_unix_ts_now() - record.requested_at).max(0))
+    } else {
+        None
+    };
+    let age_bucket = approval_request_attention_age_bucket(age_seconds);
+
+    json!({
+        "awaiting_decision": awaiting_decision,
+        "age_seconds": age_seconds,
+        "age_bucket": age_bucket.map(ApprovalAttentionAgeBucket::as_str),
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_list_pending_summary_json(requests: &[Value]) -> Value {
+    let mut pending_count = 0usize;
+    let mut counts_by_age_bucket = BTreeMap::from([
+        ("fresh".to_owned(), 0usize),
+        ("stale".to_owned(), 0usize),
+        ("overdue".to_owned(), 0usize),
+    ]);
+    let mut oldest_pending_requested_at: Option<i64> = None;
+    let mut oldest_pending_age_seconds: Option<i64> = None;
+
+    for request in requests {
+        let pending_queue = request.get("pending_queue").unwrap_or(&Value::Null);
+        if pending_queue
+            .get("awaiting_decision")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            continue;
+        }
+        pending_count += 1;
+        if let Some(age_bucket) = pending_queue.get("age_bucket").and_then(Value::as_str) {
+            *counts_by_age_bucket
+                .entry(age_bucket.to_owned())
+                .or_default() += 1;
+        }
+        let requested_at = approval_request_requested_at(request);
+        oldest_pending_requested_at = Some(
+            oldest_pending_requested_at
+                .map(|current| current.min(requested_at))
+                .unwrap_or(requested_at),
+        );
+        if let Some(age_seconds) = pending_queue.get("age_seconds").and_then(Value::as_i64) {
+            oldest_pending_age_seconds = Some(
+                oldest_pending_age_seconds
+                    .map(|current| current.max(age_seconds))
+                    .unwrap_or(age_seconds),
+            );
+        }
+    }
+
+    json!({
+        "pending_count": pending_count,
+        "counts_by_age_bucket": counts_by_age_bucket,
+        "oldest_pending_requested_at": oldest_pending_requested_at,
+        "oldest_pending_age_seconds": oldest_pending_age_seconds,
     })
 }
 
@@ -755,6 +849,7 @@ fn approval_request_detail_json_with_evidence(
 ) -> Value {
     let resolution =
         approval_request_resolution_json(record, &execution_evidence, &execution_integrity);
+    let pending_queue = approval_request_pending_queue_json(record);
     json!({
         "approval_request_id": record.approval_request_id,
         "session_id": record.session_id,
@@ -771,6 +866,7 @@ fn approval_request_detail_json_with_evidence(
         "last_error": record.last_error,
         "request_payload": record.request_payload_json,
         "governance_snapshot": record.governance_snapshot_json,
+        "pending_queue": pending_queue,
         "resolution": resolution,
         "execution_evidence": execution_evidence,
         "execution_integrity": execution_integrity,
@@ -1288,6 +1384,44 @@ fn approval_request_requested_at(request: &Value) -> i64 {
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn approval_request_pending_age_seconds(request: &Value) -> i64 {
+    request
+        .get("pending_queue")
+        .and_then(|value| value.get("age_seconds"))
+        .and_then(Value::as_i64)
+        .unwrap_or_default()
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_pending_age_bucket_from_json(
+    request: &Value,
+) -> Option<ApprovalAttentionAgeBucket> {
+    request
+        .get("pending_queue")
+        .and_then(|value| value.get("age_bucket"))
+        .and_then(Value::as_str)
+        .and_then(|value| parse_approval_pending_age_bucket(value).ok())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_pending_priority(request: &Value) -> usize {
+    let pending_queue = request.get("pending_queue").unwrap_or(&Value::Null);
+    if pending_queue
+        .get("awaiting_decision")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return 3;
+    }
+    match approval_request_pending_age_bucket_from_json(request) {
+        Some(ApprovalAttentionAgeBucket::Overdue) => 0,
+        Some(ApprovalAttentionAgeBucket::Stale) => 1,
+        Some(ApprovalAttentionAgeBucket::Fresh) => 2,
+        None => 2,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn approval_unix_ts_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1311,6 +1445,10 @@ fn parse_approval_requests_list_request(
     Ok(ApprovalRequestsListRequest {
         session_id: optional_payload_string(payload, "session_id"),
         status: optional_payload_approval_request_status(payload, "status")?,
+        pending_age_bucket: optional_payload_approval_pending_age_bucket(
+            payload,
+            "pending_age_bucket",
+        )?,
         tool_name: optional_payload_string(payload, "tool_name"),
         approval_key: optional_payload_string(payload, "approval_key"),
         rule_id: optional_payload_string(payload, "rule_id"),
@@ -1331,6 +1469,10 @@ fn parse_approval_requests_list_request(
             "attention_age_bucket",
         )?,
         escalation_level: optional_payload_approval_escalation_level(payload, "escalation_level")?,
+        prioritize_pending: payload
+            .get("prioritize_pending")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         prioritize_attention: payload
             .get("prioritize_attention")
             .and_then(Value::as_bool)
@@ -1435,6 +1577,16 @@ fn optional_payload_approval_execution_integrity_status(
 ) -> Result<Option<ApprovalExecutionIntegrityStatus>, String> {
     optional_payload_string(payload, field)
         .map(|value| parse_approval_execution_integrity_status(value.as_str()))
+        .transpose()
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn optional_payload_approval_pending_age_bucket(
+    payload: &Value,
+    field: &str,
+) -> Result<Option<ApprovalAttentionAgeBucket>, String> {
+    optional_payload_string(payload, field)
+        .map(|value| parse_approval_pending_age_bucket(value.as_str()))
         .transpose()
 }
 
@@ -1550,6 +1702,18 @@ fn parse_approval_replay_result(value: &str) -> Result<ApprovalReplayResult, Str
         "completed_with_attention" => Ok(ApprovalReplayResult::CompletedWithAttention),
         _ => Err(format!(
             "approval_requests_list_invalid_request: unknown replay_result `{value}`"
+        )),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn parse_approval_pending_age_bucket(value: &str) -> Result<ApprovalAttentionAgeBucket, String> {
+    match value {
+        "fresh" => Ok(ApprovalAttentionAgeBucket::Fresh),
+        "stale" => Ok(ApprovalAttentionAgeBucket::Stale),
+        "overdue" => Ok(ApprovalAttentionAgeBucket::Overdue),
+        _ => Err(format!(
+            "approval_requests_list_invalid_request: unknown pending_age_bucket `{value}`"
         )),
     }
 }
@@ -2978,6 +3142,134 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[test]
+    fn approval_request_tool_query_list_prioritizes_pending_queue_and_summarizes_age() {
+        let config = isolated_memory_config("approval-query-list-pending-priority");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+        seed_request(
+            &repo,
+            "apr-pending-fresh",
+            "root-session",
+            "delegate_async",
+            "governed_tool_requires_per_call_approval",
+        );
+        seed_request(
+            &repo,
+            "apr-pending-stale",
+            "root-session",
+            "session_cancel",
+            "governed_tool_requires_per_call_approval",
+        );
+        seed_request(
+            &repo,
+            "apr-pending-overdue",
+            "root-session",
+            "shell.exec",
+            "governed_tool_requires_per_call_approval",
+        );
+        seed_request(
+            &repo,
+            "apr-pending-executed",
+            "root-session",
+            "memory_search",
+            "governed_tool_requires_per_call_approval",
+        );
+
+        transition_request_status(
+            &repo,
+            "apr-pending-executed",
+            ApprovalRequestStatus::Pending,
+            ApprovalRequestStatus::Executed,
+            None,
+        );
+
+        let now = test_unix_ts_now();
+        overwrite_request_requested_at(&config, "apr-pending-fresh", now - 60);
+        overwrite_request_requested_at(&config, "apr-pending-stale", now - 7_200);
+        overwrite_request_requested_at(&config, "apr-pending-overdue", now - 172_800);
+        overwrite_request_requested_at(&config, "apr-pending-executed", now - 30);
+
+        let prioritized_outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "prioritize_pending": true,
+                    "limit": 10,
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list prioritized pending outcome");
+
+        assert_eq!(
+            prioritized_outcome.payload["filter"]["prioritize_pending"],
+            true
+        );
+        let requests = prioritized_outcome.payload["requests"]
+            .as_array()
+            .expect("pending-priority requests array");
+        assert_eq!(requests.len(), 4);
+        assert_eq!(requests[0]["approval_request_id"], "apr-pending-overdue");
+        assert_eq!(requests[0]["pending_queue"]["age_bucket"], "overdue");
+        assert_eq!(requests[1]["approval_request_id"], "apr-pending-stale");
+        assert_eq!(requests[1]["pending_queue"]["age_bucket"], "stale");
+        assert_eq!(requests[2]["approval_request_id"], "apr-pending-fresh");
+        assert_eq!(requests[2]["pending_queue"]["age_bucket"], "fresh");
+        assert_eq!(requests[3]["approval_request_id"], "apr-pending-executed");
+        assert_eq!(requests[3]["pending_queue"]["awaiting_decision"], false);
+        assert_eq!(requests[3]["pending_queue"]["age_seconds"], Value::Null);
+        assert_eq!(requests[3]["pending_queue"]["age_bucket"], Value::Null);
+
+        let pending_summary = &prioritized_outcome.payload["pending_summary"];
+        assert_eq!(pending_summary["pending_count"], 3);
+        assert_eq!(pending_summary["counts_by_age_bucket"]["fresh"], 1);
+        assert_eq!(pending_summary["counts_by_age_bucket"]["stale"], 1);
+        assert_eq!(pending_summary["counts_by_age_bucket"]["overdue"], 1);
+        assert_eq!(
+            pending_summary["oldest_pending_requested_at"],
+            now - 172_800
+        );
+        assert!(
+            pending_summary["oldest_pending_age_seconds"]
+                .as_i64()
+                .expect("oldest pending age seconds")
+                >= 172_800
+        );
+
+        let stale_outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "pending_age_bucket": "stale",
+                    "limit": 10,
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list stale pending age outcome");
+
+        assert_eq!(
+            stale_outcome.payload["filter"]["pending_age_bucket"],
+            "stale"
+        );
+        assert_eq!(stale_outcome.payload["matched_count"], 1);
+        let stale_requests = stale_outcome.payload["requests"]
+            .as_array()
+            .expect("stale pending requests array");
+        assert_eq!(stale_requests.len(), 1);
+        assert_eq!(
+            stale_requests[0]["approval_request_id"],
+            "apr-pending-stale"
+        );
+        assert_eq!(stale_requests[0]["pending_queue"]["age_bucket"], "stale");
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
     fn approval_request_tool_query_list_surfaces_integrity_summary_counts() {
         let config = isolated_memory_config("approval-query-list-integrity-summary");
         let repo = SessionRepository::new(&config).expect("repository");
@@ -3343,6 +3635,32 @@ mod tests {
         assert!(
             error.contains("approval_requests_list_invalid_request: unknown recommended_action"),
             "expected recommended_action validation error, got: {error}"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_tool_query_list_rejects_unknown_pending_age_bucket() {
+        let config = isolated_memory_config("approval-query-list-invalid-pending-age-bucket");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+
+        let error = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "pending_age_bucket": "broken",
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect_err("unknown pending_age_bucket should be rejected");
+
+        assert!(
+            error.contains("approval_requests_list_invalid_request: unknown pending_age_bucket"),
+            "expected pending_age_bucket validation error, got: {error}"
         );
     }
 
