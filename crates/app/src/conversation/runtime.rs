@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use loongclaw_contracts::Capability;
@@ -26,7 +27,9 @@ use super::turn_engine::ProviderTurn;
 #[cfg(feature = "memory-sqlite")]
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
-use crate::session::repository::{SessionKind, SessionRepository};
+use crate::session::repository::{
+    SessionKind, SessionRepository, SessionState, TransitionSessionWithEventIfCurrentRequest,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionContext {
@@ -63,6 +66,77 @@ fn normalize_session_id(session_id: String) -> String {
         "default".to_owned()
     } else {
         trimmed.to_owned()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AsyncDelegateSpawnRequest {
+    pub child_session_id: String,
+    pub parent_session_id: String,
+    pub task: String,
+    pub label: Option<String>,
+    pub timeout_seconds: u64,
+}
+
+#[async_trait]
+pub trait AsyncDelegateSpawner: Send + Sync {
+    async fn spawn(&self, request: AsyncDelegateSpawnRequest) -> Result<(), String>;
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Clone)]
+struct DefaultAsyncDelegateSpawner {
+    config: Arc<LoongClawConfig>,
+}
+
+#[cfg(feature = "memory-sqlite")]
+impl DefaultAsyncDelegateSpawner {
+    fn new(config: &LoongClawConfig) -> Self {
+        Self {
+            config: Arc::new(config.clone()),
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[async_trait]
+impl AsyncDelegateSpawner for DefaultAsyncDelegateSpawner {
+    async fn spawn(&self, request: AsyncDelegateSpawnRequest) -> Result<(), String> {
+        let repo = SessionRepository::new(&MemoryRuntimeConfig::from_memory_config(
+            &self.config.memory,
+        ))?;
+        let started = repo.transition_session_with_event_if_current(
+            &request.child_session_id,
+            TransitionSessionWithEventIfCurrentRequest {
+                expected_state: SessionState::Ready,
+                next_state: SessionState::Running,
+                last_error: None,
+                event_kind: "delegate_started".to_owned(),
+                actor_session_id: Some(request.parent_session_id.clone()),
+                event_payload_json: json!({
+                    "task": request.task.clone(),
+                    "label": request.label.clone(),
+                    "timeout_seconds": request.timeout_seconds,
+                }),
+            },
+        )?;
+        if started.is_none() {
+            return Ok(());
+        }
+
+        let runtime = DefaultConversationRuntime::from_config_or_env(self.config.as_ref())?;
+        let _ = super::turn_coordinator::run_started_delegate_child_turn_with_runtime(
+            self.config.as_ref(),
+            &runtime,
+            &request.child_session_id,
+            &request.parent_session_id,
+            request.label,
+            &request.task,
+            request.timeout_seconds,
+            None,
+        )
+        .await;
+        Ok(())
     }
 }
 
@@ -214,6 +288,14 @@ pub trait ConversationRuntime: Send + Sync {
     ) -> CliResult<ToolView> {
         let _ = (session_id, kernel_ctx);
         Ok(runtime_tool_view_for_config(&config.tools))
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn async_delegate_spawner(
+        &self,
+        config: &LoongClawConfig,
+    ) -> Option<Arc<dyn AsyncDelegateSpawner>> {
+        Some(Arc::new(DefaultAsyncDelegateSpawner::new(config)))
     }
 
     async fn bootstrap(

@@ -209,7 +209,7 @@ pub fn tool_catalog() -> ToolCatalog {
             aliases: &[],
             description: "Delegate a focused subtask into a background child session",
             execution_kind: ToolExecutionKind::App,
-            availability: ToolAvailability::Planned,
+            availability: runtime_session_tool_availability(),
             provider_definition_builder: delegate_async_definition,
         },
         ToolDescriptor {

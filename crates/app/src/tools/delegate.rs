@@ -72,6 +72,23 @@ pub(crate) fn delegate_success_outcome(
     }
 }
 
+pub(crate) fn delegate_async_queued_outcome(
+    child_session_id: String,
+    label: Option<String>,
+    timeout_seconds: u64,
+) -> ToolCoreOutcome {
+    ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: json!({
+            "child_session_id": child_session_id,
+            "label": label,
+            "mode": "async",
+            "state": "queued",
+            "timeout_seconds": timeout_seconds,
+        }),
+    }
+}
+
 pub(crate) fn delegate_timeout_outcome(
     child_session_id: String,
     label: Option<String>,
