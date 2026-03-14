@@ -42,6 +42,7 @@ struct ApprovalRequestsListRequest {
     execution_plane: Option<ToolExecutionPlane>,
     governance_scope: Option<ToolGovernanceScope>,
     risk_class: Option<ToolRiskClass>,
+    grant_audit_status: Option<ApprovalGrantAuditStatus>,
     grant_state: Option<ApprovalGrantState>,
     grant_scope_session_id: Option<String>,
     grant_created_by_session_id: Option<String>,
@@ -86,6 +87,25 @@ impl ApprovalGrantState {
             Self::Present => "present",
             Self::Absent => "absent",
             Self::LineageUnresolved => "lineage_unresolved",
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApprovalGrantAuditStatus {
+    RequiredPresent,
+    RequiredMissing,
+    NotApplicable,
+}
+
+#[cfg(feature = "memory-sqlite")]
+impl ApprovalGrantAuditStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::RequiredPresent => "required_present",
+            Self::RequiredMissing => "required_missing",
+            Self::NotApplicable => "not_applicable",
         }
     }
 }
@@ -408,6 +428,11 @@ fn execute_approval_requests_list(
         request_summaries
             .retain(|item| approval_request_risk_class_from_json(item) == Some(risk_class));
     }
+    if let Some(grant_audit_status) = request.grant_audit_status {
+        request_summaries.retain(|item| {
+            approval_request_grant_audit_status_from_json(item) == Some(grant_audit_status)
+        });
+    }
     if let Some(grant_state) = request.grant_state {
         request_summaries
             .retain(|item| approval_request_grant_state_from_json(item) == Some(grant_state));
@@ -533,6 +558,7 @@ fn execute_approval_requests_list(
                 "execution_plane": request.execution_plane.map(tool_execution_plane_as_str),
                 "governance_scope": request.governance_scope.map(tool_governance_scope_as_str),
                 "risk_class": request.risk_class.map(tool_risk_class_as_str),
+                "grant_audit_status": request.grant_audit_status.map(ApprovalGrantAuditStatus::as_str),
                 "grant_state": request.grant_state.map(ApprovalGrantState::as_str),
                 "grant_scope_session_id": request.grant_scope_session_id,
                 "grant_created_by_session_id": request.grant_created_by_session_id,
@@ -1842,6 +1868,17 @@ fn approval_request_risk_class_from_json(request: &Value) -> Option<ToolRiskClas
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn approval_request_grant_audit_status_from_json(
+    request: &Value,
+) -> Option<ApprovalGrantAuditStatus> {
+    request
+        .get("grant_audit")
+        .and_then(|value| value.get("status"))
+        .and_then(Value::as_str)
+        .and_then(|value| parse_approval_grant_audit_status(value).ok())
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn approval_request_resolved_by_session_id_from_json(request: &Value) -> Option<&str> {
     request.get("resolved_by_session_id").and_then(Value::as_str)
 }
@@ -2104,6 +2141,10 @@ fn parse_approval_requests_list_request(
         execution_plane: optional_payload_tool_execution_plane(payload, "execution_plane")?,
         governance_scope: optional_payload_tool_governance_scope(payload, "governance_scope")?,
         risk_class: optional_payload_tool_risk_class(payload, "risk_class")?,
+        grant_audit_status: optional_payload_approval_grant_audit_status(
+            payload,
+            "grant_audit_status",
+        )?,
         grant_state: optional_payload_approval_grant_state(payload, "grant_state")?,
         grant_scope_session_id: optional_payload_string(payload, "grant_scope_session_id"),
         grant_created_by_session_id: optional_payload_string(
@@ -2266,6 +2307,16 @@ fn optional_payload_tool_risk_class(
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn optional_payload_approval_grant_audit_status(
+    payload: &Value,
+    field: &str,
+) -> Result<Option<ApprovalGrantAuditStatus>, String> {
+    optional_payload_string(payload, field)
+        .map(|value| parse_approval_grant_audit_status(value.as_str()))
+        .transpose()
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn optional_payload_approval_grant_state(
     payload: &Value,
     field: &str,
@@ -2422,6 +2473,18 @@ fn parse_tool_risk_class(value: &str) -> Result<ToolRiskClass, String> {
         "High" => Ok(ToolRiskClass::High),
         _ => Err(format!(
             "approval_requests_list_invalid_request: unknown risk_class `{value}`"
+        )),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn parse_approval_grant_audit_status(value: &str) -> Result<ApprovalGrantAuditStatus, String> {
+    match value {
+        "required_present" => Ok(ApprovalGrantAuditStatus::RequiredPresent),
+        "required_missing" => Ok(ApprovalGrantAuditStatus::RequiredMissing),
+        "not_applicable" => Ok(ApprovalGrantAuditStatus::NotApplicable),
+        _ => Err(format!(
+            "approval_requests_list_invalid_request: unknown grant_audit_status `{value}`"
         )),
     }
 }
@@ -5498,6 +5561,170 @@ mod tests {
                 .expect("operator-beta approval key counts")
                 .len(),
             1
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_tool_query_list_filters_by_grant_audit_status() {
+        let config = isolated_memory_config("approval-query-list-grant-audit-filter");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+
+        seed_request(
+            &repo,
+            "apr-grant-audit-filter-present",
+            "root-session",
+            "delegate_async",
+            "governed_tool_requires_per_call_approval",
+        );
+        seed_request(
+            &repo,
+            "apr-grant-audit-filter-missing",
+            "root-session",
+            "session_cancel",
+            "governed_tool_requires_per_call_approval",
+        );
+        seed_request(
+            &repo,
+            "apr-grant-audit-filter-once",
+            "root-session",
+            "memory_search",
+            "governed_tool_requires_per_call_approval",
+        );
+
+        repo.transition_approval_request_if_current(
+            "apr-grant-audit-filter-present",
+            TransitionApprovalRequestIfCurrentRequest {
+                expected_status: ApprovalRequestStatus::Pending,
+                next_status: ApprovalRequestStatus::Approved,
+                decision: Some(ApprovalDecision::ApproveAlways),
+                resolved_by_session_id: Some("operator-session".to_owned()),
+                executed_at: None,
+                last_error: None,
+            },
+        )
+        .expect("transition present grant-audit request")
+        .expect("present grant-audit request should transition");
+        repo.transition_approval_request_if_current(
+            "apr-grant-audit-filter-missing",
+            TransitionApprovalRequestIfCurrentRequest {
+                expected_status: ApprovalRequestStatus::Pending,
+                next_status: ApprovalRequestStatus::Approved,
+                decision: Some(ApprovalDecision::ApproveAlways),
+                resolved_by_session_id: Some("operator-session".to_owned()),
+                executed_at: None,
+                last_error: None,
+            },
+        )
+        .expect("transition missing grant-audit request")
+        .expect("missing grant-audit request should transition");
+        repo.transition_approval_request_if_current(
+            "apr-grant-audit-filter-once",
+            TransitionApprovalRequestIfCurrentRequest {
+                expected_status: ApprovalRequestStatus::Pending,
+                next_status: ApprovalRequestStatus::Executed,
+                decision: Some(ApprovalDecision::ApproveOnce),
+                resolved_by_session_id: Some("operator-session".to_owned()),
+                executed_at: Some(1_773_000_000),
+                last_error: None,
+            },
+        )
+        .expect("transition approve_once grant-audit request")
+        .expect("approve_once grant-audit request should transition");
+
+        seed_runtime_grant(
+            &repo,
+            "root-session",
+            "tool:delegate_async",
+            Some("operator-session"),
+        );
+
+        let missing_outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "grant_audit_status": "required_missing",
+                    "limit": 10,
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list outcome for missing grant-audit filter");
+
+        assert_eq!(missing_outcome.payload["matched_count"], 1);
+        assert_eq!(missing_outcome.payload["returned_count"], 1);
+        assert_eq!(
+            missing_outcome.payload["filter"]["grant_audit_status"],
+            "required_missing"
+        );
+        let requests = missing_outcome.payload["requests"]
+            .as_array()
+            .expect("grant-audit filtered requests");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0]["approval_request_id"],
+            "apr-grant-audit-filter-missing"
+        );
+        assert_eq!(requests[0]["grant_audit"]["status"], "required_missing");
+
+        let present_outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "grant_audit_status": "required_present",
+                    "limit": 10,
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list outcome for present grant-audit filter");
+
+        assert_eq!(present_outcome.payload["matched_count"], 1);
+        let requests = present_outcome.payload["requests"]
+            .as_array()
+            .expect("grant-audit filtered requests");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0]["approval_request_id"],
+            "apr-grant-audit-filter-present"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_tool_query_list_rejects_unknown_grant_audit_status() {
+        let config = isolated_memory_config("approval-query-list-invalid-grant-audit-status");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+        seed_request(
+            &repo,
+            "apr-invalid-grant-audit-status",
+            "root-session",
+            "session_cancel",
+            "governed_tool_requires_per_call_approval",
+        );
+
+        let error = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "grant_audit_status": "broken",
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect_err("grant_audit_status should reject unknown values");
+
+        assert_eq!(
+            error,
+            "approval_requests_list_invalid_request: unknown grant_audit_status `broken`"
         );
     }
 
