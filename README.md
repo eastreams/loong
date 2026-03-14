@@ -455,7 +455,7 @@ cargo build -p loongclaw-daemon --no-default-features --features "channel-cli,pr
 | [Reliability](docs/RELIABILITY.md) | Build and kernel invariants |
 | [Examples](examples/README.md) | Spec files, plugin samples, benchmarks |
 | [Product Specs](docs/product-specs/index.md) | User-facing requirements (in progress) |
-| [Skills](skills/) | Agent skills (`update-harness.skill`, `harness-engineering.skill`) |
+| [Skills](skills/) | Agent skills (`update-harness.skill`) |
 | [Changelog](CHANGELOG.md) | Release history |
 
 ## Configuration

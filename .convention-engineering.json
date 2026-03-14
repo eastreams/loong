@@ -9,7 +9,7 @@
     "docs/RELIABILITY.md",
     "docs/SECURITY.md",
     "docs/QUALITY_SCORE.md",
-    "docs/tech-debt-tracker.md",
+    "docs/TECH_DEBT.md",
     "docs/design-docs/index.md",
     "docs/design-docs/core-beliefs.md",
     "docs/design-docs/layered-kernel-design.md",
@@ -131,7 +131,7 @@
     },
     {
       "name": "tech-debt-structure",
-      "file": "docs/tech-debt-tracker.md",
+      "file": "docs/TECH_DEBT.md",
       "required_markers": [
         "## Active Debt",
         "## Resolved"

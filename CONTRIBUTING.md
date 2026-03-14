@@ -20,7 +20,7 @@ LoongClaw uses a progressive-disclosure documentation harness to keep the repo a
 **Before pushing**, verify:
 - `CLAUDE.md` and `AGENTS.md` are mirrored (identical content)
 - Quality scores in `docs/QUALITY_SCORE.md` reflect current state
-- Tech debt in `docs/tech-debt-tracker.md` is up to date
+- Tech debt in `docs/TECH_DEBT.md` is up to date
 
 Agent skills at `skills/*.skill` (zip archives) can automate these checks. Install for your platform — e.g., `unzip skills/update-harness.skill -d ~/.claude/skills/update-harness/` for Claude Code.
 

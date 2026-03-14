@@ -49,7 +49,7 @@ CapabilityToken → PolicyEngine → PolicyExtensionChain → Execution → Audi
 
 ## See Also
 
-- [Tech Debt Tracker](tech-debt-tracker.md) — known security gaps and their tracking IDs
+- [Tech Debt Tracker](TECH_DEBT.md) — known security gaps and their tracking IDs
 - [Design Docs Index](design-docs/index.md) — security-related design decisions
 - [Layered Kernel Design](design-docs/layered-kernel-design.md) — L1 security layer specification
 - [Core Beliefs](design-docs/core-beliefs.md) — principle #3: capability-gated by default

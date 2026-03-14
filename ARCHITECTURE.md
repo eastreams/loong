@@ -123,6 +123,6 @@ mechanically where possible.
 | Build and kernel invariants | [Reliability](docs/RELIABILITY.md) |
 | Domain quality grades | [Quality Score](docs/QUALITY_SCORE.md) |
 | Product principles | [Product Sense](docs/PRODUCT_SENSE.md) |
-| Tech debt (22 items) | [Tech Debt Tracker](docs/tech-debt-tracker.md) |
+| Tech debt (22 items) | [Tech Debt Tracker](docs/TECH_DEBT.md) |
 | Contributor workflow and recipes | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Examples and spec files | [Examples](examples/README.md) |

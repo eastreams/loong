@@ -91,9 +91,7 @@ Use `task verify` for the stricter local superset (architecture, conventions, do
 | Reliability invariants | `docs/RELIABILITY.md` |
 | Security model & gaps | `docs/SECURITY.md` |
 | Quality scores & gaps | `docs/QUALITY_SCORE.md` |
-| Tech debt tracker (22 items) | `docs/tech-debt-tracker.md` |
-| Agent execution plans (local only) | `docs/exec-plans/active/` |
-| Durable phase plans (local only) | `docs/plans/` |
+| Tech debt tracker (22 items) | `docs/TECH_DEBT.md` |
 | Product sense & principles | `docs/PRODUCT_SENSE.md` |
 | Release process docs | `docs/releases/` |
 | Product requirements | `docs/product-specs/` |
