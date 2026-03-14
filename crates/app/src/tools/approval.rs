@@ -43,6 +43,7 @@ struct ApprovalRequestsListRequest {
     governance_scope: Option<ToolGovernanceScope>,
     risk_class: Option<ToolRiskClass>,
     grant_audit_status: Option<ApprovalGrantAuditStatus>,
+    grant_review_age_bucket: Option<ApprovalAttentionAgeBucket>,
     grant_state: Option<ApprovalGrantState>,
     grant_scope_session_id: Option<String>,
     grant_created_by_session_id: Option<String>,
@@ -433,6 +434,12 @@ fn execute_approval_requests_list(
             approval_request_grant_audit_status_from_json(item) == Some(grant_audit_status)
         });
     }
+    if let Some(grant_review_age_bucket) = request.grant_review_age_bucket {
+        request_summaries.retain(|item| {
+            approval_request_grant_review_age_bucket_from_json(item)
+                == Some(grant_review_age_bucket)
+        });
+    }
     if let Some(grant_state) = request.grant_state {
         request_summaries
             .retain(|item| approval_request_grant_state_from_json(item) == Some(grant_state));
@@ -559,6 +566,7 @@ fn execute_approval_requests_list(
                 "governance_scope": request.governance_scope.map(tool_governance_scope_as_str),
                 "risk_class": request.risk_class.map(tool_risk_class_as_str),
                 "grant_audit_status": request.grant_audit_status.map(ApprovalGrantAuditStatus::as_str),
+                "grant_review_age_bucket": request.grant_review_age_bucket.map(ApprovalAttentionAgeBucket::as_str),
                 "grant_state": request.grant_state.map(ApprovalGrantState::as_str),
                 "grant_scope_session_id": request.grant_scope_session_id,
                 "grant_created_by_session_id": request.grant_created_by_session_id,
@@ -1879,6 +1887,17 @@ fn approval_request_grant_audit_status_from_json(
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn approval_request_grant_review_age_bucket_from_json(
+    request: &Value,
+) -> Option<ApprovalAttentionAgeBucket> {
+    request
+        .get("grant_review")
+        .and_then(|value| value.get("age_bucket"))
+        .and_then(Value::as_str)
+        .and_then(|value| parse_approval_grant_review_age_bucket(value).ok())
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn approval_request_resolved_by_session_id_from_json(request: &Value) -> Option<&str> {
     request.get("resolved_by_session_id").and_then(Value::as_str)
 }
@@ -2145,6 +2164,10 @@ fn parse_approval_requests_list_request(
             payload,
             "grant_audit_status",
         )?,
+        grant_review_age_bucket: optional_payload_approval_grant_review_age_bucket(
+            payload,
+            "grant_review_age_bucket",
+        )?,
         grant_state: optional_payload_approval_grant_state(payload, "grant_state")?,
         grant_scope_session_id: optional_payload_string(payload, "grant_scope_session_id"),
         grant_created_by_session_id: optional_payload_string(
@@ -2317,6 +2340,16 @@ fn optional_payload_approval_grant_audit_status(
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn optional_payload_approval_grant_review_age_bucket(
+    payload: &Value,
+    field: &str,
+) -> Result<Option<ApprovalAttentionAgeBucket>, String> {
+    optional_payload_string(payload, field)
+        .map(|value| parse_approval_grant_review_age_bucket(value.as_str()))
+        .transpose()
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn optional_payload_approval_grant_state(
     payload: &Value,
     field: &str,
@@ -2485,6 +2518,20 @@ fn parse_approval_grant_audit_status(value: &str) -> Result<ApprovalGrantAuditSt
         "not_applicable" => Ok(ApprovalGrantAuditStatus::NotApplicable),
         _ => Err(format!(
             "approval_requests_list_invalid_request: unknown grant_audit_status `{value}`"
+        )),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn parse_approval_grant_review_age_bucket(
+    value: &str,
+) -> Result<ApprovalAttentionAgeBucket, String> {
+    match value {
+        "fresh" => Ok(ApprovalAttentionAgeBucket::Fresh),
+        "stale" => Ok(ApprovalAttentionAgeBucket::Stale),
+        "overdue" => Ok(ApprovalAttentionAgeBucket::Overdue),
+        _ => Err(format!(
+            "approval_requests_list_invalid_request: unknown grant_review_age_bucket `{value}`"
         )),
     }
 }
@@ -5725,6 +5772,152 @@ mod tests {
         assert_eq!(
             error,
             "approval_requests_list_invalid_request: unknown grant_audit_status `broken`"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_tool_query_list_filters_by_grant_review_age_bucket() {
+        let config = isolated_memory_config("approval-query-list-grant-review-filter");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+
+        seed_request(
+            &repo,
+            "apr-grant-review-filter-fresh",
+            "root-session",
+            "delegate_async",
+            "governed_tool_requires_per_call_approval",
+        );
+        seed_request(
+            &repo,
+            "apr-grant-review-filter-overdue",
+            "root-session",
+            "session_cancel",
+            "governed_tool_requires_per_call_approval",
+        );
+        seed_request(
+            &repo,
+            "apr-grant-review-filter-absent",
+            "root-session",
+            "memory_search",
+            "governed_tool_requires_per_call_approval",
+        );
+
+        seed_runtime_grant(
+            &repo,
+            "root-session",
+            "tool:delegate_async",
+            Some("operator-fresh"),
+        );
+        seed_runtime_grant(
+            &repo,
+            "root-session",
+            "tool:session_cancel",
+            Some("operator-overdue"),
+        );
+
+        let now = test_unix_ts_now();
+        overwrite_runtime_grant_timestamps(
+            &config,
+            "root-session",
+            "tool:delegate_async",
+            now - (60 * 60) - 60,
+            now - (60 * 60),
+        );
+        overwrite_runtime_grant_timestamps(
+            &config,
+            "root-session",
+            "tool:session_cancel",
+            now - (9 * 24 * 60 * 60) - 60,
+            now - (9 * 24 * 60 * 60),
+        );
+
+        let overdue_outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "grant_review_age_bucket": "overdue",
+                    "limit": 10,
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list outcome for overdue grant-review filter");
+
+        assert_eq!(overdue_outcome.payload["matched_count"], 1);
+        assert_eq!(overdue_outcome.payload["returned_count"], 1);
+        assert_eq!(
+            overdue_outcome.payload["filter"]["grant_review_age_bucket"],
+            "overdue"
+        );
+        let requests = overdue_outcome.payload["requests"]
+            .as_array()
+            .expect("grant-review filtered requests");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0]["approval_request_id"],
+            "apr-grant-review-filter-overdue"
+        );
+        assert_eq!(requests[0]["grant_review"]["age_bucket"], "overdue");
+
+        let fresh_outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "grant_review_age_bucket": "fresh",
+                    "limit": 10,
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list outcome for fresh grant-review filter");
+
+        assert_eq!(fresh_outcome.payload["matched_count"], 1);
+        let requests = fresh_outcome.payload["requests"]
+            .as_array()
+            .expect("grant-review filtered requests");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0]["approval_request_id"],
+            "apr-grant-review-filter-fresh"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_tool_query_list_rejects_unknown_grant_review_age_bucket() {
+        let config = isolated_memory_config("approval-query-list-invalid-grant-review-bucket");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+        seed_request(
+            &repo,
+            "apr-invalid-grant-review-bucket",
+            "root-session",
+            "session_cancel",
+            "governed_tool_requires_per_call_approval",
+        );
+
+        let error = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "grant_review_age_bucket": "ancient",
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect_err("grant_review_age_bucket should reject unknown values");
+
+        assert_eq!(
+            error,
+            "approval_requests_list_invalid_request: unknown grant_review_age_bucket `ancient`"
         );
     }
 
