@@ -6,7 +6,8 @@ use axum::{Router, routing::post};
 use crate::CliResult;
 use crate::KernelContext;
 use crate::channel::{
-    ChannelAdapter, ChannelOutboundTarget, runtime_state::ChannelOperationRuntimeTracker,
+    ChannelAdapter, ChannelOutboundTarget, ChannelOutboundTargetKind,
+    runtime_state::ChannelOperationRuntimeTracker,
 };
 use crate::config::{
     ChannelDefaultAccountSelectionSource, LoongClawConfig, ResolvedFeishuChannelConfig,
@@ -22,19 +23,44 @@ use webhook::{FeishuWebhookState, feishu_webhook_handler};
 
 pub(super) async fn run_feishu_send(
     config: &ResolvedFeishuChannelConfig,
-    receive_id: &str,
+    target_kind: ChannelOutboundTargetKind,
+    target_id: &str,
     text: &str,
     as_card: bool,
 ) -> CliResult<()> {
     let mut adapter = FeishuAdapter::new(config)?;
     adapter.refresh_tenant_token().await?;
-    let target = ChannelOutboundTarget::feishu_receive_id(receive_id);
+    let target = build_feishu_send_target(target_kind, target_id)?;
 
     if as_card {
         adapter.send_card(&target, text).await
     } else {
         adapter.send_text(&target, text).await
     }
+}
+
+fn build_feishu_send_target(
+    target_kind: ChannelOutboundTargetKind,
+    target_id: &str,
+) -> CliResult<ChannelOutboundTarget> {
+    let target_id = target_id.trim();
+    if target_id.is_empty() {
+        return Err("feishu outbound target id is empty".to_owned());
+    }
+
+    let target = match target_kind {
+        ChannelOutboundTargetKind::MessageReply => {
+            ChannelOutboundTarget::feishu_message_reply(target_id)
+        }
+        ChannelOutboundTargetKind::ReceiveId => ChannelOutboundTarget::feishu_receive_id(target_id),
+        ChannelOutboundTargetKind::Conversation => {
+            return Err(
+                "feishu send does not support conversation targets; use receive_id or message_reply"
+                    .to_owned(),
+            );
+        }
+    };
+    Ok(target)
 }
 
 #[allow(clippy::print_stdout)] // CLI startup banner
@@ -91,4 +117,33 @@ pub(super) async fn run_feishu_channel(
     axum::serve(listener, app)
         .await
         .map_err(|error| format!("feishu webhook server stopped: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_feishu_send_target_supports_receive_id_and_reply_kinds() {
+        let receive_id_target =
+            build_feishu_send_target(ChannelOutboundTargetKind::ReceiveId, " ou_123 ")
+                .expect("receive id target");
+        let reply_target =
+            build_feishu_send_target(ChannelOutboundTargetKind::MessageReply, " om_123 ")
+                .expect("reply target");
+
+        assert_eq!(receive_id_target.kind, ChannelOutboundTargetKind::ReceiveId);
+        assert_eq!(receive_id_target.id, "ou_123");
+        assert_eq!(reply_target.kind, ChannelOutboundTargetKind::MessageReply);
+        assert_eq!(reply_target.id, "om_123");
+    }
+
+    #[test]
+    fn build_feishu_send_target_rejects_conversation_kind() {
+        assert_eq!(
+            build_feishu_send_target(ChannelOutboundTargetKind::Conversation, "oc_123")
+                .expect_err("conversation targets should be rejected"),
+            "feishu send does not support conversation targets; use receive_id or message_reply"
+        );
+    }
 }

@@ -20,6 +20,35 @@ pub(super) struct FeishuAdapter {
     tenant_access_token: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FeishuSendTarget<'a> {
+    MessageReply(&'a str),
+    ReceiveId(&'a str),
+}
+
+fn resolve_feishu_send_target<'a>(
+    target: &'a ChannelOutboundTarget,
+) -> CliResult<FeishuSendTarget<'a>> {
+    if target.platform != ChannelPlatform::Feishu {
+        return Err(format!(
+            "feishu adapter cannot send to {} target",
+            target.platform.as_str()
+        ));
+    }
+
+    match target.kind {
+        ChannelOutboundTargetKind::MessageReply => {
+            Ok(FeishuSendTarget::MessageReply(target.trimmed_id()?))
+        }
+        ChannelOutboundTargetKind::ReceiveId => {
+            Ok(FeishuSendTarget::ReceiveId(target.trimmed_id()?))
+        }
+        ChannelOutboundTargetKind::Conversation => Err(
+            "feishu adapter does not support conversation targets for outbound sends".to_owned(),
+        ),
+    }
+}
+
 impl FeishuAdapter {
     pub(super) fn new(config: &ResolvedFeishuChannelConfig) -> CliResult<Self> {
         let app_id = config
@@ -155,19 +184,12 @@ impl FeishuAdapter {
         &self,
         target: &'a ChannelOutboundTarget,
     ) -> CliResult<&'a str> {
-        if target.platform != ChannelPlatform::Feishu {
-            return Err(format!(
-                "feishu adapter cannot send to {} target",
-                target.platform.as_str()
-            ));
+        match resolve_feishu_send_target(target)? {
+            FeishuSendTarget::ReceiveId(receive_id) => Ok(receive_id),
+            FeishuSendTarget::MessageReply(_) => {
+                Err("feishu card send requires receive_id target, got message_reply".to_owned())
+            }
         }
-        if target.kind != ChannelOutboundTargetKind::ReceiveId {
-            return Err(format!(
-                "feishu direct send requires receive_id target, got {}",
-                target.kind.as_str()
-            ));
-        }
-        target.trimmed_id()
     }
 }
 
@@ -182,25 +204,66 @@ impl ChannelAdapter for FeishuAdapter {
     }
 
     async fn send_text(&self, target: &ChannelOutboundTarget, text: &str) -> CliResult<()> {
-        if target.platform != ChannelPlatform::Feishu {
-            return Err(format!(
-                "feishu adapter cannot send to {} target",
-                target.platform.as_str()
-            ));
-        }
-
-        match target.kind {
-            ChannelOutboundTargetKind::MessageReply => {
-                self.send_reply(target.trimmed_id()?, text).await
-            }
-            ChannelOutboundTargetKind::ReceiveId => {
-                self.send_message(target.trimmed_id()?, "text", json!({"text": text}))
+        match resolve_feishu_send_target(target)? {
+            FeishuSendTarget::MessageReply(message_id) => self.send_reply(message_id, text).await,
+            FeishuSendTarget::ReceiveId(receive_id) => {
+                self.send_message(receive_id, "text", json!({"text": text}))
                     .await
             }
-            ChannelOutboundTargetKind::Conversation => Err(
-                "feishu adapter does not support conversation targets for outbound sends"
-                    .to_owned(),
-            ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_feishu_send_target_supports_reply_and_receive_id_targets() {
+        let reply = ChannelOutboundTarget::feishu_message_reply(" om_1 ");
+        let receive_id = ChannelOutboundTarget::feishu_receive_id(" ou_1 ");
+
+        assert_eq!(
+            resolve_feishu_send_target(&reply).expect("message reply target"),
+            FeishuSendTarget::MessageReply("om_1")
+        );
+        assert_eq!(
+            resolve_feishu_send_target(&receive_id).expect("receive id target"),
+            FeishuSendTarget::ReceiveId("ou_1")
+        );
+    }
+
+    #[test]
+    fn resolve_feishu_send_target_rejects_conversation_targets() {
+        let target = ChannelOutboundTarget::new(
+            ChannelPlatform::Feishu,
+            ChannelOutboundTargetKind::Conversation,
+            "oc_1",
+        );
+
+        assert_eq!(
+            resolve_feishu_send_target(&target)
+                .expect_err("conversation target should be rejected"),
+            "feishu adapter does not support conversation targets for outbound sends"
+        );
+    }
+
+    #[test]
+    fn resolve_receive_id_target_rejects_reply_targets_for_cards() {
+        let adapter = FeishuAdapter {
+            app_id: "cli_a".to_owned(),
+            app_secret: "secret".to_owned(),
+            base_url: "https://open.feishu.cn".to_owned(),
+            receive_id_type: "open_id".to_owned(),
+            tenant_access_token: None,
+        };
+        let target = ChannelOutboundTarget::feishu_message_reply("om_1");
+
+        assert_eq!(
+            adapter
+                .resolve_receive_id_target(&target)
+                .expect_err("reply target should be rejected for card send"),
+            "feishu card send requires receive_id target, got message_reply"
+        );
     }
 }

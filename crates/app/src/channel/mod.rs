@@ -1,5 +1,6 @@
 #[cfg(feature = "channel-telegram")]
 use std::time::Duration;
+use std::{fmt, str::FromStr};
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
 use std::{
     future::Future,
@@ -11,6 +12,7 @@ use std::{
 
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
 use async_trait::async_trait;
+use serde::Serialize;
 #[cfg(feature = "channel-telegram")]
 use tokio::time::sleep;
 
@@ -40,14 +42,22 @@ mod runtime_state;
 mod telegram;
 
 pub use registry::{
-    ChannelCapability, ChannelCatalogEntry, ChannelCatalogImplementationStatus,
+    CHANNEL_OPERATION_SEND_ID, CHANNEL_OPERATION_SERVE_ID, ChannelCapability,
+    ChannelCatalogCommandFamilyDescriptor, ChannelCatalogEntry, ChannelCatalogImplementationStatus,
     ChannelCatalogOperation, ChannelCatalogOperationAvailability,
-    ChannelCatalogOperationRequirement, ChannelDoctorCheckSpec, ChannelDoctorCheckTrigger,
-    ChannelDoctorOperationSpec, ChannelInventory, ChannelOperationHealth, ChannelOperationStatus,
-    ChannelStatusSnapshot, ChannelSurface, catalog_only_channel_entries, channel_inventory,
-    channel_status_snapshots, list_channel_catalog, normalize_channel_catalog_id,
-    normalize_channel_platform, resolve_channel_catalog_entry,
-    resolve_channel_doctor_operation_spec,
+    ChannelCatalogOperationRequirement, ChannelCommandFamilyDescriptor, ChannelDoctorCheckSpec,
+    ChannelDoctorCheckTrigger, ChannelDoctorOperationSpec, ChannelInventory,
+    ChannelOperationDescriptor, ChannelOperationHealth, ChannelOperationStatus,
+    ChannelRuntimeCommandDescriptor, ChannelStatusSnapshot, ChannelSurface,
+    FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR, FEISHU_COMMAND_FAMILY_DESCRIPTOR,
+    FEISHU_RUNTIME_COMMAND_DESCRIPTOR, TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    TELEGRAM_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR,
+    catalog_only_channel_entries, channel_inventory, channel_status_snapshots,
+    list_channel_catalog, normalize_channel_catalog_id, normalize_channel_platform,
+    resolve_channel_catalog_command_family_descriptor, resolve_channel_catalog_entry,
+    resolve_channel_catalog_operation, resolve_channel_command_family_descriptor,
+    resolve_channel_doctor_operation_spec, resolve_channel_operation_descriptor,
+    resolve_channel_runtime_command_descriptor,
 };
 pub use runtime_state::ChannelOperationRuntime;
 use runtime_state::ChannelOperationRuntimeTracker;
@@ -175,15 +185,14 @@ impl ChannelSession {
     }
 }
 
-#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ChannelOutboundTargetKind {
     Conversation,
     MessageReply,
     ReceiveId,
 }
 
-#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
 impl ChannelOutboundTargetKind {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -193,6 +202,30 @@ impl ChannelOutboundTargetKind {
         }
     }
 }
+
+impl fmt::Display for ChannelOutboundTargetKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ChannelOutboundTargetKind {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
+        match normalized.as_str() {
+            "conversation" => Ok(Self::Conversation),
+            "message_reply" => Ok(Self::MessageReply),
+            "receive_id" => Ok(Self::ReceiveId),
+            _ => Err(format!(
+                "unsupported channel target kind `{value}`; expected conversation, message_reply, or receive_id"
+            )),
+        }
+    }
+}
+
+pub use self::ChannelOutboundTargetKind as ChannelCatalogTargetKind;
 
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,6 +254,14 @@ impl ChannelOutboundTarget {
             ChannelPlatform::Telegram,
             ChannelOutboundTargetKind::Conversation,
             chat_id.to_string(),
+        )
+    }
+
+    pub fn telegram_chat_thread(chat_id: i64, thread_id: i64) -> Self {
+        Self::new(
+            ChannelPlatform::Telegram,
+            ChannelOutboundTargetKind::Conversation,
+            format!("{chat_id}:topic:{thread_id}"),
         )
     }
 
@@ -294,6 +335,9 @@ pub trait ChannelAdapter {
 type ChannelProcessFuture = Pin<Box<dyn Future<Output = CliResult<String>> + Send>>;
 
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+type ChannelCommandFuture<'a> = Pin<Box<dyn Future<Output = CliResult<()>> + Send + 'a>>;
+
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
 async fn process_channel_batch<A, F>(
     adapter: &mut A,
     batch: Vec<ChannelInboundMessage>,
@@ -356,6 +400,56 @@ impl<R> ChannelCommandContext<R> {
             }
         }
     }
+}
+
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+trait ChannelResolvedRuntimeAccount {
+    fn runtime_account_id(&self) -> &str;
+    fn runtime_account_label(&self) -> &str;
+}
+
+#[cfg(feature = "channel-telegram")]
+impl ChannelResolvedRuntimeAccount for ResolvedTelegramChannelConfig {
+    fn runtime_account_id(&self) -> &str {
+        self.account.id.as_str()
+    }
+
+    fn runtime_account_label(&self) -> &str {
+        self.account.label.as_str()
+    }
+}
+
+#[cfg(feature = "channel-feishu")]
+impl ChannelResolvedRuntimeAccount for ResolvedFeishuChannelConfig {
+    fn runtime_account_id(&self) -> &str {
+        self.account.id.as_str()
+    }
+
+    fn runtime_account_label(&self) -> &str {
+        self.account.label.as_str()
+    }
+}
+
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+async fn run_channel_send_command<R, F, G>(
+    context: ChannelCommandContext<R>,
+    spec: ChannelSendCommandSpec,
+    send: F,
+    render_success: G,
+) -> CliResult<()>
+where
+    F: for<'a> FnOnce(&'a ChannelCommandContext<R>) -> ChannelCommandFuture<'a>,
+    G: FnOnce(&ChannelCommandContext<R>) -> String,
+{
+    apply_runtime_env(&context.config);
+    context.emit_route_notice(spec.family.runtime.platform);
+    send(&context).await?;
+
+    #[allow(clippy::print_stdout)]
+    {
+        println!("{}", render_success(&context));
+    }
+    Ok(())
 }
 
 #[cfg(feature = "channel-telegram")]
@@ -426,11 +520,23 @@ fn build_feishu_command_context(
 
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
 #[derive(Debug, Clone, Copy)]
+struct ChannelSendCommandSpec {
+    family: ChannelCommandFamilyDescriptor,
+}
+
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+#[derive(Debug, Clone, Copy)]
 struct ChannelServeRuntimeSpec<'a> {
     platform: ChannelPlatform,
     operation_id: &'static str,
     account_id: &'a str,
     account_label: &'a str,
+}
+
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+#[derive(Debug, Clone, Copy)]
+struct ChannelServeCommandSpec {
+    family: ChannelCommandFamilyDescriptor,
 }
 
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
@@ -506,6 +612,46 @@ where
     }
 }
 
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+async fn run_channel_serve_command<R, V, F>(
+    context: ChannelCommandContext<R>,
+    spec: ChannelServeCommandSpec,
+    validate: V,
+    run: F,
+) -> CliResult<()>
+where
+    R: ChannelResolvedRuntimeAccount,
+    V: FnOnce(&R) -> CliResult<()>,
+    F: for<'a> FnOnce(
+        &'a ChannelCommandContext<R>,
+        KernelContext,
+        Arc<ChannelOperationRuntimeTracker>,
+    ) -> ChannelCommandFuture<'a>,
+{
+    validate(&context.resolved)?;
+    apply_runtime_env(&context.config);
+    let kernel_ctx = bootstrap_kernel_context(
+        spec.family.runtime.serve_bootstrap_agent_id,
+        DEFAULT_TOKEN_TTL_S,
+    )?;
+    let runtime_account_id = context.resolved.runtime_account_id().to_owned();
+    let runtime_account_label = context.resolved.runtime_account_label().to_owned();
+
+    with_channel_serve_runtime(
+        ChannelServeRuntimeSpec {
+            platform: spec.family.runtime.platform,
+            operation_id: spec.family.serve().id,
+            account_id: runtime_account_id.as_str(),
+            account_label: runtime_account_label.as_str(),
+        },
+        move |runtime| async move {
+            context.emit_route_notice(spec.family.runtime.platform);
+            run(&context, kernel_ctx, runtime).await
+        },
+    )
+    .await
+}
+
 #[cfg(test)]
 async fn with_channel_serve_runtime_in_dir<T, F, Fut>(
     runtime_dir: &std::path::Path,
@@ -541,6 +687,65 @@ where
 }
 
 #[allow(clippy::print_stdout)] // CLI startup banner
+pub async fn run_telegram_send(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+    target: &str,
+    target_kind: ChannelOutboundTargetKind,
+    text: &str,
+) -> CliResult<()> {
+    if !cfg!(feature = "channel-telegram") {
+        return Err("telegram channel is disabled (enable feature `channel-telegram`)".to_owned());
+    }
+
+    #[cfg(not(feature = "channel-telegram"))]
+    {
+        let _ = (config_path, account_id, target, target_kind, text);
+        return Err("telegram channel is disabled (enable feature `channel-telegram`)".to_owned());
+    }
+
+    #[cfg(feature = "channel-telegram")]
+    {
+        let context = load_telegram_command_context(config_path, account_id)?;
+        let target = target.to_owned();
+        let text = text.to_owned();
+        run_channel_send_command(
+            context,
+            ChannelSendCommandSpec {
+                family: TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
+            },
+            |context| {
+                Box::pin(async move {
+                    let token = context.resolved.bot_token().ok_or_else(|| {
+                        "telegram bot token missing (set telegram.bot_token or env)".to_owned()
+                    })?;
+                    telegram::run_telegram_send(
+                        &context.resolved,
+                        token,
+                        target_kind,
+                        target.as_str(),
+                        text.as_str(),
+                    )
+                    .await
+                })
+            },
+            |context| {
+                format!(
+                    "telegram message sent (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, target_kind={})",
+                    context.resolved_path.display(),
+                    context.resolved.configured_account_id,
+                    context.resolved.account.label,
+                    context.route.selected_by_default(),
+                    context.route.default_account_source.as_str(),
+                    target_kind
+                )
+            },
+        )
+        .await
+    }
+}
+
+#[allow(clippy::print_stdout)] // CLI startup banner
 pub async fn run_telegram_channel(
     config_path: Option<&str>,
     once: bool,
@@ -559,73 +764,67 @@ pub async fn run_telegram_channel(
     #[cfg(feature = "channel-telegram")]
     {
         let context = load_telegram_command_context(config_path, account_id)?;
-        validate_telegram_security_config(&context.resolved)?;
-        apply_runtime_env(&context.config);
-        let kernel_ctx = bootstrap_kernel_context("channel-telegram", DEFAULT_TOKEN_TTL_S)?;
         let token = context.resolved.bot_token().ok_or_else(|| {
             "telegram bot token missing (set telegram.bot_token or env)".to_owned()
         })?;
-        let route = context.route.clone();
-        let resolved_path = context.resolved_path.clone();
-        let resolved = context.resolved.clone();
-        let batch_config = context.config.clone();
-        let batch_kernel_ctx = Arc::new(crate::KernelContext {
-            kernel: kernel_ctx.kernel.clone(),
-            token: kernel_ctx.token.clone(),
-        });
-        let runtime_account_id = resolved.account.id.clone();
-        let runtime_account_label = resolved.account.label.clone();
-
-        with_channel_serve_runtime(
-            ChannelServeRuntimeSpec {
-                platform: ChannelPlatform::Telegram,
-                operation_id: "serve",
-                account_id: runtime_account_id.as_str(),
-                account_label: runtime_account_label.as_str(),
+        run_channel_serve_command(
+            context,
+            ChannelServeCommandSpec {
+                family: TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
             },
-            move |runtime| async move {
-                let mut adapter = telegram::TelegramAdapter::new(&resolved, token);
-                context.emit_route_notice(ChannelPlatform::Telegram);
+            validate_telegram_security_config,
+            move |context, kernel_ctx, runtime| {
+                Box::pin(async move {
+                    let route = context.route.clone();
+                    let resolved_path = context.resolved_path.clone();
+                    let resolved = context.resolved.clone();
+                    let batch_config = context.config.clone();
+                    let batch_kernel_ctx = Arc::new(crate::KernelContext {
+                        kernel: kernel_ctx.kernel.clone(),
+                        token: kernel_ctx.token.clone(),
+                    });
+                    let mut adapter = telegram::TelegramAdapter::new(&resolved, token);
 
-                println!(
-                    "{} channel started (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, timeout={}s)",
-                    adapter.name(),
-                    resolved_path.display(),
-                    resolved.configured_account_id,
-                    resolved.account.label,
-                    route.selected_by_default(),
-                    route.default_account_source.as_str(),
-                    resolved.polling_timeout_s
-                );
+                    println!(
+                        "{} channel started (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, timeout={}s)",
+                        adapter.name(),
+                        resolved_path.display(),
+                        resolved.configured_account_id,
+                        resolved.account.label,
+                        route.selected_by_default(),
+                        route.default_account_source.as_str(),
+                        resolved.polling_timeout_s
+                    );
 
-                loop {
-                    let batch = adapter.receive_batch().await?;
-                    let config = batch_config.clone();
-                    let kernel_ctx = batch_kernel_ctx.clone();
-                    let had_messages =
-                        process_channel_batch(&mut adapter, batch, Some(runtime.as_ref()), |message| {
-                            let config = config.clone();
-                            let kernel_ctx = kernel_ctx.clone();
-                            Box::pin(async move {
-                                process_inbound_with_provider(
-                                    &config,
-                                    &message,
-                                    Some(kernel_ctx.as_ref()),
-                                )
-                                .await
+                    loop {
+                        let batch = adapter.receive_batch().await?;
+                        let config = batch_config.clone();
+                        let kernel_ctx = batch_kernel_ctx.clone();
+                        let had_messages =
+                            process_channel_batch(&mut adapter, batch, Some(runtime.as_ref()), |message| {
+                                let config = config.clone();
+                                let kernel_ctx = kernel_ctx.clone();
+                                Box::pin(async move {
+                                    process_inbound_with_provider(
+                                        &config,
+                                        &message,
+                                        Some(kernel_ctx.as_ref()),
+                                    )
+                                    .await
+                                })
                             })
-                        })
-                        .await?;
-                    if !had_messages && once {
-                        break;
+                            .await?;
+                        if !had_messages && once {
+                            break;
+                        }
+                        if once {
+                            break;
+                        }
+                        sleep(Duration::from_millis(250)).await;
                     }
-                    if once {
-                        break;
-                    }
-                    sleep(Duration::from_millis(250)).await;
-                }
-                Ok(())
-            }
+                    Ok(())
+                })
+            },
         )
         .await
     }
@@ -635,7 +834,8 @@ pub async fn run_telegram_channel(
 pub async fn run_feishu_send(
     config_path: Option<&str>,
     account_id: Option<&str>,
-    receive_id: &str,
+    target: &str,
+    target_kind: ChannelOutboundTargetKind,
     text: &str,
     as_card: bool,
 ) -> CliResult<()> {
@@ -645,27 +845,46 @@ pub async fn run_feishu_send(
 
     #[cfg(not(feature = "channel-feishu"))]
     {
-        let _ = (config_path, account_id, receive_id, text, as_card);
+        let _ = (config_path, account_id, target, target_kind, text, as_card);
         return Err("feishu channel is disabled (enable feature `channel-feishu`)".to_owned());
     }
 
     #[cfg(feature = "channel-feishu")]
     {
         let context = load_feishu_command_context(config_path, account_id)?;
-        apply_runtime_env(&context.config);
-        context.emit_route_notice(ChannelPlatform::Feishu);
-        feishu::run_feishu_send(&context.resolved, receive_id, text, as_card).await?;
-
-        println!(
-            "feishu message sent (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, receive_id_type={})",
-            context.resolved_path.display(),
-            context.resolved.configured_account_id,
-            context.resolved.account.label,
-            context.route.selected_by_default(),
-            context.route.default_account_source.as_str(),
-            context.resolved.receive_id_type
-        );
-        Ok(())
+        let target = target.to_owned();
+        let text = text.to_owned();
+        run_channel_send_command(
+            context,
+            ChannelSendCommandSpec {
+                family: FEISHU_COMMAND_FAMILY_DESCRIPTOR,
+            },
+            |context| {
+                Box::pin(async move {
+                    feishu::run_feishu_send(
+                        &context.resolved,
+                        target_kind,
+                        target.as_str(),
+                        text.as_str(),
+                        as_card,
+                    )
+                    .await
+                })
+            },
+            |context| {
+                format!(
+                    "feishu message sent (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, target_kind={}, receive_id_type={})",
+                    context.resolved_path.display(),
+                    context.resolved.configured_account_id,
+                    context.resolved.account.label,
+                    context.route.selected_by_default(),
+                    context.route.default_account_source.as_str(),
+                    target_kind,
+                    context.resolved.receive_id_type
+                )
+            },
+        )
+        .await
     }
 }
 
@@ -688,37 +907,33 @@ pub async fn run_feishu_channel(
     #[cfg(feature = "channel-feishu")]
     {
         let context = load_feishu_command_context(config_path, account_id)?;
-        validate_feishu_security_config(&context.resolved)?;
-        apply_runtime_env(&context.config);
-        let kernel_ctx = bootstrap_kernel_context("channel-feishu", DEFAULT_TOKEN_TTL_S)?;
-        let route = context.route.clone();
-        let resolved_path = context.resolved_path.clone();
-        let resolved = context.resolved.clone();
-        let config = context.config.clone();
-        let runtime_account_id = resolved.account.id.clone();
-        let runtime_account_label = resolved.account.label.clone();
-
-        with_channel_serve_runtime(
-            ChannelServeRuntimeSpec {
-                platform: ChannelPlatform::Feishu,
-                operation_id: "serve",
-                account_id: runtime_account_id.as_str(),
-                account_label: runtime_account_label.as_str(),
+        let bind_override = bind_override.map(str::to_owned);
+        let path_override = path_override.map(str::to_owned);
+        run_channel_serve_command(
+            context,
+            ChannelServeCommandSpec {
+                family: FEISHU_COMMAND_FAMILY_DESCRIPTOR,
             },
-            move |runtime| async move {
-                context.emit_route_notice(ChannelPlatform::Feishu);
-                feishu::run_feishu_channel(
-                    &config,
-                    &resolved,
-                    &resolved_path,
-                    route.selected_by_default(),
-                    route.default_account_source,
-                    bind_override,
-                    path_override,
-                    kernel_ctx,
-                    runtime.clone(),
-                )
-                .await
+            validate_feishu_security_config,
+            move |context, kernel_ctx, runtime| {
+                Box::pin(async move {
+                    let route = context.route.clone();
+                    let resolved_path = context.resolved_path.clone();
+                    let resolved = context.resolved.clone();
+                    let config = context.config.clone();
+                    feishu::run_feishu_channel(
+                        &config,
+                        &resolved,
+                        &resolved_path,
+                        route.selected_by_default(),
+                        route.default_account_source,
+                        bind_override.as_deref(),
+                        path_override.as_deref(),
+                        kernel_ctx,
+                        runtime,
+                    )
+                    .await
+                })
             },
         )
         .await
@@ -1299,6 +1514,16 @@ mod tests {
 
     #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
     #[test]
+    fn channel_outbound_target_encodes_telegram_forum_topics() {
+        let target = ChannelOutboundTarget::telegram_chat_thread(123, 7);
+
+        assert_eq!(target.platform, ChannelPlatform::Telegram);
+        assert_eq!(target.kind, ChannelOutboundTargetKind::Conversation);
+        assert_eq!(target.id, "123:topic:7");
+    }
+
+    #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+    #[test]
     fn render_channel_route_notice_warns_on_implicit_multi_account_fallback() {
         let route = crate::config::ChannelResolvedAccountRoute {
             requested_account_id: None,
@@ -1394,7 +1619,7 @@ mod tests {
         let runtime_dir_for_body = runtime_dir.clone();
         let operation = ChannelServeRuntimeSpec {
             platform: ChannelPlatform::Telegram,
-            operation_id: "serve",
+            operation_id: CHANNEL_OPERATION_SERVE_ID,
             account_id: "bot_123456",
             account_label: "bot:123456",
         };
@@ -1407,7 +1632,7 @@ mod tests {
                 let live = runtime_state::load_channel_operation_runtime_for_account_from_dir(
                     runtime_dir_for_body.as_path(),
                     ChannelPlatform::Telegram,
-                    "serve",
+                    CHANNEL_OPERATION_SERVE_ID,
                     "bot_123456",
                     0,
                 )
@@ -1431,7 +1656,7 @@ mod tests {
         let finished = runtime_state::load_channel_operation_runtime_for_account_from_dir(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
-            "serve",
+            CHANNEL_OPERATION_SERVE_ID,
             "bot_123456",
             0,
         )
@@ -1448,7 +1673,7 @@ mod tests {
         runtime_state::write_runtime_state_for_test_with_account_and_pid(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
-            "serve",
+            CHANNEL_OPERATION_SERVE_ID,
             "bot_123456",
             7001,
             true,
@@ -1465,7 +1690,7 @@ mod tests {
             9191,
             ChannelServeRuntimeSpec {
                 platform: ChannelPlatform::Telegram,
-                operation_id: "serve",
+                operation_id: CHANNEL_OPERATION_SERVE_ID,
                 account_id: "bot_123456",
                 account_label: "bot:123456",
             },
@@ -1487,7 +1712,7 @@ mod tests {
         runtime_state::write_runtime_state_for_test_with_account_and_pid(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
-            "serve",
+            CHANNEL_OPERATION_SERVE_ID,
             "bot_123456",
             7001,
             true,
@@ -1504,7 +1729,7 @@ mod tests {
             9191,
             ChannelServeRuntimeSpec {
                 platform: ChannelPlatform::Telegram,
-                operation_id: "serve",
+                operation_id: CHANNEL_OPERATION_SERVE_ID,
                 account_id: "bot_123456",
                 account_label: "bot:123456",
             },
@@ -1518,7 +1743,7 @@ mod tests {
         let runtime = runtime_state::load_channel_operation_runtime_for_account_from_dir(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
-            "serve",
+            CHANNEL_OPERATION_SERVE_ID,
             "bot_123456",
             now_ms_for_test(),
         )

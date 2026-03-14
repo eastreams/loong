@@ -4,7 +4,9 @@ use std::time::Duration;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    future::Future,
     path::Path,
+    pin::Pin,
     sync::Arc,
 };
 
@@ -43,6 +45,39 @@ pub(crate) use loongclaw_spec::programmatic::{
 mod tests;
 
 const PUBLIC_GITHUB_REPO: &str = "loongclaw-ai/loongclaw";
+
+type ChannelCliCommandFuture<'a> = Pin<Box<dyn Future<Output = CliResult<()>> + Send + 'a>>;
+
+#[derive(Debug, Clone, Copy)]
+struct ChannelSendCliArgs<'a> {
+    config_path: Option<&'a str>,
+    account: Option<&'a str>,
+    target: &'a str,
+    target_kind: mvp::channel::ChannelOutboundTargetKind,
+    text: &'a str,
+    as_card: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ChannelServeCliArgs<'a> {
+    config_path: Option<&'a str>,
+    account: Option<&'a str>,
+    once: bool,
+    bind_override: Option<&'a str>,
+    path_override: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ChannelSendCliSpec {
+    family: mvp::channel::ChannelCommandFamilyDescriptor,
+    run: for<'a> fn(ChannelSendCliArgs<'a>) -> ChannelCliCommandFuture<'a>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ChannelServeCliSpec {
+    family: mvp::channel::ChannelCommandFamilyDescriptor,
+    run: for<'a> fn(ChannelServeCliArgs<'a>) -> ChannelCliCommandFuture<'a>,
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -360,6 +395,23 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    /// Send one Telegram message
+    TelegramSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_telegram_send_target_kind(),
+            value_parser = parse_telegram_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
     /// Run Telegram channel polling/response loop
     TelegramServe {
         #[arg(long)]
@@ -375,8 +427,14 @@ enum Commands {
         config: Option<String>,
         #[arg(long)]
         account: Option<String>,
-        #[arg(long)]
-        receive_id: String,
+        #[arg(long = "target", visible_alias = "receive-id")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_feishu_send_target_kind(),
+            value_parser = parse_feishu_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
         #[arg(long)]
         text: String,
         #[arg(long, default_value_t = false)]
@@ -620,24 +678,61 @@ async fn main() {
             limit,
             json,
         } => run_safe_lane_summary_cli(config.as_deref(), session.as_deref(), limit, json),
+        Commands::TelegramSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                TELEGRAM_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: &target,
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
         Commands::TelegramServe {
             config,
             once,
             account,
-        } => run_telegram_serve_cli(config.as_deref(), once, account.as_deref()).await,
+        } => {
+            run_channel_serve_cli(
+                TELEGRAM_SERVE_CLI_SPEC,
+                ChannelServeCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    once,
+                    bind_override: None,
+                    path_override: None,
+                },
+            )
+            .await
+        }
         Commands::FeishuSend {
             config,
             account,
-            receive_id,
+            target,
+            target_kind,
             text,
             card,
         } => {
-            run_feishu_send_cli(
-                config.as_deref(),
-                account.as_deref(),
-                &receive_id,
-                &text,
-                card,
+            run_channel_send_cli(
+                FEISHU_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: &target,
+                    target_kind,
+                    text: &text,
+                    as_card: card,
+                },
             )
             .await
         }
@@ -647,11 +742,15 @@ async fn main() {
             bind,
             path,
         } => {
-            run_feishu_serve_cli(
-                config.as_deref(),
-                account.as_deref(),
-                bind.as_deref(),
-                path.as_deref(),
+            run_channel_serve_cli(
+                FEISHU_SERVE_CLI_SPEC,
+                ChannelServeCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    once: false,
+                    bind_override: bind.as_deref(),
+                    path_override: path.as_deref(),
+                },
             )
             .await
         }
@@ -1055,21 +1154,23 @@ fn render_channel_surfaces_text(
                 lines.push(format!("    note: {note}"));
             }
             for operation in &snapshot.operations {
-                let requirement_ids = surface
-                    .catalog
-                    .operations
-                    .iter()
-                    .find(|catalog_operation| catalog_operation.id == operation.id)
+                let catalog_operation = surface.catalog.operation(operation.id);
+                let requirement_ids = catalog_operation
                     .map(|catalog_operation| {
                         render_channel_operation_requirement_ids(catalog_operation.requirements)
                     })
                     .unwrap_or_else(|| "-".to_owned());
                 lines.push(format!(
-                    "    op {} ({}) {}: {} requirements={}",
+                    "    op {} ({}) {}: {} target_kinds={} requirements={}",
                     operation.id,
                     operation.command,
                     operation.health.as_str(),
                     operation.detail,
+                    render_channel_target_kind_ids(
+                        catalog_operation
+                            .map(|catalog_operation| catalog_operation.supported_target_kinds)
+                            .unwrap_or(&[])
+                    ),
                     requirement_ids,
                 ));
                 if let Some(runtime) = &operation.runtime {
@@ -1117,11 +1218,12 @@ fn render_channel_surfaces_text(
             push_channel_surface_header(&mut lines, surface);
             for operation in &surface.catalog.operations {
                 lines.push(format!(
-                    "  catalog op {} ({}) availability={} tracks_runtime={} requirements={}",
+                    "  catalog op {} ({}) availability={} tracks_runtime={} target_kinds={} requirements={}",
                     operation.id,
                     operation.command,
                     operation.availability.as_str(),
                     operation.tracks_runtime,
+                    render_channel_target_kind_ids(operation.supported_target_kinds),
                     render_channel_operation_requirement_ids(operation.requirements)
                 ));
             }
@@ -1143,6 +1245,19 @@ fn render_channel_operation_requirement_ids(
         .join(",")
 }
 
+fn render_channel_target_kind_ids(
+    target_kinds: &[mvp::channel::ChannelCatalogTargetKind],
+) -> String {
+    if target_kinds.is_empty() {
+        return "-".to_owned();
+    }
+    target_kinds
+        .iter()
+        .map(|kind| kind.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 fn push_channel_surface_header(lines: &mut Vec<String>, surface: &mvp::channel::ChannelSurface) {
     let aliases = if surface.catalog.aliases.is_empty() {
         "-".to_owned()
@@ -1160,14 +1275,16 @@ fn push_channel_surface_header(lines: &mut Vec<String>, surface: &mvp::channel::
             .collect::<Vec<_>>()
             .join(",")
     };
+    let target_kinds = render_channel_target_kind_ids(&surface.catalog.supported_target_kinds);
     lines.push(format!(
-        "{} [{}] implementation_status={} capabilities={} aliases={} transport={} configured_accounts={} default_configured_account={}",
+        "{} [{}] implementation_status={} capabilities={} aliases={} transport={} target_kinds={} configured_accounts={} default_configured_account={}",
         surface.catalog.label,
         surface.catalog.id,
         surface.catalog.implementation_status.as_str(),
         capabilities,
         aliases,
         surface.catalog.transport,
+        target_kinds,
         surface.configured_accounts.len(),
         surface
             .default_configured_account_id
@@ -1999,42 +2116,141 @@ async fn wait_for_shutdown_signal() -> CliResult<()> {
     Ok(())
 }
 
-async fn run_telegram_serve_cli(
-    config_path: Option<&str>,
-    once: bool,
-    account: Option<&str>,
+const TELEGRAM_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_telegram_send_cli_impl,
+};
+
+const FEISHU_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::FEISHU_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_feishu_send_cli_impl,
+};
+
+const TELEGRAM_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
+    family: mvp::channel::TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_telegram_serve_cli_impl,
+};
+
+const FEISHU_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
+    family: mvp::channel::FEISHU_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_feishu_serve_cli_impl,
+};
+
+async fn run_channel_send_cli(
+    spec: ChannelSendCliSpec,
+    args: ChannelSendCliArgs<'_>,
 ) -> CliResult<()> {
-    with_graceful_shutdown(mvp::channel::run_telegram_channel(
-        config_path,
-        once,
-        account,
-    ))
-    .await
+    let _ = spec.family;
+    (spec.run)(args).await
 }
 
-async fn run_feishu_send_cli(
-    config_path: Option<&str>,
-    account: Option<&str>,
-    receive_id: &str,
-    text: &str,
-    as_card: bool,
+async fn run_channel_serve_cli(
+    spec: ChannelServeCliSpec,
+    args: ChannelServeCliArgs<'_>,
 ) -> CliResult<()> {
-    mvp::channel::run_feishu_send(config_path, account, receive_id, text, as_card).await
+    let _ = spec.family;
+    (spec.run)(args).await
 }
 
-async fn run_feishu_serve_cli(
-    config_path: Option<&str>,
-    account: Option<&str>,
-    bind_override: Option<&str>,
-    path_override: Option<&str>,
-) -> CliResult<()> {
-    with_graceful_shutdown(mvp::channel::run_feishu_channel(
-        config_path,
-        account,
-        bind_override,
-        path_override,
-    ))
-    .await
+fn run_telegram_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        mvp::channel::run_telegram_send(
+            args.config_path,
+            args.account,
+            args.target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+fn run_feishu_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        mvp::channel::run_feishu_send(
+            args.config_path,
+            args.account,
+            args.target,
+            args.target_kind,
+            args.text,
+            args.as_card,
+        )
+        .await
+    })
+}
+
+fn run_telegram_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = (args.bind_override, args.path_override);
+        with_graceful_shutdown(mvp::channel::run_telegram_channel(
+            args.config_path,
+            args.once,
+            args.account,
+        ))
+        .await
+    })
+}
+
+fn default_channel_send_target_kind(
+    spec: ChannelSendCliSpec,
+) -> mvp::channel::ChannelOutboundTargetKind {
+    spec.family.default_send_target_kind()
+}
+
+fn parse_channel_send_target_kind(
+    spec: ChannelSendCliSpec,
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    let target_kind = raw.parse::<mvp::channel::ChannelOutboundTargetKind>()?;
+    let channel_id = spec.family.channel_id();
+    let operation = spec.family.send();
+    if !operation.supports_target_kind(target_kind) {
+        let supported = operation
+            .supported_target_kinds
+            .iter()
+            .map(|kind| format!("`{}`", kind.as_str()))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        return Err(format!(
+            "{channel_id} --target-kind does not support `{}`; use {}",
+            target_kind.as_str(),
+            supported
+        ));
+    }
+    Ok(target_kind)
+}
+
+fn default_telegram_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(TELEGRAM_SEND_CLI_SPEC)
+}
+
+fn parse_telegram_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(TELEGRAM_SEND_CLI_SPEC, raw)
+}
+
+fn default_feishu_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(FEISHU_SEND_CLI_SPEC)
+}
+
+fn parse_feishu_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(FEISHU_SEND_CLI_SPEC, raw)
+}
+
+fn run_feishu_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        with_graceful_shutdown(mvp::channel::run_feishu_channel(
+            args.config_path,
+            args.account,
+            args.bind_override,
+            args.path_override,
+        ))
+        .await
+    })
 }
 
 fn parse_json_payload(raw: &str, context: &str) -> CliResult<Value> {
@@ -2391,6 +2607,21 @@ fn write_json_file<T: Serialize>(path: &str, value: &T) -> CliResult<()> {
 mod cli_tests {
     use super::*;
 
+    fn channel_catalog_command_family(
+        raw: &str,
+    ) -> mvp::channel::ChannelCatalogCommandFamilyDescriptor {
+        mvp::channel::resolve_channel_catalog_command_family_descriptor(raw)
+            .expect("channel catalog command family")
+    }
+
+    fn channel_send_command(raw: &str) -> &'static str {
+        channel_catalog_command_family(raw).send.command
+    }
+
+    fn channel_default_send_target_kind(raw: &str) -> mvp::channel::ChannelOutboundTargetKind {
+        channel_catalog_command_family(raw).default_send_target_kind
+    }
+
     #[test]
     fn root_help_uses_onboarding_language() {
         let mut command = Cli::command();
@@ -2593,5 +2824,256 @@ mod cli_tests {
             }
             other => panic!("unexpected command parse result: {other:?}"),
         }
+    }
+
+    #[test]
+    fn feishu_send_cli_accepts_generic_target_and_target_kind() {
+        let cli = Cli::try_parse_from([
+            "loongclaw",
+            channel_send_command("feishu"),
+            "--target",
+            "om_123",
+            "--target-kind",
+            "message_reply",
+            "--text",
+            "hello",
+        ])
+        .expect("generic feishu target flags should parse");
+
+        match cli.command {
+            Some(Commands::FeishuSend {
+                target,
+                target_kind,
+                text,
+                ..
+            }) => {
+                assert_eq!(target, "om_123");
+                assert_eq!(
+                    target_kind,
+                    mvp::channel::ChannelOutboundTargetKind::MessageReply
+                );
+                assert_eq!(text, "hello");
+            }
+            other => panic!("unexpected command parse result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn feishu_send_cli_keeps_receive_id_alias() {
+        let cli = Cli::try_parse_from([
+            "loongclaw",
+            channel_send_command("feishu"),
+            "--receive-id",
+            "ou_123",
+            "--text",
+            "hello",
+        ])
+        .expect("legacy receive-id alias should still parse");
+
+        match cli.command {
+            Some(Commands::FeishuSend {
+                target,
+                target_kind,
+                text,
+                ..
+            }) => {
+                assert_eq!(target, "ou_123");
+                assert_eq!(
+                    target_kind,
+                    mvp::channel::ChannelOutboundTargetKind::ReceiveId
+                );
+                assert_eq!(text, "hello");
+            }
+            other => panic!("unexpected command parse result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn feishu_send_cli_rejects_unsupported_conversation_target_kind() {
+        let error = Cli::try_parse_from([
+            "loongclaw",
+            channel_send_command("feishu"),
+            "--target",
+            "oc_123",
+            "--target-kind",
+            "conversation",
+            "--text",
+            "hello",
+        ])
+        .expect_err("conversation target kind should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("use `receive_id` or `message_reply`")
+        );
+    }
+
+    #[test]
+    fn feishu_send_cli_defaults_target_kind_from_catalog_metadata() {
+        let cli = Cli::try_parse_from([
+            "loongclaw",
+            channel_send_command("feishu"),
+            "--target",
+            "ou_123",
+            "--text",
+            "hello",
+        ])
+        .expect("default feishu target kind should parse from catalog metadata");
+
+        match cli.command {
+            Some(Commands::FeishuSend { target_kind, .. }) => {
+                assert_eq!(target_kind, channel_default_send_target_kind("feishu"));
+            }
+            other => panic!("unexpected command parse result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn telegram_send_cli_accepts_generic_target_and_defaults_to_conversation() {
+        let cli = Cli::try_parse_from([
+            "loongclaw",
+            channel_send_command("telegram"),
+            "--target",
+            "123:topic:7",
+            "--text",
+            "hello",
+        ])
+        .expect("telegram send CLI should parse");
+
+        match cli.command {
+            Some(Commands::TelegramSend {
+                target,
+                target_kind,
+                text,
+                ..
+            }) => {
+                assert_eq!(target, "123:topic:7");
+                assert_eq!(target_kind, channel_default_send_target_kind("telegram"));
+                assert_eq!(text, "hello");
+            }
+            other => panic!("unexpected command parse result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn telegram_send_cli_rejects_non_conversation_target_kind() {
+        let error = Cli::try_parse_from([
+            "loongclaw",
+            channel_send_command("telegram"),
+            "--target",
+            "123",
+            "--target-kind",
+            "message_reply",
+            "--text",
+            "hello",
+        ])
+        .expect_err("telegram send should reject non-conversation kinds");
+
+        assert!(error.to_string().contains(
+            "telegram --target-kind does not support `message_reply`; use `conversation`"
+        ));
+    }
+
+    fn fake_send_cli_runner(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+        Box::pin(async move {
+            Err(format!(
+                "config={}|account={}|target={}|target_kind={}|text={}|card={}",
+                args.config_path.unwrap_or("-"),
+                args.account.unwrap_or("-"),
+                args.target,
+                args.target_kind.as_str(),
+                args.text,
+                args.as_card
+            ))
+        })
+    }
+
+    fn fake_serve_cli_runner(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+        Box::pin(async move {
+            Err(format!(
+                "config={}|account={}|once={}|bind={}|path={}",
+                args.config_path.unwrap_or("-"),
+                args.account.unwrap_or("-"),
+                args.once,
+                args.bind_override.unwrap_or("-"),
+                args.path_override.unwrap_or("-")
+            ))
+        })
+    }
+
+    #[test]
+    fn run_channel_send_cli_forwards_common_arguments_to_runner() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build test runtime");
+        let error = runtime
+            .block_on(run_channel_send_cli(
+                ChannelSendCliSpec {
+                    family: mvp::channel::FEISHU_COMMAND_FAMILY_DESCRIPTOR,
+                    run: fake_send_cli_runner,
+                },
+                ChannelSendCliArgs {
+                    config_path: Some("/tmp/loongclaw.toml"),
+                    account: Some("ops"),
+                    target: "om_42",
+                    target_kind: mvp::channel::ChannelOutboundTargetKind::MessageReply,
+                    text: "hello",
+                    as_card: true,
+                },
+            ))
+            .expect_err("fake runner should surface forwarded arguments");
+
+        assert_eq!(
+            error,
+            "config=/tmp/loongclaw.toml|account=ops|target=om_42|target_kind=message_reply|text=hello|card=true"
+        );
+    }
+
+    #[test]
+    fn run_channel_serve_cli_forwards_optional_arguments_to_runner() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build test runtime");
+        let error = runtime
+            .block_on(run_channel_serve_cli(
+                ChannelServeCliSpec {
+                    family: mvp::channel::FEISHU_COMMAND_FAMILY_DESCRIPTOR,
+                    run: fake_serve_cli_runner,
+                },
+                ChannelServeCliArgs {
+                    config_path: Some("/tmp/loongclaw.toml"),
+                    account: Some("ops"),
+                    once: true,
+                    bind_override: Some("127.0.0.1:8123"),
+                    path_override: Some("/hooks/feishu"),
+                },
+            ))
+            .expect_err("fake runner should surface forwarded arguments");
+
+        assert_eq!(
+            error,
+            "config=/tmp/loongclaw.toml|account=ops|once=true|bind=127.0.0.1:8123|path=/hooks/feishu"
+        );
+    }
+
+    #[test]
+    fn default_channel_send_target_kind_uses_command_family_send_metadata() {
+        assert_eq!(
+            default_channel_send_target_kind(ChannelSendCliSpec {
+                family: mvp::channel::FEISHU_COMMAND_FAMILY_DESCRIPTOR,
+                run: fake_send_cli_runner,
+            }),
+            mvp::channel::ChannelOutboundTargetKind::ReceiveId
+        );
+        assert_eq!(
+            default_channel_send_target_kind(ChannelSendCliSpec {
+                family: mvp::channel::TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
+                run: fake_send_cli_runner,
+            }),
+            mvp::channel::ChannelOutboundTargetKind::Conversation
+        );
     }
 }
