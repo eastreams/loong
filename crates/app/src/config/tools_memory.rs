@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, path::PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::shared::{
     ConfigValidationIssue, DEFAULT_SQLITE_FILE, default_loongclaw_home, expand_path,
@@ -72,6 +72,8 @@ pub struct MemoryConfig {
     pub backend: MemoryBackendKind,
     #[serde(default)]
     pub profile: MemoryProfile,
+    #[serde(default)]
+    pub system: MemorySystemKind,
     #[serde(default = "default_sqlite_path")]
     pub sqlite_path: String,
     #[serde(default = "default_sliding_window")]
@@ -111,6 +113,42 @@ pub enum MemoryProfile {
     WindowOnly,
     WindowPlusSummary,
     ProfilePlusWindow,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Default)]
+pub enum MemorySystemKind {
+    #[default]
+    Builtin,
+}
+
+impl MemorySystemKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Builtin => "builtin",
+        }
+    }
+
+    pub fn parse_id(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "builtin" => Some(Self::Builtin),
+            _ => None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MemorySystemKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse_id(&raw).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "unsupported memory.system `{}` (available: builtin)",
+                raw.trim()
+            ))
+        })
+    }
 }
 
 impl MemoryProfile {
@@ -204,6 +242,7 @@ impl Default for MemoryConfig {
         Self {
             backend: MemoryBackendKind::default(),
             profile: MemoryProfile::default(),
+            system: MemorySystemKind::default(),
             sqlite_path: default_sqlite_path(),
             sliding_window: default_sliding_window(),
             summary_max_chars: default_summary_max_chars(),
@@ -236,6 +275,10 @@ impl MemoryConfig {
 
     pub const fn resolved_profile(&self) -> MemoryProfile {
         self.profile
+    }
+
+    pub const fn resolved_system(&self) -> MemorySystemKind {
+        self.system
     }
 
     pub const fn resolved_mode(&self) -> MemoryMode {
@@ -291,6 +334,7 @@ const fn default_summary_max_chars() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::DEFAULT_MEMORY_SYSTEM_ID;
 
     #[test]
     fn memory_profile_defaults_to_window_only() {
@@ -298,6 +342,14 @@ mod tests {
         assert_eq!(config.backend, MemoryBackendKind::Sqlite);
         assert_eq!(config.profile, MemoryProfile::WindowOnly);
         assert_eq!(config.resolved_mode(), MemoryMode::WindowOnly);
+    }
+
+    #[test]
+    fn memory_system_defaults_to_builtin() {
+        let config = MemoryConfig::default();
+        assert_eq!(config.system, MemorySystemKind::Builtin);
+        assert_eq!(config.resolved_system(), MemorySystemKind::Builtin);
+        assert_eq!(config.resolved_system().as_str(), DEFAULT_MEMORY_SYSTEM_ID);
     }
 
     #[test]

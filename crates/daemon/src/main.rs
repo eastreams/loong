@@ -308,6 +308,13 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    /// List available memory systems and selected runtime memory system
+    ListMemorySystems {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     /// List available ACP runtime backends and current control-plane selection
     ListAcpBackends {
         #[arg(long)]
@@ -611,6 +618,9 @@ async fn main() {
         Commands::ListModels { config, json } => run_list_models_cli(config.as_deref(), json).await,
         Commands::ListContextEngines { config, json } => {
             run_list_context_engines_cli(config.as_deref(), json)
+        }
+        Commands::ListMemorySystems { config, json } => {
+            run_list_memory_systems_cli(config.as_deref(), json)
         }
         Commands::ListAcpBackends { config, json } => {
             run_list_acp_backends_cli(config.as_deref(), json)
@@ -1380,6 +1390,51 @@ fn run_list_context_engines_cli(config_path: Option<&str>, as_json: bool) -> Cli
             metadata.id,
             metadata.api_version,
             format_capability_names(&metadata.capability_names())
+        );
+    }
+    Ok(())
+}
+
+fn run_list_memory_systems_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
+    let (resolved_path, config) = mvp::config::load(config_path)?;
+    let snapshot = mvp::memory::collect_memory_system_runtime_snapshot(&config)?;
+
+    if as_json {
+        let payload = json!({
+            "config": resolved_path.display().to_string(),
+            "selected": memory_system_metadata_json(
+                &snapshot.selected_metadata,
+                Some(snapshot.selected.source.as_str())
+            ),
+            "available": snapshot
+                .available
+                .iter()
+                .map(|metadata| memory_system_metadata_json(metadata, None))
+                .collect::<Vec<_>>(),
+        });
+        let pretty = serde_json::to_string_pretty(&payload)
+            .map_err(|error| format!("serialize memory-system output failed: {error}"))?;
+        println!("{pretty}");
+        return Ok(());
+    }
+
+    println!("config={}", resolved_path.display());
+    println!(
+        "selected={} source={} api_version={} capabilities={} summary={}",
+        snapshot.selected_metadata.id,
+        snapshot.selected.source.as_str(),
+        snapshot.selected_metadata.api_version,
+        format_capability_names(&snapshot.selected_metadata.capability_names()),
+        snapshot.selected_metadata.summary
+    );
+    println!("available:");
+    for metadata in snapshot.available {
+        println!(
+            "- {} api_version={} capabilities={} summary={}",
+            metadata.id,
+            metadata.api_version,
+            format_capability_names(&metadata.capability_names()),
+            metadata.summary
         );
     }
     Ok(())
@@ -2304,6 +2359,24 @@ fn context_engine_metadata_json(
     Value::Object(payload)
 }
 
+fn memory_system_metadata_json(
+    metadata: &mvp::memory::MemorySystemMetadata,
+    source: Option<&str>,
+) -> Value {
+    let mut payload = serde_json::Map::new();
+    payload.insert("id".to_owned(), json!(metadata.id));
+    payload.insert("api_version".to_owned(), json!(metadata.api_version));
+    payload.insert(
+        "capabilities".to_owned(),
+        json!(metadata.capability_names()),
+    );
+    payload.insert("summary".to_owned(), json!(metadata.summary));
+    if let Some(source) = source {
+        payload.insert("source".to_owned(), json!(source));
+    }
+    Value::Object(payload)
+}
+
 fn acp_backend_metadata_json(
     metadata: &mvp::acp::AcpBackendMetadata,
     source: Option<&str>,
@@ -2718,6 +2791,20 @@ mod cli_tests {
         match cli.command {
             Some(Commands::Onboard { api_key, .. }) => {
                 assert_eq!(api_key.as_deref(), Some("OPENAI_API_KEY"));
+            }
+            other => panic!("unexpected command parsed: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn memory_systems_cli_parses() {
+        let cli = Cli::try_parse_from(["loongclaw", "list-memory-systems"])
+            .expect("`list-memory-systems` should parse");
+
+        match cli.command {
+            Some(Commands::ListMemorySystems { config, json }) => {
+                assert!(config.is_none());
+                assert!(!json);
             }
             other => panic!("unexpected command parsed: {other:?}"),
         }

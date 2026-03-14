@@ -245,6 +245,31 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
 }
 
 #[test]
+fn memory_system_metadata_json_includes_summary_and_source() {
+    use mvp::memory::MemorySystem as _;
+
+    let metadata = mvp::memory::BuiltinMemorySystem.metadata();
+    let payload = memory_system_metadata_json(&metadata, Some("default"));
+
+    assert_eq!(payload["id"], "builtin");
+    assert_eq!(payload["api_version"], 1);
+    assert_eq!(payload["source"], "default");
+    assert!(
+        payload["summary"]
+            .as_str()
+            .expect("summary should be a string")
+            .contains("Built-in")
+    );
+    assert!(
+        payload["capabilities"]
+            .as_array()
+            .expect("capabilities should be an array")
+            .iter()
+            .any(|entry| entry == "canonical_store")
+    );
+}
+
+#[test]
 fn build_channels_cli_json_payload_includes_operation_requirement_metadata() {
     let config = mvp::config::LoongClawConfig::default();
     let inventory = mvp::channel::channel_inventory(&config);

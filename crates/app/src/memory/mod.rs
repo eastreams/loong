@@ -8,10 +8,22 @@ use crate::config::{MemoryBackendKind, MemoryMode};
 
 mod kernel_adapter;
 pub mod runtime_config;
+mod system;
+mod system_registry;
 #[cfg(feature = "memory-sqlite")]
 mod sqlite;
 
 pub use kernel_adapter::MvpMemoryAdapter;
+pub use system::{
+    BuiltinMemorySystem, DEFAULT_MEMORY_SYSTEM_ID, MEMORY_SYSTEM_API_VERSION, MemorySystem,
+    MemorySystemCapability, MemorySystemMetadata,
+};
+pub use system_registry::{
+    MEMORY_SYSTEM_ENV, MemorySystemRuntimeSnapshot, MemorySystemSelection,
+    MemorySystemSelectionSource, collect_memory_system_runtime_snapshot, describe_memory_system,
+    list_memory_system_ids, list_memory_system_metadata, memory_system_id_from_env,
+    register_memory_system, resolve_memory_system, resolve_memory_system_selection,
+};
 #[cfg(feature = "memory-sqlite")]
 pub use sqlite::ConversationTurn;
 
