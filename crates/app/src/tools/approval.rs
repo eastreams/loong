@@ -6,6 +6,8 @@ use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::{json, Value};
 
 #[cfg(feature = "memory-sqlite")]
+use super::catalog::{ToolExecutionPlane, ToolGovernanceScope, ToolRiskClass};
+#[cfg(feature = "memory-sqlite")]
 use crate::config::SessionVisibility;
 use crate::config::ToolConfig;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
@@ -29,6 +31,9 @@ const APPROVAL_ATTENTION_STALE_MAX_SECONDS: i64 = 4 * 60 * 60;
 struct ApprovalRequestsListRequest {
     session_id: Option<String>,
     status: Option<ApprovalRequestStatus>,
+    execution_plane: Option<ToolExecutionPlane>,
+    governance_scope: Option<ToolGovernanceScope>,
+    risk_class: Option<ToolRiskClass>,
     pending_age_bucket: Option<ApprovalAttentionAgeBucket>,
     tool_name: Option<String>,
     approval_key: Option<String>,
@@ -352,6 +357,20 @@ fn execute_approval_requests_list(
         request_summaries
             .retain(|item| approval_request_decision_from_json(item) == Some(decision));
     }
+    if let Some(execution_plane) = request.execution_plane {
+        request_summaries.retain(|item| {
+            approval_request_execution_plane_from_json(item) == Some(execution_plane)
+        });
+    }
+    if let Some(governance_scope) = request.governance_scope {
+        request_summaries.retain(|item| {
+            approval_request_governance_scope_from_json(item) == Some(governance_scope)
+        });
+    }
+    if let Some(risk_class) = request.risk_class {
+        request_summaries
+            .retain(|item| approval_request_risk_class_from_json(item) == Some(risk_class));
+    }
     if let Some(tool_name) = request.tool_name.as_deref() {
         request_summaries
             .retain(|item| item.get("tool_name").and_then(Value::as_str) == Some(tool_name));
@@ -442,6 +461,7 @@ fn execute_approval_requests_list(
     let integrity_summary = approval_request_list_integrity_summary_json(&request_summaries);
     let resolution_summary = approval_request_list_resolution_summary_json(&request_summaries);
     let correlation_summary = approval_request_list_correlation_summary_json(&request_summaries);
+    let governance_summary = approval_request_list_governance_summary_json(&request_summaries);
     let session_summary = approval_request_list_session_summary_json(&request_summaries);
     let matched_count = request_summaries.len();
     request_summaries.truncate(request.limit);
@@ -454,6 +474,9 @@ fn execute_approval_requests_list(
             "filter": {
                 "session_id": request.session_id,
                 "status": request.status.map(ApprovalRequestStatus::as_str),
+                "execution_plane": request.execution_plane.map(tool_execution_plane_as_str),
+                "governance_scope": request.governance_scope.map(tool_governance_scope_as_str),
+                "risk_class": request.risk_class.map(tool_risk_class_as_str),
                 "pending_age_bucket": request.pending_age_bucket.map(ApprovalAttentionAgeBucket::as_str),
                 "tool_name": request.tool_name,
                 "approval_key": request.approval_key,
@@ -477,6 +500,7 @@ fn execute_approval_requests_list(
             "integrity_summary": integrity_summary,
             "resolution_summary": resolution_summary,
             "correlation_summary": correlation_summary,
+            "governance_summary": governance_summary,
             "session_summary": session_summary,
             "requests": request_summaries,
         }),
@@ -581,6 +605,18 @@ fn approval_request_summary_json_with_evidence(
         "tool_call_id": record.tool_call_id,
         "tool_name": record.tool_name,
         "approval_key": record.approval_key,
+        "execution_plane": record
+            .governance_snapshot_json
+            .get("execution_plane")
+            .and_then(Value::as_str),
+        "governance_scope": record
+            .governance_snapshot_json
+            .get("governance_scope")
+            .and_then(Value::as_str),
+        "risk_class": record
+            .governance_snapshot_json
+            .get("risk_class")
+            .and_then(Value::as_str),
         "status": record.status.as_str(),
         "decision": record.decision.map(|decision| decision.as_str()),
         "requested_at": record.requested_at,
@@ -844,6 +880,46 @@ fn approval_request_list_correlation_summary_json(requests: &[Value]) -> Value {
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn approval_request_list_governance_summary_json(requests: &[Value]) -> Value {
+    let mut execution_plane_counts = BTreeMap::from([
+        ("Core".to_owned(), 0usize),
+        ("App".to_owned(), 0usize),
+        ("Orchestration".to_owned(), 0usize),
+    ]);
+    let mut governance_scope_counts = BTreeMap::from([
+        ("Routine".to_owned(), 0usize),
+        ("TopologyMutation".to_owned(), 0usize),
+    ]);
+    let mut risk_class_counts = BTreeMap::from([
+        ("Low".to_owned(), 0usize),
+        ("Elevated".to_owned(), 0usize),
+        ("High".to_owned(), 0usize),
+    ]);
+
+    for request in requests {
+        if let Some(execution_plane) = request.get("execution_plane").and_then(Value::as_str) {
+            *execution_plane_counts
+                .entry(execution_plane.to_owned())
+                .or_default() += 1;
+        }
+        if let Some(governance_scope) = request.get("governance_scope").and_then(Value::as_str) {
+            *governance_scope_counts
+                .entry(governance_scope.to_owned())
+                .or_default() += 1;
+        }
+        if let Some(risk_class) = request.get("risk_class").and_then(Value::as_str) {
+            *risk_class_counts.entry(risk_class.to_owned()).or_default() += 1;
+        }
+    }
+
+    json!({
+        "execution_plane_counts": execution_plane_counts,
+        "governance_scope_counts": governance_scope_counts,
+        "risk_class_counts": risk_class_counts,
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn approval_request_list_session_summary_json(requests: &[Value]) -> Value {
     #[derive(Default)]
     struct SessionSummaryAccumulator {
@@ -958,6 +1034,18 @@ fn approval_request_detail_json_with_evidence(
         "tool_call_id": record.tool_call_id,
         "tool_name": record.tool_name,
         "approval_key": record.approval_key,
+        "execution_plane": record
+            .governance_snapshot_json
+            .get("execution_plane")
+            .and_then(Value::as_str),
+        "governance_scope": record
+            .governance_snapshot_json
+            .get("governance_scope")
+            .and_then(Value::as_str),
+        "risk_class": record
+            .governance_snapshot_json
+            .get("risk_class")
+            .and_then(Value::as_str),
         "status": record.status.as_str(),
         "decision": record.decision.map(|decision| decision.as_str()),
         "requested_at": record.requested_at,
@@ -1330,6 +1418,30 @@ fn approval_request_execution_integrity_status_from_json(
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn approval_request_execution_plane_from_json(request: &Value) -> Option<ToolExecutionPlane> {
+    request
+        .get("execution_plane")
+        .and_then(Value::as_str)
+        .and_then(|value| parse_tool_execution_plane(value).ok())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_governance_scope_from_json(request: &Value) -> Option<ToolGovernanceScope> {
+    request
+        .get("governance_scope")
+        .and_then(Value::as_str)
+        .and_then(|value| parse_tool_governance_scope(value).ok())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_risk_class_from_json(request: &Value) -> Option<ToolRiskClass> {
+    request
+        .get("risk_class")
+        .and_then(Value::as_str)
+        .and_then(|value| parse_tool_risk_class(value).ok())
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn approval_request_decision_from_json(request: &Value) -> Option<ApprovalDecision> {
     request
         .get("resolution")
@@ -1558,6 +1670,9 @@ fn parse_approval_requests_list_request(
     Ok(ApprovalRequestsListRequest {
         session_id: optional_payload_string(payload, "session_id"),
         status: optional_payload_approval_request_status(payload, "status")?,
+        execution_plane: optional_payload_tool_execution_plane(payload, "execution_plane")?,
+        governance_scope: optional_payload_tool_governance_scope(payload, "governance_scope")?,
+        risk_class: optional_payload_tool_risk_class(payload, "risk_class")?,
         pending_age_bucket: optional_payload_approval_pending_age_bucket(
             payload,
             "pending_age_bucket",
@@ -1684,6 +1799,36 @@ fn optional_payload_approval_request_status(
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn optional_payload_tool_execution_plane(
+    payload: &Value,
+    field: &str,
+) -> Result<Option<ToolExecutionPlane>, String> {
+    optional_payload_string(payload, field)
+        .map(|value| parse_tool_execution_plane(value.as_str()))
+        .transpose()
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn optional_payload_tool_governance_scope(
+    payload: &Value,
+    field: &str,
+) -> Result<Option<ToolGovernanceScope>, String> {
+    optional_payload_string(payload, field)
+        .map(|value| parse_tool_governance_scope(value.as_str()))
+        .transpose()
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn optional_payload_tool_risk_class(
+    payload: &Value,
+    field: &str,
+) -> Result<Option<ToolRiskClass>, String> {
+    optional_payload_string(payload, field)
+        .map(|value| parse_tool_risk_class(value.as_str()))
+        .transpose()
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn optional_payload_approval_execution_integrity_status(
     payload: &Value,
     field: &str,
@@ -1761,6 +1906,67 @@ fn optional_payload_approval_escalation_level(
     optional_payload_string(payload, field)
         .map(|value| parse_approval_escalation_level(value.as_str()))
         .transpose()
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn tool_execution_plane_as_str(value: ToolExecutionPlane) -> &'static str {
+    match value {
+        ToolExecutionPlane::Core => "Core",
+        ToolExecutionPlane::App => "App",
+        ToolExecutionPlane::Orchestration => "Orchestration",
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn tool_governance_scope_as_str(value: ToolGovernanceScope) -> &'static str {
+    match value {
+        ToolGovernanceScope::Routine => "Routine",
+        ToolGovernanceScope::TopologyMutation => "TopologyMutation",
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn tool_risk_class_as_str(value: ToolRiskClass) -> &'static str {
+    match value {
+        ToolRiskClass::Low => "Low",
+        ToolRiskClass::Elevated => "Elevated",
+        ToolRiskClass::High => "High",
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn parse_tool_execution_plane(value: &str) -> Result<ToolExecutionPlane, String> {
+    match value {
+        "Core" => Ok(ToolExecutionPlane::Core),
+        "App" => Ok(ToolExecutionPlane::App),
+        "Orchestration" => Ok(ToolExecutionPlane::Orchestration),
+        _ => Err(format!(
+            "approval_requests_list_invalid_request: unknown execution_plane `{value}`"
+        )),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn parse_tool_governance_scope(value: &str) -> Result<ToolGovernanceScope, String> {
+    match value {
+        "Routine" => Ok(ToolGovernanceScope::Routine),
+        "TopologyMutation" => Ok(ToolGovernanceScope::TopologyMutation),
+        _ => Err(format!(
+            "approval_requests_list_invalid_request: unknown governance_scope `{value}`"
+        )),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn parse_tool_risk_class(value: &str) -> Result<ToolRiskClass, String> {
+    match value {
+        "Low" => Ok(ToolRiskClass::Low),
+        "Elevated" => Ok(ToolRiskClass::Elevated),
+        "High" => Ok(ToolRiskClass::High),
+        _ => Err(format!(
+            "approval_requests_list_invalid_request: unknown risk_class `{value}`"
+        )),
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -1970,6 +2176,43 @@ mod tests {
             }),
         })
         .expect("seed approval request");
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn seed_request_with_governance(
+        repo: &SessionRepository,
+        approval_request_id: &str,
+        session_id: &str,
+        tool_name: &str,
+        rule_id: &str,
+        execution_plane: &str,
+        governance_scope: &str,
+        risk_class: &str,
+    ) {
+        repo.ensure_approval_request(NewApprovalRequestRecord {
+            approval_request_id: approval_request_id.to_owned(),
+            session_id: session_id.to_owned(),
+            turn_id: format!("turn-{approval_request_id}"),
+            tool_call_id: format!("call-{approval_request_id}"),
+            tool_name: tool_name.to_owned(),
+            approval_key: format!("tool:{tool_name}"),
+            request_payload_json: json!({
+                "session_id": session_id,
+                "tool_name": tool_name,
+                "args_json": {
+                    "task": format!("run-{approval_request_id}")
+                },
+            }),
+            governance_snapshot_json: json!({
+                "reason": format!("approval required for {tool_name}"),
+                "rule_id": rule_id,
+                "execution_plane": execution_plane,
+                "governance_scope": governance_scope,
+                "risk_class": risk_class,
+                "approval_mode": "PolicyDriven",
+            }),
+        })
+        .expect("seed approval request with governance");
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -3554,6 +3797,131 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[test]
+    fn approval_request_tool_query_list_filters_and_summarizes_by_governance_dimensions() {
+        let config = isolated_memory_config("approval-query-list-governance-summary");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+
+        seed_request_with_governance(
+            &repo,
+            "apr-governance-high",
+            "root-session",
+            "delegate_async",
+            "governed_tool_requires_per_call_approval",
+            "Orchestration",
+            "TopologyMutation",
+            "High",
+        );
+        seed_request_with_governance(
+            &repo,
+            "apr-governance-elevated",
+            "root-session",
+            "session_cancel",
+            "governed_tool_requires_per_call_approval",
+            "App",
+            "Routine",
+            "Elevated",
+        );
+        seed_request_with_governance(
+            &repo,
+            "apr-governance-low",
+            "root-session",
+            "memory_search",
+            "governed_tool_requires_per_call_approval",
+            "App",
+            "Routine",
+            "Low",
+        );
+
+        let summary_outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "limit": 10,
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list outcome for governance summary");
+
+        let governance_summary = &summary_outcome.payload["governance_summary"];
+        assert_eq!(governance_summary["execution_plane_counts"]["App"], 2);
+        assert_eq!(
+            governance_summary["execution_plane_counts"]["Orchestration"],
+            1
+        );
+        assert_eq!(governance_summary["governance_scope_counts"]["Routine"], 2);
+        assert_eq!(
+            governance_summary["governance_scope_counts"]["TopologyMutation"],
+            1
+        );
+        assert_eq!(governance_summary["risk_class_counts"]["Low"], 1);
+        assert_eq!(governance_summary["risk_class_counts"]["Elevated"], 1);
+        assert_eq!(governance_summary["risk_class_counts"]["High"], 1);
+
+        let orchestration_outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "execution_plane": "Orchestration",
+                    "limit": 10,
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list outcome for execution_plane filter");
+
+        assert_eq!(
+            orchestration_outcome.payload["filter"]["execution_plane"],
+            "Orchestration"
+        );
+        assert_eq!(orchestration_outcome.payload["matched_count"], 1);
+        let orchestration_requests = orchestration_outcome.payload["requests"]
+            .as_array()
+            .expect("orchestration requests array");
+        assert_eq!(orchestration_requests.len(), 1);
+        assert_eq!(
+            orchestration_requests[0]["approval_request_id"],
+            "apr-governance-high"
+        );
+        assert_eq!(
+            orchestration_requests[0]["execution_plane"],
+            "Orchestration"
+        );
+
+        let high_risk_outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "risk_class": "High",
+                    "limit": 10,
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list outcome for risk_class filter");
+
+        assert_eq!(high_risk_outcome.payload["filter"]["risk_class"], "High");
+        assert_eq!(high_risk_outcome.payload["matched_count"], 1);
+        let high_risk_requests = high_risk_outcome.payload["requests"]
+            .as_array()
+            .expect("high risk requests array");
+        assert_eq!(high_risk_requests.len(), 1);
+        assert_eq!(
+            high_risk_requests[0]["approval_request_id"],
+            "apr-governance-high"
+        );
+        assert_eq!(high_risk_requests[0]["risk_class"], "High");
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
     fn approval_request_tool_query_list_surfaces_integrity_summary_counts() {
         let config = isolated_memory_config("approval-query-list-integrity-summary");
         let repo = SessionRepository::new(&config).expect("repository");
@@ -3945,6 +4313,58 @@ mod tests {
         assert!(
             error.contains("approval_requests_list_invalid_request: unknown pending_age_bucket"),
             "expected pending_age_bucket validation error, got: {error}"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_tool_query_list_rejects_unknown_execution_plane() {
+        let config = isolated_memory_config("approval-query-list-invalid-execution-plane");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+
+        let error = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "execution_plane": "broken",
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect_err("unknown execution_plane should be rejected");
+
+        assert!(
+            error.contains("approval_requests_list_invalid_request: unknown execution_plane"),
+            "expected execution_plane validation error, got: {error}"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_tool_query_list_rejects_unknown_risk_class() {
+        let config = isolated_memory_config("approval-query-list-invalid-risk-class");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+
+        let error = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "risk_class": "broken",
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect_err("unknown risk_class should be rejected");
+
+        assert!(
+            error.contains("approval_requests_list_invalid_request: unknown risk_class"),
+            "expected risk_class validation error, got: {error}"
         );
     }
 
