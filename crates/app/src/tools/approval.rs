@@ -34,6 +34,7 @@ const APPROVAL_ATTENTION_STALE_MAX_SECONDS: i64 = 4 * 60 * 60;
 struct ApprovalRequestsListRequest {
     session_id: Option<String>,
     status: Option<ApprovalRequestStatus>,
+    resolved_by_session_id: Option<String>,
     execution_plane: Option<ToolExecutionPlane>,
     governance_scope: Option<ToolGovernanceScope>,
     risk_class: Option<ToolRiskClass>,
@@ -384,6 +385,11 @@ fn execute_approval_requests_list(
         request_summaries
             .retain(|item| approval_request_decision_from_json(item) == Some(decision));
     }
+    if let Some(resolved_by_session_id) = request.resolved_by_session_id.as_deref() {
+        request_summaries.retain(|item| {
+            approval_request_resolved_by_session_id_from_json(item) == Some(resolved_by_session_id)
+        });
+    }
     if let Some(execution_plane) = request.execution_plane {
         request_summaries.retain(|item| {
             approval_request_execution_plane_from_json(item) == Some(execution_plane)
@@ -519,6 +525,7 @@ fn execute_approval_requests_list(
             "filter": {
                 "session_id": request.session_id,
                 "status": request.status.map(ApprovalRequestStatus::as_str),
+                "resolved_by_session_id": request.resolved_by_session_id,
                 "execution_plane": request.execution_plane.map(tool_execution_plane_as_str),
                 "governance_scope": request.governance_scope.map(tool_governance_scope_as_str),
                 "risk_class": request.risk_class.map(tool_risk_class_as_str),
@@ -878,6 +885,7 @@ fn approval_request_list_resolution_summary_json(requests: &[Value]) -> Value {
         ("completed_cleanly".to_owned(), 0usize),
         ("completed_with_attention".to_owned(), 0usize),
     ]);
+    let mut resolved_by_session_counts = BTreeMap::<String, usize>::new();
 
     for request in requests {
         let resolution = request.get("resolution").unwrap_or(&Value::Null);
@@ -899,12 +907,19 @@ fn approval_request_list_resolution_summary_json(requests: &[Value]) -> Value {
                 .entry(replay_result.to_owned())
                 .or_default() += 1;
         }
+        if let Some(resolved_by_session_id) = request.get("resolved_by_session_id").and_then(Value::as_str)
+        {
+            *resolved_by_session_counts
+                .entry(resolved_by_session_id.to_owned())
+                .or_default() += 1;
+        }
     }
 
     json!({
         "decision_counts": decision_counts,
         "request_status_counts": request_status_counts,
         "replay_result_counts": replay_result_counts,
+        "resolved_by_session_counts": resolved_by_session_counts,
     })
 }
 
@@ -1704,6 +1719,11 @@ fn approval_request_risk_class_from_json(request: &Value) -> Option<ToolRiskClas
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn approval_request_resolved_by_session_id_from_json(request: &Value) -> Option<&str> {
+    request.get("resolved_by_session_id").and_then(Value::as_str)
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn approval_request_grant_state_from_json(request: &Value) -> Option<ApprovalGrantState> {
     request
         .get("grant")
@@ -1957,6 +1977,7 @@ fn parse_approval_requests_list_request(
     Ok(ApprovalRequestsListRequest {
         session_id: optional_payload_string(payload, "session_id"),
         status: optional_payload_approval_request_status(payload, "status")?,
+        resolved_by_session_id: optional_payload_string(payload, "resolved_by_session_id"),
         execution_plane: optional_payload_tool_execution_plane(payload, "execution_plane")?,
         governance_scope: optional_payload_tool_governance_scope(payload, "governance_scope")?,
         risk_class: optional_payload_tool_risk_class(payload, "risk_class")?,
@@ -3488,6 +3509,119 @@ mod tests {
             deny_requests[0]["approval_request_id"],
             "apr-decision-denied"
         );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_tool_query_list_summarizes_and_filters_by_resolver() {
+        let config = isolated_memory_config("approval-query-list-resolver-summary");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+        seed_request(
+            &repo,
+            "apr-resolver-pending",
+            "root-session",
+            "session_cancel",
+            "governed_tool_requires_per_call_approval",
+        );
+        seed_request(
+            &repo,
+            "apr-resolver-alpha",
+            "root-session",
+            "session_cancel",
+            "governed_tool_requires_per_call_approval",
+        );
+        seed_request(
+            &repo,
+            "apr-resolver-beta",
+            "root-session",
+            "delegate_async",
+            "governed_tool_requires_per_call_approval",
+        );
+
+        repo.transition_approval_request_if_current(
+            "apr-resolver-alpha",
+            TransitionApprovalRequestIfCurrentRequest {
+                expected_status: ApprovalRequestStatus::Pending,
+                next_status: ApprovalRequestStatus::Denied,
+                decision: Some(ApprovalDecision::Deny),
+                resolved_by_session_id: Some("operator-alpha".to_owned()),
+                executed_at: None,
+                last_error: None,
+            },
+        )
+        .expect("transition alpha resolver request")
+        .expect("alpha resolver request should transition");
+        repo.transition_approval_request_if_current(
+            "apr-resolver-beta",
+            TransitionApprovalRequestIfCurrentRequest {
+                expected_status: ApprovalRequestStatus::Pending,
+                next_status: ApprovalRequestStatus::Executed,
+                decision: Some(ApprovalDecision::ApproveOnce),
+                resolved_by_session_id: Some("operator-beta".to_owned()),
+                executed_at: Some(1_773_000_000),
+                last_error: None,
+            },
+        )
+        .expect("transition beta resolver request")
+        .expect("beta resolver request should transition");
+
+        let list_outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "limit": 10,
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list outcome for resolver summary");
+
+        let resolution_summary = &list_outcome.payload["resolution_summary"];
+        assert_eq!(
+            resolution_summary["resolved_by_session_counts"]["operator-alpha"],
+            1
+        );
+        assert_eq!(
+            resolution_summary["resolved_by_session_counts"]["operator-beta"],
+            1
+        );
+        assert_eq!(
+            resolution_summary["resolved_by_session_counts"]
+                .as_object()
+                .expect("resolver counts object")
+                .len(),
+            2
+        );
+
+        let filtered_outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "resolved_by_session_id": "operator-beta",
+                    "limit": 10,
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list outcome for resolver filter");
+
+        assert_eq!(filtered_outcome.payload["matched_count"], 1);
+        assert_eq!(filtered_outcome.payload["returned_count"], 1);
+        assert_eq!(
+            filtered_outcome.payload["filter"]["resolved_by_session_id"],
+            "operator-beta"
+        );
+        let requests = filtered_outcome.payload["requests"]
+            .as_array()
+            .expect("resolver filtered requests array");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["approval_request_id"], "apr-resolver-beta");
+        assert_eq!(requests[0]["resolved_by_session_id"], "operator-beta");
     }
 
     #[cfg(feature = "memory-sqlite")]
