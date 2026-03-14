@@ -49,7 +49,6 @@ pub(super) enum ConfigValidationCode {
     NumericRange,
     DuplicateChannelAccountId,
     UnknownChannelDefaultAccount,
-    DeprecatedField,
 }
 
 impl ConfigValidationCode {
@@ -67,7 +66,6 @@ impl ConfigValidationCode {
             ConfigValidationCode::UnknownChannelDefaultAccount => {
                 "config.channel_account.unknown_default"
             }
-            ConfigValidationCode::DeprecatedField => "config.deprecated_field",
         }
     }
 
@@ -95,9 +93,6 @@ impl ConfigValidationCode {
             ConfigValidationCode::UnknownChannelDefaultAccount => {
                 "urn:loongclaw:problem:config.channel_account.unknown_default"
             }
-            ConfigValidationCode::DeprecatedField => {
-                "urn:loongclaw:problem:config.deprecated_field"
-            }
         }
     }
 
@@ -115,7 +110,6 @@ impl ConfigValidationCode {
             ConfigValidationCode::UnknownChannelDefaultAccount => {
                 "config.channel_account.unknown_default.title"
             }
-            ConfigValidationCode::DeprecatedField => "config.deprecated_field.title",
         }
     }
 
@@ -141,7 +135,6 @@ impl ConfigValidationCode {
                 "Duplicate Normalized Channel Account ID"
             }
             ConfigValidationCode::UnknownChannelDefaultAccount => "Unknown Channel Default Account",
-            ConfigValidationCode::DeprecatedField => "Deprecated Config Field",
         }
     }
 
@@ -170,9 +163,6 @@ impl ConfigValidationCode {
             }
             ConfigValidationCode::UnknownChannelDefaultAccount => {
                 "[{code}] {field_path} points to `{requested_account_id}`, but configured accounts are: {configured_account_ids}. set `{field_path}` to one of the configured account ids"
-            }
-            ConfigValidationCode::DeprecatedField => {
-                "[{code}] {field_path} is deprecated: {deprecated_detail}"
             }
         }
     }
@@ -307,11 +297,6 @@ const EN_VALIDATION_MESSAGE_CATALOG: &[ConfigValidationCatalogEntry] = &[
     ConfigValidationCatalogEntry::new(
         "config.channel_account.unknown_default",
         "[{code}] {field_path} points to `{requested_account_id}`, but configured accounts are: {configured_account_ids}. set `{field_path}` to one of the configured account ids",
-    ),
-    ConfigValidationCatalogEntry::new("config.deprecated_field.title", "Deprecated Config Field"),
-    ConfigValidationCatalogEntry::new(
-        "config.deprecated_field",
-        "[{code}] {field_path} is deprecated: {deprecated_detail}",
     ),
 ];
 

@@ -1,10 +1,10 @@
-use std::{collections::BTreeMap, collections::BTreeSet, path::PathBuf};
+use std::{collections::BTreeSet, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use super::shared::{
-    ConfigValidationCode, ConfigValidationIssue, DEFAULT_SQLITE_FILE, default_loongclaw_home,
-    expand_path, validate_numeric_range,
+    ConfigValidationIssue, DEFAULT_SQLITE_FILE, default_loongclaw_home, expand_path,
+    validate_numeric_range,
 };
 
 pub(crate) const MIN_MEMORY_SLIDING_WINDOW: usize = 1;
@@ -12,10 +12,6 @@ pub(crate) const MAX_MEMORY_SLIDING_WINDOW: usize = 128;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolConfig {
-    /// Deprecated: shell policy is now enforced via PolicyExtensionChain.
-    /// Kept for config deserialization backward compatibility.
-    #[serde(default)]
-    pub shell_allowlist: Vec<String>,
     #[serde(default)]
     pub file_root: Option<String>,
     /// Commands to allow. Defaults to empty — no commands are allowed unless
@@ -155,7 +151,6 @@ pub enum MemoryMode {
 impl Default for ToolConfig {
     fn default() -> Self {
         Self {
-            shell_allowlist: Vec::new(),
             file_root: None,
             shell_allow: default_shell_allow(),
             shell_deny: Vec::new(),
@@ -186,23 +181,7 @@ impl ToolConfig {
     }
 
     pub(super) fn validate(&self) -> Vec<ConfigValidationIssue> {
-        let mut issues = Vec::new();
-        if !self.shell_allowlist.is_empty() {
-            let mut extra = BTreeMap::new();
-            extra.insert(
-                "deprecated_detail".to_owned(),
-                "rename to 'shell_allow'; values in 'shell_allowlist' are ignored".to_owned(),
-            );
-            issues.push(ConfigValidationIssue {
-                code: ConfigValidationCode::DeprecatedField,
-                field_path: "tools.shell_allowlist".to_owned(),
-                inline_field_path: "tools.shell_allowlist".to_owned(),
-                example_env_name: String::new(),
-                suggested_env_name: None,
-                extra_message_variables: extra,
-            });
-        }
-        issues
+        Vec::new()
     }
 }
 
@@ -414,26 +393,5 @@ mod tests {
                 .expect("install root should resolve")
                 .ends_with("demo-skills")
         );
-    }
-
-    #[test]
-    fn deprecated_shell_allowlist_emits_warning() {
-        let config = ToolConfig {
-            shell_allowlist: vec!["echo".to_owned()],
-            ..ToolConfig::default()
-        };
-        let issues = config.validate();
-        assert_eq!(issues.len(), 1);
-        assert_eq!(
-            issues[0].code,
-            super::super::shared::ConfigValidationCode::DeprecatedField
-        );
-        assert!(issues[0].field_path.contains("shell_allowlist"));
-    }
-
-    #[test]
-    fn empty_shell_allowlist_emits_no_warning() {
-        let config = ToolConfig::default();
-        assert!(config.validate().is_empty());
     }
 }
