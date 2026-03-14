@@ -1710,31 +1710,67 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn write_fake_executable_script(
-        temp_dir: &Path,
-        script_name: &str,
-        body: impl AsRef<str>,
-    ) -> PathBuf {
-        let script_path = temp_dir.join(script_name);
-        let temp_script_path = temp_dir.join(format!("{script_name}.tmp"));
-        {
-            let mut script_file =
-                std::fs::File::create(&temp_script_path).expect("create fake executable script");
-            script_file
-                .write_all(body.as_ref().as_bytes())
-                .expect("write fake executable script");
-            script_file.flush().expect("flush fake executable script");
-            script_file.sync_all().expect("sync fake executable script");
+    fn write_executable_script_atomically(
+        script_path: &Path,
+        contents: &str,
+    ) -> std::io::Result<()> {
+        write_executable_script_atomically_with(script_path, |file| {
+            std::io::Write::write_all(file, contents.as_bytes())
+        })
+    }
+
+    #[cfg(unix)]
+    fn write_executable_script_atomically_with<F>(
+        script_path: &Path,
+        writer: F,
+    ) -> std::io::Result<()>
+    where
+        F: FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+    {
+        static NEXT_STAGING_FILE_SEED: AtomicU64 = AtomicU64::new(1);
+
+        let Some(parent) = script_path.parent() else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "fake acpx script path `{}` has no parent directory",
+                    script_path.display()
+                ),
+            ));
+        };
+        let Some(file_name) = script_path.file_name().and_then(|name| name.to_str()) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "fake acpx script path `{}` has no UTF-8 file name",
+                    script_path.display()
+                ),
+            ));
+        };
+
+        let seed = NEXT_STAGING_FILE_SEED.fetch_add(1, Ordering::Relaxed);
+        let staged_path = parent.join(format!(".{file_name}.{}.{seed}.tmp", std::process::id()));
+        let mut staged_file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&staged_path)?;
+        let write_result = writer(&mut staged_file).and_then(|()| staged_file.sync_all());
+        drop(staged_file);
+
+        if let Err(error) = write_result {
+            let _ = std::fs::remove_file(&staged_path);
+            return Err(error);
         }
 
-        let mut permissions = std::fs::metadata(&temp_script_path)
-            .expect("stat fake executable script")
-            .permissions();
+        let mut permissions = std::fs::metadata(&staged_path)?.permissions();
         permissions.set_mode(0o755);
-        std::fs::set_permissions(&temp_script_path, permissions)
-            .expect("chmod fake executable script");
-        std::fs::rename(&temp_script_path, &script_path).expect("persist fake executable script");
-        script_path
+        std::fs::set_permissions(&staged_path, permissions)?;
+        if let Err(error) = std::fs::rename(&staged_path, script_path) {
+            let _ = std::fs::remove_file(&staged_path);
+            return Err(error);
+        }
+
+        Ok(())
     }
 
     #[cfg(unix)]
@@ -1744,15 +1780,46 @@ mod tests {
         log_path: &Path,
         body: &str,
     ) -> PathBuf {
-        write_fake_executable_script(
-            temp_dir,
-            script_name,
-            format!(
+        let script_path = temp_dir.join(script_name);
+        write_executable_script_atomically(
+            &script_path,
+            &format!(
                 "#!/bin/sh\nset -eu\nLOG_PATH=\"{}\"\nprintf '%s\\n' \"$*\" >> \"$LOG_PATH\"\n{}\n",
                 log_path.display(),
                 body
             ),
         )
+        .expect("write fake acpx script");
+        script_path
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn write_executable_script_atomically_preserves_existing_script_when_write_fails() {
+        let temp_dir = unique_temp_dir("loongclaw-acpx-script-atomic");
+        let script_path = temp_dir.join("fake-acpx");
+
+        write_executable_script_atomically(&script_path, "#!/bin/sh\necho old\n")
+            .expect("write baseline fake acpx script");
+
+        let error = write_executable_script_atomically_with(&script_path, |file| {
+            std::io::Write::write_all(file, b"#!/bin/sh\necho new\n")?;
+            Err(std::io::Error::other("simulated staging failure"))
+        })
+        .expect_err("staging failure should surface");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert_eq!(
+            std::fs::read_to_string(&script_path).expect("read baseline fake acpx script"),
+            "#!/bin/sh\necho old\n"
+        );
+
+        let staging_entries = std::fs::read_dir(&temp_dir)
+            .expect("list temp dir")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp"))
+            .count();
+        assert_eq!(staging_entries, 0, "staging files should be cleaned up");
     }
 
     #[cfg(unix)]
@@ -1857,8 +1924,9 @@ mod tests {
     #[cfg(unix)]
     async fn doctor_accepts_fake_version_command() {
         let temp_dir = unique_temp_dir("loongclaw-acpx-probe");
-        let script_path =
-            write_fake_executable_script(&temp_dir, "fake-acpx", "#!/bin/sh\necho 'acpx 0.1.16'\n");
+        let script_path = temp_dir.join("fake-acpx");
+        write_executable_script_atomically(&script_path, "#!/bin/sh\necho 'acpx 0.1.16'\n")
+            .expect("write fake acpx script");
 
         let backend = AcpxCliProbeBackend;
         let config = LoongClawConfig {

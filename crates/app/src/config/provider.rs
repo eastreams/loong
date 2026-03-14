@@ -1448,46 +1448,88 @@ impl ProviderKind {
     }
 
     pub fn profile(self) -> &'static ProviderProfile {
+        let [
+            anthropic,
+            bedrock,
+            byteplus,
+            byteplus_coding,
+            cerebras,
+            cloudflare_ai_gateway,
+            cohere,
+            custom,
+            deepseek,
+            fireworks,
+            gemini,
+            groq,
+            kimi,
+            kimi_coding,
+            mistral,
+            minimax,
+            novita,
+            nvidia,
+            llamacpp,
+            lm_studio,
+            ollama,
+            openai,
+            openrouter,
+            perplexity,
+            qianfan,
+            qwen,
+            sambanova,
+            sglang,
+            siliconflow,
+            stepfun,
+            together,
+            venice,
+            vercel_ai_gateway,
+            vllm,
+            volcengine,
+            volcengine_coding,
+            xai,
+            zai,
+            zhipu,
+        ] = &PROVIDER_PROFILES;
+
         match self {
-            ProviderKind::Anthropic => &PROVIDER_PROFILES[0],
-            ProviderKind::Bedrock => &PROVIDER_PROFILES[1],
-            ProviderKind::Byteplus => &PROVIDER_PROFILES[2],
-            ProviderKind::ByteplusCoding => &PROVIDER_PROFILES[3],
-            ProviderKind::Cerebras => &PROVIDER_PROFILES[4],
-            ProviderKind::CloudflareAiGateway => &PROVIDER_PROFILES[5],
-            ProviderKind::Cohere => &PROVIDER_PROFILES[6],
-            ProviderKind::Custom => &PROVIDER_PROFILES[7],
-            ProviderKind::Deepseek => &PROVIDER_PROFILES[8],
-            ProviderKind::Fireworks => &PROVIDER_PROFILES[9],
-            ProviderKind::Gemini => &PROVIDER_PROFILES[10],
-            ProviderKind::Groq => &PROVIDER_PROFILES[11],
-            ProviderKind::Kimi => &PROVIDER_PROFILES[12],
-            ProviderKind::KimiCoding => &PROVIDER_PROFILES[13],
-            ProviderKind::Mistral => &PROVIDER_PROFILES[14],
-            ProviderKind::Minimax => &PROVIDER_PROFILES[15],
-            ProviderKind::Novita => &PROVIDER_PROFILES[16],
-            ProviderKind::Nvidia => &PROVIDER_PROFILES[17],
-            ProviderKind::Llamacpp => &PROVIDER_PROFILES[18],
-            ProviderKind::LmStudio => &PROVIDER_PROFILES[19],
-            ProviderKind::Ollama => &PROVIDER_PROFILES[20],
-            ProviderKind::Openai => &PROVIDER_PROFILES[21],
-            ProviderKind::Openrouter => &PROVIDER_PROFILES[22],
-            ProviderKind::Perplexity => &PROVIDER_PROFILES[23],
-            ProviderKind::Qianfan => &PROVIDER_PROFILES[24],
-            ProviderKind::Qwen => &PROVIDER_PROFILES[25],
-            ProviderKind::Sambanova => &PROVIDER_PROFILES[26],
-            ProviderKind::Sglang => &PROVIDER_PROFILES[27],
-            ProviderKind::Siliconflow => &PROVIDER_PROFILES[28],
-            ProviderKind::Stepfun => &PROVIDER_PROFILES[29],
-            ProviderKind::Together => &PROVIDER_PROFILES[30],
-            ProviderKind::Venice => &PROVIDER_PROFILES[31],
-            ProviderKind::VercelAiGateway => &PROVIDER_PROFILES[32],
-            ProviderKind::Vllm => &PROVIDER_PROFILES[33],
-            ProviderKind::Volcengine => &PROVIDER_PROFILES[34],
-            ProviderKind::VolcengineCoding => &PROVIDER_PROFILES[35],
-            ProviderKind::Xai => &PROVIDER_PROFILES[36],
-            ProviderKind::Zai => &PROVIDER_PROFILES[37],
-            ProviderKind::Zhipu => &PROVIDER_PROFILES[38],
+            ProviderKind::Anthropic => anthropic,
+            ProviderKind::Bedrock => bedrock,
+            ProviderKind::Byteplus => byteplus,
+            ProviderKind::ByteplusCoding => byteplus_coding,
+            ProviderKind::Cerebras => cerebras,
+            ProviderKind::CloudflareAiGateway => cloudflare_ai_gateway,
+            ProviderKind::Cohere => cohere,
+            ProviderKind::Custom => custom,
+            ProviderKind::Gemini => gemini,
+            ProviderKind::Kimi => kimi,
+            ProviderKind::KimiCoding => kimi_coding,
+            ProviderKind::Groq => groq,
+            ProviderKind::Fireworks => fireworks,
+            ProviderKind::Mistral => mistral,
+            ProviderKind::Minimax => minimax,
+            ProviderKind::Novita => novita,
+            ProviderKind::Nvidia => nvidia,
+            ProviderKind::Llamacpp => llamacpp,
+            ProviderKind::LmStudio => lm_studio,
+            ProviderKind::Ollama => ollama,
+            ProviderKind::Openai => openai,
+            ProviderKind::Openrouter => openrouter,
+            ProviderKind::Perplexity => perplexity,
+            ProviderKind::Qianfan => qianfan,
+            ProviderKind::Qwen => qwen,
+            ProviderKind::Sambanova => sambanova,
+            ProviderKind::Sglang => sglang,
+            ProviderKind::Siliconflow => siliconflow,
+            ProviderKind::Stepfun => stepfun,
+            ProviderKind::Together => together,
+            ProviderKind::Venice => venice,
+            ProviderKind::VercelAiGateway => vercel_ai_gateway,
+            ProviderKind::Volcengine => volcengine,
+            ProviderKind::VolcengineCoding => volcengine_coding,
+            ProviderKind::Xai => xai,
+            ProviderKind::Zai => zai,
+            ProviderKind::Zhipu => zhipu,
+            ProviderKind::Deepseek => deepseek,
+            ProviderKind::Vllm => vllm,
         }
     }
 
@@ -1546,13 +1588,7 @@ impl ProviderKind {
     pub fn allowed_reasoning_efforts(self) -> Option<&'static [ReasoningEffort]> {
         if self == ProviderKind::Cohere {
             Some(COHERE_REASONING_EFFORTS)
-        } else if matches!(
-            self,
-            ProviderKind::Byteplus
-                | ProviderKind::ByteplusCoding
-                | ProviderKind::Volcengine
-                | ProviderKind::VolcengineCoding
-        ) {
+        } else if self.feature_family() == ProviderFeatureFamily::Volcengine {
             Some(ARK_REASONING_EFFORTS)
         } else {
             None
@@ -2565,12 +2601,10 @@ fn derive_models_path(chat_path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{PROVIDER_KIND_ORDER, PROVIDER_PROFILES, ProviderKind};
+    use super::*;
 
     #[test]
-    fn provider_profiles_cover_every_provider_kind() {
-        assert_eq!(PROVIDER_KIND_ORDER.len(), PROVIDER_PROFILES.len());
-
+    fn provider_profile_lookup_matches_kind() {
         for kind in ProviderKind::all_sorted() {
             assert_eq!(kind.profile().kind, *kind);
         }
