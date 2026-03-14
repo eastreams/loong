@@ -114,6 +114,18 @@ impl MemoryRuntimeConfig {
             profile_note: config.trimmed_profile_note(),
         }
     }
+
+    pub const fn strict_mode_requested(&self) -> bool {
+        !self.fail_open
+    }
+
+    pub const fn strict_mode_active(&self) -> bool {
+        false
+    }
+
+    pub const fn effective_fail_open(&self) -> bool {
+        !self.strict_mode_active()
+    }
 }
 
 fn parse_positive_usize(raw: Option<String>) -> Option<usize> {
@@ -240,6 +252,9 @@ mod tests {
 
         assert_eq!(runtime.system, crate::config::MemorySystemKind::Builtin);
         assert!(!runtime.fail_open);
+        assert!(runtime.strict_mode_requested());
+        assert!(!runtime.strict_mode_active());
+        assert!(runtime.effective_fail_open());
         assert_eq!(
             runtime.ingest_mode,
             crate::config::MemoryIngestMode::AsyncBackground
