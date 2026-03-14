@@ -1,5 +1,7 @@
 use serde_json::{Value, json};
 
+use super::contracts::ProviderApiError;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ProviderFailoverReason {
     ModelMismatch,
@@ -96,6 +98,7 @@ pub(super) struct ModelRequestError {
     pub(super) try_next_model: bool,
     pub(super) reason: ProviderFailoverReason,
     pub(super) snapshot: ProviderFailoverSnapshot,
+    pub(super) api_error: Option<ProviderApiError>,
 }
 
 pub(super) fn build_model_request_error(
@@ -107,6 +110,7 @@ pub(super) fn build_model_request_error(
     attempt: usize,
     max_attempts: usize,
     status_code: Option<u16>,
+    api_error: Option<ProviderApiError>,
 ) -> ModelRequestError {
     let snapshot = ProviderFailoverSnapshot {
         reason,
@@ -122,6 +126,7 @@ pub(super) fn build_model_request_error(
         try_next_model,
         reason,
         snapshot,
+        api_error,
     }
 }
 
@@ -202,6 +207,7 @@ mod tests {
             1,
             3,
             Some(429),
+            None,
         );
         let (_, payload_raw) = error
             .message

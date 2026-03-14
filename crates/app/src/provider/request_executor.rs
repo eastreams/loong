@@ -227,6 +227,7 @@ where
                             attempt,
                             runtime.request_policy.max_attempts,
                             None,
+                            None,
                         )
                     })?;
 
@@ -244,6 +245,7 @@ where
                             runtime.model,
                             attempt,
                             runtime.request_policy.max_attempts,
+                            None,
                             None,
                         )
                     })?;
@@ -299,6 +301,7 @@ where
                             attempt,
                             runtime.request_policy.max_attempts,
                             Some(status_code),
+                            Some(api_error.clone()),
                         ));
                     }
                     ModelStatusOutcome::Fail { reason } => {
@@ -315,6 +318,7 @@ where
                             attempt,
                             runtime.request_policy.max_attempts,
                             Some(status_code),
+                            Some(api_error.clone()),
                         ));
                     }
                 }
@@ -339,6 +343,7 @@ where
                     runtime.model,
                     attempt,
                     runtime.request_policy.max_attempts,
+                    None,
                     None,
                 ));
             }

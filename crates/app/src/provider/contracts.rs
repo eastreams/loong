@@ -2,6 +2,7 @@ use serde_json::Value;
 
 use crate::config::{
     ProviderConfig, ProviderKind, ProviderProfileHealthModeConfig, ProviderProtocolFamily,
+    ProviderWireApi,
     ProviderReasoningExtraBodyModeConfig, ProviderToolSchemaModeConfig,
 };
 
@@ -38,6 +39,7 @@ pub(super) enum ProviderTransportMode {
     OpenAiChatCompletions,
     AnthropicMessages,
     BedrockConverse,
+    Responses,
     KimiApi,
 }
 
@@ -50,7 +52,10 @@ impl ProviderTransportMode {
                 if matches!(provider.kind, ProviderKind::KimiCoding) {
                     Self::KimiApi
                 } else {
-                    Self::OpenAiChatCompletions
+                    match provider.wire_api {
+                        ProviderWireApi::ChatCompletions => Self::OpenAiChatCompletions,
+                        ProviderWireApi::Responses => Self::Responses,
+                    }
                 }
             }
         }
@@ -149,10 +154,17 @@ pub(super) struct ProviderRuntimeContract {
 
 pub(super) fn provider_runtime_contract(provider: &ProviderConfig) -> ProviderRuntimeContract {
     let transport_mode = ProviderTransportMode::for_provider(provider);
-    let default_token_field = if matches!(provider.kind, ProviderKind::Openai) {
-        TokenLimitField::MaxCompletionTokens
-    } else {
-        TokenLimitField::MaxTokens
+    let default_token_field = match transport_mode {
+        ProviderTransportMode::Responses => TokenLimitField::MaxOutputTokens,
+        ProviderTransportMode::OpenAiChatCompletions
+            if matches!(provider.kind, ProviderKind::Openai) =>
+        {
+            TokenLimitField::MaxCompletionTokens
+        }
+        ProviderTransportMode::OpenAiChatCompletions
+        | ProviderTransportMode::AnthropicMessages
+        | ProviderTransportMode::BedrockConverse
+        | ProviderTransportMode::KimiApi => TokenLimitField::MaxTokens,
     };
     let feature_family = match provider.kind.feature_family() {
         crate::config::ProviderFeatureFamily::OpenAiCompatible => {
@@ -193,10 +205,13 @@ pub(super) fn provider_runtime_contract(provider: &ProviderConfig) -> ProviderRu
         }
         ProviderProfileHealthModeConfig::ObserveOnly => ProviderProfileHealthMode::ObserveOnly,
     };
-    let default_reasoning_field = match feature_family {
-        ProviderFeatureFamily::Anthropic | ProviderFeatureFamily::Bedrock => ReasoningField::Omit,
-        ProviderFeatureFamily::OpenAiCompatible | ProviderFeatureFamily::VolcengineCompatible => {
+    let default_reasoning_field = match transport_mode {
+        ProviderTransportMode::Responses => ReasoningField::ReasoningObject,
+        ProviderTransportMode::OpenAiChatCompletions | ProviderTransportMode::KimiApi => {
             ReasoningField::ReasoningEffort
+        }
+        ProviderTransportMode::AnthropicMessages | ProviderTransportMode::BedrockConverse => {
+            ReasoningField::Omit
         }
     };
     let default_temperature_field = TemperatureField::Include;
@@ -225,7 +240,7 @@ pub(super) fn provider_runtime_contract(provider: &ProviderConfig) -> ProviderRu
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ProviderPayloadAdaptationContract {
-    pub(super) token_field_progression: [TokenLimitField; 3],
+    pub(super) token_field_progression: [TokenLimitField; 4],
     pub(super) reasoning_field_progression: [ReasoningField; 3],
     pub(super) temperature_field_progression: [TemperatureField; 2],
     pub(super) unsupported_parameter_message_fragments: &'static [&'static str],
@@ -242,20 +257,40 @@ fn provider_payload_adaptation_contract(
     default_temperature_field: TemperatureField,
 ) -> ProviderPayloadAdaptationContract {
     match feature_family {
-        ProviderFeatureFamily::OpenAiCompatible
-        | ProviderFeatureFamily::Anthropic
-        | ProviderFeatureFamily::Bedrock
-        | ProviderFeatureFamily::VolcengineCompatible => ProviderPayloadAdaptationContract {
-            token_field_progression: token_field_progression(default_token_field),
-            reasoning_field_progression: reasoning_field_progression(default_reasoning_field),
-            temperature_field_progression: temperature_field_progression(default_temperature_field),
-            unsupported_parameter_message_fragments:
-                DEFAULT_UNSUPPORTED_PARAMETER_MESSAGE_FRAGMENTS,
-            token_error_parameters: &["max_tokens", "max_completion_tokens"],
-            reasoning_error_parameters: &["reasoning_effort", "reasoning"],
-            temperature_error_parameters: &["temperature"],
-            temperature_default_only_fragments: &["only the default"],
-        },
+        ProviderFeatureFamily::OpenAiCompatible | ProviderFeatureFamily::VolcengineCompatible => {
+            ProviderPayloadAdaptationContract {
+                token_field_progression: token_field_progression(default_token_field),
+                reasoning_field_progression: reasoning_field_progression(default_reasoning_field),
+                temperature_field_progression: temperature_field_progression(
+                    default_temperature_field,
+                ),
+                unsupported_parameter_message_fragments:
+                    DEFAULT_UNSUPPORTED_PARAMETER_MESSAGE_FRAGMENTS,
+                token_error_parameters: &[
+                    "max_output_tokens",
+                    "max_tokens",
+                    "max_completion_tokens",
+                ],
+                reasoning_error_parameters: &["reasoning_effort", "reasoning"],
+                temperature_error_parameters: &["temperature"],
+                temperature_default_only_fragments: &["only the default"],
+            }
+        }
+        ProviderFeatureFamily::Anthropic | ProviderFeatureFamily::Bedrock => {
+            ProviderPayloadAdaptationContract {
+                token_field_progression: token_field_progression(default_token_field),
+                reasoning_field_progression: reasoning_field_progression(default_reasoning_field),
+                temperature_field_progression: temperature_field_progression(
+                    default_temperature_field,
+                ),
+                unsupported_parameter_message_fragments:
+                    DEFAULT_UNSUPPORTED_PARAMETER_MESSAGE_FRAGMENTS,
+                token_error_parameters: &["max_tokens", "max_completion_tokens"],
+                reasoning_error_parameters: &["reasoning_effort", "reasoning"],
+                temperature_error_parameters: &["temperature"],
+                temperature_default_only_fragments: &["only the default"],
+            }
+        }
     }
 }
 
@@ -341,22 +376,31 @@ fn apply_provider_capability_config_overrides(
         };
 }
 
-fn token_field_progression(default_field: TokenLimitField) -> [TokenLimitField; 3] {
+fn token_field_progression(default_field: TokenLimitField) -> [TokenLimitField; 4] {
     match default_field {
+        TokenLimitField::MaxOutputTokens => [
+            TokenLimitField::MaxOutputTokens,
+            TokenLimitField::MaxTokens,
+            TokenLimitField::MaxCompletionTokens,
+            TokenLimitField::Omit,
+        ],
         TokenLimitField::MaxCompletionTokens => [
             TokenLimitField::MaxCompletionTokens,
             TokenLimitField::MaxTokens,
+            TokenLimitField::Omit,
             TokenLimitField::Omit,
         ],
         TokenLimitField::MaxTokens => [
             TokenLimitField::MaxTokens,
             TokenLimitField::MaxCompletionTokens,
             TokenLimitField::Omit,
+            TokenLimitField::Omit,
         ],
         TokenLimitField::Omit => [
             TokenLimitField::Omit,
-            TokenLimitField::MaxTokens,
-            TokenLimitField::MaxCompletionTokens,
+            TokenLimitField::Omit,
+            TokenLimitField::Omit,
+            TokenLimitField::Omit,
         ],
     }
 }
@@ -390,6 +434,7 @@ fn temperature_field_progression(default_field: TemperatureField) -> [Temperatur
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TokenLimitField {
+    MaxOutputTokens,
     MaxCompletionTokens,
     MaxTokens,
     Omit,
@@ -446,7 +491,7 @@ impl CompletionPayloadMode {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(super) struct ProviderApiError {
     pub(super) code: Option<String>,
     pub(super) param: Option<String>,

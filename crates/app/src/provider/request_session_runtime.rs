@@ -3,8 +3,6 @@ use std::time::Duration;
 use crate::{CliResult, config::LoongClawConfig};
 
 use super::auth_profile_runtime::{ProviderAuthProfile, resolve_provider_auth_profiles};
-use super::capability_profile_runtime::ProviderCapabilityProfile;
-use super::contracts::{ProviderRuntimeContract, provider_runtime_contract};
 use super::http_client_runtime::build_http_client;
 use super::model_candidate_cooldown_runtime::ModelCandidateCooldownPolicy;
 use super::model_candidate_resolver_runtime::resolve_request_models;
@@ -21,9 +19,6 @@ use super::provider_validation_runtime::{
 };
 
 pub(super) struct ProviderRequestSession {
-    pub(super) runtime_contract: ProviderRuntimeContract,
-    pub(super) capability_profile: ProviderCapabilityProfile,
-    pub(super) endpoint: String,
     pub(super) headers: reqwest::header::HeaderMap,
     pub(super) request_policy: policy::ProviderRequestPolicy,
     pub(super) client: reqwest::Client,
@@ -42,9 +37,6 @@ pub(super) async fn prepare_provider_request_session(
     validate_provider_feature_gate(config)?;
     ensure_provider_profile_state_backend(config);
 
-    let runtime_contract = provider_runtime_contract(&config.provider);
-    let capability_profile =
-        ProviderCapabilityProfile::from_provider(&config.provider, runtime_contract);
     let endpoint = config.provider.endpoint();
     let auth_context = super::transport::resolve_request_auth_context(&config.provider).await?;
     let headers = super::transport::build_request_headers_without_provider_auth(&config.provider)?;
@@ -114,9 +106,6 @@ pub(super) async fn prepare_provider_request_session(
     };
 
     Ok(ProviderRequestSession {
-        runtime_contract,
-        capability_profile,
-        endpoint,
         headers,
         request_policy,
         client,
