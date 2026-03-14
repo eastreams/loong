@@ -9,13 +9,11 @@ use super::*;
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::path::PathBuf;
+use std::sync::MutexGuard;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static TEMP_PATH_COUNTER: AtomicU64 = AtomicU64::new(0);
-static DETECTED_ENV_LOCK: Mutex<()> = Mutex::new(());
-
 fn unique_temp_path(label: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -35,24 +33,23 @@ struct DetectedEnvironmentGuard {
 
 impl DetectedEnvironmentGuard {
     fn without_detected_environment() -> Self {
-        let lock = DETECTED_ENV_LOCK
-            .lock()
-            .expect("detected-environment guard lock");
+        let lock = super::lock_daemon_test_environment();
         let mut keys = std::collections::BTreeSet::new();
         let default_config = mvp::config::LoongClawConfig::default();
-        let default_provider_kind = default_config.provider.kind;
 
-        if let Some(key) = default_provider_kind.default_api_key_env() {
-            keys.insert(key.to_owned());
-        }
-        for alias in default_provider_kind.api_key_env_aliases() {
-            keys.insert((*alias).to_owned());
-        }
-        if let Some(key) = default_provider_kind.default_oauth_access_token_env() {
-            keys.insert(key.to_owned());
-        }
-        for alias in default_provider_kind.oauth_access_token_env_aliases() {
-            keys.insert((*alias).to_owned());
+        for provider_kind in mvp::config::ProviderKind::all_sorted() {
+            if let Some(key) = provider_kind.default_api_key_env() {
+                keys.insert(key.to_owned());
+            }
+            for alias in provider_kind.api_key_env_aliases() {
+                keys.insert((*alias).to_owned());
+            }
+            if let Some(key) = provider_kind.default_oauth_access_token_env() {
+                keys.insert(key.to_owned());
+            }
+            for alias in provider_kind.oauth_access_token_env_aliases() {
+                keys.insert((*alias).to_owned());
+            }
         }
         if let Some(key) = default_config.telegram.bot_token_env.as_deref() {
             keys.insert(key.to_owned());
@@ -2561,6 +2558,11 @@ fn onboard_starting_point_selection_screen_explains_why_suggested_starting_point
 
 #[test]
 fn onboard_starting_point_selection_screen_explains_when_direct_source_is_a_good_fit() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    unsafe {
+        std::env::set_var("OPENAI_API_KEY", "openai-test-token");
+        std::env::set_var("DEEPSEEK_API_KEY", "deepseek-test-token");
+    }
     let codex = import_candidate_with_provider(
         crate::migration::types::ImportSourceKind::CodexConfig,
         "Codex config at ~/.codex/config.toml",
@@ -3867,6 +3869,7 @@ requires_openai_auth = true
 
 #[tokio::test(flavor = "current_thread")]
 async fn onboard_current_setup_adjustments_preserve_unchanged_domain_actions_in_review() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let workspace_root = unique_temp_path("current-adjusted-review-workspace");
     std::fs::create_dir_all(&workspace_root).expect("create workspace root");
     std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
@@ -3963,6 +3966,7 @@ async fn onboard_current_setup_adjustments_preserve_unchanged_domain_actions_in_
 
 #[tokio::test(flavor = "current_thread")]
 async fn onboard_detected_setup_adjustments_preserve_unchanged_detected_actions_in_review() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let workspace_root = unique_temp_path("detected-adjusted-review-workspace");
     std::fs::create_dir_all(&workspace_root).expect("create workspace root");
     std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
@@ -4268,6 +4272,7 @@ fn onboard_review_lines_sanitize_suggested_starting_point_label() {
 
 #[test]
 fn onboard_review_lines_compact_on_narrow_width() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let mut config = mvp::config::LoongClawConfig::default();
     config.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
     config.telegram.enabled = true;
@@ -4277,7 +4282,7 @@ fn onboard_review_lines_compact_on_narrow_width() {
         crate::onboard_cli::render_onboard_review_lines_with_guidance(&config, None, &[], 54);
 
     assert!(
-        lines.iter().any(|line| line.contains("- provider [Ready]")),
+        lines.iter().any(|line| line.starts_with("- provider [")),
         "narrow review should use compact domain rows: {lines:#?}"
     );
     assert!(

@@ -8,13 +8,11 @@
 use super::*;
 use std::ffi::OsString;
 use std::path::PathBuf;
+use std::sync::MutexGuard;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static MIGRATION_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-static MIGRATION_ENV_LOCK: Mutex<()> = Mutex::new(());
-
 fn unique_temp_dir(label: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -34,7 +32,7 @@ struct MigrationEnvironmentGuard {
 
 impl MigrationEnvironmentGuard {
     fn set(pairs: &[(&str, Option<&str>)]) -> Self {
-        let lock = MIGRATION_ENV_LOCK.lock().expect("migration env guard lock");
+        let lock = super::lock_daemon_test_environment();
         let mut saved = Vec::new();
         for (key, value) in pairs {
             saved.push(((*key).to_owned(), std::env::var_os(key)));
@@ -469,6 +467,11 @@ fn migration_domain_previews_preserve_source_attribution() {
 
 #[test]
 fn migration_classify_current_setup_distinguishes_basic_states() {
+    let home = unique_temp_dir("classify-home");
+    std::fs::create_dir_all(&home).expect("create classify home");
+    let _env_guard =
+        MigrationEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
+
     let missing = unique_temp_dir("missing").join("config.toml");
     assert_eq!(
         crate::migration::discovery::classify_current_setup(&missing),

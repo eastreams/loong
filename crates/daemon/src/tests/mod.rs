@@ -1,5 +1,14 @@
 use super::*;
 use clap::CommandFactory;
+use std::sync::{Mutex, MutexGuard};
+
+static DAEMON_TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_daemon_test_environment() -> MutexGuard<'static, ()> {
+    DAEMON_TEST_ENV_LOCK
+        .lock()
+        .expect("daemon test environment lock")
+}
 
 fn catalog_entry(raw: &str) -> mvp::channel::ChannelCatalogEntry {
     mvp::channel::resolve_channel_catalog_entry(raw).expect("channel catalog entry")

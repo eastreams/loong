@@ -11,13 +11,11 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
+use std::sync::MutexGuard;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static IMPORT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-static IMPORT_ENV_LOCK: Mutex<()> = Mutex::new(());
-
 fn unique_temp_dir(label: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -37,7 +35,7 @@ struct ImportEnvironmentGuard {
 
 impl ImportEnvironmentGuard {
     fn set(pairs: &[(&str, Option<&str>)]) -> Self {
-        let lock = IMPORT_ENV_LOCK.lock().expect("import env guard lock");
+        let lock = super::lock_daemon_test_environment();
         let mut saved = Vec::new();
         for (key, value) in pairs {
             saved.push(((*key).to_owned(), std::env::var_os(key)));
