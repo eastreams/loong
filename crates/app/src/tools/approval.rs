@@ -3918,6 +3918,35 @@ mod tests {
             "apr-governance-high"
         );
         assert_eq!(high_risk_requests[0]["risk_class"], "High");
+
+        let topology_outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "governance_scope": "TopologyMutation",
+                    "limit": 10,
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list outcome for governance_scope filter");
+
+        assert_eq!(
+            topology_outcome.payload["filter"]["governance_scope"],
+            "TopologyMutation"
+        );
+        assert_eq!(topology_outcome.payload["matched_count"], 1);
+        let topology_requests = topology_outcome.payload["requests"]
+            .as_array()
+            .expect("topology mutation requests array");
+        assert_eq!(topology_requests.len(), 1);
+        assert_eq!(
+            topology_requests[0]["approval_request_id"],
+            "apr-governance-high"
+        );
+        assert_eq!(topology_requests[0]["governance_scope"], "TopologyMutation");
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -4365,6 +4394,32 @@ mod tests {
         assert!(
             error.contains("approval_requests_list_invalid_request: unknown risk_class"),
             "expected risk_class validation error, got: {error}"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_tool_query_list_rejects_unknown_governance_scope() {
+        let config = isolated_memory_config("approval-query-list-invalid-governance-scope");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+
+        let error = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "governance_scope": "broken",
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect_err("unknown governance_scope should be rejected");
+
+        assert!(
+            error.contains("approval_requests_list_invalid_request: unknown governance_scope"),
+            "expected governance_scope validation error, got: {error}"
         );
     }
 
