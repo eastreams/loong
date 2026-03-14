@@ -129,6 +129,10 @@ fn render_channel_surfaces_text_reports_aliases_and_operation_health() {
     assert!(
         rendered.contains("capabilities=runtime_backed,multi_account,send,serve,runtime_tracking")
     );
+    assert!(rendered.contains(
+        "onboarding strategy=manual_config status_command=\"loongclaw doctor\" repair_command=\"loongclaw doctor --fix\""
+    ));
+    assert!(rendered.contains("setup_hint=\"configure telegram bot credentials"));
     assert!(rendered.contains("target_kinds=receive_id,message_reply"));
     assert!(rendered.contains("configured_accounts=1"));
     assert!(rendered.contains("aliases=lark"));
@@ -234,6 +238,10 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         "catalog op serve ({}) availability=stub tracks_runtime=true target_kinds=conversation requirements=-",
         channel_serve_command("slack")
     )));
+    assert!(rendered.contains(
+        "onboarding strategy=planned status_command=\"loongclaw channels --json\" repair_command=-"
+    ));
+    assert!(rendered.contains("setup_hint=\"stub surface only"));
 }
 
 #[test]
@@ -299,6 +307,70 @@ fn build_channels_cli_json_payload_includes_operation_requirement_metadata() {
                     "encrypt_key",
                 ])
     }));
+}
+
+#[test]
+fn build_channels_cli_json_payload_includes_onboarding_metadata() {
+    let config = mvp::config::LoongClawConfig::default();
+    let inventory = mvp::channel::channel_inventory(&config);
+    let payload = build_channels_cli_json_payload("/tmp/loongclaw.toml", &inventory);
+    let encoded = serde_json::to_value(&payload).expect("serialize payload");
+
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("telegram")
+                    && entry
+                        .get("onboarding")
+                        .and_then(|onboarding| onboarding.get("strategy"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("manual_config")
+                    && entry
+                        .get("onboarding")
+                        .and_then(|onboarding| onboarding.get("status_command"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("loongclaw doctor")
+                    && entry
+                        .get("onboarding")
+                        .and_then(|onboarding| onboarding.get("repair_command"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("loongclaw doctor --fix")
+            })
+    );
+
+    assert!(
+        encoded["channel_surfaces"]
+            .as_array()
+            .expect("channel surfaces array")
+            .iter()
+            .any(|surface| {
+                surface
+                    .get("catalog")
+                    .and_then(|catalog| catalog.get("id"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("discord")
+                    && surface
+                        .get("catalog")
+                        .and_then(|catalog| catalog.get("onboarding"))
+                        .and_then(|onboarding| onboarding.get("strategy"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("planned")
+                    && surface
+                        .get("catalog")
+                        .and_then(|catalog| catalog.get("onboarding"))
+                        .and_then(|onboarding| onboarding.get("status_command"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("loongclaw channels --json")
+                    && surface
+                        .get("catalog")
+                        .and_then(|catalog| catalog.get("onboarding"))
+                        .and_then(|onboarding| onboarding.get("repair_command"))
+                        .is_some_and(serde_json::Value::is_null)
+            })
+    );
 }
 
 #[test]
