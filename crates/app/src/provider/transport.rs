@@ -77,13 +77,13 @@ pub(super) async fn resolve_request_auth_context(
     #[cfg(feature = "provider-bedrock")]
     {
         let credentials = resolve_bedrock_credentials(region.as_str()).await?;
-        return Ok(RequestAuthContext {
+        Ok(RequestAuthContext {
             bedrock_region: Some(region.clone()),
             bedrock_signing: Some(BedrockSigningContext {
                 region,
                 credentials,
             }),
-        });
+        })
     }
 
     #[cfg(not(feature = "provider-bedrock"))]

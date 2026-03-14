@@ -1682,6 +1682,8 @@ fn now_ms() -> u64 {
 mod tests {
     use std::collections::BTreeMap;
     #[cfg(unix)]
+    use std::io::Write as _;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     #[cfg(unix)]
     use std::path::{Path, PathBuf};
@@ -1708,28 +1710,49 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn write_fake_executable_script(
+        temp_dir: &Path,
+        script_name: &str,
+        body: impl AsRef<str>,
+    ) -> PathBuf {
+        let script_path = temp_dir.join(script_name);
+        let temp_script_path = temp_dir.join(format!("{script_name}.tmp"));
+        {
+            let mut script_file =
+                std::fs::File::create(&temp_script_path).expect("create fake executable script");
+            script_file
+                .write_all(body.as_ref().as_bytes())
+                .expect("write fake executable script");
+            script_file.flush().expect("flush fake executable script");
+            script_file.sync_all().expect("sync fake executable script");
+        }
+
+        let mut permissions = std::fs::metadata(&temp_script_path)
+            .expect("stat fake executable script")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&temp_script_path, permissions)
+            .expect("chmod fake executable script");
+        std::fs::rename(&temp_script_path, &script_path).expect("persist fake executable script");
+        script_path
+    }
+
+    #[cfg(unix)]
     fn write_fake_acpx_script(
         temp_dir: &Path,
         script_name: &str,
         log_path: &Path,
         body: &str,
     ) -> PathBuf {
-        let script_path = temp_dir.join(script_name);
-        std::fs::write(
-            &script_path,
+        write_fake_executable_script(
+            temp_dir,
+            script_name,
             format!(
                 "#!/bin/sh\nset -eu\nLOG_PATH=\"{}\"\nprintf '%s\\n' \"$*\" >> \"$LOG_PATH\"\n{}\n",
                 log_path.display(),
                 body
             ),
         )
-        .expect("write fake acpx script");
-        let mut permissions = std::fs::metadata(&script_path)
-            .expect("stat fake acpx script")
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&script_path, permissions).expect("chmod fake acpx script");
-        script_path
     }
 
     #[cfg(unix)]
@@ -1834,14 +1857,8 @@ mod tests {
     #[cfg(unix)]
     async fn doctor_accepts_fake_version_command() {
         let temp_dir = unique_temp_dir("loongclaw-acpx-probe");
-        let script_path = temp_dir.join("fake-acpx");
-        std::fs::write(&script_path, "#!/bin/sh\necho 'acpx 0.1.16'\n")
-            .expect("write fake acpx script");
-        let mut permissions = std::fs::metadata(&script_path)
-            .expect("stat fake acpx script")
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&script_path, permissions).expect("chmod fake acpx script");
+        let script_path =
+            write_fake_executable_script(&temp_dir, "fake-acpx", "#!/bin/sh\necho 'acpx 0.1.16'\n");
 
         let backend = AcpxCliProbeBackend;
         let config = LoongClawConfig {

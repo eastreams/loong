@@ -467,7 +467,7 @@ pub(super) fn parse_provider_api_error(body: &Value) -> ProviderApiError {
     }
 }
 
-fn provider_error_value<'a>(body: &'a Value) -> &'a Value {
+fn provider_error_value(body: &Value) -> &Value {
     body.get("error")
         .or_else(|| body.get("Error"))
         .or_else(|| {
@@ -525,7 +525,7 @@ fn value_to_trimmed_string(value: &Value) -> Option<String> {
         }
         Value::Number(number) => Some(number.to_string()),
         Value::Bool(boolean) => Some(boolean.to_string()),
-        _ => None,
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
     }
 }
 
