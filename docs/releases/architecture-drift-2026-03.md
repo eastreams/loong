@@ -14,7 +14,7 @@
 | spec_runtime | `crates/spec/src/spec_runtime.rs` | 3020 | 3600 | 580 | 47 | 65 | 18 | n/a | n/a | N/A | n/a |
 | spec_execution | `crates/spec/src/spec_execution.rs` | 1478 | 3700 | 2222 | 23 | 80 | 57 | n/a | n/a | N/A | n/a |
 | provider_mod | `crates/app/src/provider/mod.rs` | 260 | 1000 | 740 | 6 | 20 | 14 | n/a | n/a | N/A | n/a |
-| memory_mod | `crates/app/src/memory/mod.rs` | 620 | 650 | 30 | 14 | 16 | 2 | n/a | n/a | N/A | n/a |
+| memory_mod | `crates/app/src/memory/mod.rs` | 645 | 650 | 5 | 14 | 16 | 2 | n/a | n/a | N/A | n/a |
 
 ## Boundary Checks
 | Check | Status | Previous Status | Detail |
@@ -41,7 +41,7 @@
 <!-- arch-hotspot key=spec_runtime lines=3020 functions=47 -->
 <!-- arch-hotspot key=spec_execution lines=1478 functions=23 -->
 <!-- arch-hotspot key=provider_mod lines=260 functions=6 -->
-<!-- arch-hotspot key=memory_mod lines=620 functions=14 -->
+<!-- arch-hotspot key=memory_mod lines=645 functions=14 -->
 <!-- arch-boundary key=memory_literals status=PASS -->
 <!-- arch-boundary key=provider_mod_helper_definitions status=PASS -->
 <!-- arch-boundary key=spec_app_dependency status=PASS -->
