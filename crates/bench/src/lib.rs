@@ -1067,6 +1067,11 @@ async fn run_spec_pressure_once(
     spec: &RunnerSpec,
     scenario: &ProgrammaticPressureScenario,
 ) -> CliResult<ScenarioRunSample> {
+    if spec_requires_native_tool_executor(spec) {
+        return Err(
+            "spec benchmark scenario requires a native tool executor; move this claw.import/claw-migration run to daemon composition root".to_owned(),
+        );
+    }
     let report = execute_spec(spec, false).await;
     let blocked = report.operation_kind == "blocked" || report.blocked_reason.is_some();
 
@@ -1105,6 +1110,19 @@ async fn run_spec_pressure_once(
     collect_spec_step_metrics(&report.outcome, &mut sample);
 
     Ok(sample)
+}
+
+fn spec_requires_native_tool_executor(spec: &RunnerSpec) -> bool {
+    match &spec.operation {
+        loongclaw_spec::OperationSpec::ToolCore { tool_name, .. } => matches!(
+            tool_name.as_str(),
+            "claw.import" | "claw_import" | "import_claw"
+        ),
+        loongclaw_spec::OperationSpec::ToolExtension { extension, .. } => {
+            extension == "claw-migration"
+        }
+        _ => false,
+    }
 }
 
 async fn run_circuit_half_open_pressure_once(
@@ -1959,6 +1977,7 @@ fn default_failures_before_open() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kernel::{Capability, ExecutionRoute, HarnessKind, VerticalPackManifest};
     use serde_json::json;
 
     #[test]
@@ -2598,5 +2617,90 @@ mod tests {
         assert_eq!(normalized.max_ratio, 0.0);
         assert_eq!(normalized.min_ratio, 0.0);
         assert_eq!(normalized.latency_ms, 0.0);
+    }
+
+    #[tokio::test]
+    async fn run_spec_pressure_once_rejects_native_claw_import_scenarios() {
+        let spec = RunnerSpec {
+            pack: VerticalPackManifest {
+                pack_id: "bench-spec-native-claw-import".to_owned(),
+                domain: "ops".to_owned(),
+                version: "0.1.0".to_owned(),
+                default_route: ExecutionRoute {
+                    harness_kind: HarnessKind::EmbeddedPi,
+                    adapter: Some("pi-local".to_owned()),
+                },
+                allowed_connectors: BTreeSet::new(),
+                granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+                metadata: BTreeMap::new(),
+            },
+            agent_id: "bench-agent-native-claw-import".to_owned(),
+            ttl_s: 60,
+            approval: None,
+            defaults: None,
+            self_awareness: None,
+            plugin_scan: None,
+            bridge_support: None,
+            bootstrap: None,
+            auto_provision: None,
+            hotfixes: Vec::new(),
+            operation: loongclaw_spec::OperationSpec::ToolCore {
+                tool_name: "claw.import".to_owned(),
+                required_capabilities: BTreeSet::from([Capability::InvokeTool]),
+                payload: json!({"mode": "plan"}),
+                core: None,
+            },
+        };
+        let scenario = ProgrammaticPressureScenario {
+            name: "native-claw-import".to_owned(),
+            description: None,
+            iterations: Some(1),
+            warmup_iterations: Some(0),
+            expected_operation_kind: "tool_core".to_owned(),
+            allow_blocked: false,
+            kind: ProgrammaticPressureScenarioKind::SpecRun { spec: spec.clone() },
+        };
+
+        let error = run_spec_pressure_once(&spec, &scenario)
+            .await
+            .expect_err("bench spec runs should reject native claw.import scenarios");
+        assert!(error.contains("native tool executor"));
+    }
+
+    #[test]
+    fn spec_requires_native_tool_executor_detects_claw_migration_extension() {
+        let spec = RunnerSpec {
+            pack: VerticalPackManifest {
+                pack_id: "bench-spec-claw-migration-extension".to_owned(),
+                domain: "ops".to_owned(),
+                version: "0.1.0".to_owned(),
+                default_route: ExecutionRoute {
+                    harness_kind: HarnessKind::EmbeddedPi,
+                    adapter: Some("pi-local".to_owned()),
+                },
+                allowed_connectors: BTreeSet::new(),
+                granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+                metadata: BTreeMap::new(),
+            },
+            agent_id: "bench-agent-claw-migration-extension".to_owned(),
+            ttl_s: 60,
+            approval: None,
+            defaults: None,
+            self_awareness: None,
+            plugin_scan: None,
+            bridge_support: None,
+            bootstrap: None,
+            auto_provision: None,
+            hotfixes: Vec::new(),
+            operation: loongclaw_spec::OperationSpec::ToolExtension {
+                extension_action: "plan".to_owned(),
+                required_capabilities: BTreeSet::from([Capability::InvokeTool]),
+                payload: json!({"input_path": "/tmp/demo"}),
+                extension: "claw-migration".to_owned(),
+                core: None,
+            },
+        };
+
+        assert!(spec_requires_native_tool_executor(&spec));
     }
 }
