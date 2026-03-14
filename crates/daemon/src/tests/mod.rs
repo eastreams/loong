@@ -1,6 +1,39 @@
 use super::*;
 use clap::CommandFactory;
 
+fn catalog_entry(raw: &str) -> mvp::channel::ChannelCatalogEntry {
+    mvp::channel::resolve_channel_catalog_entry(raw).expect("channel catalog entry")
+}
+
+fn catalog_command_family(raw: &str) -> mvp::channel::ChannelCatalogCommandFamilyDescriptor {
+    mvp::channel::resolve_channel_catalog_command_family_descriptor(raw)
+        .expect("channel catalog command family")
+}
+
+fn channel_send_command(raw: &str) -> &'static str {
+    catalog_command_family(raw).send.command
+}
+
+fn channel_serve_command(raw: &str) -> &'static str {
+    catalog_command_family(raw).serve.command
+}
+
+fn channel_capability_ids(raw: &str) -> Vec<&'static str> {
+    catalog_entry(raw)
+        .capabilities
+        .into_iter()
+        .map(|capability| capability.as_str())
+        .collect()
+}
+
+fn channel_supported_target_kinds(raw: &str) -> Vec<&'static str> {
+    catalog_entry(raw)
+        .supported_target_kinds
+        .into_iter()
+        .map(|kind| kind.as_str())
+        .collect()
+}
+
 fn approval_test_operation(tool_name: &str, payload: Value) -> OperationSpec {
     OperationSpec::ToolCore {
         tool_name: tool_name.to_owned(),
@@ -72,6 +105,9 @@ fn resolve_validate_output_rejects_conflicting_json_and_output_flags() {
 #[test]
 fn render_channel_surfaces_text_reports_aliases_and_operation_health() {
     let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = true;
+    config.telegram.bot_token = Some("123456:telegram-token".to_owned());
+    config.telegram.allowed_chat_ids = vec![1001];
     config.feishu.enabled = true;
     config.feishu.app_id = Some("cli_a1b2c3".to_owned());
     config.feishu.app_secret = Some("app-secret".to_owned());
@@ -80,21 +116,31 @@ fn render_channel_surfaces_text_reports_aliases_and_operation_health() {
     let rendered = render_channel_surfaces_text("/tmp/loongclaw.toml", &inventory);
 
     assert!(rendered.contains("config=/tmp/loongclaw.toml"));
+    assert!(rendered.contains("Telegram [telegram]"));
+    assert!(
+        rendered.contains("capabilities=runtime_backed,multi_account,send,serve,runtime_tracking")
+    );
+    assert!(rendered.contains(&format!(
+        "op send ({}) ready: ready target_kinds=conversation requirements=enabled,bot_token",
+        channel_send_command("telegram")
+    )));
     assert!(rendered.contains("Feishu/Lark [feishu]"));
     assert!(rendered.contains("implementation_status=runtime_backed"));
     assert!(
         rendered.contains("capabilities=runtime_backed,multi_account,send,serve,runtime_tracking")
     );
+    assert!(rendered.contains("target_kinds=receive_id,message_reply"));
     assert!(rendered.contains("configured_accounts=1"));
     assert!(rendered.contains("aliases=lark"));
     assert!(rendered.contains("account=feishu:cli_a1b2c3"));
-    assert!(
-        rendered
-            .contains("op send (feishu-send) ready: ready requirements=enabled,app_id,app_secret")
-    );
-    assert!(rendered.contains(
-        "op serve (feishu-serve) misconfigured: allowed_chat_ids is empty; verification_token is missing; encrypt_key is missing requirements=enabled,app_id,app_secret,allowed_chat_ids,verification_token,encrypt_key"
-    ));
+    assert!(rendered.contains(&format!(
+        "op send ({}) ready: ready target_kinds=receive_id,message_reply requirements=enabled,app_id,app_secret",
+        channel_send_command("feishu")
+    )));
+    assert!(rendered.contains(&format!(
+        "op serve ({}) misconfigured: allowed_chat_ids is empty; verification_token is missing; encrypt_key is missing target_kinds=message_reply requirements=enabled,app_id,app_secret,allowed_chat_ids,verification_token,encrypt_key",
+        channel_serve_command("feishu")
+    )));
     assert!(rendered.contains("running=false"));
 }
 
@@ -167,23 +213,27 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
 
     assert!(rendered.contains("catalog-only channels:"));
     assert!(rendered.contains(
-        "Discord [discord] implementation_status=stub capabilities=send,serve,runtime_tracking aliases=discord-bot transport=discord_gateway"
+        "Discord [discord] implementation_status=stub capabilities=send,serve,runtime_tracking aliases=discord-bot transport=discord_gateway target_kinds=conversation"
     ));
+    assert!(rendered.contains(&format!(
+        "catalog op send ({}) availability=stub tracks_runtime=false target_kinds=conversation requirements=-",
+        channel_send_command("discord")
+    )));
+    assert!(rendered.contains(&format!(
+        "catalog op serve ({}) availability=stub tracks_runtime=true target_kinds=conversation requirements=-",
+        channel_serve_command("discord")
+    )));
     assert!(rendered.contains(
-        "catalog op send (discord-send) availability=stub tracks_runtime=false requirements=-"
+        "Slack [slack] implementation_status=stub capabilities=send,serve,runtime_tracking aliases=slack-bot transport=slack_events_api target_kinds=conversation"
     ));
-    assert!(rendered.contains(
-        "catalog op serve (discord-serve) availability=stub tracks_runtime=true requirements=-"
-    ));
-    assert!(rendered.contains(
-        "Slack [slack] implementation_status=stub capabilities=send,serve,runtime_tracking aliases=slack-bot transport=slack_events_api"
-    ));
-    assert!(rendered.contains(
-        "catalog op send (slack-send) availability=stub tracks_runtime=false requirements=-"
-    ));
-    assert!(rendered.contains(
-        "catalog op serve (slack-serve) availability=stub tracks_runtime=true requirements=-"
-    ));
+    assert!(rendered.contains(&format!(
+        "catalog op send ({}) availability=stub tracks_runtime=false target_kinds=conversation requirements=-",
+        channel_send_command("slack")
+    )));
+    assert!(rendered.contains(&format!(
+        "catalog op serve ({}) availability=stub tracks_runtime=true target_kinds=conversation requirements=-",
+        channel_serve_command("slack")
+    )));
 }
 
 #[test]
@@ -216,7 +266,7 @@ fn build_channels_cli_json_payload_includes_operation_requirement_metadata() {
                                 .filter_map(serde_json::Value::as_str)
                                 .collect::<Vec<_>>()
                         })
-                        == Some(vec!["enabled", "bot_token", "allowed_chat_ids"])
+                        == Some(vec!["enabled", "bot_token"])
             })
     );
 
@@ -321,6 +371,16 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                         .get("implementation_status")
                         .and_then(serde_json::Value::as_str)
                         == Some("runtime_backed")
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["conversation"])
             })
     );
     assert!(
@@ -345,6 +405,16 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                                 .collect::<Vec<_>>()
                         })
                         == Some(vec!["stub", "stub"])
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["conversation"])
             })
     );
 }
@@ -388,12 +458,18 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
                         .filter_map(serde_json::Value::as_str)
                         .collect::<Vec<_>>()
                 })
-                == Some(vec![
-                    "runtime_backed",
-                    "multi_account",
-                    "serve",
-                    "runtime_tracking",
-                ])
+                == Some(channel_capability_ids("telegram"))
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("supported_target_kinds"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_supported_target_kinds("telegram"))
             && surface
                 .get("configured_accounts")
                 .and_then(serde_json::Value::as_array)
@@ -417,7 +493,18 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
                         .filter_map(serde_json::Value::as_str)
                         .collect::<Vec<_>>()
                 })
-                == Some(vec!["send", "serve", "runtime_tracking"])
+                == Some(channel_capability_ids("discord"))
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("supported_target_kinds"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_supported_target_kinds("discord"))
             && surface
                 .get("configured_accounts")
                 .and_then(serde_json::Value::as_array)

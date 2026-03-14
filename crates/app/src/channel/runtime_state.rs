@@ -561,6 +561,7 @@ fn test_account_label(account_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::channel::CHANNEL_OPERATION_SERVE_ID;
 
     fn temp_runtime_dir(suffix: &str) -> PathBuf {
         let unique = format!(
@@ -579,7 +580,7 @@ mod tests {
         let tracker = ChannelOperationRuntimeTracker::start_in_dir_with_pid(
             &runtime_dir,
             ChannelPlatform::Telegram,
-            "serve",
+            CHANNEL_OPERATION_SERVE_ID,
             20,
             4242,
         )
@@ -594,7 +595,7 @@ mod tests {
         let runtime = load_channel_operation_runtime_from_dir(
             &runtime_dir,
             ChannelPlatform::Telegram,
-            "serve",
+            CHANNEL_OPERATION_SERVE_ID,
             now_ms(),
         )
         .expect("load runtime state");
@@ -615,7 +616,18 @@ mod tests {
                     .expect("utf-8 file name")
             })
             .collect::<Vec<_>>();
-        assert!(entries.contains(&"telegram-serve-4242.json".to_owned()));
+        let expected_entry = channel_operation_runtime_path(
+            &runtime_dir,
+            ChannelPlatform::Telegram,
+            CHANNEL_OPERATION_SERVE_ID,
+            None,
+            Some(4242),
+        )
+        .file_name()
+        .expect("runtime path file name")
+        .to_string_lossy()
+        .into_owned();
+        assert!(entries.contains(&expected_entry));
     }
 
     #[test]
@@ -625,7 +637,7 @@ mod tests {
         write_runtime_state_for_test(
             &runtime_dir,
             ChannelPlatform::Feishu,
-            "serve",
+            CHANNEL_OPERATION_SERVE_ID,
             true,
             true,
             1,
@@ -638,7 +650,7 @@ mod tests {
         let runtime = load_channel_operation_runtime_from_dir(
             &runtime_dir,
             ChannelPlatform::Feishu,
-            "serve",
+            CHANNEL_OPERATION_SERVE_ID,
             now,
         )
         .expect("load runtime state");
@@ -656,7 +668,7 @@ mod tests {
         write_runtime_state_for_test_with_pid(
             &runtime_dir,
             ChannelPlatform::Telegram,
-            "serve",
+            CHANNEL_OPERATION_SERVE_ID,
             1001,
             true,
             true,
@@ -669,7 +681,7 @@ mod tests {
         write_runtime_state_for_test_with_pid(
             &runtime_dir,
             ChannelPlatform::Telegram,
-            "serve",
+            CHANNEL_OPERATION_SERVE_ID,
             2002,
             false,
             false,
@@ -683,7 +695,7 @@ mod tests {
         let runtime = load_channel_operation_runtime_from_dir(
             &runtime_dir,
             ChannelPlatform::Telegram,
-            "serve",
+            CHANNEL_OPERATION_SERVE_ID,
             now,
         )
         .expect("load runtime state");
@@ -702,7 +714,7 @@ mod tests {
         write_runtime_state_for_test(
             &runtime_dir,
             ChannelPlatform::Feishu,
-            "serve",
+            CHANNEL_OPERATION_SERVE_ID,
             true,
             true,
             1,
@@ -715,7 +727,7 @@ mod tests {
         let runtime = load_channel_operation_runtime_from_dir(
             &runtime_dir,
             ChannelPlatform::Feishu,
-            "serve",
+            CHANNEL_OPERATION_SERVE_ID,
             now,
         )
         .expect("load runtime state");
@@ -731,7 +743,7 @@ mod tests {
         write_runtime_state_for_test_with_account_and_pid(
             &runtime_dir,
             ChannelPlatform::Telegram,
-            "serve",
+            CHANNEL_OPERATION_SERVE_ID,
             "bot_123456",
             3003,
             true,
@@ -746,7 +758,7 @@ mod tests {
         let runtime = load_channel_operation_runtime_for_account_from_dir(
             &runtime_dir,
             ChannelPlatform::Telegram,
-            "serve",
+            CHANNEL_OPERATION_SERVE_ID,
             "bot_123456",
             now,
         )
@@ -764,7 +776,7 @@ mod tests {
         write_runtime_state_for_test(
             &runtime_dir,
             ChannelPlatform::Feishu,
-            "serve",
+            CHANNEL_OPERATION_SERVE_ID,
             true,
             false,
             0,
@@ -777,7 +789,7 @@ mod tests {
         let runtime = load_channel_operation_runtime_for_account_from_dir(
             &runtime_dir,
             ChannelPlatform::Feishu,
-            "serve",
+            CHANNEL_OPERATION_SERVE_ID,
             "lark_cli_a1b2c3",
             now,
         )
@@ -794,7 +806,7 @@ mod tests {
         write_runtime_state_for_test_with_account_and_pid(
             &runtime_dir,
             ChannelPlatform::Telegram,
-            "serve",
+            CHANNEL_OPERATION_SERVE_ID,
             "bot_123456",
             3003,
             true,
@@ -808,7 +820,7 @@ mod tests {
         write_runtime_state_for_test_with_account_and_pid(
             &runtime_dir,
             ChannelPlatform::Telegram,
-            "serve",
+            CHANNEL_OPERATION_SERVE_ID,
             "bot_123456",
             4004,
             true,
@@ -823,7 +835,7 @@ mod tests {
         let runtime = load_channel_operation_runtime_for_account_from_dir(
             &runtime_dir,
             ChannelPlatform::Telegram,
-            "serve",
+            CHANNEL_OPERATION_SERVE_ID,
             "bot_123456",
             now,
         )

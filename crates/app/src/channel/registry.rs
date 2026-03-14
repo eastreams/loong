@@ -8,7 +8,63 @@ use crate::config::{
     ResolvedFeishuChannelConfig, ResolvedTelegramChannelConfig, TELEGRAM_BOT_TOKEN_ENV,
 };
 
-use super::{ChannelOperationRuntime, ChannelPlatform, runtime_state};
+use super::{ChannelCatalogTargetKind, ChannelOperationRuntime, ChannelPlatform, runtime_state};
+
+pub const CHANNEL_OPERATION_SEND_ID: &str = "send";
+pub const CHANNEL_OPERATION_SERVE_ID: &str = "serve";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChannelRuntimeCommandDescriptor {
+    pub channel_id: &'static str,
+    pub platform: ChannelPlatform,
+    pub serve_bootstrap_agent_id: &'static str,
+}
+
+pub const TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
+    ChannelRuntimeCommandDescriptor {
+        channel_id: "telegram",
+        platform: ChannelPlatform::Telegram,
+        serve_bootstrap_agent_id: "channel-telegram",
+    };
+
+pub const FEISHU_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
+    ChannelRuntimeCommandDescriptor {
+        channel_id: "feishu",
+        platform: ChannelPlatform::Feishu,
+        serve_bootstrap_agent_id: "channel-feishu",
+    };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChannelCommandFamilyDescriptor {
+    pub runtime: ChannelRuntimeCommandDescriptor,
+    pub catalog: ChannelCatalogCommandFamilyDescriptor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChannelCatalogCommandFamilyDescriptor {
+    pub channel_id: &'static str,
+    pub default_send_target_kind: ChannelCatalogTargetKind,
+    pub send: ChannelCatalogOperation,
+    pub serve: ChannelCatalogOperation,
+}
+
+impl ChannelCommandFamilyDescriptor {
+    pub fn channel_id(self) -> &'static str {
+        self.catalog.channel_id
+    }
+
+    pub fn default_send_target_kind(self) -> ChannelCatalogTargetKind {
+        self.catalog.default_send_target_kind
+    }
+
+    pub fn send(self) -> ChannelCatalogOperation {
+        self.catalog.send
+    }
+
+    pub fn serve(self) -> ChannelCatalogOperation {
+        self.catalog.serve
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ChannelCatalogOperation {
@@ -18,6 +74,17 @@ pub struct ChannelCatalogOperation {
     pub availability: ChannelCatalogOperationAvailability,
     pub tracks_runtime: bool,
     pub requirements: &'static [ChannelCatalogOperationRequirement],
+    pub supported_target_kinds: &'static [ChannelCatalogTargetKind],
+}
+
+impl ChannelCatalogOperation {
+    pub fn supports_target_kind(self, kind: ChannelCatalogTargetKind) -> bool {
+        self.supported_target_kinds.contains(&kind)
+    }
+
+    pub fn default_target_kind(self) -> Option<ChannelCatalogTargetKind> {
+        self.supported_target_kinds.first().copied()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -84,6 +151,12 @@ pub struct ChannelDoctorOperationSpec {
     pub checks: &'static [ChannelDoctorCheckSpec],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChannelOperationDescriptor {
+    pub operation: ChannelCatalogOperation,
+    pub doctor: Option<ChannelDoctorOperationSpec>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelCatalogImplementationStatus {
@@ -108,7 +181,14 @@ pub struct ChannelCatalogEntry {
     pub capabilities: Vec<ChannelCapability>,
     pub aliases: Vec<&'static str>,
     pub transport: &'static str,
+    pub supported_target_kinds: Vec<ChannelCatalogTargetKind>,
     pub operations: Vec<ChannelCatalogOperation>,
+}
+
+impl ChannelCatalogEntry {
+    pub fn operation(&self, id: &str) -> Option<&ChannelCatalogOperation> {
+        self.operations.iter().find(|operation| operation.id == id)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -188,7 +268,7 @@ pub struct ChannelSurface {
 
 #[derive(Debug, Clone, Copy)]
 struct ChannelRuntimeDescriptor {
-    platform: ChannelPlatform,
+    family: ChannelCommandFamilyDescriptor,
     snapshot_builder: ChannelSnapshotBuilder,
 }
 
@@ -213,14 +293,39 @@ struct ChannelRegistryDescriptor {
     operations: &'static [ChannelRegistryOperationDescriptor],
 }
 
+const TELEGRAM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "direct send",
+    command: "telegram-send",
+    availability: ChannelCatalogOperationAvailability::Implemented,
+    tracks_runtime: false,
+    requirements: TELEGRAM_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+
 const TELEGRAM_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
-    id: "serve",
+    id: CHANNEL_OPERATION_SERVE_ID,
     label: "reply loop",
     command: "telegram-serve",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: TELEGRAM_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
+
+pub const TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
+    ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "telegram",
+        default_send_target_kind: ChannelCatalogTargetKind::Conversation,
+        send: TELEGRAM_SEND_OPERATION,
+        serve: TELEGRAM_SERVE_OPERATION,
+    };
+
+pub const TELEGRAM_COMMAND_FAMILY_DESCRIPTOR: ChannelCommandFamilyDescriptor =
+    ChannelCommandFamilyDescriptor {
+        runtime: TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR,
+        catalog: TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    };
 
 const TELEGRAM_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
     ChannelCatalogOperationRequirement {
@@ -255,6 +360,8 @@ const TELEGRAM_ALLOWED_CHAT_IDS_REQUIREMENT: ChannelCatalogOperationRequirement 
         env_pointer_paths: &[],
         default_env_var: None,
     };
+const TELEGRAM_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] =
+    &[TELEGRAM_ENABLED_REQUIREMENT, TELEGRAM_BOT_TOKEN_REQUIREMENT];
 const TELEGRAM_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
     TELEGRAM_ENABLED_REQUIREMENT,
     TELEGRAM_BOT_TOKEN_REQUIREMENT,
@@ -271,35 +378,60 @@ const TELEGRAM_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[
         trigger: ChannelDoctorCheckTrigger::ReadyRuntime,
     },
 ];
-const TELEGRAM_OPERATIONS: &[ChannelRegistryOperationDescriptor] =
-    &[ChannelRegistryOperationDescriptor {
-        operation: TELEGRAM_SERVE_OPERATION,
+const TELEGRAM_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR.send,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
         doctor_checks: TELEGRAM_SERVE_DOCTOR_CHECKS,
-    }];
+    },
+];
 const TELEGRAM_CAPABILITIES: &[ChannelCapability] = &[
     ChannelCapability::RuntimeBacked,
     ChannelCapability::MultiAccount,
+    ChannelCapability::Send,
     ChannelCapability::Serve,
     ChannelCapability::RuntimeTracking,
 ];
 
 const FEISHU_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
-    id: "send",
+    id: CHANNEL_OPERATION_SEND_ID,
     label: "direct send",
     command: "feishu-send",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: FEISHU_SEND_REQUIREMENTS,
+    supported_target_kinds: &[
+        ChannelCatalogTargetKind::ReceiveId,
+        ChannelCatalogTargetKind::MessageReply,
+    ],
 };
 
 const FEISHU_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
-    id: "serve",
+    id: CHANNEL_OPERATION_SERVE_ID,
     label: "webhook reply server",
     command: "feishu-serve",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: FEISHU_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::MessageReply],
 };
+
+pub const FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
+    ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "feishu",
+        default_send_target_kind: ChannelCatalogTargetKind::ReceiveId,
+        send: FEISHU_SEND_OPERATION,
+        serve: FEISHU_SERVE_OPERATION,
+    };
+
+pub const FEISHU_COMMAND_FAMILY_DESCRIPTOR: ChannelCommandFamilyDescriptor =
+    ChannelCommandFamilyDescriptor {
+        runtime: FEISHU_RUNTIME_COMMAND_DESCRIPTOR,
+        catalog: FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    };
 
 const FEISHU_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
     ChannelCatalogOperationRequirement {
@@ -397,11 +529,11 @@ const FEISHU_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[
 ];
 const FEISHU_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
-        operation: FEISHU_SEND_OPERATION,
+        operation: FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR.send,
         doctor_checks: FEISHU_SEND_DOCTOR_CHECKS,
     },
     ChannelRegistryOperationDescriptor {
-        operation: FEISHU_SERVE_OPERATION,
+        operation: FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
         doctor_checks: FEISHU_SERVE_DOCTOR_CHECKS,
     },
 ];
@@ -414,21 +546,23 @@ const FEISHU_CAPABILITIES: &[ChannelCapability] = &[
 ];
 
 const DISCORD_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
-    id: "send",
+    id: CHANNEL_OPERATION_SEND_ID,
     label: "direct send",
     command: "discord-send",
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: false,
     requirements: &[],
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
 const DISCORD_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
-    id: "serve",
+    id: CHANNEL_OPERATION_SERVE_ID,
     label: "gateway reply loop",
     command: "discord-serve",
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: &[],
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
 const DISCORD_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
@@ -448,21 +582,23 @@ const DISCORD_CAPABILITIES: &[ChannelCapability] = &[
 ];
 
 const SLACK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
-    id: "send",
+    id: CHANNEL_OPERATION_SEND_ID,
     label: "direct send",
     command: "slack-send",
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: false,
     requirements: &[],
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
 const SLACK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
-    id: "serve",
+    id: CHANNEL_OPERATION_SERVE_ID,
     label: "events reply loop",
     command: "slack-serve",
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: &[],
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
 const SLACK_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
@@ -485,7 +621,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "telegram",
         runtime: Some(ChannelRuntimeDescriptor {
-            platform: ChannelPlatform::Telegram,
+            family: TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
             snapshot_builder: build_telegram_snapshots,
         }),
         implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
@@ -498,7 +634,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "feishu",
         runtime: Some(ChannelRuntimeDescriptor {
-            platform: ChannelPlatform::Feishu,
+            family: FEISHU_COMMAND_FAMILY_DESCRIPTOR,
             snapshot_builder: build_feishu_snapshots,
         }),
         implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
@@ -549,6 +685,15 @@ fn find_channel_registry_descriptor(raw: &str) -> Option<&'static ChannelRegistr
 fn channel_catalog_entry_from_descriptor(
     descriptor: &ChannelRegistryDescriptor,
 ) -> ChannelCatalogEntry {
+    let mut supported_target_kinds = Vec::new();
+    for operation in descriptor.operations {
+        for kind in operation.operation.supported_target_kinds {
+            if !supported_target_kinds.contains(kind) {
+                supported_target_kinds.push(*kind);
+            }
+        }
+    }
+
     ChannelCatalogEntry {
         id: descriptor.id,
         label: descriptor.label,
@@ -556,6 +701,7 @@ fn channel_catalog_entry_from_descriptor(
         capabilities: descriptor.capabilities.to_vec(),
         aliases: descriptor.aliases.to_vec(),
         transport: descriptor.transport,
+        supported_target_kinds,
         operations: descriptor
             .operations
             .iter()
@@ -579,20 +725,36 @@ pub fn resolve_channel_catalog_entry(raw: &str) -> Option<ChannelCatalogEntry> {
     find_channel_registry_descriptor(raw).map(channel_catalog_entry_from_descriptor)
 }
 
-pub fn resolve_channel_doctor_operation_spec(
+pub fn resolve_channel_catalog_operation(
     raw_channel_id: &str,
     operation_id: &str,
-) -> Option<ChannelDoctorOperationSpec> {
+) -> Option<ChannelCatalogOperation> {
+    resolve_channel_operation_descriptor(raw_channel_id, operation_id)
+        .map(|descriptor| descriptor.operation)
+}
+
+pub fn resolve_channel_operation_descriptor(
+    raw_channel_id: &str,
+    operation_id: &str,
+) -> Option<ChannelOperationDescriptor> {
     let descriptor = find_channel_registry_descriptor(raw_channel_id)?
         .operations
         .iter()
         .find(|descriptor| descriptor.operation.id == operation_id)?;
-    if descriptor.doctor_checks.is_empty() {
-        return None;
-    }
-    Some(ChannelDoctorOperationSpec {
-        checks: descriptor.doctor_checks,
+    Some(ChannelOperationDescriptor {
+        operation: descriptor.operation,
+        doctor: (!descriptor.doctor_checks.is_empty()).then_some(ChannelDoctorOperationSpec {
+            checks: descriptor.doctor_checks,
+        }),
     })
+}
+
+pub fn resolve_channel_doctor_operation_spec(
+    raw_channel_id: &str,
+    operation_id: &str,
+) -> Option<ChannelDoctorOperationSpec> {
+    resolve_channel_operation_descriptor(raw_channel_id, operation_id)
+        .and_then(|descriptor| descriptor.doctor)
 }
 
 pub fn catalog_only_channel_entries(
@@ -618,8 +780,47 @@ fn catalog_only_channel_entries_from(
 }
 
 pub fn normalize_channel_platform(raw: &str) -> Option<ChannelPlatform> {
+    find_channel_registry_descriptor(raw).and_then(|descriptor| {
+        descriptor
+            .runtime
+            .map(|runtime| runtime.family.runtime.platform)
+    })
+}
+
+pub fn resolve_channel_command_family_descriptor(
+    raw: &str,
+) -> Option<ChannelCommandFamilyDescriptor> {
     find_channel_registry_descriptor(raw)
-        .and_then(|descriptor| descriptor.runtime.map(|runtime| runtime.platform))
+        .and_then(|descriptor| descriptor.runtime.map(|runtime| runtime.family))
+}
+
+pub fn resolve_channel_catalog_command_family_descriptor(
+    raw: &str,
+) -> Option<ChannelCatalogCommandFamilyDescriptor> {
+    let descriptor = find_channel_registry_descriptor(raw)?;
+    let send = descriptor
+        .operations
+        .iter()
+        .find(|descriptor| descriptor.operation.id == CHANNEL_OPERATION_SEND_ID)?
+        .operation;
+    let serve = descriptor
+        .operations
+        .iter()
+        .find(|descriptor| descriptor.operation.id == CHANNEL_OPERATION_SERVE_ID)?
+        .operation;
+    Some(ChannelCatalogCommandFamilyDescriptor {
+        channel_id: descriptor.id,
+        default_send_target_kind: send.default_target_kind()?,
+        send,
+        serve,
+    })
+}
+
+pub fn resolve_channel_runtime_command_descriptor(
+    raw: &str,
+) -> Option<ChannelRuntimeCommandDescriptor> {
+    find_channel_registry_descriptor(raw)
+        .and_then(|descriptor| descriptor.runtime.map(|runtime| runtime.family.runtime))
 }
 
 pub fn channel_inventory(config: &LoongClawConfig) -> ChannelInventory {
@@ -758,15 +959,33 @@ fn build_telegram_snapshot_for_account(
     runtime_dir: &Path,
     now_ms: u64,
 ) -> ChannelStatusSnapshot {
-    let mut issues = Vec::new();
+    let mut send_issues = Vec::new();
     if resolved.bot_token().is_none() {
-        issues.push("bot token is missing (telegram.bot_token or env)".to_owned());
-    }
-    if resolved.allowed_chat_ids.is_empty() {
-        issues.push("allowed_chat_ids is empty".to_owned());
+        send_issues.push("bot token is missing (telegram.bot_token or env)".to_owned());
     }
 
-    let operation = if !compiled {
+    let mut serve_issues = send_issues.clone();
+    if resolved.allowed_chat_ids.is_empty() {
+        serve_issues.push("allowed_chat_ids is empty".to_owned());
+    }
+
+    let send_operation = if !compiled {
+        unsupported_operation(
+            TELEGRAM_SEND_OPERATION,
+            "binary built without feature `channel-telegram`".to_owned(),
+        )
+    } else if !resolved.enabled {
+        disabled_operation(
+            TELEGRAM_SEND_OPERATION,
+            "disabled by telegram account configuration".to_owned(),
+        )
+    } else if !send_issues.is_empty() {
+        misconfigured_operation(TELEGRAM_SEND_OPERATION, send_issues)
+    } else {
+        ready_operation(TELEGRAM_SEND_OPERATION)
+    };
+
+    let serve_operation = if !compiled {
         unsupported_operation(
             TELEGRAM_SERVE_OPERATION,
             "binary built without feature `channel-telegram`".to_owned(),
@@ -776,15 +995,24 @@ fn build_telegram_snapshot_for_account(
             TELEGRAM_SERVE_OPERATION,
             "disabled by telegram account configuration".to_owned(),
         )
-    } else if !issues.is_empty() {
-        misconfigured_operation(TELEGRAM_SERVE_OPERATION, issues)
+    } else if !serve_issues.is_empty() {
+        misconfigured_operation(TELEGRAM_SERVE_OPERATION, serve_issues)
     } else {
         ready_operation(TELEGRAM_SERVE_OPERATION)
     };
-    let operation = attach_runtime(
+    let send_operation = attach_runtime(
+        ChannelPlatform::Telegram,
+        TELEGRAM_SEND_OPERATION,
+        send_operation,
+        resolved.account.id.as_str(),
+        resolved.account.label.as_str(),
+        runtime_dir,
+        now_ms,
+    );
+    let serve_operation = attach_runtime(
         ChannelPlatform::Telegram,
         TELEGRAM_SERVE_OPERATION,
-        operation,
+        serve_operation,
         resolved.account.id.as_str(),
         resolved.account.label.as_str(),
         runtime_dir,
@@ -831,7 +1059,7 @@ fn build_telegram_snapshot_for_account(
         enabled: resolved.enabled,
         api_base_url: Some(resolved.base_url),
         notes,
-        operations: vec![operation],
+        operations: vec![send_operation, serve_operation],
     }
 }
 
@@ -1013,7 +1241,15 @@ fn build_invalid_telegram_snapshot(
     default_account_source: ChannelDefaultAccountSelectionSource,
     error: String,
 ) -> ChannelStatusSnapshot {
-    let operation = if !compiled {
+    let send_operation = if !compiled {
+        unsupported_operation(
+            TELEGRAM_SEND_OPERATION,
+            "binary built without feature `channel-telegram`".to_owned(),
+        )
+    } else {
+        misconfigured_operation(TELEGRAM_SEND_OPERATION, vec![error.clone()])
+    };
+    let serve_operation = if !compiled {
         unsupported_operation(
             TELEGRAM_SERVE_OPERATION,
             "binary built without feature `channel-telegram`".to_owned(),
@@ -1047,7 +1283,7 @@ fn build_invalid_telegram_snapshot(
         enabled: false,
         api_base_url: None,
         notes,
-        operations: vec![operation],
+        operations: vec![send_operation, serve_operation],
     }
 }
 
@@ -1258,6 +1494,143 @@ mod tests {
     }
 
     #[test]
+    fn resolve_channel_runtime_command_descriptor_returns_runtime_surface_metadata() {
+        let telegram = resolve_channel_runtime_command_descriptor("telegram")
+            .expect("telegram runtime command descriptor");
+        let lark =
+            resolve_channel_runtime_command_descriptor("lark").expect("lark runtime descriptor");
+
+        assert_eq!(telegram.channel_id, "telegram");
+        assert_eq!(telegram.platform, ChannelPlatform::Telegram);
+        assert_eq!(telegram.serve_bootstrap_agent_id, "channel-telegram");
+
+        assert_eq!(lark.channel_id, "feishu");
+        assert_eq!(lark.platform, ChannelPlatform::Feishu);
+        assert_eq!(lark.serve_bootstrap_agent_id, "channel-feishu");
+    }
+
+    #[test]
+    fn resolve_channel_runtime_command_descriptor_skips_stub_surfaces() {
+        assert_eq!(resolve_channel_runtime_command_descriptor("discord"), None);
+        assert_eq!(
+            resolve_channel_runtime_command_descriptor("slack-bot"),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_channel_catalog_command_family_descriptor_includes_runtime_and_stub_channels() {
+        let telegram = resolve_channel_catalog_command_family_descriptor("telegram")
+            .expect("telegram catalog command family");
+        let lark = resolve_channel_catalog_command_family_descriptor("lark")
+            .expect("lark catalog command family");
+        let slack = resolve_channel_catalog_command_family_descriptor("slack-bot")
+            .expect("slack alias catalog command family");
+
+        assert_eq!(telegram.channel_id, "telegram");
+        assert_eq!(telegram.send.id, CHANNEL_OPERATION_SEND_ID);
+        assert_eq!(telegram.send.command, "telegram-send");
+        assert_eq!(telegram.serve.id, CHANNEL_OPERATION_SERVE_ID);
+        assert_eq!(telegram.serve.command, "telegram-serve");
+        assert_eq!(
+            telegram.default_send_target_kind,
+            ChannelCatalogTargetKind::Conversation
+        );
+
+        assert_eq!(lark.channel_id, "feishu");
+        assert_eq!(lark.send.command, "feishu-send");
+        assert_eq!(lark.serve.command, "feishu-serve");
+        assert_eq!(
+            lark.default_send_target_kind,
+            ChannelCatalogTargetKind::ReceiveId
+        );
+
+        assert_eq!(slack.channel_id, "slack");
+        assert_eq!(slack.send.command, "slack-send");
+        assert_eq!(slack.serve.command, "slack-serve");
+        assert_eq!(
+            slack.default_send_target_kind,
+            ChannelCatalogTargetKind::Conversation
+        );
+    }
+
+    #[test]
+    fn resolve_channel_catalog_command_family_descriptor_rejects_unknown_channels() {
+        assert_eq!(
+            resolve_channel_catalog_command_family_descriptor("unknown-channel"),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_channel_command_family_descriptor_returns_runtime_send_and_serve_metadata() {
+        let telegram = resolve_channel_command_family_descriptor("telegram")
+            .expect("telegram command family descriptor");
+        let lark =
+            resolve_channel_command_family_descriptor("lark").expect("lark family descriptor");
+        let telegram_catalog = resolve_channel_catalog_command_family_descriptor("telegram")
+            .expect("telegram catalog family");
+        let lark_catalog =
+            resolve_channel_catalog_command_family_descriptor("lark").expect("lark catalog family");
+
+        assert_eq!(telegram.runtime.channel_id, "telegram");
+        assert_eq!(telegram.runtime.platform, ChannelPlatform::Telegram);
+        assert_eq!(telegram.catalog, telegram_catalog);
+        assert_eq!(telegram.catalog.send.id, CHANNEL_OPERATION_SEND_ID);
+        assert_eq!(telegram.catalog.send.command, "telegram-send");
+        assert_eq!(telegram.catalog.serve.id, CHANNEL_OPERATION_SERVE_ID);
+        assert_eq!(telegram.catalog.serve.command, "telegram-serve");
+        assert_eq!(
+            telegram.catalog.send.default_target_kind(),
+            Some(telegram.catalog.default_send_target_kind)
+        );
+
+        assert_eq!(lark.runtime.channel_id, "feishu");
+        assert_eq!(lark.runtime.platform, ChannelPlatform::Feishu);
+        assert_eq!(lark.catalog, lark_catalog);
+        assert_eq!(lark.catalog.send.command, "feishu-send");
+        assert_eq!(lark.catalog.serve.command, "feishu-serve");
+        assert_eq!(
+            lark.catalog.send.default_target_kind(),
+            Some(lark.catalog.default_send_target_kind)
+        );
+    }
+
+    #[test]
+    fn resolve_channel_command_family_descriptor_skips_stub_surfaces() {
+        assert_eq!(resolve_channel_command_family_descriptor("discord"), None);
+        assert_eq!(resolve_channel_command_family_descriptor("slack-bot"), None);
+    }
+
+    #[test]
+    fn resolve_channel_operation_descriptor_combines_catalog_and_doctor_metadata() {
+        let lark_serve = resolve_channel_operation_descriptor("lark", CHANNEL_OPERATION_SERVE_ID)
+            .expect("lark serve descriptor");
+        assert_eq!(lark_serve.operation.command, "feishu-serve");
+        assert_eq!(
+            lark_serve
+                .doctor
+                .expect("lark serve doctor metadata")
+                .checks
+                .iter()
+                .map(|check| check.name)
+                .collect::<Vec<_>>(),
+            vec!["feishu webhook verification", "feishu webhook runtime"]
+        );
+
+        let discord_send =
+            resolve_channel_operation_descriptor("discord-bot", CHANNEL_OPERATION_SEND_ID)
+                .expect("discord send descriptor");
+        assert_eq!(discord_send.operation.command, "discord-send");
+        assert_eq!(discord_send.doctor, None);
+
+        assert_eq!(
+            resolve_channel_operation_descriptor("telegram", "unknown"),
+            None
+        );
+    }
+
+    #[test]
     fn resolve_channel_catalog_entry_returns_stub_metadata_for_alias_lookup() {
         let discord = resolve_channel_catalog_entry("discord-bot").expect("discord stub entry");
         let encoded = serde_json::to_value(&discord).expect("serialize discord entry");
@@ -1399,6 +1772,9 @@ mod tests {
         let discord_json = serde_json::to_value(discord).expect("serialize discord entry");
         let slack_json = serde_json::to_value(slack).expect("serialize slack entry");
 
+        assert_eq!(telegram.operations.len(), 2);
+        assert_eq!(telegram.operations[0].command, "telegram-send");
+        assert_eq!(telegram.operations[1].command, "telegram-serve");
         assert_eq!(
             discord.implementation_status,
             ChannelCatalogImplementationStatus::Stub
@@ -1431,6 +1807,7 @@ mod tests {
             Some(vec![
                 "runtime_backed",
                 "multi_account",
+                "send",
                 "serve",
                 "runtime_tracking",
             ])
@@ -1479,6 +1856,14 @@ mod tests {
 
         assert_eq!(
             telegram.operations[0]
+                .requirements
+                .iter()
+                .map(|requirement| requirement.id)
+                .collect::<Vec<_>>(),
+            vec!["enabled", "bot_token"]
+        );
+        assert_eq!(
+            telegram.operations[1]
                 .requirements
                 .iter()
                 .map(|requirement| requirement.id)
@@ -1534,6 +1919,105 @@ mod tests {
                 .operations
                 .iter()
                 .all(|operation| operation.requirements.is_empty())
+        );
+    }
+
+    #[test]
+    fn channel_catalog_operations_expose_supported_target_kinds() {
+        let catalog = list_channel_catalog();
+        let telegram = catalog
+            .iter()
+            .find(|entry| entry.id == "telegram")
+            .expect("telegram catalog entry");
+        let feishu = catalog
+            .iter()
+            .find(|entry| entry.id == "feishu")
+            .expect("feishu catalog entry");
+        let discord = catalog
+            .iter()
+            .find(|entry| entry.id == "discord")
+            .expect("discord catalog entry");
+
+        assert_eq!(
+            telegram.operations[0].supported_target_kinds,
+            &[ChannelCatalogTargetKind::Conversation]
+        );
+        assert_eq!(
+            telegram.operations[1].supported_target_kinds,
+            &[ChannelCatalogTargetKind::Conversation]
+        );
+        assert_eq!(
+            feishu.operations[0].supported_target_kinds,
+            &[
+                ChannelCatalogTargetKind::ReceiveId,
+                ChannelCatalogTargetKind::MessageReply,
+            ]
+        );
+        assert_eq!(
+            feishu.operations[1].supported_target_kinds,
+            &[ChannelCatalogTargetKind::MessageReply]
+        );
+        assert_eq!(
+            discord.operations[0].supported_target_kinds,
+            &[ChannelCatalogTargetKind::Conversation]
+        );
+        assert_eq!(
+            discord.operations[1].supported_target_kinds,
+            &[ChannelCatalogTargetKind::Conversation]
+        );
+    }
+
+    #[test]
+    fn channel_catalog_operation_exposes_default_target_kind_from_metadata() {
+        let telegram =
+            resolve_channel_catalog_operation("telegram", "send").expect("telegram send operation");
+        let feishu =
+            resolve_channel_catalog_operation("feishu", "send").expect("feishu send operation");
+
+        assert_eq!(
+            telegram.default_target_kind(),
+            Some(ChannelCatalogTargetKind::Conversation)
+        );
+        assert!(telegram.supports_target_kind(ChannelCatalogTargetKind::Conversation));
+        assert_eq!(
+            feishu.default_target_kind(),
+            Some(ChannelCatalogTargetKind::ReceiveId)
+        );
+        assert!(feishu.supports_target_kind(ChannelCatalogTargetKind::ReceiveId));
+        assert!(feishu.supports_target_kind(ChannelCatalogTargetKind::MessageReply));
+        assert!(!feishu.supports_target_kind(ChannelCatalogTargetKind::Conversation));
+    }
+
+    #[test]
+    fn channel_catalog_surfaces_expose_union_of_supported_target_kinds() {
+        let catalog = list_channel_catalog();
+        let telegram = catalog
+            .iter()
+            .find(|entry| entry.id == "telegram")
+            .expect("telegram catalog entry");
+        let feishu = catalog
+            .iter()
+            .find(|entry| entry.id == "feishu")
+            .expect("feishu catalog entry");
+        let discord = catalog
+            .iter()
+            .find(|entry| entry.id == "discord")
+            .expect("discord catalog entry");
+
+        assert_eq!(
+            telegram.supported_target_kinds,
+            vec![ChannelCatalogTargetKind::Conversation]
+        );
+        assert_eq!(
+            feishu.supported_target_kinds,
+            vec![
+                ChannelCatalogTargetKind::ReceiveId,
+                ChannelCatalogTargetKind::MessageReply,
+            ]
+        );
+        assert_eq!(
+            discord.supported_target_kinds,
+            vec![ChannelCatalogTargetKind::Conversation]
         );
     }
 
@@ -1635,19 +2119,33 @@ mod tests {
                 implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
                 capabilities: vec![
                     ChannelCapability::RuntimeBacked,
+                    ChannelCapability::Send,
                     ChannelCapability::Serve,
                     ChannelCapability::RuntimeTracking,
                 ],
                 aliases: vec![],
                 transport: "telegram_bot_api_polling",
-                operations: vec![ChannelCatalogOperation {
-                    id: "serve",
-                    label: "reply loop",
-                    command: "telegram-serve",
-                    availability: ChannelCatalogOperationAvailability::Implemented,
-                    tracks_runtime: true,
-                    requirements: &[],
-                }],
+                supported_target_kinds: vec![ChannelCatalogTargetKind::Conversation],
+                operations: vec![
+                    ChannelCatalogOperation {
+                        id: "send",
+                        label: "direct send",
+                        command: "telegram-send",
+                        availability: ChannelCatalogOperationAvailability::Implemented,
+                        tracks_runtime: false,
+                        requirements: &[],
+                        supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+                    },
+                    ChannelCatalogOperation {
+                        id: "serve",
+                        label: "reply loop",
+                        command: "telegram-serve",
+                        availability: ChannelCatalogOperationAvailability::Implemented,
+                        tracks_runtime: true,
+                        requirements: &[],
+                        supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+                    },
+                ],
             },
             ChannelCatalogEntry {
                 id: "discord",
@@ -1660,6 +2158,7 @@ mod tests {
                 ],
                 aliases: vec![],
                 transport: "discord_gateway",
+                supported_target_kinds: vec![ChannelCatalogTargetKind::Conversation],
                 operations: vec![ChannelCatalogOperation {
                     id: "send",
                     label: "direct send",
@@ -1667,6 +2166,7 @@ mod tests {
                     availability: ChannelCatalogOperationAvailability::Stub,
                     tracks_runtime: false,
                     requirements: &[],
+                    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
                 }],
             },
         ];
@@ -1728,6 +2228,42 @@ mod tests {
             Some("https://api.telegram.org")
         );
         assert!(!serve.runtime.as_ref().expect("telegram runtime").running);
+    }
+
+    #[test]
+    fn telegram_status_splits_direct_send_and_reply_loop_readiness() {
+        let mut config = LoongClawConfig::default();
+        config.telegram.enabled = true;
+        config.telegram.bot_token = Some("123456:token".to_owned());
+
+        let snapshots = channel_status_snapshots(&config);
+        let telegram = snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == "telegram")
+            .expect("telegram snapshot");
+        let send = telegram.operation("send").expect("telegram send operation");
+        let serve = telegram
+            .operation("serve")
+            .expect("telegram serve operation");
+
+        assert_eq!(send.health, ChannelOperationHealth::Ready);
+        assert_eq!(serve.health, ChannelOperationHealth::Misconfigured);
+        assert!(
+            serve
+                .issues
+                .iter()
+                .any(|issue| issue.contains("allowed_chat_ids")),
+            "serve issues should mention allowlist"
+        );
+        assert!(send.runtime.is_none());
+        assert_eq!(
+            serve
+                .runtime
+                .as_ref()
+                .expect("telegram runtime")
+                .active_runs,
+            0
+        );
     }
 
     #[test]
