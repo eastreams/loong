@@ -8,19 +8,73 @@ use crate::KernelContext;
 
 use super::super::config::LoongClawConfig;
 use super::ProviderErrorMode;
-use super::persistence::{format_provider_error_reply, persist_error_turns, persist_success_turns};
+use super::persistence::persist_reply_turns_with_mode;
 use super::runtime::{ConversationRuntime, DefaultConversationRuntime};
+use super::turn_budget::{TurnRoundBudget, TurnRoundBudgetDecision};
 use super::turn_engine::{ProviderTurn, ToolIntent, TurnEngine, TurnResult};
 use super::turn_shared::{
-    build_external_skill_followup_user_prompt, build_external_skill_system_message,
-    build_tool_followup_user_prompt, compose_assistant_reply, join_non_empty_lines,
-    parse_external_skill_invoke_context, user_requested_raw_tool_output,
+    ProviderTurnRequestAction, ReplyPersistenceMode, ToolDrivenFollowupPayload,
+    ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase, build_tool_driven_followup_tail,
+    build_tool_loop_guard_tail, decide_provider_turn_request_action,
+    request_completion_with_raw_fallback, user_requested_raw_tool_output,
 };
 
 #[derive(Default)]
 pub struct ConversationTurnLoop;
 
-const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rounds. Do not repeat identical or cyclical tool calls without new evidence. Adjust strategy (different tool, arguments, or decomposition) or provide the best possible final answer and clearly state remaining gaps.";
+#[derive(Debug, Clone)]
+struct TurnLoopSessionState {
+    messages: Vec<Value>,
+    raw_tool_output_requested: bool,
+    last_raw_reply: String,
+    loop_supervisor: ToolLoopSupervisor,
+    followup_payload_budget: FollowupPayloadBudget,
+}
+
+#[derive(Debug, Clone)]
+struct RoundKernelEvaluation {
+    assistant_preface: String,
+    had_tool_intents: bool,
+    turn_result: TurnResult,
+    loop_verdict: Option<ToolLoopSupervisorVerdict>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RoundKernelDecision {
+    ContinueWithFollowup(RoundFollowup),
+    FinalizeDirect {
+        reply: String,
+    },
+    FinalizeWithCompletionPass {
+        raw_reply: String,
+        followup: RoundFollowup,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TurnLoopTerminalAction {
+    PersistReply {
+        reply: String,
+        persistence_mode: ReplyPersistenceMode,
+    },
+    ReturnError {
+        error: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RoundFollowup {
+    Tool {
+        assistant_preface: String,
+        payload: ToolDrivenFollowupPayload,
+        loop_warning_reason: Option<String>,
+    },
+    Guard {
+        assistant_preface: String,
+        reason: String,
+        latest_tool_payload: Option<ToolDrivenFollowupPayload>,
+    },
+}
 
 impl ConversationTurnLoop {
     pub fn new() -> Self {
@@ -51,364 +105,358 @@ impl ConversationTurnLoop {
         runtime: &R,
         kernel_ctx: Option<&KernelContext>,
     ) -> CliResult<String> {
-        let mut messages = runtime
-            .build_messages(config, session_id, true, kernel_ctx)
-            .await?;
-        messages.push(json!({
-            "role": "user",
-            "content": user_input,
-        }));
-        let raw_tool_output_requested = user_requested_raw_tool_output(user_input);
-        let mut last_raw_reply = String::new();
         let policy = TurnLoopPolicy::from_config(config);
-        let mut loop_supervisor = ToolLoopSupervisor::default();
-        let mut followup_payload_budget = FollowupPayloadBudget::new(
-            policy.max_followup_tool_payload_chars,
-            policy.max_followup_tool_payload_chars_total,
+        let mut session = initialize_turn_loop_session(
+            runtime
+                .build_messages(config, session_id, true, kernel_ctx)
+                .await?,
+            user_input,
+            &policy,
         );
 
         for round_index in 0..policy.max_rounds {
-            let turn = match runtime.request_turn(config, &messages, kernel_ctx).await {
-                Ok(turn) => turn,
-                Err(error) => {
-                    return match error_mode {
-                        ProviderErrorMode::Propagate => Err(error),
-                        ProviderErrorMode::InlineMessage => {
-                            let synthetic = format_provider_error_reply(&error);
-                            persist_error_turns(
-                                runtime, session_id, user_input, &synthetic, kernel_ctx,
-                            )
-                            .await?;
-                            Ok(synthetic)
-                        }
-                    };
-                }
-            };
-
-            let had_tool_intents = !turn.tool_intents.is_empty();
-            let current_tool_signature =
-                had_tool_intents.then(|| tool_intent_signature_for_turn(&turn));
-            let current_tool_name_signature =
-                had_tool_intents.then(|| tool_name_signature(&turn.tool_intents));
-
-            let turn_result = TurnEngine::with_tool_result_payload_summary_limit(
-                policy.max_tool_steps_per_round,
-                config
-                    .conversation
-                    .tool_result_payload_summary_limit_chars(),
-            )
-            .execute_turn(&turn, kernel_ctx)
-            .await;
-            let loop_supervisor_verdict = if let (Some(signature), Some(name_signature)) = (
-                current_tool_signature.as_deref(),
-                current_tool_name_signature.as_deref(),
+            let turn = match decide_provider_turn_request_action(
+                runtime
+                    .request_turn(config, &session.messages, kernel_ctx)
+                    .await,
+                error_mode,
             ) {
-                tool_round_outcome(&turn_result).map(|outcome| {
-                    loop_supervisor.observe_round(
-                        &policy,
-                        signature,
-                        name_signature,
-                        outcome.fingerprint.as_str(),
-                        outcome.failed,
+                ProviderTurnRequestAction::Continue { turn } => turn,
+                ProviderTurnRequestAction::FinalizeInlineProviderError { reply } => {
+                    return apply_turn_loop_terminal_action(
+                        runtime,
+                        session_id,
+                        user_input,
+                        TurnLoopTerminalAction::PersistReply {
+                            reply,
+                            persistence_mode: ReplyPersistenceMode::InlineProviderError,
+                        },
+                        kernel_ctx,
                     )
-                })
-            } else {
-                None
+                    .await;
+                }
+                ProviderTurnRequestAction::ReturnError { error } => {
+                    return apply_turn_loop_terminal_action(
+                        runtime,
+                        session_id,
+                        user_input,
+                        TurnLoopTerminalAction::ReturnError { error },
+                        kernel_ctx,
+                    )
+                    .await;
+                }
             };
 
-            #[allow(clippy::wildcard_enum_match_arm)]
-            let reply = match turn_result {
-                TurnResult::FinalText(tool_text) if had_tool_intents => {
-                    let raw_reply =
-                        join_non_empty_lines(&[turn.assistant_text.as_str(), tool_text.as_str()]);
-                    last_raw_reply = raw_reply.clone();
-                    if let Some(ToolLoopSupervisorVerdict::HardStop { reason }) =
-                        loop_supervisor_verdict.as_ref()
-                    {
-                        if raw_tool_output_requested {
-                            raw_reply
-                        } else {
-                            append_repeated_tool_guard_followup_messages(
-                                &mut messages,
-                                turn.assistant_text.as_str(),
-                                reason.as_str(),
-                                user_input,
-                                Some(("tool_result", tool_text.as_str())),
-                                &mut followup_payload_budget,
-                            );
-                            request_completion_with_raw_fallback(
-                                runtime,
-                                config,
-                                &messages,
-                                kernel_ctx,
-                                raw_reply.as_str(),
-                            )
-                            .await
-                        }
-                    } else {
-                        let loop_warning_reason = match loop_supervisor_verdict.as_ref() {
-                            Some(ToolLoopSupervisorVerdict::InjectWarning { reason }) => {
-                                Some(reason.as_str())
-                            }
-                            _ => None,
-                        };
-                        if raw_tool_output_requested {
-                            raw_reply
-                        } else {
-                            append_tool_followup_messages(
-                                &mut messages,
-                                turn.assistant_text.as_str(),
-                                tool_text.as_str(),
-                                user_input,
-                                &mut followup_payload_budget,
-                                loop_warning_reason,
-                            );
-                            if round_index + 1 < policy.max_rounds {
-                                continue;
-                            }
-                            request_completion_with_raw_fallback(
-                                runtime,
-                                config,
-                                &messages,
-                                kernel_ctx,
-                                raw_reply.as_str(),
-                            )
-                            .await
-                        }
-                    }
-                }
-                TurnResult::ToolDenied(reason) if had_tool_intents => {
-                    let raw_reply = compose_assistant_reply(
-                        turn.assistant_text.as_str(),
-                        had_tool_intents,
-                        TurnResult::ToolDenied(reason.clone()),
-                    );
-                    last_raw_reply = raw_reply.clone();
-                    if let Some(ToolLoopSupervisorVerdict::HardStop {
-                        reason: loop_reason,
-                    }) = loop_supervisor_verdict.as_ref()
-                    {
-                        if raw_tool_output_requested {
-                            raw_reply
-                        } else {
-                            append_repeated_tool_guard_followup_messages(
-                                &mut messages,
-                                turn.assistant_text.as_str(),
-                                loop_reason.as_str(),
-                                user_input,
-                                Some(("tool_failure", reason.as_str())),
-                                &mut followup_payload_budget,
-                            );
-                            request_completion_with_raw_fallback(
-                                runtime,
-                                config,
-                                &messages,
-                                kernel_ctx,
-                                raw_reply.as_str(),
-                            )
-                            .await
-                        }
-                    } else {
-                        let loop_warning_reason = match loop_supervisor_verdict.as_ref() {
-                            Some(ToolLoopSupervisorVerdict::InjectWarning { reason }) => {
-                                Some(reason.as_str())
-                            }
-                            _ => None,
-                        };
-                        if raw_tool_output_requested {
-                            raw_reply
-                        } else {
-                            append_tool_failure_followup_messages(
-                                &mut messages,
-                                turn.assistant_text.as_str(),
-                                reason.as_str(),
-                                user_input,
-                                &mut followup_payload_budget,
-                                loop_warning_reason,
-                            );
-                            if round_index + 1 < policy.max_rounds {
-                                continue;
-                            }
-                            request_completion_with_raw_fallback(
-                                runtime,
-                                config,
-                                &messages,
-                                kernel_ctx,
-                                raw_reply.as_str(),
-                            )
-                            .await
-                        }
-                    }
-                }
-                TurnResult::ToolError(reason) if had_tool_intents => {
-                    let raw_reply = compose_assistant_reply(
-                        turn.assistant_text.as_str(),
-                        had_tool_intents,
-                        TurnResult::ToolError(reason.clone()),
-                    );
-                    last_raw_reply = raw_reply.clone();
-                    if let Some(ToolLoopSupervisorVerdict::HardStop {
-                        reason: loop_reason,
-                    }) = loop_supervisor_verdict.as_ref()
-                    {
-                        if raw_tool_output_requested {
-                            raw_reply
-                        } else {
-                            append_repeated_tool_guard_followup_messages(
-                                &mut messages,
-                                turn.assistant_text.as_str(),
-                                loop_reason.as_str(),
-                                user_input,
-                                Some(("tool_failure", reason.as_str())),
-                                &mut followup_payload_budget,
-                            );
-                            request_completion_with_raw_fallback(
-                                runtime,
-                                config,
-                                &messages,
-                                kernel_ctx,
-                                raw_reply.as_str(),
-                            )
-                            .await
-                        }
-                    } else {
-                        let loop_warning_reason = match loop_supervisor_verdict.as_ref() {
-                            Some(ToolLoopSupervisorVerdict::InjectWarning { reason }) => {
-                                Some(reason.as_str())
-                            }
-                            _ => None,
-                        };
-                        if raw_tool_output_requested {
-                            raw_reply
-                        } else {
-                            append_tool_failure_followup_messages(
-                                &mut messages,
-                                turn.assistant_text.as_str(),
-                                reason.as_str(),
-                                user_input,
-                                &mut followup_payload_budget,
-                                loop_warning_reason,
-                            );
-                            if round_index + 1 < policy.max_rounds {
-                                continue;
-                            }
-                            request_completion_with_raw_fallback(
-                                runtime,
-                                config,
-                                &messages,
-                                kernel_ctx,
-                                raw_reply.as_str(),
-                            )
-                            .await
-                        }
-                    }
-                }
-                other => {
-                    compose_assistant_reply(turn.assistant_text.as_str(), had_tool_intents, other)
-                }
-            };
-            persist_success_turns(runtime, session_id, user_input, &reply, kernel_ctx).await?;
-            return Ok(reply);
+            let evaluation = evaluate_round_kernel(
+                config,
+                &policy,
+                &turn,
+                kernel_ctx,
+                &mut session.loop_supervisor,
+            )
+            .await;
+            let reply_phase = evaluation.reply_phase(session.raw_tool_output_requested);
+            if let Some(raw_reply) = reply_phase.raw_reply() {
+                session.last_raw_reply = raw_reply.to_owned();
+            }
+            let decision = decide_round_kernel_action(
+                TurnRoundBudget::for_round_index(round_index, policy.max_rounds),
+                evaluation,
+                reply_phase,
+            );
+
+            if let Some(action) = resolve_round_kernel_terminal_action(
+                runtime,
+                config,
+                &mut session,
+                user_input,
+                decision,
+                kernel_ctx,
+            )
+            .await?
+            {
+                return apply_turn_loop_terminal_action(
+                    runtime, session_id, user_input, action, kernel_ctx,
+                )
+                .await;
+            }
         }
 
-        let reply = if last_raw_reply.is_empty() {
+        apply_turn_loop_terminal_action(
+            runtime,
+            session_id,
+            user_input,
+            build_round_limit_terminal_action(session.last_raw_reply.as_str()),
+            kernel_ctx,
+        )
+        .await
+    }
+}
+
+fn build_round_limit_terminal_action(last_raw_reply: &str) -> TurnLoopTerminalAction {
+    TurnLoopTerminalAction::PersistReply {
+        persistence_mode: ReplyPersistenceMode::Success,
+        reply: if last_raw_reply.is_empty() {
             "agent_loop_round_limit_reached".to_owned()
         } else {
-            last_raw_reply
-        };
-        persist_success_turns(runtime, session_id, user_input, &reply, kernel_ctx).await?;
-        Ok(reply)
+            last_raw_reply.to_owned()
+        },
     }
 }
 
-fn append_tool_followup_messages(
-    messages: &mut Vec<Value>,
-    assistant_preface: &str,
-    tool_result_text: &str,
+async fn resolve_round_kernel_terminal_action<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    config: &LoongClawConfig,
+    session: &mut TurnLoopSessionState,
     user_input: &str,
-    followup_payload_budget: &mut FollowupPayloadBudget,
-    loop_warning_reason: Option<&str>,
-) {
-    let preface = assistant_preface.trim();
-    if !preface.is_empty() {
-        messages.push(json!({
-            "role": "assistant",
-            "content": preface,
-        }));
-    }
-    if let Some(skill_context) = parse_external_skill_invoke_context(tool_result_text) {
-        messages.push(json!({
-            "role": "system",
-            "content": build_external_skill_system_message(&skill_context),
-        }));
-        if let Some(reason) = loop_warning_reason {
-            messages.push(json!({
-                "role": "assistant",
-                "content": format!("[tool_loop_warning]\n{reason}"),
-            }));
+    decision: RoundKernelDecision,
+    kernel_ctx: Option<&KernelContext>,
+) -> CliResult<Option<TurnLoopTerminalAction>> {
+    match decision {
+        RoundKernelDecision::ContinueWithFollowup(followup) => {
+            append_round_followup_messages(session, user_input, followup);
+            Ok(None)
         }
-        messages.push(json!({
-            "role": "user",
-            "content": build_external_skill_followup_user_prompt(
-                user_input,
-                loop_warning_reason,
-                &skill_context,
-            ),
-        }));
-        return;
+        RoundKernelDecision::FinalizeDirect { reply } => {
+            Ok(Some(TurnLoopTerminalAction::PersistReply {
+                reply,
+                persistence_mode: ReplyPersistenceMode::Success,
+            }))
+        }
+        RoundKernelDecision::FinalizeWithCompletionPass {
+            raw_reply,
+            followup,
+        } => {
+            append_round_followup_messages(session, user_input, followup);
+            let reply = request_completion_with_raw_fallback(
+                runtime,
+                config,
+                &session.messages,
+                kernel_ctx,
+                raw_reply.as_str(),
+            )
+            .await;
+            Ok(Some(TurnLoopTerminalAction::PersistReply {
+                reply,
+                persistence_mode: ReplyPersistenceMode::Success,
+            }))
+        }
     }
-    let bounded_result = followup_payload_budget.truncate_payload("tool_result", tool_result_text);
-    messages.push(json!({
-        "role": "assistant",
-        "content": format!("[tool_result]\n{bounded_result}"),
-    }));
-    if let Some(reason) = loop_warning_reason {
-        messages.push(json!({
-            "role": "assistant",
-            "content": format!("[tool_loop_warning]\n{reason}"),
-        }));
-    }
-    messages.push(json!({
-        "role": "user",
-        "content": build_tool_followup_user_prompt(
-            user_input,
-            loop_warning_reason,
-            Some(tool_result_text),
-        ),
-    }));
 }
 
-fn append_tool_failure_followup_messages(
+async fn apply_turn_loop_terminal_action<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    session_id: &str,
+    user_input: &str,
+    action: TurnLoopTerminalAction,
+    kernel_ctx: Option<&KernelContext>,
+) -> CliResult<String> {
+    match action {
+        TurnLoopTerminalAction::PersistReply {
+            reply,
+            persistence_mode,
+        } => {
+            persist_reply_turns_with_mode(
+                runtime,
+                session_id,
+                user_input,
+                &reply,
+                persistence_mode,
+                kernel_ctx,
+            )
+            .await?;
+            Ok(reply)
+        }
+        TurnLoopTerminalAction::ReturnError { error } => Err(error),
+    }
+}
+
+fn initialize_turn_loop_session(
+    mut messages: Vec<Value>,
+    user_input: &str,
+    policy: &TurnLoopPolicy,
+) -> TurnLoopSessionState {
+    messages.push(json!({
+        "role": "user",
+        "content": user_input,
+    }));
+    TurnLoopSessionState {
+        messages,
+        raw_tool_output_requested: user_requested_raw_tool_output(user_input),
+        last_raw_reply: String::new(),
+        loop_supervisor: ToolLoopSupervisor::default(),
+        followup_payload_budget: FollowupPayloadBudget::new(
+            policy.max_followup_tool_payload_chars,
+            policy.max_followup_tool_payload_chars_total,
+        ),
+    }
+}
+
+async fn evaluate_round_kernel(
+    config: &LoongClawConfig,
+    policy: &TurnLoopPolicy,
+    turn: &ProviderTurn,
+    kernel_ctx: Option<&KernelContext>,
+    loop_supervisor: &mut ToolLoopSupervisor,
+) -> RoundKernelEvaluation {
+    let had_tool_intents = !turn.tool_intents.is_empty();
+    let current_tool_signature = had_tool_intents.then(|| tool_intent_signature_for_turn(turn));
+    let current_tool_name_signature =
+        had_tool_intents.then(|| tool_name_signature(&turn.tool_intents));
+
+    let turn_result = TurnEngine::with_tool_result_payload_summary_limit(
+        policy.max_tool_steps_per_round,
+        config
+            .conversation
+            .tool_result_payload_summary_limit_chars(),
+    )
+    .execute_turn(turn, kernel_ctx)
+    .await;
+    let loop_verdict = if let (Some(signature), Some(name_signature)) = (
+        current_tool_signature.as_deref(),
+        current_tool_name_signature.as_deref(),
+    ) {
+        tool_round_outcome(&turn_result).map(|outcome| {
+            loop_supervisor.observe_round(
+                policy,
+                signature,
+                name_signature,
+                outcome.fingerprint.as_str(),
+                outcome.failed,
+            )
+        })
+    } else {
+        None
+    };
+
+    RoundKernelEvaluation {
+        assistant_preface: turn.assistant_text.clone(),
+        had_tool_intents,
+        turn_result,
+        loop_verdict,
+    }
+}
+
+impl RoundKernelEvaluation {
+    fn reply_phase(&self, raw_tool_output_requested: bool) -> ToolDrivenReplyPhase {
+        ToolDrivenReplyPhase::new(
+            self.assistant_preface.as_str(),
+            self.had_tool_intents,
+            raw_tool_output_requested,
+            &self.turn_result,
+        )
+    }
+
+    fn loop_warning_reason(&self) -> Option<String> {
+        match self.loop_verdict.as_ref() {
+            Some(ToolLoopSupervisorVerdict::InjectWarning { reason }) => Some(reason.clone()),
+            _ => None,
+        }
+    }
+
+    fn hard_stop_reason(&self) -> Option<String> {
+        match self.loop_verdict.as_ref() {
+            Some(ToolLoopSupervisorVerdict::HardStop { reason }) => Some(reason.clone()),
+            _ => None,
+        }
+    }
+}
+
+fn decide_round_kernel_action(
+    round_budget: TurnRoundBudget,
+    evaluation: RoundKernelEvaluation,
+    reply_phase: ToolDrivenReplyPhase,
+) -> RoundKernelDecision {
+    let (raw_reply, tool_payload) = match reply_phase.into_decision() {
+        ToolDrivenReplyBaseDecision::FinalizeDirect { reply } => {
+            return RoundKernelDecision::FinalizeDirect { reply };
+        }
+        ToolDrivenReplyBaseDecision::RequireFollowup { raw_reply, payload } => (raw_reply, payload),
+    };
+
+    if let Some(reason) = evaluation.hard_stop_reason() {
+        return RoundKernelDecision::FinalizeWithCompletionPass {
+            raw_reply,
+            followup: RoundFollowup::Guard {
+                assistant_preface: evaluation.assistant_preface,
+                reason,
+                latest_tool_payload: Some(tool_payload),
+            },
+        };
+    }
+
+    let loop_warning_reason = evaluation.loop_warning_reason();
+    let followup = RoundFollowup::Tool {
+        assistant_preface: evaluation.assistant_preface,
+        payload: tool_payload,
+        loop_warning_reason,
+    };
+
+    match round_budget.followup_decision() {
+        TurnRoundBudgetDecision::ContinueWithFollowup => {
+            RoundKernelDecision::ContinueWithFollowup(followup)
+        }
+        TurnRoundBudgetDecision::FinalizeWithCompletionPass => {
+            RoundKernelDecision::FinalizeWithCompletionPass {
+                raw_reply,
+                followup,
+            }
+        }
+    }
+}
+
+fn append_round_followup_messages(
+    session: &mut TurnLoopSessionState,
+    user_input: &str,
+    followup: RoundFollowup,
+) {
+    match followup {
+        RoundFollowup::Tool {
+            assistant_preface,
+            payload,
+            loop_warning_reason,
+        } => append_tool_driven_followup_messages(
+            &mut session.messages,
+            assistant_preface.as_str(),
+            &payload,
+            user_input,
+            &mut session.followup_payload_budget,
+            loop_warning_reason.as_deref(),
+        ),
+        RoundFollowup::Guard {
+            assistant_preface,
+            reason,
+            latest_tool_payload,
+        } => append_repeated_tool_guard_followup_messages(
+            &mut session.messages,
+            assistant_preface.as_str(),
+            reason.as_str(),
+            user_input,
+            latest_tool_payload.as_ref().map(round_tool_payload_context),
+            &mut session.followup_payload_budget,
+        ),
+    }
+}
+
+fn round_tool_payload_context(payload: &ToolDrivenFollowupPayload) -> (&'static str, &str) {
+    payload.message_context()
+}
+
+fn append_tool_driven_followup_messages(
     messages: &mut Vec<Value>,
     assistant_preface: &str,
-    tool_failure_reason: &str,
+    payload: &ToolDrivenFollowupPayload,
     user_input: &str,
     followup_payload_budget: &mut FollowupPayloadBudget,
     loop_warning_reason: Option<&str>,
 ) {
-    let preface = assistant_preface.trim();
-    if !preface.is_empty() {
-        messages.push(json!({
-            "role": "assistant",
-            "content": preface,
-        }));
-    }
-    let bounded_failure =
-        followup_payload_budget.truncate_payload("tool_failure", tool_failure_reason);
-    messages.push(json!({
-        "role": "assistant",
-        "content": format!("[tool_failure]\n{bounded_failure}"),
-    }));
-    if let Some(reason) = loop_warning_reason {
-        messages.push(json!({
-            "role": "assistant",
-            "content": format!("[tool_loop_warning]\n{reason}"),
-        }));
-    }
-    messages.push(json!({
-        "role": "user",
-        "content": build_tool_followup_user_prompt(user_input, loop_warning_reason, None),
-    }));
+    messages.extend(build_tool_driven_followup_tail(
+        assistant_preface,
+        payload,
+        user_input,
+        loop_warning_reason,
+        |label, text| followup_payload_budget.truncate_payload(label, text),
+    ));
 }
 
 fn append_repeated_tool_guard_followup_messages(
@@ -419,57 +467,13 @@ fn append_repeated_tool_guard_followup_messages(
     latest_tool_context: Option<(&str, &str)>,
     followup_payload_budget: &mut FollowupPayloadBudget,
 ) {
-    let preface = assistant_preface.trim();
-    if !preface.is_empty() {
-        messages.push(json!({
-            "role": "assistant",
-            "content": preface,
-        }));
-    }
-    if let Some((label, text)) = latest_tool_context {
-        let bounded = followup_payload_budget.truncate_payload(label, text);
-        messages.push(json!({
-            "role": "assistant",
-            "content": format!("[{label}]\n{bounded}"),
-        }));
-    }
-    messages.push(json!({
-        "role": "assistant",
-        "content": format!("[tool_loop_guard]\n{reason}"),
-    }));
-    messages.push(json!({
-        "role": "user",
-        "content": build_tool_loop_guard_prompt(user_input, reason),
-    }));
-}
-
-fn build_tool_loop_guard_prompt(user_input: &str, reason: &str) -> String {
-    format!(
-        "{TOOL_LOOP_GUARD_PROMPT}\n\nLoop guard reason:\n{reason}\n\nOriginal request:\n{user_input}"
-    )
-}
-
-async fn request_completion_with_raw_fallback<R: ConversationRuntime + ?Sized>(
-    runtime: &R,
-    config: &LoongClawConfig,
-    messages: &[Value],
-    kernel_ctx: Option<&KernelContext>,
-    raw_reply: &str,
-) -> String {
-    match runtime
-        .request_completion(config, messages, kernel_ctx)
-        .await
-    {
-        Ok(final_reply) => {
-            let trimmed = final_reply.trim();
-            if trimmed.is_empty() {
-                raw_reply.to_owned()
-            } else {
-                trimmed.to_owned()
-            }
-        }
-        Err(_) => raw_reply.to_owned(),
-    }
+    messages.extend(build_tool_loop_guard_tail(
+        assistant_preface,
+        reason,
+        user_input,
+        latest_tool_context,
+        |label, text| followup_payload_budget.truncate_payload(label, text),
+    ));
 }
 
 fn truncate_followup_tool_payload(label: &str, text: &str, max_chars: usize) -> String {
@@ -775,16 +779,19 @@ impl ToolLoopSupervisor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::conversation::turn_engine::TurnFailure;
 
     #[test]
-    fn append_tool_followup_messages_adds_truncation_hint_to_user_prompt() {
+    fn append_tool_driven_followup_messages_adds_truncation_hint_to_user_prompt() {
         let mut messages = Vec::new();
         let mut budget = FollowupPayloadBudget::new(8_000, 20_000);
 
-        append_tool_followup_messages(
+        append_tool_driven_followup_messages(
             &mut messages,
             "preface",
-            r#"[ok] {"payload_truncated":true,"payload_summary":"..."}"#,
+            &ToolDrivenFollowupPayload::ToolResult {
+                text: r#"[ok] {"payload_truncated":true,"payload_summary":"..."}"#.to_owned(),
+            },
             "summarize note.md",
             &mut budget,
             None,
@@ -801,14 +808,16 @@ mod tests {
     }
 
     #[test]
-    fn append_tool_failure_followup_messages_omits_truncation_hint_in_user_prompt() {
+    fn append_tool_driven_followup_messages_omits_truncation_hint_in_user_prompt() {
         let mut messages = Vec::new();
         let mut budget = FollowupPayloadBudget::new(8_000, 20_000);
 
-        append_tool_failure_followup_messages(
+        append_tool_driven_followup_messages(
             &mut messages,
             "preface",
-            "tool_timeout ...(truncated 200 chars)",
+            &ToolDrivenFollowupPayload::ToolFailure {
+                reason: "tool_timeout ...(truncated 200 chars)".to_owned(),
+            },
             "summarize note.md",
             &mut budget,
             None,
@@ -825,14 +834,16 @@ mod tests {
     }
 
     #[test]
-    fn append_tool_followup_messages_promotes_external_skill_invoke_into_system_context() {
+    fn append_tool_driven_followup_messages_promotes_external_skill_invoke_into_system_context() {
         let mut messages = Vec::new();
         let mut budget = FollowupPayloadBudget::new(64, 64);
 
-        append_tool_followup_messages(
+        append_tool_driven_followup_messages(
             &mut messages,
             "preface",
-            r#"[ok] {"status":"ok","tool":"external_skills.invoke","tool_call_id":"call-1","payload_summary":"{\"skill_id\":\"demo-skill\",\"display_name\":\"Demo Skill\",\"instructions\":\"Follow the managed skill instruction before answering.\"}","payload_chars":180,"payload_truncated":false}"#,
+            &ToolDrivenFollowupPayload::ToolResult {
+                text: r#"[ok] {"status":"ok","tool":"external_skills.invoke","tool_call_id":"call-1","payload_summary":"{\"skill_id\":\"demo-skill\",\"display_name\":\"Demo Skill\",\"instructions\":\"Follow the managed skill instruction before answering.\"}","payload_chars":180,"payload_truncated":false}"#.to_owned(),
+            },
             "summarize note.md",
             &mut budget,
             None,
@@ -858,7 +869,7 @@ mod tests {
     }
 
     #[test]
-    fn append_tool_followup_messages_keeps_large_external_skill_instructions_intact() {
+    fn append_tool_driven_followup_messages_keeps_large_external_skill_instructions_intact() {
         let mut messages = Vec::new();
         let mut budget = FollowupPayloadBudget::new(32, 32);
         let instructions = format!("prefix {}\nsuffix-marker", "x".repeat(512));
@@ -880,10 +891,10 @@ mod tests {
             })
         );
 
-        append_tool_followup_messages(
+        append_tool_driven_followup_messages(
             &mut messages,
             "",
-            tool_result.as_str(),
+            &ToolDrivenFollowupPayload::ToolResult { text: tool_result },
             "apply the skill",
             &mut budget,
             None,
@@ -896,5 +907,258 @@ mod tests {
             system_content.contains("suffix-marker"),
             "system context should preserve the tail of large invoke instructions"
         );
+    }
+
+    #[test]
+    fn decide_round_kernel_action_continues_tool_result_with_warning_before_round_limit() {
+        let evaluation = RoundKernelEvaluation {
+            assistant_preface: "preface".to_owned(),
+            had_tool_intents: true,
+            turn_result: TurnResult::FinalText("tool output".to_owned()),
+            loop_verdict: Some(ToolLoopSupervisorVerdict::InjectWarning {
+                reason: "warning".to_owned(),
+            }),
+        };
+
+        let reply_phase = evaluation.reply_phase(false);
+        let decision = decide_round_kernel_action(
+            TurnRoundBudget::for_round_index(0, 3),
+            evaluation,
+            reply_phase,
+        );
+
+        if let RoundKernelDecision::ContinueWithFollowup(RoundFollowup::Tool {
+            assistant_preface,
+            payload: ToolDrivenFollowupPayload::ToolResult { text },
+            loop_warning_reason,
+        }) = decision
+        {
+            assert_eq!(assistant_preface, "preface");
+            assert_eq!(text, "tool output");
+            assert_eq!(loop_warning_reason.as_deref(), Some("warning"));
+        } else {
+            panic!("unexpected decision: {decision:?}");
+        }
+    }
+
+    #[test]
+    fn decide_round_kernel_action_hard_stop_tool_result_uses_completion_pass() {
+        let evaluation = RoundKernelEvaluation {
+            assistant_preface: "preface".to_owned(),
+            had_tool_intents: true,
+            turn_result: TurnResult::FinalText("tool output".to_owned()),
+            loop_verdict: Some(ToolLoopSupervisorVerdict::HardStop {
+                reason: "stop".to_owned(),
+            }),
+        };
+
+        let reply_phase = evaluation.reply_phase(false);
+        let decision = decide_round_kernel_action(
+            TurnRoundBudget::for_round_index(0, 3),
+            evaluation,
+            reply_phase,
+        );
+
+        if let RoundKernelDecision::FinalizeWithCompletionPass {
+            raw_reply,
+            followup:
+                RoundFollowup::Guard {
+                    assistant_preface,
+                    reason,
+                    latest_tool_payload: Some(ToolDrivenFollowupPayload::ToolResult { text }),
+                },
+        } = decision
+        {
+            assert_eq!(raw_reply, "preface\ntool output");
+            assert_eq!(assistant_preface, "preface");
+            assert_eq!(reason, "stop");
+            assert_eq!(text, "tool output");
+        } else {
+            panic!("unexpected decision: {decision:?}");
+        }
+    }
+
+    #[test]
+    fn decide_round_kernel_action_hard_stop_tool_failure_uses_completion_pass() {
+        let evaluation = RoundKernelEvaluation {
+            assistant_preface: "preface".to_owned(),
+            had_tool_intents: true,
+            turn_result: TurnResult::ToolError(TurnFailure::retryable(
+                "tool_failed",
+                "tool failure",
+            )),
+            loop_verdict: Some(ToolLoopSupervisorVerdict::HardStop {
+                reason: "stop".to_owned(),
+            }),
+        };
+
+        let reply_phase = evaluation.reply_phase(false);
+        let decision = decide_round_kernel_action(
+            TurnRoundBudget::for_round_index(0, 3),
+            evaluation,
+            reply_phase,
+        );
+
+        if let RoundKernelDecision::FinalizeWithCompletionPass {
+            raw_reply,
+            followup:
+                RoundFollowup::Guard {
+                    assistant_preface,
+                    reason,
+                    latest_tool_payload:
+                        Some(ToolDrivenFollowupPayload::ToolFailure {
+                            reason: tool_reason,
+                        }),
+                },
+        } = decision
+        {
+            assert_eq!(raw_reply, "preface\ntool failure");
+            assert_eq!(assistant_preface, "preface");
+            assert_eq!(reason, "stop");
+            assert_eq!(tool_reason, "tool failure");
+        } else {
+            panic!("unexpected decision: {decision:?}");
+        }
+    }
+
+    #[test]
+    fn decide_round_kernel_action_raw_mode_finalizes_tool_result_directly() {
+        let evaluation = RoundKernelEvaluation {
+            assistant_preface: "preface".to_owned(),
+            had_tool_intents: true,
+            turn_result: TurnResult::FinalText("tool output".to_owned()),
+            loop_verdict: Some(ToolLoopSupervisorVerdict::InjectWarning {
+                reason: "warning".to_owned(),
+            }),
+        };
+
+        let reply_phase = evaluation.reply_phase(true);
+        let decision = decide_round_kernel_action(
+            TurnRoundBudget::for_round_index(0, 3),
+            evaluation,
+            reply_phase,
+        );
+
+        if let RoundKernelDecision::FinalizeDirect { reply } = decision {
+            assert_eq!(reply, "preface\ntool output");
+        } else {
+            panic!("unexpected decision: {decision:?}");
+        }
+    }
+
+    #[test]
+    fn turn_round_budget_detects_followup_capacity() {
+        let first_round = TurnRoundBudget::for_round_index(0, 3);
+        let last_round = TurnRoundBudget::for_round_index(2, 3);
+
+        assert_eq!(
+            first_round.followup_decision(),
+            TurnRoundBudgetDecision::ContinueWithFollowup
+        );
+        assert_eq!(
+            last_round.followup_decision(),
+            TurnRoundBudgetDecision::FinalizeWithCompletionPass
+        );
+    }
+
+    #[test]
+    fn decide_provider_turn_request_action_continues_successful_turns() {
+        let action = decide_provider_turn_request_action(
+            Ok(ProviderTurn {
+                assistant_text: "preface".to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            }),
+            ProviderErrorMode::Propagate,
+        );
+
+        match action {
+            ProviderTurnRequestAction::Continue { turn } => {
+                assert_eq!(turn.assistant_text, "preface");
+                assert!(turn.tool_intents.is_empty());
+            }
+            ProviderTurnRequestAction::FinalizeInlineProviderError { reply } => {
+                panic!("unexpected inline error action: {reply}");
+            }
+            ProviderTurnRequestAction::ReturnError { error } => {
+                panic!("unexpected propagated error action: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn decide_provider_turn_request_action_formats_inline_provider_errors() {
+        let action = decide_provider_turn_request_action(
+            Err("timeout".to_owned()),
+            ProviderErrorMode::InlineMessage,
+        );
+
+        match action {
+            ProviderTurnRequestAction::FinalizeInlineProviderError { reply } => {
+                assert_eq!(reply, "[provider_error] timeout");
+            }
+            ProviderTurnRequestAction::Continue { turn } => {
+                panic!("unexpected continue action: {turn:?}");
+            }
+            ProviderTurnRequestAction::ReturnError { error } => {
+                panic!("unexpected propagated error action: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn decide_provider_turn_request_action_propagates_provider_errors() {
+        let action = decide_provider_turn_request_action(
+            Err("timeout".to_owned()),
+            ProviderErrorMode::Propagate,
+        );
+
+        match action {
+            ProviderTurnRequestAction::ReturnError { error } => {
+                assert_eq!(error, "timeout");
+            }
+            ProviderTurnRequestAction::Continue { turn } => {
+                panic!("unexpected continue action: {turn:?}");
+            }
+            ProviderTurnRequestAction::FinalizeInlineProviderError { reply } => {
+                panic!("unexpected inline error action: {reply}");
+            }
+        }
+    }
+
+    #[test]
+    fn build_round_limit_terminal_action_prefers_last_raw_reply() {
+        let action = build_round_limit_terminal_action("last raw reply");
+
+        match action {
+            TurnLoopTerminalAction::PersistReply {
+                reply,
+                persistence_mode,
+            } => {
+                assert_eq!(reply, "last raw reply");
+                assert_eq!(persistence_mode, ReplyPersistenceMode::Success);
+            }
+            TurnLoopTerminalAction::ReturnError { error } => {
+                panic!("unexpected propagated error terminal action: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn build_round_limit_terminal_action_uses_synthetic_reply_when_raw_reply_missing() {
+        let action = build_round_limit_terminal_action("");
+
+        match action {
+            TurnLoopTerminalAction::PersistReply {
+                reply,
+                persistence_mode,
+            } => {
+                assert_eq!(reply, "agent_loop_round_limit_reached");
+                assert_eq!(persistence_mode, ReplyPersistenceMode::Success);
+            }
+            TurnLoopTerminalAction::ReturnError { error } => {
+                panic!("unexpected propagated error terminal action: {error}");
+            }
+        }
     }
 }

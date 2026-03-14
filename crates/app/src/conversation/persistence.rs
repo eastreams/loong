@@ -8,6 +8,7 @@ use crate::acp::{
 
 use super::runtime::ConversationRuntime;
 use super::turn_engine::{ToolDecision, ToolOutcome};
+use super::turn_shared::ReplyPersistenceMode;
 
 pub(super) fn format_provider_error_reply(error: &str) -> String {
     format!("[provider_error] {error}")
@@ -30,6 +31,25 @@ pub(super) async fn persist_success_turns<R: ConversationRuntime + ?Sized>(
     )
     .await?;
     Ok(())
+}
+
+pub(super) async fn persist_reply_turns_with_mode<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    session_id: &str,
+    user_input: &str,
+    assistant_reply: &str,
+    persistence_mode: ReplyPersistenceMode,
+    kernel_ctx: Option<&KernelContext>,
+) -> CliResult<()> {
+    match persistence_mode {
+        ReplyPersistenceMode::Success => {
+            persist_success_turns(runtime, session_id, user_input, assistant_reply, kernel_ctx)
+                .await
+        }
+        ReplyPersistenceMode::InlineProviderError => {
+            persist_error_turns(runtime, session_id, user_input, assistant_reply, kernel_ctx).await
+        }
+    }
 }
 
 /// Persist a tool decision as a structured JSON assistant message.
@@ -130,6 +150,26 @@ pub(super) async fn persist_success_turns_raw<R: ConversationRuntime + ?Sized>(
     )
     .await?;
     Ok(())
+}
+
+pub(super) async fn persist_reply_turns_raw_with_mode<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    session_id: &str,
+    user_input: &str,
+    assistant_reply: &str,
+    persistence_mode: ReplyPersistenceMode,
+    kernel_ctx: Option<&KernelContext>,
+) -> CliResult<()> {
+    match persistence_mode {
+        ReplyPersistenceMode::Success => {
+            persist_success_turns_raw(runtime, session_id, user_input, assistant_reply, kernel_ctx)
+                .await
+        }
+        ReplyPersistenceMode::InlineProviderError => {
+            persist_error_turns_raw(runtime, session_id, user_input, assistant_reply, kernel_ctx)
+                .await
+        }
+    }
 }
 
 pub(super) async fn persist_error_turns_raw<R: ConversationRuntime + ?Sized>(

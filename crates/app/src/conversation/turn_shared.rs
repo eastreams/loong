@@ -1,16 +1,239 @@
+use super::super::config::LoongClawConfig;
+use super::ProviderErrorMode;
 use super::persistence::format_provider_error_reply;
-use super::turn_engine::TurnResult;
+use super::runtime::ConversationRuntime;
+use super::turn_engine::{ProviderTurn, TurnResult};
+use serde::Serialize;
 use serde_json::Value;
+
+use crate::CliResult;
+use crate::KernelContext;
 
 pub const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to answer the original user request in natural language. Do not include raw JSON, payload wrappers, or status markers unless the user explicitly asks for raw output.";
 pub const TOOL_TRUNCATION_HINT_PROMPT: &str = "One or more tool results were truncated for context safety. If exact missing details are needed, explicitly state the truncation and request a narrower rerun.";
 pub const EXTERNAL_SKILL_FOLLOWUP_PROMPT: &str = "A managed external skill has been loaded into runtime context. Follow its instructions while answering the original user request. Do not restate the skill verbatim unless the user explicitly asks for it.";
+pub const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rounds. Do not repeat identical or cyclical tool calls without new evidence. Adjust strategy (different tool, arguments, or decomposition) or provide the best possible final answer and clearly state remaining gaps.";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolDrivenFollowupPayload {
+    ToolResult { text: String },
+    ToolFailure { reason: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolDrivenFollowupKind {
+    ToolResult,
+    ToolFailure,
+}
+
+impl ToolDrivenFollowupPayload {
+    pub fn kind(&self) -> ToolDrivenFollowupKind {
+        match self {
+            Self::ToolResult { .. } => ToolDrivenFollowupKind::ToolResult,
+            Self::ToolFailure { .. } => ToolDrivenFollowupKind::ToolFailure,
+        }
+    }
+
+    pub fn message_context(&self) -> (&'static str, &str) {
+        match self {
+            Self::ToolResult { text } => ("tool_result", text.as_str()),
+            Self::ToolFailure { reason } => ("tool_failure", reason.as_str()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolDrivenReplyBaseDecision {
+    FinalizeDirect {
+        reply: String,
+    },
+    RequireFollowup {
+        raw_reply: String,
+        payload: ToolDrivenFollowupPayload,
+    },
+}
+
+impl ToolDrivenReplyBaseDecision {
+    pub fn resolution_mode(&self) -> ReplyResolutionMode {
+        match self {
+            Self::FinalizeDirect { .. } => ReplyResolutionMode::Direct,
+            Self::RequireFollowup { .. } => ReplyResolutionMode::CompletionPass,
+        }
+    }
+
+    pub fn followup_kind(&self) -> Option<ToolDrivenFollowupKind> {
+        match self {
+            Self::FinalizeDirect { .. } => None,
+            Self::RequireFollowup { payload, .. } => Some(payload.kind()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolDrivenReplyPhase {
+    raw_reply: Option<String>,
+    decision: ToolDrivenReplyBaseDecision,
+}
+
+impl ToolDrivenReplyPhase {
+    pub fn new(
+        assistant_preface: &str,
+        had_tool_intents: bool,
+        raw_tool_output_requested: bool,
+        turn_result: &TurnResult,
+    ) -> Self {
+        let kernel = ToolDrivenReplyKernel::new(assistant_preface, had_tool_intents, turn_result);
+        Self {
+            raw_reply: kernel.raw_reply(),
+            decision: kernel.base_decision(raw_tool_output_requested),
+        }
+    }
+
+    pub fn raw_reply(&self) -> Option<&str> {
+        self.raw_reply.as_deref()
+    }
+
+    pub fn decision(&self) -> &ToolDrivenReplyBaseDecision {
+        &self.decision
+    }
+
+    pub fn into_decision(self) -> ToolDrivenReplyBaseDecision {
+        self.decision
+    }
+
+    pub fn resolution_mode(&self) -> ReplyResolutionMode {
+        self.decision.resolution_mode()
+    }
+
+    pub fn followup_kind(&self) -> Option<ToolDrivenFollowupKind> {
+        self.decision.followup_kind()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplyPersistenceMode {
+    Success,
+    InlineProviderError,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplyResolutionMode {
+    Direct,
+    CompletionPass,
+}
+
+#[derive(Debug, Clone)]
+pub enum ProviderTurnRequestAction {
+    Continue { turn: ProviderTurn },
+    FinalizeInlineProviderError { reply: String },
+    ReturnError { error: String },
+}
+
+pub fn decide_provider_turn_request_action(
+    result: CliResult<ProviderTurn>,
+    error_mode: ProviderErrorMode,
+) -> ProviderTurnRequestAction {
+    match result {
+        Ok(turn) => ProviderTurnRequestAction::Continue { turn },
+        Err(error) => match error_mode {
+            ProviderErrorMode::Propagate => ProviderTurnRequestAction::ReturnError { error },
+            ProviderErrorMode::InlineMessage => {
+                ProviderTurnRequestAction::FinalizeInlineProviderError {
+                    reply: format_provider_error_reply(&error),
+                }
+            }
+        },
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalSkillInvokeContext {
     pub skill_id: String,
     pub display_name: String,
     pub instructions: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ToolDrivenReplyKernel<'a> {
+    assistant_preface: &'a str,
+    had_tool_intents: bool,
+    turn_result: &'a TurnResult,
+}
+
+impl<'a> ToolDrivenReplyKernel<'a> {
+    pub fn new(
+        assistant_preface: &'a str,
+        had_tool_intents: bool,
+        turn_result: &'a TurnResult,
+    ) -> Self {
+        Self {
+            assistant_preface,
+            had_tool_intents,
+            turn_result,
+        }
+    }
+
+    pub fn fallback_reply(&self) -> String {
+        compose_assistant_reply(
+            self.assistant_preface,
+            self.had_tool_intents,
+            self.turn_result.clone(),
+        )
+    }
+
+    pub fn raw_reply(&self) -> Option<String> {
+        if !self.had_tool_intents {
+            return None;
+        }
+        match self.turn_result {
+            TurnResult::FinalText(text) => Some(join_non_empty_lines(&[
+                self.assistant_preface,
+                text.as_str(),
+            ])),
+            TurnResult::ToolDenied(failure) | TurnResult::ToolError(failure) => {
+                Some(join_non_empty_lines(&[
+                    self.assistant_preface,
+                    failure.reason.as_str(),
+                ]))
+            }
+            TurnResult::NeedsApproval(_) | TurnResult::ProviderError(_) => None,
+        }
+    }
+
+    pub fn followup_payload(&self) -> Option<ToolDrivenFollowupPayload> {
+        if !self.had_tool_intents {
+            return None;
+        }
+        match self.turn_result {
+            TurnResult::FinalText(text) => {
+                Some(ToolDrivenFollowupPayload::ToolResult { text: text.clone() })
+            }
+            TurnResult::ToolDenied(failure) | TurnResult::ToolError(failure) => {
+                Some(ToolDrivenFollowupPayload::ToolFailure {
+                    reason: failure.reason.clone(),
+                })
+            }
+            TurnResult::NeedsApproval(_) | TurnResult::ProviderError(_) => None,
+        }
+    }
+
+    pub fn base_decision(&self, raw_tool_output_requested: bool) -> ToolDrivenReplyBaseDecision {
+        let fallback_reply = self.fallback_reply();
+        let Some(payload) = self.followup_payload() else {
+            return ToolDrivenReplyBaseDecision::FinalizeDirect {
+                reply: fallback_reply,
+            };
+        };
+        let raw_reply = self.raw_reply().unwrap_or_else(|| fallback_reply.clone());
+        if raw_tool_output_requested {
+            ToolDrivenReplyBaseDecision::FinalizeDirect { reply: raw_reply }
+        } else {
+            ToolDrivenReplyBaseDecision::RequireFollowup { raw_reply, payload }
+        }
+    }
 }
 
 pub fn user_requested_raw_tool_output(user_input: &str) -> bool {
@@ -154,6 +377,158 @@ pub fn build_external_skill_followup_user_prompt(
     sections.join("\n\n")
 }
 
+pub fn build_tool_result_followup_tail<F>(
+    assistant_preface: &str,
+    tool_result_text: &str,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    mut payload_mapper: F,
+) -> Vec<Value>
+where
+    F: FnMut(&str, &str) -> String,
+{
+    let mut messages = Vec::new();
+    append_followup_preface(&mut messages, assistant_preface);
+    if let Some(skill_context) = parse_external_skill_invoke_context(tool_result_text) {
+        messages.push(serde_json::json!({
+            "role": "system",
+            "content": build_external_skill_system_message(&skill_context),
+        }));
+        append_followup_warning(&mut messages, loop_warning_reason);
+        messages.push(serde_json::json!({
+            "role": "user",
+            "content": build_external_skill_followup_user_prompt(
+                user_input,
+                loop_warning_reason,
+                &skill_context,
+            ),
+        }));
+        return messages;
+    }
+
+    let bounded_result = payload_mapper("tool_result", tool_result_text);
+    messages.push(serde_json::json!({
+        "role": "assistant",
+        "content": format!("[tool_result]\n{bounded_result}"),
+    }));
+    append_followup_warning(&mut messages, loop_warning_reason);
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": build_tool_followup_user_prompt(
+            user_input,
+            loop_warning_reason,
+            Some(tool_result_text),
+        ),
+    }));
+    messages
+}
+
+pub fn build_tool_failure_followup_tail<F>(
+    assistant_preface: &str,
+    tool_failure_reason: &str,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    mut payload_mapper: F,
+) -> Vec<Value>
+where
+    F: FnMut(&str, &str) -> String,
+{
+    let mut messages = Vec::new();
+    append_followup_preface(&mut messages, assistant_preface);
+    let bounded_failure = payload_mapper("tool_failure", tool_failure_reason);
+    messages.push(serde_json::json!({
+        "role": "assistant",
+        "content": format!("[tool_failure]\n{bounded_failure}"),
+    }));
+    append_followup_warning(&mut messages, loop_warning_reason);
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": build_tool_followup_user_prompt(user_input, loop_warning_reason, None),
+    }));
+    messages
+}
+
+pub fn build_tool_driven_followup_tail<F>(
+    assistant_preface: &str,
+    payload: &ToolDrivenFollowupPayload,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    payload_mapper: F,
+) -> Vec<Value>
+where
+    F: FnMut(&str, &str) -> String,
+{
+    match payload {
+        ToolDrivenFollowupPayload::ToolResult { text } => build_tool_result_followup_tail(
+            assistant_preface,
+            text.as_str(),
+            user_input,
+            loop_warning_reason,
+            payload_mapper,
+        ),
+        ToolDrivenFollowupPayload::ToolFailure { reason } => build_tool_failure_followup_tail(
+            assistant_preface,
+            reason.as_str(),
+            user_input,
+            loop_warning_reason,
+            payload_mapper,
+        ),
+    }
+}
+
+pub fn build_tool_loop_guard_tail<F>(
+    assistant_preface: &str,
+    reason: &str,
+    user_input: &str,
+    latest_tool_context: Option<(&str, &str)>,
+    mut payload_mapper: F,
+) -> Vec<Value>
+where
+    F: FnMut(&str, &str) -> String,
+{
+    let mut messages = Vec::new();
+    append_followup_preface(&mut messages, assistant_preface);
+    if let Some((label, text)) = latest_tool_context {
+        let bounded = payload_mapper(label, text);
+        messages.push(serde_json::json!({
+            "role": "assistant",
+            "content": format!("[{label}]\n{bounded}"),
+        }));
+    }
+    messages.push(serde_json::json!({
+        "role": "assistant",
+        "content": format!("[tool_loop_guard]\n{reason}"),
+    }));
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": build_tool_loop_guard_prompt(user_input, reason),
+    }));
+    messages
+}
+
+pub async fn request_completion_with_raw_fallback<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    config: &LoongClawConfig,
+    messages: &[Value],
+    kernel_ctx: Option<&KernelContext>,
+    raw_reply: &str,
+) -> String {
+    match runtime
+        .request_completion(config, messages, kernel_ctx)
+        .await
+    {
+        Ok(final_reply) => {
+            let trimmed = final_reply.trim();
+            if trimmed.is_empty() {
+                raw_reply.to_owned()
+            } else {
+                trimmed.to_owned()
+            }
+        }
+        Err(_) => raw_reply.to_owned(),
+    }
+}
+
 pub fn join_non_empty_lines(parts: &[&str]) -> String {
     parts
         .iter()
@@ -161,6 +536,31 @@ pub fn join_non_empty_lines(parts: &[&str]) -> String {
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn append_followup_preface(messages: &mut Vec<Value>, assistant_preface: &str) {
+    let preface = assistant_preface.trim();
+    if !preface.is_empty() {
+        messages.push(serde_json::json!({
+            "role": "assistant",
+            "content": preface,
+        }));
+    }
+}
+
+fn append_followup_warning(messages: &mut Vec<Value>, loop_warning_reason: Option<&str>) {
+    if let Some(reason) = loop_warning_reason {
+        messages.push(serde_json::json!({
+            "role": "assistant",
+            "content": format!("[tool_loop_warning]\n{reason}"),
+        }));
+    }
+}
+
+fn build_tool_loop_guard_prompt(user_input: &str, reason: &str) -> String {
+    format!(
+        "{TOOL_LOOP_GUARD_PROMPT}\n\nLoop guard reason:\n{reason}\n\nOriginal request:\n{user_input}"
+    )
 }
 
 fn parse_external_skill_invoke_context_line(line: &str) -> Option<ExternalSkillInvokeContext> {
@@ -235,6 +635,471 @@ mod tests {
     }
 
     #[test]
+    fn tool_driven_reply_kernel_extracts_raw_reply_and_result_followup() {
+        let result = TurnResult::FinalText("tool output".to_owned());
+        let kernel = ToolDrivenReplyKernel::new("preface", true, &result);
+
+        assert_eq!(kernel.fallback_reply(), "preface\ntool output");
+        assert_eq!(kernel.raw_reply(), Some("preface\ntool output".to_owned()));
+        assert_eq!(
+            kernel.followup_payload(),
+            Some(ToolDrivenFollowupPayload::ToolResult {
+                text: "tool output".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn tool_driven_reply_kernel_extracts_raw_reply_and_failure_followup() {
+        let result =
+            TurnResult::ToolError(TurnFailure::retryable("tool_error", "temporary failure"));
+        let kernel = ToolDrivenReplyKernel::new("preface", true, &result);
+
+        assert_eq!(kernel.fallback_reply(), "preface\ntemporary failure");
+        assert_eq!(
+            kernel.raw_reply(),
+            Some("preface\ntemporary failure".to_owned())
+        );
+        assert_eq!(
+            kernel.followup_payload(),
+            Some(ToolDrivenFollowupPayload::ToolFailure {
+                reason: "temporary failure".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn tool_driven_reply_kernel_rejects_non_tool_followup_paths() {
+        let provider_error = TurnResult::ProviderError(TurnFailure::provider(
+            "provider_error",
+            "provider unavailable",
+        ));
+        let kernel = ToolDrivenReplyKernel::new("preface", true, &provider_error);
+        assert_eq!(kernel.raw_reply(), None);
+        assert_eq!(kernel.followup_payload(), None);
+
+        let plain_text = TurnResult::FinalText("plain reply".to_owned());
+        let non_tool_kernel = ToolDrivenReplyKernel::new("preface", false, &plain_text);
+        assert_eq!(non_tool_kernel.raw_reply(), None);
+        assert_eq!(non_tool_kernel.followup_payload(), None);
+        assert_eq!(non_tool_kernel.fallback_reply(), "plain reply");
+    }
+
+    #[test]
+    fn tool_driven_followup_payload_reports_result_kind_and_context() {
+        let payload = ToolDrivenFollowupPayload::ToolResult {
+            text: "tool output".to_owned(),
+        };
+
+        assert_eq!(payload.kind(), ToolDrivenFollowupKind::ToolResult);
+        assert_eq!(payload.message_context(), ("tool_result", "tool output"));
+    }
+
+    #[test]
+    fn tool_driven_followup_payload_reports_failure_kind_and_context() {
+        let payload = ToolDrivenFollowupPayload::ToolFailure {
+            reason: "tool failed".to_owned(),
+        };
+
+        assert_eq!(payload.kind(), ToolDrivenFollowupKind::ToolFailure);
+        assert_eq!(payload.message_context(), ("tool_failure", "tool failed"));
+    }
+
+    #[test]
+    fn tool_driven_followup_kind_serializes_as_snake_case() {
+        assert_eq!(
+            serde_json::to_value(ToolDrivenFollowupKind::ToolResult).expect("serialize kind"),
+            Value::String("tool_result".to_owned())
+        );
+        assert_eq!(
+            serde_json::to_value(ToolDrivenFollowupKind::ToolFailure).expect("serialize kind"),
+            Value::String("tool_failure".to_owned())
+        );
+    }
+
+    #[test]
+    fn reply_resolution_mode_serializes_as_snake_case() {
+        assert_eq!(
+            serde_json::to_value(ReplyResolutionMode::Direct).expect("serialize mode"),
+            Value::String("direct".to_owned())
+        );
+        assert_eq!(
+            serde_json::to_value(ReplyResolutionMode::CompletionPass).expect("serialize mode"),
+            Value::String("completion_pass".to_owned())
+        );
+    }
+
+    #[test]
+    fn tool_driven_reply_kernel_base_decision_finalizes_non_tool_reply_directly() {
+        let result = TurnResult::FinalText("plain reply".to_owned());
+        let kernel = ToolDrivenReplyKernel::new("preface", false, &result);
+
+        assert_eq!(
+            kernel.base_decision(false),
+            ToolDrivenReplyBaseDecision::FinalizeDirect {
+                reply: "plain reply".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn tool_driven_reply_kernel_base_decision_honors_raw_tool_output_mode() {
+        let result = TurnResult::FinalText("tool output".to_owned());
+        let kernel = ToolDrivenReplyKernel::new("preface", true, &result);
+
+        assert_eq!(
+            kernel.base_decision(true),
+            ToolDrivenReplyBaseDecision::FinalizeDirect {
+                reply: "preface\ntool output".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn tool_driven_reply_kernel_base_decision_requires_followup_for_tool_failure() {
+        let result =
+            TurnResult::ToolError(TurnFailure::retryable("tool_error", "temporary failure"));
+        let kernel = ToolDrivenReplyKernel::new("preface", true, &result);
+
+        assert_eq!(
+            kernel.base_decision(false),
+            ToolDrivenReplyBaseDecision::RequireFollowup {
+                raw_reply: "preface\ntemporary failure".to_owned(),
+                payload: ToolDrivenFollowupPayload::ToolFailure {
+                    reason: "temporary failure".to_owned(),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn tool_driven_reply_base_decision_reports_followup_kind_only_for_followup_paths() {
+        let direct = ToolDrivenReplyBaseDecision::FinalizeDirect {
+            reply: "reply".to_owned(),
+        };
+        let followup = ToolDrivenReplyBaseDecision::RequireFollowup {
+            raw_reply: "raw".to_owned(),
+            payload: ToolDrivenFollowupPayload::ToolResult {
+                text: "tool output".to_owned(),
+            },
+        };
+
+        assert_eq!(direct.resolution_mode(), ReplyResolutionMode::Direct);
+        assert_eq!(
+            followup.resolution_mode(),
+            ReplyResolutionMode::CompletionPass
+        );
+        assert_eq!(direct.followup_kind(), None);
+        assert_eq!(
+            followup.followup_kind(),
+            Some(ToolDrivenFollowupKind::ToolResult)
+        );
+    }
+
+    #[test]
+    fn tool_driven_reply_phase_finalizes_non_tool_reply_directly() {
+        let result = TurnResult::FinalText("plain reply".to_owned());
+        let phase = ToolDrivenReplyPhase::new("preface", false, false, &result);
+
+        assert_eq!(phase.resolution_mode(), ReplyResolutionMode::Direct);
+        assert_eq!(phase.followup_kind(), None);
+        assert_eq!(
+            phase.decision(),
+            &ToolDrivenReplyBaseDecision::FinalizeDirect {
+                reply: "plain reply".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn tool_driven_reply_phase_requires_followup_for_tool_success() {
+        let result = TurnResult::FinalText("tool output".to_owned());
+        let phase = ToolDrivenReplyPhase::new("preface", true, false, &result);
+
+        assert_eq!(phase.resolution_mode(), ReplyResolutionMode::CompletionPass);
+        assert_eq!(
+            phase.followup_kind(),
+            Some(ToolDrivenFollowupKind::ToolResult)
+        );
+        assert_eq!(
+            phase.decision(),
+            &ToolDrivenReplyBaseDecision::RequireFollowup {
+                raw_reply: "preface\ntool output".to_owned(),
+                payload: ToolDrivenFollowupPayload::ToolResult {
+                    text: "tool output".to_owned(),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn tool_driven_reply_phase_requires_followup_for_tool_failure() {
+        let result =
+            TurnResult::ToolError(TurnFailure::retryable("tool_error", "temporary failure"));
+        let phase = ToolDrivenReplyPhase::new("preface", true, false, &result);
+
+        assert_eq!(phase.resolution_mode(), ReplyResolutionMode::CompletionPass);
+        assert_eq!(
+            phase.followup_kind(),
+            Some(ToolDrivenFollowupKind::ToolFailure)
+        );
+        assert_eq!(
+            phase.decision(),
+            &ToolDrivenReplyBaseDecision::RequireFollowup {
+                raw_reply: "preface\ntemporary failure".to_owned(),
+                payload: ToolDrivenFollowupPayload::ToolFailure {
+                    reason: "temporary failure".to_owned(),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn tool_driven_reply_phase_exposes_raw_reply_for_tool_success() {
+        let result = TurnResult::FinalText("tool output".to_owned());
+        let phase = ToolDrivenReplyPhase::new("preface", true, false, &result);
+
+        assert_eq!(phase.raw_reply(), Some("preface\ntool output"));
+    }
+
+    #[test]
+    fn tool_driven_reply_phase_exposes_raw_reply_for_tool_failure() {
+        let result =
+            TurnResult::ToolError(TurnFailure::retryable("tool_error", "temporary failure"));
+        let phase = ToolDrivenReplyPhase::new("preface", true, false, &result);
+
+        assert_eq!(phase.raw_reply(), Some("preface\ntemporary failure"));
+    }
+
+    #[test]
+    fn tool_driven_reply_phase_omits_raw_reply_for_non_tool_paths() {
+        let result = TurnResult::FinalText("plain reply".to_owned());
+        let phase = ToolDrivenReplyPhase::new("preface", false, false, &result);
+
+        assert_eq!(phase.raw_reply(), None);
+    }
+
+    #[test]
+    fn tool_driven_reply_phase_raw_mode_bypasses_completion_pass() {
+        let result = TurnResult::FinalText("tool output".to_owned());
+        let phase = ToolDrivenReplyPhase::new("preface", true, true, &result);
+
+        assert_eq!(phase.resolution_mode(), ReplyResolutionMode::Direct);
+        assert_eq!(phase.followup_kind(), None);
+        assert_eq!(
+            phase.decision(),
+            &ToolDrivenReplyBaseDecision::FinalizeDirect {
+                reply: "preface\ntool output".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn tool_result_followup_tail_promotes_external_skill_without_payload_mapping() {
+        let tail = build_tool_result_followup_tail(
+            "preface",
+            r#"[ok] {"status":"ok","tool":"external_skills.invoke","tool_call_id":"call-1","payload_summary":"{\"skill_id\":\"demo-skill\",\"display_name\":\"Demo Skill\",\"instructions\":\"Follow the managed skill instruction before answering.\"}","payload_chars":180,"payload_truncated":false}"#,
+            "summarize note.md",
+            Some("warning"),
+            |_, _| panic!("external skill payload should bypass payload mapper"),
+        );
+
+        assert!(tail.iter().any(|message| {
+            message.get("role") == Some(&Value::String("system".to_owned()))
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(|content| {
+                        content.contains("Follow the managed skill instruction before answering.")
+                    })
+                    .unwrap_or(false)
+        }));
+        assert!(tail.iter().any(|message| {
+            message.get("role") == Some(&Value::String("assistant".to_owned()))
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(|content| content.contains("[tool_loop_warning]\nwarning"))
+                    .unwrap_or(false)
+        }));
+        assert!(
+            tail.iter()
+                .filter_map(|message| message.get("content").and_then(Value::as_str))
+                .all(|content| !content.contains("[tool_result]\n[ok]"))
+        );
+    }
+
+    #[test]
+    fn tool_result_followup_tail_uses_payload_mapper_and_keeps_truncation_hint() {
+        let tail = build_tool_result_followup_tail(
+            "preface",
+            r#"[ok] {"payload_truncated":true}"#,
+            "summarize note.md",
+            Some("warning"),
+            |_, _| "bounded-result".to_owned(),
+        );
+
+        assert!(tail.iter().any(|message| {
+            message.get("role") == Some(&Value::String("assistant".to_owned()))
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(|content| content == "[tool_result]\nbounded-result")
+                    .unwrap_or(false)
+        }));
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+        assert!(user_prompt.contains(TOOL_TRUNCATION_HINT_PROMPT));
+        assert!(user_prompt.contains("Loop warning:\nwarning"));
+    }
+
+    #[test]
+    fn tool_failure_followup_tail_uses_payload_mapper_without_truncation_hint() {
+        let tail = build_tool_failure_followup_tail(
+            "preface",
+            "tool_timeout ...(truncated 200 chars)",
+            "summarize note.md",
+            Some("warning"),
+            |_, _| "bounded-failure".to_owned(),
+        );
+
+        assert!(tail.iter().any(|message| {
+            message.get("role") == Some(&Value::String("assistant".to_owned()))
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(|content| content == "[tool_failure]\nbounded-failure")
+                    .unwrap_or(false)
+        }));
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+        assert!(!user_prompt.contains(TOOL_TRUNCATION_HINT_PROMPT));
+        assert!(user_prompt.contains("Loop warning:\nwarning"));
+    }
+
+    #[test]
+    fn tool_driven_followup_tail_dispatches_result_payload() {
+        let payload = ToolDrivenFollowupPayload::ToolResult {
+            text: r#"[ok] {"payload_truncated":true}"#.to_owned(),
+        };
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            "summarize note.md",
+            Some("warning"),
+            |_, _| "bounded-result".to_owned(),
+        );
+
+        assert!(tail.iter().any(|message| {
+            message.get("role") == Some(&Value::String("assistant".to_owned()))
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(|content| content == "[tool_result]\nbounded-result")
+                    .unwrap_or(false)
+        }));
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+        assert!(user_prompt.contains(TOOL_TRUNCATION_HINT_PROMPT));
+        assert!(user_prompt.contains("Loop warning:\nwarning"));
+    }
+
+    #[test]
+    fn tool_driven_followup_tail_dispatches_failure_payload() {
+        let payload = ToolDrivenFollowupPayload::ToolFailure {
+            reason: "tool_timeout ...(truncated 200 chars)".to_owned(),
+        };
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            "summarize note.md",
+            Some("warning"),
+            |_, _| "bounded-failure".to_owned(),
+        );
+
+        assert!(tail.iter().any(|message| {
+            message.get("role") == Some(&Value::String("assistant".to_owned()))
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(|content| content == "[tool_failure]\nbounded-failure")
+                    .unwrap_or(false)
+        }));
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+        assert!(!user_prompt.contains(TOOL_TRUNCATION_HINT_PROMPT));
+        assert!(user_prompt.contains("Loop warning:\nwarning"));
+    }
+
+    #[test]
+    fn tool_loop_guard_tail_uses_payload_mapper_and_builds_guard_prompt() {
+        let tail = build_tool_loop_guard_tail(
+            "preface",
+            "stop",
+            "summarize note.md",
+            Some(("tool_result", "tool output")),
+            |_, _| "bounded-result".to_owned(),
+        );
+
+        assert!(tail.iter().any(|message| {
+            message.get("role") == Some(&Value::String("assistant".to_owned()))
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(|content| content == "preface")
+                    .unwrap_or(false)
+        }));
+        assert!(tail.iter().any(|message| {
+            message.get("role") == Some(&Value::String("assistant".to_owned()))
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(|content| content == "[tool_result]\nbounded-result")
+                    .unwrap_or(false)
+        }));
+        assert!(tail.iter().any(|message| {
+            message.get("role") == Some(&Value::String("assistant".to_owned()))
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(|content| content == "[tool_loop_guard]\nstop")
+                    .unwrap_or(false)
+        }));
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+        assert!(user_prompt.contains(TOOL_LOOP_GUARD_PROMPT));
+        assert!(user_prompt.contains("Loop guard reason:\nstop"));
+        assert!(user_prompt.contains("Original request:\nsummarize note.md"));
+    }
+
+    #[test]
+    fn tool_loop_guard_tail_skips_latest_tool_context_without_payload_mapping() {
+        let tail = build_tool_loop_guard_tail("", "stop", "summarize note.md", None, |_, _| {
+            panic!("missing latest tool context should bypass payload mapper")
+        });
+
+        assert_eq!(tail.len(), 2);
+        assert_eq!(tail[0]["role"], "assistant");
+        assert_eq!(tail[0]["content"], "[tool_loop_guard]\nstop");
+        assert_eq!(tail[1]["role"], "user");
+    }
+
+    #[test]
     fn truncation_signal_detection_matches_structured_tool_result() {
         assert!(tool_result_contains_truncation_signal(
             r#"[ok] {"payload_truncated":true}"#
@@ -298,5 +1163,30 @@ mod tests {
         assert_eq!(parsed.skill_id, "demo-skill");
         assert_eq!(parsed.display_name, "Demo Skill");
         assert!(parsed.instructions.contains("suffix-marker"));
+    }
+
+    #[test]
+    fn parse_external_skill_invoke_context_rejects_truncated_payload() {
+        let payload = json!({
+            "skill_id": "demo-skill",
+            "display_name": "Demo Skill",
+            "instructions": "Follow the managed skill instruction before answering.",
+        });
+        let line = format!(
+            "[ok] {}",
+            json!({
+                "status": "ok",
+                "tool": "external_skills.invoke",
+                "tool_call_id": "call-1",
+                "payload_summary": serde_json::to_string(&payload).expect("encode payload"),
+                "payload_chars": 512,
+                "payload_truncated": true
+            })
+        );
+
+        assert!(
+            parse_external_skill_invoke_context(line.as_str()).is_none(),
+            "truncated external skill payload should not activate managed skill context"
+        );
     }
 }

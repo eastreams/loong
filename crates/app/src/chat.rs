@@ -15,13 +15,20 @@ use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context};
 
 use super::config::{self, ConversationConfig, LoongClawConfig};
 #[cfg(feature = "memory-sqlite")]
-use super::conversation::summarize_safe_lane_events;
+use super::conversation::load_safe_lane_event_summary;
 use super::conversation::{
     ConversationSessionAddress, ConversationTurnCoordinator, ProviderErrorMode,
     resolve_context_engine_selection,
 };
 #[cfg(any(test, feature = "memory-sqlite"))]
 use super::conversation::{SafeLaneEventSummary, SafeLaneFinalStatus};
+#[cfg(any(test, feature = "memory-sqlite"))]
+use super::conversation::{
+    TurnCheckpointDiagnostics, TurnCheckpointEventSummary, TurnCheckpointFailureStep,
+    TurnCheckpointProgressStatus, TurnCheckpointRecoveryAction, TurnCheckpointRecoveryAssessment,
+    TurnCheckpointSessionState, TurnCheckpointStage, TurnCheckpointTailRepairOutcome,
+    TurnCheckpointTailRepairReason, TurnCheckpointTailRepairRuntimeProbe,
+};
 #[cfg(feature = "memory-sqlite")]
 use super::memory;
 #[cfg(feature = "memory-sqlite")]
@@ -131,6 +138,27 @@ pub async fn run_cli_chat(
         );
     }
     let turn_coordinator = ConversationTurnCoordinator::new();
+
+    #[cfg(feature = "memory-sqlite")]
+    match turn_coordinator
+        .load_turn_checkpoint_diagnostics(&config, &session_id, Some(&kernel_ctx))
+        .await
+    {
+        Ok(diagnostics) => {
+            if let Some(health) = format_turn_checkpoint_startup_health(&session_id, &diagnostics) {
+                println!("{health}");
+                if let Some(probe) = diagnostics.runtime_probe() {
+                    println!(
+                        "{}",
+                        format_turn_checkpoint_runtime_probe(&session_id, probe)
+                    );
+                }
+            }
+        }
+        Err(error) => {
+            println!("turn_checkpoint_health session={session_id} state=unavailable error={error}");
+        }
+    }
     let session_address = ConversationSessionAddress::from_session_id(session_id.clone());
     let acp_event_printer = options
         .acp_event_stream
@@ -175,9 +203,60 @@ pub async fn run_cli_chat(
         }
         if let Some(limit) = parse_safe_lane_summary_limit(input, config.memory.sliding_window)? {
             #[cfg(feature = "memory-sqlite")]
-            print_safe_lane_summary(&session_id, limit, &config.conversation, &memory_config)?;
+            print_safe_lane_summary(
+                &session_id,
+                limit,
+                &config.conversation,
+                Some(&kernel_ctx),
+                &memory_config,
+            )
+            .await?;
             #[cfg(not(feature = "memory-sqlite"))]
-            print_safe_lane_summary(&session_id, limit, &config.conversation)?;
+            print_safe_lane_summary(&session_id, limit, &config.conversation, Some(&kernel_ctx))
+                .await?;
+            continue;
+        }
+        if let Some(limit) =
+            parse_turn_checkpoint_summary_limit(input, config.memory.sliding_window)?
+        {
+            #[cfg(feature = "memory-sqlite")]
+            print_turn_checkpoint_summary(
+                &turn_coordinator,
+                &config,
+                &session_id,
+                limit,
+                Some(&kernel_ctx),
+                &memory_config,
+            )
+            .await?;
+            #[cfg(not(feature = "memory-sqlite"))]
+            print_turn_checkpoint_summary(
+                &turn_coordinator,
+                &config,
+                &session_id,
+                limit,
+                Some(&kernel_ctx),
+            )
+            .await?;
+            continue;
+        }
+        if is_turn_checkpoint_repair_command(input)? {
+            #[cfg(feature = "memory-sqlite")]
+            print_turn_checkpoint_repair(
+                &turn_coordinator,
+                &config,
+                &session_id,
+                Some(&kernel_ctx),
+            )
+            .await?;
+            #[cfg(not(feature = "memory-sqlite"))]
+            print_turn_checkpoint_repair(
+                &turn_coordinator,
+                &config,
+                &session_id,
+                Some(&kernel_ctx),
+            )
+            .await?;
             continue;
         }
 
@@ -226,6 +305,8 @@ fn print_help() {
     println!("/help    show this help");
     println!("/history print current session sliding window");
     println!("/safe_lane_summary [limit]  summarize safe-lane runtime events");
+    println!("/turn_checkpoint_summary [limit]  summarize durable turn finalization state");
+    println!("/turn_checkpoint_repair  repair durable turn finalization tail when safe");
     println!("/exit    quit chat");
 }
 
@@ -323,22 +404,65 @@ fn parse_safe_lane_summary_limit(input: &str, default_window: usize) -> CliResul
     Ok(Some(limit))
 }
 
+fn parse_turn_checkpoint_summary_limit(
+    input: &str,
+    default_window: usize,
+) -> CliResult<Option<usize>> {
+    let mut tokens = input.split_whitespace();
+    let Some(command) = tokens.next() else {
+        return Ok(None);
+    };
+    if command != "/turn_checkpoint_summary" && command != "/turn-checkpoint-summary" {
+        return Ok(None);
+    }
+
+    let default_limit = default_window.saturating_mul(4).max(64);
+    let limit = match tokens.next() {
+        Some(raw) => raw.parse::<usize>().map_err(|error| {
+            format!(
+                "invalid /turn_checkpoint_summary limit `{raw}`: {error}; usage: /turn_checkpoint_summary [limit]"
+            )
+        })?,
+        None => default_limit,
+    };
+    if limit == 0 {
+        return Err(
+            "invalid /turn_checkpoint_summary limit `0`; usage: /turn_checkpoint_summary [limit]"
+                .to_owned(),
+        );
+    }
+    if tokens.next().is_some() {
+        return Err("usage: /turn_checkpoint_summary [limit]".to_owned());
+    }
+    Ok(Some(limit))
+}
+
+fn is_turn_checkpoint_repair_command(input: &str) -> CliResult<bool> {
+    let mut tokens = input.split_whitespace();
+    let Some(command) = tokens.next() else {
+        return Ok(false);
+    };
+    if command != "/turn_checkpoint_repair" && command != "/turn-checkpoint-repair" {
+        return Ok(false);
+    }
+    if tokens.next().is_some() {
+        return Err("usage: /turn_checkpoint_repair".to_owned());
+    }
+    Ok(true)
+}
+
 #[allow(clippy::print_stdout)] // CLI output
-fn print_safe_lane_summary(
+async fn print_safe_lane_summary(
     session_id: &str,
     limit: usize,
     conversation_config: &ConversationConfig,
+    kernel_ctx: Option<&crate::KernelContext>,
     #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
 ) -> CliResult<()> {
     #[cfg(feature = "memory-sqlite")]
     {
-        let turns = memory::window_direct(session_id, limit, memory_config)
-            .map_err(|error| format!("load safe-lane summary failed: {error}"))?;
-        let summary = summarize_safe_lane_events(
-            turns
-                .iter()
-                .filter_map(|turn| (turn.role == "assistant").then_some(turn.content.as_str())),
-        );
+        let summary =
+            load_safe_lane_event_summary(session_id, limit, kernel_ctx, memory_config).await?;
         println!(
             "{}",
             format_safe_lane_summary(session_id, limit, conversation_config, &summary)
@@ -348,8 +472,61 @@ fn print_safe_lane_summary(
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let _ = (session_id, limit, conversation_config);
+        let _ = (session_id, limit, conversation_config, kernel_ctx);
         println!("safe-lane summary unavailable: memory-sqlite feature disabled");
+        Ok(())
+    }
+}
+
+#[allow(clippy::print_stdout)] // CLI output
+async fn print_turn_checkpoint_summary(
+    turn_coordinator: &ConversationTurnCoordinator,
+    config: &LoongClawConfig,
+    session_id: &str,
+    limit: usize,
+    kernel_ctx: Option<&crate::KernelContext>,
+    #[cfg(feature = "memory-sqlite")] _memory_config: &MemoryRuntimeConfig,
+) -> CliResult<()> {
+    #[cfg(feature = "memory-sqlite")]
+    {
+        let diagnostics = turn_coordinator
+            .load_turn_checkpoint_diagnostics_with_limit(config, session_id, limit, kernel_ctx)
+            .await?;
+        println!(
+            "{}",
+            format_turn_checkpoint_summary_output(session_id, limit, &diagnostics)
+        );
+        Ok(())
+    }
+
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = (turn_coordinator, config, session_id, limit, kernel_ctx);
+        println!("turn checkpoint summary unavailable: memory-sqlite feature disabled");
+        Ok(())
+    }
+}
+
+#[allow(clippy::print_stdout)] // CLI output
+async fn print_turn_checkpoint_repair(
+    turn_coordinator: &ConversationTurnCoordinator,
+    config: &LoongClawConfig,
+    session_id: &str,
+    kernel_ctx: Option<&crate::KernelContext>,
+) -> CliResult<()> {
+    #[cfg(feature = "memory-sqlite")]
+    {
+        let outcome = turn_coordinator
+            .repair_turn_checkpoint_tail(config, session_id, kernel_ctx)
+            .await?;
+        println!("{}", format_turn_checkpoint_repair(session_id, &outcome));
+        Ok(())
+    }
+
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = (turn_coordinator, config, session_id, kernel_ctx);
+        println!("turn checkpoint repair unavailable: memory-sqlite feature disabled");
         Ok(())
     }
 }
@@ -554,6 +731,305 @@ fn format_safe_lane_summary(
 }
 
 #[cfg(any(test, feature = "memory-sqlite"))]
+fn format_turn_checkpoint_stage(stage: Option<TurnCheckpointStage>) -> &'static str {
+    match stage {
+        Some(TurnCheckpointStage::PostPersist) => "post_persist",
+        Some(TurnCheckpointStage::Finalized) => "finalized",
+        Some(TurnCheckpointStage::FinalizationFailed) => "finalization_failed",
+        None => "-",
+    }
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn format_turn_checkpoint_progress(status: Option<TurnCheckpointProgressStatus>) -> &'static str {
+    match status {
+        Some(TurnCheckpointProgressStatus::Pending) => "pending",
+        Some(TurnCheckpointProgressStatus::Skipped) => "skipped",
+        Some(TurnCheckpointProgressStatus::Completed) => "completed",
+        Some(TurnCheckpointProgressStatus::Failed) => "failed",
+        Some(TurnCheckpointProgressStatus::FailedOpen) => "failed_open",
+        None => "-",
+    }
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn format_turn_checkpoint_failure_step(step: Option<TurnCheckpointFailureStep>) -> &'static str {
+    match step {
+        Some(TurnCheckpointFailureStep::AfterTurn) => "after_turn",
+        Some(TurnCheckpointFailureStep::Compaction) => "compaction",
+        None => "-",
+    }
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn format_turn_checkpoint_identity_presence(identity_present: Option<bool>) -> &'static str {
+    match identity_present {
+        Some(true) => "present",
+        Some(false) => "missing",
+        None => "-",
+    }
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn format_turn_checkpoint_session_state(state: TurnCheckpointSessionState) -> &'static str {
+    match state {
+        TurnCheckpointSessionState::NotDurable => "not_durable",
+        TurnCheckpointSessionState::PendingFinalization => "pending_finalization",
+        TurnCheckpointSessionState::Finalized => "finalized",
+        TurnCheckpointSessionState::FinalizationFailed => "finalization_failed",
+    }
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn format_turn_checkpoint_recovery_action(action: TurnCheckpointRecoveryAction) -> &'static str {
+    action.as_str()
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn format_turn_checkpoint_recovery_reason(
+    reason: Option<TurnCheckpointTailRepairReason>,
+) -> &'static str {
+    reason
+        .map(TurnCheckpointTailRepairReason::as_str)
+        .unwrap_or("-")
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TurnCheckpointRecoveryRenderLabels {
+    action: &'static str,
+    source: &'static str,
+    reason: &'static str,
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+impl TurnCheckpointRecoveryRenderLabels {
+    fn from_assessment(assessment: TurnCheckpointRecoveryAssessment) -> Self {
+        Self {
+            action: format_turn_checkpoint_recovery_action(assessment.action()),
+            source: assessment.source().as_str(),
+            reason: format_turn_checkpoint_recovery_reason(assessment.reason()),
+        }
+    }
+
+    fn from_outcome(outcome: &TurnCheckpointTailRepairOutcome) -> Self {
+        Self {
+            action: outcome.action().as_str(),
+            source: outcome.source().map(|value| value.as_str()).unwrap_or("-"),
+            reason: outcome.reason().as_str(),
+        }
+    }
+
+    fn from_probe(probe: &TurnCheckpointTailRepairRuntimeProbe) -> Self {
+        Self {
+            action: probe.action().as_str(),
+            source: probe.source().as_str(),
+            reason: probe.reason().as_str(),
+        }
+    }
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TurnCheckpointSummaryRenderLabels<'a> {
+    session_state: &'static str,
+    stage: &'static str,
+    after_turn: &'static str,
+    compaction: &'static str,
+    lane: &'a str,
+    result_kind: &'a str,
+    persistence_mode: &'a str,
+    safe_lane_route_decision: &'static str,
+    safe_lane_route_reason: &'static str,
+    safe_lane_route_source: &'static str,
+    identity: &'static str,
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+impl<'a> TurnCheckpointSummaryRenderLabels<'a> {
+    fn from_summary(summary: &'a TurnCheckpointEventSummary) -> Self {
+        let (safe_lane_route_decision, safe_lane_route_reason, safe_lane_route_source) =
+            summary.latest_safe_lane_route_labels_or_default();
+        Self {
+            session_state: format_turn_checkpoint_session_state(summary.session_state),
+            stage: format_turn_checkpoint_stage(summary.latest_stage),
+            after_turn: format_turn_checkpoint_progress(summary.latest_after_turn),
+            compaction: format_turn_checkpoint_progress(summary.latest_compaction),
+            lane: summary.latest_lane.as_deref().unwrap_or("-"),
+            result_kind: summary.latest_result_kind.as_deref().unwrap_or("-"),
+            persistence_mode: summary.latest_persistence_mode.as_deref().unwrap_or("-"),
+            safe_lane_route_decision,
+            safe_lane_route_reason,
+            safe_lane_route_source,
+            identity: format_turn_checkpoint_identity_presence(summary.latest_identity_present),
+        }
+    }
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TurnCheckpointDurabilityRenderLabels {
+    checkpoint_durable: u8,
+    reply_durable: u8,
+    durability: &'static str,
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+impl TurnCheckpointDurabilityRenderLabels {
+    fn from_summary(summary: &TurnCheckpointEventSummary) -> Self {
+        let checkpoint_durable = u8::from(summary.checkpoint_durable);
+        let reply_durable = u8::from(summary.reply_durable);
+        let durability = if checkpoint_durable == 0 {
+            "not_durable"
+        } else if reply_durable == 1 {
+            "reply"
+        } else {
+            "checkpoint_only"
+        };
+        Self {
+            checkpoint_durable,
+            reply_durable,
+            durability,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn format_turn_checkpoint_summary(
+    session_id: &str,
+    limit: usize,
+    diagnostics: &TurnCheckpointDiagnostics,
+) -> String {
+    let summary = diagnostics.summary();
+    let render_labels = TurnCheckpointSummaryRenderLabels::from_summary(summary);
+    let durability_labels = TurnCheckpointDurabilityRenderLabels::from_summary(summary);
+    let recovery_labels =
+        TurnCheckpointRecoveryRenderLabels::from_assessment(diagnostics.recovery());
+    let failure_step = format_turn_checkpoint_failure_step(summary.latest_failure_step);
+    let requires_recovery = if summary.requires_recovery { 1 } else { 0 };
+    let failure_error = summary.latest_failure_error.as_deref().unwrap_or("-");
+
+    let mut lines = vec![format!(
+        "turn_checkpoint_summary session={session_id} limit={limit} checkpoints={} state={} durable={} checkpoint_durable={} durability={} requires_recovery={requires_recovery} recovery_action={} recovery_source={} recovery_reason={} stage={} after_turn={} compaction={} lane={} result_kind={} persistence_mode={} safe_lane_route_decision={} safe_lane_route_reason={} safe_lane_route_source={} identity={} failure_step={failure_step} failure_error={failure_error}",
+        summary.checkpoint_events,
+        render_labels.session_state,
+        durability_labels.reply_durable,
+        durability_labels.checkpoint_durable,
+        durability_labels.durability,
+        recovery_labels.action,
+        recovery_labels.source,
+        recovery_labels.reason,
+        render_labels.stage,
+        render_labels.after_turn,
+        render_labels.compaction,
+        render_labels.lane,
+        render_labels.result_kind,
+        render_labels.persistence_mode,
+        render_labels.safe_lane_route_decision,
+        render_labels.safe_lane_route_reason,
+        render_labels.safe_lane_route_source,
+        render_labels.identity,
+    )];
+    lines.push(format!(
+        "events post_persist={} finalized={} finalization_failed={}",
+        summary.post_persist_events, summary.finalized_events, summary.finalization_failed_events
+    ));
+    if !summary.stage_counts.is_empty() {
+        let stage_rollup = summary
+            .stage_counts
+            .iter()
+            .map(|(stage_name, count)| format!("{stage_name}:{count}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        lines.push(format!("rollup stages={stage_rollup}"));
+    }
+    lines.join("\n")
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn format_turn_checkpoint_summary_output(
+    session_id: &str,
+    limit: usize,
+    diagnostics: &TurnCheckpointDiagnostics,
+) -> String {
+    let mut rendered = format_turn_checkpoint_summary(session_id, limit, diagnostics);
+    if let Some(probe) = diagnostics.runtime_probe() {
+        rendered.push('\n');
+        rendered.push_str(&format_turn_checkpoint_runtime_probe(session_id, probe));
+    }
+    rendered
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn format_turn_checkpoint_startup_health(
+    session_id: &str,
+    diagnostics: &TurnCheckpointDiagnostics,
+) -> Option<String> {
+    let summary = diagnostics.summary();
+    if !summary.checkpoint_durable {
+        return None;
+    }
+
+    let render_labels = TurnCheckpointSummaryRenderLabels::from_summary(summary);
+    let durability_labels = TurnCheckpointDurabilityRenderLabels::from_summary(summary);
+    let recovery_labels =
+        TurnCheckpointRecoveryRenderLabels::from_assessment(diagnostics.recovery());
+    let recovery_needed = if summary.requires_recovery { 1 } else { 0 };
+
+    Some(format!(
+        "turn_checkpoint_health session={session_id} state={} reply_durable={} checkpoint_durable={} durability={} recovery_needed={recovery_needed} action={} source={} reason={} stage={} after_turn={} compaction={} lane={} result_kind={} persistence_mode={} safe_lane_route_decision={} safe_lane_route_reason={} safe_lane_route_source={} identity={}",
+        render_labels.session_state,
+        durability_labels.reply_durable,
+        durability_labels.checkpoint_durable,
+        durability_labels.durability,
+        recovery_labels.action,
+        recovery_labels.source,
+        recovery_labels.reason,
+        render_labels.stage,
+        render_labels.after_turn,
+        render_labels.compaction,
+        render_labels.lane,
+        render_labels.result_kind,
+        render_labels.persistence_mode,
+        render_labels.safe_lane_route_decision,
+        render_labels.safe_lane_route_reason,
+        render_labels.safe_lane_route_source,
+        render_labels.identity,
+    ))
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn format_turn_checkpoint_repair(
+    session_id: &str,
+    outcome: &TurnCheckpointTailRepairOutcome,
+) -> String {
+    let after_turn = outcome.after_turn_status().unwrap_or("-");
+    let compaction = outcome.compaction_status().unwrap_or("-");
+    let render_labels = TurnCheckpointRecoveryRenderLabels::from_outcome(outcome);
+    format!(
+        "turn_checkpoint_repair session={session_id} status={} action={} source={} reason={} state={} checkpoints={} after_turn={after_turn} compaction={compaction}",
+        outcome.status().as_str(),
+        render_labels.action,
+        render_labels.source,
+        render_labels.reason,
+        outcome.session_state().as_str(),
+        outcome.checkpoint_events(),
+    )
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn format_turn_checkpoint_runtime_probe(
+    session_id: &str,
+    probe: &TurnCheckpointTailRepairRuntimeProbe,
+) -> String {
+    let render_labels = TurnCheckpointRecoveryRenderLabels::from_probe(probe);
+    format!(
+        "turn_checkpoint_probe session={session_id} action={} source={} reason={}",
+        render_labels.action, render_labels.source, render_labels.reason,
+    )
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
 fn derive_safe_lane_health_signal(
     conversation_config: &ConversationConfig,
     summary: &SafeLaneEventSummary,
@@ -585,16 +1061,7 @@ fn derive_safe_lane_health_signal(
     if replan_rate >= replan_warn_threshold {
         flags.push(format!("replan_pressure({replan_rate:.3})"));
     }
-    let terminal_instability = matches!(summary.final_status, Some(SafeLaneFinalStatus::Failed))
-        && summary
-            .final_failure_code
-            .as_deref()
-            .map(|code| {
-                code.contains("verify_failed")
-                    || code.contains("backpressure")
-                    || code.contains("session_governor")
-            })
-            .unwrap_or(false);
+    let terminal_instability = summary.has_terminal_instability_final_failure();
     if terminal_instability {
         flags.push("terminal_instability".to_owned());
         has_critical = true;
@@ -732,6 +1199,400 @@ mod tests {
         let error = parse_safe_lane_summary_limit("/safe_lane_summary abc", 20)
             .expect_err("non-number limit should be rejected");
         assert!(error.contains("invalid"));
+    }
+
+    #[test]
+    fn parse_turn_checkpoint_summary_limit_accepts_default_and_explicit_limit() {
+        assert_eq!(
+            parse_turn_checkpoint_summary_limit("/turn_checkpoint_summary", 20).expect("parse"),
+            Some(80)
+        );
+        assert_eq!(
+            parse_turn_checkpoint_summary_limit("/turn-checkpoint-summary 96", 20).expect("parse"),
+            Some(96)
+        );
+    }
+
+    #[test]
+    fn parse_turn_checkpoint_summary_limit_rejects_invalid_input() {
+        let error = parse_turn_checkpoint_summary_limit("/turn_checkpoint_summary 0", 20)
+            .expect_err("zero limit should be rejected");
+        assert!(error.contains("usage"));
+
+        let error = parse_turn_checkpoint_summary_limit("/turn_checkpoint_summary nope", 20)
+            .expect_err("non-number limit should be rejected");
+        assert!(error.contains("invalid"));
+    }
+
+    #[test]
+    fn is_turn_checkpoint_repair_command_accepts_aliases_and_rejects_extra_args() {
+        assert!(is_turn_checkpoint_repair_command("/turn_checkpoint_repair").expect("parse"));
+        assert!(is_turn_checkpoint_repair_command("/turn-checkpoint-repair").expect("parse"));
+        assert!(!is_turn_checkpoint_repair_command("/turn_checkpoint_summary").expect("parse"));
+
+        let error = is_turn_checkpoint_repair_command("/turn_checkpoint_repair now")
+            .expect_err("extra args should be rejected");
+        assert!(error.contains("usage"));
+    }
+
+    fn test_turn_checkpoint_diagnostics(
+        summary: TurnCheckpointEventSummary,
+        runtime_probe: Option<TurnCheckpointTailRepairRuntimeProbe>,
+    ) -> crate::conversation::TurnCheckpointDiagnostics {
+        let recovery =
+            crate::conversation::TurnCheckpointRecoveryAssessment::from_summary(&summary);
+        crate::conversation::TurnCheckpointDiagnostics::new(summary, recovery, runtime_probe)
+    }
+
+    #[test]
+    fn format_turn_checkpoint_summary_reports_recovery_state_and_failure() {
+        let summary = TurnCheckpointEventSummary {
+            checkpoint_events: 2,
+            post_persist_events: 1,
+            finalization_failed_events: 1,
+            latest_stage: Some(TurnCheckpointStage::FinalizationFailed),
+            latest_after_turn: Some(TurnCheckpointProgressStatus::Completed),
+            latest_compaction: Some(TurnCheckpointProgressStatus::Failed),
+            latest_failure_step: Some(TurnCheckpointFailureStep::Compaction),
+            latest_failure_error: Some("context compaction failed".to_owned()),
+            latest_lane: Some("safe".to_owned()),
+            latest_result_kind: Some("tool_call".to_owned()),
+            latest_persistence_mode: Some("error".to_owned()),
+            latest_safe_lane_terminal_route: Some(
+                crate::conversation::SafeLaneTerminalRouteSnapshot {
+                    decision: crate::conversation::SafeLaneFailureRouteDecision::Terminal,
+                    reason:
+                        crate::conversation::SafeLaneFailureRouteReason::SessionGovernorNoReplan,
+                    source: crate::conversation::SafeLaneFailureRouteSource::SessionGovernor,
+                },
+            ),
+            latest_identity_present: Some(false),
+            latest_runs_after_turn: Some(true),
+            latest_attempts_context_compaction: Some(true),
+            session_state: TurnCheckpointSessionState::FinalizationFailed,
+            checkpoint_durable: true,
+            requires_recovery: true,
+            reply_durable: true,
+            ..TurnCheckpointEventSummary::default()
+        };
+
+        let diagnostics = test_turn_checkpoint_diagnostics(summary, None);
+        let formatted = format_turn_checkpoint_summary("session-checkpoint", 128, &diagnostics);
+
+        assert!(formatted.contains("turn_checkpoint_summary session=session-checkpoint limit=128"));
+        assert!(formatted.contains("state=finalization_failed"));
+        assert!(formatted.contains("durable=1"));
+        assert!(formatted.contains("requires_recovery=1"));
+        assert!(formatted.contains("stage=finalization_failed"));
+        assert!(formatted.contains("after_turn=completed"));
+        assert!(formatted.contains("compaction=failed"));
+        assert!(formatted.contains("lane=safe"));
+        assert!(formatted.contains("result_kind=tool_call"));
+        assert!(formatted.contains("persistence_mode=error"));
+        assert!(formatted.contains("safe_lane_route_decision=terminal"));
+        assert!(formatted.contains("safe_lane_route_reason=session_governor_no_replan"));
+        assert!(formatted.contains("safe_lane_route_source=session_governor"));
+        assert!(formatted.contains("identity=missing"));
+        assert!(formatted.contains("failure_step=compaction"));
+        assert!(formatted.contains("failure_error=context compaction failed"));
+        assert!(formatted.contains("recovery_action=inspect_manually"));
+        assert!(formatted.contains("recovery_source=summary"));
+        assert!(formatted.contains("recovery_reason=checkpoint_identity_missing"));
+    }
+
+    #[test]
+    fn format_turn_checkpoint_summary_marks_checkpoint_only_durability_for_return_error_sessions() {
+        let summary = TurnCheckpointEventSummary {
+            checkpoint_events: 1,
+            finalized_events: 1,
+            latest_stage: Some(TurnCheckpointStage::Finalized),
+            latest_after_turn: Some(TurnCheckpointProgressStatus::Skipped),
+            latest_compaction: Some(TurnCheckpointProgressStatus::Skipped),
+            latest_lane: None,
+            latest_result_kind: None,
+            latest_persistence_mode: None,
+            latest_identity_present: Some(false),
+            latest_runs_after_turn: Some(false),
+            latest_attempts_context_compaction: Some(false),
+            session_state: TurnCheckpointSessionState::Finalized,
+            checkpoint_durable: true,
+            requires_recovery: false,
+            reply_durable: false,
+            ..TurnCheckpointEventSummary::default()
+        };
+
+        let diagnostics = test_turn_checkpoint_diagnostics(summary, None);
+        let formatted = format_turn_checkpoint_summary("session-checkpoint", 64, &diagnostics);
+
+        assert!(formatted.contains("durable=0"));
+        assert!(formatted.contains("checkpoint_durable=1"));
+        assert!(formatted.contains("durability=checkpoint_only"));
+        assert!(formatted.contains("state=finalized"));
+    }
+
+    #[test]
+    fn format_turn_checkpoint_summary_uses_typed_checkpoint_durability() {
+        let summary = TurnCheckpointEventSummary {
+            checkpoint_events: 1,
+            latest_stage: Some(TurnCheckpointStage::Finalized),
+            session_state: TurnCheckpointSessionState::Finalized,
+            checkpoint_durable: false,
+            reply_durable: false,
+            ..TurnCheckpointEventSummary::default()
+        };
+
+        let diagnostics = test_turn_checkpoint_diagnostics(summary, None);
+        let formatted = format_turn_checkpoint_summary("session-checkpoint", 32, &diagnostics);
+
+        assert!(formatted.contains("state=finalized"));
+        assert!(formatted.contains("checkpoint_durable=0"));
+        assert!(formatted.contains("durability=not_durable"));
+    }
+
+    #[test]
+    fn format_turn_checkpoint_startup_health_reports_recovery_action() {
+        let summary = TurnCheckpointEventSummary {
+            checkpoint_events: 1,
+            post_persist_events: 1,
+            latest_stage: Some(TurnCheckpointStage::PostPersist),
+            latest_after_turn: Some(TurnCheckpointProgressStatus::Pending),
+            latest_compaction: Some(TurnCheckpointProgressStatus::Pending),
+            latest_lane: Some("safe".to_owned()),
+            latest_result_kind: Some("tool_error".to_owned()),
+            latest_persistence_mode: Some("success".to_owned()),
+            latest_safe_lane_terminal_route: Some(
+                crate::conversation::SafeLaneTerminalRouteSnapshot {
+                    decision: crate::conversation::SafeLaneFailureRouteDecision::Terminal,
+                    reason: crate::conversation::SafeLaneFailureRouteReason::BackpressureAttemptsExhausted,
+                    source: crate::conversation::SafeLaneFailureRouteSource::BackpressureGuard,
+                },
+            ),
+            latest_identity_present: Some(true),
+            latest_runs_after_turn: Some(true),
+            latest_attempts_context_compaction: Some(true),
+            session_state: TurnCheckpointSessionState::PendingFinalization,
+            checkpoint_durable: true,
+            requires_recovery: true,
+            reply_durable: true,
+            ..TurnCheckpointEventSummary::default()
+        };
+
+        let diagnostics = test_turn_checkpoint_diagnostics(summary, None);
+        let formatted =
+            format_turn_checkpoint_startup_health("session-health", &diagnostics).expect("health");
+
+        assert!(formatted.contains("turn_checkpoint_health session=session-health"));
+        assert!(formatted.contains("state=pending_finalization"));
+        assert!(formatted.contains("recovery_needed=1"));
+        assert!(formatted.contains("action=run_after_turn_and_compaction"));
+        assert!(formatted.contains("source=summary"));
+        assert!(formatted.contains("reason=-"));
+        assert!(formatted.contains("lane=safe"));
+        assert!(formatted.contains("result_kind=tool_error"));
+        assert!(formatted.contains("safe_lane_route_decision=terminal"));
+        assert!(formatted.contains("safe_lane_route_reason=backpressure_attempts_exhausted"));
+        assert!(formatted.contains("safe_lane_route_source=backpressure_guard"));
+        assert!(formatted.contains("identity=present"));
+    }
+
+    #[test]
+    fn format_turn_checkpoint_startup_health_reports_route_aware_manual_reason() {
+        let summary = TurnCheckpointEventSummary {
+            checkpoint_events: 1,
+            post_persist_events: 1,
+            latest_stage: Some(TurnCheckpointStage::PostPersist),
+            latest_after_turn: Some(TurnCheckpointProgressStatus::Skipped),
+            latest_compaction: Some(TurnCheckpointProgressStatus::Skipped),
+            latest_lane: Some("safe".to_owned()),
+            latest_result_kind: Some("tool_error".to_owned()),
+            latest_persistence_mode: Some("success".to_owned()),
+            latest_safe_lane_terminal_route: Some(
+                crate::conversation::SafeLaneTerminalRouteSnapshot {
+                    decision: crate::conversation::SafeLaneFailureRouteDecision::Terminal,
+                    reason:
+                        crate::conversation::SafeLaneFailureRouteReason::SessionGovernorNoReplan,
+                    source: crate::conversation::SafeLaneFailureRouteSource::SessionGovernor,
+                },
+            ),
+            latest_identity_present: Some(true),
+            latest_runs_after_turn: Some(false),
+            latest_attempts_context_compaction: Some(false),
+            session_state: TurnCheckpointSessionState::PendingFinalization,
+            checkpoint_durable: true,
+            requires_recovery: true,
+            reply_durable: true,
+            ..TurnCheckpointEventSummary::default()
+        };
+
+        let diagnostics = test_turn_checkpoint_diagnostics(summary, None);
+        let formatted =
+            format_turn_checkpoint_startup_health("session-health", &diagnostics).expect("health");
+
+        assert!(formatted.contains("turn_checkpoint_health session=session-health"));
+        assert!(formatted.contains("action=inspect_manually"));
+        assert!(formatted.contains("source=summary"));
+        assert!(
+            formatted
+                .contains("reason=safe_lane_session_governor_terminal_requires_manual_inspection")
+        );
+        assert!(formatted.contains("safe_lane_route_reason=session_governor_no_replan"));
+        assert!(formatted.contains("safe_lane_route_source=session_governor"));
+    }
+
+    #[test]
+    fn format_turn_checkpoint_startup_health_marks_checkpoint_only_durability() {
+        let summary = TurnCheckpointEventSummary {
+            checkpoint_events: 1,
+            finalized_events: 1,
+            latest_stage: Some(TurnCheckpointStage::Finalized),
+            latest_after_turn: Some(TurnCheckpointProgressStatus::Skipped),
+            latest_compaction: Some(TurnCheckpointProgressStatus::Skipped),
+            latest_identity_present: Some(false),
+            latest_runs_after_turn: Some(false),
+            latest_attempts_context_compaction: Some(false),
+            session_state: TurnCheckpointSessionState::Finalized,
+            checkpoint_durable: true,
+            requires_recovery: false,
+            reply_durable: false,
+            ..TurnCheckpointEventSummary::default()
+        };
+
+        let diagnostics = test_turn_checkpoint_diagnostics(summary, None);
+        let formatted =
+            format_turn_checkpoint_startup_health("session-health", &diagnostics).expect("health");
+
+        assert!(formatted.contains("reply_durable=0"));
+        assert!(formatted.contains("checkpoint_durable=1"));
+        assert!(formatted.contains("durability=checkpoint_only"));
+    }
+
+    #[test]
+    fn format_turn_checkpoint_startup_health_uses_typed_checkpoint_durability_gate() {
+        let summary = TurnCheckpointEventSummary {
+            checkpoint_events: 1,
+            latest_stage: Some(TurnCheckpointStage::Finalized),
+            session_state: TurnCheckpointSessionState::Finalized,
+            checkpoint_durable: false,
+            reply_durable: false,
+            ..TurnCheckpointEventSummary::default()
+        };
+
+        let diagnostics = test_turn_checkpoint_diagnostics(summary, None);
+
+        assert!(format_turn_checkpoint_startup_health("session-health", &diagnostics).is_none());
+    }
+
+    #[test]
+    fn format_turn_checkpoint_startup_health_skips_non_durable_sessions() {
+        let diagnostics =
+            test_turn_checkpoint_diagnostics(TurnCheckpointEventSummary::default(), None);
+        assert!(format_turn_checkpoint_startup_health("session-empty", &diagnostics).is_none());
+    }
+
+    #[test]
+    fn format_turn_checkpoint_runtime_probe_reports_runtime_only_manual_reason() {
+        let probe = TurnCheckpointTailRepairRuntimeProbe::new(
+            TurnCheckpointRecoveryAction::InspectManually,
+            crate::conversation::TurnCheckpointTailRepairSource::Runtime,
+            crate::conversation::TurnCheckpointTailRepairReason::CheckpointPreparationFingerprintMismatch,
+        );
+
+        let formatted = format_turn_checkpoint_runtime_probe("session-probe", &probe);
+
+        assert!(formatted.contains("turn_checkpoint_probe session=session-probe"));
+        assert!(formatted.contains("action=inspect_manually"));
+        assert!(formatted.contains("source=runtime"));
+        assert!(formatted.contains("reason=checkpoint_preparation_fingerprint_mismatch"));
+    }
+
+    #[test]
+    fn format_turn_checkpoint_summary_output_appends_runtime_probe_line() {
+        let summary = TurnCheckpointEventSummary {
+            checkpoint_events: 1,
+            post_persist_events: 1,
+            latest_stage: Some(TurnCheckpointStage::FinalizationFailed),
+            latest_after_turn: Some(TurnCheckpointProgressStatus::Completed),
+            latest_compaction: Some(TurnCheckpointProgressStatus::Failed),
+            latest_lane: Some("fast".to_owned()),
+            latest_result_kind: Some("final_text".to_owned()),
+            latest_persistence_mode: Some("success".to_owned()),
+            latest_identity_present: Some(true),
+            latest_runs_after_turn: Some(true),
+            latest_attempts_context_compaction: Some(true),
+            session_state: TurnCheckpointSessionState::FinalizationFailed,
+            checkpoint_durable: true,
+            requires_recovery: true,
+            reply_durable: true,
+            ..TurnCheckpointEventSummary::default()
+        };
+        let probe = TurnCheckpointTailRepairRuntimeProbe::new(
+            TurnCheckpointRecoveryAction::InspectManually,
+            crate::conversation::TurnCheckpointTailRepairSource::Runtime,
+            crate::conversation::TurnCheckpointTailRepairReason::CheckpointPreparationFingerprintMismatch,
+        );
+
+        let diagnostics = test_turn_checkpoint_diagnostics(summary, Some(probe));
+        let formatted = format_turn_checkpoint_summary_output("session-summary", 64, &diagnostics);
+
+        assert!(formatted.contains("turn_checkpoint_summary session=session-summary limit=64"));
+        assert!(formatted.contains("turn_checkpoint_probe session=session-summary"));
+        assert!(formatted.contains("source=runtime"));
+        assert!(formatted.contains("reason=checkpoint_preparation_fingerprint_mismatch"));
+    }
+
+    #[test]
+    fn format_turn_checkpoint_repair_reports_summary_source() {
+        let summary = TurnCheckpointEventSummary {
+            checkpoint_events: 1,
+            latest_stage: Some(TurnCheckpointStage::PostPersist),
+            session_state: TurnCheckpointSessionState::PendingFinalization,
+            checkpoint_durable: true,
+            requires_recovery: true,
+            reply_durable: true,
+            ..TurnCheckpointEventSummary::default()
+        };
+        let outcome = crate::conversation::TurnCheckpointTailRepairOutcome::from_summary(
+            crate::conversation::TurnCheckpointTailRepairStatus::ManualRequired,
+            TurnCheckpointRecoveryAction::InspectManually,
+            Some(crate::conversation::TurnCheckpointTailRepairSource::Summary),
+            crate::conversation::TurnCheckpointTailRepairReason::CheckpointIdentityMissing,
+            &summary,
+        );
+
+        let formatted = format_turn_checkpoint_repair("session-repair", &outcome);
+
+        assert!(formatted.contains("turn_checkpoint_repair session=session-repair"));
+        assert!(formatted.contains("status=manual_required"));
+        assert!(formatted.contains("source=summary"));
+        assert!(formatted.contains("reason=checkpoint_identity_missing"));
+    }
+
+    #[test]
+    fn format_turn_checkpoint_summary_output_omits_runtime_probe_line_without_probe() {
+        let summary = TurnCheckpointEventSummary {
+            checkpoint_events: 1,
+            post_persist_events: 1,
+            latest_stage: Some(TurnCheckpointStage::PostPersist),
+            latest_after_turn: Some(TurnCheckpointProgressStatus::Pending),
+            latest_compaction: Some(TurnCheckpointProgressStatus::Pending),
+            latest_lane: Some("fast".to_owned()),
+            latest_result_kind: Some("final_text".to_owned()),
+            latest_persistence_mode: Some("success".to_owned()),
+            latest_identity_present: Some(true),
+            latest_runs_after_turn: Some(true),
+            latest_attempts_context_compaction: Some(true),
+            session_state: TurnCheckpointSessionState::PendingFinalization,
+            requires_recovery: true,
+            reply_durable: true,
+            ..TurnCheckpointEventSummary::default()
+        };
+
+        let diagnostics = test_turn_checkpoint_diagnostics(summary, None);
+        let formatted = format_turn_checkpoint_summary_output("session-summary", 64, &diagnostics);
+
+        assert!(formatted.contains("turn_checkpoint_summary session=session-summary limit=64"));
+        assert!(!formatted.contains("turn_checkpoint_probe"));
+        assert!(!formatted.ends_with('\n'));
     }
 
     #[test]
@@ -908,5 +1769,19 @@ mod tests {
         assert!(formatted.contains("truncation_pressure(0.250)"));
         assert!(!formatted.contains("verify_failure_pressure"));
         assert!(!formatted.contains("replan_pressure"));
+    }
+
+    #[test]
+    fn format_safe_lane_summary_does_not_mark_unknown_failure_code_substrings_as_instability() {
+        let config = ConversationConfig::default();
+        let summary = SafeLaneEventSummary {
+            final_status: Some(SafeLaneFinalStatus::Failed),
+            final_failure_code: Some("unknown_session_governor_hint".to_owned()),
+            ..SafeLaneEventSummary::default()
+        };
+
+        let formatted = format_safe_lane_summary("session-unknown-code", 16, &config, &summary);
+        assert!(formatted.contains("health severity=ok"));
+        assert!(!formatted.contains("terminal_instability"));
     }
 }
