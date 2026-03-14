@@ -134,6 +134,30 @@ impl ChannelCapability {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelOnboardingStrategy {
+    ManualConfig,
+    Planned,
+}
+
+impl ChannelOnboardingStrategy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ManualConfig => "manual_config",
+            Self::Planned => "planned",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ChannelOnboardingDescriptor {
+    pub strategy: ChannelOnboardingStrategy,
+    pub setup_hint: &'static str,
+    pub status_command: &'static str,
+    pub repair_command: Option<&'static str>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelDoctorCheckTrigger {
     OperationHealth,
@@ -181,6 +205,7 @@ pub struct ChannelCatalogEntry {
     pub capabilities: Vec<ChannelCapability>,
     pub aliases: Vec<&'static str>,
     pub transport: &'static str,
+    pub onboarding: ChannelOnboardingDescriptor,
     pub supported_target_kinds: Vec<ChannelCatalogTargetKind>,
     pub operations: Vec<ChannelCatalogOperation>,
 }
@@ -290,6 +315,7 @@ struct ChannelRegistryDescriptor {
     label: &'static str,
     aliases: &'static [&'static str],
     transport: &'static str,
+    onboarding: ChannelOnboardingDescriptor,
     operations: &'static [ChannelRegistryOperationDescriptor],
 }
 
@@ -395,6 +421,12 @@ const TELEGRAM_CAPABILITIES: &[ChannelCapability] = &[
     ChannelCapability::Serve,
     ChannelCapability::RuntimeTracking,
 ];
+const TELEGRAM_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::ManualConfig,
+    setup_hint: "configure telegram bot credentials and allowed chat ids in loongclaw.toml under telegram or telegram.accounts.<account>",
+    status_command: "loongclaw doctor",
+    repair_command: Some("loongclaw doctor --fix"),
+};
 
 const FEISHU_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
@@ -544,6 +576,12 @@ const FEISHU_CAPABILITIES: &[ChannelCapability] = &[
     ChannelCapability::Serve,
     ChannelCapability::RuntimeTracking,
 ];
+const FEISHU_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::ManualConfig,
+    setup_hint: "configure feishu or lark app credentials and webhook secrets in loongclaw.toml under feishu or feishu.accounts.<account>",
+    status_command: "loongclaw doctor",
+    repair_command: Some("loongclaw doctor --fix"),
+};
 
 const DISCORD_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
@@ -580,6 +618,12 @@ const DISCORD_CAPABILITIES: &[ChannelCapability] = &[
     ChannelCapability::Serve,
     ChannelCapability::RuntimeTracking,
 ];
+const DISCORD_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::Planned,
+    setup_hint: "stub surface only; runtime adapter and onboarding flow are not implemented yet",
+    status_command: "loongclaw channels --json",
+    repair_command: None,
+};
 
 const SLACK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
@@ -616,6 +660,12 @@ const SLACK_CAPABILITIES: &[ChannelCapability] = &[
     ChannelCapability::Serve,
     ChannelCapability::RuntimeTracking,
 ];
+const SLACK_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::Planned,
+    setup_hint: "stub surface only; runtime adapter and onboarding flow are not implemented yet",
+    status_command: "loongclaw channels --json",
+    repair_command: None,
+};
 
 const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
@@ -629,6 +679,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
         label: "Telegram",
         aliases: &[],
         transport: "telegram_bot_api_polling",
+        onboarding: TELEGRAM_ONBOARDING_DESCRIPTOR,
         operations: TELEGRAM_OPERATIONS,
     },
     ChannelRegistryDescriptor {
@@ -642,6 +693,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
         label: "Feishu/Lark",
         aliases: &["lark"],
         transport: "feishu_openapi_webhook",
+        onboarding: FEISHU_ONBOARDING_DESCRIPTOR,
         operations: FEISHU_OPERATIONS,
     },
     ChannelRegistryDescriptor {
@@ -652,6 +704,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
         label: "Discord",
         aliases: &["discord-bot"],
         transport: "discord_gateway",
+        onboarding: DISCORD_ONBOARDING_DESCRIPTOR,
         operations: DISCORD_OPERATIONS,
     },
     ChannelRegistryDescriptor {
@@ -662,6 +715,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
         label: "Slack",
         aliases: &["slack-bot"],
         transport: "slack_events_api",
+        onboarding: SLACK_ONBOARDING_DESCRIPTOR,
         operations: SLACK_OPERATIONS,
     },
 ];
@@ -701,6 +755,7 @@ fn channel_catalog_entry_from_descriptor(
         capabilities: descriptor.capabilities.to_vec(),
         aliases: descriptor.aliases.to_vec(),
         transport: descriptor.transport,
+        onboarding: descriptor.onboarding,
         supported_target_kinds,
         operations: descriptor
             .operations
@@ -708,6 +763,10 @@ fn channel_catalog_entry_from_descriptor(
             .map(|descriptor| descriptor.operation)
             .collect(),
     }
+}
+
+pub fn resolve_channel_onboarding_descriptor(raw: &str) -> Option<ChannelOnboardingDescriptor> {
+    find_channel_registry_descriptor(raw).map(|descriptor| descriptor.onboarding)
 }
 
 pub fn list_channel_catalog() -> Vec<ChannelCatalogEntry> {
@@ -1656,6 +1715,44 @@ mod tests {
                 }),
             Some(vec!["stub", "stub"])
         );
+        assert_eq!(
+            encoded
+                .get("onboarding")
+                .and_then(|onboarding| onboarding.get("strategy"))
+                .and_then(serde_json::Value::as_str),
+            Some("planned")
+        );
+    }
+
+    #[test]
+    fn resolve_channel_catalog_entry_exposes_onboarding_contracts() {
+        let telegram = resolve_channel_catalog_entry("telegram").expect("telegram entry");
+        let lark = resolve_channel_catalog_entry("lark").expect("lark entry");
+        let discord = resolve_channel_catalog_entry("discord").expect("discord entry");
+
+        assert_eq!(
+            telegram.onboarding.strategy,
+            ChannelOnboardingStrategy::ManualConfig
+        );
+        assert_eq!(telegram.onboarding.status_command, "loongclaw doctor");
+        assert_eq!(
+            telegram.onboarding.repair_command,
+            Some("loongclaw doctor --fix")
+        );
+        assert!(telegram.onboarding.setup_hint.contains("loongclaw.toml"));
+
+        assert_eq!(
+            lark.onboarding.strategy,
+            ChannelOnboardingStrategy::ManualConfig
+        );
+        assert_eq!(lark.onboarding.status_command, "loongclaw doctor");
+
+        assert_eq!(
+            discord.onboarding.strategy,
+            ChannelOnboardingStrategy::Planned
+        );
+        assert_eq!(discord.onboarding.repair_command, None);
+        assert!(discord.onboarding.setup_hint.contains("stub surface"));
     }
 
     #[test]
@@ -2125,6 +2222,7 @@ mod tests {
                 ],
                 aliases: vec![],
                 transport: "telegram_bot_api_polling",
+                onboarding: TELEGRAM_ONBOARDING_DESCRIPTOR,
                 supported_target_kinds: vec![ChannelCatalogTargetKind::Conversation],
                 operations: vec![
                     ChannelCatalogOperation {
@@ -2158,6 +2256,7 @@ mod tests {
                 ],
                 aliases: vec![],
                 transport: "discord_gateway",
+                onboarding: DISCORD_ONBOARDING_DESCRIPTOR,
                 supported_target_kinds: vec![ChannelCatalogTargetKind::Conversation],
                 operations: vec![ChannelCatalogOperation {
                     id: "send",

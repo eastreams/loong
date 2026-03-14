@@ -1138,6 +1138,7 @@ fn render_channel_surfaces_text(
         }
 
         push_channel_surface_header(&mut lines, surface);
+        lines.push(render_channel_onboarding_line(&surface.catalog.onboarding));
         for snapshot in &surface.configured_accounts {
             let api_base_url = snapshot.api_base_url.as_deref().unwrap_or("-");
             lines.push(format!(
@@ -1216,6 +1217,7 @@ fn render_channel_surfaces_text(
         lines.push("catalog-only channels:".to_owned());
         for surface in catalog_only_surfaces {
             push_channel_surface_header(&mut lines, surface);
+            lines.push(render_channel_onboarding_line(&surface.catalog.onboarding));
             for operation in &surface.catalog.operations {
                 lines.push(format!(
                     "  catalog op {} ({}) availability={} tracks_runtime={} target_kinds={} requirements={}",
@@ -1230,6 +1232,21 @@ fn render_channel_surfaces_text(
         }
     }
     lines.join("\n")
+}
+
+fn render_channel_onboarding_line(
+    onboarding: &mvp::channel::ChannelOnboardingDescriptor,
+) -> String {
+    format!(
+        "  onboarding strategy={} status_command=\"{}\" repair_command={} setup_hint=\"{}\"",
+        onboarding.strategy.as_str(),
+        onboarding.status_command,
+        onboarding
+            .repair_command
+            .map(|command| format!("\"{command}\""))
+            .unwrap_or_else(|| "-".to_owned()),
+        onboarding.setup_hint
+    )
 }
 
 fn render_channel_operation_requirement_ids(
