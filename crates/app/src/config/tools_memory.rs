@@ -74,6 +74,10 @@ pub struct MemoryConfig {
     pub profile: MemoryProfile,
     #[serde(default)]
     pub system: MemorySystemKind,
+    #[serde(default = "default_true")]
+    pub fail_open: bool,
+    #[serde(default)]
+    pub ingest_mode: MemoryIngestMode,
     #[serde(default = "default_sqlite_path")]
     pub sqlite_path: String,
     #[serde(default = "default_sliding_window")]
@@ -116,6 +120,7 @@ pub enum MemoryProfile {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum MemorySystemKind {
     #[default]
     Builtin,
@@ -145,6 +150,46 @@ impl<'de> Deserialize<'de> for MemorySystemKind {
         Self::parse_id(&raw).ok_or_else(|| {
             serde::de::Error::custom(format!(
                 "unsupported memory.system `{}` (available: builtin)",
+                raw.trim()
+            ))
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryIngestMode {
+    #[default]
+    SyncMinimal,
+    AsyncBackground,
+}
+
+impl MemoryIngestMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SyncMinimal => "sync_minimal",
+            Self::AsyncBackground => "async_background",
+        }
+    }
+
+    pub fn parse_id(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "sync_minimal" => Some(Self::SyncMinimal),
+            "async_background" => Some(Self::AsyncBackground),
+            _ => None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MemoryIngestMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse_id(&raw).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "unsupported memory.ingest_mode `{}` (available: sync_minimal, async_background)",
                 raw.trim()
             ))
         })
@@ -243,6 +288,8 @@ impl Default for MemoryConfig {
             backend: MemoryBackendKind::default(),
             profile: MemoryProfile::default(),
             system: MemorySystemKind::default(),
+            fail_open: default_true(),
+            ingest_mode: MemoryIngestMode::default(),
             sqlite_path: default_sqlite_path(),
             sliding_window: default_sliding_window(),
             summary_max_chars: default_summary_max_chars(),
@@ -309,6 +356,10 @@ const fn default_require_download_approval() -> bool {
     true
 }
 
+const fn default_true() -> bool {
+    true
+}
+
 const fn default_auto_expose_installed() -> bool {
     true
 }
@@ -350,6 +401,13 @@ mod tests {
         assert_eq!(config.system, MemorySystemKind::Builtin);
         assert_eq!(config.resolved_system(), MemorySystemKind::Builtin);
         assert_eq!(config.resolved_system().as_str(), DEFAULT_MEMORY_SYSTEM_ID);
+    }
+
+    #[test]
+    fn hydrated_memory_policy_defaults_are_fail_open_and_sync_minimal() {
+        let config = MemoryConfig::default();
+        assert!(config.fail_open);
+        assert_eq!(config.ingest_mode, MemoryIngestMode::SyncMinimal);
     }
 
     #[test]

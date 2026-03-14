@@ -120,7 +120,11 @@ mod tests {
     #[test]
     fn memory_system_registry_includes_builtin_metadata() {
         let metadata = crate::memory::list_memory_system_metadata().expect("list memory systems");
-        assert!(metadata.iter().any(|entry| entry.id == DEFAULT_MEMORY_SYSTEM_ID));
+        assert!(
+            metadata
+                .iter()
+                .any(|entry| entry.id == DEFAULT_MEMORY_SYSTEM_ID)
+        );
     }
 
     #[test]

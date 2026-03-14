@@ -7,13 +7,19 @@ use serde_json::{Value, json};
 use crate::config::{MemoryBackendKind, MemoryMode};
 
 mod kernel_adapter;
+mod orchestrator;
 pub mod runtime_config;
-mod system;
-mod system_registry;
 #[cfg(feature = "memory-sqlite")]
 mod sqlite;
+mod system;
+mod system_registry;
 
 pub use kernel_adapter::MvpMemoryAdapter;
+pub use orchestrator::{
+    BuiltinMemoryOrchestrator, HydratedMemoryContext, MemoryDiagnostics, hydrate_memory_context,
+};
+#[cfg(feature = "memory-sqlite")]
+pub use sqlite::ConversationTurn;
 pub use system::{
     BuiltinMemorySystem, DEFAULT_MEMORY_SYSTEM_ID, MEMORY_SYSTEM_API_VERSION, MemorySystem,
     MemorySystemCapability, MemorySystemMetadata,
@@ -24,8 +30,6 @@ pub use system_registry::{
     list_memory_system_ids, list_memory_system_metadata, memory_system_id_from_env,
     register_memory_system, resolve_memory_system, resolve_memory_system_selection,
 };
-#[cfg(feature = "memory-sqlite")]
-pub use sqlite::ConversationTurn;
 
 pub const MEMORY_OP_APPEND_TURN: &str = "append_turn";
 pub const MEMORY_OP_WINDOW: &str = "window";

@@ -195,7 +195,7 @@ pub(crate) fn clear_memory_system_env_override() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::{MemorySystemCapability, MEMORY_SYSTEM_API_VERSION};
+    use crate::memory::{MEMORY_SYSTEM_API_VERSION, MemorySystemCapability};
 
     struct TestRegistrySystem;
 

@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use crate::config::{MemoryBackendKind, MemoryConfig, MemoryMode, MemoryProfile};
+use crate::config::{
+    MemoryBackendKind, MemoryConfig, MemoryIngestMode, MemoryMode, MemoryProfile, MemorySystemKind,
+};
 
 /// Typed runtime configuration for the memory (SQLite) subsystem.
 ///
@@ -12,7 +14,10 @@ use crate::config::{MemoryBackendKind, MemoryConfig, MemoryMode, MemoryProfile};
 pub struct MemoryRuntimeConfig {
     pub backend: MemoryBackendKind,
     pub profile: MemoryProfile,
+    pub system: MemorySystemKind,
     pub mode: MemoryMode,
+    pub fail_open: bool,
+    pub ingest_mode: MemoryIngestMode,
     pub sqlite_path: Option<PathBuf>,
     pub sliding_window: usize,
     pub summary_max_chars: usize,
@@ -25,7 +30,10 @@ impl Default for MemoryRuntimeConfig {
         Self {
             backend: defaults.backend,
             profile: defaults.profile,
+            system: defaults.system,
             mode: defaults.resolved_mode(),
+            fail_open: defaults.fail_open,
+            ingest_mode: defaults.ingest_mode,
             sqlite_path: None,
             sliding_window: defaults.sliding_window,
             summary_max_chars: defaults.summary_char_budget(),
@@ -51,6 +59,17 @@ impl MemoryRuntimeConfig {
             .as_deref()
             .and_then(MemoryProfile::parse_id)
             .unwrap_or(defaults.profile);
+        let system = crate::memory::memory_system_id_from_env()
+            .as_deref()
+            .and_then(MemorySystemKind::parse_id)
+            .unwrap_or(defaults.system);
+        let fail_open = parse_bool(std::env::var("LOONGCLAW_MEMORY_FAIL_OPEN").ok())
+            .unwrap_or(defaults.fail_open);
+        let ingest_mode = std::env::var("LOONGCLAW_MEMORY_INGEST_MODE")
+            .ok()
+            .as_deref()
+            .and_then(MemoryIngestMode::parse_id)
+            .unwrap_or(defaults.ingest_mode);
         let sqlite_path = std::env::var("LOONGCLAW_SQLITE_PATH")
             .ok()
             .map(PathBuf::from);
@@ -68,7 +87,10 @@ impl MemoryRuntimeConfig {
         Self {
             backend,
             profile,
+            system,
             mode: profile.mode(),
+            fail_open,
+            ingest_mode,
             sqlite_path,
             sliding_window,
             summary_max_chars,
@@ -82,7 +104,10 @@ impl MemoryRuntimeConfig {
         Self {
             backend,
             profile,
+            system: config.resolved_system(),
             mode: config.resolved_mode(),
+            fail_open: config.fail_open,
+            ingest_mode: config.ingest_mode,
             sqlite_path: Some(config.resolved_sqlite_path()),
             sliding_window: config.sliding_window,
             summary_max_chars: config.summary_char_budget(),
@@ -94,6 +119,14 @@ impl MemoryRuntimeConfig {
 fn parse_positive_usize(raw: Option<String>) -> Option<usize> {
     raw.and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0)
+}
+
+fn parse_bool(raw: Option<String>) -> Option<bool> {
+    raw.and_then(|value| match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    })
 }
 
 static MEMORY_RUNTIME_CONFIG: OnceLock<MemoryRuntimeConfig> = OnceLock::new();
@@ -139,6 +172,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_bool_accepts_common_true_false_forms() {
+        assert_eq!(parse_bool(Some("true".to_owned())), Some(true));
+        assert_eq!(parse_bool(Some("1".to_owned())), Some(true));
+        assert_eq!(parse_bool(Some("off".to_owned())), Some(false));
+        assert_eq!(parse_bool(Some("0".to_owned())), Some(false));
+    }
+
+    #[test]
+    fn parse_bool_rejects_unknown_values() {
+        assert_eq!(parse_bool(Some("maybe".to_owned())), None);
+        assert_eq!(parse_bool(None), None);
+    }
+
+    #[test]
     fn memory_runtime_config_default_has_no_path() {
         let config = MemoryRuntimeConfig::default();
         assert!(config.sqlite_path.is_none());
@@ -149,7 +196,10 @@ mod tests {
         let config = MemoryRuntimeConfig {
             backend: MemoryBackendKind::Sqlite,
             profile: MemoryProfile::WindowOnly,
+            system: MemorySystemKind::Builtin,
             mode: MemoryMode::WindowOnly,
+            fail_open: true,
+            ingest_mode: MemoryIngestMode::SyncMinimal,
             sqlite_path: Some(PathBuf::from("/tmp/test-memory.sqlite3")),
             sliding_window: 12,
             summary_max_chars: 1200,
@@ -175,5 +225,24 @@ mod tests {
         assert_eq!(runtime.profile, MemoryProfile::WindowPlusSummary);
         assert_eq!(runtime.mode, MemoryMode::WindowPlusSummary);
         assert_eq!(runtime.summary_max_chars, 900);
+    }
+
+    #[test]
+    fn hydrated_memory_runtime_config_carries_system_policy() {
+        let config = MemoryConfig {
+            system: crate::config::MemorySystemKind::Builtin,
+            fail_open: false,
+            ingest_mode: crate::config::MemoryIngestMode::AsyncBackground,
+            ..MemoryConfig::default()
+        };
+
+        let runtime = MemoryRuntimeConfig::from_memory_config(&config);
+
+        assert_eq!(runtime.system, crate::config::MemorySystemKind::Builtin);
+        assert!(!runtime.fail_open);
+        assert_eq!(
+            runtime.ingest_mode,
+            crate::config::MemoryIngestMode::AsyncBackground
+        );
     }
 }
