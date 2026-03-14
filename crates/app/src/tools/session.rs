@@ -717,11 +717,7 @@ fn execute_session_unarchive(
 ) -> Result<ToolCoreOutcome, String> {
     let request = parse_session_mutation_request(&payload)?;
     if request.use_legacy_single_response() {
-        let target_session_id = request
-            .target
-            .session_ids
-            .first()
-            .expect("legacy single request requires one session id");
+        let target_session_id = legacy_single_session_id(&request.target.session_ids)?;
         let repo = SessionRepository::new(config)?;
         ensure_visible(
             &repo,
