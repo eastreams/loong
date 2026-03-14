@@ -660,6 +660,7 @@ fn approval_request_summary_json_with_evidence(
     let resolution =
         approval_request_resolution_json(record, &execution_evidence, &execution_integrity);
     let pending_queue = approval_request_pending_queue_json(record);
+    let grant_audit = approval_request_grant_audit_json(record, &grant);
     json!({
         "approval_request_id": record.approval_request_id,
         "session_id": record.session_id,
@@ -695,6 +696,7 @@ fn approval_request_summary_json_with_evidence(
             .get("rule_id")
             .and_then(Value::as_str),
         "grant": grant,
+        "grant_audit": grant_audit,
         "pending_queue": pending_queue,
         "resolution": resolution,
         "execution_evidence": execution_evidence,
@@ -716,6 +718,25 @@ fn approval_request_pending_queue_json(record: &ApprovalRequestRecord) -> Value 
         "awaiting_decision": awaiting_decision,
         "age_seconds": age_seconds,
         "age_bucket": age_bucket.map(ApprovalAttentionAgeBucket::as_str),
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_grant_audit_json(record: &ApprovalRequestRecord, grant: &Value) -> Value {
+    let has_durable_grant = grant.get("state").and_then(Value::as_str) == Some("present");
+    let (status, requires_durable_grant, is_consistent) = match record.decision {
+        Some(ApprovalDecision::ApproveAlways) if has_durable_grant => {
+            ("required_present", true, true)
+        }
+        Some(ApprovalDecision::ApproveAlways) => ("required_missing", true, false),
+        Some(_) | None => ("not_applicable", false, true),
+    };
+
+    json!({
+        "status": status,
+        "requires_durable_grant": requires_durable_grant,
+        "has_durable_grant": has_durable_grant,
+        "is_consistent": is_consistent,
     })
 }
 
@@ -997,6 +1018,11 @@ fn approval_request_list_grant_summary_json(requests: &[Value]) -> Value {
         ("absent".to_owned(), 0usize),
         ("lineage_unresolved".to_owned(), 0usize),
     ]);
+    let mut consistency_counts = BTreeMap::from([
+        ("required_present".to_owned(), 0usize),
+        ("required_missing".to_owned(), 0usize),
+        ("not_applicable".to_owned(), 0usize),
+    ]);
     let mut scope_session_counts = BTreeMap::<String, usize>::new();
     let mut created_by_session_counts = BTreeMap::<String, usize>::new();
 
@@ -1017,10 +1043,18 @@ fn approval_request_list_grant_summary_json(requests: &[Value]) -> Value {
                 .entry(created_by_session_id.to_owned())
                 .or_default() += 1;
         }
+        if let Some(status) = request
+            .get("grant_audit")
+            .and_then(|value| value.get("status"))
+            .and_then(Value::as_str)
+        {
+            *consistency_counts.entry(status.to_owned()).or_default() += 1;
+        }
     }
 
     json!({
         "counts_by_state": counts_by_state,
+        "consistency_counts": consistency_counts,
         "scope_session_counts": scope_session_counts,
         "created_by_session_counts": created_by_session_counts,
     })
@@ -1270,6 +1304,7 @@ fn approval_request_detail_json_with_evidence(
     let resolution =
         approval_request_resolution_json(record, &execution_evidence, &execution_integrity);
     let pending_queue = approval_request_pending_queue_json(record);
+    let grant_audit = approval_request_grant_audit_json(record, &grant);
     json!({
         "approval_request_id": record.approval_request_id,
         "session_id": record.session_id,
@@ -1299,6 +1334,7 @@ fn approval_request_detail_json_with_evidence(
         "request_payload": record.request_payload_json,
         "governance_snapshot": record.governance_snapshot_json,
         "grant": grant,
+        "grant_audit": grant_audit,
         "pending_queue": pending_queue,
         "resolution": resolution,
         "execution_evidence": execution_evidence,
@@ -4959,6 +4995,148 @@ mod tests {
             requests[0]["grant"]["created_by_session_id"],
             "operator-beta"
         );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_tool_query_surfaces_durable_grant_audit() {
+        let config = isolated_memory_config("approval-query-list-grant-audit");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+
+        seed_request(
+            &repo,
+            "apr-grant-audit-present",
+            "root-session",
+            "delegate_async",
+            "governed_tool_requires_per_call_approval",
+        );
+        seed_request(
+            &repo,
+            "apr-grant-audit-missing",
+            "root-session",
+            "session_cancel",
+            "governed_tool_requires_per_call_approval",
+        );
+        seed_request(
+            &repo,
+            "apr-grant-audit-once",
+            "root-session",
+            "memory_search",
+            "governed_tool_requires_per_call_approval",
+        );
+
+        repo.transition_approval_request_if_current(
+            "apr-grant-audit-present",
+            TransitionApprovalRequestIfCurrentRequest {
+                expected_status: ApprovalRequestStatus::Pending,
+                next_status: ApprovalRequestStatus::Approved,
+                decision: Some(ApprovalDecision::ApproveAlways),
+                resolved_by_session_id: Some("operator-session".to_owned()),
+                executed_at: None,
+                last_error: None,
+            },
+        )
+        .expect("transition present durable grant request")
+        .expect("present durable grant request should transition");
+        repo.transition_approval_request_if_current(
+            "apr-grant-audit-missing",
+            TransitionApprovalRequestIfCurrentRequest {
+                expected_status: ApprovalRequestStatus::Pending,
+                next_status: ApprovalRequestStatus::Approved,
+                decision: Some(ApprovalDecision::ApproveAlways),
+                resolved_by_session_id: Some("operator-session".to_owned()),
+                executed_at: None,
+                last_error: None,
+            },
+        )
+        .expect("transition missing durable grant request")
+        .expect("missing durable grant request should transition");
+        repo.transition_approval_request_if_current(
+            "apr-grant-audit-once",
+            TransitionApprovalRequestIfCurrentRequest {
+                expected_status: ApprovalRequestStatus::Pending,
+                next_status: ApprovalRequestStatus::Executed,
+                decision: Some(ApprovalDecision::ApproveOnce),
+                resolved_by_session_id: Some("operator-session".to_owned()),
+                executed_at: Some(1_773_000_000),
+                last_error: None,
+            },
+        )
+        .expect("transition approve_once request")
+        .expect("approve_once request should transition");
+
+        seed_runtime_grant(
+            &repo,
+            "root-session",
+            "tool:delegate_async",
+            Some("operator-session"),
+        );
+
+        let list_outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "limit": 10,
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list outcome for durable grant audit");
+
+        let grant_summary = &list_outcome.payload["grant_summary"];
+        assert_eq!(grant_summary["consistency_counts"]["required_present"], 1);
+        assert_eq!(grant_summary["consistency_counts"]["required_missing"], 1);
+        assert_eq!(grant_summary["consistency_counts"]["not_applicable"], 1);
+
+        let requests = list_outcome.payload["requests"]
+            .as_array()
+            .expect("requests array");
+        let present_request = requests
+            .iter()
+            .find(|item| item["approval_request_id"] == "apr-grant-audit-present")
+            .expect("present durable grant request");
+        assert_eq!(present_request["grant_audit"]["status"], "required_present");
+        assert_eq!(present_request["grant_audit"]["requires_durable_grant"], true);
+        assert_eq!(present_request["grant_audit"]["has_durable_grant"], true);
+        assert_eq!(present_request["grant_audit"]["is_consistent"], true);
+
+        let missing_request = requests
+            .iter()
+            .find(|item| item["approval_request_id"] == "apr-grant-audit-missing")
+            .expect("missing durable grant request");
+        assert_eq!(missing_request["grant_audit"]["status"], "required_missing");
+        assert_eq!(missing_request["grant_audit"]["requires_durable_grant"], true);
+        assert_eq!(missing_request["grant_audit"]["has_durable_grant"], false);
+        assert_eq!(missing_request["grant_audit"]["is_consistent"], false);
+
+        let once_request = requests
+            .iter()
+            .find(|item| item["approval_request_id"] == "apr-grant-audit-once")
+            .expect("approve_once request");
+        assert_eq!(once_request["grant_audit"]["status"], "not_applicable");
+        assert_eq!(once_request["grant_audit"]["requires_durable_grant"], false);
+        assert_eq!(once_request["grant_audit"]["has_durable_grant"], false);
+        assert_eq!(once_request["grant_audit"]["is_consistent"], true);
+
+        let status_outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_request_status".to_owned(),
+                payload: json!({
+                    "approval_request_id": "apr-grant-audit-present",
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_request_status outcome for durable grant audit");
+
+        let request = &status_outcome.payload["approval_request"];
+        assert_eq!(request["grant_audit"]["status"], "required_present");
+        assert_eq!(request["grant_audit"]["is_consistent"], true);
     }
 
     #[cfg(feature = "memory-sqlite")]
