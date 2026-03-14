@@ -18,8 +18,8 @@ Domain grades for LoongClaw. Updated periodically to track gaps, prioritize clea
 | Self-Awareness (L8) | B- | 2026-03-13 | Snapshots generated but not continuous; no drift detection agent |
 | Bootstrap (L9) | B | 2026-03-13 | Activation plans work; no policy-bounded bootstrap validation |
 | Context/Memory | C | 2026-03-13 | SQLite turns only; no scopes, no provenance, no FTS5 |
-| Documentation | A- | 2026-03-13 | Strong coverage; missing design index and quality tracking |
-| CI/Enforcement | A | 2026-03-13 | 8 workflows, convention engineering, architecture checks |
+| Documentation | A | 2026-03-13 | Full harness: design-docs/index.md, quality scores, tech-debt-tracker, all domain docs |
+| CI/Enforcement | A | 2026-03-13 | 8 CI workflows, convention-engineering (14 files, 11 checks), check:harness mirror gate |
 | Contributor Experience | A- | 2026-03-13 | Clear tracks and recipes; could add more examples |
 
 ## Grading Criteria
@@ -34,10 +34,9 @@ Domain grades for LoongClaw. Updated periodically to track gaps, prioritize clea
 
 | Criterion | Status |
 |-----------|--------|
-| Agent entry point (AGENTS.md) | Present, 80 lines, mirrored with CLAUDE.md |
+| Agent entry point (AGENTS.md) | Present, 102 lines, mirrored with CLAUDE.md |
 | Architecture defined with enforcement | Present, DAG + boundary checks + CI |
 | Progressive disclosure hierarchy | Present, 3-tier structure |
-| Execution plans tracked | 41 phase plans in `docs/plans/` (local only) |
-| Mechanical enforcement | 8 CI workflows, convention engineering, pre-commit |
+| Mechanical enforcement | 8 CI workflows, convention-engineering (14 files, 11 content checks), check:harness, pre-commit |
 | Quality tracked | This file |
 | External context captured | Core beliefs principle #8 requires it |
