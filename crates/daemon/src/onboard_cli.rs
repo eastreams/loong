@@ -619,6 +619,7 @@ pub(crate) async fn run_onboard_cli_with_ui(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn build_channel_onboarding_follow_up_lines(
     config: &mvp::config::LoongClawConfig,
 ) -> Vec<String> {
