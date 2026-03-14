@@ -17,7 +17,10 @@ use clap::CommandFactory;
 use clap::{Parser, Subcommand, ValueEnum};
 #[cfg(test)]
 use kernel::{AuditEventKind, ExecutionRoute, HarnessKind, PluginBridgeKind, VerticalPackManifest};
-use kernel::{Capability, ConnectorCommand, FixedClock, InMemoryAuditSink, TaskIntent};
+use kernel::{
+    Capability, ConnectorCommand, FixedClock, InMemoryAuditSink, TaskIntent, ToolCoreOutcome,
+    ToolCoreRequest,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 #[cfg(test)]
@@ -45,6 +48,13 @@ pub(crate) use loongclaw_spec::programmatic::{
 mod tests;
 
 const PUBLIC_GITHUB_REPO: &str = "loongclaw-ai/loongclaw";
+
+fn native_spec_tool_executor(request: ToolCoreRequest) -> Option<Result<ToolCoreOutcome, String>> {
+    if mvp::tools::canonical_tool_name(request.tool_name.as_str()) != "claw.import" {
+        return None;
+    }
+    Some(mvp::tools::execute_tool_core(request))
+}
 
 type ChannelCliCommandFuture<'a> = Pin<Box<dyn Future<Output = CliResult<()>> + Send + 'a>>;
 
@@ -930,7 +940,9 @@ fn init_spec_cli(output_path: &str) -> CliResult<()> {
 
 async fn run_spec_cli(spec_path: &str, print_audit: bool) -> CliResult<()> {
     let spec = read_spec_file(spec_path)?;
-    let report = execute_spec(&spec, print_audit).await;
+    let report =
+        execute_spec_with_native_tool_executor(&spec, print_audit, Some(native_spec_tool_executor))
+            .await;
     let pretty = serde_json::to_string_pretty(&report)
         .map_err(|error| format!("serialize spec run report failed: {error}"))?;
     println!("{pretty}");

@@ -11,7 +11,6 @@ test-hooks = []
 [dependencies]
 async-trait.workspace = true
 kernel = { package = "loongclaw-kernel", path = "../kernel" }
-loongclaw-app = { path = "../app", default-features = false, features = ["config-toml"] }
 loongclaw-protocol = { path = "../protocol" }
 serde.workspace = true
 serde_json.workspace = true

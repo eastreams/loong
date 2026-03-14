@@ -22,6 +22,7 @@ use crate::spec_runtime::{
 pub struct KernelBuilder {
     clock: Option<Arc<dyn Clock>>,
     audit: Option<Arc<dyn AuditSink>>,
+    native_tool_executor: Option<crate::NativeToolExecutor>,
 }
 
 impl KernelBuilder {
@@ -37,9 +38,15 @@ impl KernelBuilder {
         self
     }
 
+    pub fn native_tool_executor(mut self, executor: crate::NativeToolExecutor) -> Self {
+        self.native_tool_executor = Some(executor);
+        self
+    }
+
     /// Build and return a fully configured kernel with all builtin adapters
     /// and the default pack manifest registered.
     pub fn build(self) -> LoongClawKernel<StaticPolicyEngine> {
+        let native_tool_executor = self.native_tool_executor;
         let mut kernel = match (self.clock, self.audit) {
             (Some(clock), Some(audit)) => {
                 LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit)
@@ -60,7 +67,7 @@ impl KernelBuilder {
                 Arc::new(InMemoryAuditSink::default()) as Arc<dyn AuditSink>,
             ),
         };
-        register_builtin_adapters(&mut kernel);
+        register_builtin_adapters(&mut kernel, native_tool_executor);
         // The default pack manifest is hardcoded and always valid; ignore the
         // impossible error branch to avoid panicking in production.
         let _ = kernel.register_pack(default_pack_manifest());
@@ -68,7 +75,10 @@ impl KernelBuilder {
     }
 }
 
-fn register_builtin_adapters(kernel: &mut LoongClawKernel<StaticPolicyEngine>) {
+fn register_builtin_adapters(
+    kernel: &mut LoongClawKernel<StaticPolicyEngine>,
+    native_tool_executor: Option<crate::NativeToolExecutor>,
+) {
     kernel.register_harness_adapter(EmbeddedPiHarness {
         seen: Mutex::new(Vec::new()),
     });
@@ -81,7 +91,7 @@ fn register_builtin_adapters(kernel: &mut LoongClawKernel<StaticPolicyEngine>) {
     kernel.register_core_runtime_adapter(FallbackCoreRuntime);
     kernel.register_runtime_extension_adapter(AcpBridgeRuntimeExtension);
 
-    kernel.register_core_tool_adapter(CoreToolRuntime);
+    kernel.register_core_tool_adapter(CoreToolRuntime::new(native_tool_executor));
     kernel.register_tool_extension_adapter(ClawMigrationToolExtension);
     kernel.register_tool_extension_adapter(SqlAnalyticsToolExtension);
 

@@ -2,6 +2,8 @@ use std::sync::OnceLock;
 #[cfg(any(test, feature = "test-hooks"))]
 use std::{collections::BTreeMap, sync::Mutex};
 
+use kernel::{ToolCoreOutcome, ToolCoreRequest};
+
 pub mod kernel_bootstrap;
 pub mod programmatic;
 pub mod spec_execution;
@@ -17,6 +19,7 @@ pub use spec_runtime::*;
 
 pub const DEFAULT_PACK_ID: &str = "dev-automation";
 pub const DEFAULT_AGENT_ID: &str = "agent-dev-01";
+pub type NativeToolExecutor = fn(ToolCoreRequest) -> Option<Result<ToolCoreOutcome, String>>;
 pub static BUNDLED_APPROVAL_RISK_PROFILE: OnceLock<ApprovalRiskProfile> = OnceLock::new();
 pub static BUNDLED_SECURITY_SCAN_PROFILE: OnceLock<SecurityScanProfile> = OnceLock::new();
 #[cfg(any(test, feature = "test-hooks"))]

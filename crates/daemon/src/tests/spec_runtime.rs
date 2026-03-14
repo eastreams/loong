@@ -4481,7 +4481,8 @@ async fn execute_spec_tool_core_can_run_claw_import_plan_via_native_tool_runtime
         },
     };
 
-    let report = execute_spec(&spec, true).await;
+    let report =
+        execute_spec_with_native_tool_executor(&spec, true, Some(native_spec_tool_executor)).await;
     assert_eq!(report.operation_kind, "tool_core");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(report.outcome["outcome"]["payload"]["source"], "nanobot");
@@ -4566,7 +4567,8 @@ async fn execute_spec_tool_extension_can_hot_handle_claw_import_via_core_wrapper
         },
     };
 
-    let report = execute_spec(&spec, true).await;
+    let report =
+        execute_spec_with_native_tool_executor(&spec, true, Some(native_spec_tool_executor)).await;
     assert_eq!(report.operation_kind, "tool_extension");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(
@@ -4667,7 +4669,8 @@ async fn execute_spec_tool_extension_can_discover_multiple_sources() {
         },
     };
 
-    let report = execute_spec(&spec, true).await;
+    let report =
+        execute_spec_with_native_tool_executor(&spec, true, Some(native_spec_tool_executor)).await;
     assert_eq!(report.operation_kind, "tool_extension");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(report.outcome["outcome"]["payload"]["action"], "discover");
@@ -4764,7 +4767,8 @@ async fn execute_spec_tool_extension_can_merge_profiles_without_merging_prompt_l
         },
     };
 
-    let report = execute_spec(&spec, true).await;
+    let report =
+        execute_spec_with_native_tool_executor(&spec, true, Some(native_spec_tool_executor)).await;
     assert_eq!(report.operation_kind, "tool_extension");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(
@@ -4870,7 +4874,8 @@ async fn execute_spec_tool_extension_apply_selected_safe_merge_keeps_native_prom
         },
     };
 
-    let report = execute_spec(&spec, true).await;
+    let report =
+        execute_spec_with_native_tool_executor(&spec, true, Some(native_spec_tool_executor)).await;
     assert_eq!(report.operation_kind, "tool_extension");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(
