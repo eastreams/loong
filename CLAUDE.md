@@ -49,7 +49,7 @@ refactor, not normalized as permanent layering.
 - **Before every commit**, run CI-parity checks. Any manual edit after fmt must be re-checked.
 - Every released version must map to `docs/releases/vX.Y.Z.md` with process log and detail links.
 - Local agent debug context for a release should be recorded in `.docs/releases/vX.Y.Z-debug.md`.
-- Agent execution plans go in `docs/exec-plans/active/`. Move to `completed/` when done.
+- Agent execution plans go in `docs/exec-plans/active/` (local only, not committed). Move to `completed/` when done.
 
 ## 5. Verification Gates
 
@@ -83,7 +83,7 @@ Run the `update-harness` skill before pushing to verify mirrors, docs, and quali
 - App layer uses `Result<T, String>` (`CliResult`), not typed errors. Kernel uses `thiserror` enums.
 - Audit events are in-memory only — lost on restart (TD-006). No persistence yet.
 - `BTreeMap` not `HashMap` everywhere — deterministic ordering is intentional.
-- `docs/exec-plans/` (agent working memory) ≠ `docs/plans/` (durable phase plans).
+- `docs/exec-plans/` (agent working memory) and `docs/plans/` (durable phase plans) are local only — not committed to git.
 
 ## 9. Where to Look Next
 
@@ -91,16 +91,15 @@ Run the `update-harness` skill before pushing to verify mirrors, docs, and quali
 |------|-------|
 | Core principles | `docs/design-docs/core-beliefs.md` |
 | Layered architecture | `docs/design-docs/layered-kernel-design.md` |
-| Design decisions & patterns | `docs/DESIGN.md` |
-| Design docs catalog (all 30 decisions) | `docs/design-docs/index.md` |
+| Design decisions, patterns & catalog | `docs/design-docs/index.md` |
 | Harness engineering | `docs/design-docs/harness-engineering.md` |
 | Roadmap | `docs/ROADMAP.md` |
 | Reliability invariants | `docs/RELIABILITY.md` |
 | Security model & gaps | `docs/SECURITY.md` |
 | Quality scores & gaps | `docs/QUALITY_SCORE.md` |
-| Plans index (all 41 phase plans) | `docs/PLANS.md` |
-| Tech debt tracker (22 items) | `docs/plans/tech-debt-tracker.md` |
-| Agent execution plans | `docs/exec-plans/active/` |
+| Tech debt tracker (22 items) | `docs/tech-debt-tracker.md` |
+| Agent execution plans (local only) | `docs/exec-plans/active/` |
+| Durable phase plans (local only) | `docs/plans/` |
 | Product sense & principles | `docs/PRODUCT_SENSE.md` |
 | Release process docs | `docs/releases/` |
 | Product requirements | `docs/product-specs/` |

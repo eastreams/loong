@@ -121,7 +121,7 @@ Progressive disclosure hierarchy:
 
 ## Key Gaps for Harness Maturity
 
-Ranked by impact on agent reliability. All tracked in [Tech Debt Tracker](../plans/tech-debt-tracker.md).
+Ranked by impact on agent reliability. All tracked in [Tech Debt Tracker](../tech-debt-tracker.md).
 
 ### High Priority
 

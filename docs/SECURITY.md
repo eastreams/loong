@@ -49,7 +49,7 @@ CapabilityToken → PolicyEngine → PolicyExtensionChain → Execution → Audi
 
 ## Critical Security Gaps
 
-These are tracked in the [Tech Debt Tracker](plans/tech-debt-tracker.md):
+These are tracked in the [Tech Debt Tracker](tech-debt-tracker.md):
 
 | Priority | Gap | TD ID |
 |----------|-----|-------|

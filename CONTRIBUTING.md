@@ -124,6 +124,15 @@ cargo test --workspace --all-features
 4. Wire the subcommand in `crates/daemon/src/main.rs`
 5. Add a feature flag in `crates/app/Cargo.toml`
 
+## Planning Conventions
+
+Plans live in `docs/plans/` (local only, not committed to git). If you create plans locally:
+
+- Every plan has a **design doc** (rationale, constraints, alternatives) and an **implementation doc** (tasks, progress, decisions)
+- Plans are prefixed with date: `YYYY-MM-DD-<topic>-design.md` / `YYYY-MM-DD-<topic>.md`
+- Agent execution plans (short-lived, task-scoped) go in `docs/exec-plans/active/`
+- External decisions must be transcribed into design docs or plans — if it's not in the repo, it doesn't exist for agents
+
 ## Standard Workflow
 
 1. Fork the repository.

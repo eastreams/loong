@@ -37,7 +37,7 @@ Domain grades for LoongClaw. Updated periodically to track gaps, prioritize clea
 | Agent entry point (AGENTS.md) | Present, 80 lines, mirrored with CLAUDE.md |
 | Architecture defined with enforcement | Present, DAG + boundary checks + CI |
 | Progressive disclosure hierarchy | Present, 3-tier structure |
-| Execution plans tracked | 41 phase plans in `docs/plans/` |
+| Execution plans tracked | 41 phase plans in `docs/plans/` (local only) |
 | Mechanical enforcement | 8 CI workflows, convention engineering, pre-commit |
 | Quality tracked | This file |
 | External context captured | Core beliefs principle #8 requires it |
