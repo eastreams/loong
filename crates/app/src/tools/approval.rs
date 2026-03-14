@@ -463,8 +463,8 @@ async fn execute_approval_request_resolve(
         approval_request_execution_integrity_json(&outcome.approval_request, &execution_evidence);
     let resolution = approval_request_resolution_json(
         &outcome.approval_request,
+        &execution_evidence,
         &execution_integrity,
-        outcome.resumed_tool_output.as_ref(),
     );
 
     Ok(ToolCoreOutcome {
@@ -488,6 +488,8 @@ fn approval_request_summary_json_with_evidence(
     execution_evidence: Value,
     execution_integrity: Value,
 ) -> Value {
+    let resolution =
+        approval_request_resolution_json(record, &execution_evidence, &execution_integrity);
     json!({
         "approval_request_id": record.approval_request_id,
         "session_id": record.session_id,
@@ -510,6 +512,7 @@ fn approval_request_summary_json_with_evidence(
             .governance_snapshot_json
             .get("rule_id")
             .and_then(Value::as_str),
+        "resolution": resolution,
         "execution_evidence": execution_evidence,
         "execution_integrity": execution_integrity,
     })
@@ -615,6 +618,8 @@ fn approval_request_detail_json_with_evidence(
     execution_evidence: Value,
     execution_integrity: Value,
 ) -> Value {
+    let resolution =
+        approval_request_resolution_json(record, &execution_evidence, &execution_integrity);
     json!({
         "approval_request_id": record.approval_request_id,
         "session_id": record.session_id,
@@ -631,6 +636,7 @@ fn approval_request_detail_json_with_evidence(
         "last_error": record.last_error,
         "request_payload": record.request_payload_json,
         "governance_snapshot": record.governance_snapshot_json,
+        "resolution": resolution,
         "execution_evidence": execution_evidence,
         "execution_integrity": execution_integrity,
     })
@@ -639,16 +645,31 @@ fn approval_request_detail_json_with_evidence(
 #[cfg(feature = "memory-sqlite")]
 fn approval_request_resolution_json(
     record: &ApprovalRequestRecord,
+    execution_evidence: &Value,
     execution_integrity: &Value,
-    resumed_tool_output: Option<&ToolCoreOutcome>,
 ) -> Value {
-    let replay_attempted = resumed_tool_output.is_some();
+    let started_event_kind = execution_evidence
+        .get("started_event_kind")
+        .and_then(Value::as_str);
+    let terminal_event_kind = execution_evidence
+        .get("terminal_event_kind")
+        .and_then(Value::as_str);
+    let replay_attempted = started_event_kind.is_some()
+        || terminal_event_kind.is_some()
+        || matches!(
+            record.status,
+            ApprovalRequestStatus::Executing | ApprovalRequestStatus::Executed
+        );
     let needs_attention = execution_integrity
         .get("needs_attention")
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let replay_result = if !replay_attempted {
         "not_attempted"
+    } else if matches!(record.status, ApprovalRequestStatus::Executing)
+        || (started_event_kind.is_some() && terminal_event_kind.is_none())
+    {
+        "in_progress"
     } else if needs_attention {
         "completed_with_attention"
     } else {
@@ -1620,6 +1641,20 @@ mod tests {
         );
         assert_eq!(
             root_request["execution_integrity"]["escalation_level"],
+            Value::Null
+        );
+        assert_eq!(root_request["resolution"]["decision"], Value::Null);
+        assert_eq!(root_request["resolution"]["request_status"], "pending");
+        assert_eq!(root_request["resolution"]["replay_attempted"], false);
+        assert_eq!(root_request["resolution"]["replay_result"], "not_attempted");
+        assert_eq!(
+            root_request["resolution"]["integrity_status"],
+            "not_started"
+        );
+        assert_eq!(root_request["resolution"]["needs_attention"], false);
+        assert_eq!(root_request["resolution"]["attention_reason"], Value::Null);
+        assert_eq!(
+            root_request["resolution"]["recommended_action"],
             Value::Null
         );
     }
@@ -2848,6 +2883,14 @@ mod tests {
             request["execution_integrity"]["escalation_level"],
             Value::Null
         );
+        assert_eq!(request["resolution"]["decision"], Value::Null);
+        assert_eq!(request["resolution"]["request_status"], "pending");
+        assert_eq!(request["resolution"]["replay_attempted"], false);
+        assert_eq!(request["resolution"]["replay_result"], "not_attempted");
+        assert_eq!(request["resolution"]["integrity_status"], "not_started");
+        assert_eq!(request["resolution"]["needs_attention"], false);
+        assert_eq!(request["resolution"]["attention_reason"], Value::Null);
+        assert_eq!(request["resolution"]["recommended_action"], Value::Null);
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -2994,6 +3037,18 @@ mod tests {
         );
         assert_eq!(integrity["attention_age_bucket"], "overdue");
         assert_eq!(integrity["escalation_level"], "critical");
+        let resolution = &outcome.payload["approval_request"]["resolution"];
+        assert_eq!(resolution["decision"], Value::Null);
+        assert_eq!(resolution["request_status"], "executed");
+        assert_eq!(resolution["replay_attempted"], true);
+        assert_eq!(resolution["replay_result"], "completed_with_attention");
+        assert_eq!(resolution["integrity_status"], "incomplete");
+        assert_eq!(resolution["needs_attention"], true);
+        assert_eq!(resolution["attention_reason"], "integrity_gap");
+        assert_eq!(
+            resolution["recommended_action"],
+            "inspect_execution_event_stream"
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]
