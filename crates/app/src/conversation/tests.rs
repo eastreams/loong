@@ -499,6 +499,21 @@ fn unique_memory_sqlite_path(suffix: &str) -> String {
         .to_string()
 }
 
+fn persisted_canonical_records(
+    persisted: &[(String, String, String)],
+) -> Vec<crate::memory::CanonicalMemoryRecord> {
+    persisted
+        .iter()
+        .map(|(session_id, role, content)| {
+            crate::memory::canonical_memory_record_from_persisted_turn(
+                session_id.as_str(),
+                role.as_str(),
+                content.as_str(),
+            )
+        })
+        .collect()
+}
+
 #[async_trait]
 impl AcpRuntimeBackend for RoutedAcpBackend {
     fn id(&self) -> &'static str {
@@ -1152,6 +1167,47 @@ async fn handle_turn_with_runtime_success_persists_user_and_assistant_turns() {
 }
 
 #[tokio::test]
+async fn persist_turn_provider_turns_expose_typed_canonical_records() {
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("assistant-reply".to_owned()),
+    );
+    let coordinator = ConversationTurnCoordinator::new();
+    coordinator
+        .handle_turn_with_runtime(
+            &test_config(),
+            "session-canonical-provider",
+            "hello canonical memory",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("provider turn should succeed");
+
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    let records = persisted_canonical_records(&persisted);
+
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].scope, crate::memory::MemoryScope::Session);
+    assert_eq!(
+        records[0].kind,
+        crate::memory::CanonicalMemoryKind::UserTurn
+    );
+    assert_eq!(records[0].role.as_deref(), Some("user"));
+    assert_eq!(records[0].content, "hello canonical memory");
+    assert_eq!(records[0].session_id, "session-canonical-provider");
+
+    assert_eq!(records[1].scope, crate::memory::MemoryScope::Session);
+    assert_eq!(
+        records[1].kind,
+        crate::memory::CanonicalMemoryKind::AssistantTurn
+    );
+    assert_eq!(records[1].role.as_deref(), Some("assistant"));
+    assert_eq!(records[1].content, "assistant-reply");
+}
+
+#[tokio::test]
 async fn handle_turn_with_runtime_keeps_provider_path_by_default_when_acp_enabled() {
     let (backend_id, shared) = register_routed_acp_backend("success", false);
     let runtime = FakeRuntime::new(
@@ -1313,6 +1369,83 @@ async fn handle_turn_with_runtime_routes_explicit_acp_turns_through_acp() {
             .get("loongclaw.acp.routing_origin")
             .map(String::as_str),
         Some("explicit_request")
+    );
+}
+
+#[tokio::test]
+async fn persist_turn_explicit_acp_routing_exposes_typed_canonical_records() {
+    let (backend_id, _shared) = register_routed_acp_backend_with_events(
+        "typed-explicit",
+        false,
+        vec![
+            json!({
+                "type": "text",
+                "content": "partial hello"
+            }),
+            json!({
+                "type": "done",
+                "stopReason": "completed"
+            }),
+        ],
+    );
+    let runtime = FakeRuntime::new(Vec::new(), Ok("provider-should-not-run".to_owned()));
+    let orchestrator = ConversationOrchestrator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.emit_runtime_events = true;
+    config.memory.sqlite_path = unique_acp_sqlite_path("typed-explicit");
+
+    let reply = orchestrator
+        .handle_turn_with_runtime_and_address_and_acp_options(
+            &config,
+            &ConversationSessionAddress::from_session_id("telegram:typed-explicit"),
+            "hello explicit canonical",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            &AcpConversationTurnOptions {
+                routing_intent: AcpRoutingIntent::Explicit,
+                ..AcpConversationTurnOptions::default()
+            },
+            None,
+        )
+        .await
+        .expect("explicit ACP turn should succeed");
+
+    assert_eq!(reply, "acp: hello explicit canonical");
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    let records = persisted_canonical_records(&persisted);
+
+    assert!(
+        records
+            .iter()
+            .any(|record| record.kind == crate::memory::CanonicalMemoryKind::UserTurn)
+    );
+    assert!(
+        records
+            .iter()
+            .any(|record| record.kind == crate::memory::CanonicalMemoryKind::AssistantTurn)
+    );
+
+    let runtime_event = records
+        .iter()
+        .find(|record| record.kind == crate::memory::CanonicalMemoryKind::AcpRuntimeEvent)
+        .expect("expected ACP runtime event record");
+    assert_eq!(runtime_event.scope, crate::memory::MemoryScope::Session);
+    assert_eq!(runtime_event.metadata["event"], "acp_turn_event");
+    assert_eq!(
+        runtime_event.metadata["payload"]["routing_intent"],
+        "explicit"
+    );
+
+    let final_event = records
+        .iter()
+        .find(|record| record.kind == crate::memory::CanonicalMemoryKind::AcpFinalEvent)
+        .expect("expected ACP final event record");
+    assert_eq!(final_event.metadata["event"], "acp_turn_final");
+    assert_eq!(
+        final_event.metadata["payload"]["routing_intent"],
+        "explicit"
     );
 }
 
@@ -1720,6 +1853,157 @@ async fn handle_turn_with_runtime_routes_only_agent_prefixed_sessions_when_confi
             .map(String::as_str),
         Some("automatic_agent_prefixed")
     );
+}
+
+#[tokio::test]
+async fn persist_turn_automatic_acp_routing_exposes_typed_canonical_records() {
+    let (backend_id, _shared) = register_routed_acp_backend_with_events(
+        "typed-automatic",
+        false,
+        vec![
+            json!({
+                "type": "text",
+                "content": "partial hello"
+            }),
+            json!({
+                "type": "done",
+                "stopReason": "completed"
+            }),
+        ],
+    );
+    let runtime = FakeRuntime::new(Vec::new(), Ok("provider-should-not-run".to_owned()));
+    let orchestrator = ConversationOrchestrator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.emit_runtime_events = true;
+    config.acp.dispatch.conversation_routing =
+        crate::config::AcpConversationRoutingMode::AgentPrefixedOnly;
+    config.memory.sqlite_path = unique_acp_sqlite_path("typed-automatic");
+
+    let reply = orchestrator
+        .handle_turn_with_runtime(
+            &config,
+            "agent:codex:review-thread",
+            "hello automatic canonical",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("automatic ACP turn should succeed");
+
+    assert_eq!(reply, "acp: hello automatic canonical");
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    let records = persisted_canonical_records(&persisted);
+
+    assert!(
+        records
+            .iter()
+            .any(|record| record.kind == crate::memory::CanonicalMemoryKind::UserTurn)
+    );
+    assert!(
+        records
+            .iter()
+            .any(|record| record.kind == crate::memory::CanonicalMemoryKind::AssistantTurn)
+    );
+
+    let runtime_event = records
+        .iter()
+        .find(|record| record.kind == crate::memory::CanonicalMemoryKind::AcpRuntimeEvent)
+        .expect("expected ACP runtime event record");
+    assert_eq!(runtime_event.metadata["event"], "acp_turn_event");
+    assert_eq!(
+        runtime_event.metadata["payload"]["routing_intent"],
+        "automatic"
+    );
+
+    let final_event = records
+        .iter()
+        .find(|record| record.kind == crate::memory::CanonicalMemoryKind::AcpFinalEvent)
+        .expect("expected ACP final event record");
+    assert_eq!(final_event.metadata["event"], "acp_turn_final");
+    assert_eq!(
+        final_event.metadata["payload"]["routing_intent"],
+        "automatic"
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_automatic_acp_routing_bypasses_context_engine_lifecycle_hooks() {
+    let (backend_id, shared) = register_routed_acp_backend("automatic-lifecycle-bypass", false);
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("provider-should-not-run".to_owned()),
+    );
+    let orchestrator = ConversationOrchestrator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.dispatch.conversation_routing =
+        crate::config::AcpConversationRoutingMode::AgentPrefixedOnly;
+    config.memory.sqlite_path = unique_acp_sqlite_path("automatic-lifecycle-bypass");
+
+    let reply = orchestrator
+        .handle_turn_with_runtime(
+            &config,
+            "agent:codex:review-thread",
+            "route automatically through ACP",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("automatic ACP turn should succeed");
+
+    assert_eq!(reply, "acp: route automatically through ACP");
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 0);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+    assert!(
+        runtime
+            .requested_messages
+            .lock()
+            .expect("requested messages lock")
+            .is_empty()
+    );
+    assert!(
+        runtime
+            .bootstrap_calls
+            .lock()
+            .expect("bootstrap lock")
+            .is_empty()
+    );
+    assert!(
+        runtime
+            .ingested_messages
+            .lock()
+            .expect("ingest lock")
+            .is_empty()
+    );
+    assert!(
+        runtime
+            .after_turn_calls
+            .lock()
+            .expect("after-turn lock")
+            .is_empty()
+    );
+    assert!(
+        runtime
+            .compact_calls
+            .lock()
+            .expect("compact lock")
+            .is_empty()
+    );
+
+    let state = shared.lock().expect("ACP shared state");
+    assert_eq!(state.ensure_calls, 1);
+    assert_eq!(state.turn_calls, 1);
 }
 
 #[tokio::test]
