@@ -615,13 +615,13 @@ impl ConversationRuntime for FakeRuntime {
     fn tool_view(
         &self,
         config: &LoongClawConfig,
-        _session_id: &str,
-        _kernel_ctx: Option<&KernelContext>,
+        session_id: &str,
+        kernel_ctx: Option<&KernelContext>,
     ) -> CliResult<crate::tools::ToolView> {
-        Ok(self
-            .tool_view_override
-            .clone()
-            .unwrap_or_else(|| crate::tools::runtime_tool_view_for_config(&config.tools)))
+        match self.tool_view_override.clone() {
+            Some(tool_view) => Ok(tool_view),
+            None => DefaultConversationRuntime::default().tool_view(config, session_id, kernel_ctx),
+        }
     }
 
     async fn bootstrap(
@@ -939,7 +939,7 @@ fn default_runtime_tool_view_uses_persisted_delegate_child_restrictions() {
 
 #[cfg(feature = "memory-sqlite")]
 #[test]
-fn default_runtime_tool_view_falls_back_to_restricted_child_view_when_lineage_is_broken() {
+fn default_runtime_tool_view_treats_broken_lineage_child_as_depth_zero_for_delegate_budget() {
     let mut config = test_config();
     config.tools.delegate.allow_shell_in_child = false;
     let db_path = std::env::temp_dir().join(format!(
@@ -969,7 +969,7 @@ fn default_runtime_tool_view_falls_back_to_restricted_child_view_when_lineage_is
     assert!(child_view.contains("file.read"));
     assert!(child_view.contains("file.write"));
     assert!(!child_view.contains("shell.exec"));
-    assert!(!child_view.contains("delegate"));
+    assert!(child_view.contains("delegate"));
     assert!(!child_view.contains("delegate_async"));
 }
 
@@ -8669,6 +8669,331 @@ async fn handle_turn_with_runtime_executes_sessions_send_via_default_dispatcher(
     );
 
     server.join().expect("telegram stub join");
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_executes_delegate_via_coordinator() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-delegate", "normal-lane")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "Delegating.".to_owned(),
+                tool_intents: vec![ToolIntent {
+                    tool_name: "delegate".to_owned(),
+                    args_json: json!({
+                        "task": "child task",
+                        "label": "research-subtask"
+                    }),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "root-session".to_owned(),
+                    turn_id: "turn-delegate-parent".to_owned(),
+                    tool_call_id: "call-delegate-parent".to_owned(),
+                }],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Child final output".to_owned(),
+                tool_intents: vec![],
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    )
+    .with_durable_memory_config(memory_config.clone());
+    let coordinator = ConversationTurnCoordinator::new();
+
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("delegate handle turn success");
+
+    assert!(
+        reply.contains("\"tool\":\"delegate\""),
+        "expected raw delegate tool output, got: {reply}"
+    );
+    let line = reply.lines().last().expect("tool result line should exist");
+    let payload = line
+        .strip_prefix("[ok] ")
+        .expect("tool result line should keep [ok] prefix");
+    let envelope: Value =
+        serde_json::from_str(payload).expect("tool result envelope should be json");
+    let payload_summary = envelope["payload_summary"]
+        .as_str()
+        .expect("payload summary should be text");
+    assert!(
+        payload_summary.contains("\"label\":\"research-subtask\""),
+        "expected child label in payload summary, got: {reply}"
+    );
+    assert!(
+        payload_summary.contains("\"final_output\":\"Child final output\""),
+        "expected child final output in payload summary, got: {reply}"
+    );
+    assert!(
+        payload_summary.contains("\"child_session_id\":\"delegate:"),
+        "expected child session id in payload summary, got: {reply}"
+    );
+
+    let child = repo
+        .list_visible_sessions("root-session")
+        .expect("list visible sessions")
+        .into_iter()
+        .find(|session| session.parent_session_id.as_deref() == Some("root-session"))
+        .expect("child session summary");
+    assert_eq!(
+        child.kind,
+        crate::session::repository::SessionKind::DelegateChild
+    );
+    assert_eq!(
+        child.state,
+        crate::session::repository::SessionState::Completed
+    );
+    assert_eq!(child.label.as_deref(), Some("research-subtask"));
+
+    let events = repo
+        .list_recent_events(&child.session_id, 10)
+        .expect("list child events");
+    let event_kinds: Vec<&str> = events
+        .iter()
+        .map(|event| event.event_kind.as_str())
+        .collect();
+    assert!(event_kinds.contains(&"delegate_started"));
+    assert!(event_kinds.contains(&"delegate_completed"));
+
+    let terminal_outcome = repo
+        .load_terminal_outcome(&child.session_id)
+        .expect("load terminal outcome")
+        .expect("terminal outcome row");
+    assert_eq!(terminal_outcome.status, "ok");
+    assert_eq!(
+        terminal_outcome.payload_json["final_output"],
+        "Child final output"
+    );
+
+    let requested = runtime
+        .turn_requested_tool_views
+        .lock()
+        .expect("turn request tool views lock");
+    assert_eq!(requested.len(), 2);
+    assert!(requested[0].contains("delegate"));
+    assert!(!requested[1].contains("delegate"));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_delegate_child_cannot_reenter_delegate_by_default() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-delegate", "nested-denied")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "Delegating.".to_owned(),
+                tool_intents: vec![ToolIntent {
+                    tool_name: "delegate".to_owned(),
+                    args_json: json!({
+                        "task": "show raw json tool output",
+                        "label": "nested-child"
+                    }),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "root-session".to_owned(),
+                    turn_id: "turn-delegate-parent".to_owned(),
+                    tool_call_id: "call-delegate-parent".to_owned(),
+                }],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Trying nested delegate.".to_owned(),
+                tool_intents: vec![ToolIntent {
+                    tool_name: "delegate".to_owned(),
+                    args_json: json!({
+                        "task": "nested"
+                    }),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "delegate:child".to_owned(),
+                    turn_id: "turn-delegate-child".to_owned(),
+                    tool_call_id: "call-delegate-child".to_owned(),
+                }],
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    )
+    .with_durable_memory_config(memory_config.clone());
+    let coordinator = ConversationTurnCoordinator::new();
+
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("nested delegate denial reply");
+
+    assert!(
+        reply.contains("tool_not_visible: delegate"),
+        "reply should surface nested delegate denial, got: {reply}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_delegate_child_can_reenter_when_max_depth_allows() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-delegate", "nested-allowed")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.tools.delegate.max_depth = 2;
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "Delegating from root.".to_owned(),
+                tool_intents: vec![ToolIntent {
+                    tool_name: "delegate".to_owned(),
+                    args_json: json!({
+                        "task": "show raw json tool output",
+                        "label": "child"
+                    }),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "root-session".to_owned(),
+                    turn_id: "turn-root".to_owned(),
+                    tool_call_id: "call-root".to_owned(),
+                }],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Delegating from child.".to_owned(),
+                tool_intents: vec![ToolIntent {
+                    tool_name: "delegate".to_owned(),
+                    args_json: json!({
+                        "task": "final grandchild task",
+                        "label": "grandchild"
+                    }),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "delegate:child-runtime".to_owned(),
+                    turn_id: "turn-child".to_owned(),
+                    tool_call_id: "call-child".to_owned(),
+                }],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Grandchild final output".to_owned(),
+                tool_intents: vec![],
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    )
+    .with_durable_memory_config(memory_config.clone());
+    let coordinator = ConversationTurnCoordinator::new();
+
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("nested delegate success");
+
+    assert!(
+        reply.contains("Grandchild final output"),
+        "reply should include nested delegate final output, got: {reply}"
+    );
+
+    let requested = runtime
+        .turn_requested_tool_views
+        .lock()
+        .expect("turn request tool views lock");
+    assert_eq!(requested.len(), 3);
+    assert!(requested[1].contains("delegate"));
+    assert!(!requested[2].contains("delegate"));
+
+    let visible = repo
+        .list_visible_sessions("root-session")
+        .expect("visible sessions");
+    assert!(
+        visible
+            .iter()
+            .any(|session| session.parent_session_id.as_deref() == Some("root-session")),
+        "expected direct child session in visible set: {visible:?}"
+    );
+    assert!(
+        visible
+            .iter()
+            .any(|session| session.parent_session_id.is_some()
+                && session.parent_session_id.as_deref() != Some("root-session")),
+        "expected descendant grandchild session in visible set: {visible:?}"
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]

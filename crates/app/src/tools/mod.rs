@@ -11,6 +11,7 @@ use crate::memory::runtime_config::MemoryRuntimeConfig;
 
 mod catalog;
 mod claw_import;
+pub(crate) mod delegate;
 mod external_skills;
 mod file;
 pub mod file_policy_ext;
@@ -461,6 +462,7 @@ mod tests {
                 "- claw.import: Import legacy Claw configs into native LoongClaw settings"
             )
         );
+        assert!(snapshot.contains("- delegate: Delegate a focused subtask into a child session"));
         assert!(snapshot.contains("- external_skills.fetch: Download external skills artifacts with domain policy and approval guards"));
         assert!(snapshot.contains("- external_skills.install: Install a managed external skill from a local directory or archive"));
         assert!(
@@ -505,28 +507,29 @@ mod tests {
         );
         assert!(snapshot.contains("- shell.exec: Execute shell commands"));
 
-        // Verify sorted order: claw.import < external_skills.* < file.* < session_* < sessions_* < shell.exec
+        // Verify sorted order: claw.import < delegate < external_skills.* < file.* < session_* < sessions_* < shell.exec
         let lines: Vec<&str> = snapshot.lines().skip(1).collect();
-        assert_eq!(lines.len(), 19);
+        assert_eq!(lines.len(), 20);
         assert!(lines[0].starts_with("- claw.import"));
-        assert!(lines[1].starts_with("- external_skills.fetch"));
-        assert!(lines[2].starts_with("- external_skills.inspect"));
-        assert!(lines[3].starts_with("- external_skills.install"));
-        assert!(lines[4].starts_with("- external_skills.invoke"));
-        assert!(lines[5].starts_with("- external_skills.list"));
-        assert!(lines[6].starts_with("- external_skills.policy"));
-        assert!(lines[7].starts_with("- external_skills.remove"));
-        assert!(lines[8].starts_with("- file.read"));
-        assert!(lines[9].starts_with("- file.write"));
-        assert!(lines[10].starts_with("- session_archive"));
-        assert!(lines[11].starts_with("- session_cancel"));
-        assert!(lines[12].starts_with("- session_events"));
-        assert!(lines[13].starts_with("- session_recover"));
-        assert!(lines[14].starts_with("- session_status"));
-        assert!(lines[15].starts_with("- session_wait"));
-        assert!(lines[16].starts_with("- sessions_history"));
-        assert!(lines[17].starts_with("- sessions_list"));
-        assert!(lines[18].starts_with("- shell.exec"));
+        assert!(lines[1].starts_with("- delegate"));
+        assert!(lines[2].starts_with("- external_skills.fetch"));
+        assert!(lines[3].starts_with("- external_skills.inspect"));
+        assert!(lines[4].starts_with("- external_skills.install"));
+        assert!(lines[5].starts_with("- external_skills.invoke"));
+        assert!(lines[6].starts_with("- external_skills.list"));
+        assert!(lines[7].starts_with("- external_skills.policy"));
+        assert!(lines[8].starts_with("- external_skills.remove"));
+        assert!(lines[9].starts_with("- file.read"));
+        assert!(lines[10].starts_with("- file.write"));
+        assert!(lines[11].starts_with("- session_archive"));
+        assert!(lines[12].starts_with("- session_cancel"));
+        assert!(lines[13].starts_with("- session_events"));
+        assert!(lines[14].starts_with("- session_recover"));
+        assert!(lines[15].starts_with("- session_status"));
+        assert!(lines[16].starts_with("- session_wait"));
+        assert!(lines[17].starts_with("- sessions_history"));
+        assert!(lines[18].starts_with("- sessions_list"));
+        assert!(lines[19].starts_with("- shell.exec"));
     }
 
     #[cfg(all(
@@ -537,9 +540,10 @@ mod tests {
     #[test]
     fn tool_registry_returns_all_known_tools() {
         let entries = tool_registry();
-        assert_eq!(entries.len(), 19);
+        assert_eq!(entries.len(), 20);
         let names: Vec<&str> = entries.iter().map(|e| e.name).collect();
         assert!(names.contains(&"claw.import"));
+        assert!(names.contains(&"delegate"));
         assert!(names.contains(&"external_skills.fetch"));
         assert!(names.contains(&"external_skills.install"));
         assert!(names.contains(&"external_skills.inspect"));
@@ -595,7 +599,7 @@ mod tests {
             .expect_err("planned tools must stay hidden from provider schema");
 
         assert!(err.contains("tool_not_advertisable"), "error: {err}");
-        assert!(err.contains("delegate"), "error: {err}");
+        assert!(err.contains("delegate_async"), "error: {err}");
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -604,6 +608,7 @@ mod tests {
         let view = runtime_tool_view_for_config(&crate::config::ToolConfig::default());
 
         for tool_name in [
+            "delegate",
             "session_archive",
             "session_cancel",
             "session_events",
@@ -619,12 +624,29 @@ mod tests {
             );
         }
 
-        for tool_name in ["sessions_send", "delegate", "delegate_async"] {
+        for tool_name in ["sessions_send", "delegate_async"] {
             assert!(
                 !view.contains(tool_name),
                 "expected runtime view to keep `{tool_name}` hidden"
             );
         }
+    }
+
+    #[test]
+    fn runtime_tool_view_exposes_delegate_with_depth_budget_only() {
+        let config = crate::config::ToolConfig::default();
+
+        let root_view = runtime_tool_view_for_config(&config);
+        assert!(root_view.contains("delegate"));
+        assert!(!root_view.contains("delegate_async"));
+
+        let child_view = delegate_child_tool_view_for_config(&config);
+        assert!(!child_view.contains("delegate"));
+        assert!(!child_view.contains("delegate_async"));
+
+        let depth_budgeted_child = delegate_child_tool_view_for_config_with_delegate(&config, true);
+        assert!(depth_budgeted_child.contains("delegate"));
+        assert!(!depth_budgeted_child.contains("delegate_async"));
     }
 
     #[test]
@@ -673,7 +695,7 @@ mod tests {
     #[test]
     fn provider_tool_definitions_are_stable_and_complete() {
         let defs = provider_tool_definitions();
-        assert_eq!(defs.len(), 19);
+        assert_eq!(defs.len(), 20);
 
         let names: Vec<&str> = defs
             .iter()
@@ -685,6 +707,7 @@ mod tests {
             names,
             vec![
                 "claw_import",
+                "delegate",
                 "external_skills_fetch",
                 "external_skills_inspect",
                 "external_skills_install",
@@ -747,6 +770,24 @@ mod tests {
                 .expect("required should be an array")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn provider_tool_definitions_include_delegate_when_enabled() {
+        let defs = try_provider_tool_definitions_for_view(&runtime_tool_view_for_config(
+            &crate::config::ToolConfig::default(),
+        ))
+        .expect("runtime-visible tool schemas");
+        let delegate = defs
+            .iter()
+            .find(|item| item["function"]["name"] == "delegate")
+            .expect("delegate definition");
+        let properties = delegate["function"]["parameters"]["properties"]
+            .as_object()
+            .expect("delegate properties");
+        assert!(properties.contains_key("task"));
+        assert!(properties.contains_key("label"));
+        assert!(properties.contains_key("timeout_seconds"));
     }
 
     #[test]

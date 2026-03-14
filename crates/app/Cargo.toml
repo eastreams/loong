@@ -29,6 +29,7 @@ sha2.workspace = true
 flate2.workspace = true
 tar.workspace = true
 tokio.workspace = true
+futures-util.workspace = true
 base64.workspace = true
 time.workspace = true
 rusqlite = { workspace = true, optional = true }

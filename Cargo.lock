@@ -1248,6 +1248,7 @@ dependencies = [
  "base64",
  "cbc",
  "flate2",
+ "futures-util",
  "loongclaw-contracts",
  "loongclaw-kernel",
  "reqwest",
