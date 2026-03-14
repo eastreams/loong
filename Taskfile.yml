@@ -81,6 +81,11 @@ tasks:
     cmds:
       - scripts/check_dep_graph.sh
 
+  check:harness:
+    desc: Verify agent guide mirrors are identical
+    cmds:
+      - diff CLAUDE.md AGENTS.md
+
   check:deny:
     desc: Run cargo-deny (advisories, bans, sources)
     preconditions:
@@ -97,6 +102,7 @@ tasks:
       - task: check:architecture:strict
       - task: check:dep-graph
       - task: check:conventions
+      - task: check:harness
       - task: test
       - task: test:all-features
       - task: check:docs

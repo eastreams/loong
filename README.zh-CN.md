@@ -344,7 +344,7 @@ cargo build -p loongclaw-daemon --no-default-features --features "channel-cli,pr
 | [架构](ARCHITECTURE.md) | Crate 结构和分层执行模型 |
 | [核心信念](docs/design-docs/core-beliefs.md) | 10 条核心工程原则 |
 | [分层内核设计](docs/design-docs/layered-kernel-design.md) | 完整 L0-L9 层规格 |
-| [路线图](docs/roadmap.md) | 阶段里程碑和验收标准 |
+| [路线图](docs/ROADMAP.md) | 阶段里程碑和验收标准 |
 | [可靠性](docs/RELIABILITY.md) | 构建和内核不变量 |
 | [示例](examples/README.md) | Spec 文件、插件示例、基准测试 |
 | [产品规格](docs/product-specs/index.md) | 面向用户的需求（进行中） |
