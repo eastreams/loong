@@ -1,5 +1,8 @@
 use async_trait::async_trait;
+use futures_util::FutureExt;
+use std::any::Any;
 use std::collections::BTreeSet;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 #[cfg(feature = "memory-sqlite")]
 use std::{
@@ -10,10 +13,13 @@ use std::{
 
 use loongclaw_contracts::{Capability, KernelError, ToolCoreOutcome, ToolCoreRequest};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::config::{LoongClawConfig, SessionVisibility, ToolConfig};
 use crate::context::KernelContext;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
+#[cfg(feature = "memory-sqlite")]
+use crate::session::recovery::{build_async_spawn_failure_recovery_payload, RECOVERY_EVENT_KIND};
 use crate::tools::{
     delegate_child_tool_view_for_config, delegate_child_tool_view_for_config_with_delegate,
     runtime_tool_view, runtime_tool_view_for_config, tool_catalog, ToolExecutionKind, ToolView,
