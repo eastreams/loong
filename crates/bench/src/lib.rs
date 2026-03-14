@@ -3546,10 +3546,10 @@ fn copy_benchmark_file(source: &Path, destination: &Path) -> CliResult<()> {
     })
 }
 
-fn benchmark_copy_strategy_from_env(raw: Option<String>) -> BenchmarkCopyStrategy {
+fn benchmark_copy_strategy_from_env(_raw: Option<String>) -> BenchmarkCopyStrategy {
     #[cfg(target_os = "macos")]
     {
-        if raw
+        if _raw
             .as_deref()
             .map(str::trim)
             .is_some_and(|value| value.eq_ignore_ascii_case("clone"))

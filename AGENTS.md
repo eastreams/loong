@@ -21,13 +21,17 @@ contracts (leaf — zero internal deps)
 ├── protocol (independent leaf)
 ├── app → contracts, kernel
 ├── spec → contracts, kernel, protocol (+ app: known deviation, tracked as D1)
-├── bench → contracts, kernel, spec
+├── bench → contracts, kernel, spec (+ app: known deviation, tracked as D2)
 └── daemon (binary) → all of the above
 ```
 
 Non-negotiable: no dependency cycles. See [Core Beliefs](docs/design-docs/core-beliefs.md).
-Current tracked deviation: D1 keeps `spec -> app` temporary and must be retired by architectural
-refactor, not normalized as permanent layering.
+Current tracked deviations:
+- D1 keeps `spec -> app` temporary and must be retired by architectural refactor, not normalized
+  as permanent layering.
+- D2 keeps `bench -> app` temporary for the memory-context benchmark harness, which currently
+  measures the real app-layer hydration path and should be retired by benchmark-harness extraction
+  instead of being treated as a permanent layering expansion.
 
 ## 3. Commands
 
