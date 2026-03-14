@@ -371,6 +371,7 @@ fn execute_approval_requests_list(
         });
     }
     let integrity_summary = approval_request_list_integrity_summary_json(&request_summaries);
+    let resolution_summary = approval_request_list_resolution_summary_json(&request_summaries);
     let matched_count = request_summaries.len();
     request_summaries.truncate(request.limit);
     let returned_count = request_summaries.len();
@@ -395,6 +396,7 @@ fn execute_approval_requests_list(
             "matched_count": matched_count,
             "returned_count": returned_count,
             "integrity_summary": integrity_summary,
+            "resolution_summary": resolution_summary,
             "requests": request_summaries,
         }),
     })
@@ -609,6 +611,44 @@ fn approval_request_list_integrity_summary_json(requests: &[Value]) -> Value {
             "age_bucket_counts": age_bucket_counts,
             "counts_by_escalation": counts_by_escalation,
         },
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_list_resolution_summary_json(requests: &[Value]) -> Value {
+    let mut request_status_counts = BTreeMap::from([
+        ("pending".to_owned(), 0usize),
+        ("approved".to_owned(), 0usize),
+        ("executing".to_owned(), 0usize),
+        ("executed".to_owned(), 0usize),
+        ("denied".to_owned(), 0usize),
+        ("expired".to_owned(), 0usize),
+        ("cancelled".to_owned(), 0usize),
+    ]);
+    let mut replay_result_counts = BTreeMap::from([
+        ("not_attempted".to_owned(), 0usize),
+        ("in_progress".to_owned(), 0usize),
+        ("completed_cleanly".to_owned(), 0usize),
+        ("completed_with_attention".to_owned(), 0usize),
+    ]);
+
+    for request in requests {
+        let resolution = request.get("resolution").unwrap_or(&Value::Null);
+        if let Some(request_status) = resolution.get("request_status").and_then(Value::as_str) {
+            *request_status_counts
+                .entry(request_status.to_owned())
+                .or_default() += 1;
+        }
+        if let Some(replay_result) = resolution.get("replay_result").and_then(Value::as_str) {
+            *replay_result_counts
+                .entry(replay_result.to_owned())
+                .or_default() += 1;
+        }
+    }
+
+    json!({
+        "request_status_counts": request_status_counts,
+        "replay_result_counts": replay_result_counts,
     })
 }
 
@@ -2670,6 +2710,24 @@ mod tests {
         assert_eq!(
             summary["attention_summary"]["counts_by_escalation"]["critical"],
             1
+        );
+        let resolution_summary = &outcome.payload["resolution_summary"];
+        assert_eq!(resolution_summary["request_status_counts"]["pending"], 1);
+        assert_eq!(resolution_summary["request_status_counts"]["approved"], 0);
+        assert_eq!(resolution_summary["request_status_counts"]["executing"], 1);
+        assert_eq!(resolution_summary["request_status_counts"]["executed"], 4);
+        assert_eq!(resolution_summary["request_status_counts"]["denied"], 0);
+        assert_eq!(resolution_summary["request_status_counts"]["expired"], 0);
+        assert_eq!(resolution_summary["request_status_counts"]["cancelled"], 0);
+        assert_eq!(resolution_summary["replay_result_counts"]["not_attempted"], 1);
+        assert_eq!(resolution_summary["replay_result_counts"]["in_progress"], 1);
+        assert_eq!(
+            resolution_summary["replay_result_counts"]["completed_cleanly"],
+            1
+        );
+        assert_eq!(
+            resolution_summary["replay_result_counts"]["completed_with_attention"],
+            3
         );
     }
 
