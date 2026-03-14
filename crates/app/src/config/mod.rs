@@ -1810,6 +1810,21 @@ system = " Builtin "
 
     #[test]
     #[cfg(feature = "config-toml")]
+    fn memory_system_field_rejects_unimplemented_future_variant() {
+        let raw = r#"
+[memory]
+system = " LuCid "
+"#;
+        let error =
+            toml::from_str::<LoongClawConfig>(raw).expect_err("lucid should stay unsupported");
+        assert!(
+            error.to_string().contains("available: builtin"),
+            "error should keep builtin-only surface: {error}"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
     fn conversation_compaction_fields_parse_and_gate_compact_hook() {
         let raw = r#"
 [conversation]

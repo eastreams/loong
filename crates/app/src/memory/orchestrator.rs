@@ -33,6 +33,7 @@ pub struct BuiltinMemoryOrchestrator;
 #[cfg(test)]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MemoryOrchestratorTestFaults {
+    pub session_id: Option<String>,
     pub derivation_error: Option<String>,
     pub retrieval_error: Option<String>,
 }
@@ -59,6 +60,18 @@ fn active_memory_orchestrator_test_faults() -> Option<MemoryOrchestratorTestFaul
         .lock()
         .ok()
         .and_then(|guard| guard.clone())
+}
+
+#[cfg(test)]
+fn matching_memory_orchestrator_test_faults(
+    session_id: &str,
+) -> Option<MemoryOrchestratorTestFaults> {
+    active_memory_orchestrator_test_faults().filter(|faults| {
+        faults
+            .session_id
+            .as_deref()
+            .is_none_or(|expected| expected == session_id)
+    })
 }
 
 #[cfg(test)]
@@ -139,8 +152,8 @@ fn run_derivation_stage(
     _recent_window: &[WindowTurn],
 ) -> Result<Vec<MemoryContextEntry>, String> {
     #[cfg(test)]
-    if let Some(error) =
-        active_memory_orchestrator_test_faults().and_then(|faults| faults.derivation_error)
+    if let Some(error) = matching_memory_orchestrator_test_faults(_session_id)
+        .and_then(|faults| faults.derivation_error)
     {
         return Err(error);
     }
@@ -154,8 +167,8 @@ fn run_retrieval_stage(
     _recent_window: &[WindowTurn],
 ) -> Result<Vec<MemoryContextEntry>, String> {
     #[cfg(test)]
-    if let Some(error) =
-        active_memory_orchestrator_test_faults().and_then(|faults| faults.retrieval_error)
+    if let Some(error) = matching_memory_orchestrator_test_faults(_session_id)
+        .and_then(|faults| faults.retrieval_error)
     {
         return Err(error);
     }
@@ -360,7 +373,9 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[test]
     fn fail_open_memory_derivation_failure_keeps_recent_window_behavior() {
+        let session_id = "fail-open-derivation";
         let _faults = ScopedMemoryOrchestratorTestFaults::set(MemoryOrchestratorTestFaults {
+            session_id: Some(session_id.to_owned()),
             derivation_error: Some("simulated derivation failure".to_owned()),
             ..MemoryOrchestratorTestFaults::default()
         });
@@ -377,14 +392,14 @@ mod tests {
             ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
         };
 
-        append_turn_direct("fail-open-derivation", "user", "turn 1", &config)
+        append_turn_direct(session_id, "user", "turn 1", &config)
             .expect("append turn 1 should succeed");
-        append_turn_direct("fail-open-derivation", "assistant", "turn 2", &config)
+        append_turn_direct(session_id, "assistant", "turn 2", &config)
             .expect("append turn 2 should succeed");
-        append_turn_direct("fail-open-derivation", "user", "turn 3", &config)
+        append_turn_direct(session_id, "user", "turn 3", &config)
             .expect("append turn 3 should succeed");
 
-        let hydrated = hydrate_memory_context("fail-open-derivation", &config)
+        let hydrated = hydrate_memory_context(session_id, &config)
             .expect("fail-open derivation should preserve hydration");
 
         let turn_entries = hydrated
@@ -409,7 +424,9 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[test]
     fn fail_open_memory_retrieval_failure_keeps_recent_window_behavior() {
+        let session_id = "fail-open-retrieval";
         let _faults = ScopedMemoryOrchestratorTestFaults::set(MemoryOrchestratorTestFaults {
+            session_id: Some(session_id.to_owned()),
             retrieval_error: Some("simulated retrieval failure".to_owned()),
             ..MemoryOrchestratorTestFaults::default()
         });
@@ -426,14 +443,14 @@ mod tests {
             ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
         };
 
-        append_turn_direct("fail-open-retrieval", "user", "turn 1", &config)
+        append_turn_direct(session_id, "user", "turn 1", &config)
             .expect("append turn 1 should succeed");
-        append_turn_direct("fail-open-retrieval", "assistant", "turn 2", &config)
+        append_turn_direct(session_id, "assistant", "turn 2", &config)
             .expect("append turn 2 should succeed");
-        append_turn_direct("fail-open-retrieval", "user", "turn 3", &config)
+        append_turn_direct(session_id, "user", "turn 3", &config)
             .expect("append turn 3 should succeed");
 
-        let hydrated = hydrate_memory_context("fail-open-retrieval", &config)
+        let hydrated = hydrate_memory_context(session_id, &config)
             .expect("fail-open retrieval should preserve hydration");
 
         let turn_entries = hydrated
@@ -458,7 +475,9 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[test]
     fn fail_open_memory_strict_mode_remains_reserved_and_disabled_by_default() {
+        let session_id = "fail-open-strict-reserved";
         let _faults = ScopedMemoryOrchestratorTestFaults::set(MemoryOrchestratorTestFaults {
+            session_id: Some(session_id.to_owned()),
             derivation_error: Some("strict mode should stay disabled".to_owned()),
             ..MemoryOrchestratorTestFaults::default()
         });
@@ -476,10 +495,10 @@ mod tests {
         };
         config.fail_open = false;
 
-        append_turn_direct("fail-open-strict-reserved", "assistant", "turn 1", &config)
+        append_turn_direct(session_id, "assistant", "turn 1", &config)
             .expect("append turn should succeed");
 
-        let hydrated = hydrate_memory_context("fail-open-strict-reserved", &config)
+        let hydrated = hydrate_memory_context(session_id, &config)
             .expect("strict mode should remain reserved and disabled");
 
         assert!(hydrated.diagnostics.strict_mode_requested);

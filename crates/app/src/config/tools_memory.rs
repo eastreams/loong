@@ -416,6 +416,11 @@ mod tests {
     }
 
     #[test]
+    fn memory_system_rejects_unimplemented_future_variant_ids() {
+        assert_eq!(MemorySystemKind::parse_id("lucid"), None);
+    }
+
+    #[test]
     fn hydrated_memory_policy_defaults_are_fail_open_and_sync_minimal() {
         let config = MemoryConfig::default();
         assert!(config.fail_open);
