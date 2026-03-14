@@ -1,3 +1,9 @@
+#![allow(
+    clippy::await_holding_lock,
+    clippy::expect_used,
+    clippy::indexing_slicing
+)]
+
 use async_trait::async_trait;
 use loongclaw_app as mvp;
 use loongclaw_contracts::ToolCoreRequest;
@@ -304,7 +310,7 @@ impl AsyncDelegateSpawner for GatedAsyncDelegateSpawner {
             .ok_or_else(|| "gated async delegate spawn request already captured".to_owned())?;
         request_tx
             .send(request.clone())
-            .map_err(|_| "gated async delegate spawn receiver dropped".to_owned())?;
+            .map_err(|_send_error| "gated async delegate spawn receiver dropped".to_owned())?;
         self.launch_notify.notified().await;
         self.inner.spawn(request).await
     }

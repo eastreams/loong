@@ -1,3 +1,5 @@
+#![allow(clippy::await_holding_lock, clippy::expect_used)]
+
 use super::*;
 use clap::Parser;
 use std::path::PathBuf;
