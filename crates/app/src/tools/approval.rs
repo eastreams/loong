@@ -1,5 +1,8 @@
 #[cfg(feature = "memory-sqlite")]
-use std::{cmp::Ordering, collections::BTreeMap};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use async_trait::async_trait;
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
@@ -463,6 +466,7 @@ fn execute_approval_requests_list(
     let correlation_summary = approval_request_list_correlation_summary_json(&request_summaries);
     let governance_summary = approval_request_list_governance_summary_json(&request_summaries);
     let session_summary = approval_request_list_session_summary_json(&request_summaries);
+    let tool_summary = approval_request_list_tool_summary_json(&request_summaries);
     let matched_count = request_summaries.len();
     request_summaries.truncate(request.limit);
     let returned_count = request_summaries.len();
@@ -502,6 +506,7 @@ fn execute_approval_requests_list(
             "correlation_summary": correlation_summary,
             "governance_summary": governance_summary,
             "session_summary": session_summary,
+            "tool_summary": tool_summary,
             "requests": request_summaries,
         }),
     })
@@ -1015,6 +1020,141 @@ fn approval_request_list_session_summary_json(requests: &[Value]) -> Value {
     json!({
         "session_count": sessions.len(),
         "sessions": sessions,
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_list_tool_summary_json(requests: &[Value]) -> Value {
+    #[derive(Default)]
+    struct ToolSummaryAccumulator {
+        tool_name: Option<String>,
+        execution_plane: Option<String>,
+        governance_scope: Option<String>,
+        risk_class: Option<String>,
+        request_count: usize,
+        pending_count: usize,
+        attention_count: usize,
+        session_ids: BTreeSet<String>,
+        oldest_pending_requested_at: Option<i64>,
+        oldest_pending_age_seconds: Option<i64>,
+        oldest_pending_age_bucket: Option<ApprovalAttentionAgeBucket>,
+    }
+
+    let mut tools = BTreeMap::<String, ToolSummaryAccumulator>::new();
+    for request in requests {
+        let Some(approval_key) = request.get("approval_key").and_then(Value::as_str) else {
+            continue;
+        };
+        let tool = tools.entry(approval_key.to_owned()).or_default();
+        tool.request_count += 1;
+
+        if let Some(tool_name) = request.get("tool_name").and_then(Value::as_str) {
+            tool.tool_name.get_or_insert_with(|| tool_name.to_owned());
+        }
+        if let Some(execution_plane) = request.get("execution_plane").and_then(Value::as_str) {
+            tool.execution_plane
+                .get_or_insert_with(|| execution_plane.to_owned());
+        }
+        if let Some(governance_scope) = request.get("governance_scope").and_then(Value::as_str) {
+            tool.governance_scope
+                .get_or_insert_with(|| governance_scope.to_owned());
+        }
+        if let Some(risk_class) = request.get("risk_class").and_then(Value::as_str) {
+            let should_replace = tool
+                .risk_class
+                .as_deref()
+                .map(|current| {
+                    tool_risk_class_priority(risk_class) < tool_risk_class_priority(current)
+                })
+                .unwrap_or(true);
+            if should_replace {
+                tool.risk_class = Some(risk_class.to_owned());
+            }
+        }
+        if let Some(session_id) = request.get("session_id").and_then(Value::as_str) {
+            tool.session_ids.insert(session_id.to_owned());
+        }
+
+        if request
+            .get("execution_integrity")
+            .and_then(|value| value.get("needs_attention"))
+            .and_then(Value::as_bool)
+            == Some(true)
+        {
+            tool.attention_count += 1;
+        }
+
+        let pending_queue = request.get("pending_queue").unwrap_or(&Value::Null);
+        if pending_queue
+            .get("awaiting_decision")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            continue;
+        }
+
+        tool.pending_count += 1;
+        let requested_at = approval_request_requested_at(request);
+        tool.oldest_pending_requested_at = Some(
+            tool.oldest_pending_requested_at
+                .map(|current| current.min(requested_at))
+                .unwrap_or(requested_at),
+        );
+
+        if let Some(age_seconds) = pending_queue.get("age_seconds").and_then(Value::as_i64) {
+            let is_older = tool
+                .oldest_pending_age_seconds
+                .map(|current| age_seconds > current)
+                .unwrap_or(true);
+            if is_older {
+                tool.oldest_pending_age_seconds = Some(age_seconds);
+                tool.oldest_pending_age_bucket =
+                    approval_request_attention_age_bucket(Some(age_seconds));
+            }
+        }
+    }
+
+    let mut tools = tools.into_iter().collect::<Vec<_>>();
+    tools.sort_by(|(left_approval_key, left), (right_approval_key, right)| {
+        approval_request_session_hotspot_priority(left.oldest_pending_age_bucket)
+            .cmp(&approval_request_session_hotspot_priority(
+                right.oldest_pending_age_bucket,
+            ))
+            .then_with(|| right.pending_count.cmp(&left.pending_count))
+            .then_with(|| right.attention_count.cmp(&left.attention_count))
+            .then_with(|| {
+                right
+                    .oldest_pending_age_seconds
+                    .unwrap_or_default()
+                    .cmp(&left.oldest_pending_age_seconds.unwrap_or_default())
+            })
+            .then_with(|| right.request_count.cmp(&left.request_count))
+            .then_with(|| left_approval_key.cmp(right_approval_key))
+    });
+
+    let tools = tools
+        .into_iter()
+        .map(|(approval_key, tool)| {
+            json!({
+                "approval_key": approval_key,
+                "tool_name": tool.tool_name,
+                "execution_plane": tool.execution_plane,
+                "governance_scope": tool.governance_scope,
+                "risk_class": tool.risk_class,
+                "request_count": tool.request_count,
+                "pending_count": tool.pending_count,
+                "attention_count": tool.attention_count,
+                "session_count": tool.session_ids.len(),
+                "oldest_pending_requested_at": tool.oldest_pending_requested_at,
+                "oldest_pending_age_seconds": tool.oldest_pending_age_seconds,
+                "oldest_pending_age_bucket": tool.oldest_pending_age_bucket.map(ApprovalAttentionAgeBucket::as_str),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    json!({
+        "tool_count": tools.len(),
+        "tools": tools,
     })
 }
 
@@ -1931,6 +2071,16 @@ fn tool_risk_class_as_str(value: ToolRiskClass) -> &'static str {
         ToolRiskClass::Low => "Low",
         ToolRiskClass::Elevated => "Elevated",
         ToolRiskClass::High => "High",
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn tool_risk_class_priority(value: &str) -> usize {
+    match value {
+        "High" => 0,
+        "Elevated" => 1,
+        "Low" => 2,
+        _ => 3,
     }
 }
 
@@ -3947,6 +4097,187 @@ mod tests {
             "apr-governance-high"
         );
         assert_eq!(topology_requests[0]["governance_scope"], "TopologyMutation");
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_tool_query_list_summarizes_tool_hotspots() {
+        let config = isolated_memory_config("approval-query-list-tool-summary");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+
+        seed_request_with_governance(
+            &repo,
+            "apr-tool-delegate-pending-overdue",
+            "root-session",
+            "delegate_async",
+            "governed_tool_requires_per_call_approval",
+            "Orchestration",
+            "TopologyMutation",
+            "High",
+        );
+        seed_request_with_governance(
+            &repo,
+            "apr-tool-delegate-pending-fresh",
+            "root-session",
+            "delegate_async",
+            "governed_tool_requires_per_call_approval",
+            "Orchestration",
+            "TopologyMutation",
+            "High",
+        );
+        seed_request_with_governance(
+            &repo,
+            "apr-tool-delegate-attention",
+            "root-session",
+            "delegate_async",
+            "governed_tool_requires_per_call_approval",
+            "Orchestration",
+            "TopologyMutation",
+            "High",
+        );
+        seed_request_with_governance(
+            &repo,
+            "apr-tool-cancel-pending",
+            "root-session",
+            "session_cancel",
+            "governed_tool_requires_per_call_approval",
+            "App",
+            "Routine",
+            "Elevated",
+        );
+        seed_request_with_governance(
+            &repo,
+            "apr-tool-memory-complete",
+            "root-session",
+            "memory_search",
+            "governed_tool_requires_per_call_approval",
+            "App",
+            "Routine",
+            "Low",
+        );
+
+        transition_request_status(
+            &repo,
+            "apr-tool-delegate-attention",
+            ApprovalRequestStatus::Pending,
+            ApprovalRequestStatus::Executed,
+            Some("tool failed for domain reasons"),
+        );
+        transition_request_status(
+            &repo,
+            "apr-tool-memory-complete",
+            ApprovalRequestStatus::Pending,
+            ApprovalRequestStatus::Executed,
+            None,
+        );
+
+        repo.append_event(crate::session::repository::NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: "tool_approval_execution_started".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "approval_request_id": "apr-tool-delegate-attention",
+                "replay_decision_persisted": true,
+                "replay_decision_persist_error": null,
+            }),
+        })
+        .expect("append delegate attention started event");
+        repo.append_event(crate::session::repository::NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: "tool_approval_execution_failed".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "approval_request_id": "apr-tool-delegate-attention",
+                "error": "tool failed for domain reasons",
+                "replay_outcome_persisted": true,
+                "replay_outcome_persist_error": null,
+            }),
+        })
+        .expect("append delegate attention failed event");
+        repo.append_event(crate::session::repository::NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: "tool_approval_execution_started".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "approval_request_id": "apr-tool-memory-complete",
+                "replay_decision_persisted": true,
+                "replay_decision_persist_error": null,
+            }),
+        })
+        .expect("append memory complete started event");
+        repo.append_event(crate::session::repository::NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: "tool_approval_execution_finished".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "approval_request_id": "apr-tool-memory-complete",
+                "resumed_tool_status": "ok",
+                "replay_outcome_persisted": true,
+                "replay_outcome_persist_error": null,
+            }),
+        })
+        .expect("append memory complete finished event");
+
+        let now = test_unix_ts_now();
+        overwrite_request_requested_at(&config, "apr-tool-delegate-pending-overdue", now - 172_800);
+        overwrite_request_requested_at(&config, "apr-tool-delegate-pending-fresh", now - 60);
+        overwrite_request_requested_at(&config, "apr-tool-delegate-attention", now - 300);
+        overwrite_request_requested_at(&config, "apr-tool-cancel-pending", now - 7_200);
+        overwrite_request_requested_at(&config, "apr-tool-memory-complete", now - 30);
+
+        let outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "limit": 10,
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list outcome for tool summary");
+
+        let tool_summary = &outcome.payload["tool_summary"];
+        assert_eq!(tool_summary["tool_count"], 3);
+        let tools = tool_summary["tools"]
+            .as_array()
+            .expect("tool summary tools array");
+        assert_eq!(tools.len(), 3);
+
+        assert_eq!(tools[0]["approval_key"], "tool:delegate_async");
+        assert_eq!(tools[0]["tool_name"], "delegate_async");
+        assert_eq!(tools[0]["execution_plane"], "Orchestration");
+        assert_eq!(tools[0]["risk_class"], "High");
+        assert_eq!(tools[0]["request_count"], 3);
+        assert_eq!(tools[0]["pending_count"], 2);
+        assert_eq!(tools[0]["attention_count"], 1);
+        assert_eq!(tools[0]["oldest_pending_age_bucket"], "overdue");
+        assert!(
+            tools[0]["oldest_pending_age_seconds"]
+                .as_i64()
+                .expect("delegate hotspot age")
+                >= 172_800
+        );
+
+        assert_eq!(tools[1]["approval_key"], "tool:session_cancel");
+        assert_eq!(tools[1]["tool_name"], "session_cancel");
+        assert_eq!(tools[1]["execution_plane"], "App");
+        assert_eq!(tools[1]["risk_class"], "Elevated");
+        assert_eq!(tools[1]["request_count"], 1);
+        assert_eq!(tools[1]["pending_count"], 1);
+        assert_eq!(tools[1]["attention_count"], 0);
+        assert_eq!(tools[1]["oldest_pending_age_bucket"], "stale");
+
+        assert_eq!(tools[2]["approval_key"], "tool:memory_search");
+        assert_eq!(tools[2]["tool_name"], "memory_search");
+        assert_eq!(tools[2]["execution_plane"], "App");
+        assert_eq!(tools[2]["risk_class"], "Low");
+        assert_eq!(tools[2]["request_count"], 1);
+        assert_eq!(tools[2]["pending_count"], 0);
+        assert_eq!(tools[2]["attention_count"], 0);
+        assert_eq!(tools[2]["oldest_pending_requested_at"], Value::Null);
     }
 
     #[cfg(feature = "memory-sqlite")]
