@@ -268,4 +268,13 @@ mod tests {
         assert_eq!(selection.source, MemorySystemSelectionSource::Env);
         clear_memory_system_env_override();
     }
+
+    #[test]
+    fn memory_system_registry_stays_builtin_only_until_adapter_lands() {
+        let ids = list_memory_system_ids().expect("list memory-system ids");
+        assert!(
+            !ids.iter().any(|id| id == "lucid"),
+            "future adapter ids should not appear before the adapter actually lands"
+        );
+    }
 }
