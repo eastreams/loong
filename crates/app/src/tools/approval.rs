@@ -28,6 +28,7 @@ struct ApprovalRequestsListRequest {
     integrity_status: Option<ApprovalExecutionIntegrityStatus>,
     needs_attention: Option<bool>,
     attention_reason: Option<ApprovalAttentionReason>,
+    prioritize_attention: bool,
     limit: usize,
 }
 
@@ -270,6 +271,16 @@ fn execute_approval_requests_list(
                 == Some(attention_reason)
         });
     }
+    if request.prioritize_attention {
+        request_summaries.sort_by(|left, right| {
+            approval_request_attention_priority(left)
+                .cmp(&approval_request_attention_priority(right))
+                .then_with(|| {
+                    approval_request_requested_at(right).cmp(&approval_request_requested_at(left))
+                })
+                .then_with(|| approval_request_id(left).cmp(approval_request_id(right)))
+        });
+    }
     let integrity_summary = approval_request_list_integrity_summary_json(&request_summaries);
     let matched_count = request_summaries.len();
     request_summaries.truncate(request.limit);
@@ -285,6 +296,7 @@ fn execute_approval_requests_list(
                 "integrity_status": request.integrity_status.map(ApprovalExecutionIntegrityStatus::as_str),
                 "needs_attention": request.needs_attention,
                 "attention_reason": request.attention_reason.map(ApprovalAttentionReason::as_str),
+                "prioritize_attention": request.prioritize_attention,
                 "limit": request.limit,
             },
             "visible_session_ids": target_session_ids,
@@ -786,6 +798,42 @@ fn approval_request_attention_reason_from_json(
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn approval_request_attention_priority(request: &Value) -> u8 {
+    let execution_integrity = request.get("execution_integrity").unwrap_or(&Value::Null);
+    if execution_integrity
+        .get("needs_attention")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return 3;
+    }
+    match execution_integrity
+        .get("attention_reason")
+        .and_then(Value::as_str)
+    {
+        Some("integrity_gap") => 0,
+        Some("execution_failed") => 1,
+        Some(_) | None => 2,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_requested_at(request: &Value) -> i64 {
+    request
+        .get("requested_at")
+        .and_then(Value::as_i64)
+        .unwrap_or(i64::MIN)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_id(request: &Value) -> &str {
+    request
+        .get("approval_request_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn parse_approval_requests_list_request(
     payload: &Value,
     tool_config: &ToolConfig,
@@ -799,6 +847,10 @@ fn parse_approval_requests_list_request(
         )?,
         needs_attention: payload.get("needs_attention").and_then(Value::as_bool),
         attention_reason: optional_payload_approval_attention_reason(payload, "attention_reason")?,
+        prioritize_attention: payload
+            .get("prioritize_attention")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         limit: optional_payload_limit(
             payload,
             "limit",
@@ -1613,6 +1665,172 @@ mod tests {
             execution_failed_requests[0]["execution_integrity"]["attention_reason"],
             "execution_failed"
         );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_tool_query_list_prioritizes_attention_when_requested() {
+        let config = isolated_memory_config("approval-query-list-attention-priority");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+        seed_request(
+            &repo,
+            "apr-priority-not-started",
+            "root-session",
+            "session_cancel",
+            "governed_tool_requires_per_call_approval",
+        );
+        seed_request(
+            &repo,
+            "apr-priority-complete",
+            "root-session",
+            "session_cancel",
+            "governed_tool_requires_per_call_approval",
+        );
+        seed_request(
+            &repo,
+            "apr-priority-integrity-gap",
+            "root-session",
+            "session_cancel",
+            "governed_tool_requires_per_call_approval",
+        );
+        seed_request(
+            &repo,
+            "apr-priority-execution-failed",
+            "root-session",
+            "session_cancel",
+            "governed_tool_requires_per_call_approval",
+        );
+
+        transition_request_status(
+            &repo,
+            "apr-priority-complete",
+            ApprovalRequestStatus::Pending,
+            ApprovalRequestStatus::Executed,
+            None,
+        );
+        transition_request_status(
+            &repo,
+            "apr-priority-integrity-gap",
+            ApprovalRequestStatus::Pending,
+            ApprovalRequestStatus::Executed,
+            Some("persist assistant turn via kernel failed: forced outcome persistence failure"),
+        );
+        transition_request_status(
+            &repo,
+            "apr-priority-execution-failed",
+            ApprovalRequestStatus::Pending,
+            ApprovalRequestStatus::Executed,
+            Some("tool failed for domain reasons"),
+        );
+
+        repo.append_event(crate::session::repository::NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: "tool_approval_execution_started".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "approval_request_id": "apr-priority-complete",
+                "replay_decision_persisted": true,
+                "replay_decision_persist_error": null,
+            }),
+        })
+        .expect("append complete started event");
+        repo.append_event(crate::session::repository::NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: "tool_approval_execution_finished".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "approval_request_id": "apr-priority-complete",
+                "resumed_tool_status": "ok",
+                "replay_outcome_persisted": true,
+                "replay_outcome_persist_error": null,
+            }),
+        })
+        .expect("append complete finished event");
+        repo.append_event(crate::session::repository::NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: "tool_approval_execution_started".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "approval_request_id": "apr-priority-integrity-gap",
+                "replay_decision_persisted": true,
+                "replay_decision_persist_error": null,
+            }),
+        })
+        .expect("append integrity-gap started event");
+        repo.append_event(crate::session::repository::NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: "tool_approval_execution_finished".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "approval_request_id": "apr-priority-integrity-gap",
+                "resumed_tool_status": "ok",
+                "replay_outcome_persisted": false,
+                "replay_outcome_persist_error": "persist assistant turn via kernel failed: forced outcome persistence failure",
+            }),
+        })
+        .expect("append integrity-gap finished event");
+        repo.append_event(crate::session::repository::NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: "tool_approval_execution_started".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "approval_request_id": "apr-priority-execution-failed",
+                "replay_decision_persisted": true,
+                "replay_decision_persist_error": null,
+            }),
+        })
+        .expect("append execution-failed started event");
+        repo.append_event(crate::session::repository::NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: "tool_approval_execution_failed".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "approval_request_id": "apr-priority-execution-failed",
+                "error": "tool failed for domain reasons",
+                "replay_outcome_persisted": true,
+                "replay_outcome_persist_error": null,
+            }),
+        })
+        .expect("append execution-failed terminal event");
+
+        let outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "prioritize_attention": true,
+                    "limit": 10,
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list prioritized outcome");
+
+        assert_eq!(outcome.payload["filter"]["prioritize_attention"], true);
+        let requests = outcome.payload["requests"]
+            .as_array()
+            .expect("requests array");
+        assert_eq!(requests.len(), 4);
+        assert_eq!(
+            requests[0]["approval_request_id"],
+            "apr-priority-integrity-gap"
+        );
+        assert_eq!(
+            requests[0]["execution_integrity"]["attention_reason"],
+            "integrity_gap"
+        );
+        assert_eq!(
+            requests[1]["approval_request_id"],
+            "apr-priority-execution-failed"
+        );
+        assert_eq!(
+            requests[1]["execution_integrity"]["attention_reason"],
+            "execution_failed"
+        );
+        assert_eq!(requests[2]["execution_integrity"]["needs_attention"], false);
+        assert_eq!(requests[3]["execution_integrity"]["needs_attention"], false);
     }
 
     #[cfg(feature = "memory-sqlite")]
