@@ -1,4 +1,7 @@
-use std::collections::BTreeSet;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::OnceLock,
+};
 
 use serde_json::{Value, json};
 
@@ -187,6 +190,30 @@ enum InlineFunctionParseError {
     MissingParameterClose,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InlineParameterSchemaType {
+    String,
+    Integer,
+    Number,
+    Boolean,
+    Array,
+    Object,
+}
+
+impl InlineParameterSchemaType {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "string" => Some(Self::String),
+            "integer" => Some(Self::Integer),
+            "number" => Some(Self::Number),
+            "boolean" => Some(Self::Boolean),
+            "array" => Some(Self::Array),
+            "object" => Some(Self::Object),
+            _ => None,
+        }
+    }
+}
+
 impl InlineFunctionParseError {
     fn as_str(self) -> &'static str {
         match self {
@@ -243,9 +270,15 @@ fn extract_inline_function_call_turn(text: &str) -> InlineFunctionParseResult {
     let mut found_inline_function = false;
 
     while let Some(relative_start) = text[cursor..].find(FUNCTION_OPEN) {
-        found_inline_function = true;
         let start = cursor + relative_start;
-        cleaned.push_str(&text[cursor..start]);
+        if !is_standalone_inline_function_start(text, start)
+            || is_inside_markdown_fence(text, start)
+        {
+            let next_cursor = start + FUNCTION_OPEN.len();
+            cleaned.push_str(&text[cursor..next_cursor]);
+            cursor = next_cursor;
+            continue;
+        }
 
         let name_start = start + FUNCTION_OPEN.len();
         let header_remainder = &text[name_start..];
@@ -278,20 +311,31 @@ fn extract_inline_function_call_turn(text: &str) -> InlineFunctionParseResult {
             };
         };
         let function_body = &body_remainder[..body_end];
-        let args_json = match parse_inline_function_parameters(function_body) {
-            Ok(args_json) => args_json,
-            Err(error_code) => {
-                return InlineFunctionParseResult::Malformed {
-                    telemetry: InlineFunctionParseTelemetry::malformed(
-                        tool_intents.len(),
-                        error_code,
-                    ),
-                };
-            }
-        };
+        let function_end = body_start + body_end + FUNCTION_CLOSE.len();
+        if !is_standalone_inline_function_end(text, function_end) {
+            cleaned.push_str(&text[cursor..function_end]);
+            cursor = function_end;
+            continue;
+        }
 
+        let canonical_tool_name = tools::canonical_tool_name(raw_tool_name).to_owned();
+        let args_json =
+            match parse_inline_function_parameters(canonical_tool_name.as_str(), function_body) {
+                Ok(args_json) => args_json,
+                Err(error_code) => {
+                    return InlineFunctionParseResult::Malformed {
+                        telemetry: InlineFunctionParseTelemetry::malformed(
+                            tool_intents.len(),
+                            error_code,
+                        ),
+                    };
+                }
+            };
+
+        found_inline_function = true;
+        cleaned.push_str(&text[cursor..start]);
         tool_intents.push(ToolIntent {
-            tool_name: tools::canonical_tool_name(raw_tool_name).to_owned(),
+            tool_name: canonical_tool_name,
             args_json,
             source: "provider_inline_function_call".to_owned(),
             session_id: String::new(),
@@ -299,7 +343,7 @@ fn extract_inline_function_call_turn(text: &str) -> InlineFunctionParseResult {
             tool_call_id: format!("inline-call-{}", tool_intents.len()),
         });
 
-        cursor = body_start + body_end + FUNCTION_CLOSE.len();
+        cursor = function_end;
     }
 
     if !found_inline_function {
@@ -315,7 +359,10 @@ fn extract_inline_function_call_turn(text: &str) -> InlineFunctionParseResult {
     }
 }
 
-fn parse_inline_function_parameters(body: &str) -> Result<Value, InlineFunctionParseError> {
+fn parse_inline_function_parameters(
+    tool_name: &str,
+    body: &str,
+) -> Result<Value, InlineFunctionParseError> {
     const PARAMETER_OPEN: &str = "<parameter=";
     const PARAMETER_CLOSE: &str = "</parameter>";
 
@@ -353,7 +400,7 @@ fn parse_inline_function_parameters(body: &str) -> Result<Value, InlineFunctionP
         let raw_value = &value_remainder[..value_end];
         payload.insert(
             parameter_name.to_owned(),
-            parse_inline_parameter_value(raw_value),
+            parse_inline_parameter_value(tool_name, parameter_name, raw_value),
         );
 
         cursor = value_start + value_end + PARAMETER_CLOSE.len();
@@ -362,13 +409,24 @@ fn parse_inline_function_parameters(body: &str) -> Result<Value, InlineFunctionP
     Ok(Value::Object(payload))
 }
 
-fn parse_inline_parameter_value(raw_value: &str) -> Value {
+fn parse_inline_parameter_value(tool_name: &str, parameter_name: &str, raw_value: &str) -> Value {
     let decoded = decode_inline_xml_text(raw_value);
     let trimmed = decoded.trim();
     if trimmed.is_empty() {
         return Value::String(String::new());
     }
-    serde_json::from_str::<Value>(trimmed).unwrap_or_else(|_| Value::String(trimmed.to_owned()))
+    match inline_parameter_schema_type(tool_name, parameter_name) {
+        Some(InlineParameterSchemaType::String) => parse_inline_string_value(trimmed),
+        Some(
+            InlineParameterSchemaType::Integer
+            | InlineParameterSchemaType::Number
+            | InlineParameterSchemaType::Boolean
+            | InlineParameterSchemaType::Array
+            | InlineParameterSchemaType::Object,
+        )
+        | None => serde_json::from_str::<Value>(trimmed)
+            .unwrap_or_else(|_| Value::String(trimmed.to_owned())),
+    }
 }
 
 fn decode_inline_xml_text(raw: &str) -> String {
@@ -377,6 +435,124 @@ fn decode_inline_xml_text(raw: &str) -> String {
         .replace("&quot;", "\"")
         .replace("&apos;", "'")
         .replace("&amp;", "&")
+}
+
+fn parse_inline_string_value(raw: &str) -> Value {
+    match serde_json::from_str::<Value>(raw) {
+        Ok(Value::String(value)) => Value::String(value),
+        _ => Value::String(raw.to_owned()),
+    }
+}
+
+fn inline_parameter_schema_type(
+    tool_name: &str,
+    parameter_name: &str,
+) -> Option<InlineParameterSchemaType> {
+    inline_parameter_schema_types()
+        .get(tool_name)
+        .and_then(|parameters| parameters.get(parameter_name))
+        .copied()
+}
+
+fn inline_parameter_schema_types()
+-> &'static BTreeMap<String, BTreeMap<String, InlineParameterSchemaType>> {
+    static SCHEMA_TYPES: OnceLock<BTreeMap<String, BTreeMap<String, InlineParameterSchemaType>>> =
+        OnceLock::new();
+
+    SCHEMA_TYPES.get_or_init(|| {
+        let mut tools_by_name =
+            BTreeMap::<String, BTreeMap<String, InlineParameterSchemaType>>::new();
+        for tool in tools::provider_tool_definitions() {
+            let Some(function) = tool.get("function") else {
+                continue;
+            };
+            let Some(raw_tool_name) = function.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(properties) = function
+                .get("parameters")
+                .and_then(|value| value.get("properties"))
+                .and_then(Value::as_object)
+            else {
+                continue;
+            };
+
+            let tool_name = tools::canonical_tool_name(raw_tool_name).to_owned();
+            let entry = tools_by_name.entry(tool_name).or_default();
+            for (parameter_name, schema) in properties {
+                let Some(parameter_type) = schema
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .and_then(InlineParameterSchemaType::parse)
+                else {
+                    continue;
+                };
+                entry.insert(parameter_name.clone(), parameter_type);
+            }
+        }
+        tools_by_name
+    })
+}
+
+fn is_standalone_inline_function_start(text: &str, start: usize) -> bool {
+    let line_start = text[..start]
+        .rfind('\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    text[line_start..start]
+        .chars()
+        .all(|ch| matches!(ch, ' ' | '\t' | '\r'))
+}
+
+fn is_standalone_inline_function_end(text: &str, end: usize) -> bool {
+    let line_end = text[end..]
+        .find('\n')
+        .map(|relative| end + relative)
+        .unwrap_or(text.len());
+    text[end..line_end]
+        .chars()
+        .all(|ch| matches!(ch, ' ' | '\t' | '\r'))
+}
+
+fn is_inside_markdown_fence(text: &str, index: usize) -> bool {
+    let mut cursor = 0usize;
+    let mut inside = false;
+    let mut fence_marker = None;
+
+    while cursor < index {
+        let line_end = text[cursor..]
+            .find('\n')
+            .map(|relative| cursor + relative + 1)
+            .unwrap_or(text.len());
+        let line = &text[cursor..line_end];
+        let trimmed = line.trim_start();
+
+        if let Some(marker) = markdown_fence_marker(trimmed) {
+            if inside {
+                if fence_marker == Some(marker) {
+                    inside = false;
+                    fence_marker = None;
+                }
+            } else {
+                inside = true;
+                fence_marker = Some(marker);
+            }
+        }
+
+        cursor = line_end;
+    }
+
+    inside
+}
+
+fn markdown_fence_marker(line: &str) -> Option<char> {
+    if line.starts_with("```") {
+        return Some('`');
+    }
+    if line.starts_with("~~~") {
+        return Some('~');
+    }
+    None
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -625,6 +801,42 @@ mod tests {
     }
 
     #[test]
+    fn extract_provider_turn_does_not_execute_literal_inline_function_examples() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "如果你想手动调用，可以写成 ` <function=shell.exec><parameter=command>ls</parameter></function> ` 这样的格式。"
+                }
+            }]
+        });
+
+        let turn = extract_provider_turn(&body).expect("turn");
+        assert!(turn.tool_intents.is_empty());
+        assert_eq!(
+            turn.assistant_text,
+            "如果你想手动调用，可以写成 ` <function=shell.exec><parameter=command>ls</parameter></function> ` 这样的格式。"
+        );
+    }
+
+    #[test]
+    fn extract_provider_turn_does_not_execute_fenced_inline_function_examples() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "示例：\n```xml\n<function=shell.exec><parameter=command>ls</parameter></function>\n```"
+                }
+            }]
+        });
+
+        let turn = extract_provider_turn(&body).expect("turn");
+        assert!(turn.tool_intents.is_empty());
+        assert_eq!(
+            turn.assistant_text,
+            "示例：\n```xml\n<function=shell.exec><parameter=command>ls</parameter></function>\n```"
+        );
+    }
+
+    #[test]
     fn extract_provider_turn_recovers_inline_parameter_json_types() {
         let body = serde_json::json!({
             "choices": [{
@@ -643,6 +855,27 @@ mod tests {
                 "args": ["hello", "world"],
                 "timeout_ms": 3000,
                 "login": false
+            })
+        );
+    }
+
+    #[test]
+    fn extract_provider_turn_preserves_string_typed_inline_parameters() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "让我重试。\n<function=shell.exec><parameter=command>true</parameter><parameter=args>[\"hello\"]</parameter></function>"
+                }
+            }]
+        });
+
+        let turn = extract_provider_turn(&body).expect("turn");
+        assert_eq!(turn.tool_intents.len(), 1);
+        assert_eq!(
+            turn.tool_intents[0].args_json,
+            json!({
+                "command": "true",
+                "args": ["hello"]
             })
         );
     }
