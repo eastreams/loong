@@ -24,7 +24,10 @@ use crate::tools::{
     ToolDescriptor, ToolExecutionPlane, ToolGovernanceScope, ToolRiskClass, ToolView,
 };
 
-use super::persistence::{persist_tool_decision, persist_tool_outcome};
+use super::persistence::{
+    persist_tool_decision, persist_tool_decision_with_memory_config, persist_tool_outcome,
+    persist_tool_outcome_with_memory_config,
+};
 use super::runtime::{ConversationRuntime, SessionContext};
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
@@ -1099,21 +1102,6 @@ impl DefaultApprovalResolutionRuntime {
         .map(|_| ())
     }
 
-    fn effective_tool_config_for_request_session(
-        &self,
-        repo: &SessionRepository,
-        session_id: &str,
-    ) -> Result<ToolConfig, String> {
-        let mut tool_config = self.tool_config.clone();
-        if repo
-            .load_session(session_id)?
-            .is_some_and(|session| session.parent_session_id.is_some())
-        {
-            tool_config.sessions.visibility = SessionVisibility::SelfOnly;
-        }
-        Ok(tool_config)
-    }
-
     fn request_lineage_root_session_id(
         &self,
         repo: &SessionRepository,
@@ -1203,23 +1191,24 @@ impl DefaultApprovalResolutionRuntime {
         kernel_ctx: Option<&KernelContext>,
     ) -> Result<ToolCoreOutcome, String> {
         let (execution_plane, replay_request) = self.replay_request(approval_request)?;
-        let effective_tool_config =
-            self.effective_tool_config_for_request_session(repo, &approval_request.session_id)?;
 
         match execution_plane {
             ToolExecutionPlane::App => {
-                crate::tools::execute_app_tool_with_runtime_support(
-                    replay_request,
-                    &approval_request.session_id,
-                    &self.memory_config,
-                    &effective_tool_config,
-                    crate::tools::AppToolRuntimeSupport {
-                        app_config: self.app_config.as_deref(),
-                        kernel_ctx,
-                        approval_runtime: None,
-                    },
-                )
-                .await
+                let session_context =
+                    self.replay_session_context(repo, &approval_request.session_id)?;
+                let app_dispatcher = match &self.app_config {
+                    Some(config) => DefaultAppToolDispatcher::production_with_config(
+                        self.memory_config.clone(),
+                        config.as_ref().clone(),
+                    ),
+                    None => DefaultAppToolDispatcher::production(
+                        self.memory_config.clone(),
+                        self.tool_config.clone(),
+                    ),
+                };
+                app_dispatcher
+                    .execute_app_tool(&session_context, replay_request, kernel_ctx)
+                    .await
             }
             ToolExecutionPlane::Orchestration => {
                 let orchestration_replayer = orchestration_replayer.ok_or_else(|| {
@@ -1237,6 +1226,104 @@ impl DefaultApprovalResolutionRuntime {
                     .to_owned(),
             ),
         }
+    }
+
+    fn replay_governance_snapshot(
+        &self,
+        approval_request: &crate::session::repository::ApprovalRequestRecord,
+    ) -> Option<ToolGovernanceSnapshot> {
+        serde_json::from_value(approval_request.governance_snapshot_json.clone()).ok()
+    }
+
+    fn replay_decision(
+        &self,
+        approval_request: &crate::session::repository::ApprovalRequestRecord,
+    ) -> Result<ToolDecision, String> {
+        let governance = self
+            .replay_governance_snapshot(approval_request)
+            .ok_or_else(|| {
+                "approval_request_invalid_governance_snapshot: failed to deserialize replay governance snapshot"
+                    .to_owned()
+            })?;
+        let decision = approval_request.decision.ok_or_else(|| {
+            "approval_request_missing_decision: approved replay is missing approval decision"
+                .to_owned()
+        })?;
+        let reason = format!("approval_request_{}", decision.as_str());
+        Ok(ToolDecision {
+            allow: true,
+            deny: false,
+            approval_required: false,
+            reason: reason.clone(),
+            rule_id: reason,
+            governance,
+        })
+    }
+
+    fn replay_success_outcome(
+        &self,
+        approval_request: &crate::session::repository::ApprovalRequestRecord,
+        resumed_tool_output: &ToolCoreOutcome,
+    ) -> ToolOutcome {
+        ToolOutcome {
+            status: resumed_tool_output.status.clone(),
+            payload: resumed_tool_output.payload.clone(),
+            error_code: None,
+            human_reason: None,
+            audit_event_id: None,
+            governance_allowed: true,
+            governance: self.replay_governance_snapshot(approval_request),
+        }
+    }
+
+    fn replay_failure_outcome(
+        &self,
+        approval_request: &crate::session::repository::ApprovalRequestRecord,
+        error: &str,
+    ) -> ToolOutcome {
+        ToolOutcome {
+            status: "error".to_owned(),
+            payload: serde_json::Value::Null,
+            error_code: Some("tool_error".to_owned()),
+            human_reason: Some(error.to_owned()),
+            audit_event_id: None,
+            governance_allowed: true,
+            governance: self.replay_governance_snapshot(approval_request),
+        }
+    }
+
+    async fn persist_replayed_outcome(
+        &self,
+        approval_request: &crate::session::repository::ApprovalRequestRecord,
+        outcome: &ToolOutcome,
+        kernel_ctx: Option<&KernelContext>,
+    ) -> Result<(), String> {
+        persist_tool_outcome_with_memory_config(
+            &self.memory_config,
+            &approval_request.session_id,
+            &approval_request.turn_id,
+            &approval_request.tool_call_id,
+            outcome,
+            kernel_ctx,
+        )
+        .await
+    }
+
+    async fn persist_replayed_decision(
+        &self,
+        approval_request: &crate::session::repository::ApprovalRequestRecord,
+        decision: &ToolDecision,
+        kernel_ctx: Option<&KernelContext>,
+    ) -> Result<(), String> {
+        persist_tool_decision_with_memory_config(
+            &self.memory_config,
+            &approval_request.session_id,
+            &approval_request.turn_id,
+            &approval_request.tool_call_id,
+            decision,
+            kernel_ctx,
+        )
+        .await
     }
 
     async fn execute_approved_request(
@@ -1264,13 +1351,58 @@ impl DefaultApprovalResolutionRuntime {
                     "approval_request_not_approved: `{approval_request_id}` is no longer approved"
                 )
             })?;
+        let replay_decision_persist_error = match self.replay_decision(&executing) {
+            Ok(replay_decision) => self
+                .persist_replayed_decision(&executing, &replay_decision, kernel_ctx)
+                .await
+                .err(),
+            Err(error) => Some(error),
+        };
         self.append_approval_event(
             repo,
             &executing,
             current_session_id,
             TOOL_APPROVAL_EXECUTION_STARTED_EVENT_KIND,
-            serde_json::json!({}),
+            serde_json::json!({
+                "replay_decision_persisted": replay_decision_persist_error.is_none(),
+                "replay_decision_persist_error": replay_decision_persist_error.clone(),
+            }),
         )?;
+        if let Some(error) = replay_decision_persist_error {
+            let executed_at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_secs() as i64)
+                .unwrap_or(0);
+            let executed = repo
+                .transition_approval_request_if_current(
+                    approval_request_id,
+                    TransitionApprovalRequestIfCurrentRequest {
+                        expected_status: ApprovalRequestStatus::Executing,
+                        next_status: ApprovalRequestStatus::Executed,
+                        decision: None,
+                        resolved_by_session_id: None,
+                        executed_at: Some(executed_at),
+                        last_error: Some(error.clone()),
+                    },
+                )?
+                .ok_or_else(|| {
+                    format!(
+                        "approval_request_not_executing: `{approval_request_id}` is no longer executing"
+                    )
+                })?;
+            self.append_approval_event(
+                repo,
+                &executed,
+                current_session_id,
+                TOOL_APPROVAL_EXECUTION_FAILED_EVENT_KIND,
+                serde_json::json!({
+                    "error": error.clone(),
+                    "replay_decision_persisted": false,
+                    "replay_decision_persist_error": error.clone(),
+                }),
+            )?;
+            return Err(error);
+        }
 
         match self
             .replay_approved_request(repo, &executing, orchestration_replayer, kernel_ctx)
@@ -1298,6 +1430,31 @@ impl DefaultApprovalResolutionRuntime {
                             "approval_request_not_executing: `{approval_request_id}` is no longer executing"
                         )
                     })?;
+                let replay_outcome = self.replay_success_outcome(&executing, &resumed_tool_output);
+                let replay_outcome_persist_error = self
+                    .persist_replayed_outcome(&executing, &replay_outcome, kernel_ctx)
+                    .await
+                    .err();
+                let executed = if let Some(error) = replay_outcome_persist_error.as_ref() {
+                    repo.transition_approval_request_if_current(
+                        approval_request_id,
+                        TransitionApprovalRequestIfCurrentRequest {
+                            expected_status: ApprovalRequestStatus::Executed,
+                            next_status: ApprovalRequestStatus::Executed,
+                            decision: None,
+                            resolved_by_session_id: None,
+                            executed_at: executed.executed_at,
+                            last_error: Some(error.clone()),
+                        },
+                    )?
+                    .ok_or_else(|| {
+                        format!(
+                            "approval_request_not_executed: `{approval_request_id}` lost executed state before recording replay outcome persistence error"
+                        )
+                    })?
+                } else {
+                    executed
+                };
                 self.append_approval_event(
                     repo,
                     &executed,
@@ -1305,6 +1462,8 @@ impl DefaultApprovalResolutionRuntime {
                     TOOL_APPROVAL_EXECUTION_FINISHED_EVENT_KIND,
                     serde_json::json!({
                         "resumed_tool_status": resumed_tool_output.status.clone(),
+                        "replay_outcome_persisted": replay_outcome_persist_error.is_none(),
+                        "replay_outcome_persist_error": replay_outcome_persist_error.clone(),
                     }),
                 )?;
                 Ok(crate::tools::approval::ApprovalResolutionOutcome {
@@ -1334,6 +1493,36 @@ impl DefaultApprovalResolutionRuntime {
                             "approval_request_not_executing: `{approval_request_id}` is no longer executing"
                         )
                     })?;
+                let replay_outcome = self.replay_failure_outcome(&executing, &error);
+                let replay_outcome_persist_error = self
+                    .persist_replayed_outcome(&executing, &replay_outcome, kernel_ctx)
+                    .await
+                    .err();
+                let error = if let Some(persist_error) = replay_outcome_persist_error.as_ref() {
+                    format!("{error}; replay_outcome_persist_error: {persist_error}")
+                } else {
+                    error
+                };
+                let executed = if replay_outcome_persist_error.is_some() {
+                    repo.transition_approval_request_if_current(
+                        approval_request_id,
+                        TransitionApprovalRequestIfCurrentRequest {
+                            expected_status: ApprovalRequestStatus::Executed,
+                            next_status: ApprovalRequestStatus::Executed,
+                            decision: None,
+                            resolved_by_session_id: None,
+                            executed_at: executed.executed_at,
+                            last_error: Some(error.clone()),
+                        },
+                    )?
+                    .ok_or_else(|| {
+                        format!(
+                            "approval_request_not_executed: `{approval_request_id}` lost executed state before recording replay failure outcome persistence error"
+                        )
+                    })?
+                } else {
+                    executed
+                };
                 self.append_approval_event(
                     repo,
                     &executed,
@@ -1341,6 +1530,8 @@ impl DefaultApprovalResolutionRuntime {
                     TOOL_APPROVAL_EXECUTION_FAILED_EVENT_KIND,
                     serde_json::json!({
                         "error": error.clone(),
+                        "replay_outcome_persisted": replay_outcome_persist_error.is_none(),
+                        "replay_outcome_persist_error": replay_outcome_persist_error.clone(),
                     }),
                 )?;
                 Err(error)

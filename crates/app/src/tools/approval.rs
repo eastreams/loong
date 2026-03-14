@@ -1,3 +1,6 @@
+#[cfg(feature = "memory-sqlite")]
+use std::collections::BTreeMap;
+
 use async_trait::async_trait;
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::{json, Value};
@@ -11,6 +14,11 @@ use crate::session::repository::{
     ApprovalDecision, ApprovalRequestRecord, ApprovalRequestStatus, SessionRepository,
 };
 use crate::KernelContext;
+
+#[cfg(feature = "memory-sqlite")]
+const APPROVAL_REQUEST_EVIDENCE_EVENT_LIMIT: usize = 64;
+#[cfg(feature = "memory-sqlite")]
+const APPROVAL_REQUEST_EVIDENCE_EVENT_BUDGET_PER_RETURNED_REQUEST: usize = 4;
 
 #[cfg(feature = "memory-sqlite")]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,6 +137,7 @@ pub async fn execute_approval_tool_with_runtime_support(
                 execute_approval_request_resolve(
                     request.payload,
                     current_session_id,
+                    config,
                     tool_config,
                     runtime,
                     kernel_ctx,
@@ -181,6 +190,24 @@ fn execute_approval_requests_list(
     let matched_count = requests.len();
     requests.truncate(request.limit);
     let returned_count = requests.len();
+    let recent_events_by_session_id =
+        approval_request_recent_events_by_session_id(&repo, &requests)?;
+    let request_summaries = requests
+        .iter()
+        .map(|record| {
+            let session_events = recent_events_by_session_id
+                .get(&record.session_id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            approval_request_summary_json_with_evidence(
+                record,
+                approval_request_execution_evidence_json_from_events(
+                    session_events,
+                    &record.approval_request_id,
+                ),
+            )
+        })
+        .collect::<Vec<_>>();
 
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
@@ -194,10 +221,7 @@ fn execute_approval_requests_list(
             "visible_session_ids": target_session_ids,
             "matched_count": matched_count,
             "returned_count": returned_count,
-            "requests": requests
-                .iter()
-                .map(approval_request_summary_json)
-                .collect::<Vec<_>>(),
+            "requests": request_summaries,
         }),
     })
 }
@@ -225,7 +249,10 @@ fn execute_approval_request_status(
         status: "ok".to_owned(),
         payload: json!({
             "current_session_id": current_session_id,
-            "approval_request": approval_request_detail_json(&request),
+            "approval_request": approval_request_detail_json_with_evidence(
+                &request,
+                approval_request_execution_evidence_json(&repo, &request)?,
+            ),
         }),
     })
 }
@@ -234,6 +261,7 @@ fn execute_approval_request_status(
 async fn execute_approval_request_resolve(
     payload: Value,
     current_session_id: &str,
+    config: &MemoryRuntimeConfig,
     tool_config: &ToolConfig,
     runtime: &(dyn ApprovalResolutionRuntime + '_),
     kernel_ctx: Option<&KernelContext>,
@@ -250,19 +278,26 @@ async fn execute_approval_request_resolve(
             kernel_ctx,
         )
         .await?;
+    let repo = SessionRepository::new(config)?;
 
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
         payload: json!({
             "current_session_id": current_session_id,
-            "approval_request": approval_request_detail_json(&outcome.approval_request),
+            "approval_request": approval_request_detail_json_with_evidence(
+                &outcome.approval_request,
+                approval_request_execution_evidence_json(&repo, &outcome.approval_request)?,
+            ),
             "resumed_tool_output": outcome.resumed_tool_output,
         }),
     })
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn approval_request_summary_json(record: &ApprovalRequestRecord) -> Value {
+fn approval_request_summary_json_with_evidence(
+    record: &ApprovalRequestRecord,
+    execution_evidence: Value,
+) -> Value {
     json!({
         "approval_request_id": record.approval_request_id,
         "session_id": record.session_id,
@@ -285,11 +320,15 @@ fn approval_request_summary_json(record: &ApprovalRequestRecord) -> Value {
             .governance_snapshot_json
             .get("rule_id")
             .and_then(Value::as_str),
+        "execution_evidence": execution_evidence,
     })
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn approval_request_detail_json(record: &ApprovalRequestRecord) -> Value {
+fn approval_request_detail_json_with_evidence(
+    record: &ApprovalRequestRecord,
+    execution_evidence: Value,
+) -> Value {
     json!({
         "approval_request_id": record.approval_request_id,
         "session_id": record.session_id,
@@ -306,6 +345,109 @@ fn approval_request_detail_json(record: &ApprovalRequestRecord) -> Value {
         "last_error": record.last_error,
         "request_payload": record.request_payload_json,
         "governance_snapshot": record.governance_snapshot_json,
+        "execution_evidence": execution_evidence,
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_execution_evidence_json(
+    repo: &SessionRepository,
+    record: &ApprovalRequestRecord,
+) -> Result<Value, String> {
+    let events =
+        repo.list_recent_events(&record.session_id, APPROVAL_REQUEST_EVIDENCE_EVENT_LIMIT)?;
+    Ok(approval_request_execution_evidence_json_from_events(
+        &events,
+        &record.approval_request_id,
+    ))
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_recent_events_by_session_id(
+    repo: &SessionRepository,
+    requests: &[ApprovalRequestRecord],
+) -> Result<BTreeMap<String, Vec<crate::session::repository::SessionEventRecord>>, String> {
+    let mut request_count_by_session_id = BTreeMap::<String, usize>::new();
+    for record in requests {
+        *request_count_by_session_id
+            .entry(record.session_id.clone())
+            .or_default() += 1;
+    }
+
+    let mut events_by_session_id = BTreeMap::new();
+    for (session_id, request_count) in request_count_by_session_id {
+        let event_limit = APPROVAL_REQUEST_EVIDENCE_EVENT_LIMIT.max(
+            request_count
+                .saturating_mul(APPROVAL_REQUEST_EVIDENCE_EVENT_BUDGET_PER_RETURNED_REQUEST),
+        );
+        let events = repo.list_recent_events(&session_id, event_limit)?;
+        events_by_session_id.insert(session_id, events);
+    }
+    Ok(events_by_session_id)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_execution_evidence_json_from_events(
+    events: &[crate::session::repository::SessionEventRecord],
+    approval_request_id: &str,
+) -> Value {
+    let mut started_event: Option<&crate::session::repository::SessionEventRecord> = None;
+    let mut terminal_event: Option<&crate::session::repository::SessionEventRecord> = None;
+
+    for event in events {
+        if event
+            .payload_json
+            .get("approval_request_id")
+            .and_then(Value::as_str)
+            != Some(approval_request_id)
+        {
+            continue;
+        }
+        match event.event_kind.as_str() {
+            "tool_approval_execution_started" => started_event = Some(event),
+            "tool_approval_execution_finished" | "tool_approval_execution_failed" => {
+                terminal_event = Some(event)
+            }
+            _ => {}
+        }
+    }
+
+    let replay_decision_persisted = started_event
+        .and_then(|event| event.payload_json.get("replay_decision_persisted"))
+        .and_then(Value::as_bool);
+    let replay_decision_persist_error = started_event
+        .and_then(|event| event.payload_json.get("replay_decision_persist_error"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let replay_outcome_persisted = terminal_event
+        .and_then(|event| event.payload_json.get("replay_outcome_persisted"))
+        .and_then(Value::as_bool);
+    let replay_outcome_persist_error = terminal_event
+        .and_then(|event| event.payload_json.get("replay_outcome_persist_error"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let execution_error = terminal_event
+        .and_then(|event| event.payload_json.get("error"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let evidence_complete = terminal_event
+        .map(|_| {
+            Value::Bool(
+                replay_decision_persisted.unwrap_or(false)
+                    && replay_outcome_persisted.unwrap_or(false),
+            )
+        })
+        .unwrap_or(Value::Null);
+
+    json!({
+        "started_event_kind": started_event.map(|event| event.event_kind.clone()),
+        "terminal_event_kind": terminal_event.map(|event| event.event_kind.clone()),
+        "replay_decision_persisted": replay_decision_persisted,
+        "replay_decision_persist_error": replay_decision_persist_error,
+        "replay_outcome_persisted": replay_outcome_persisted,
+        "replay_outcome_persist_error": replay_outcome_persist_error,
+        "execution_error": execution_error,
+        "evidence_complete": evidence_complete,
     })
 }
 
@@ -573,6 +715,151 @@ mod tests {
         assert!(request_ids.contains(&"apr-root-visible"));
         assert!(request_ids.contains(&"apr-child-visible"));
         assert!(!request_ids.contains(&"apr-hidden"));
+        let root_request = requests
+            .iter()
+            .find(|item| item["approval_request_id"] == "apr-root-visible")
+            .expect("root visible request");
+        assert_eq!(
+            root_request["execution_evidence"]["terminal_event_kind"],
+            Value::Null
+        );
+        assert_eq!(
+            root_request["execution_evidence"]["evidence_complete"],
+            Value::Null
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_tool_query_list_surfaces_execution_evidence() {
+        let config = isolated_memory_config("approval-query-list-evidence");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+        seed_request(
+            &repo,
+            "apr-list-evidence",
+            "root-session",
+            "session_cancel",
+            "governed_tool_requires_per_call_approval",
+        );
+        repo.append_event(crate::session::repository::NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: "tool_approval_execution_started".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "approval_request_id": "apr-list-evidence",
+                "replay_decision_persisted": true,
+                "replay_decision_persist_error": null,
+            }),
+        })
+        .expect("append started event");
+        repo.append_event(crate::session::repository::NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: "tool_approval_execution_finished".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "approval_request_id": "apr-list-evidence",
+                "resumed_tool_status": "ok",
+                "replay_outcome_persisted": true,
+                "replay_outcome_persist_error": null,
+            }),
+        })
+        .expect("append finished event");
+
+        let outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({}),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list outcome");
+
+        let requests = outcome.payload["requests"]
+            .as_array()
+            .expect("requests array");
+        let request = requests
+            .iter()
+            .find(|item| item["approval_request_id"] == "apr-list-evidence")
+            .expect("visible request");
+        let evidence = &request["execution_evidence"];
+        assert_eq!(
+            evidence["terminal_event_kind"],
+            "tool_approval_execution_finished"
+        );
+        assert_eq!(evidence["replay_decision_persisted"], true);
+        assert_eq!(evidence["replay_outcome_persisted"], true);
+        assert_eq!(evidence["evidence_complete"], true);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_tool_query_list_scales_execution_evidence_window_for_returned_requests() {
+        let config = isolated_memory_config("approval-query-list-evidence-window");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+
+        for index in 0..40 {
+            let approval_request_id = format!("apr-list-window-{index:02}");
+            seed_request(
+                &repo,
+                &approval_request_id,
+                "root-session",
+                "session_cancel",
+                "governed_tool_requires_per_call_approval",
+            );
+            repo.append_event(crate::session::repository::NewSessionEvent {
+                session_id: "root-session".to_owned(),
+                event_kind: "tool_approval_execution_started".to_owned(),
+                actor_session_id: Some("root-session".to_owned()),
+                payload_json: json!({
+                    "approval_request_id": approval_request_id,
+                    "replay_decision_persisted": true,
+                    "replay_decision_persist_error": null,
+                }),
+            })
+            .expect("append started event");
+            repo.append_event(crate::session::repository::NewSessionEvent {
+                session_id: "root-session".to_owned(),
+                event_kind: "tool_approval_execution_finished".to_owned(),
+                actor_session_id: Some("root-session".to_owned()),
+                payload_json: json!({
+                    "approval_request_id": approval_request_id,
+                    "resumed_tool_status": "ok",
+                    "replay_outcome_persisted": true,
+                    "replay_outcome_persist_error": null,
+                }),
+            })
+            .expect("append finished event");
+        }
+
+        let outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "limit": 40,
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list outcome");
+
+        let requests = outcome.payload["requests"]
+            .as_array()
+            .expect("requests array");
+        assert_eq!(requests.len(), 40);
+        let complete_evidence_count = requests
+            .iter()
+            .filter(|item| item["execution_evidence"]["evidence_complete"] == Value::Bool(true))
+            .count();
+        assert_eq!(
+            complete_evidence_count, 40,
+            "all returned requests should retain complete execution evidence"
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -623,6 +910,80 @@ mod tests {
         assert_eq!(
             request["request_payload"]["args_json"]["task"],
             "run-apr-child-visible"
+        );
+        assert_eq!(
+            request["execution_evidence"]["terminal_event_kind"],
+            Value::Null
+        );
+        assert_eq!(
+            request["execution_evidence"]["evidence_complete"],
+            Value::Null
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_tool_query_status_surfaces_execution_evidence() {
+        let config = isolated_memory_config("approval-query-status-evidence");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+        seed_request(
+            &repo,
+            "apr-visible-evidence",
+            "root-session",
+            "session_cancel",
+            "governed_tool_requires_per_call_approval",
+        );
+        repo.append_event(crate::session::repository::NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: "tool_approval_execution_started".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "approval_request_id": "apr-visible-evidence",
+                "replay_decision_persisted": true,
+                "replay_decision_persist_error": null,
+            }),
+        })
+        .expect("append started event");
+        repo.append_event(crate::session::repository::NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: "tool_approval_execution_finished".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "approval_request_id": "apr-visible-evidence",
+                "resumed_tool_status": "ok",
+                "replay_outcome_persisted": false,
+                "replay_outcome_persist_error": "persist assistant turn via kernel failed: forced outcome persistence failure",
+            }),
+        })
+        .expect("append finished event");
+
+        let outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_request_status".to_owned(),
+                payload: json!({
+                    "approval_request_id": "apr-visible-evidence",
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_request_status outcome");
+
+        let evidence = &outcome.payload["approval_request"]["execution_evidence"];
+        assert_eq!(
+            evidence["terminal_event_kind"],
+            "tool_approval_execution_finished"
+        );
+        assert_eq!(evidence["replay_decision_persisted"], true);
+        assert_eq!(evidence["replay_outcome_persisted"], false);
+        assert_eq!(evidence["evidence_complete"], false);
+        assert!(
+            evidence["replay_outcome_persist_error"]
+                .as_str()
+                .is_some_and(|error| error.contains("persist assistant turn via kernel failed")),
+            "expected replay outcome persistence error in evidence, got: {evidence}"
         );
     }
 

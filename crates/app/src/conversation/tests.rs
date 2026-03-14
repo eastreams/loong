@@ -8174,6 +8174,24 @@ fn seed_pending_approval_request_with_snapshot(
     args_json: Value,
     execution_plane: &str,
 ) {
+    let governance_snapshot_json =
+        if let Some(descriptor) = crate::tools::tool_catalog().descriptor(tool_name) {
+            json!({
+                "execution_plane": descriptor.execution_plane,
+                "governance_scope": descriptor.governance_scope,
+                "risk_class": descriptor.risk_class,
+                "approval_mode": descriptor.approval_mode,
+                "audit_label": descriptor.audit_label,
+                "reason": format!("approval required for {tool_name}"),
+                "rule_id": "governed_tool_requires_per_call_approval",
+            })
+        } else {
+            json!({
+                "reason": format!("approval required for {tool_name}"),
+                "rule_id": "governed_tool_requires_per_call_approval",
+                "execution_plane": execution_plane,
+            })
+        };
     repo.ensure_approval_request(crate::session::repository::NewApprovalRequestRecord {
         approval_request_id: approval_request_id.to_owned(),
         session_id: session_id.to_owned(),
@@ -8186,11 +8204,7 @@ fn seed_pending_approval_request_with_snapshot(
             "tool_name": tool_name,
             "args_json": args_json,
         }),
-        governance_snapshot_json: json!({
-            "reason": format!("approval required for {tool_name}"),
-            "rule_id": "governed_tool_requires_per_call_approval",
-            "execution_plane": execution_plane,
-        }),
+        governance_snapshot_json,
     })
     .expect("seed pending approval request");
 }
@@ -8542,6 +8556,14 @@ async fn approval_request_resume_once_executes_blocked_app_tool_and_marks_reques
                 text.contains("\"resumed_tool_output\":{"),
                 "expected resumed tool output envelope in output, got: {text}"
             );
+            assert!(
+                text.contains("\"execution_evidence\":{"),
+                "expected execution_evidence in output, got: {text}"
+            );
+            assert!(
+                text.contains("\"evidence_complete\":true"),
+                "expected complete execution evidence in output, got: {text}"
+            );
         }
         other => panic!("expected FinalText, got: {other:?}"),
     }
@@ -8595,6 +8617,1003 @@ async fn approval_request_resume_once_executes_blocked_app_tool_and_marks_reques
     assert!(events
         .iter()
         .any(|event| event.event_kind == "tool_approval_execution_started"));
+    assert!(events
+        .iter()
+        .any(|event| event.event_kind == "tool_approval_execution_finished"));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_request_resume_once_persists_terminal_outcome_for_original_blocked_call() {
+    let runtime = FakeRuntime::new(vec![], Ok(String::new()));
+    let governance =
+        crate::conversation::DefaultToolGovernanceEvaluator::new(ToolConfig::default());
+    let (_approval_request_store, memory_config) =
+        isolated_approval_request_store("approval-resume-once-transcript-outcome");
+    let repo = SessionRepository::new(&memory_config).expect("approval resolve repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create child session");
+    repo.append_event(crate::session::repository::NewSessionEvent {
+        session_id: "child-session".to_owned(),
+        event_kind: "delegate_queued".to_owned(),
+        actor_session_id: Some("root-session".to_owned()),
+        payload_json: json!({
+            "task": "research",
+            "timeout_seconds": 60,
+        }),
+    })
+    .expect("append queued child event");
+    seed_pending_approval_request_with_snapshot(
+        &repo,
+        "apr-approve-once-transcript-outcome",
+        "root-session",
+        "session_cancel",
+        json!({
+            "session_id": "child-session",
+        }),
+        "App",
+    );
+
+    let app_dispatcher = crate::conversation::DefaultAppToolDispatcher::new(
+        memory_config.clone(),
+        ToolConfig::default(),
+    );
+    let orchestration_dispatcher = RecordingApprovalResolveOrchestrationDispatcher::default();
+    let engine = TurnEngine::new(1);
+    let turn = approval_request_resolve_turn(
+        "root-session",
+        "apr-approve-once-transcript-outcome",
+        "approve_once",
+    );
+    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
+
+    let result = engine
+        .execute_turn_in_context_with_governance_and_persistence(
+            &turn,
+            &session_context,
+            &runtime,
+            &governance,
+            &app_dispatcher,
+            &orchestration_dispatcher,
+            None,
+            None,
+        )
+        .await;
+
+    match result {
+        TurnResult::FinalText(_) => {}
+        other => panic!("expected FinalText, got: {other:?}"),
+    }
+
+    let turns = crate::memory::window_direct("root-session", 20, &memory_config)
+        .expect("load root session transcript");
+    let replay_outcome = turns
+        .iter()
+        .find_map(|turn| {
+            let json = serde_json::from_str::<serde_json::Value>(&turn.content).ok()?;
+            if json["type"] == "tool_outcome"
+                && json["turn_id"] == "turn-apr-approve-once-transcript-outcome"
+                && json["tool_call_id"] == "call-apr-approve-once-transcript-outcome"
+            {
+                Some(json)
+            } else {
+                None
+            }
+        })
+        .expect("replayed original tool call should persist a terminal tool_outcome");
+
+    assert_eq!(replay_outcome["outcome"]["status"], "ok");
+    assert_eq!(replay_outcome["outcome"]["governance_allowed"], true);
+    assert_eq!(
+        replay_outcome["outcome"]["governance"]["execution_plane"],
+        "App"
+    );
+    assert_eq!(
+        replay_outcome["outcome"]["governance"]["audit_label"],
+        "session_cancel"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_request_resume_once_persists_replay_decision_before_terminal_outcome() {
+    let runtime = FakeRuntime::new(vec![], Ok(String::new()));
+    let governance =
+        crate::conversation::DefaultToolGovernanceEvaluator::new(ToolConfig::default());
+    let (_approval_request_store, memory_config) =
+        isolated_approval_request_store("approval-resume-once-replay-decision");
+    let repo = SessionRepository::new(&memory_config).expect("approval resolve repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create child session");
+    repo.append_event(crate::session::repository::NewSessionEvent {
+        session_id: "child-session".to_owned(),
+        event_kind: "delegate_queued".to_owned(),
+        actor_session_id: Some("root-session".to_owned()),
+        payload_json: json!({
+            "task": "research",
+            "timeout_seconds": 60,
+        }),
+    })
+    .expect("append queued child event");
+    seed_pending_approval_request_with_snapshot(
+        &repo,
+        "apr-replay-decision",
+        "root-session",
+        "session_cancel",
+        json!({
+            "session_id": "child-session",
+        }),
+        "App",
+    );
+
+    let app_dispatcher = crate::conversation::DefaultAppToolDispatcher::new(
+        memory_config.clone(),
+        ToolConfig::default(),
+    );
+    let orchestration_dispatcher = RecordingApprovalResolveOrchestrationDispatcher::default();
+    let engine = TurnEngine::new(1);
+    let turn = approval_request_resolve_turn("root-session", "apr-replay-decision", "approve_once");
+    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
+
+    let result = engine
+        .execute_turn_in_context_with_governance_and_persistence(
+            &turn,
+            &session_context,
+            &runtime,
+            &governance,
+            &app_dispatcher,
+            &orchestration_dispatcher,
+            None,
+            None,
+        )
+        .await;
+
+    match result {
+        TurnResult::FinalText(_) => {}
+        other => panic!("expected FinalText, got: {other:?}"),
+    }
+
+    let relevant_turns = crate::memory::window_direct("root-session", 20, &memory_config)
+        .expect("load root session transcript")
+        .into_iter()
+        .filter_map(|turn| {
+            let json = serde_json::from_str::<serde_json::Value>(&turn.content).ok()?;
+            (json["turn_id"] == "turn-apr-replay-decision"
+                && json["tool_call_id"] == "call-apr-replay-decision")
+                .then_some(json)
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        relevant_turns.len(),
+        2,
+        "expected replay decision and outcome"
+    );
+    assert_eq!(relevant_turns[0]["type"], "tool_decision");
+    assert_eq!(relevant_turns[1]["type"], "tool_outcome");
+    assert_eq!(relevant_turns[0]["decision"]["allow"], true);
+    assert_eq!(relevant_turns[0]["decision"]["approval_required"], false);
+    assert_eq!(
+        relevant_turns[0]["decision"]["reason"],
+        "approval_request_approve_once"
+    );
+    assert_eq!(
+        relevant_turns[0]["decision"]["governance"]["execution_plane"],
+        "App"
+    );
+    assert_eq!(relevant_turns[1]["outcome"]["status"], "ok");
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_request_resume_once_rechecks_app_tool_visibility_for_request_session() {
+    let runtime = FakeRuntime::new(vec![], Ok(String::new()));
+    let governance =
+        crate::conversation::DefaultToolGovernanceEvaluator::new(ToolConfig::default());
+    let (_approval_request_store, memory_config) =
+        isolated_approval_request_store("approval-resume-once-app-visibility");
+    let repo = SessionRepository::new(&memory_config).expect("approval resolve repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create child session");
+    seed_pending_approval_request_with_snapshot(
+        &repo,
+        "apr-approve-once-app-visibility",
+        "child-session",
+        "sessions_list",
+        json!({}),
+        "App",
+    );
+
+    let app_dispatcher = crate::conversation::DefaultAppToolDispatcher::new(
+        memory_config.clone(),
+        ToolConfig::default(),
+    );
+    let orchestration_dispatcher = RecordingApprovalResolveOrchestrationDispatcher::default();
+    let engine = TurnEngine::new(1);
+    let turn = approval_request_resolve_turn(
+        "root-session",
+        "apr-approve-once-app-visibility",
+        "approve_once",
+    );
+    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
+
+    let result = engine
+        .execute_turn_in_context_with_governance_and_persistence(
+            &turn,
+            &session_context,
+            &runtime,
+            &governance,
+            &app_dispatcher,
+            &orchestration_dispatcher,
+            None,
+            None,
+        )
+        .await;
+
+    match result {
+        TurnResult::ToolError(error) => assert!(
+            error.contains("tool_not_visible: sessions_list"),
+            "expected child replay visibility error, got: {error}"
+        ),
+        other => panic!("expected ToolError, got: {other:?}"),
+    }
+
+    let resolved = repo
+        .load_approval_request("apr-approve-once-app-visibility")
+        .expect("load approval request")
+        .expect("executed approval request");
+    assert_eq!(
+        resolved.status,
+        crate::session::repository::ApprovalRequestStatus::Executed
+    );
+    assert!(
+        resolved
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("tool_not_visible: sessions_list")),
+        "expected tool visibility failure in approval request last_error, got: {:?}",
+        resolved.last_error
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_request_resume_once_rejects_invalid_replay_governance_snapshot_before_execution()
+{
+    let runtime = FakeRuntime::new(vec![], Ok(String::new()));
+    let governance =
+        crate::conversation::DefaultToolGovernanceEvaluator::new(ToolConfig::default());
+    let (_approval_request_store, memory_config) =
+        isolated_approval_request_store("approval-resume-once-invalid-replay-governance");
+    let repo = SessionRepository::new(&memory_config).expect("approval resolve repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create child session");
+    repo.append_event(crate::session::repository::NewSessionEvent {
+        session_id: "child-session".to_owned(),
+        event_kind: "delegate_queued".to_owned(),
+        actor_session_id: Some("root-session".to_owned()),
+        payload_json: json!({
+            "task": "research",
+            "timeout_seconds": 60,
+        }),
+    })
+    .expect("append queued child event");
+    repo.ensure_approval_request(crate::session::repository::NewApprovalRequestRecord {
+        approval_request_id: "apr-invalid-replay-governance".to_owned(),
+        session_id: "root-session".to_owned(),
+        turn_id: "turn-apr-invalid-replay-governance".to_owned(),
+        tool_call_id: "call-apr-invalid-replay-governance".to_owned(),
+        tool_name: "session_cancel".to_owned(),
+        approval_key: "tool:session_cancel".to_owned(),
+        request_payload_json: json!({
+            "session_id": "root-session",
+            "tool_name": "session_cancel",
+            "args_json": {
+                "session_id": "child-session",
+            },
+        }),
+        governance_snapshot_json: json!({
+            "execution_plane": "App",
+        }),
+    })
+    .expect("seed invalid approval request");
+
+    let app_dispatcher = crate::conversation::DefaultAppToolDispatcher::new(
+        memory_config.clone(),
+        ToolConfig::default(),
+    );
+    let orchestration_dispatcher = RecordingApprovalResolveOrchestrationDispatcher::default();
+    let engine = TurnEngine::new(1);
+    let turn = approval_request_resolve_turn(
+        "root-session",
+        "apr-invalid-replay-governance",
+        "approve_once",
+    );
+    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
+
+    let result = engine
+        .execute_turn_in_context_with_governance_and_persistence(
+            &turn,
+            &session_context,
+            &runtime,
+            &governance,
+            &app_dispatcher,
+            &orchestration_dispatcher,
+            None,
+            None,
+        )
+        .await;
+
+    match result {
+        TurnResult::ToolError(error) => assert!(
+            error.contains("approval_request_invalid_governance_snapshot"),
+            "expected invalid governance snapshot error, got: {error}"
+        ),
+        other => panic!("expected ToolError, got: {other:?}"),
+    }
+
+    let resolved = repo
+        .load_approval_request("apr-invalid-replay-governance")
+        .expect("load approval request")
+        .expect("resolved approval request");
+    assert_eq!(
+        resolved.status,
+        crate::session::repository::ApprovalRequestStatus::Executed
+    );
+    assert!(
+        resolved
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("approval_request_invalid_governance_snapshot")),
+        "expected invalid governance snapshot last_error, got: {:?}",
+        resolved.last_error
+    );
+
+    let child = repo
+        .load_session("child-session")
+        .expect("load child session")
+        .expect("child session");
+    assert_eq!(child.state, crate::session::repository::SessionState::Ready);
+
+    let events = repo
+        .list_recent_events("root-session", 20)
+        .expect("list approval events");
+    assert!(events
+        .iter()
+        .any(|event| event.event_kind == "tool_approval_execution_started"));
+    assert!(events
+        .iter()
+        .any(|event| event.event_kind == "tool_approval_execution_failed"));
+    assert!(!events
+        .iter()
+        .any(|event| event.event_kind == "tool_approval_execution_finished"));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_request_resume_once_persists_terminal_outcome_for_original_orchestration_call() {
+    let runtime = FakeRuntime::new(vec![], Ok(String::new()));
+    let governance =
+        crate::conversation::DefaultToolGovernanceEvaluator::new(ToolConfig::default());
+    let (_approval_request_store, memory_config) =
+        isolated_approval_request_store("approval-resume-once-orchestration-transcript-outcome");
+    let repo = SessionRepository::new(&memory_config).expect("approval resolve repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    seed_pending_approval_request(
+        &repo,
+        "apr-approve-once-orchestration-transcript-outcome",
+        "root-session",
+        "delegate_async",
+    );
+
+    let orchestration_dispatcher =
+        Arc::new(RecordingApprovalResolveOrchestrationDispatcher::default());
+    let app_dispatcher = crate::conversation::DefaultAppToolDispatcher::new(
+        memory_config.clone(),
+        ToolConfig::default(),
+    )
+    .with_approval_resolution_orchestration_dispatcher(orchestration_dispatcher.clone());
+    let engine = TurnEngine::new(1);
+    let turn = approval_request_resolve_turn(
+        "root-session",
+        "apr-approve-once-orchestration-transcript-outcome",
+        "approve_once",
+    );
+    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
+
+    let result = engine
+        .execute_turn_in_context_with_governance_and_persistence(
+            &turn,
+            &session_context,
+            &runtime,
+            &governance,
+            &app_dispatcher,
+            orchestration_dispatcher.as_ref(),
+            None,
+            None,
+        )
+        .await;
+
+    match result {
+        TurnResult::FinalText(_) => {}
+        other => panic!("expected FinalText, got: {other:?}"),
+    }
+
+    let turns = crate::memory::window_direct("root-session", 20, &memory_config)
+        .expect("load root session transcript");
+    let replay_outcome = turns
+        .iter()
+        .find_map(|turn| {
+            let json = serde_json::from_str::<serde_json::Value>(&turn.content).ok()?;
+            if json["type"] == "tool_outcome"
+                && json["turn_id"] == "turn-apr-approve-once-orchestration-transcript-outcome"
+                && json["tool_call_id"] == "call-apr-approve-once-orchestration-transcript-outcome"
+            {
+                Some(json)
+            } else {
+                None
+            }
+        })
+        .expect("replayed orchestration tool should persist a terminal tool_outcome");
+
+    assert_eq!(replay_outcome["outcome"]["status"], "ok");
+    assert_eq!(replay_outcome["outcome"]["governance_allowed"], true);
+    assert_eq!(
+        replay_outcome["outcome"]["governance"]["execution_plane"],
+        "Orchestration"
+    );
+    assert_eq!(
+        replay_outcome["outcome"]["governance"]["audit_label"],
+        "delegate_async"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_request_replay_outcome_persistence_routes_through_kernel_when_context_provided() {
+    let runtime = FakeRuntime::new(vec![], Ok(String::new()));
+    let governance =
+        crate::conversation::DefaultToolGovernanceEvaluator::new(ToolConfig::default());
+    let (_approval_request_store, memory_config) =
+        isolated_approval_request_store("approval-replay-outcome-kernel-memory");
+    let repo = SessionRepository::new(&memory_config).expect("approval resolve repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create child session");
+    repo.append_event(crate::session::repository::NewSessionEvent {
+        session_id: "child-session".to_owned(),
+        event_kind: "delegate_queued".to_owned(),
+        actor_session_id: Some("root-session".to_owned()),
+        payload_json: json!({
+            "task": "research",
+            "timeout_seconds": 60,
+        }),
+    })
+    .expect("append queued child event");
+    seed_pending_approval_request_with_snapshot(
+        &repo,
+        "apr-replay-outcome-kernel-memory",
+        "root-session",
+        "session_cancel",
+        json!({
+            "session_id": "child-session",
+        }),
+        "App",
+    );
+
+    let app_dispatcher = crate::conversation::DefaultAppToolDispatcher::new(
+        memory_config.clone(),
+        ToolConfig::default(),
+    );
+    let orchestration_dispatcher = RecordingApprovalResolveOrchestrationDispatcher::default();
+    let engine = TurnEngine::new(1);
+    let turn = approval_request_resolve_turn(
+        "root-session",
+        "apr-replay-outcome-kernel-memory",
+        "approve_once",
+    );
+    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let (kernel_ctx, _memory_invocations) = build_kernel_context(audit.clone());
+
+    let result = engine
+        .execute_turn_in_context_with_governance_and_persistence(
+            &turn,
+            &session_context,
+            &runtime,
+            &governance,
+            &app_dispatcher,
+            &orchestration_dispatcher,
+            None,
+            Some(&kernel_ctx),
+        )
+        .await;
+
+    match result {
+        TurnResult::FinalText(_) => {}
+        other => panic!("expected FinalText, got: {other:?}"),
+    }
+
+    let events = audit.snapshot();
+    let memory_plane_invocations = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                &event.kind,
+                loongclaw_kernel::AuditEventKind::PlaneInvoked {
+                    plane: loongclaw_contracts::ExecutionPlane::Memory,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert!(
+        memory_plane_invocations >= 1,
+        "expected replay outcome persistence to route through kernel memory plane, got events: {events:?}"
+    );
+
+    let captured = _memory_invocations.lock().expect("memory invocations lock");
+    let persisted = captured
+        .iter()
+        .filter(|request| request.operation == "append_turn")
+        .filter_map(|request| {
+            let content = request.payload["content"].as_str()?;
+            serde_json::from_str::<serde_json::Value>(content).ok()
+        })
+        .find(|json| {
+            json["type"] == "tool_outcome"
+                && json["turn_id"] == "turn-apr-replay-outcome-kernel-memory"
+                && json["tool_call_id"] == "call-apr-replay-outcome-kernel-memory"
+        })
+        .expect("expected serialized replay tool_outcome append_turn invocation");
+    assert_eq!(persisted["type"], "tool_outcome");
+    assert_eq!(
+        persisted["turn_id"],
+        "turn-apr-replay-outcome-kernel-memory"
+    );
+    assert_eq!(
+        persisted["tool_call_id"],
+        "call-apr-replay-outcome-kernel-memory"
+    );
+    assert_eq!(persisted["outcome"]["status"], "ok");
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_request_replay_decision_persistence_routes_through_kernel_before_outcome() {
+    let runtime = FakeRuntime::new(vec![], Ok(String::new()));
+    let governance =
+        crate::conversation::DefaultToolGovernanceEvaluator::new(ToolConfig::default());
+    let (_approval_request_store, memory_config) =
+        isolated_approval_request_store("approval-replay-decision-kernel-memory");
+    let repo = SessionRepository::new(&memory_config).expect("approval resolve repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create child session");
+    repo.append_event(crate::session::repository::NewSessionEvent {
+        session_id: "child-session".to_owned(),
+        event_kind: "delegate_queued".to_owned(),
+        actor_session_id: Some("root-session".to_owned()),
+        payload_json: json!({
+            "task": "research",
+            "timeout_seconds": 60,
+        }),
+    })
+    .expect("append queued child event");
+    seed_pending_approval_request_with_snapshot(
+        &repo,
+        "apr-replay-decision-kernel-memory",
+        "root-session",
+        "session_cancel",
+        json!({
+            "session_id": "child-session",
+        }),
+        "App",
+    );
+
+    let app_dispatcher = crate::conversation::DefaultAppToolDispatcher::new(
+        memory_config.clone(),
+        ToolConfig::default(),
+    );
+    let orchestration_dispatcher = RecordingApprovalResolveOrchestrationDispatcher::default();
+    let engine = TurnEngine::new(1);
+    let turn = approval_request_resolve_turn(
+        "root-session",
+        "apr-replay-decision-kernel-memory",
+        "approve_once",
+    );
+    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let (kernel_ctx, memory_invocations) = build_kernel_context(audit);
+
+    let result = engine
+        .execute_turn_in_context_with_governance_and_persistence(
+            &turn,
+            &session_context,
+            &runtime,
+            &governance,
+            &app_dispatcher,
+            &orchestration_dispatcher,
+            None,
+            Some(&kernel_ctx),
+        )
+        .await;
+
+    match result {
+        TurnResult::FinalText(_) => {}
+        other => panic!("expected FinalText, got: {other:?}"),
+    }
+
+    let captured = memory_invocations.lock().expect("memory invocations lock");
+    let relevant = captured
+        .iter()
+        .filter(|request| request.operation == "append_turn")
+        .map(|request| {
+            serde_json::from_str::<serde_json::Value>(
+                request.payload["content"]
+                    .as_str()
+                    .expect("kernel append_turn content should be serialized as a string"),
+            )
+            .expect("kernel append_turn content should be valid JSON")
+        })
+        .filter(|json| {
+            json["turn_id"] == "turn-apr-replay-decision-kernel-memory"
+                && json["tool_call_id"] == "call-apr-replay-decision-kernel-memory"
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(relevant.len(), 2, "expected replay decision and outcome");
+    assert_eq!(relevant[0]["type"], "tool_decision");
+    assert_eq!(relevant[1]["type"], "tool_outcome");
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_request_resume_once_rejects_replay_decision_persistence_failure_before_execution()
+{
+    let runtime = FakeRuntime::new(vec![], Ok(String::new()));
+    let governance =
+        crate::conversation::DefaultToolGovernanceEvaluator::new(ToolConfig::default());
+    let (_approval_request_store, memory_config) =
+        isolated_approval_request_store("approval-replay-decision-kernel-failure");
+    let repo = SessionRepository::new(&memory_config).expect("approval resolve repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create child session");
+    repo.append_event(crate::session::repository::NewSessionEvent {
+        session_id: "child-session".to_owned(),
+        event_kind: "delegate_queued".to_owned(),
+        actor_session_id: Some("root-session".to_owned()),
+        payload_json: json!({
+            "task": "research",
+            "timeout_seconds": 60,
+        }),
+    })
+    .expect("append queued child event");
+    seed_pending_approval_request_with_snapshot(
+        &repo,
+        "apr-replay-decision-kernel-failure",
+        "root-session",
+        "session_cancel",
+        json!({
+            "session_id": "child-session",
+        }),
+        "App",
+    );
+
+    let app_dispatcher = crate::conversation::DefaultAppToolDispatcher::new(
+        memory_config.clone(),
+        ToolConfig::default(),
+    );
+    let orchestration_dispatcher = RecordingApprovalResolveOrchestrationDispatcher::default();
+    let engine = TurnEngine::new(1);
+    let turn = approval_request_resolve_turn(
+        "root-session",
+        "apr-replay-decision-kernel-failure",
+        "approve_once",
+    );
+    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
+    let kernel_ctx = build_failing_kernel_context("forced memory failure");
+
+    let result = engine
+        .execute_turn_in_context_with_governance_and_persistence(
+            &turn,
+            &session_context,
+            &runtime,
+            &governance,
+            &app_dispatcher,
+            &orchestration_dispatcher,
+            None,
+            Some(&kernel_ctx),
+        )
+        .await;
+
+    match result {
+        TurnResult::ToolError(error) => assert!(
+            error.contains("persist assistant turn via kernel failed"),
+            "expected replay decision persistence failure, got: {error}"
+        ),
+        other => panic!("expected ToolError, got: {other:?}"),
+    }
+
+    let resolved = repo
+        .load_approval_request("apr-replay-decision-kernel-failure")
+        .expect("load approval request")
+        .expect("resolved approval request");
+    assert_eq!(
+        resolved.status,
+        crate::session::repository::ApprovalRequestStatus::Executed
+    );
+    assert!(
+        resolved
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("persist assistant turn via kernel failed")),
+        "expected replay decision persistence last_error, got: {:?}",
+        resolved.last_error
+    );
+
+    let child = repo
+        .load_session("child-session")
+        .expect("load child session")
+        .expect("child session");
+    assert_eq!(child.state, crate::session::repository::SessionState::Ready);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_request_resume_once_records_successful_replay_outcome_persistence_gap_in_last_error(
+) {
+    let runtime = FakeRuntime::new(vec![], Ok(String::new()));
+    let governance =
+        crate::conversation::DefaultToolGovernanceEvaluator::new(ToolConfig::default());
+    let (_approval_request_store, memory_config) =
+        isolated_approval_request_store("approval-replay-outcome-kernel-failure");
+    let repo = SessionRepository::new(&memory_config).expect("approval resolve repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create child session");
+    repo.append_event(crate::session::repository::NewSessionEvent {
+        session_id: "child-session".to_owned(),
+        event_kind: "delegate_queued".to_owned(),
+        actor_session_id: Some("root-session".to_owned()),
+        payload_json: json!({
+            "task": "research",
+            "timeout_seconds": 60,
+        }),
+    })
+    .expect("append queued child event");
+    seed_pending_approval_request_with_snapshot(
+        &repo,
+        "apr-replay-outcome-kernel-failure",
+        "root-session",
+        "session_cancel",
+        json!({
+            "session_id": "child-session",
+        }),
+        "App",
+    );
+
+    let app_dispatcher = crate::conversation::DefaultAppToolDispatcher::new(
+        memory_config.clone(),
+        ToolConfig::default(),
+    );
+    let orchestration_dispatcher = RecordingApprovalResolveOrchestrationDispatcher::default();
+    let engine = TurnEngine::new(1);
+    let turn = approval_request_resolve_turn(
+        "root-session",
+        "apr-replay-outcome-kernel-failure",
+        "approve_once",
+    );
+    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
+    let kernel_ctx = build_fail_after_n_kernel_context(2, "forced outcome persistence failure");
+
+    let result = engine
+        .execute_turn_in_context_with_governance_and_persistence(
+            &turn,
+            &session_context,
+            &runtime,
+            &governance,
+            &app_dispatcher,
+            &orchestration_dispatcher,
+            None,
+            Some(&kernel_ctx),
+        )
+        .await;
+
+    match result {
+        TurnResult::FinalText(text) => {
+            assert!(
+                text.contains("\"status\":\"executed\""),
+                "expected executed status in output, got: {text}"
+            );
+            assert!(
+                text.contains("persist assistant turn via kernel failed"),
+                "expected durable replay outcome persistence warning in output, got: {text}"
+            );
+            assert!(
+                text.contains("\"execution_evidence\":{"),
+                "expected execution_evidence in output, got: {text}"
+            );
+            assert!(
+                text.contains("\"evidence_complete\":false"),
+                "expected incomplete execution evidence in output, got: {text}"
+            );
+        }
+        other => panic!("expected FinalText, got: {other:?}"),
+    }
+
+    let resolved = repo
+        .load_approval_request("apr-replay-outcome-kernel-failure")
+        .expect("load approval request")
+        .expect("resolved approval request");
+    assert_eq!(
+        resolved.status,
+        crate::session::repository::ApprovalRequestStatus::Executed
+    );
+    assert!(
+        resolved
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("persist assistant turn via kernel failed")),
+        "expected replay outcome persistence last_error, got: {:?}",
+        resolved.last_error
+    );
+
+    let child = repo
+        .load_session("child-session")
+        .expect("load child session")
+        .expect("child session");
+    assert_eq!(
+        child.state,
+        crate::session::repository::SessionState::Failed
+    );
+
+    let events = repo
+        .list_recent_events("root-session", 20)
+        .expect("list approval events");
     assert!(events
         .iter()
         .any(|event| event.event_kind == "tool_approval_execution_finished"));
@@ -8700,6 +9719,125 @@ async fn approval_request_resume_once_records_execution_failure_and_last_error()
     assert!(events
         .iter()
         .any(|event| event.event_kind == "tool_approval_execution_failed"));
+
+    let turns = crate::memory::window_direct("root-session", 20, &memory_config)
+        .expect("load root session transcript");
+    let replay_outcome = turns
+        .iter()
+        .find_map(|turn| {
+            let json = serde_json::from_str::<serde_json::Value>(&turn.content).ok()?;
+            if json["type"] == "tool_outcome"
+                && json["turn_id"] == "turn-apr-approve-once-failure"
+                && json["tool_call_id"] == "call-apr-approve-once-failure"
+            {
+                Some(json)
+            } else {
+                None
+            }
+        })
+        .expect("failed replay should persist a terminal tool_outcome");
+    assert_eq!(replay_outcome["outcome"]["status"], "error");
+    assert_eq!(replay_outcome["outcome"]["error_code"], "tool_error");
+    assert!(
+        replay_outcome["outcome"]["human_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("session_cancel_not_cancellable")),
+        "expected persisted failure reason, got: {replay_outcome}"
+    );
+    assert_eq!(replay_outcome["outcome"]["governance_allowed"], true);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_request_resume_once_records_failure_outcome_persistence_gap_in_last_error() {
+    let runtime = FakeRuntime::new(vec![], Ok(String::new()));
+    let governance =
+        crate::conversation::DefaultToolGovernanceEvaluator::new(ToolConfig::default());
+    let (_approval_request_store, memory_config) =
+        isolated_approval_request_store("approval-replay-failure-outcome-kernel-failure");
+    let repo = SessionRepository::new(&memory_config).expect("approval resolve repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: crate::session::repository::SessionState::Completed,
+    })
+    .expect("create child session");
+    seed_pending_approval_request_with_snapshot(
+        &repo,
+        "apr-replay-failure-outcome-kernel-failure",
+        "root-session",
+        "session_cancel",
+        json!({
+            "session_id": "child-session",
+        }),
+        "App",
+    );
+
+    let app_dispatcher = crate::conversation::DefaultAppToolDispatcher::new(
+        memory_config.clone(),
+        ToolConfig::default(),
+    );
+    let orchestration_dispatcher = RecordingApprovalResolveOrchestrationDispatcher::default();
+    let engine = TurnEngine::new(1);
+    let turn = approval_request_resolve_turn(
+        "root-session",
+        "apr-replay-failure-outcome-kernel-failure",
+        "approve_once",
+    );
+    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
+    let kernel_ctx =
+        build_fail_after_n_kernel_context(2, "forced failure outcome persistence failure");
+
+    let result = engine
+        .execute_turn_in_context_with_governance_and_persistence(
+            &turn,
+            &session_context,
+            &runtime,
+            &governance,
+            &app_dispatcher,
+            &orchestration_dispatcher,
+            None,
+            Some(&kernel_ctx),
+        )
+        .await;
+
+    match result {
+        TurnResult::ToolError(error) => assert!(
+            error.contains("session_cancel_not_cancellable"),
+            "expected original tool failure, got: {error}"
+        ),
+        other => panic!("expected ToolError, got: {other:?}"),
+    }
+
+    let resolved = repo
+        .load_approval_request("apr-replay-failure-outcome-kernel-failure")
+        .expect("load approval request")
+        .expect("resolved approval request");
+    assert_eq!(
+        resolved.status,
+        crate::session::repository::ApprovalRequestStatus::Executed
+    );
+    assert!(
+        resolved.last_error.as_deref().is_some_and(|error| {
+            error.contains("session_cancel_not_cancellable")
+                && error.contains("persist assistant turn via kernel failed")
+        }),
+        "expected original failure plus persistence gap in last_error, got: {:?}",
+        resolved.last_error
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -9448,6 +10586,88 @@ fn build_kernel_context(
     (ctx, invocations)
 }
 
+fn build_failing_kernel_context(message: &str) -> KernelContext {
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongClawKernel::with_runtime(
+        StaticPolicyEngine::default(),
+        clock,
+        Arc::new(InMemoryAuditSink::default()),
+    );
+
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::MemoryWrite, Capability::MemoryRead]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+
+    let adapter = FailingTestMemoryAdapter {
+        message: message.to_owned(),
+    };
+    kernel.register_core_memory_adapter(adapter);
+    kernel
+        .set_default_core_memory_adapter("test-memory-failing")
+        .expect("set default memory adapter");
+
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+
+    KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    }
+}
+
+fn build_fail_after_n_kernel_context(fail_on_call: usize, message: &str) -> KernelContext {
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongClawKernel::with_runtime(
+        StaticPolicyEngine::default(),
+        clock,
+        Arc::new(InMemoryAuditSink::default()),
+    );
+
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::MemoryWrite, Capability::MemoryRead]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+
+    let adapter = FailAfterNTestMemoryAdapter {
+        fail_on_call,
+        calls: Arc::new(Mutex::new(0)),
+        message: message.to_owned(),
+    };
+    kernel.register_core_memory_adapter(adapter);
+    kernel
+        .set_default_core_memory_adapter("test-memory-fail-after-n")
+        .expect("set default memory adapter");
+
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+
+    KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    }
+}
+
 struct SharedTestMemoryAdapter {
     invocations: Arc<Mutex<Vec<MemoryCoreRequest>>>,
 }
@@ -9466,6 +10686,52 @@ impl CoreMemoryAdapter for SharedTestMemoryAdapter {
             .lock()
             .expect("invocations lock")
             .push(request);
+        Ok(MemoryCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({}),
+        })
+    }
+}
+
+struct FailingTestMemoryAdapter {
+    message: String,
+}
+
+#[async_trait]
+impl CoreMemoryAdapter for FailingTestMemoryAdapter {
+    fn name(&self) -> &str {
+        "test-memory-failing"
+    }
+
+    async fn execute_core_memory(
+        &self,
+        _request: MemoryCoreRequest,
+    ) -> Result<MemoryCoreOutcome, MemoryPlaneError> {
+        Err(MemoryPlaneError::Execution(self.message.clone()))
+    }
+}
+
+struct FailAfterNTestMemoryAdapter {
+    fail_on_call: usize,
+    calls: Arc<Mutex<usize>>,
+    message: String,
+}
+
+#[async_trait]
+impl CoreMemoryAdapter for FailAfterNTestMemoryAdapter {
+    fn name(&self) -> &str {
+        "test-memory-fail-after-n"
+    }
+
+    async fn execute_core_memory(
+        &self,
+        _request: MemoryCoreRequest,
+    ) -> Result<MemoryCoreOutcome, MemoryPlaneError> {
+        let mut calls = self.calls.lock().expect("memory calls lock");
+        *calls += 1;
+        if *calls == self.fail_on_call {
+            return Err(MemoryPlaneError::Execution(self.message.clone()));
+        }
         Ok(MemoryCoreOutcome {
             status: "ok".to_owned(),
             payload: json!({}),
