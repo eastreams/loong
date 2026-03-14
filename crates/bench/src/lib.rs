@@ -1121,7 +1121,16 @@ fn spec_requires_native_tool_executor(spec: &RunnerSpec) -> bool {
         loongclaw_spec::OperationSpec::ToolExtension { extension, .. } => {
             extension == "claw-migration"
         }
-        _ => false,
+        loongclaw_spec::OperationSpec::Task { .. }
+        | loongclaw_spec::OperationSpec::ConnectorLegacy { .. }
+        | loongclaw_spec::OperationSpec::ConnectorCore { .. }
+        | loongclaw_spec::OperationSpec::ConnectorExtension { .. }
+        | loongclaw_spec::OperationSpec::RuntimeCore { .. }
+        | loongclaw_spec::OperationSpec::RuntimeExtension { .. }
+        | loongclaw_spec::OperationSpec::MemoryCore { .. }
+        | loongclaw_spec::OperationSpec::MemoryExtension { .. }
+        | loongclaw_spec::OperationSpec::ToolSearch { .. }
+        | loongclaw_spec::OperationSpec::ProgrammaticToolCall { .. } => false,
     }
 }
 
