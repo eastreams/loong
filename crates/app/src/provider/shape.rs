@@ -903,11 +903,64 @@ mod tests {
     }
 
     #[test]
+    fn extract_provider_turn_does_not_execute_multiline_indented_code_block_examples() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "示例：\n\n    第一步\n    <function=shell.exec><parameter=command>ls</parameter></function>"
+                }
+            }]
+        });
+
+        let turn = extract_provider_turn(&body).expect("turn");
+        assert!(turn.tool_intents.is_empty());
+        assert_eq!(
+            turn.assistant_text,
+            "示例：\n\n    第一步\n    <function=shell.exec><parameter=command>ls</parameter></function>"
+        );
+    }
+
+    #[test]
+    fn extract_provider_turn_does_not_execute_tab_indented_code_block_examples() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "示例：\n\n\t<function=shell.exec><parameter=command>ls</parameter></function>"
+                }
+            }]
+        });
+
+        let turn = extract_provider_turn(&body).expect("turn");
+        assert!(turn.tool_intents.is_empty());
+        assert_eq!(
+            turn.assistant_text,
+            "示例：\n\n\t<function=shell.exec><parameter=command>ls</parameter></function>"
+        );
+    }
+
+    #[test]
     fn extract_provider_turn_parses_indented_inline_function_when_not_code_block() {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
                     "content": "让我重试：\n    <function=shell.exec><parameter=command>ls</parameter></function>"
+                }
+            }]
+        });
+
+        let turn = extract_provider_turn(&body).expect("turn");
+        assert_eq!(turn.assistant_text, "让我重试：");
+        assert_eq!(turn.tool_intents.len(), 1);
+        assert_eq!(turn.tool_intents[0].tool_name, "shell.exec");
+        assert_eq!(turn.tool_intents[0].args_json, json!({"command": "ls"}));
+    }
+
+    #[test]
+    fn extract_provider_turn_parses_tab_indented_inline_function_when_not_code_block() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "让我重试：\n\t<function=shell.exec><parameter=command>ls</parameter></function>"
                 }
             }]
         });
