@@ -1400,43 +1400,18 @@ fn run_list_memory_systems_cli(config_path: Option<&str>, as_json: bool) -> CliR
     let snapshot = mvp::memory::collect_memory_system_runtime_snapshot(&config)?;
 
     if as_json {
-        let payload = json!({
-            "config": resolved_path.display().to_string(),
-            "selected": memory_system_metadata_json(
-                &snapshot.selected_metadata,
-                Some(snapshot.selected.source.as_str())
-            ),
-            "available": snapshot
-                .available
-                .iter()
-                .map(|metadata| memory_system_metadata_json(metadata, None))
-                .collect::<Vec<_>>(),
-        });
+        let payload =
+            build_memory_systems_cli_json_payload(&resolved_path.display().to_string(), &snapshot);
         let pretty = serde_json::to_string_pretty(&payload)
             .map_err(|error| format!("serialize memory-system output failed: {error}"))?;
         println!("{pretty}");
         return Ok(());
     }
 
-    println!("config={}", resolved_path.display());
     println!(
-        "selected={} source={} api_version={} capabilities={} summary={}",
-        snapshot.selected_metadata.id,
-        snapshot.selected.source.as_str(),
-        snapshot.selected_metadata.api_version,
-        format_capability_names(&snapshot.selected_metadata.capability_names()),
-        snapshot.selected_metadata.summary
+        "{}",
+        render_memory_system_snapshot_text(&resolved_path.display().to_string(), &snapshot)
     );
-    println!("available:");
-    for metadata in snapshot.available {
-        println!(
-            "- {} api_version={} capabilities={} summary={}",
-            metadata.id,
-            metadata.api_version,
-            format_capability_names(&metadata.capability_names()),
-            metadata.summary
-        );
-    }
     Ok(())
 }
 
@@ -2375,6 +2350,79 @@ fn memory_system_metadata_json(
         payload.insert("source".to_owned(), json!(source));
     }
     Value::Object(payload)
+}
+
+fn memory_system_policy_json(policy: &mvp::memory::MemorySystemPolicySnapshot) -> Value {
+    json!({
+        "backend": policy.backend.as_str(),
+        "profile": policy.profile.as_str(),
+        "mode": policy.mode.as_str(),
+        "ingest_mode": policy.ingest_mode.as_str(),
+        "fail_open": policy.fail_open,
+        "strict_mode_requested": policy.strict_mode_requested,
+        "strict_mode_active": policy.strict_mode_active,
+        "effective_fail_open": policy.effective_fail_open,
+    })
+}
+
+fn build_memory_systems_cli_json_payload(
+    config_path: &str,
+    snapshot: &mvp::memory::MemorySystemRuntimeSnapshot,
+) -> Value {
+    json!({
+        "config": config_path,
+        "selected": memory_system_metadata_json(
+            &snapshot.selected_metadata,
+            Some(snapshot.selected.source.as_str())
+        ),
+        "available": snapshot
+            .available
+            .iter()
+            .map(|metadata| memory_system_metadata_json(metadata, None))
+            .collect::<Vec<_>>(),
+        "policy": memory_system_policy_json(&snapshot.policy),
+    })
+}
+
+fn render_memory_system_snapshot_text(
+    config_path: &str,
+    snapshot: &mvp::memory::MemorySystemRuntimeSnapshot,
+) -> String {
+    let mut lines = vec![
+        format!("config={config_path}"),
+        format!(
+            "selected={} source={} api_version={} capabilities={} summary={}",
+            snapshot.selected_metadata.id,
+            snapshot.selected.source.as_str(),
+            snapshot.selected_metadata.api_version,
+            format_capability_names(&snapshot.selected_metadata.capability_names()),
+            snapshot.selected_metadata.summary
+        ),
+        format!(
+            "policy=backend:{} profile:{} mode:{} ingest_mode:{} fail_open:{} strict_mode_requested:{} strict_mode_active:{} effective_fail_open:{}",
+            snapshot.policy.backend.as_str(),
+            snapshot.policy.profile.as_str(),
+            snapshot.policy.mode.as_str(),
+            snapshot.policy.ingest_mode.as_str(),
+            snapshot.policy.fail_open,
+            snapshot.policy.strict_mode_requested,
+            snapshot.policy.strict_mode_active,
+            snapshot.policy.effective_fail_open,
+        ),
+        "available:".to_owned(),
+    ];
+
+    for metadata in &snapshot.available {
+        lines.push(format!(
+            "- {} api_version={} capabilities={} summary={}",
+            metadata.id,
+            metadata.api_version,
+            format_capability_names(&metadata.capability_names()),
+            metadata.summary
+        ));
+    }
+
+    lines.join("\n")
 }
 
 fn acp_backend_metadata_json(

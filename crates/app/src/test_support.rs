@@ -28,7 +28,7 @@ impl ScopedEnv {
         crate::process_env::set_var(key, value);
     }
 
-    #[allow(clippy::disallowed_methods)]
+    #[allow(dead_code, clippy::disallowed_methods)]
     pub(crate) fn remove(&mut self, key: &'static str) {
         self.capture_original(key);
         crate::process_env::remove_var(key);

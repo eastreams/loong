@@ -231,6 +231,16 @@ pub enum MemoryMode {
     ProfilePlusWindow,
 }
 
+impl MemoryMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::WindowOnly => "window_only",
+            Self::WindowPlusSummary => "window_plus_summary",
+            Self::ProfilePlusWindow => "profile_plus_window",
+        }
+    }
+}
+
 impl Default for ToolConfig {
     fn default() -> Self {
         Self {

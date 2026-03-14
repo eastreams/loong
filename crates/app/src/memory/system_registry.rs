@@ -4,11 +4,15 @@ use std::sync::Mutex;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::CliResult;
-use crate::config::{LoongClawConfig, MemorySystemKind};
+use crate::config::{
+    LoongClawConfig, MemoryBackendKind, MemoryIngestMode, MemoryMode, MemoryProfile,
+    MemorySystemKind,
+};
 
 use super::system::{
     BuiltinMemorySystem, DEFAULT_MEMORY_SYSTEM_ID, MemorySystem, MemorySystemMetadata,
 };
+use super::runtime_config::MemoryRuntimeConfig;
 
 pub const MEMORY_SYSTEM_ENV: &str = "LOONGCLAW_MEMORY_SYSTEM";
 
@@ -47,6 +51,34 @@ pub struct MemorySystemRuntimeSnapshot {
     pub selected: MemorySystemSelection,
     pub selected_metadata: MemorySystemMetadata,
     pub available: Vec<MemorySystemMetadata>,
+    pub policy: MemorySystemPolicySnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemorySystemPolicySnapshot {
+    pub backend: MemoryBackendKind,
+    pub profile: MemoryProfile,
+    pub mode: MemoryMode,
+    pub ingest_mode: MemoryIngestMode,
+    pub fail_open: bool,
+    pub strict_mode_requested: bool,
+    pub strict_mode_active: bool,
+    pub effective_fail_open: bool,
+}
+
+impl MemorySystemPolicySnapshot {
+    fn from_runtime_config(config: &MemoryRuntimeConfig) -> Self {
+        Self {
+            backend: config.backend,
+            profile: config.profile,
+            mode: config.mode,
+            ingest_mode: config.ingest_mode,
+            fail_open: config.fail_open,
+            strict_mode_requested: config.strict_mode_requested(),
+            strict_mode_active: config.strict_mode_active(),
+            effective_fail_open: config.effective_fail_open(),
+        }
+    }
 }
 
 fn registry() -> &'static RwLock<BTreeMap<String, MemorySystemFactory>> {
@@ -167,11 +199,14 @@ pub fn collect_memory_system_runtime_snapshot(
     let selected = resolve_memory_system_selection(config);
     let selected_metadata = describe_memory_system(Some(selected.id.as_str()))?;
     let available = list_memory_system_metadata()?;
+    let runtime = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let policy = MemorySystemPolicySnapshot::from_runtime_config(&runtime);
 
     Ok(MemorySystemRuntimeSnapshot {
         selected,
         selected_metadata,
         available,
+        policy,
     })
 }
 
@@ -195,6 +230,7 @@ pub(crate) fn clear_memory_system_env_override() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::ScopedEnv;
     use crate::memory::{MEMORY_SYSTEM_API_VERSION, MemorySystemCapability};
 
     struct TestRegistrySystem;
@@ -275,6 +311,78 @@ mod tests {
         assert!(
             !ids.iter().any(|id| id == "lucid"),
             "future adapter ids should not appear before the adapter actually lands"
+        );
+    }
+
+    #[test]
+    fn memory_system_runtime_snapshot_captures_runtime_policy() {
+        let config = LoongClawConfig {
+            memory: crate::config::MemoryConfig {
+                profile: crate::config::MemoryProfile::WindowPlusSummary,
+                fail_open: false,
+                ingest_mode: crate::config::MemoryIngestMode::AsyncBackground,
+                ..crate::config::MemoryConfig::default()
+            },
+            ..LoongClawConfig::default()
+        };
+
+        let snapshot =
+            collect_memory_system_runtime_snapshot(&config).expect("collect runtime snapshot");
+
+        assert_eq!(snapshot.policy.backend, crate::config::MemoryBackendKind::Sqlite);
+        assert_eq!(
+            snapshot.policy.profile,
+            crate::config::MemoryProfile::WindowPlusSummary
+        );
+        assert_eq!(
+            snapshot.policy.mode,
+            crate::config::MemoryMode::WindowPlusSummary
+        );
+        assert_eq!(
+            snapshot.policy.ingest_mode,
+            crate::config::MemoryIngestMode::AsyncBackground
+        );
+        assert!(!snapshot.policy.fail_open);
+        assert!(snapshot.policy.strict_mode_requested);
+        assert!(!snapshot.policy.strict_mode_active);
+        assert!(snapshot.policy.effective_fail_open);
+    }
+
+    #[test]
+    fn memory_system_runtime_snapshot_uses_memory_env_policy_overrides() {
+        let mut env = ScopedEnv::new();
+        env.set(MEMORY_SYSTEM_ENV, "builtin");
+        env.set("LOONGCLAW_MEMORY_PROFILE", "profile_plus_window");
+        env.set("LOONGCLAW_MEMORY_FAIL_OPEN", "true");
+        env.set("LOONGCLAW_MEMORY_INGEST_MODE", "async_background");
+
+        let config = LoongClawConfig {
+            memory: crate::config::MemoryConfig {
+                profile: crate::config::MemoryProfile::WindowOnly,
+                fail_open: false,
+                ingest_mode: crate::config::MemoryIngestMode::SyncMinimal,
+                ..crate::config::MemoryConfig::default()
+            },
+            ..LoongClawConfig::default()
+        };
+
+        let snapshot =
+            collect_memory_system_runtime_snapshot(&config).expect("collect runtime snapshot");
+
+        assert_eq!(snapshot.selected.id, DEFAULT_MEMORY_SYSTEM_ID);
+        assert_eq!(snapshot.selected.source, MemorySystemSelectionSource::Env);
+        assert_eq!(
+            snapshot.policy.profile,
+            crate::config::MemoryProfile::ProfilePlusWindow
+        );
+        assert_eq!(
+            snapshot.policy.mode,
+            crate::config::MemoryMode::ProfilePlusWindow
+        );
+        assert!(snapshot.policy.fail_open);
+        assert_eq!(
+            snapshot.policy.ingest_mode,
+            crate::config::MemoryIngestMode::AsyncBackground
         );
     }
 }

@@ -34,10 +34,11 @@ pub use system::{
     MemorySystemCapability, MemorySystemMetadata,
 };
 pub use system_registry::{
-    MEMORY_SYSTEM_ENV, MemorySystemRuntimeSnapshot, MemorySystemSelection,
-    MemorySystemSelectionSource, collect_memory_system_runtime_snapshot, describe_memory_system,
-    list_memory_system_ids, list_memory_system_metadata, memory_system_id_from_env,
-    register_memory_system, resolve_memory_system, resolve_memory_system_selection,
+    MEMORY_SYSTEM_ENV, MemorySystemPolicySnapshot, MemorySystemRuntimeSnapshot,
+    MemorySystemSelection, MemorySystemSelectionSource, collect_memory_system_runtime_snapshot,
+    describe_memory_system, list_memory_system_ids, list_memory_system_metadata,
+    memory_system_id_from_env, register_memory_system, resolve_memory_system,
+    resolve_memory_system_selection,
 };
 
 pub const MEMORY_OP_APPEND_TURN: &str = "append_turn";

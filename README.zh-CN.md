@@ -125,6 +125,25 @@ cargo install --path crates/daemon
 cargo test --workspace --all-features
 ```
 
+## 记忆配置与记忆系统
+
+LoongClaw 现在把 `memory.system` 作为稳定的选择缝预留出来，但当前 alpha-test
+运行面仍然刻意保持 builtin-only：
+
+- `builtin` 继续由 LoongClaw 自己掌管 canonical 原始会话历史、typed canonical
+  records 和确定性的 prompt hydration。
+- 未来接入外部记忆体系时，它们会落在派生/检索层，而不是直接接管最终 prompt
+  组装权。
+- 记忆系统异常默认按 fail-open 处理，优先保住最近窗口对话体验，而不是让记忆层
+  变成隐藏的单点依赖。
+
+可用下面的运行时诊断命令查看当前选中的 system、capabilities、memory profile、
+ingest mode 以及生效中的 fail-open policy：
+
+```bash
+loongclaw list-memory-systems --json
+```
+
 ## 迁移与导入
 
 LoongClaw 支持从旧 claw 工作区进行发现、规划、应用与回滚：
