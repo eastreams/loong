@@ -8,7 +8,7 @@ This file is the **map** — keep it short (~100 lines). Deeper context lives in
 
 - [Core Beliefs](docs/design-docs/core-beliefs.md) — kernel and engineering principles
 - [Layered Kernel Design](docs/design-docs/layered-kernel-design.md) — layered model and boundary rules
-- [Roadmap](docs/roadmap.md) — stage-based milestones and acceptance criteria
+- [Roadmap](docs/ROADMAP.md) — stage-based milestones and acceptance criteria
 - [Reliability](docs/RELIABILITY.md) — invariants and operating expectations
 - [Product Specs](docs/product-specs/index.md) — user-facing requirements
 - [Contributing Guide](CONTRIBUTING.md) — contributor workflow and recipes
@@ -49,6 +49,7 @@ refactor, not normalized as permanent layering.
 - **Before every commit**, run CI-parity checks. Any manual edit after fmt must be re-checked.
 - Every released version must map to `docs/releases/vX.Y.Z.md` with process log and detail links.
 - Local agent debug context for a release should be recorded in `.docs/releases/vX.Y.Z-debug.md`.
+- Agent execution plans go in `docs/exec-plans/active/` (local only, not committed). Move to `completed/` when done.
 
 ## 5. Verification Gates
 
@@ -67,14 +68,33 @@ cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 Runs CI-parity cargo checks before each commit.
 Use `task verify` for the stricter local superset (architecture, conventions, docs, deny).
 
-## 7. Where to Look Next
+## 7. Pitfalls
+
+- No `unwrap()`, `expect()`, `panic!()`, `todo!()`, `[]` indexing, or `println!` — use `?`, `.get()`, and proper logging. The workspace denies all of these at compile time.
+- Policy engine only gates `shell.exec` — `file.read`/`file.write` bypass it entirely (TD-002). Don't assume all tools are policy-checked.
+- `membrane` field on CapabilityToken is never checked. `call_depth` is always 0. Don't build on stubs.
+- `spec -> app` dependency (D1) is a tracked deviation, not permanent. Don't add more cross-layer deps.
+- App layer uses `Result<T, String>` (`CliResult`), not typed errors. Kernel uses `thiserror` enums.
+- Audit events are in-memory only — lost on restart (TD-006). No persistence yet.
+- `BTreeMap` not `HashMap` everywhere — deterministic ordering is intentional.
+- `docs/exec-plans/` (agent working memory) and `docs/plans/` (durable phase plans) are local only — not committed to git.
+
+## 8. Where to Look Next
 
 | Need | Go to |
 |------|-------|
+| Architecture overview & crate DAG | `ARCHITECTURE.md` |
 | Core principles | `docs/design-docs/core-beliefs.md` |
 | Layered architecture | `docs/design-docs/layered-kernel-design.md` |
-| Roadmap | `docs/roadmap.md` |
+| Design decisions, patterns & catalog | `docs/design-docs/index.md` |
+| Harness engineering | `docs/design-docs/harness-engineering.md` |
+| Roadmap | `docs/ROADMAP.md` |
 | Reliability invariants | `docs/RELIABILITY.md` |
+| Security model & gaps | `docs/SECURITY.md` |
+| Quality scores & gaps | `docs/QUALITY_SCORE.md` |
+| Tech debt tracker (22 items) | `docs/TECH_DEBT.md` |
+| Product sense & principles | `docs/PRODUCT_SENSE.md` |
 | Release process docs | `docs/releases/` |
 | Product requirements | `docs/product-specs/` |
+| References (specs, schemas, technical docs) | `docs/references/` |
 | Contributing recipes | `CONTRIBUTING.md` |

@@ -13,6 +13,17 @@ Thanks for contributing. This guide defines the baseline workflow for external a
 - Convention checks require the `convention-engineering` skill script at
   `~/.claude/skills/convention-engineering/scripts/main.go` (see `Taskfile.yml`).
 
+## Harness Engineering
+
+LoongClaw uses a progressive-disclosure documentation harness to keep the repo agent-legible. When your changes affect architecture, security, reliability, or other documented domains, update the relevant docs. See [Harness Engineering](docs/design-docs/harness-engineering.md) for the full model.
+
+**Before pushing**, verify:
+- `CLAUDE.md` and `AGENTS.md` are mirrored (identical content)
+- Quality scores in `docs/QUALITY_SCORE.md` reflect current state
+- Tech debt in `docs/TECH_DEBT.md` is up to date
+
+Agent skills at `skills/*.skill` (zip archives) can automate these checks. Install for your platform — e.g., `unzip skills/update-harness.skill -d ~/.claude/skills/update-harness/` for Claude Code.
+
 ## Contribution Tracks
 
 LoongClaw uses two tracks for OSS contribution risk.
@@ -123,6 +134,16 @@ cargo test --workspace --all-features
    - Loops: receive messages → `process_inbound_with_provider(config, msg, Some(&ctx))` → send reply
 4. Wire the subcommand in `crates/daemon/src/main.rs`
 5. Add a feature flag in `crates/app/Cargo.toml`
+
+## Planning Conventions
+
+Plans live in `docs/plans/` (local only, not committed to git). If you create plans locally:
+
+- Every plan has a **design doc** (rationale, constraints, alternatives) and an **implementation doc** (tasks, progress, decisions)
+- Plans are prefixed with date: `YYYY-MM-DD-<topic>-design.md` / `YYYY-MM-DD-<topic>.md`
+- Agent execution plans (short-lived, task-scoped) go in `docs/exec-plans/active/`
+- Treat `docs/plans/` as local working memory, not the shared system of record
+- Durable decisions that other contributors and agents must see belong in tracked docs such as `docs/design-docs/`, domain indices, or release notes
 
 ## Standard Workflow
 

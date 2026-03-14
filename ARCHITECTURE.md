@@ -116,7 +116,13 @@ mechanically where possible.
 | Topic | Document |
 |-------|----------|
 | Full layer specification (L0-L9) | [Layered Kernel Design](docs/design-docs/layered-kernel-design.md) |
-| Stage-based roadmap | [Roadmap](docs/roadmap.md) |
+| Harness engineering & backpressure | [Harness Engineering](docs/design-docs/harness-engineering.md) |
+| Design decisions, patterns & catalog | [Design Docs Index](docs/design-docs/index.md) |
+| Security model & gaps | [Security](docs/SECURITY.md) |
+| Stage-based roadmap | [Roadmap](docs/ROADMAP.md) |
 | Build and kernel invariants | [Reliability](docs/RELIABILITY.md) |
+| Domain quality grades | [Quality Score](docs/QUALITY_SCORE.md) |
+| Product principles | [Product Sense](docs/PRODUCT_SENSE.md) |
+| Tech debt (22 items) | [Tech Debt Tracker](docs/TECH_DEBT.md) |
 | Contributor workflow and recipes | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Examples and spec files | [Examples](examples/README.md) |
