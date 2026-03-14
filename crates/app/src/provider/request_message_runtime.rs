@@ -80,32 +80,36 @@ pub(super) fn load_memory_window_messages(
     {
         let mem_config =
             memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-        let memory_entries = memory::load_prompt_context(session_id, &mem_config)
-            .map_err(|error| format!("load prompt memory context failed: {error}"))?;
-        let mut messages = Vec::with_capacity(memory_entries.len());
-        for entry in memory_entries {
-            match entry.kind {
-                memory::MemoryContextKind::Profile | memory::MemoryContextKind::Summary => {
-                    messages.push(json!({
-                        "role": entry.role,
-                        "content": entry.content,
-                    }));
-                }
-                memory::MemoryContextKind::Turn => {
-                    push_history_message(
-                        &mut messages,
-                        entry.role.as_str(),
-                        entry.content.as_str(),
-                    );
-                }
-            }
-        }
+        let hydrated = memory::hydrate_memory_context(session_id, &mem_config)
+            .map_err(|error| format!("hydrate prompt memory context failed: {error}"))?;
+        let mut messages = Vec::with_capacity(hydrated.entries.len());
+        append_hydrated_memory_messages(&mut messages, &hydrated);
         Ok(messages)
     }
     #[cfg(not(feature = "memory-sqlite"))]
     {
         let _ = (config, session_id);
         Ok(Vec::new())
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn append_hydrated_memory_messages(
+    messages: &mut Vec<Value>,
+    hydrated: &memory::HydratedMemoryContext,
+) {
+    for entry in &hydrated.entries {
+        match entry.kind {
+            memory::MemoryContextKind::Profile | memory::MemoryContextKind::Summary => {
+                messages.push(json!({
+                    "role": entry.role,
+                    "content": entry.content,
+                }));
+            }
+            memory::MemoryContextKind::Turn => {
+                push_history_message(messages, entry.role.as_str(), entry.content.as_str());
+            }
+        }
     }
 }
 

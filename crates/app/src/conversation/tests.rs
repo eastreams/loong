@@ -13,7 +13,8 @@ use sha2::{Digest, Sha256};
 
 use super::super::config::{
     CliChannelConfig, ConversationConfig, ExternalSkillsConfig, FeishuChannelConfig,
-    LoongClawConfig, MemoryConfig, ProviderConfig, TelegramChannelConfig, ToolConfig,
+    LoongClawConfig, MemoryConfig, MemoryProfile, MemorySystemKind, ProviderConfig,
+    TelegramChannelConfig, ToolConfig,
 };
 use super::persistence::format_provider_error_reply;
 use super::runtime::DefaultConversationRuntime;
@@ -488,6 +489,16 @@ fn test_turn_preparation_context_fingerprint(messages: &[Value]) -> String {
     format!("{:x}", Sha256::digest(serialized))
 }
 
+fn unique_memory_sqlite_path(suffix: &str) -> String {
+    std::env::temp_dir()
+        .join(format!(
+            "{}.sqlite3",
+            unique_acp_test_id("conversation-memory", suffix)
+        ))
+        .display()
+        .to_string()
+}
+
 #[async_trait]
 impl AcpRuntimeBackend for RoutedAcpBackend {
     fn id(&self) -> &'static str {
@@ -878,6 +889,95 @@ async fn default_runtime_build_context_applies_system_prompt_addition() {
         merged, "runtime-policy-addition\n\nbase-system-prompt",
         "system prompt addition should be prepended"
     );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_build_context_matches_builtin_summary_projection() {
+    let runtime = DefaultConversationRuntime::default();
+    let session_id = unique_acp_test_id("default-runtime-context", "summary");
+    let sqlite_path = unique_memory_sqlite_path("summary");
+    let mut config = test_config();
+    config.memory.system = MemorySystemKind::Builtin;
+    config.memory.profile = MemoryProfile::WindowPlusSummary;
+    config.memory.sliding_window = 2;
+    config.memory.sqlite_path = sqlite_path.clone();
+
+    let runtime_config =
+        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    crate::memory::append_turn_direct(&session_id, "user", "turn 1", &runtime_config)
+        .expect("append turn 1 should succeed");
+    crate::memory::append_turn_direct(&session_id, "assistant", "turn 2", &runtime_config)
+        .expect("append turn 2 should succeed");
+    crate::memory::append_turn_direct(&session_id, "user", "turn 3", &runtime_config)
+        .expect("append turn 3 should succeed");
+    crate::memory::append_turn_direct(&session_id, "assistant", "turn 4", &runtime_config)
+        .expect("append turn 4 should succeed");
+
+    let assembled = runtime
+        .build_context(&config, &session_id, true, None)
+        .await
+        .expect("build context from default runtime");
+    let provider_messages = crate::provider::build_messages_for_session(&config, &session_id, true)
+        .expect("build provider messages");
+
+    assert_eq!(
+        assembled.messages, provider_messages,
+        "default runtime should match provider projection for builtin summary hydration"
+    );
+    assert!(
+        assembled.messages.iter().any(|message| {
+            message["role"] == "system"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|content| content.contains("## Memory Summary"))
+        }),
+        "expected hydrated summary block in default runtime messages"
+    );
+
+    let _ = std::fs::remove_file(sqlite_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_build_context_explicit_builtin_system_preserves_profile_projection() {
+    let runtime = DefaultConversationRuntime::default();
+    let session_id = unique_acp_test_id("default-runtime-context", "profile");
+    let sqlite_path = unique_memory_sqlite_path("profile");
+    let mut config = test_config();
+    config.memory.system = MemorySystemKind::Builtin;
+    config.memory.profile = MemoryProfile::ProfilePlusWindow;
+    config.memory.profile_note = Some("Imported ZeroClaw preferences".to_owned());
+    config.memory.sliding_window = 2;
+    config.memory.sqlite_path = sqlite_path.clone();
+
+    let runtime_config =
+        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    crate::memory::append_turn_direct(&session_id, "assistant", "turn 1", &runtime_config)
+        .expect("append turn should succeed");
+
+    let assembled = runtime
+        .build_context(&config, &session_id, true, None)
+        .await
+        .expect("build context from default runtime");
+    let provider_messages = crate::provider::build_messages_for_session(&config, &session_id, true)
+        .expect("build provider messages");
+
+    assert_eq!(
+        assembled.messages, provider_messages,
+        "explicit builtin memory system should not change prompt projection"
+    );
+    assert!(
+        assembled.messages.iter().any(|message| {
+            message["role"] == "system"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|content| content.contains("Imported ZeroClaw preferences"))
+        }),
+        "expected hydrated profile block in default runtime messages"
+    );
+
+    let _ = std::fs::remove_file(sqlite_path);
 }
 
 #[test]
