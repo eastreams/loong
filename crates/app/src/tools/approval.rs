@@ -1332,12 +1332,7 @@ fn approval_request_list_session_summary_json(requests: &[Value]) -> Value {
         let session = sessions.entry(session_id.to_owned()).or_default();
         session.request_count += 1;
 
-        if request
-            .get("execution_integrity")
-            .and_then(|value| value.get("needs_attention"))
-            .and_then(Value::as_bool)
-            == Some(true)
-        {
+        if approval_request_has_attention(request) {
             session.attention_count += 1;
         }
 
@@ -1463,12 +1458,7 @@ fn approval_request_list_tool_summary_json(requests: &[Value]) -> Value {
             tool.session_ids.insert(session_id.to_owned());
         }
 
-        if request
-            .get("execution_integrity")
-            .and_then(|value| value.get("needs_attention"))
-            .and_then(Value::as_bool)
-            == Some(true)
-        {
+        if approval_request_has_attention(request) {
             tool.attention_count += 1;
         }
 
@@ -2179,6 +2169,12 @@ fn approval_request_escalation_level(
 
 #[cfg(feature = "memory-sqlite")]
 fn approval_request_attention_priority(request: &Value) -> u8 {
+    approval_request_execution_attention_priority(request)
+        .min(approval_request_grant_attention_priority(request))
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_execution_attention_priority(request: &Value) -> u8 {
     let execution_integrity = request.get("execution_integrity").unwrap_or(&Value::Null);
     if execution_integrity
         .get("needs_attention")
@@ -2198,7 +2194,30 @@ fn approval_request_attention_priority(request: &Value) -> u8 {
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn approval_request_grant_attention_priority(request: &Value) -> u8 {
+    let grant_attention = request.get("grant_attention").unwrap_or(&Value::Null);
+    if grant_attention
+        .get("needs_attention")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return 3;
+    }
+    match grant_attention.get("attention_reason").and_then(Value::as_str) {
+        Some("durable_grant_missing") => 0,
+        Some("grant_review_overdue") => 1,
+        Some(_) | None => 2,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn approval_request_escalation_priority(request: &Value) -> u8 {
+    approval_request_execution_escalation_priority(request)
+        .min(approval_request_grant_escalation_priority(request))
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_execution_escalation_priority(request: &Value) -> u8 {
     match request
         .get("execution_integrity")
         .and_then(approval_request_escalation_level_from_json)
@@ -2207,6 +2226,33 @@ fn approval_request_escalation_priority(request: &Value) -> u8 {
         Some(ApprovalEscalationLevel::Elevated) => 1,
         None => 2,
     }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_grant_escalation_priority(request: &Value) -> u8 {
+    match request
+        .get("grant_attention")
+        .and_then(|value| value.get("escalation_level"))
+        .and_then(Value::as_str)
+    {
+        Some("critical") => 0,
+        Some("elevated") => 1,
+        Some(_) | None => 2,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_has_attention(request: &Value) -> bool {
+    request
+        .get("execution_integrity")
+        .and_then(|value| value.get("needs_attention"))
+        .and_then(Value::as_bool)
+        == Some(true)
+        || request
+            .get("grant_attention")
+            .and_then(|value| value.get("needs_attention"))
+            .and_then(Value::as_bool)
+            == Some(true)
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -4365,6 +4411,123 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[test]
+    fn approval_request_tool_query_list_prioritizes_grant_attention_when_requested() {
+        let config = isolated_memory_config("approval-query-list-grant-attention-priority");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+
+        seed_request(
+            &repo,
+            "apr-priority-grant-missing",
+            "root-session",
+            "delegate_async",
+            "governed_tool_requires_per_call_approval",
+        );
+        seed_request(
+            &repo,
+            "apr-priority-grant-overdue",
+            "root-session",
+            "session_cancel",
+            "governed_tool_requires_per_call_approval",
+        );
+        seed_request(
+            &repo,
+            "apr-priority-grant-clean",
+            "root-session",
+            "memory_search",
+            "governed_tool_requires_per_call_approval",
+        );
+
+        repo.transition_approval_request_if_current(
+            "apr-priority-grant-missing",
+            TransitionApprovalRequestIfCurrentRequest {
+                expected_status: ApprovalRequestStatus::Pending,
+                next_status: ApprovalRequestStatus::Approved,
+                decision: Some(ApprovalDecision::ApproveAlways),
+                resolved_by_session_id: Some("operator-missing".to_owned()),
+                executed_at: None,
+                last_error: None,
+            },
+        )
+        .expect("transition missing grant-priority request")
+        .expect("missing grant-priority request should transition");
+        repo.transition_approval_request_if_current(
+            "apr-priority-grant-overdue",
+            TransitionApprovalRequestIfCurrentRequest {
+                expected_status: ApprovalRequestStatus::Pending,
+                next_status: ApprovalRequestStatus::Approved,
+                decision: Some(ApprovalDecision::ApproveAlways),
+                resolved_by_session_id: Some("operator-overdue".to_owned()),
+                executed_at: None,
+                last_error: None,
+            },
+        )
+        .expect("transition overdue grant-priority request")
+        .expect("overdue grant-priority request should transition");
+
+        seed_runtime_grant(
+            &repo,
+            "root-session",
+            "tool:session_cancel",
+            Some("operator-overdue"),
+        );
+
+        let now = test_unix_ts_now();
+        overwrite_request_requested_at(&config, "apr-priority-grant-missing", now - 3_600);
+        overwrite_request_requested_at(&config, "apr-priority-grant-overdue", now - 60);
+        overwrite_request_requested_at(&config, "apr-priority-grant-clean", now - 30);
+        overwrite_runtime_grant_timestamps(
+            &config,
+            "root-session",
+            "tool:session_cancel",
+            now - (9 * 24 * 60 * 60) - 60,
+            now - (9 * 24 * 60 * 60),
+        );
+
+        let outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "prioritize_attention": true,
+                    "limit": 10,
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list prioritized outcome for grant attention");
+
+        assert_eq!(outcome.payload["filter"]["prioritize_attention"], true);
+        let requests = outcome.payload["requests"]
+            .as_array()
+            .expect("requests array");
+        assert_eq!(requests.len(), 3);
+        assert_eq!(
+            requests[0]["approval_request_id"],
+            "apr-priority-grant-missing"
+        );
+        assert_eq!(
+            requests[0]["grant_attention"]["attention_reason"],
+            "durable_grant_missing"
+        );
+        assert_eq!(
+            requests[1]["approval_request_id"],
+            "apr-priority-grant-overdue"
+        );
+        assert_eq!(
+            requests[1]["grant_attention"]["attention_reason"],
+            "grant_review_overdue"
+        );
+        assert_eq!(
+            requests[2]["approval_request_id"],
+            "apr-priority-grant-clean"
+        );
+        assert_eq!(requests[2]["grant_attention"]["needs_attention"], false);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
     fn approval_request_tool_query_list_prioritizes_pending_queue_and_summarizes_age() {
         let config = isolated_memory_config("approval-query-list-pending-priority");
         let repo = SessionRepository::new(&config).expect("repository");
@@ -4995,6 +5158,142 @@ mod tests {
         assert_eq!(tools[2]["pending_count"], 0);
         assert_eq!(tools[2]["attention_count"], 0);
         assert_eq!(tools[2]["oldest_pending_requested_at"], Value::Null);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_tool_query_summarizes_grant_attention_hotspots() {
+        let config = isolated_memory_config("approval-query-list-grant-attention-hotspots");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+        seed_session(
+            &repo,
+            "child-hot",
+            SessionKind::DelegateChild,
+            Some("root-session"),
+        );
+        seed_session(
+            &repo,
+            "child-calm",
+            SessionKind::DelegateChild,
+            Some("root-session"),
+        );
+
+        seed_request(
+            &repo,
+            "apr-hotspot-grant-missing",
+            "child-hot",
+            "delegate_async",
+            "governed_tool_requires_per_call_approval",
+        );
+        seed_request(
+            &repo,
+            "apr-hotspot-grant-overdue",
+            "root-session",
+            "session_cancel",
+            "governed_tool_requires_per_call_approval",
+        );
+        seed_request(
+            &repo,
+            "apr-hotspot-clean",
+            "child-calm",
+            "memory_search",
+            "governed_tool_requires_per_call_approval",
+        );
+
+        repo.transition_approval_request_if_current(
+            "apr-hotspot-grant-missing",
+            TransitionApprovalRequestIfCurrentRequest {
+                expected_status: ApprovalRequestStatus::Pending,
+                next_status: ApprovalRequestStatus::Approved,
+                decision: Some(ApprovalDecision::ApproveAlways),
+                resolved_by_session_id: Some("operator-missing".to_owned()),
+                executed_at: None,
+                last_error: None,
+            },
+        )
+        .expect("transition hotspot missing request")
+        .expect("hotspot missing request should transition");
+        repo.transition_approval_request_if_current(
+            "apr-hotspot-grant-overdue",
+            TransitionApprovalRequestIfCurrentRequest {
+                expected_status: ApprovalRequestStatus::Pending,
+                next_status: ApprovalRequestStatus::Approved,
+                decision: Some(ApprovalDecision::ApproveAlways),
+                resolved_by_session_id: Some("operator-overdue".to_owned()),
+                executed_at: None,
+                last_error: None,
+            },
+        )
+        .expect("transition hotspot overdue request")
+        .expect("hotspot overdue request should transition");
+
+        seed_runtime_grant(
+            &repo,
+            "root-session",
+            "tool:session_cancel",
+            Some("operator-overdue"),
+        );
+
+        let now = test_unix_ts_now();
+        overwrite_runtime_grant_timestamps(
+            &config,
+            "root-session",
+            "tool:session_cancel",
+            now - (9 * 24 * 60 * 60) - 60,
+            now - (9 * 24 * 60 * 60),
+        );
+
+        let outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({
+                    "limit": 10,
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list outcome for grant attention hotspots");
+
+        let sessions = outcome.payload["session_summary"]["sessions"]
+            .as_array()
+            .expect("session summary sessions array");
+        let child_hot = sessions
+            .iter()
+            .find(|item| item["session_id"] == "child-hot")
+            .expect("child-hot session summary");
+        assert_eq!(child_hot["attention_count"], 1);
+        let root = sessions
+            .iter()
+            .find(|item| item["session_id"] == "root-session")
+            .expect("root session summary");
+        assert_eq!(root["attention_count"], 1);
+        let child_calm = sessions
+            .iter()
+            .find(|item| item["session_id"] == "child-calm")
+            .expect("child-calm session summary");
+        assert_eq!(child_calm["attention_count"], 0);
+
+        let tools = outcome.payload["tool_summary"]["tools"]
+            .as_array()
+            .expect("tool summary tools array");
+        let delegate = tools
+            .iter()
+            .find(|item| item["approval_key"] == "tool:delegate_async")
+            .expect("delegate tool summary");
+        assert_eq!(delegate["attention_count"], 1);
+        let cancel = tools
+            .iter()
+            .find(|item| item["approval_key"] == "tool:session_cancel")
+            .expect("cancel tool summary");
+        assert_eq!(cancel["attention_count"], 1);
+        let memory = tools
+            .iter()
+            .find(|item| item["approval_key"] == "tool:memory_search")
+            .expect("memory tool summary");
+        assert_eq!(memory["attention_count"], 0);
     }
 
     #[cfg(feature = "memory-sqlite")]
