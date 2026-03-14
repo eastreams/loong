@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::ops::Deref;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use loongclaw_contracts::{
@@ -8,7 +9,7 @@ use loongclaw_contracts::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::config::{SessionVisibility, ToolConfig};
+use crate::config::{LoongClawConfig, SessionVisibility, ToolConfig};
 use crate::context::KernelContext;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
@@ -225,6 +226,7 @@ impl AppToolDispatcher for NoopAppToolDispatcher {
 pub struct DefaultAppToolDispatcher {
     memory_config: MemoryRuntimeConfig,
     tool_config: ToolConfig,
+    app_config: Option<Arc<LoongClawConfig>>,
 }
 
 impl DefaultAppToolDispatcher {
@@ -232,6 +234,15 @@ impl DefaultAppToolDispatcher {
         Self {
             memory_config,
             tool_config,
+            app_config: None,
+        }
+    }
+
+    pub fn with_config(memory_config: MemoryRuntimeConfig, app_config: LoongClawConfig) -> Self {
+        Self {
+            memory_config,
+            tool_config: app_config.tools.clone(),
+            app_config: Some(Arc::new(app_config)),
         }
     }
 
@@ -289,6 +300,27 @@ impl DefaultAppToolDispatcher {
     ) -> Result<ToolView, String> {
         Ok(runtime_tool_view_for_config(&self.tool_config))
     }
+
+    #[cfg(feature = "memory-sqlite")]
+    async fn execute_sessions_send(
+        &self,
+        session_context: &SessionContext,
+        payload: serde_json::Value,
+    ) -> Result<ToolCoreOutcome, String> {
+        let app_config = self
+            .app_config
+            .as_ref()
+            .ok_or_else(|| "sessions_send_not_configured".to_owned())?;
+        let effective_tool_config = self.effective_tool_config_for_session(session_context);
+        crate::tools::messaging::execute_sessions_send_with_config(
+            payload,
+            &session_context.session_id,
+            &self.memory_config,
+            &effective_tool_config,
+            app_config.as_ref(),
+        )
+        .await
+    }
 }
 
 impl Default for DefaultAppToolDispatcher {
@@ -324,6 +356,12 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                 &effective_tool_config,
             )
             .await;
+        }
+        #[cfg(feature = "memory-sqlite")]
+        if canonical_tool_name == "sessions_send" {
+            return self
+                .execute_sessions_send(session_context, request.payload)
+                .await;
         }
         crate::tools::execute_app_tool_with_config(
             request,

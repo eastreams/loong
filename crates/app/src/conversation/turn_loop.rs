@@ -111,9 +111,9 @@ impl ConversationTurnLoop {
         let policy = TurnLoopPolicy::from_config(config);
         let session_context = runtime.session_context(config, session_id, kernel_ctx)?;
         let tool_view = session_context.tool_view.clone();
-        let app_dispatcher = DefaultAppToolDispatcher::new(
+        let app_dispatcher = DefaultAppToolDispatcher::with_config(
             MemoryRuntimeConfig::from_memory_config(&config.memory),
-            config.tools.clone(),
+            config.clone(),
         );
         let mut session = initialize_turn_loop_session(
             runtime

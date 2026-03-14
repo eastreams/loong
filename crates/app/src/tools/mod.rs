@@ -15,6 +15,7 @@ mod external_skills;
 mod file;
 pub mod file_policy_ext;
 mod kernel_adapter;
+pub(crate) mod messaging;
 pub mod runtime_config;
 mod session;
 mod shell;
@@ -626,6 +627,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn runtime_tool_view_exposes_sessions_send_only_when_messages_enabled() {
+        let default_root_view = runtime_tool_view_for_config(&crate::config::ToolConfig::default());
+        assert!(!default_root_view.contains("sessions_send"));
+
+        let mut config = crate::config::ToolConfig::default();
+        config.messages.enabled = true;
+
+        let root_view = runtime_tool_view_for_config(&config);
+        assert!(root_view.contains("sessions_send"));
+
+        let child_view = delegate_child_tool_view_for_config(&config);
+        assert!(!child_view.contains("sessions_send"));
+    }
+
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
     fn delegate_child_tool_view_hides_shell_by_default() {
@@ -731,6 +747,24 @@ mod tests {
                 .expect("required should be an array")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn provider_tool_definitions_include_sessions_send_when_enabled() {
+        let mut config = crate::config::ToolConfig::default();
+        config.messages.enabled = true;
+
+        let defs = try_provider_tool_definitions_for_view(&runtime_tool_view_for_config(&config))
+            .expect("runtime-visible tool schemas");
+        let sessions_send = defs
+            .iter()
+            .find(|item| item["function"]["name"] == "sessions_send")
+            .expect("sessions_send definition");
+        let properties = sessions_send["function"]["parameters"]["properties"]
+            .as_object()
+            .expect("sessions_send properties");
+        assert!(properties.contains_key("session_id"));
+        assert!(properties.contains_key("text"));
     }
 
     #[test]

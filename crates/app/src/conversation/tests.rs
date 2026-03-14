@@ -35,7 +35,7 @@ struct FakeRuntime {
     seed_messages: Vec<Value>,
     assembled_context_with_system_prompt: Option<AssembledConversationContext>,
     assembled_context_without_system_prompt: Option<AssembledConversationContext>,
-    tool_view: crate::tools::ToolView,
+    tool_view_override: Option<crate::tools::ToolView>,
     completion_responses: Mutex<VecDeque<Result<String, String>>>,
     turn_responses: Mutex<VecDeque<Result<ProviderTurn, String>>>,
     after_turn_result: Result<(), String>,
@@ -325,7 +325,7 @@ impl FakeRuntime {
             seed_messages,
             assembled_context_with_system_prompt: None,
             assembled_context_without_system_prompt: None,
-            tool_view: crate::tools::runtime_tool_view(),
+            tool_view_override: None,
             completion_responses: Mutex::new(VecDeque::from(completions)),
             turn_responses: Mutex::new(VecDeque::from(turns)),
             after_turn_result: Ok(()),
@@ -349,7 +349,7 @@ impl FakeRuntime {
     }
 
     fn with_tool_view(mut self, tool_view: crate::tools::ToolView) -> Self {
-        self.tool_view = tool_view;
+        self.tool_view_override = Some(tool_view);
         self
     }
 
@@ -394,6 +394,47 @@ fn unique_acp_test_id(prefix: &str, suffix: &str) -> String {
             .expect("clock")
             .as_nanos()
     )
+}
+
+#[cfg(all(feature = "memory-sqlite", feature = "channel-telegram"))]
+fn spawn_telegram_send_server_once() -> (
+    String,
+    std::sync::mpsc::Receiver<String>,
+    std::thread::JoinHandle<()>,
+) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind telegram stub");
+    let addr = listener.local_addr().expect("telegram stub addr");
+    let (request_tx, request_rx) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut request_buf = [0_u8; 8192];
+            let read = stream
+                .read(&mut request_buf)
+                .expect("read telegram request");
+            request_tx
+                .send(String::from_utf8_lossy(&request_buf[..read]).into_owned())
+                .expect("send telegram request capture");
+            let body = serde_json::to_string(&json!({
+                "ok": true,
+                "result": {
+                    "message_id": 1
+                }
+            }))
+            .expect("serialize telegram stub body");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write telegram response");
+        }
+    });
+    (format!("http://{addr}"), request_rx, server)
 }
 
 fn register_routed_acp_backend(
@@ -573,11 +614,14 @@ impl AcpRuntimeBackend for RoutedAcpBackend {
 impl ConversationRuntime for FakeRuntime {
     fn tool_view(
         &self,
-        _config: &LoongClawConfig,
+        config: &LoongClawConfig,
         _session_id: &str,
         _kernel_ctx: Option<&KernelContext>,
     ) -> CliResult<crate::tools::ToolView> {
-        Ok(self.tool_view.clone())
+        Ok(self
+            .tool_view_override
+            .clone()
+            .unwrap_or_else(|| crate::tools::runtime_tool_view_for_config(&config.tools)))
     }
 
     async fn bootstrap(
@@ -5551,6 +5595,166 @@ async fn child_session_hidden_session_wait_is_rejected_by_default_dispatcher() {
     );
 }
 
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn child_session_hidden_sessions_send_is_rejected_by_default_dispatcher() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-sessions-send", "hidden-child")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.tools.messages.enabled = true;
+    config.memory.sqlite_path = db_path.display().to_string();
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create child session");
+
+    let dispatcher = DefaultAppToolDispatcher::new(memory_config, config.tools.clone());
+    let session_context = SessionContext::child(
+        "child-session",
+        "root-session",
+        crate::tools::delegate_child_tool_view_for_config(&config.tools),
+    );
+
+    let error = dispatcher
+        .execute_app_tool(
+            &session_context,
+            loongclaw_contracts::ToolCoreRequest {
+                tool_name: "sessions_send".to_owned(),
+                payload: json!({
+                    "session_id": "telegram:123",
+                    "text": "hello"
+                }),
+            },
+            None,
+        )
+        .await
+        .expect_err("child should not execute hidden sessions_send");
+
+    assert!(
+        error.contains("tool_not_visible: sessions_send"),
+        "expected tool_not_visible for sessions_send, got: {error}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn sessions_send_rejects_unknown_target_session() {
+    let mut config = test_config();
+    config.tools.messages.enabled = true;
+    config.memory.sqlite_path = unique_acp_sqlite_path("sessions-send-unknown-target");
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "controller-root".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Controller".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create controller root");
+
+    let dispatcher = DefaultAppToolDispatcher::with_config(memory_config, config.clone());
+    let session_context = SessionContext::root_with_tool_view(
+        "controller-root",
+        crate::tools::runtime_tool_view_for_config(&config.tools),
+    );
+
+    let error = dispatcher
+        .execute_app_tool(
+            &session_context,
+            loongclaw_contracts::ToolCoreRequest {
+                tool_name: "sessions_send".to_owned(),
+                payload: json!({
+                    "session_id": "telegram:999",
+                    "text": "hello"
+                }),
+            },
+            None,
+        )
+        .await
+        .expect_err("unknown session target must be rejected");
+
+    assert!(
+        error.contains("session_not_found: `telegram:999`"),
+        "expected session_not_found error, got: {error}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn sessions_send_rejects_delegate_child_target() {
+    let mut config = test_config();
+    config.tools.messages.enabled = true;
+    config.memory.sqlite_path = unique_acp_sqlite_path("sessions-send-child-target");
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "controller-root".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Controller".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create controller root");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "telegram:123".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("controller-root".to_owned()),
+        label: Some("Pretend Child".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create child target");
+
+    let dispatcher = DefaultAppToolDispatcher::with_config(memory_config, config.clone());
+    let session_context = SessionContext::root_with_tool_view(
+        "controller-root",
+        crate::tools::runtime_tool_view_for_config(&config.tools),
+    );
+
+    let error = dispatcher
+        .execute_app_tool(
+            &session_context,
+            loongclaw_contracts::ToolCoreRequest {
+                tool_name: "sessions_send".to_owned(),
+                payload: json!({
+                    "session_id": "telegram:123",
+                    "text": "hello"
+                }),
+            },
+            None,
+        )
+        .await
+        .expect_err("delegate child target must be rejected");
+
+    assert!(
+        error.contains("sessions_send_not_supported") && error.contains("not a root session"),
+        "expected root-session rejection, got: {error}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_tool_execution_error_is_marked_retryable() {
     use crate::conversation::turn_engine::{
@@ -8347,6 +8551,126 @@ async fn handle_turn_with_runtime_executes_session_tools_via_default_dispatcher(
     );
 }
 
+#[cfg(all(feature = "memory-sqlite", feature = "channel-telegram"))]
+#[tokio::test]
+async fn handle_turn_with_runtime_executes_sessions_send_via_default_dispatcher() {
+    let (base_url, request_rx, server) = spawn_telegram_send_server_once();
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-sessions-send", "normal-lane")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.tools.messages.enabled = true;
+    config.telegram.enabled = true;
+    config.telegram.bot_token = Some("123456:telegram-test-token".to_owned());
+    config.telegram.bot_token_env = None;
+    config.telegram.base_url = base_url;
+    config.telegram.allowed_chat_ids = vec![123];
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "controller-root".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Controller".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create controller root");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "telegram:123".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Telegram Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create telegram root");
+    crate::memory::append_turn_direct("telegram:123", "user", "previous inbound", &memory_config)
+        .expect("append prior transcript turn");
+    let before_turns =
+        crate::memory::window_direct("telegram:123", 10, &memory_config).expect("window turns");
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Sending to known session.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "sessions_send".to_owned(),
+                args_json: json!({
+                    "session_id": "telegram:123",
+                    "text": "hello root channel"
+                }),
+                source: "provider_tool_call".to_owned(),
+                session_id: "controller-root".to_owned(),
+                turn_id: "turn-sessions-send".to_owned(),
+                tool_call_id: "call-sessions-send".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+    let coordinator = ConversationTurnCoordinator::new();
+
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "controller-root",
+            "show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("handle turn success");
+
+    assert!(
+        reply.contains("\"tool\":\"sessions_send\""),
+        "expected raw sessions_send tool output, got: {reply}"
+    );
+    let line = reply.lines().last().expect("tool result line should exist");
+    let payload = line
+        .strip_prefix("[ok] ")
+        .expect("tool result line should keep [ok] prefix");
+    let envelope: Value =
+        serde_json::from_str(payload).expect("tool result envelope should be json");
+    assert!(
+        envelope["payload_summary"]
+            .as_str()
+            .expect("payload summary should be text")
+            .contains("\"delivery\":\"sent\""),
+        "expected send receipt in output, got: {reply}"
+    );
+
+    let request = request_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("telegram request should be captured");
+    assert!(request.starts_with("POST /bot123456:telegram-test-token/sendMessage "));
+    assert!(request.contains("\"chat_id\":123"));
+    assert!(request.contains("\"text\":\"hello root channel\""));
+
+    let after_turns =
+        crate::memory::window_direct("telegram:123", 10, &memory_config).expect("window turns");
+    assert_eq!(after_turns.len(), before_turns.len());
+    assert_eq!(after_turns[0].role, before_turns[0].role);
+    assert_eq!(after_turns[0].content, before_turns[0].content);
+
+    let events = repo
+        .list_recent_events("telegram:123", 10)
+        .expect("list target events");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event_kind, "session_message_sent");
+    assert_eq!(
+        events[0].actor_session_id.as_deref(),
+        Some("controller-root")
+    );
+
+    server.join().expect("telegram stub join");
+}
+
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_executes_session_wait_via_default_dispatcher() {
@@ -8504,6 +8828,105 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_tools_via_default_d
         reply.contains("child-session"),
         "expected listed child session in output, got: {reply}"
     );
+}
+
+#[cfg(all(feature = "memory-sqlite", feature = "channel-telegram"))]
+#[tokio::test]
+async fn handle_turn_with_runtime_safe_lane_executes_sessions_send_via_default_dispatcher() {
+    let (base_url, request_rx, server) = spawn_telegram_send_server_once();
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-sessions-send", "safe-lane")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.conversation.safe_lane_plan_execution_enabled = true;
+    config.tools.messages.enabled = true;
+    config.telegram.enabled = true;
+    config.telegram.bot_token = Some("123456:telegram-test-token".to_owned());
+    config.telegram.bot_token_env = None;
+    config.telegram.base_url = base_url;
+    config.telegram.allowed_chat_ids = vec![123];
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "controller-root".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Controller".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create controller root");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "telegram:123".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Telegram Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create telegram root");
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Sending to known session safely.".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "sessions_send".to_owned(),
+                args_json: json!({
+                    "session_id": "telegram:123",
+                    "text": "hello safe lane"
+                }),
+                source: "provider_tool_call".to_owned(),
+                session_id: "controller-root".to_owned(),
+                turn_id: "turn-safe-sessions-send".to_owned(),
+                tool_call_id: "call-safe-sessions-send".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+    let coordinator = ConversationTurnCoordinator::new();
+
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "controller-root",
+            "deploy safely and show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("safe-lane handle turn success");
+
+    assert!(
+        reply.contains("\"tool\":\"sessions_send\""),
+        "expected raw sessions_send tool output, got: {reply}"
+    );
+    let line = reply.lines().last().expect("tool result line should exist");
+    let payload = line
+        .strip_prefix("[ok] ")
+        .expect("tool result line should keep [ok] prefix");
+    let envelope: Value =
+        serde_json::from_str(payload).expect("tool result envelope should be json");
+    assert!(
+        envelope["payload_summary"]
+            .as_str()
+            .expect("payload summary should be text")
+            .contains("\"delivery\":\"sent\""),
+        "expected send receipt in output, got: {reply}"
+    );
+
+    let request = request_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("telegram request should be captured");
+    assert!(request.contains("\"text\":\"hello safe lane\""));
+
+    server.join().expect("telegram stub join");
 }
 
 #[cfg(feature = "memory-sqlite")]

@@ -2726,9 +2726,9 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
             };
         }
     };
-    let app_dispatcher = DefaultAppToolDispatcher::new(
+    let app_dispatcher = DefaultAppToolDispatcher::with_config(
         MemoryRuntimeConfig::from_memory_config(&config.memory),
-        config.tools.clone(),
+        config.clone(),
     );
     let (turn_result, safe_lane_terminal_route) = if preparation
         .lane_plan

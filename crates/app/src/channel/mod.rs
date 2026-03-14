@@ -71,6 +71,12 @@ pub struct ChannelDelivery {
     pub source_message_id: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChannelSendReceipt {
+    pub channel: &'static str,
+    pub target: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelPlatform {
     Telegram,
@@ -337,6 +343,149 @@ type ChannelProcessFuture = Pin<Box<dyn Future<Output = CliResult<String>> + Sen
 
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
 type ChannelCommandFuture<'a> = Pin<Box<dyn Future<Output = CliResult<()>> + Send + 'a>>;
+
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum KnownChannelSessionSendTarget {
+    Telegram {
+        account_id: Option<String>,
+        chat_id: String,
+        thread_id: Option<String>,
+    },
+    Feishu {
+        account_id: Option<String>,
+        conversation_id: String,
+        reply_message_id: Option<String>,
+    },
+}
+
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+fn parse_known_channel_session_send_target(
+    config: &LoongClawConfig,
+    session_id: &str,
+) -> CliResult<KnownChannelSessionSendTarget> {
+    let mut parts = session_id.split(':');
+    let channel = parts
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("sessions_send_channel_unsupported: `{session_id}`"))?;
+    let scope = parts.map(str::trim).collect::<Vec<_>>();
+
+    match channel {
+        "telegram" => parse_telegram_session_send_target(config, session_id, scope.as_slice()),
+        "feishu" | "lark" => parse_feishu_session_send_target(config, session_id, scope.as_slice()),
+        _ => Err(format!("sessions_send_channel_unsupported: `{session_id}`")),
+    }
+}
+
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+fn parse_telegram_session_send_target(
+    config: &LoongClawConfig,
+    session_id: &str,
+    scope: &[&str],
+) -> CliResult<KnownChannelSessionSendTarget> {
+    let account_known = |account_id: &str| {
+        config
+            .telegram
+            .resolve_account_for_session_account_id(Some(account_id))
+            .is_ok()
+    };
+
+    match scope {
+        [chat_id] if !chat_id.is_empty() => Ok(KnownChannelSessionSendTarget::Telegram {
+            account_id: None,
+            chat_id: (*chat_id).to_owned(),
+            thread_id: None,
+        }),
+        [first_segment, second_segment]
+            if !first_segment.is_empty() && !second_segment.is_empty() =>
+        {
+            if account_known(first_segment) {
+                Ok(KnownChannelSessionSendTarget::Telegram {
+                    account_id: Some((*first_segment).to_owned()),
+                    chat_id: (*second_segment).to_owned(),
+                    thread_id: None,
+                })
+            } else {
+                Ok(KnownChannelSessionSendTarget::Telegram {
+                    account_id: None,
+                    chat_id: (*first_segment).to_owned(),
+                    thread_id: Some((*second_segment).to_owned()),
+                })
+            }
+        }
+        [account_id, chat_id, thread_id]
+            if !account_id.is_empty() && !chat_id.is_empty() && !thread_id.is_empty() =>
+        {
+            if !account_known(account_id) {
+                return Err(format!("sessions_send_channel_unsupported: `{session_id}`"));
+            }
+            Ok(KnownChannelSessionSendTarget::Telegram {
+                account_id: Some((*account_id).to_owned()),
+                chat_id: (*chat_id).to_owned(),
+                thread_id: Some((*thread_id).to_owned()),
+            })
+        }
+        _ => Err(format!("sessions_send_channel_unsupported: `{session_id}`")),
+    }
+}
+
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+fn parse_feishu_session_send_target(
+    config: &LoongClawConfig,
+    session_id: &str,
+    scope: &[&str],
+) -> CliResult<KnownChannelSessionSendTarget> {
+    let account_known = |account_id: &str| {
+        config
+            .feishu
+            .resolve_account_for_session_account_id(Some(account_id))
+            .is_ok()
+    };
+
+    match scope {
+        [conversation_id] if !conversation_id.is_empty() => {
+            Ok(KnownChannelSessionSendTarget::Feishu {
+                account_id: None,
+                conversation_id: (*conversation_id).to_owned(),
+                reply_message_id: None,
+            })
+        }
+        [first_segment, second_segment]
+            if !first_segment.is_empty() && !second_segment.is_empty() =>
+        {
+            if account_known(first_segment) {
+                Ok(KnownChannelSessionSendTarget::Feishu {
+                    account_id: Some((*first_segment).to_owned()),
+                    conversation_id: (*second_segment).to_owned(),
+                    reply_message_id: None,
+                })
+            } else {
+                Ok(KnownChannelSessionSendTarget::Feishu {
+                    account_id: None,
+                    conversation_id: (*first_segment).to_owned(),
+                    reply_message_id: Some((*second_segment).to_owned()),
+                })
+            }
+        }
+        [account_id, conversation_id, reply_message_id]
+            if !account_id.is_empty()
+                && !conversation_id.is_empty()
+                && !reply_message_id.is_empty() =>
+        {
+            if !account_known(account_id) {
+                return Err(format!("sessions_send_channel_unsupported: `{session_id}`"));
+            }
+            Ok(KnownChannelSessionSendTarget::Feishu {
+                account_id: Some((*account_id).to_owned()),
+                conversation_id: (*conversation_id).to_owned(),
+                reply_message_id: Some((*reply_message_id).to_owned()),
+            })
+        }
+        _ => Err(format!("sessions_send_channel_unsupported: `{session_id}`")),
+    }
+}
 
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
 async fn process_channel_batch<A, F>(
@@ -945,6 +1094,119 @@ pub async fn run_feishu_channel(
         )
         .await
     }
+}
+
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+pub(crate) async fn send_text_to_known_session(
+    config: &LoongClawConfig,
+    session_id: &str,
+    text: &str,
+) -> CliResult<ChannelSendReceipt> {
+    match parse_known_channel_session_send_target(config, session_id)? {
+        KnownChannelSessionSendTarget::Telegram {
+            account_id,
+            chat_id,
+            thread_id,
+        } => {
+            #[cfg(not(feature = "channel-telegram"))]
+            {
+                let _ = (config, account_id, chat_id, thread_id, text);
+                Err("telegram channel is disabled (enable feature `channel-telegram`)".to_owned())
+            }
+
+            #[cfg(feature = "channel-telegram")]
+            {
+                let resolved = config
+                    .telegram
+                    .resolve_account_for_session_account_id(account_id.as_deref())?;
+                if !resolved.enabled {
+                    return Err(
+                        "sessions_send_channel_disabled: telegram channel is disabled by config"
+                            .to_owned(),
+                    );
+                }
+                let allowed_chat_id = chat_id.parse::<i64>().map_err(|error| {
+                    format!("sessions_send_invalid_telegram_target: `{chat_id}`: {error}")
+                })?;
+                if !resolved.allowed_chat_ids.contains(&allowed_chat_id) {
+                    return Err(format!(
+                        "sessions_send_target_not_allowed: telegram target `{allowed_chat_id}` is not present in telegram.allowed_chat_ids"
+                    ));
+                }
+                let token = resolved.bot_token().ok_or_else(|| {
+                    "telegram bot token missing (set telegram.bot_token or env)".to_owned()
+                })?;
+                let target = match thread_id {
+                    Some(thread_id) => format!("{chat_id}:topic:{thread_id}"),
+                    None => chat_id,
+                };
+                telegram::run_telegram_send(
+                    &resolved,
+                    token,
+                    ChannelOutboundTargetKind::Conversation,
+                    target.as_str(),
+                    text,
+                )
+                .await?;
+                Ok(ChannelSendReceipt {
+                    channel: "telegram",
+                    target,
+                })
+            }
+        }
+        KnownChannelSessionSendTarget::Feishu {
+            account_id,
+            conversation_id,
+            reply_message_id,
+        } => {
+            #[cfg(not(feature = "channel-feishu"))]
+            {
+                let _ = (config, account_id, conversation_id, reply_message_id, text);
+                Err("feishu channel is disabled (enable feature `channel-feishu`)".to_owned())
+            }
+
+            #[cfg(feature = "channel-feishu")]
+            {
+                let resolved = config
+                    .feishu
+                    .resolve_account_for_session_account_id(account_id.as_deref())?;
+                if !resolved.enabled {
+                    return Err(
+                        "sessions_send_channel_disabled: feishu channel is disabled by config"
+                            .to_owned(),
+                    );
+                }
+                if !resolved
+                    .allowed_chat_ids
+                    .iter()
+                    .any(|allowed| allowed.trim() == conversation_id)
+                {
+                    return Err(format!(
+                        "sessions_send_target_not_allowed: feishu target `{conversation_id}` is not present in feishu.allowed_chat_ids"
+                    ));
+                }
+                let (target_kind, target) = match reply_message_id {
+                    Some(message_id) => (ChannelOutboundTargetKind::MessageReply, message_id),
+                    None => (ChannelOutboundTargetKind::ReceiveId, conversation_id),
+                };
+                feishu::run_feishu_send(&resolved, target_kind, target.as_str(), text, false)
+                    .await?;
+                Ok(ChannelSendReceipt {
+                    channel: "feishu",
+                    target,
+                })
+            }
+        }
+    }
+}
+
+#[cfg(not(any(feature = "channel-telegram", feature = "channel-feishu")))]
+pub(crate) async fn send_text_to_known_session(
+    _config: &LoongClawConfig,
+    session_id: &str,
+    _text: &str,
+) -> CliResult<ChannelSendReceipt> {
+    Err(format!("sessions_send_channel_unsupported: `{session_id}`"))
 }
 
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]

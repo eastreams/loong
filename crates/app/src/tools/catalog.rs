@@ -86,6 +86,22 @@ const fn runtime_session_tool_availability() -> ToolAvailability {
     ToolAvailability::Planned
 }
 
+#[cfg(all(
+    feature = "memory-sqlite",
+    any(feature = "channel-telegram", feature = "channel-feishu")
+))]
+const fn runtime_messaging_tool_availability() -> ToolAvailability {
+    ToolAvailability::Runtime
+}
+
+#[cfg(not(all(
+    feature = "memory-sqlite",
+    any(feature = "channel-telegram", feature = "channel-feishu")
+)))]
+const fn runtime_messaging_tool_availability() -> ToolAvailability {
+    ToolAvailability::Planned
+}
+
 impl ToolCatalog {
     pub fn descriptor(&self, tool_name: &str) -> Option<&ToolDescriptor> {
         self.descriptors
@@ -274,7 +290,7 @@ pub fn tool_catalog() -> ToolCatalog {
             aliases: &[],
             description: "Send an outbound text message to a known channel-backed root session",
             execution_kind: ToolExecutionKind::App,
-            availability: ToolAvailability::Planned,
+            availability: runtime_messaging_tool_availability(),
             provider_definition_builder: sessions_send_definition,
         },
     ];
