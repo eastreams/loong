@@ -81,8 +81,9 @@ pub(crate) fn execute_memory_search_tool_with_policies(
             "limit": request.limit.clamp(1, 100),
             "truncated": false,
         });
-        let returned_count = payload["matches"]
-            .as_array()
+        let returned_count = payload
+            .get("matches")
+            .and_then(Value::as_array)
             .map(Vec::len)
             .unwrap_or_default();
 
@@ -299,8 +300,10 @@ mod tests {
     }
 
     fn skipped_target<'a>(payload: &'a Value, session_id: &str) -> &'a Value {
-        payload["scope"]["skipped_targets"]
-            .as_array()
+        payload
+            .get("scope")
+            .and_then(|scope| scope.get("skipped_targets"))
+            .and_then(Value::as_array)
             .expect("skipped_targets array")
             .iter()
             .find(|item| item.get("session_id").and_then(Value::as_str) == Some(session_id))
@@ -399,10 +402,19 @@ mod tests {
         )
         .expect("memory_search outcome");
 
-        assert_eq!(outcome.payload["scope"]["mode"], "visible");
-        assert_eq!(outcome.payload["returned_count"], 2);
-        let matches = outcome.payload["matches"]
-            .as_array()
+        let scope = outcome.payload.get("scope").expect("scope payload");
+        assert_eq!(scope.get("mode").and_then(Value::as_str), Some("visible"));
+        assert_eq!(
+            outcome
+                .payload
+                .get("returned_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        let matches = outcome
+            .payload
+            .get("matches")
+            .and_then(Value::as_array)
             .expect("matches array");
         let session_ids: Vec<&str> = matches
             .iter()
@@ -510,15 +522,26 @@ mod tests {
         )
         .expect("batch memory_search outcome");
 
-        assert_eq!(outcome.payload["scope"]["mode"], "batch");
-        assert_eq!(outcome.payload["returned_count"], 1);
+        let scope = outcome.payload.get("scope").expect("scope payload");
+        assert_eq!(scope.get("mode").and_then(Value::as_str), Some("batch"));
         assert_eq!(
-            skipped_target(&outcome.payload, "hidden-root")["result"],
-            "skipped_not_visible"
+            outcome
+                .payload
+                .get("returned_count")
+                .and_then(Value::as_u64),
+            Some(1)
         );
         assert_eq!(
-            skipped_target(&outcome.payload, "missing-session")["result"],
-            "skipped_not_found"
+            skipped_target(&outcome.payload, "hidden-root")
+                .get("result")
+                .and_then(Value::as_str),
+            Some("skipped_not_visible")
+        );
+        assert_eq!(
+            skipped_target(&outcome.payload, "missing-session")
+                .get("result")
+                .and_then(Value::as_str),
+            Some("skipped_not_found")
         );
     }
 
@@ -566,11 +589,19 @@ mod tests {
         )
         .expect("memory_search outcome");
 
-        let matches = outcome.payload["matches"]
-            .as_array()
+        let matches = outcome
+            .payload
+            .get("matches")
+            .and_then(Value::as_array)
             .expect("matches array");
         assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0]["session_id"], "archived-child");
+        assert_eq!(
+            matches
+                .first()
+                .and_then(|item| item.get("session_id"))
+                .and_then(Value::as_str),
+            Some("archived-child")
+        );
     }
 
     #[test]
@@ -599,10 +630,22 @@ mod tests {
         )
         .expect("legacy memory_search outcome");
 
-        assert_eq!(outcome.payload["returned_count"], 1);
         assert_eq!(
-            outcome.payload["matches"][0]["session_id"],
-            "delegate:legacy-child"
+            outcome
+                .payload
+                .get("returned_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            outcome
+                .payload
+                .get("matches")
+                .and_then(Value::as_array)
+                .and_then(|matches| matches.first())
+                .and_then(|item| item.get("session_id"))
+                .and_then(Value::as_str),
+            Some("delegate:legacy-child")
         );
     }
 
@@ -643,8 +686,10 @@ mod tests {
         )
         .expect("memory_search outcome");
 
-        let matches = outcome.payload["matches"]
-            .as_array()
+        let matches = outcome
+            .payload
+            .get("matches")
+            .and_then(Value::as_array)
             .expect("matches array");
         assert!(
             matches.is_empty(),
