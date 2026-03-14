@@ -332,6 +332,18 @@ impl MemoryConfig {
         self.profile.mode()
     }
 
+    pub const fn strict_mode_requested(&self) -> bool {
+        !self.fail_open
+    }
+
+    pub const fn strict_mode_active(&self) -> bool {
+        false
+    }
+
+    pub const fn effective_fail_open(&self) -> bool {
+        !self.strict_mode_active()
+    }
+
     pub fn summary_char_budget(&self) -> usize {
         self.summary_max_chars.max(256)
     }
@@ -407,7 +419,22 @@ mod tests {
     fn hydrated_memory_policy_defaults_are_fail_open_and_sync_minimal() {
         let config = MemoryConfig::default();
         assert!(config.fail_open);
+        assert!(config.effective_fail_open());
+        assert!(!config.strict_mode_requested());
+        assert!(!config.strict_mode_active());
         assert_eq!(config.ingest_mode, MemoryIngestMode::SyncMinimal);
+    }
+
+    #[test]
+    fn strict_mode_request_remains_reserved_and_disabled_by_default() {
+        let config = MemoryConfig {
+            fail_open: false,
+            ..MemoryConfig::default()
+        };
+
+        assert!(config.strict_mode_requested());
+        assert!(!config.strict_mode_active());
+        assert!(config.effective_fail_open());
     }
 
     #[test]

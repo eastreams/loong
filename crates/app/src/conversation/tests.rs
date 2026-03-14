@@ -995,6 +995,60 @@ async fn default_runtime_build_context_explicit_builtin_system_preserves_profile
     let _ = std::fs::remove_file(sqlite_path);
 }
 
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_build_context_fail_open_memory_derivation_preserves_recent_window_projection()
+ {
+    let _faults = crate::memory::ScopedMemoryOrchestratorTestFaults::set(
+        crate::memory::MemoryOrchestratorTestFaults {
+            derivation_error: Some("simulated derivation failure".to_owned()),
+            ..crate::memory::MemoryOrchestratorTestFaults::default()
+        },
+    );
+    let runtime = DefaultConversationRuntime::default();
+    let session_id = unique_acp_test_id("default-runtime-context", "fail-open-memory");
+    let sqlite_path = unique_memory_sqlite_path("fail-open-memory");
+    let mut config = test_config();
+    config.memory.system = MemorySystemKind::Builtin;
+    config.memory.profile = MemoryProfile::WindowOnly;
+    config.memory.sliding_window = 2;
+    config.memory.sqlite_path = sqlite_path.clone();
+
+    let runtime_config =
+        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    crate::memory::append_turn_direct(&session_id, "user", "turn 1", &runtime_config)
+        .expect("append turn 1 should succeed");
+    crate::memory::append_turn_direct(&session_id, "assistant", "turn 2", &runtime_config)
+        .expect("append turn 2 should succeed");
+    crate::memory::append_turn_direct(&session_id, "user", "turn 3", &runtime_config)
+        .expect("append turn 3 should succeed");
+
+    let assembled = runtime
+        .build_context(&config, &session_id, true, None)
+        .await
+        .expect("build context should stay available when memory derivation degrades");
+
+    let projected_turns = assembled
+        .messages
+        .iter()
+        .filter_map(|message| {
+            let role = message.get("role")?.as_str()?;
+            let content = message.get("content")?.as_str()?;
+            matches!(role, "user" | "assistant").then_some((role.to_owned(), content.to_owned()))
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        projected_turns,
+        vec![
+            ("assistant".to_owned(), "turn 2".to_owned()),
+            ("user".to_owned(), "turn 3".to_owned()),
+        ]
+    );
+
+    let _ = std::fs::remove_file(sqlite_path);
+}
+
 #[test]
 fn resolve_context_engine_selection_uses_default_when_unset() {
     let _env_lock = context_engine_env_lock().lock().expect("env lock");

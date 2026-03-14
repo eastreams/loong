@@ -19,6 +19,8 @@ pub use kernel_adapter::MvpMemoryAdapter;
 pub use orchestrator::{
     BuiltinMemoryOrchestrator, HydratedMemoryContext, MemoryDiagnostics, hydrate_memory_context,
 };
+#[cfg(test)]
+pub use orchestrator::{MemoryOrchestratorTestFaults, ScopedMemoryOrchestratorTestFaults};
 #[cfg(feature = "memory-sqlite")]
 pub use sqlite::ConversationTurn;
 pub use system::{
