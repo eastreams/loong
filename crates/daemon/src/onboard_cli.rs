@@ -20,63 +20,409 @@ pub(crate) struct OnboardCommandOptions {
     pub accept_risk: bool,
     pub provider: Option<String>,
     pub model: Option<String>,
-    pub api_key: Option<String>,
-    pub personality: Option<String>,
-    pub memory_profile: Option<String>,
+    pub api_key_env: Option<String>,
     pub system_prompt: Option<String>,
     pub skip_model_probe: bool,
 }
 
+pub(crate) trait OnboardUi {
+    fn print_line(&mut self, line: &str) -> CliResult<()>;
+    fn prompt_with_default(&mut self, label: &str, default: &str) -> CliResult<String>;
+    fn prompt_required(&mut self, label: &str) -> CliResult<String>;
+    fn prompt_confirm(&mut self, message: &str, default: bool) -> CliResult<bool>;
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct OnboardRuntimeContext {
+    render_width: usize,
+    workspace_root: Option<PathBuf>,
+    codex_config_paths: Vec<PathBuf>,
+}
+
+impl OnboardRuntimeContext {
+    fn capture() -> Self {
+        Self {
+            render_width: detect_render_width(),
+            workspace_root: env::current_dir().ok(),
+            codex_config_paths: default_codex_config_paths(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_tests(
+        render_width: usize,
+        workspace_root: Option<PathBuf>,
+        codex_config_paths: impl IntoIterator<Item = PathBuf>,
+    ) -> Self {
+        Self {
+            render_width,
+            workspace_root,
+            codex_config_paths: codex_config_paths.into_iter().collect(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct StdioOnboardUi;
+
+impl OnboardUi for StdioOnboardUi {
+    fn print_line(&mut self, line: &str) -> CliResult<()> {
+        println!("{line}");
+        Ok(())
+    }
+
+    fn prompt_with_default(&mut self, label: &str, default: &str) -> CliResult<String> {
+        print!("{label} [{default}]: ");
+        io::stdout()
+            .flush()
+            .map_err(|error| format!("flush stdout failed: {error}"))?;
+        let mut line = String::new();
+        io::stdin()
+            .read_line(&mut line)
+            .map_err(|error| format!("read stdin failed: {error}"))?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Ok(default.to_owned());
+        }
+        Ok(trimmed.to_owned())
+    }
+
+    fn prompt_required(&mut self, label: &str) -> CliResult<String> {
+        print!("{label}: ");
+        io::stdout()
+            .flush()
+            .map_err(|error| format!("flush stdout failed: {error}"))?;
+        let mut line = String::new();
+        io::stdin()
+            .read_line(&mut line)
+            .map_err(|error| format!("read stdin failed: {error}"))?;
+        Ok(line.trim().to_owned())
+    }
+
+    fn prompt_confirm(&mut self, message: &str, default: bool) -> CliResult<bool> {
+        let suffix = if default { "[Y/n]" } else { "[y/N]" };
+        print!("{message} {suffix}: ");
+        io::stdout()
+            .flush()
+            .map_err(|error| format!("flush stdout failed: {error}"))?;
+        let mut line = String::new();
+        io::stdin()
+            .read_line(&mut line)
+            .map_err(|error| format!("read stdin failed: {error}"))?;
+        let value = line.trim().to_ascii_lowercase();
+        if value.is_empty() {
+            return Ok(default);
+        }
+        Ok(matches!(value.as_str(), "y" | "yes"))
+    }
+}
+
+fn print_lines(ui: &mut impl OnboardUi, lines: impl IntoIterator<Item = String>) -> CliResult<()> {
+    for line in lines {
+        ui.print_line(&line)?;
+    }
+    Ok(())
+}
+
+fn print_message(ui: &mut impl OnboardUi, line: impl Into<String>) -> CliResult<()> {
+    ui.print_line(&line.into())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OnboardCheckLevel {
+pub(crate) enum OnboardCheckLevel {
     Pass,
     Warn,
     Fail,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct OnboardCheckCounts {
+    pass: usize,
+    warn: usize,
+    fail: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OnboardCheck {
+    pub(crate) name: &'static str,
+    pub(crate) level: OnboardCheckLevel,
+    pub(crate) detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ImportSurfaceLevel {
+    Ready,
+    Review,
+    Blocked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ImportSurface {
+    pub(crate) name: &'static str,
+    pub(crate) domain: crate::migration::SetupDomainKind,
+    pub(crate) level: ImportSurfaceLevel,
+    pub(crate) detail: String,
+}
+
 #[derive(Debug, Clone)]
-struct OnboardCheck {
-    name: &'static str,
-    level: OnboardCheckLevel,
+pub(crate) struct ImportCandidate {
+    pub(crate) source_kind: crate::migration::ImportSourceKind,
+    pub(crate) source: String,
+    pub(crate) config: mvp::config::LoongClawConfig,
+    pub(crate) surfaces: Vec<ImportSurface>,
+    pub(crate) domains: Vec<crate::migration::DomainPreview>,
+    pub(crate) channel_candidates: Vec<crate::migration::ChannelCandidate>,
+    pub(crate) workspace_guidance: Vec<crate::migration::WorkspaceGuidanceCandidate>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OnboardEntryChoice {
+    ContinueCurrentSetup,
+    ImportDetectedSetup,
+    StartFresh,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OnboardEntryOption {
+    pub(crate) choice: OnboardEntryChoice,
+    pub(crate) label: &'static str,
+    pub(crate) detail: String,
+    pub(crate) recommended: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OnboardHeaderStyle {
+    Brand,
+    Compact,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuidedOnboardStep {
+    Provider,
+    Model,
+    CredentialEnv,
+    SystemPrompt,
+    Review,
+}
+
+impl GuidedOnboardStep {
+    const TOTAL: usize = 5;
+
+    const fn index(self) -> usize {
+        match self {
+            GuidedOnboardStep::Provider => 1,
+            GuidedOnboardStep::Model => 2,
+            GuidedOnboardStep::CredentialEnv => 3,
+            GuidedOnboardStep::SystemPrompt => 4,
+            GuidedOnboardStep::Review => 5,
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            GuidedOnboardStep::Provider => "provider",
+            GuidedOnboardStep::Model => "model",
+            GuidedOnboardStep::CredentialEnv => "credential env",
+            GuidedOnboardStep::SystemPrompt => "system prompt",
+            GuidedOnboardStep::Review => "review",
+        }
+    }
+
+    fn progress_line(self) -> String {
+        format!(
+            "step {} of {} · {}",
+            self.index(),
+            Self::TOTAL,
+            self.label()
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReviewFlowStyle {
+    Guided,
+    QuickCurrentSetup,
+    QuickDetectedSetup,
+}
+
+impl ReviewFlowStyle {
+    const fn presentation_kind(self) -> crate::onboard_presentation::ReviewFlowKind {
+        match self {
+            ReviewFlowStyle::Guided => crate::onboard_presentation::ReviewFlowKind::Guided,
+            ReviewFlowStyle::QuickCurrentSetup => {
+                crate::onboard_presentation::ReviewFlowKind::QuickCurrentSetup
+            }
+            ReviewFlowStyle::QuickDetectedSetup => {
+                crate::onboard_presentation::ReviewFlowKind::QuickDetectedSetup
+            }
+        }
+    }
+
+    fn progress_line(self) -> String {
+        match self {
+            ReviewFlowStyle::Guided => GuidedOnboardStep::Review.progress_line(),
+            ReviewFlowStyle::QuickCurrentSetup | ReviewFlowStyle::QuickDetectedSetup => {
+                crate::onboard_presentation::review_flow_copy(self.presentation_kind())
+                    .progress_line
+                    .to_owned()
+            }
+        }
+    }
+
+    const fn header_subtitle(self) -> &'static str {
+        crate::onboard_presentation::review_flow_copy(self.presentation_kind()).header_subtitle
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OnboardScreenOption {
+    key: String,
+    label: String,
+    detail_lines: Vec<String>,
+    recommended: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StartingPointFitHint {
+    key: &'static str,
     detail: String,
+    domain: Option<crate::migration::SetupDomainKind>,
 }
 
 #[derive(Debug, Clone)]
-struct OnboardImportDiscovery {
-    report: mvp::migration::DiscoveryReport,
-    summary: mvp::migration::DiscoveryPlanSummary,
-    recommendation: Option<mvp::migration::PrimarySourceRecommendation>,
+struct StartingConfigSelection {
+    config: mvp::config::LoongClawConfig,
+    import_source: Option<String>,
+    provider_selection: crate::migration::ProviderSelectionPlan,
+    entry_choice: OnboardEntryChoice,
+    current_setup_state: crate::migration::CurrentSetupState,
+    review_candidate: Option<ImportCandidate>,
+}
+
+#[derive(Debug, Clone)]
+struct ConfigWritePlan {
+    force: bool,
+    backup_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OnboardShortcutKind {
+    CurrentSetup,
+    DetectedSetup,
+}
+
+impl OnboardShortcutKind {
+    const fn presentation_kind(self) -> crate::onboard_presentation::ShortcutKind {
+        match self {
+            OnboardShortcutKind::CurrentSetup => {
+                crate::onboard_presentation::ShortcutKind::CurrentSetup
+            }
+            OnboardShortcutKind::DetectedSetup => {
+                crate::onboard_presentation::ShortcutKind::DetectedSetup
+            }
+        }
+    }
+
+    const fn review_flow_style(self) -> ReviewFlowStyle {
+        match self {
+            OnboardShortcutKind::CurrentSetup => ReviewFlowStyle::QuickCurrentSetup,
+            OnboardShortcutKind::DetectedSetup => ReviewFlowStyle::QuickDetectedSetup,
+        }
+    }
+
+    const fn subtitle(self) -> &'static str {
+        crate::onboard_presentation::shortcut_copy(self.presentation_kind()).subtitle
+    }
+
+    const fn title(self) -> &'static str {
+        crate::onboard_presentation::shortcut_copy(self.presentation_kind()).title
+    }
+
+    const fn summary_line(self) -> &'static str {
+        crate::onboard_presentation::shortcut_copy(self.presentation_kind()).summary_line
+    }
+
+    const fn primary_label(self) -> &'static str {
+        crate::onboard_presentation::shortcut_copy(self.presentation_kind()).primary_label
+    }
+
+    const fn default_choice_description(self) -> &'static str {
+        crate::onboard_presentation::shortcut_copy(self.presentation_kind())
+            .default_choice_description
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OnboardShortcutChoice {
+    UseShortcut,
+    AdjustSettings,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum OnboardImportMode {
-    Skip,
-    RecommendedSingleSource { source_id: String },
-    SelectedSingleSource { source_id: String },
-    SafeProfileMerge,
+pub(crate) struct OnboardingSuccessSummary {
+    pub(crate) import_source: Option<String>,
+    pub(crate) config_path: String,
+    pub(crate) config_status: Option<String>,
+    pub(crate) provider: String,
+    pub(crate) model: String,
+    pub(crate) transport: String,
+    pub(crate) credential: Option<OnboardingCredentialSummary>,
+    pub(crate) memory_path: Option<String>,
+    pub(crate) channels: Vec<String>,
+    pub(crate) domain_outcomes: Vec<OnboardingDomainOutcome>,
+    pub(crate) next_actions: Vec<OnboardingAction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OnboardImportStrategy {
-    pub mode: OnboardImportMode,
-    pub recommended_source_id: Option<String>,
+pub(crate) struct OnboardingCredentialSummary {
+    pub(crate) label: &'static str,
+    pub(crate) value: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OnboardingDomainOutcome {
+    pub(crate) kind: crate::migration::SetupDomainKind,
+    pub(crate) decision: crate::migration::types::PreviewDecision,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OnboardingActionKind {
+    Chat,
+    Channel,
+    Doctor,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OnboardingAction {
+    pub(crate) kind: OnboardingActionKind,
+    pub(crate) label: String,
+    pub(crate) command: String,
+}
+
+pub(crate) type ChannelImportReadiness = crate::migration::ChannelImportReadiness;
 
 pub(crate) async fn run_onboard_cli(options: OnboardCommandOptions) -> CliResult<()> {
+    let context = OnboardRuntimeContext::capture();
+    let mut ui = StdioOnboardUi;
+    run_onboard_cli_with_ui(options, &mut ui, &context).await
+}
+
+pub(crate) async fn run_onboard_cli_with_ui(
+    options: OnboardCommandOptions,
+    ui: &mut impl OnboardUi,
+    context: &OnboardRuntimeContext,
+) -> CliResult<()> {
     validate_non_interactive_risk_gate(options.non_interactive, options.accept_risk)?;
-    let using_prompt_override = options
-        .system_prompt
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty());
-    let total_steps = if using_prompt_override { 5 } else { 6 };
 
     if !options.non_interactive && !options.accept_risk {
-        println!("Security warning:");
-        println!("- LoongClaw can invoke tools and read local files when enabled.");
-        println!("- Keep credentials in environment variables, not in prompts.");
-        println!("- Prefer allowlist-style tool policy for shared environments.");
-        if !prompt_confirm("Continue onboarding?", false)? {
+        print_lines(
+            ui,
+            render_onboarding_risk_screen_lines_with_style(context.render_width, true),
+        )?;
+        if !ui.prompt_confirm(
+            crate::onboard_presentation::risk_screen_copy().confirm_prompt,
+            false,
+        )? {
             return Err("onboarding cancelled: risk acknowledgement declined".to_owned());
         }
     }
@@ -86,80 +432,90 @@ pub(crate) async fn run_onboard_cli(options: OnboardCommandOptions) -> CliResult
         .as_deref()
         .map(mvp::config::expand_path)
         .unwrap_or_else(mvp::config::default_config_path);
-    let force_write = resolve_force_write(&output_path, &options)?;
-
-    let import_applied = maybe_apply_onboard_import(&options, &output_path)?;
-    let mut config = if import_applied {
-        load_or_default_onboard_config(&output_path)?
+    let starting_selection = load_import_starting_config(&output_path, &options, ui, context)?;
+    let shortcut_kind = resolve_onboard_shortcut_kind(&options, &starting_selection);
+    let mut config = starting_selection.config.clone();
+    let skip_detailed_setup = if let Some(shortcut_kind) = shortcut_kind {
+        print_lines(
+            ui,
+            render_onboard_shortcut_screen_lines_with_style(
+                shortcut_kind,
+                &config,
+                starting_selection.import_source.as_deref(),
+                context.render_width,
+                true,
+            ),
+        )?;
+        matches!(
+            prompt_onboard_shortcut_choice(ui)?,
+            OnboardShortcutChoice::UseShortcut
+        )
     } else {
-        mvp::config::LoongClawConfig::default()
+        false
+    };
+    let review_flow_style = if skip_detailed_setup {
+        shortcut_kind
+            .map(OnboardShortcutKind::review_flow_style)
+            .unwrap_or(ReviewFlowStyle::Guided)
+    } else {
+        ReviewFlowStyle::Guided
     };
 
-    if !options.non_interactive {
-        print_step_header(1, total_steps, "provider");
-    }
-    let selected_provider = resolve_provider_selection(&options, &config)?;
-    config.provider.set_kind(selected_provider);
-    let profile = config.provider.kind.profile();
-    config.provider.set_base_url(profile.base_url.to_owned());
-    config
-        .provider
-        .set_chat_completions_path(profile.chat_completions_path.to_owned());
-    config.provider.set_endpoint(None);
-    config.provider.set_models_endpoint(None);
-    config.provider.set_api_key_env(None);
-    config.provider.set_oauth_access_token_env(None);
+    if !skip_detailed_setup {
+        let selected_provider = resolve_provider_selection(
+            &options,
+            &config,
+            &starting_selection.provider_selection,
+            ui,
+            context,
+        )?;
+        config.provider = selected_provider;
 
-    if !options.non_interactive {
-        print_step_header(2, total_steps, "model");
-    }
-    let selected_model = resolve_model_selection(&options, &config)?;
-    config.provider.model = selected_model;
+        let selected_model = resolve_model_selection(&options, &config, ui, context)?;
+        config.provider.model = selected_model;
 
-    if !options.non_interactive {
-        print_step_header(3, total_steps, "credential source");
-    }
-    let default_api_key_env = provider_default_api_key_env(config.provider.kind).to_owned();
-    let selected_api_key = resolve_api_key_selection(&options, default_api_key_env)?;
-    config.provider.api_key = normalize_provider_api_key_source(&selected_api_key);
-    config.provider.set_api_key_env(None);
+        let default_api_key_env = preferred_api_key_env_default(&config);
+        let selected_api_key_env =
+            resolve_api_key_env_selection(&options, &config, default_api_key_env, ui, context)?;
+        config.provider.api_key_env = if selected_api_key_env.trim().is_empty() {
+            None
+        } else {
+            Some(selected_api_key_env)
+        };
 
-    if using_prompt_override {
-        if !options.non_interactive {
-            print_step_header(4, total_steps, "system prompt override");
-        }
-        if let Some(system_prompt) = resolve_system_prompt_selection(&options, &config)? {
-            config.cli.prompt_pack_id = None;
-            config.cli.personality = None;
-            config.cli.system_prompt_addendum = None;
+        if let Some(system_prompt) =
+            resolve_system_prompt_selection(&options, &config, ui, context)?
+        {
             config.cli.system_prompt = system_prompt;
         }
-        if !options.non_interactive {
-            print_step_header(5, total_steps, "memory profile");
-        }
-        config.memory.profile = resolve_memory_profile_selection(&options, &config)?;
-    } else {
-        if !options.non_interactive {
-            print_step_header(4, total_steps, "personality");
-        }
-        let personality = resolve_personality_selection(&options, &config)?;
-        config.cli.prompt_pack_id = Some(mvp::prompt::DEFAULT_PROMPT_PACK_ID.to_owned());
-        config.cli.personality = Some(personality);
+    }
 
-        if !options.non_interactive {
-            print_step_header(5, total_steps, "prompt addendum");
-        }
-        config.cli.system_prompt_addendum = resolve_prompt_addendum_selection(&options, &config)?;
-        config.cli.refresh_native_system_prompt();
-
-        if !options.non_interactive {
-            print_step_header(6, total_steps, "memory profile");
-        }
-        config.memory.profile = resolve_memory_profile_selection(&options, &config)?;
+    let workspace_guidance = context
+        .workspace_root
+        .as_deref()
+        .map(crate::migration::detect_workspace_guidance)
+        .unwrap_or_default();
+    let review_candidate = build_onboard_review_candidate_with_selected_context(
+        &config,
+        &workspace_guidance,
+        starting_selection.review_candidate.as_ref(),
+    );
+    if !options.non_interactive {
+        print_lines(
+            ui,
+            render_onboard_review_lines_with_guidance_and_style(
+                &config,
+                starting_selection.import_source.as_deref(),
+                &workspace_guidance,
+                starting_selection.review_candidate.as_ref(),
+                context.render_width,
+                review_flow_style,
+                true,
+            ),
+        )?;
     }
 
     let checks = run_preflight_checks(&config, options.skip_model_probe).await;
-    print_preflight_checks(&checks);
 
     let credential_ok = checks
         .iter()
@@ -171,32 +527,73 @@ pub(crate) async fn run_onboard_cli(options: OnboardCommandOptions) -> CliResult
     let has_warnings = checks
         .iter()
         .any(|check| check.level == OnboardCheckLevel::Warn);
+    let existing_output_config = load_existing_output_config(&output_path);
+    let skip_config_write = should_skip_config_write(existing_output_config.as_ref(), &config);
 
     if options.non_interactive {
         if !credential_ok {
+            let credential_hint = provider_credential_env_hint(&config.provider)
+                .unwrap_or_else(|| "PROVIDER_API_KEY".to_owned());
             return Err(format!(
-                "onboard preflight failed: provider credentials missing. set {} in env or pass --api-key with a populated value",
-                provider_credential_env_hint(&config)
-                    .unwrap_or_else(|| "OPENAI_API_KEY".to_owned())
+                "onboard preflight failed: provider credentials missing. configure inline credentials or set {} in env",
+                credential_hint
             ));
         }
         if has_failures {
             return Err(
-                "onboard preflight failed. rerun with --skip-model-probe if your provider blocks model listing during onboarding"
+                "onboard preflight failed. rerun with --skip-model-probe if your provider blocks model listing during setup"
                     .to_owned(),
             );
         }
-    } else if (has_failures || has_warnings)
-        && !prompt_confirm("Some checks are not green. Continue anyway?", false)?
-    {
-        return Err("onboarding cancelled: unresolved preflight warnings".to_owned());
+    } else {
+        print_lines(
+            ui,
+            render_preflight_summary_screen_lines_with_style(
+                &checks,
+                context.render_width,
+                review_flow_style,
+                true,
+            ),
+        )?;
+        if (has_failures || has_warnings)
+            && !ui.prompt_confirm(
+                crate::onboard_presentation::preflight_confirm_prompt(),
+                false,
+            )?
+        {
+            return Err("onboarding cancelled: unresolved preflight warnings".to_owned());
+        }
+    }
+    if !options.non_interactive && !skip_config_write {
+        print_lines(
+            ui,
+            render_write_confirmation_screen_lines_with_style(
+                &output_path.display().to_string(),
+                has_failures || has_warnings,
+                context.render_width,
+                review_flow_style,
+                true,
+            ),
+        )?;
+        if !ui.prompt_confirm(
+            crate::onboard_presentation::write_confirmation_prompt(),
+            true,
+        )? {
+            return Err("onboarding cancelled: review declined before write".to_owned());
+        }
     }
 
-    let path = mvp::config::write(
-        options.output.as_deref(),
-        &config,
-        force_write || import_applied,
-    )?;
+    let (path, config_status) = if skip_config_write {
+        (
+            output_path.clone(),
+            Some("existing config kept; no changes were needed".to_owned()),
+        )
+    } else {
+        let write_plan = resolve_write_plan(&output_path, &options, ui, context)?;
+        prepare_output_path_for_write(&output_path, &write_plan, ui)?;
+        let path = mvp::config::write(options.output.as_deref(), &config, write_plan.force)?;
+        (path, None)
+    };
     #[cfg(feature = "memory-sqlite")]
     let memory_path = {
         let mem_config =
@@ -205,32 +602,19 @@ pub(crate) async fn run_onboard_cli(options: OnboardCommandOptions) -> CliResult
             .map_err(|error| format!("failed to bootstrap sqlite memory: {error}"))?
     };
 
-    println!("onboarding complete");
-    println!("- config: {}", path.display());
-    println!("- provider: {}", provider_kind_id(config.provider.kind));
-    println!("- model: {}", config.provider.model);
-    if let Some(pack_id) = config.cli.prompt_pack_id() {
-        println!("- prompt pack: {pack_id}");
-    } else {
-        println!("- prompt mode: inline override");
-    }
-    if let Some(personality) = config.cli.personality {
-        println!("- personality: {}", prompt_personality_id(personality));
-    }
-    println!(
-        "- memory profile: {}",
-        memory_profile_id(config.memory.profile)
+    let memory_path_display = Some(memory_path.display().to_string());
+    #[cfg(not(feature = "memory-sqlite"))]
+    let memory_path_display: Option<String> = None;
+
+    let success_summary = build_onboarding_success_summary_with_memory(
+        &path,
+        &config,
+        starting_selection.import_source.as_deref(),
+        Some(&review_candidate),
+        memory_path_display.as_deref(),
+        config_status.as_deref(),
     );
-    println!(
-        "- credential source: {}",
-        describe_provider_credential_source(&config)
-    );
-    #[cfg(feature = "memory-sqlite")]
-    println!("- sqlite memory: {}", memory_path.display());
-    println!("next step: loongclaw chat --config {}", path.display());
-    for line in build_channel_onboarding_follow_up_lines(&config) {
-        println!("{line}");
-    }
+    print_lines(ui, render_onboarding_success_summary(&success_summary))?;
     Ok(())
 }
 
@@ -271,244 +655,109 @@ pub(crate) fn build_channel_onboarding_follow_up_lines(
 fn resolve_provider_selection(
     options: &OnboardCommandOptions,
     config: &mvp::config::LoongClawConfig,
-) -> CliResult<mvp::config::ProviderKind> {
+    provider_selection: &crate::migration::ProviderSelectionPlan,
+    ui: &mut impl OnboardUi,
+    context: &OnboardRuntimeContext,
+) -> CliResult<mvp::config::ProviderConfig> {
     if options.non_interactive {
         if let Some(provider_raw) = options.provider.as_deref() {
-            return parse_provider_kind(provider_raw).ok_or_else(|| {
+            let kind = parse_provider_kind(provider_raw).ok_or_else(|| {
                 format!(
                     "unsupported --provider value \"{provider_raw}\". supported: {}",
                     supported_provider_list()
                 )
-            });
+            })?;
+            return Ok(crate::migration::resolve_provider_config_from_selection(
+                &config.provider,
+                provider_selection,
+                kind,
+            ));
         }
-        return Ok(config.provider.kind);
+        if provider_selection.requires_explicit_choice {
+            let detected = provider_selection
+                .imported_choices
+                .iter()
+                .map(|choice| provider_kind_id(choice.kind))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(format!(
+                "multiple detected provider choices found ({detected}); rerun with --provider <id> to choose the active provider"
+            ));
+        }
+        let default_kind = provider_selection
+            .default_kind
+            .unwrap_or(config.provider.kind);
+        return Ok(crate::migration::resolve_provider_config_from_selection(
+            &config.provider,
+            provider_selection,
+            default_kind,
+        ));
     }
 
+    print_lines(
+        ui,
+        render_provider_selection_screen_lines_with_style(
+            provider_selection,
+            context.render_width,
+            true,
+        ),
+    )?;
     let default_provider = options
         .provider
         .as_deref()
         .and_then(parse_provider_kind)
-        .unwrap_or(config.provider.kind);
+        .or(provider_selection
+            .default_kind
+            .or(Some(config.provider.kind)));
     loop {
-        println!("Provider options: {}", supported_provider_list());
-        let input = prompt_with_default("Provider", provider_kind_id(default_provider))?;
-        if let Some(kind) = parse_provider_kind(&input) {
-            return Ok(kind);
-        }
-        println!("Invalid provider: {input}");
-    }
-}
-
-fn maybe_apply_onboard_import(
-    options: &OnboardCommandOptions,
-    output_path: &Path,
-) -> CliResult<bool> {
-    let Some(discovery) = discover_onboard_import_candidates()? else {
-        return Ok(false);
-    };
-
-    let strategy = if options.non_interactive {
-        let strategy = resolve_onboard_import_strategy(&discovery.summary, false)?;
-        validate_non_interactive_import_strategy(&strategy, false)?;
-        strategy
-    } else {
-        println!();
-        println!("legacy claw migration:");
-        println!(
-            "{}",
-            build_onboard_import_summary(&discovery.summary, discovery.recommendation.as_ref())
-        );
-        resolve_interactive_onboard_import_strategy(&discovery)?
-    };
-
-    let selection = match strategy.mode {
-        OnboardImportMode::Skip => return Ok(false),
-        OnboardImportMode::RecommendedSingleSource { source_id } => {
-            mvp::migration::ImportSelectionMode::RecommendedSingleSource { source_id }
-        }
-        OnboardImportMode::SelectedSingleSource { source_id } => {
-            mvp::migration::ImportSelectionMode::SelectedSingleSource { source_id }
-        }
-        OnboardImportMode::SafeProfileMerge => {
-            let primary_source_id = strategy
-                .recommended_source_id
-                .clone()
-                .ok_or_else(|| "safe profile merge requires a primary source".to_owned())?;
-            mvp::migration::ImportSelectionMode::SafeProfileMerge { primary_source_id }
-        }
-    };
-
-    let result = mvp::migration::apply_import_selection(&mvp::migration::ApplyImportSelection {
-        discovery: discovery.report,
-        output_path: output_path.to_path_buf(),
-        mode: selection,
-        apply_external_skills_plan: false,
-        external_skills_input_path: None,
-    })?;
-
-    println!("imported legacy claw profile");
-    println!("- primary source: {}", result.selected_primary_source_id);
-    println!("- backup: {}", result.backup_path.display());
-    println!("- manifest: {}", result.manifest_path.display());
-    if result.merged_source_ids.len() > 1 {
-        println!("- merged sources: {}", result.merged_source_ids.join(", "));
-    }
-    Ok(true)
-}
-
-fn discover_onboard_import_candidates() -> CliResult<Option<OnboardImportDiscovery>> {
-    let mut seen = std::collections::BTreeSet::new();
-    let mut sources = Vec::new();
-    for root in onboard_search_roots() {
-        if !root.exists() {
-            continue;
-        }
-        let report = mvp::migration::discover_import_sources(
-            &root,
-            mvp::migration::DiscoveryOptions::default(),
-        )?;
-        for source in report.sources {
-            let canonical = source
-                .path
-                .canonicalize()
-                .unwrap_or_else(|_| source.path.clone())
-                .display()
-                .to_string();
-            if seen.insert(canonical) {
-                sources.push(source);
-            }
-        }
-    }
-
-    if sources.is_empty() {
-        return Ok(None);
-    }
-
-    sources.sort_by(|left, right| {
-        right
-            .confidence_score
-            .cmp(&left.confidence_score)
-            .then_with(|| left.path.cmp(&right.path))
-    });
-    let report = mvp::migration::DiscoveryReport { sources };
-    let summary = mvp::migration::plan_import_sources(&report)?;
-    let recommendation = mvp::migration::recommend_primary_source(&summary).ok();
-    Ok(Some(OnboardImportDiscovery {
-        report,
-        summary,
-        recommendation,
-    }))
-}
-
-fn onboard_search_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
-    let push_root =
-        |roots: &mut Vec<PathBuf>, seen: &mut std::collections::BTreeSet<String>, path: PathBuf| {
-            let canonical = path
-                .canonicalize()
-                .unwrap_or_else(|_| path.clone())
-                .display()
-                .to_string();
-            if seen.insert(canonical) {
-                roots.push(path);
-            }
+        let input = if provider_selection.requires_explicit_choice {
+            ui.prompt_required("Provider")?
+        } else {
+            ui.prompt_with_default(
+                "Provider",
+                provider_kind_id(default_provider.expect("interactive provider default")),
+            )?
         };
-
-    if let Ok(cwd) = std::env::current_dir() {
-        push_root(&mut roots, &mut seen, cwd.clone());
-        if let Some(parent) = cwd.parent() {
-            push_root(&mut roots, &mut seen, parent.to_path_buf());
+        if let Some(kind) = parse_provider_kind(&input) {
+            return Ok(crate::migration::resolve_provider_config_from_selection(
+                &config.provider,
+                provider_selection,
+                kind,
+            ));
         }
+        print_message(ui, format!("Invalid provider: {input}"))?;
     }
-    if let Some(home) = env::var_os("HOME").map(PathBuf::from) {
-        push_root(&mut roots, &mut seen, home.clone());
-        push_root(&mut roots, &mut seen, home.join(".config"));
-    }
-    if let Some(config_parent) = mvp::config::default_loongclaw_home()
-        .parent()
-        .map(Path::to_path_buf)
-    {
-        push_root(&mut roots, &mut seen, config_parent);
-    }
-
-    roots
 }
 
-fn resolve_interactive_onboard_import_strategy(
-    discovery: &OnboardImportDiscovery,
-) -> CliResult<OnboardImportStrategy> {
-    let default_choice = if discovery.summary.plans.is_empty() {
-        "s"
-    } else {
-        "r"
-    };
-    println!("Import options:");
-    if let Some(recommendation) = discovery.recommendation.as_ref() {
-        println!(
-            "  [r] Recommended source ({} -> {} @ {})",
-            recommendation.source_id,
-            recommendation.source.as_id(),
-            recommendation.input_path.display()
-        );
-    }
-    for plan in &discovery.summary.plans {
-        println!(
-            "  [{}] Import only {} @ {}",
-            plan.source_id,
-            plan.source.as_id(),
-            plan.input_path.display()
-        );
-    }
-    if discovery.summary.plans.len() > 1 {
-        println!("  [m] Safe profile merge");
-    }
-    println!("  [s] Skip import");
+pub(crate) fn build_provider_selection_plan_for_candidate(
+    selected_candidate: &ImportCandidate,
+    all_candidates: &[ImportCandidate],
+) -> crate::migration::ProviderSelectionPlan {
+    let migration_selected = migration_candidate_from_onboard(selected_candidate);
+    let migration_candidates = all_candidates
+        .iter()
+        .map(migration_candidate_from_onboard)
+        .collect::<Vec<_>>();
+    crate::migration::build_provider_selection_plan_for_candidate(
+        &migration_selected,
+        &migration_candidates,
+    )
+}
 
-    loop {
-        let choice = prompt_with_default("Import strategy", default_choice)?;
-        let trimmed = choice.trim().to_ascii_lowercase();
-        match trimmed.as_str() {
-            "r" => return resolve_onboard_import_strategy(&discovery.summary, false),
-            "s" | "skip" => {
-                return Ok(OnboardImportStrategy {
-                    mode: OnboardImportMode::Skip,
-                    recommended_source_id: discovery
-                        .recommendation
-                        .as_ref()
-                        .map(|recommendation| recommendation.source_id.clone()),
-                });
-            }
-            "m" | "merge" if discovery.summary.plans.len() > 1 => {
-                return resolve_onboard_import_strategy(&discovery.summary, true);
-            }
-            other
-                if discovery
-                    .summary
-                    .plans
-                    .iter()
-                    .any(|plan| plan.source_id == other) =>
-            {
-                return Ok(OnboardImportStrategy {
-                    mode: OnboardImportMode::SelectedSingleSource {
-                        source_id: other.to_owned(),
-                    },
-                    recommended_source_id: discovery
-                        .recommendation
-                        .as_ref()
-                        .map(|recommendation| recommendation.source_id.clone()),
-                });
-            }
-            _ => {
-                println!("Invalid import strategy: {trimmed}");
-            }
-        }
-    }
+#[cfg(test)]
+pub(crate) fn resolve_provider_config_from_selection(
+    current_provider: &mvp::config::ProviderConfig,
+    plan: &crate::migration::ProviderSelectionPlan,
+    selected_kind: mvp::config::ProviderKind,
+) -> mvp::config::ProviderConfig {
+    crate::migration::resolve_provider_config_from_selection(current_provider, plan, selected_kind)
 }
 
 fn resolve_model_selection(
     options: &OnboardCommandOptions,
     config: &mvp::config::LoongClawConfig,
+    ui: &mut impl OnboardUi,
+    context: &OnboardRuntimeContext,
 ) -> CliResult<String> {
     if options.non_interactive {
         if let Some(model) = options.model.as_deref() {
@@ -527,7 +776,16 @@ fn resolve_model_selection(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(config.provider.model.as_str());
-    let value = prompt_with_default("Model", default_model)?;
+    print_lines(
+        ui,
+        render_model_selection_screen_lines_with_style(
+            config,
+            default_model,
+            context.render_width,
+            true,
+        ),
+    )?;
+    let value = ui.prompt_with_default("Model", default_model)?;
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err("model cannot be empty".to_owned());
@@ -535,13 +793,16 @@ fn resolve_model_selection(
     Ok(trimmed.to_owned())
 }
 
-fn resolve_api_key_selection(
+fn resolve_api_key_env_selection(
     options: &OnboardCommandOptions,
+    config: &mvp::config::LoongClawConfig,
     default_api_key_env: String,
+    ui: &mut impl OnboardUi,
+    context: &OnboardRuntimeContext,
 ) -> CliResult<String> {
     if options.non_interactive {
         return Ok(options
-            .api_key
+            .api_key_env
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -549,18 +810,30 @@ fn resolve_api_key_selection(
             .to_owned());
     }
     let initial = options
-        .api_key
+        .api_key_env
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(default_api_key_env.as_str());
-    let value = prompt_with_default("API key or env var", initial)?;
+    print_lines(
+        ui,
+        render_api_key_env_selection_screen_lines_with_style(
+            config,
+            default_api_key_env.as_str(),
+            initial,
+            context.render_width,
+            true,
+        ),
+    )?;
+    let value = ui.prompt_with_default("API key env var", initial)?;
     Ok(value.trim().to_owned())
 }
 
 fn resolve_system_prompt_selection(
     options: &OnboardCommandOptions,
     config: &mvp::config::LoongClawConfig,
+    ui: &mut impl OnboardUi,
+    context: &OnboardRuntimeContext,
 ) -> CliResult<Option<String>> {
     if options.non_interactive {
         return Ok(options
@@ -576,7 +849,16 @@ fn resolve_system_prompt_selection(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(config.cli.system_prompt.as_str());
-    let value = prompt_with_default("CLI system prompt", initial)?;
+    print_lines(
+        ui,
+        render_system_prompt_selection_screen_lines_with_style(
+            config,
+            initial,
+            context.render_width,
+            true,
+        ),
+    )?;
+    let value = ui.prompt_with_default("CLI system prompt", initial)?;
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Ok(None);
@@ -584,101 +866,15 @@ fn resolve_system_prompt_selection(
     Ok(Some(trimmed.to_owned()))
 }
 
-fn resolve_personality_selection(
-    options: &OnboardCommandOptions,
-    config: &mvp::config::LoongClawConfig,
-) -> CliResult<mvp::prompt::PromptPersonality> {
-    if options.non_interactive {
-        if let Some(personality_raw) = options.personality.as_deref() {
-            return parse_prompt_personality(personality_raw).ok_or_else(|| {
-                format!(
-                    "unsupported --personality value \"{personality_raw}\". supported: {}",
-                    supported_personality_list()
-                )
-            });
-        }
-        return Ok(config.cli.resolved_personality());
-    }
-
-    let default_personality = options
-        .personality
-        .as_deref()
-        .and_then(parse_prompt_personality)
-        .unwrap_or_else(|| config.cli.resolved_personality());
-    loop {
-        println!("Personality options: {}", supported_personality_list());
-        let input = prompt_with_default("Personality", prompt_personality_id(default_personality))?;
-        if let Some(personality) = parse_prompt_personality(&input) {
-            return Ok(personality);
-        }
-        println!("Invalid personality: {input}");
-    }
-}
-
-fn resolve_prompt_addendum_selection(
-    options: &OnboardCommandOptions,
-    config: &mvp::config::LoongClawConfig,
-) -> CliResult<Option<String>> {
-    if options.non_interactive {
-        return Ok(config.cli.system_prompt_addendum.clone());
-    }
-    prompt_optional(
-        "Prompt addendum (blank keeps current, '-' clears)",
-        config.cli.system_prompt_addendum.as_deref(),
-    )
-}
-
-fn resolve_memory_profile_selection(
-    options: &OnboardCommandOptions,
-    config: &mvp::config::LoongClawConfig,
-) -> CliResult<mvp::config::MemoryProfile> {
-    if options.non_interactive {
-        if let Some(profile_raw) = options.memory_profile.as_deref() {
-            return parse_memory_profile(profile_raw).ok_or_else(|| {
-                format!(
-                    "unsupported --memory-profile value \"{profile_raw}\". supported: {}",
-                    supported_memory_profile_list()
-                )
-            });
-        }
-        return Ok(config.memory.profile);
-    }
-
-    let default_profile = options
-        .memory_profile
-        .as_deref()
-        .and_then(parse_memory_profile)
-        .unwrap_or(config.memory.profile);
-    loop {
-        println!(
-            "Memory profile options: {}",
-            supported_memory_profile_list()
-        );
-        let input = prompt_with_default("Memory profile", memory_profile_id(default_profile))?;
-        if let Some(profile) = parse_memory_profile(&input) {
-            return Ok(profile);
-        }
-        println!("Invalid memory profile: {input}");
-    }
-}
-
 async fn run_preflight_checks(
     config: &mvp::config::LoongClawConfig,
     skip_model_probe: bool,
 ) -> Vec<OnboardCheck> {
     let mut checks = Vec::new();
-
-    let credential_source = provider_credential_source(config);
-    let has_credentials = credential_source.is_available();
-    checks.push(OnboardCheck {
-        name: "provider credentials",
-        level: if has_credentials {
-            OnboardCheckLevel::Pass
-        } else {
-            OnboardCheckLevel::Warn
-        },
-        detail: credential_source.detail(),
-    });
+    let credential_check = provider_credential_check(config);
+    let has_credentials = credential_check.level == OnboardCheckLevel::Pass;
+    checks.push(credential_check);
+    checks.push(provider_transport_check(config));
 
     if skip_model_probe {
         checks.push(OnboardCheck {
@@ -709,249 +905,349 @@ async fn run_preflight_checks(
 
     let sqlite_path = config.memory.resolved_sqlite_path();
     let sqlite_parent = sqlite_path.parent().unwrap_or(Path::new("."));
-    match fs::create_dir_all(sqlite_parent) {
-        Ok(()) => checks.push(OnboardCheck {
-            name: "memory path",
-            level: OnboardCheckLevel::Pass,
-            detail: format!("writable parent {}", sqlite_parent.display()),
-        }),
-        Err(error) => checks.push(OnboardCheck {
-            name: "memory path",
-            level: OnboardCheckLevel::Fail,
-            detail: format!("failed to prepare {}: {error}", sqlite_parent.display()),
-        }),
-    }
+    checks.push(directory_preflight_check("memory path", sqlite_parent));
 
     let file_root = config.tools.resolved_file_root();
-    match fs::create_dir_all(&file_root) {
-        Ok(()) => checks.push(OnboardCheck {
-            name: "tool file root",
-            level: OnboardCheckLevel::Pass,
-            detail: file_root.display().to_string(),
-        }),
-        Err(error) => checks.push(OnboardCheck {
-            name: "tool file root",
-            level: OnboardCheckLevel::Fail,
-            detail: format!("failed to create {}: {error}", file_root.display()),
-        }),
-    }
+    checks.push(directory_preflight_check("tool file root", &file_root));
+
+    checks.extend(collect_channel_preflight_checks(config));
 
     checks
 }
 
-fn print_preflight_checks(checks: &[OnboardCheck]) {
-    println!("preflight checks:");
-    let name_width = checks
-        .iter()
-        .map(|check| check.name.len())
-        .max()
-        .unwrap_or(0);
-    for check in checks {
-        println!(
-            "{} {:width$}  {}",
-            check_level_marker(check.level),
-            check.name,
-            check.detail,
-            width = name_width
-        );
-    }
-}
-
-fn print_step_header(step: usize, total: usize, title: &str) {
-    println!();
-    println!("[{step}/{total}] {title}");
-}
-
-#[derive(Debug, Clone)]
-enum ProviderCredentialSource {
-    InlineLiteral,
-    ApiKeyEnvRef(String),
-    LegacyApiKeyEnv(String),
-    DefaultApiKeyEnv(String),
-    Missing,
-}
-
-impl ProviderCredentialSource {
-    fn is_available(&self) -> bool {
-        match self {
-            Self::InlineLiteral => true,
-            Self::ApiKeyEnvRef(key) | Self::LegacyApiKeyEnv(key) | Self::DefaultApiKeyEnv(key) => {
-                env::var(key)
-                    .ok()
-                    .map(|value| !value.trim().is_empty())
-                    .unwrap_or(false)
-            }
-            Self::Missing => false,
-        }
+pub(crate) fn provider_credential_check(config: &mvp::config::LoongClawConfig) -> OnboardCheck {
+    let provider = &config.provider;
+    let inline_oauth = provider
+        .oauth_access_token
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    if inline_oauth {
+        return OnboardCheck {
+            name: "provider credentials",
+            level: OnboardCheckLevel::Pass,
+            detail: "inline oauth access token configured".to_owned(),
+        };
     }
 
-    fn detail(&self) -> String {
-        match self {
-            Self::InlineLiteral => "provider.api_key literal is configured".to_owned(),
-            Self::ApiKeyEnvRef(key) => {
-                if self.is_available() {
-                    format!("env {key} is available")
-                } else {
-                    format!("env {key} is not set")
-                }
-            }
-            Self::LegacyApiKeyEnv(key) => {
-                if self.is_available() {
-                    format!("legacy env {key} is available")
-                } else {
-                    format!("legacy env {key} is not set")
-                }
-            }
-            Self::DefaultApiKeyEnv(key) => {
-                if self.is_available() {
-                    format!("default env {key} is available")
-                } else {
-                    format!("default env {key} is not set")
-                }
-            }
-            Self::Missing => "provider.api_key is empty".to_owned(),
-        }
-    }
-
-    fn summary(&self) -> String {
-        match self {
-            Self::InlineLiteral => "direct provider.api_key".to_owned(),
-            Self::ApiKeyEnvRef(key) => format!("env {key}"),
-            Self::LegacyApiKeyEnv(key) => format!("legacy env {key}"),
-            Self::DefaultApiKeyEnv(key) => format!("default env {key}"),
-            Self::Missing => "not configured".to_owned(),
-        }
-    }
-
-    fn env_hint(&self) -> Option<String> {
-        match self {
-            Self::ApiKeyEnvRef(key) | Self::LegacyApiKeyEnv(key) | Self::DefaultApiKeyEnv(key) => {
-                Some(key.clone())
-            }
-            Self::InlineLiteral | Self::Missing => None,
-        }
-    }
-}
-
-fn provider_credential_source(config: &mvp::config::LoongClawConfig) -> ProviderCredentialSource {
-    if let Some(raw) = config
-        .provider
+    let inline_api_key = provider
         .api_key
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        if let Some(env_name) = parse_explicit_api_key_env_name(raw) {
-            return ProviderCredentialSource::ApiKeyEnvRef(env_name);
-        }
-        return ProviderCredentialSource::InlineLiteral;
+        .is_some_and(|value| !value.is_empty());
+    if inline_api_key {
+        return OnboardCheck {
+            name: "provider credentials",
+            level: OnboardCheckLevel::Pass,
+            detail: "inline api key configured".to_owned(),
+        };
     }
-    if let Some(key) = config
-        .provider
+
+    if provider.authorization_header().is_some() {
+        let detail = provider_credential_env_hint(provider)
+            .map(|env_name| format!("{env_name} is available"))
+            .unwrap_or_else(|| "provider credentials are available".to_owned());
+        return OnboardCheck {
+            name: "provider credentials",
+            level: OnboardCheckLevel::Pass,
+            detail,
+        };
+    }
+
+    let detail = provider_credential_env_hint(provider)
+        .map(|env_name| format!("{env_name} is not set"))
+        .unwrap_or_else(|| "provider credentials are not configured".to_owned());
+    OnboardCheck {
+        name: "provider credentials",
+        level: OnboardCheckLevel::Warn,
+        detail,
+    }
+}
+
+fn provider_transport_check(config: &mvp::config::LoongClawConfig) -> OnboardCheck {
+    let readiness = config.provider.transport_readiness();
+    OnboardCheck {
+        name: "provider transport",
+        level: match readiness.level {
+            mvp::config::ProviderTransportReadinessLevel::Ready => OnboardCheckLevel::Pass,
+            mvp::config::ProviderTransportReadinessLevel::Review => OnboardCheckLevel::Warn,
+            mvp::config::ProviderTransportReadinessLevel::Unsupported => OnboardCheckLevel::Fail,
+        },
+        detail: readiness.detail,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProviderCredentialEnvField {
+    ApiKey,
+    OAuthAccessToken,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProviderCredentialEnvBinding {
+    pub(crate) field: ProviderCredentialEnvField,
+    pub(crate) env_name: String,
+}
+
+pub(crate) fn provider_credential_env_hints(provider: &mvp::config::ProviderConfig) -> Vec<String> {
+    let mut hints = Vec::new();
+    push_provider_credential_env_hint(&mut hints, provider.oauth_access_token_env.as_deref());
+    push_provider_credential_env_hint(&mut hints, provider.api_key_env.as_deref());
+    push_provider_credential_env_hint(&mut hints, provider.kind.default_oauth_access_token_env());
+    push_provider_credential_env_hint(&mut hints, provider.kind.default_api_key_env());
+    hints
+}
+
+pub(crate) fn provider_credential_env_hint(
+    provider: &mvp::config::ProviderConfig,
+) -> Option<String> {
+    provider_credential_env_hints(provider).into_iter().next()
+}
+
+pub(crate) fn preferred_provider_credential_env_binding(
+    provider: &mvp::config::ProviderConfig,
+) -> Option<ProviderCredentialEnvBinding> {
+    provider
+        .oauth_access_token_env
+        .as_deref()
+        .and_then(normalize_provider_credential_env_name)
+        .map(|env_name| ProviderCredentialEnvBinding {
+            field: ProviderCredentialEnvField::OAuthAccessToken,
+            env_name,
+        })
+        .or_else(|| {
+            provider
+                .api_key_env
+                .as_deref()
+                .and_then(normalize_provider_credential_env_name)
+                .map(|env_name| ProviderCredentialEnvBinding {
+                    field: ProviderCredentialEnvField::ApiKey,
+                    env_name,
+                })
+        })
+        .or_else(|| {
+            provider
+                .kind
+                .default_oauth_access_token_env()
+                .and_then(normalize_provider_credential_env_name)
+                .map(|env_name| ProviderCredentialEnvBinding {
+                    field: ProviderCredentialEnvField::OAuthAccessToken,
+                    env_name,
+                })
+        })
+        .or_else(|| {
+            provider
+                .kind
+                .default_api_key_env()
+                .and_then(normalize_provider_credential_env_name)
+                .map(|env_name| ProviderCredentialEnvBinding {
+                    field: ProviderCredentialEnvField::ApiKey,
+                    env_name,
+                })
+        })
+}
+
+fn push_provider_credential_env_hint(hints: &mut Vec<String>, maybe_env_name: Option<&str>) {
+    let Some(env_name) = maybe_env_name.and_then(normalize_provider_credential_env_name) else {
+        return;
+    };
+    if !hints.iter().any(|existing| existing == &env_name) {
+        hints.push(env_name);
+    }
+}
+
+fn normalize_provider_credential_env_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_owned())
+}
+
+pub(crate) fn preferred_api_key_env_default(config: &mvp::config::LoongClawConfig) -> String {
+    let provider = &config.provider;
+    if let Some(api_key_env) = provider
         .api_key_env
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return ProviderCredentialSource::LegacyApiKeyEnv(key.to_owned());
+        return api_key_env.to_owned();
     }
-    if let Some(default_key) = config.provider.kind.default_api_key_env() {
-        return ProviderCredentialSource::DefaultApiKeyEnv(default_key.to_owned());
+    let inline_or_oauth_auth = provider
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+        || provider
+            .oauth_access_token
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        || provider
+            .oauth_access_token_env
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+    if inline_or_oauth_auth {
+        return String::new();
     }
-    ProviderCredentialSource::Missing
+    if provider.api_key().is_some() {
+        return provider_default_api_key_env(provider.kind)
+            .unwrap_or_default()
+            .to_owned();
+    }
+    provider_default_api_key_env(provider.kind)
+        .unwrap_or_default()
+        .to_owned()
 }
 
-fn provider_credential_env_hint(config: &mvp::config::LoongClawConfig) -> Option<String> {
-    provider_credential_source(config).env_hint()
+pub(crate) fn directory_preflight_check(name: &'static str, target: &Path) -> OnboardCheck {
+    if target.exists() {
+        return match fs::metadata(target) {
+            Ok(metadata) if metadata.is_dir() => OnboardCheck {
+                name,
+                level: OnboardCheckLevel::Pass,
+                detail: target.display().to_string(),
+            },
+            Ok(_) => OnboardCheck {
+                name,
+                level: OnboardCheckLevel::Fail,
+                detail: format!("{} exists but is not a directory", target.display()),
+            },
+            Err(error) => OnboardCheck {
+                name,
+                level: OnboardCheckLevel::Fail,
+                detail: format!("failed to inspect {}: {error}", target.display()),
+            },
+        };
+    }
+
+    let mut ancestor = target;
+    while !ancestor.exists() {
+        let Some(parent) = ancestor.parent() else {
+            return OnboardCheck {
+                name,
+                level: OnboardCheckLevel::Fail,
+                detail: format!("no existing parent found for {}", target.display()),
+            };
+        };
+        ancestor = parent;
+    }
+
+    match fs::metadata(ancestor) {
+        Ok(metadata) if metadata.is_dir() => OnboardCheck {
+            name,
+            level: OnboardCheckLevel::Pass,
+            detail: format!("would create under {}", ancestor.display()),
+        },
+        Ok(_) => OnboardCheck {
+            name,
+            level: OnboardCheckLevel::Fail,
+            detail: format!("{} exists but is not a directory", ancestor.display()),
+        },
+        Err(error) => OnboardCheck {
+            name,
+            level: OnboardCheckLevel::Fail,
+            detail: format!("failed to inspect {}: {error}", ancestor.display()),
+        },
+    }
 }
 
-fn describe_provider_credential_source(config: &mvp::config::LoongClawConfig) -> String {
-    provider_credential_source(config).summary()
+pub(crate) fn collect_channel_preflight_checks(
+    config: &mvp::config::LoongClawConfig,
+) -> Vec<OnboardCheck> {
+    crate::migration::channels::collect_channel_preflight_checks(config)
+        .into_iter()
+        .map(|check| OnboardCheck {
+            name: check.name,
+            level: match check.level {
+                crate::migration::channels::ChannelCheckLevel::Pass => OnboardCheckLevel::Pass,
+                crate::migration::channels::ChannelCheckLevel::Warn => OnboardCheckLevel::Warn,
+                crate::migration::channels::ChannelCheckLevel::Fail => OnboardCheckLevel::Fail,
+            },
+            detail: check.detail,
+        })
+        .collect()
 }
 
-fn normalize_provider_api_key_source(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if let Some(env_name) = normalize_onboard_api_key_env_name(trimmed) {
-        return Some(format!("${{{env_name}}}"));
-    }
-    Some(trimmed.to_owned())
+#[cfg(test)]
+pub(crate) fn collect_import_surfaces(config: &mvp::config::LoongClawConfig) -> Vec<ImportSurface> {
+    crate::migration::collect_import_surfaces(config)
+        .into_iter()
+        .map(import_surface_from_migration)
+        .collect()
 }
 
-fn normalize_onboard_api_key_env_name(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if let Some(env_name) = parse_explicit_api_key_env_name(trimmed) {
-        return Some(env_name);
-    }
-    if looks_like_bare_onboard_env_name(trimmed) {
-        return Some(trimmed.to_owned());
-    }
-    None
+#[cfg(test)]
+pub(crate) fn collect_import_surfaces_with_channel_readiness(
+    config: &mvp::config::LoongClawConfig,
+    readiness: ChannelImportReadiness,
+) -> Vec<ImportSurface> {
+    crate::migration::collect_import_surfaces_with_channel_readiness(
+        config,
+        &to_migration_readiness(readiness),
+    )
+    .into_iter()
+    .map(import_surface_from_migration)
+    .collect()
 }
 
-fn parse_explicit_api_key_env_name(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if let Some(env_name) = parse_dollar_env_name(trimmed) {
-        return Some(env_name.to_owned());
-    }
-    if trimmed.len() >= 4 && trimmed[..4].eq_ignore_ascii_case("env:") {
-        let env_name = trimmed[4..].trim();
-        if looks_like_env_name(env_name) {
-            return Some(env_name.to_owned());
+fn summarize_onboard_checks(checks: &[OnboardCheck]) -> OnboardCheckCounts {
+    let mut counts = OnboardCheckCounts::default();
+    for check in checks {
+        match check.level {
+            OnboardCheckLevel::Pass => counts.pass += 1,
+            OnboardCheckLevel::Warn => counts.warn += 1,
+            OnboardCheckLevel::Fail => counts.fail += 1,
         }
     }
-    if let Some(env_name) = trimmed
-        .strip_prefix('%')
-        .and_then(|rest| rest.strip_suffix('%'))
-        .map(str::trim)
-        .filter(|value| looks_like_env_name(value))
-    {
-        return Some(env_name.to_owned());
-    }
-    None
+    counts
 }
 
-fn looks_like_bare_onboard_env_name(raw: &str) -> bool {
-    let mut chars = raw.chars();
-    let Some(first) = chars.next() else {
-        return false;
+fn render_preflight_check_rows(checks: &[OnboardCheck], width: usize) -> Vec<String> {
+    let render_stacked_rows = |checks: &[OnboardCheck], width: usize| {
+        let mut lines = Vec::new();
+        for check in checks {
+            lines.push(format!(
+                "{} {}",
+                check_level_marker(check.level),
+                check.name
+            ));
+            lines.extend(mvp::presentation::render_wrapped_text_line(
+                "  ",
+                &check.detail,
+                width,
+            ));
+        }
+        lines
     };
-    if !(first.is_ascii_uppercase() || first == '_') {
-        return false;
-    }
-    chars.all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
-}
 
-fn parse_dollar_env_name(raw: &str) -> Option<&str> {
-    let stripped = raw.strip_prefix('$')?.trim();
-    if stripped.is_empty() {
-        return None;
+    if width < 68 {
+        return render_stacked_rows(checks, width);
     }
-    let candidate = stripped
-        .strip_prefix('{')
-        .and_then(|rest| rest.strip_suffix('}'))
-        .map(str::trim)
-        .unwrap_or(stripped);
-    looks_like_env_name(candidate).then_some(candidate)
-}
 
-fn looks_like_env_name(raw: &str) -> bool {
-    let mut chars = raw.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !(first.is_ascii_alphanumeric() || first == '_') {
-        return false;
+    let name_width = checks
+        .iter()
+        .map(|check| check.name.len())
+        .max()
+        .unwrap_or(0);
+    let rows = checks
+        .iter()
+        .map(|check| {
+            format!(
+                "{} {:width$}  {}",
+                check_level_marker(check.level),
+                check.name,
+                check.detail,
+                width = name_width
+            )
+        })
+        .collect::<Vec<_>>();
+    if rows.iter().any(|row| row.len() > width) {
+        return render_stacked_rows(checks, width);
     }
-    chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' || ch == '.')
+    rows
 }
 
 fn check_level_marker(level: OnboardCheckLevel) -> &'static str {
@@ -962,57 +1258,2600 @@ fn check_level_marker(level: OnboardCheckLevel) -> &'static str {
     }
 }
 
-fn prompt_with_default(label: &str, default: &str) -> CliResult<String> {
-    print!("{label} [{default}]: ");
-    io::stdout()
-        .flush()
-        .map_err(|error| format!("flush stdout failed: {error}"))?;
-    let mut line = String::new();
-    io::stdin()
-        .read_line(&mut line)
-        .map_err(|error| format!("read stdin failed: {error}"))?;
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return Ok(default.to_owned());
+fn load_import_starting_config(
+    output_path: &Path,
+    options: &OnboardCommandOptions,
+    ui: &mut impl OnboardUi,
+    context: &OnboardRuntimeContext,
+) -> CliResult<StartingConfigSelection> {
+    let default_config = mvp::config::LoongClawConfig::default();
+    let readiness = resolve_channel_import_readiness(&default_config);
+    let current_setup_state = crate::migration::classify_current_setup(output_path);
+    let candidates = collect_import_candidates_with_context(output_path, context, readiness)?;
+    let all_candidates = candidates.clone();
+    let entry_options = build_onboard_entry_options(current_setup_state, &candidates);
+    let (current_candidate, import_candidates) = split_onboard_candidates(candidates);
+
+    if current_candidate.is_none() && import_candidates.is_empty() {
+        return Ok(default_starting_config_selection());
     }
-    Ok(trimmed.to_owned())
+
+    if options.non_interactive {
+        return Ok(select_non_interactive_starting_config(
+            current_setup_state,
+            &entry_options,
+            current_candidate,
+            import_candidates,
+            &all_candidates,
+        ));
+    }
+
+    if entry_options.len() == 1 && entry_options[0].choice == OnboardEntryChoice::StartFresh {
+        return Ok(default_starting_config_selection());
+    }
+
+    print_onboard_entry_options(
+        ui,
+        current_setup_state,
+        current_candidate.as_ref(),
+        &import_candidates,
+        &entry_options,
+        context,
+    )?;
+    match prompt_onboard_entry_choice(ui, &entry_options)? {
+        OnboardEntryChoice::ContinueCurrentSetup => Ok(current_candidate
+            .map(|candidate| {
+                starting_config_selection_from_current_candidate(candidate, current_setup_state)
+            })
+            .unwrap_or_else(default_starting_config_selection)),
+        OnboardEntryChoice::ImportDetectedSetup => select_interactive_import_starting_config(
+            ui,
+            context,
+            current_setup_state,
+            import_candidates,
+            &all_candidates,
+        ),
+        OnboardEntryChoice::StartFresh => Ok(default_starting_config_selection()),
+    }
 }
 
-fn prompt_confirm(message: &str, default: bool) -> CliResult<bool> {
-    let suffix = if default { "[Y/n]" } else { "[y/N]" };
-    print!("{message} {suffix}: ");
-    io::stdout()
-        .flush()
-        .map_err(|error| format!("flush stdout failed: {error}"))?;
-    let mut line = String::new();
-    io::stdin()
-        .read_line(&mut line)
-        .map_err(|error| format!("read stdin failed: {error}"))?;
-    let value = line.trim().to_ascii_lowercase();
-    if value.is_empty() {
-        return Ok(default);
+pub(crate) fn build_onboard_entry_options(
+    current_setup_state: crate::migration::CurrentSetupState,
+    candidates: &[ImportCandidate],
+) -> Vec<OnboardEntryOption> {
+    let has_current_setup = candidates.iter().any(|candidate| {
+        candidate.source_kind == crate::migration::ImportSourceKind::ExistingLoongClawConfig
+    });
+    let recommended_plan_available = candidates.iter().any(|candidate| {
+        candidate.source_kind == crate::migration::ImportSourceKind::RecommendedPlan
+    });
+    let detected_source_count = detected_reusable_source_count_for_entry(
+        candidates.iter().find(|candidate| {
+            candidate.source_kind == crate::migration::ImportSourceKind::ExistingLoongClawConfig
+        }),
+        candidates,
+    );
+    let mut options = Vec::new();
+
+    if has_current_setup {
+        options.push(OnboardEntryOption {
+            choice: OnboardEntryChoice::ContinueCurrentSetup,
+            label: crate::onboard_presentation::current_setup_option_label(),
+            detail: describe_current_setup_option(current_setup_state),
+            recommended: matches!(
+                current_setup_state,
+                crate::migration::CurrentSetupState::Healthy
+            ) || matches!(
+                current_setup_state,
+                crate::migration::CurrentSetupState::Repairable
+            ) && detected_source_count == 0,
+        });
     }
-    Ok(matches!(value.as_str(), "y" | "yes"))
+
+    if detected_source_count > 0 || recommended_plan_available {
+        options.push(OnboardEntryOption {
+            choice: OnboardEntryChoice::ImportDetectedSetup,
+            label: crate::onboard_presentation::detected_setup_option_label(),
+            detail: describe_import_option(
+                has_current_setup,
+                recommended_plan_available,
+                detected_source_count,
+            ),
+            recommended: matches!(
+                current_setup_state,
+                crate::migration::CurrentSetupState::Absent
+                    | crate::migration::CurrentSetupState::LegacyOrIncomplete
+                    | crate::migration::CurrentSetupState::Repairable
+            ),
+        });
+    }
+
+    options.push(OnboardEntryOption {
+        choice: OnboardEntryChoice::StartFresh,
+        label: crate::onboard_presentation::start_fresh_option_label(),
+        detail: crate::onboard_presentation::start_fresh_option_detail().to_owned(),
+        recommended: !options.iter().any(|option| option.recommended),
+    });
+
+    options
 }
 
-fn prompt_optional(label: &str, current: Option<&str>) -> CliResult<Option<String>> {
-    let default = current.unwrap_or("none");
-    print!("{label} [{default}]: ");
-    io::stdout()
-        .flush()
-        .map_err(|error| format!("flush stdout failed: {error}"))?;
-    let mut line = String::new();
-    io::stdin()
-        .read_line(&mut line)
-        .map_err(|error| format!("read stdin failed: {error}"))?;
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return Ok(current.map(str::to_owned));
+fn describe_current_setup_option(
+    current_setup_state: crate::migration::CurrentSetupState,
+) -> String {
+    crate::onboard_presentation::current_setup_option_detail(current_setup_state).to_owned()
+}
+
+fn describe_import_option(
+    has_current_setup: bool,
+    recommended_plan_available: bool,
+    detected_source_count: usize,
+) -> String {
+    crate::onboard_presentation::import_option_detail(
+        has_current_setup,
+        recommended_plan_available,
+        detected_source_count,
+    )
+}
+
+fn split_onboard_candidates(
+    candidates: Vec<ImportCandidate>,
+) -> (Option<ImportCandidate>, Vec<ImportCandidate>) {
+    let mut current_candidate = None;
+    let mut import_candidates = Vec::new();
+
+    for candidate in candidates {
+        if candidate.source_kind == crate::migration::ImportSourceKind::ExistingLoongClawConfig
+            && current_candidate.is_none()
+        {
+            current_candidate = Some(candidate);
+        } else {
+            import_candidates.push(candidate);
+        }
     }
-    if trimmed == "-" {
-        return Ok(None);
+
+    (current_candidate, import_candidates)
+}
+
+fn select_non_interactive_starting_config(
+    current_setup_state: crate::migration::CurrentSetupState,
+    entry_options: &[OnboardEntryOption],
+    current_candidate: Option<ImportCandidate>,
+    import_candidates: Vec<ImportCandidate>,
+    all_candidates: &[ImportCandidate],
+) -> StartingConfigSelection {
+    match default_onboard_entry_choice(entry_options) {
+        OnboardEntryChoice::ContinueCurrentSetup => current_candidate
+            .map(|candidate| {
+                starting_config_selection_from_current_candidate(candidate, current_setup_state)
+            })
+            .unwrap_or_else(default_starting_config_selection),
+        OnboardEntryChoice::ImportDetectedSetup => import_candidates
+            .into_iter()
+            .next()
+            .map(|candidate| {
+                starting_config_selection_from_import_candidate(
+                    candidate,
+                    all_candidates,
+                    current_setup_state,
+                )
+            })
+            .unwrap_or_else(default_starting_config_selection),
+        OnboardEntryChoice::StartFresh => default_starting_config_selection(),
     }
-    Ok(Some(trimmed.to_owned()))
+}
+
+fn print_onboard_entry_options(
+    ui: &mut impl OnboardUi,
+    current_setup_state: crate::migration::CurrentSetupState,
+    current_candidate: Option<&ImportCandidate>,
+    import_candidates: &[ImportCandidate],
+    options: &[OnboardEntryOption],
+    context: &OnboardRuntimeContext,
+) -> CliResult<()> {
+    print_lines(
+        ui,
+        render_onboard_entry_screen_lines_with_style(
+            current_setup_state,
+            current_candidate,
+            import_candidates,
+            options,
+            context.workspace_root.as_deref(),
+            context.render_width,
+            true,
+        ),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn render_onboard_entry_screen_lines(
+    current_setup_state: crate::migration::CurrentSetupState,
+    current_candidate: Option<&ImportCandidate>,
+    import_candidates: &[ImportCandidate],
+    options: &[OnboardEntryOption],
+    workspace_root: Option<&Path>,
+    width: usize,
+) -> Vec<String> {
+    render_onboard_entry_screen_lines_with_style(
+        current_setup_state,
+        current_candidate,
+        import_candidates,
+        options,
+        workspace_root,
+        width,
+        false,
+    )
+}
+
+fn render_onboard_entry_screen_lines_with_style(
+    current_setup_state: crate::migration::CurrentSetupState,
+    current_candidate: Option<&ImportCandidate>,
+    import_candidates: &[ImportCandidate],
+    options: &[OnboardEntryOption],
+    workspace_root: Option<&Path>,
+    width: usize,
+    color_enabled: bool,
+) -> Vec<String> {
+    let recommended_plan_available = import_candidates.iter().any(|candidate| {
+        candidate.source_kind == crate::migration::ImportSourceKind::RecommendedPlan
+    });
+    let mut lines = mvp::presentation::style_brand_lines(
+        &mvp::presentation::render_brand_header(
+            width,
+            &mvp::presentation::BuildVersionInfo::current(),
+            Some("guided setup for provider, channels, and workspace guidance"),
+        ),
+        color_enabled,
+    );
+    lines.push(String::new());
+    lines.push(crate::onboard_presentation::detected_settings_section_heading().to_owned());
+    lines.extend(render_onboard_wrapped_display_lines(
+        render_detected_settings_digest_lines(
+            current_setup_state,
+            current_candidate,
+            import_candidates,
+            workspace_root,
+            recommended_plan_available,
+        ),
+        width,
+    ));
+    lines.push(String::new());
+    lines.push(crate::onboard_presentation::entry_choice_section_heading().to_owned());
+    let screen_options = options
+        .iter()
+        .enumerate()
+        .map(|(index, option)| OnboardScreenOption {
+            key: (index + 1).to_string(),
+            label: option.label.to_owned(),
+            detail_lines: vec![option.detail.clone()],
+            recommended: option.recommended,
+        })
+        .collect::<Vec<_>>();
+    lines.extend(render_onboard_option_lines(&screen_options, width));
+    if let Some(default_choice_line) = render_onboard_entry_default_choice_footer_line(options) {
+        lines.push(String::new());
+        lines.extend(render_onboard_wrapped_display_lines(
+            [default_choice_line],
+            width,
+        ));
+    }
+    lines
+}
+
+fn render_onboard_entry_default_choice_footer_line(
+    options: &[OnboardEntryOption],
+) -> Option<String> {
+    let default_choice = default_onboard_entry_choice(options);
+    let default_index = options
+        .iter()
+        .position(|option| option.choice == default_choice)
+        .map(|index| index + 1)?;
+    let description = crate::onboard_presentation::entry_default_choice_description(
+        onboard_entry_choice_kind(default_choice),
+    );
+    Some(render_default_choice_footer_line(
+        &default_index.to_string(),
+        description,
+    ))
+}
+
+const fn onboard_entry_choice_kind(
+    choice: OnboardEntryChoice,
+) -> crate::onboard_presentation::EntryChoiceKind {
+    match choice {
+        OnboardEntryChoice::ContinueCurrentSetup => {
+            crate::onboard_presentation::EntryChoiceKind::CurrentSetup
+        }
+        OnboardEntryChoice::ImportDetectedSetup => {
+            crate::onboard_presentation::EntryChoiceKind::DetectedSetup
+        }
+        OnboardEntryChoice::StartFresh => crate::onboard_presentation::EntryChoiceKind::StartFresh,
+    }
+}
+
+fn collect_detected_workspace_guidance_files<'a>(
+    current_candidate: impl Iterator<Item = &'a ImportCandidate>,
+    import_candidates: &'a [ImportCandidate],
+) -> Vec<String> {
+    let mut files = std::collections::BTreeSet::new();
+    for candidate in current_candidate.chain(import_candidates.iter()) {
+        for guidance in &candidate.workspace_guidance {
+            if let Some(name) = Path::new(&guidance.path).file_name() {
+                files.insert(name.to_string_lossy().to_string());
+            }
+        }
+    }
+    files.into_iter().collect()
+}
+
+fn recommended_starting_point_candidate(
+    import_candidates: &[ImportCandidate],
+) -> Option<&ImportCandidate> {
+    import_candidates.iter().find(|candidate| {
+        candidate.source_kind == crate::migration::ImportSourceKind::RecommendedPlan
+    })
+}
+
+fn collect_detected_coverage_kinds(
+    candidates: impl IntoIterator<Item = impl std::borrow::Borrow<ImportCandidate>>,
+) -> std::collections::BTreeSet<crate::migration::SetupDomainKind> {
+    let mut kinds = std::collections::BTreeSet::new();
+    for candidate in candidates {
+        let candidate = candidate.borrow();
+        for domain in &candidate.domains {
+            if domain.status != crate::migration::PreviewStatus::Unavailable {
+                kinds.insert(domain.kind);
+            }
+        }
+        if candidate
+            .channel_candidates
+            .iter()
+            .any(|channel| channel.status != crate::migration::PreviewStatus::Unavailable)
+        {
+            kinds.insert(crate::migration::SetupDomainKind::Channels);
+        }
+        if !candidate.workspace_guidance.is_empty() {
+            kinds.insert(crate::migration::SetupDomainKind::WorkspaceGuidance);
+        }
+    }
+    kinds
+}
+
+fn collect_detected_channel_labels(import_candidates: &[ImportCandidate]) -> Vec<String> {
+    let mut labels = std::collections::BTreeSet::new();
+    for candidate in import_candidates {
+        for channel in &candidate.channel_candidates {
+            if channel.status != crate::migration::PreviewStatus::Unavailable {
+                labels.insert(channel.label.to_owned());
+            }
+        }
+    }
+    labels.into_iter().collect()
+}
+
+fn detected_reusable_source_count_for_entry(
+    current_candidate: Option<&ImportCandidate>,
+    import_candidates: &[ImportCandidate],
+) -> usize {
+    if let Some(recommended_candidate) = recommended_starting_point_candidate(import_candidates) {
+        let mut labels = crate::migration::render::candidate_source_rollup_labels(
+            &migration_candidate_from_onboard(recommended_candidate),
+        );
+        if let Some(current_candidate) = current_candidate {
+            labels.retain(|label| label != &current_candidate.source);
+        }
+        return labels.len();
+    }
+
+    import_candidates
+        .iter()
+        .filter(|candidate| {
+            !matches!(
+                candidate.source_kind,
+                crate::migration::ImportSourceKind::ExistingLoongClawConfig
+                    | crate::migration::ImportSourceKind::RecommendedPlan
+            )
+        })
+        .count()
+}
+
+fn render_detected_settings_digest_lines(
+    current_setup_state: crate::migration::CurrentSetupState,
+    current_candidate: Option<&ImportCandidate>,
+    import_candidates: &[ImportCandidate],
+    workspace_root: Option<&Path>,
+    recommended_plan_available: bool,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(workspace_root) = workspace_root {
+        lines.push(format!("- workspace: {}", workspace_root.display()));
+    }
+    lines.push(format!(
+        "- current setup: {}",
+        crate::onboard_presentation::current_setup_state_label(current_setup_state)
+    ));
+    if let Some(candidate) = current_candidate {
+        lines.push(format!("- current config: {}", candidate.source));
+    }
+
+    let coverage_kinds = recommended_starting_point_candidate(import_candidates)
+        .map(|candidate| collect_detected_coverage_kinds([candidate]))
+        .filter(|kinds| !kinds.is_empty())
+        .or_else(|| {
+            let kinds = collect_detected_coverage_kinds(import_candidates.iter());
+            (!kinds.is_empty()).then_some(kinds)
+        });
+    if let Some(coverage_kinds) = coverage_kinds {
+        let coverage = coverage_kinds
+            .into_iter()
+            .map(|kind| kind.label())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let prefix =
+            crate::onboard_presentation::detected_coverage_prefix(recommended_plan_available);
+        lines.push(format!("{prefix}{coverage}"));
+    } else if recommended_plan_available {
+        lines.push(crate::onboard_presentation::suggested_starting_point_ready_line().to_owned());
+    }
+
+    let channel_labels = collect_detected_channel_labels(import_candidates);
+    if !channel_labels.is_empty() {
+        lines.push(format!(
+            "- channels detected: {}",
+            channel_labels.join(", ")
+        ));
+    }
+
+    let guidance_files =
+        collect_detected_workspace_guidance_files(current_candidate.into_iter(), import_candidates);
+    if !guidance_files.is_empty() {
+        lines.push(format!(
+            "- workspace guidance: {}",
+            guidance_files.join(", ")
+        ));
+    }
+
+    let reusable_source_count =
+        detected_reusable_source_count_for_entry(current_candidate, import_candidates);
+    if reusable_source_count > 0 {
+        lines.push(format!("- reusable sources: {reusable_source_count}"));
+    }
+
+    lines
+}
+fn prompt_onboard_entry_choice(
+    ui: &mut impl OnboardUi,
+    options: &[OnboardEntryOption],
+) -> CliResult<OnboardEntryChoice> {
+    let default_choice = options
+        .iter()
+        .position(|option| option.recommended)
+        .map(|index| (index + 1).to_string())
+        .unwrap_or_else(|| "1".to_owned());
+    loop {
+        let choice = ui.prompt_with_default("Setup path", &default_choice)?;
+        let trimmed = choice.trim();
+        let Ok(selected) = trimmed.parse::<usize>() else {
+            print_message(ui, format!("Invalid choice: {trimmed}"))?;
+            continue;
+        };
+        if let Some(option) = options.get(selected - 1) {
+            return Ok(option.choice);
+        }
+        print_message(ui, format!("Invalid choice: {trimmed}"))?;
+    }
+}
+
+fn default_onboard_entry_choice(options: &[OnboardEntryOption]) -> OnboardEntryChoice {
+    options
+        .iter()
+        .find(|option| option.recommended)
+        .map(|option| option.choice)
+        .unwrap_or(OnboardEntryChoice::StartFresh)
+}
+
+fn starting_point_candidate_coverage_breadth(candidate: &ImportCandidate) -> usize {
+    collect_detected_coverage_kinds([candidate]).len()
+}
+
+fn direct_starting_point_source_rank(source_kind: crate::migration::ImportSourceKind) -> usize {
+    source_kind.direct_starting_point_rank()
+}
+
+fn sort_starting_point_candidates(mut candidates: Vec<ImportCandidate>) -> Vec<ImportCandidate> {
+    candidates.sort_by_key(|candidate| {
+        (
+            usize::from(
+                candidate.source_kind != crate::migration::ImportSourceKind::RecommendedPlan,
+            ),
+            std::cmp::Reverse(starting_point_candidate_coverage_breadth(candidate)),
+            direct_starting_point_source_rank(candidate.source_kind),
+            candidate.source.to_ascii_lowercase(),
+        )
+    });
+    candidates
+}
+
+fn select_interactive_import_starting_config(
+    ui: &mut impl OnboardUi,
+    context: &OnboardRuntimeContext,
+    current_setup_state: crate::migration::CurrentSetupState,
+    import_candidates: Vec<ImportCandidate>,
+    all_candidates: &[ImportCandidate],
+) -> CliResult<StartingConfigSelection> {
+    let import_candidates = sort_starting_point_candidates(import_candidates);
+    if import_candidates.is_empty() {
+        return Ok(default_starting_config_selection());
+    }
+    if import_candidates.len() == 1 {
+        let candidate = &import_candidates[0];
+        print_import_candidate_preview(ui, candidate, all_candidates, context)?;
+        return Ok(starting_config_selection_from_import_candidate(
+            candidate.clone(),
+            all_candidates,
+            current_setup_state,
+        ));
+    }
+
+    print_import_candidates(ui, &import_candidates, context)?;
+    let Some(index) = prompt_import_candidate_choice(ui, import_candidates.len())? else {
+        return Ok(default_starting_config_selection());
+    };
+    if let Some(candidate) = import_candidates.get(index) {
+        return Ok(starting_config_selection_from_import_candidate(
+            candidate.clone(),
+            all_candidates,
+            current_setup_state,
+        ));
+    }
+    Ok(default_starting_config_selection())
+}
+
+#[cfg(test)]
+pub(crate) fn collect_import_candidates_with_paths(
+    output_path: &Path,
+    codex_config_path: Option<&Path>,
+    readiness: ChannelImportReadiness,
+) -> CliResult<Vec<ImportCandidate>> {
+    let workspace_root = env::current_dir().ok();
+    crate::migration::collect_import_candidates_with_paths_and_readiness(
+        output_path,
+        codex_config_path,
+        workspace_root.as_deref(),
+        to_migration_readiness(readiness),
+    )
+    .map(crate::migration::prepend_recommended_import_candidate)
+    .map(|candidates| {
+        candidates
+            .into_iter()
+            .map(import_candidate_from_migration)
+            .collect()
+    })
+}
+
+fn collect_import_candidates_with_context(
+    output_path: &Path,
+    context: &OnboardRuntimeContext,
+    readiness: ChannelImportReadiness,
+) -> CliResult<Vec<ImportCandidate>> {
+    crate::migration::discovery::collect_import_candidates_with_path_list_and_readiness(
+        output_path,
+        &context.codex_config_paths,
+        context.workspace_root.as_deref(),
+        to_migration_readiness(readiness),
+    )
+    .map(crate::migration::prepend_recommended_import_candidate)
+    .map(|candidates| {
+        candidates
+            .into_iter()
+            .map(import_candidate_from_migration)
+            .collect()
+    })
+}
+
+fn default_starting_config_selection() -> StartingConfigSelection {
+    StartingConfigSelection {
+        config: mvp::config::LoongClawConfig::default(),
+        import_source: None,
+        provider_selection: crate::migration::ProviderSelectionPlan::default(),
+        entry_choice: OnboardEntryChoice::StartFresh,
+        current_setup_state: crate::migration::CurrentSetupState::Absent,
+        review_candidate: None,
+    }
+}
+
+fn starting_config_selection_from_current_candidate(
+    candidate: ImportCandidate,
+    current_setup_state: crate::migration::CurrentSetupState,
+) -> StartingConfigSelection {
+    StartingConfigSelection {
+        config: candidate.config.clone(),
+        import_source: Some(onboard_starting_point_label(
+            Some(candidate.source_kind),
+            &candidate.source,
+        )),
+        provider_selection: crate::migration::ProviderSelectionPlan::default(),
+        entry_choice: OnboardEntryChoice::ContinueCurrentSetup,
+        current_setup_state,
+        review_candidate: Some(candidate),
+    }
+}
+
+fn starting_config_selection_from_import_candidate(
+    candidate: ImportCandidate,
+    all_candidates: &[ImportCandidate],
+    current_setup_state: crate::migration::CurrentSetupState,
+) -> StartingConfigSelection {
+    let provider_selection =
+        build_provider_selection_plan_for_candidate(&candidate, all_candidates);
+    StartingConfigSelection {
+        config: candidate.config.clone(),
+        import_source: Some(onboard_starting_point_label(
+            Some(candidate.source_kind),
+            &candidate.source,
+        )),
+        provider_selection,
+        entry_choice: OnboardEntryChoice::ImportDetectedSetup,
+        current_setup_state,
+        review_candidate: Some(candidate),
+    }
+}
+
+fn print_import_candidate_preview(
+    ui: &mut impl OnboardUi,
+    candidate: &ImportCandidate,
+    all_candidates: &[ImportCandidate],
+    context: &OnboardRuntimeContext,
+) -> CliResult<()> {
+    print_lines(
+        ui,
+        render_single_detected_setup_preview_screen_lines_with_style(
+            candidate,
+            all_candidates,
+            context.render_width,
+            true,
+        ),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn render_single_detected_setup_preview_screen_lines(
+    candidate: &ImportCandidate,
+    all_candidates: &[ImportCandidate],
+    width: usize,
+) -> Vec<String> {
+    render_single_detected_setup_preview_screen_lines_with_style(
+        candidate,
+        all_candidates,
+        width,
+        false,
+    )
+}
+
+fn render_single_detected_setup_preview_screen_lines_with_style(
+    candidate: &ImportCandidate,
+    all_candidates: &[ImportCandidate],
+    width: usize,
+    color_enabled: bool,
+) -> Vec<String> {
+    let migration_candidate = migration_candidate_from_onboard(candidate);
+    let migration_candidates = all_candidates
+        .iter()
+        .map(migration_candidate_from_onboard)
+        .collect::<Vec<_>>();
+    let provider_selection = crate::migration::build_provider_selection_plan_for_candidate(
+        &migration_candidate,
+        &migration_candidates,
+    );
+    let mut intro_lines = Vec::new();
+    if let Some(reason_line) =
+        format_starting_point_reason(&collect_starting_point_fit_hints(candidate))
+    {
+        intro_lines.push(reason_line);
+    }
+    intro_lines.extend(crate::migration::render::render_candidate_preview_lines(
+        &migration_candidate_for_onboard_display(candidate),
+        width,
+    ));
+    intro_lines.extend(crate::migration::render::render_provider_selection_lines(
+        &provider_selection,
+        width,
+    ));
+
+    render_onboard_choice_screen(
+        OnboardHeaderStyle::Brand,
+        width,
+        crate::onboard_presentation::single_detected_starting_point_preview_subtitle(),
+        crate::onboard_presentation::single_detected_starting_point_preview_title(),
+        None,
+        intro_lines,
+        Vec::new(),
+        vec![
+            crate::onboard_presentation::single_detected_starting_point_preview_footer().to_owned(),
+        ],
+        color_enabled,
+    )
+}
+
+fn print_import_candidates(
+    ui: &mut impl OnboardUi,
+    candidates: &[ImportCandidate],
+    context: &OnboardRuntimeContext,
+) -> CliResult<()> {
+    print_lines(
+        ui,
+        render_starting_point_selection_screen_lines_with_style(
+            candidates,
+            context.render_width,
+            true,
+        ),
+    )
+}
+
+fn build_onboard_review_candidate_with_guidance(
+    config: &mvp::config::LoongClawConfig,
+    workspace_guidance: &[crate::migration::WorkspaceGuidanceCandidate],
+) -> crate::migration::ImportCandidate {
+    crate::migration::build_import_candidate(
+        crate::migration::ImportSourceKind::CurrentSetup,
+        crate::source_presentation::current_onboarding_draft_source_label().to_owned(),
+        config.clone(),
+        crate::migration::resolve_channel_import_readiness_from_config,
+        workspace_guidance.to_vec(),
+    )
+    .unwrap_or_else(|| crate::migration::ImportCandidate {
+        source_kind: crate::migration::ImportSourceKind::CurrentSetup,
+        source: crate::source_presentation::current_onboarding_draft_source_label().to_owned(),
+        config: config.clone(),
+        surfaces: Vec::new(),
+        domains: Vec::new(),
+        channel_candidates: Vec::new(),
+        workspace_guidance: workspace_guidance.to_vec(),
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn render_onboard_review_lines_with_guidance(
+    config: &mvp::config::LoongClawConfig,
+    import_source: Option<&str>,
+    workspace_guidance: &[crate::migration::WorkspaceGuidanceCandidate],
+    width: usize,
+) -> Vec<String> {
+    render_onboard_review_lines_with_guidance_and_style(
+        config,
+        import_source,
+        workspace_guidance,
+        None,
+        width,
+        ReviewFlowStyle::Guided,
+        false,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn render_current_setup_review_lines_with_guidance(
+    config: &mvp::config::LoongClawConfig,
+    import_source: Option<&str>,
+    workspace_guidance: &[crate::migration::WorkspaceGuidanceCandidate],
+    width: usize,
+) -> Vec<String> {
+    render_onboard_review_lines_with_guidance_and_style(
+        config,
+        import_source,
+        workspace_guidance,
+        None,
+        width,
+        ReviewFlowStyle::QuickCurrentSetup,
+        false,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn render_detected_setup_review_lines_with_guidance(
+    config: &mvp::config::LoongClawConfig,
+    import_source: Option<&str>,
+    workspace_guidance: &[crate::migration::WorkspaceGuidanceCandidate],
+    width: usize,
+) -> Vec<String> {
+    render_onboard_review_lines_with_guidance_and_style(
+        config,
+        import_source,
+        workspace_guidance,
+        None,
+        width,
+        ReviewFlowStyle::QuickDetectedSetup,
+        false,
+    )
+}
+
+fn channel_candidates_match(
+    left: &[crate::migration::ChannelCandidate],
+    right: &[crate::migration::ChannelCandidate],
+) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(left, right)| {
+            left.id == right.id
+                && left.label == right.label
+                && left.status == right.status
+                && left.summary == right.summary
+        })
+}
+
+fn should_preserve_review_domain(
+    kind: crate::migration::SetupDomainKind,
+    config: &mvp::config::LoongClawConfig,
+    workspace_guidance: &[crate::migration::WorkspaceGuidanceCandidate],
+    selected_candidate: &ImportCandidate,
+    channels_unchanged: bool,
+) -> bool {
+    match kind {
+        crate::migration::SetupDomainKind::Provider => {
+            provider_matches_for_review(&selected_candidate.config.provider, &config.provider)
+        }
+        crate::migration::SetupDomainKind::Channels => channels_unchanged,
+        crate::migration::SetupDomainKind::Cli => selected_candidate.config.cli == config.cli,
+        crate::migration::SetupDomainKind::Memory => {
+            selected_candidate.config.memory == config.memory
+        }
+        crate::migration::SetupDomainKind::Tools => selected_candidate.config.tools == config.tools,
+        crate::migration::SetupDomainKind::WorkspaceGuidance => {
+            selected_candidate.workspace_guidance.as_slice() == workspace_guidance
+        }
+    }
+}
+
+fn provider_matches_for_review(
+    left: &mvp::config::ProviderConfig,
+    right: &mvp::config::ProviderConfig,
+) -> bool {
+    let mut left = left.clone();
+    let mut right = right.clone();
+
+    left.api_key = None;
+    left.api_key_env = None;
+    left.oauth_access_token = None;
+    left.oauth_access_token_env = None;
+
+    right.api_key = None;
+    right.api_key_env = None;
+    right.oauth_access_token = None;
+    right.oauth_access_token_env = None;
+
+    left == right
+}
+
+fn build_onboard_review_candidate_with_selected_context(
+    config: &mvp::config::LoongClawConfig,
+    workspace_guidance: &[crate::migration::WorkspaceGuidanceCandidate],
+    selected_candidate: Option<&ImportCandidate>,
+) -> crate::migration::ImportCandidate {
+    let draft_candidate = build_onboard_review_candidate_with_guidance(config, workspace_guidance);
+    let Some(selected_candidate) = selected_candidate else {
+        return draft_candidate;
+    };
+    if selected_candidate.config == *config
+        && selected_candidate.workspace_guidance.as_slice() == workspace_guidance
+    {
+        return migration_candidate_for_onboard_display(selected_candidate);
+    }
+
+    let channels_unchanged = channel_candidates_match(
+        &draft_candidate.channel_candidates,
+        &selected_candidate.channel_candidates,
+    );
+    let mut review_candidate = draft_candidate;
+
+    if channels_unchanged {
+        review_candidate.channel_candidates = selected_candidate.channel_candidates.clone();
+    }
+    if selected_candidate.workspace_guidance.as_slice() == workspace_guidance {
+        review_candidate.workspace_guidance = selected_candidate.workspace_guidance.clone();
+    }
+
+    for domain in &mut review_candidate.domains {
+        if should_preserve_review_domain(
+            domain.kind,
+            config,
+            workspace_guidance,
+            selected_candidate,
+            channels_unchanged,
+        ) {
+            if let Some(selected_domain) = selected_candidate
+                .domains
+                .iter()
+                .find(|selected_domain| selected_domain.kind == domain.kind)
+            {
+                *domain = selected_domain.clone();
+            }
+        } else {
+            domain.decision = Some(crate::migration::types::PreviewDecision::AdjustedInSession);
+        }
+    }
+
+    review_candidate
+}
+
+fn render_onboard_review_lines_with_guidance_and_style(
+    config: &mvp::config::LoongClawConfig,
+    import_source: Option<&str>,
+    workspace_guidance: &[crate::migration::WorkspaceGuidanceCandidate],
+    selected_candidate: Option<&ImportCandidate>,
+    width: usize,
+    flow_style: ReviewFlowStyle,
+    color_enabled: bool,
+) -> Vec<String> {
+    let mut lines = render_onboard_brand_header(width, flow_style.header_subtitle(), color_enabled);
+    lines.push(String::new());
+    lines.push("review setup".to_owned());
+    lines.push(flow_style.progress_line());
+    if let Some(source) = import_source {
+        lines.extend(mvp::presentation::render_wrapped_text_line(
+            "- starting point: ",
+            &onboard_starting_point_label(None, source),
+            width,
+        ));
+    }
+    lines.extend(render_onboard_review_digest_lines(config));
+    let review_candidate = build_onboard_review_candidate_with_selected_context(
+        config,
+        workspace_guidance,
+        selected_candidate,
+    );
+    lines.extend(crate::migration::render::render_candidate_preview_lines(
+        &review_candidate,
+        width,
+    ));
+    lines
+}
+
+#[cfg(test)]
+pub(crate) fn build_onboarding_success_summary(
+    path: &Path,
+    config: &mvp::config::LoongClawConfig,
+    import_source: Option<&str>,
+) -> OnboardingSuccessSummary {
+    build_onboarding_success_summary_with_memory(path, config, import_source, None, None, None)
+}
+
+fn collect_onboarding_domain_outcomes(
+    review_candidate: Option<&crate::migration::ImportCandidate>,
+) -> Vec<OnboardingDomainOutcome> {
+    review_candidate
+        .into_iter()
+        .flat_map(|candidate| candidate.domains.iter())
+        .filter_map(|domain| {
+            domain.decision.map(|decision| OnboardingDomainOutcome {
+                kind: domain.kind,
+                decision,
+            })
+        })
+        .collect()
+}
+
+fn build_onboarding_success_summary_with_memory(
+    path: &Path,
+    config: &mvp::config::LoongClawConfig,
+    import_source: Option<&str>,
+    review_candidate: Option<&crate::migration::ImportCandidate>,
+    memory_path: Option<&str>,
+    config_status: Option<&str>,
+) -> OnboardingSuccessSummary {
+    let config_path = path.display().to_string();
+    let next_actions = crate::next_actions::collect_setup_next_actions(config, &config_path)
+        .into_iter()
+        .map(|action| OnboardingAction {
+            kind: match action.kind {
+                crate::next_actions::SetupNextActionKind::Chat => OnboardingActionKind::Chat,
+                crate::next_actions::SetupNextActionKind::Channel => OnboardingActionKind::Channel,
+                crate::next_actions::SetupNextActionKind::Doctor => OnboardingActionKind::Doctor,
+            },
+            label: action.label,
+            command: action.command,
+        })
+        .collect();
+
+    OnboardingSuccessSummary {
+        import_source: import_source.map(str::to_owned),
+        config_path,
+        config_status: config_status.map(str::to_owned),
+        provider: crate::provider_presentation::guided_provider_label(config.provider.kind)
+            .to_owned(),
+        model: config.provider.model.clone(),
+        transport: config.provider.transport_readiness().summary,
+        credential: summarize_provider_credential(&config.provider),
+        memory_path: memory_path.map(str::to_owned),
+        channels: enabled_channel_ids(config),
+        domain_outcomes: collect_onboarding_domain_outcomes(review_candidate),
+        next_actions,
+    }
+}
+
+fn render_onboarding_domain_outcome_lines(
+    outcomes: &[OnboardingDomainOutcome],
+    width: usize,
+) -> Vec<String> {
+    let mut grouped: Vec<(crate::migration::types::PreviewDecision, Vec<&'static str>)> =
+        Vec::new();
+    let mut sorted = outcomes.to_vec();
+    sorted.sort_by_key(|outcome| (outcome.decision.outcome_rank(), outcome.kind));
+    for outcome in sorted {
+        if let Some((_, labels)) = grouped
+            .iter_mut()
+            .find(|(decision, _)| *decision == outcome.decision)
+        {
+            labels.push(outcome.kind.label());
+        } else {
+            grouped.push((outcome.decision, vec![outcome.kind.label()]));
+        }
+    }
+    grouped
+        .into_iter()
+        .flat_map(|(decision, labels)| {
+            mvp::presentation::render_wrapped_csv_line(
+                &format!("- {}: ", decision.outcome_label()),
+                &labels,
+                width,
+            )
+        })
+        .collect()
+}
+
+fn render_onboarding_success_summary(summary: &OnboardingSuccessSummary) -> Vec<String> {
+    render_onboarding_success_summary_with_width_and_style(summary, detect_render_width(), true)
+}
+
+#[cfg(test)]
+pub(crate) fn render_onboarding_success_summary_with_width(
+    summary: &OnboardingSuccessSummary,
+    width: usize,
+) -> Vec<String> {
+    render_onboarding_success_summary_with_width_and_style(summary, width, false)
+}
+
+fn render_onboarding_success_summary_with_width_and_style(
+    summary: &OnboardingSuccessSummary,
+    width: usize,
+    color_enabled: bool,
+) -> Vec<String> {
+    let mut lines = render_onboard_brand_header(width, "setup complete", color_enabled);
+    lines.push(String::new());
+    lines.push("onboarding complete".to_owned());
+    lines.extend(mvp::presentation::render_wrapped_text_line(
+        "- config: ",
+        &summary.config_path,
+        width,
+    ));
+    if let Some(config_status) = summary.config_status.as_deref() {
+        lines.extend(mvp::presentation::render_wrapped_text_line(
+            "- config status: ",
+            config_status,
+            width,
+        ));
+    }
+    if let Some(source) = summary.import_source.as_deref() {
+        lines.extend(mvp::presentation::render_wrapped_text_line(
+            "- starting point: ",
+            &onboard_starting_point_label(None, source),
+            width,
+        ));
+    }
+    lines.extend(mvp::presentation::render_wrapped_text_line(
+        "- provider: ",
+        &summary.provider,
+        width,
+    ));
+    lines.extend(mvp::presentation::render_wrapped_text_line(
+        "- model: ",
+        &summary.model,
+        width,
+    ));
+    lines.extend(mvp::presentation::render_wrapped_text_line(
+        "- transport: ",
+        &summary.transport,
+        width,
+    ));
+    if let Some(credential) = summary.credential.as_ref() {
+        lines.extend(mvp::presentation::render_wrapped_text_line(
+            &format!("- {}: ", credential.label),
+            &credential.value,
+            width,
+        ));
+    }
+    if let Some(memory_path) = summary.memory_path.as_deref() {
+        lines.extend(mvp::presentation::render_wrapped_text_line(
+            "- sqlite memory: ",
+            memory_path,
+            width,
+        ));
+    }
+    if !summary.channels.is_empty() {
+        let channels = summary
+            .channels
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        lines.extend(mvp::presentation::render_wrapped_csv_line(
+            "- channels: ",
+            &channels,
+            width,
+        ));
+    }
+    if !summary.domain_outcomes.is_empty() {
+        lines.push("setup outcome".to_owned());
+        lines.extend(render_onboarding_domain_outcome_lines(
+            &summary.domain_outcomes,
+            width,
+        ));
+    }
+    if summary.next_actions.is_empty() {
+        return lines;
+    }
+
+    let mut actions = summary.next_actions.iter();
+    if let Some(primary) = actions.next() {
+        if width < 56 {
+            lines.push("start here".to_owned());
+            lines.extend(mvp::presentation::render_wrapped_text_line(
+                &format!("- {}: ", primary.label),
+                &primary.command,
+                width,
+            ));
+        } else {
+            lines.extend(mvp::presentation::render_wrapped_text_line(
+                "start here: ",
+                &primary.command,
+                width,
+            ));
+        }
+    }
+
+    let secondary_actions = actions.collect::<Vec<_>>();
+    if secondary_actions.is_empty() {
+        return lines;
+    }
+
+    lines.push("also available".to_owned());
+    lines.extend(secondary_actions.into_iter().flat_map(|action| {
+        mvp::presentation::render_wrapped_text_line(
+            &format!("- {}: ", action.label),
+            &action.command,
+            width,
+        )
+    }));
+    lines
+}
+
+fn render_onboard_brand_header(width: usize, subtitle: &str, color_enabled: bool) -> Vec<String> {
+    mvp::presentation::style_brand_lines_with_palette(
+        &mvp::presentation::render_brand_header(
+            width,
+            &mvp::presentation::BuildVersionInfo::current(),
+            Some(subtitle),
+        ),
+        color_enabled,
+        mvp::presentation::ONBOARD_BRAND_PALETTE,
+    )
+}
+
+fn render_onboard_compact_header(width: usize, subtitle: &str, color_enabled: bool) -> Vec<String> {
+    mvp::presentation::style_brand_lines_with_palette(
+        &mvp::presentation::render_compact_brand_header(
+            width,
+            &mvp::presentation::BuildVersionInfo::current(),
+            Some(subtitle),
+        ),
+        color_enabled,
+        mvp::presentation::ONBOARD_BRAND_PALETTE,
+    )
+}
+
+fn render_onboard_header(
+    style: OnboardHeaderStyle,
+    width: usize,
+    subtitle: &str,
+    color_enabled: bool,
+) -> Vec<String> {
+    match style {
+        OnboardHeaderStyle::Brand => render_onboard_brand_header(width, subtitle, color_enabled),
+        OnboardHeaderStyle::Compact => {
+            render_onboard_compact_header(width, subtitle, color_enabled)
+        }
+    }
+}
+
+fn render_onboard_wrapped_display_lines<I, S>(display_lines: I, width: usize) -> Vec<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    display_lines
+        .into_iter()
+        .flat_map(|line| mvp::presentation::render_wrapped_display_line(line.as_ref(), width))
+        .collect()
+}
+
+fn render_onboard_option_lines(options: &[OnboardScreenOption], width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for option in options {
+        let suffix = if option.recommended {
+            " (recommended)"
+        } else {
+            ""
+        };
+        lines.extend(
+            mvp::presentation::render_wrapped_text_line_with_continuation(
+                &format!("[{}] ", option.key),
+                "    ",
+                &format!("{}{}", option.label, suffix),
+                width,
+            ),
+        );
+        lines.extend(render_onboard_wrapped_display_lines(
+            option
+                .detail_lines
+                .iter()
+                .map(|detail| format!("    {detail}"))
+                .collect::<Vec<_>>(),
+            width,
+        ));
+    }
+    lines
+}
+
+fn render_default_choice_footer_line(key: &str, description: &str) -> String {
+    format!("press Enter to use [{key}], {description}")
+}
+
+fn render_default_input_hint_line(description: impl AsRef<str>) -> String {
+    format!("- press Enter to {}", description.as_ref())
+}
+
+fn render_model_selection_default_hint_line(
+    config: &mvp::config::LoongClawConfig,
+    prompt_default: &str,
+) -> String {
+    let prompt_default = prompt_default.trim();
+    let current_model = config.provider.model.trim();
+    if prompt_default == current_model {
+        render_default_input_hint_line("keep current model")
+    } else if prompt_default.is_empty() {
+        render_default_input_hint_line("leave the model blank")
+    } else {
+        render_default_input_hint_line(format!("use prefilled model: {prompt_default}"))
+    }
+}
+
+fn render_api_key_env_selection_default_hint_line(
+    config: &mvp::config::LoongClawConfig,
+    suggested_env: &str,
+    prompt_default: &str,
+) -> String {
+    let prompt_default = prompt_default.trim();
+    let suggested_env = suggested_env.trim();
+    let current_env = config
+        .provider
+        .api_key_env
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    if prompt_default.is_empty() {
+        return render_default_input_hint_line("leave this blank");
+    }
+
+    if current_env.is_some_and(|current_env| current_env == prompt_default) {
+        return render_default_input_hint_line("keep current env");
+    }
+
+    if !suggested_env.is_empty() && prompt_default == suggested_env {
+        return render_default_input_hint_line(format!("use suggested env: {prompt_default}"));
+    }
+
+    render_default_input_hint_line(format!("use prefilled env: {prompt_default}"))
+}
+
+fn render_system_prompt_selection_default_hint_line(
+    config: &mvp::config::LoongClawConfig,
+    prompt_default: &str,
+) -> String {
+    let prompt_default = prompt_default.trim();
+    let current_prompt = config.cli.system_prompt.trim();
+
+    if prompt_default == current_prompt {
+        if current_prompt.is_empty() {
+            render_default_input_hint_line("keep the built-in default")
+        } else {
+            render_default_input_hint_line("keep current prompt")
+        }
+    } else if prompt_default.is_empty() {
+        render_default_input_hint_line("keep the built-in default")
+    } else {
+        render_default_input_hint_line(format!("use prefilled prompt: {prompt_default}"))
+    }
+}
+
+fn with_default_choice_footer(
+    mut footer_lines: Vec<String>,
+    default_choice_line: Option<String>,
+) -> Vec<String> {
+    if let Some(default_choice_line) = default_choice_line {
+        footer_lines.insert(0, default_choice_line);
+    }
+    footer_lines
+}
+
+fn render_onboard_choice_screen(
+    header_style: OnboardHeaderStyle,
+    width: usize,
+    subtitle: &str,
+    title: &str,
+    step: Option<GuidedOnboardStep>,
+    intro_lines: Vec<String>,
+    options: Vec<OnboardScreenOption>,
+    footer_lines: Vec<String>,
+    color_enabled: bool,
+) -> Vec<String> {
+    let mut lines = render_onboard_header(header_style, width, subtitle, color_enabled);
+    lines.push(String::new());
+    lines.extend(render_onboard_wrapped_display_lines([title], width));
+    if let Some(step) = step {
+        lines.extend(render_onboard_wrapped_display_lines(
+            [step.progress_line()],
+            width,
+        ));
+    }
+    lines.extend(render_onboard_wrapped_display_lines(intro_lines, width));
+    if !options.is_empty() {
+        lines.push(String::new());
+        lines.extend(render_onboard_option_lines(&options, width));
+    }
+    if !footer_lines.is_empty() {
+        lines.push(String::new());
+        lines.extend(render_onboard_wrapped_display_lines(footer_lines, width));
+    }
+    lines
+}
+
+fn render_onboard_input_screen(
+    width: usize,
+    title: &str,
+    step: GuidedOnboardStep,
+    context_lines: Vec<String>,
+    hint_lines: Vec<String>,
+    color_enabled: bool,
+) -> Vec<String> {
+    let mut lines = render_onboard_header(OnboardHeaderStyle::Compact, width, "", color_enabled);
+    lines.push(String::new());
+    lines.extend(render_onboard_wrapped_display_lines([title], width));
+    lines.extend(render_onboard_wrapped_display_lines(
+        [step.progress_line()],
+        width,
+    ));
+    lines.extend(render_onboard_wrapped_display_lines(context_lines, width));
+    if !hint_lines.is_empty() {
+        lines.push(String::new());
+        lines.extend(render_onboard_wrapped_display_lines(hint_lines, width));
+    }
+    lines
+}
+
+#[cfg(test)]
+pub(crate) fn render_continue_current_setup_screen_lines(
+    config: &mvp::config::LoongClawConfig,
+    width: usize,
+) -> Vec<String> {
+    render_onboard_shortcut_screen_lines_with_style(
+        OnboardShortcutKind::CurrentSetup,
+        config,
+        None,
+        width,
+        false,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn render_continue_detected_setup_screen_lines(
+    config: &mvp::config::LoongClawConfig,
+    import_source: &str,
+    width: usize,
+) -> Vec<String> {
+    render_onboard_shortcut_screen_lines_with_style(
+        OnboardShortcutKind::DetectedSetup,
+        config,
+        Some(import_source),
+        width,
+        false,
+    )
+}
+
+fn render_onboard_shortcut_screen_lines_with_style(
+    shortcut_kind: OnboardShortcutKind,
+    config: &mvp::config::LoongClawConfig,
+    import_source: Option<&str>,
+    width: usize,
+    color_enabled: bool,
+) -> Vec<String> {
+    let mut context_lines = Vec::new();
+    if let Some(source) = import_source {
+        context_lines.push(format!(
+            "- starting point: {}",
+            onboard_starting_point_label(None, source)
+        ));
+    }
+    context_lines.extend(render_onboard_review_digest_lines(config));
+    context_lines.push(shortcut_kind.summary_line().to_owned());
+
+    render_onboard_choice_screen(
+        OnboardHeaderStyle::Brand,
+        width,
+        shortcut_kind.subtitle(),
+        shortcut_kind.title(),
+        None,
+        context_lines,
+        vec![
+            OnboardScreenOption {
+                key: "1".to_owned(),
+                label: shortcut_kind.primary_label().to_owned(),
+                detail_lines: vec![
+                    crate::onboard_presentation::shortcut_continue_detail().to_owned(),
+                ],
+                recommended: true,
+            },
+            OnboardScreenOption {
+                key: "2".to_owned(),
+                label: crate::onboard_presentation::adjust_settings_label().to_owned(),
+                detail_lines: vec![
+                    crate::onboard_presentation::shortcut_adjust_detail().to_owned(),
+                ],
+                recommended: false,
+            },
+        ],
+        vec![render_shortcut_default_choice_footer_line(shortcut_kind)],
+        color_enabled,
+    )
+}
+
+fn render_shortcut_default_choice_footer_line(shortcut_kind: OnboardShortcutKind) -> String {
+    render_default_choice_footer_line("1", shortcut_kind.default_choice_description())
+}
+
+#[cfg(test)]
+pub(crate) fn render_onboarding_risk_screen_lines(width: usize) -> Vec<String> {
+    render_onboarding_risk_screen_lines_with_style(width, false)
+}
+
+fn render_onboarding_risk_screen_lines_with_style(
+    width: usize,
+    color_enabled: bool,
+) -> Vec<String> {
+    let copy = crate::onboard_presentation::risk_screen_copy();
+    render_onboard_choice_screen(
+        OnboardHeaderStyle::Brand,
+        width,
+        copy.subtitle,
+        copy.title,
+        None,
+        vec![
+            "- LoongClaw can invoke tools and read local files when enabled.".to_owned(),
+            "- Keep credentials in environment variables, not in prompts.".to_owned(),
+            "- Prefer allowlist-style tool policy for shared environments.".to_owned(),
+        ],
+        vec![
+            OnboardScreenOption {
+                key: "y".to_owned(),
+                label: copy.continue_label.to_owned(),
+                detail_lines: vec![copy.continue_detail.to_owned()],
+                recommended: false,
+            },
+            OnboardScreenOption {
+                key: "n".to_owned(),
+                label: copy.cancel_label.to_owned(),
+                detail_lines: vec![copy.cancel_detail.to_owned()],
+                recommended: false,
+            },
+        ],
+        vec![render_default_choice_footer_line(
+            "n",
+            copy.default_choice_description,
+        )],
+        color_enabled,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn render_preflight_summary_screen_lines(
+    checks: &[OnboardCheck],
+    width: usize,
+) -> Vec<String> {
+    render_preflight_summary_screen_lines_with_style(checks, width, ReviewFlowStyle::Guided, false)
+}
+
+#[cfg(test)]
+pub(crate) fn render_current_setup_preflight_summary_screen_lines(
+    checks: &[OnboardCheck],
+    width: usize,
+) -> Vec<String> {
+    render_preflight_summary_screen_lines_with_style(
+        checks,
+        width,
+        ReviewFlowStyle::QuickCurrentSetup,
+        false,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn render_detected_setup_preflight_summary_screen_lines(
+    checks: &[OnboardCheck],
+    width: usize,
+) -> Vec<String> {
+    render_preflight_summary_screen_lines_with_style(
+        checks,
+        width,
+        ReviewFlowStyle::QuickDetectedSetup,
+        false,
+    )
+}
+
+fn render_preflight_summary_screen_lines_with_style(
+    checks: &[OnboardCheck],
+    width: usize,
+    flow_style: ReviewFlowStyle,
+    color_enabled: bool,
+) -> Vec<String> {
+    let counts = summarize_onboard_checks(checks);
+    let has_attention = counts.warn > 0 || counts.fail > 0;
+    let mut lines = render_onboard_compact_header(
+        width,
+        crate::onboard_presentation::preflight_header_title(),
+        color_enabled,
+    );
+    let mut summary_lines = vec![format!(
+        "- status: {} pass · {} warn · {} fail",
+        counts.pass, counts.warn, counts.fail
+    )];
+    if has_attention {
+        summary_lines
+            .push(crate::onboard_presentation::preflight_attention_summary_line().to_owned());
+        if counts.fail > 0 {
+            summary_lines
+                .push(crate::onboard_presentation::preflight_probe_rerun_hint().to_owned());
+        }
+    } else {
+        summary_lines.push(crate::onboard_presentation::preflight_green_summary_line().to_owned());
+    }
+    lines.push(String::new());
+    lines.extend(render_onboard_wrapped_display_lines(
+        [crate::onboard_presentation::preflight_section_title()],
+        width,
+    ));
+    lines.extend(render_onboard_wrapped_display_lines(
+        [flow_style.progress_line()],
+        width,
+    ));
+    lines.extend(render_onboard_wrapped_display_lines(summary_lines, width));
+    if !checks.is_empty() {
+        lines.push(String::new());
+        lines.extend(render_preflight_check_rows(checks, width));
+    }
+    if has_attention {
+        let options = vec![
+            OnboardScreenOption {
+                key: "y".to_owned(),
+                label: crate::onboard_presentation::preflight_continue_label().to_owned(),
+                detail_lines: vec![
+                    crate::onboard_presentation::preflight_continue_detail().to_owned(),
+                ],
+                recommended: false,
+            },
+            OnboardScreenOption {
+                key: "n".to_owned(),
+                label: crate::onboard_presentation::preflight_cancel_label().to_owned(),
+                detail_lines: vec![
+                    crate::onboard_presentation::preflight_cancel_detail().to_owned(),
+                ],
+                recommended: false,
+            },
+        ];
+        lines.push(String::new());
+        lines.extend(render_onboard_option_lines(&options, width));
+        lines.push(String::new());
+        lines.extend(render_onboard_wrapped_display_lines(
+            [render_default_choice_footer_line(
+                "n",
+                crate::onboard_presentation::preflight_default_choice_description(),
+            )],
+            width,
+        ));
+    }
+    lines
+}
+
+#[cfg(test)]
+pub(crate) fn render_write_confirmation_screen_lines(
+    config_path: &str,
+    warnings_kept: bool,
+    width: usize,
+) -> Vec<String> {
+    render_write_confirmation_screen_lines_with_style(
+        config_path,
+        warnings_kept,
+        width,
+        ReviewFlowStyle::Guided,
+        false,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn render_current_setup_write_confirmation_screen_lines(
+    config_path: &str,
+    warnings_kept: bool,
+    width: usize,
+) -> Vec<String> {
+    render_write_confirmation_screen_lines_with_style(
+        config_path,
+        warnings_kept,
+        width,
+        ReviewFlowStyle::QuickCurrentSetup,
+        false,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn render_detected_setup_write_confirmation_screen_lines(
+    config_path: &str,
+    warnings_kept: bool,
+    width: usize,
+) -> Vec<String> {
+    render_write_confirmation_screen_lines_with_style(
+        config_path,
+        warnings_kept,
+        width,
+        ReviewFlowStyle::QuickDetectedSetup,
+        false,
+    )
+}
+
+fn render_write_confirmation_screen_lines_with_style(
+    config_path: &str,
+    warnings_kept: bool,
+    width: usize,
+    flow_style: ReviewFlowStyle,
+    color_enabled: bool,
+) -> Vec<String> {
+    let mut context_lines = vec![format!("- config: {config_path}")];
+    context_lines.push(
+        crate::onboard_presentation::write_confirmation_status_line(warnings_kept).to_owned(),
+    );
+    let options = vec![
+        OnboardScreenOption {
+            key: "y".to_owned(),
+            label: crate::onboard_presentation::write_confirmation_label().to_owned(),
+            detail_lines: vec![crate::onboard_presentation::write_confirmation_detail().to_owned()],
+            recommended: false,
+        },
+        OnboardScreenOption {
+            key: "n".to_owned(),
+            label: crate::onboard_presentation::write_confirmation_cancel_label().to_owned(),
+            detail_lines: vec![
+                crate::onboard_presentation::write_confirmation_cancel_detail().to_owned(),
+            ],
+            recommended: false,
+        },
+    ];
+    let mut lines = render_onboard_header(OnboardHeaderStyle::Compact, width, "", color_enabled);
+    lines.push(String::new());
+    lines.extend(render_onboard_wrapped_display_lines(
+        [crate::onboard_presentation::write_confirmation_title()],
+        width,
+    ));
+    lines.extend(render_onboard_wrapped_display_lines(
+        [flow_style.progress_line()],
+        width,
+    ));
+    lines.extend(render_onboard_wrapped_display_lines(context_lines, width));
+    lines.push(String::new());
+    lines.extend(render_onboard_option_lines(&options, width));
+    lines.push(String::new());
+    lines.extend(render_onboard_wrapped_display_lines(
+        [render_default_choice_footer_line(
+            "y",
+            crate::onboard_presentation::write_confirmation_default_choice_description(),
+        )],
+        width,
+    ));
+    lines
+}
+
+fn push_starting_point_fit_hint(
+    hints: &mut Vec<StartingPointFitHint>,
+    seen: &mut std::collections::BTreeSet<&'static str>,
+    key: &'static str,
+    detail: impl Into<String>,
+    domain: Option<crate::migration::SetupDomainKind>,
+) {
+    if seen.insert(key) {
+        hints.push(StartingPointFitHint {
+            key,
+            detail: detail.into(),
+            domain,
+        });
+    }
+}
+
+fn summarize_direct_starting_point_source_reason(
+    candidate: &ImportCandidate,
+) -> Option<&'static str> {
+    candidate.source_kind.direct_starting_point_reason()
+}
+
+fn collect_starting_point_fit_hints(candidate: &ImportCandidate) -> Vec<StartingPointFitHint> {
+    let mut hints = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+
+    if let Some(reason) = summarize_direct_starting_point_source_reason(candidate) {
+        push_starting_point_fit_hint(&mut hints, &mut seen, "direct_source", reason, None);
+    } else if let Some(provider_domain) = candidate
+        .domains
+        .iter()
+        .find(|domain| domain.kind == crate::migration::SetupDomainKind::Provider)
+    {
+        if let Some(decision) = provider_domain.decision {
+            if let Some(reason) = provider_domain.kind.starting_point_reason(decision) {
+                let key = match decision {
+                    crate::migration::types::PreviewDecision::KeepCurrent => "provider_keep",
+                    crate::migration::types::PreviewDecision::UseDetected => "provider_detected",
+                    _ => "provider",
+                };
+                push_starting_point_fit_hint(
+                    &mut hints,
+                    &mut seen,
+                    key,
+                    reason,
+                    Some(crate::migration::SetupDomainKind::Provider),
+                );
+            }
+        }
+    }
+
+    if let Some(channels_domain) = candidate
+        .domains
+        .iter()
+        .find(|domain| domain.kind == crate::migration::SetupDomainKind::Channels)
+    {
+        if let Some(decision) = channels_domain.decision {
+            if let Some(reason) = channels_domain.kind.starting_point_reason(decision) {
+                let key = match decision {
+                    crate::migration::types::PreviewDecision::Supplement => "channels_add",
+                    crate::migration::types::PreviewDecision::UseDetected => "channels_detected",
+                    _ => "channels",
+                };
+                push_starting_point_fit_hint(
+                    &mut hints,
+                    &mut seen,
+                    key,
+                    reason,
+                    Some(crate::migration::SetupDomainKind::Channels),
+                );
+            }
+        }
+    } else if !candidate.channel_candidates.is_empty() {
+        push_starting_point_fit_hint(
+            &mut hints,
+            &mut seen,
+            "channels_add",
+            crate::migration::SetupDomainKind::Channels
+                .starting_point_reason(crate::migration::types::PreviewDecision::Supplement)
+                .expect("channels supplement reason"),
+            Some(crate::migration::SetupDomainKind::Channels),
+        );
+    }
+
+    if !candidate.workspace_guidance.is_empty()
+        || candidate.domains.iter().any(|domain| {
+            domain.kind == crate::migration::SetupDomainKind::WorkspaceGuidance
+                && matches!(
+                    domain.decision,
+                    Some(crate::migration::types::PreviewDecision::UseDetected)
+                        | Some(crate::migration::types::PreviewDecision::Supplement)
+                )
+        })
+    {
+        push_starting_point_fit_hint(
+            &mut hints,
+            &mut seen,
+            "workspace_guidance",
+            crate::migration::SetupDomainKind::WorkspaceGuidance
+                .starting_point_reason(crate::migration::types::PreviewDecision::UseDetected)
+                .expect("workspace guidance detected reason"),
+            Some(crate::migration::SetupDomainKind::WorkspaceGuidance),
+        );
+    }
+
+    for (kind, key) in [
+        (crate::migration::SetupDomainKind::Cli, "cli"),
+        (crate::migration::SetupDomainKind::Memory, "memory"),
+        (crate::migration::SetupDomainKind::Tools, "tools"),
+    ] {
+        if hints.len() >= 3 {
+            break;
+        }
+        if candidate.domains.iter().any(|domain| {
+            domain.kind == kind
+                && matches!(
+                    domain.decision,
+                    Some(crate::migration::types::PreviewDecision::UseDetected)
+                        | Some(crate::migration::types::PreviewDecision::Supplement)
+                )
+        }) {
+            let reason = kind
+                .starting_point_reason(crate::migration::types::PreviewDecision::UseDetected)
+                .expect("detected domain reason");
+            push_starting_point_fit_hint(&mut hints, &mut seen, key, reason, Some(kind));
+        }
+    }
+
+    if hints.is_empty() {
+        let source_count = crate::migration::render::candidate_source_rollup_labels(
+            &migration_candidate_from_onboard(candidate),
+        )
+        .len();
+        if source_count > 1 {
+            push_starting_point_fit_hint(
+                &mut hints,
+                &mut seen,
+                "combined_sources",
+                format!("combine {source_count} reusable sources"),
+                None,
+            );
+        }
+    }
+
+    hints
+}
+
+fn format_starting_point_reason(hints: &[StartingPointFitHint]) -> Option<String> {
+    if hints.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "good fit: {}",
+        hints
+            .iter()
+            .take(3)
+            .map(|hint| hint.detail.as_str())
+            .collect::<Vec<_>>()
+            .join(" + ")
+    ))
+}
+
+fn should_include_starting_point_domain_decision(candidate: &ImportCandidate) -> bool {
+    candidate.source_kind == crate::migration::ImportSourceKind::RecommendedPlan
+}
+
+fn format_starting_point_domain_detail(
+    candidate: &ImportCandidate,
+    domain: &crate::migration::DomainPreview,
+) -> String {
+    let mut detail = format!("{}: ", domain.kind.label());
+    if should_include_starting_point_domain_decision(candidate) {
+        if let Some(decision) = domain.decision {
+            detail.push_str(decision.label());
+            detail.push_str(" · ");
+        }
+    }
+    detail.push_str(&domain.summary);
+    detail
+}
+
+fn summarize_starting_point_detail_lines(candidate: &ImportCandidate, width: usize) -> Vec<String> {
+    let mut details = Vec::new();
+    let max_lines = if width < 68 { 4 } else { 5 };
+    let mut detail_lines_used = 0usize;
+    let has_channel_details = !candidate.channel_candidates.is_empty();
+    let has_workspace_guidance_details = !candidate.workspace_guidance.is_empty();
+    let migration_candidate = migration_candidate_from_onboard(candidate);
+    let fit_hints = collect_starting_point_fit_hints(candidate);
+    let emphasized_domains = if width < 68 {
+        fit_hints
+            .iter()
+            .filter_map(|hint| hint.domain)
+            .collect::<std::collections::BTreeSet<_>>()
+    } else {
+        std::collections::BTreeSet::new()
+    };
+
+    if let Some(reason_line) = format_starting_point_reason(&fit_hints) {
+        details.push(reason_line);
+    }
+
+    let mut source_labels =
+        crate::migration::render::candidate_source_rollup_labels(&migration_candidate);
+    if has_workspace_guidance_details {
+        source_labels.retain(|label| label != "workspace guidance");
+    }
+    let should_render_source_summary =
+        if candidate.source_kind == crate::migration::ImportSourceKind::RecommendedPlan {
+            !source_labels.is_empty()
+        } else {
+            source_labels.len() > 1
+        };
+    if should_render_source_summary {
+        details.push(format!("sources: {}", source_labels.join(" + ")));
+        detail_lines_used += 1;
+    }
+
+    for domain in &candidate.domains {
+        if has_channel_details && domain.kind == crate::migration::SetupDomainKind::Channels {
+            continue;
+        }
+        if has_workspace_guidance_details
+            && domain.kind == crate::migration::SetupDomainKind::WorkspaceGuidance
+        {
+            continue;
+        }
+        if emphasized_domains.contains(&domain.kind) {
+            continue;
+        }
+        details.push(format_starting_point_domain_detail(candidate, domain));
+        detail_lines_used += 1;
+        if detail_lines_used >= max_lines {
+            return details;
+        }
+    }
+
+    for channel in &candidate.channel_candidates {
+        details.push(format!(
+            "{}: {}",
+            channel.label.to_ascii_lowercase(),
+            channel.summary
+        ));
+        detail_lines_used += 1;
+        if detail_lines_used >= max_lines {
+            return details;
+        }
+    }
+
+    if details.len() < max_lines && !candidate.workspace_guidance.is_empty() {
+        let files = candidate
+            .workspace_guidance
+            .iter()
+            .filter_map(|guidance| Path::new(&guidance.path).file_name())
+            .map(|name| name.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        if !files.is_empty() {
+            details.push(format!("workspace guidance: {}", files.join(", ")));
+        }
+    }
+
+    if details.is_empty() {
+        details.push("ready to use as a starting point".to_owned());
+    }
+
+    details
+}
+
+fn start_fresh_starting_point_detail_lines() -> Vec<String> {
+    vec![
+        crate::onboard_presentation::start_fresh_starting_point_fit_line().to_owned(),
+        crate::onboard_presentation::start_fresh_starting_point_detail_line().to_owned(),
+    ]
+}
+
+fn render_starting_point_selection_footer_lines(
+    sorted_candidates: &[ImportCandidate],
+) -> Vec<String> {
+    if sorted_candidates.is_empty() {
+        return Vec::new();
+    }
+
+    let first_hint = render_default_choice_footer_line(
+        "1",
+        crate::onboard_presentation::starting_point_footer_description(
+            sorted_candidates[0].source_kind,
+        ),
+    );
+
+    vec![first_hint]
+}
+
+#[cfg(test)]
+pub(crate) fn render_starting_point_selection_screen_lines(
+    candidates: &[ImportCandidate],
+    width: usize,
+) -> Vec<String> {
+    render_starting_point_selection_screen_lines_with_style(candidates, width, false)
+}
+
+fn render_starting_point_selection_screen_lines_with_style(
+    candidates: &[ImportCandidate],
+    width: usize,
+    color_enabled: bool,
+) -> Vec<String> {
+    let sorted_candidates = sort_starting_point_candidates(candidates.to_vec());
+    let mut options = sorted_candidates
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| OnboardScreenOption {
+            key: (index + 1).to_string(),
+            label: onboard_starting_point_label(Some(candidate.source_kind), &candidate.source),
+            detail_lines: summarize_starting_point_detail_lines(candidate, width),
+            recommended: matches!(
+                candidate.source_kind,
+                crate::migration::ImportSourceKind::RecommendedPlan
+            ),
+        })
+        .collect::<Vec<_>>();
+    options.push(OnboardScreenOption {
+        key: "0".to_owned(),
+        label: crate::onboard_presentation::start_fresh_option_label().to_owned(),
+        detail_lines: start_fresh_starting_point_detail_lines(),
+        recommended: false,
+    });
+    let footer_lines = render_starting_point_selection_footer_lines(&sorted_candidates);
+
+    render_onboard_choice_screen(
+        OnboardHeaderStyle::Brand,
+        width,
+        crate::onboard_presentation::starting_point_selection_subtitle(),
+        crate::onboard_presentation::starting_point_selection_title(),
+        None,
+        vec![crate::onboard_presentation::starting_point_selection_hint().to_owned()],
+        options,
+        footer_lines,
+        color_enabled,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn render_provider_selection_screen_lines(
+    plan: &crate::migration::ProviderSelectionPlan,
+    width: usize,
+) -> Vec<String> {
+    render_provider_selection_screen_lines_with_style(plan, width, false)
+}
+
+fn render_provider_selection_screen_lines_with_style(
+    plan: &crate::migration::ProviderSelectionPlan,
+    width: usize,
+    color_enabled: bool,
+) -> Vec<String> {
+    let intro = if plan.imported_choices.is_empty() {
+        vec!["pick the provider that should back this setup".to_owned()]
+    } else if plan.requires_explicit_choice {
+        vec!["other detected settings stay merged".to_owned()]
+    } else {
+        vec!["review the detected provider choices for this setup".to_owned()]
+    };
+    let options = plan
+        .imported_choices
+        .iter()
+        .map(|choice| OnboardScreenOption {
+            key: provider_kind_id(choice.kind).to_owned(),
+            label: provider_kind_display_name(choice.kind).to_owned(),
+            detail_lines: {
+                let mut detail_lines = vec![
+                    format!("source: {}", choice.source),
+                    format!("summary: {}", choice.summary),
+                ];
+                if let Some(transport_summary) = choice.config.preview_transport_summary() {
+                    detail_lines.push(format!("transport: {transport_summary}"));
+                }
+                detail_lines
+            },
+            recommended: Some(choice.kind) == plan.default_kind,
+        })
+        .collect::<Vec<_>>();
+    render_onboard_choice_screen(
+        OnboardHeaderStyle::Brand,
+        width,
+        "choose the current provider",
+        "choose active provider",
+        Some(GuidedOnboardStep::Provider),
+        intro,
+        options,
+        with_default_choice_footer(
+            vec![format!("provider ids: {}", supported_provider_list())],
+            render_provider_selection_default_choice_footer_line(plan),
+        ),
+        color_enabled,
+    )
+}
+
+fn render_provider_selection_default_choice_footer_line(
+    plan: &crate::migration::ProviderSelectionPlan,
+) -> Option<String> {
+    if plan.requires_explicit_choice {
+        return None;
+    }
+    let default_kind = plan.default_kind?;
+    Some(render_default_choice_footer_line(
+        provider_kind_id(default_kind),
+        &format!("the {} provider", provider_kind_display_name(default_kind)),
+    ))
+}
+
+#[cfg(test)]
+pub(crate) fn render_model_selection_screen_lines(
+    config: &mvp::config::LoongClawConfig,
+    width: usize,
+) -> Vec<String> {
+    render_model_selection_screen_lines_with_style(
+        config,
+        config.provider.model.as_str(),
+        width,
+        false,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn render_model_selection_screen_lines_with_default(
+    config: &mvp::config::LoongClawConfig,
+    prompt_default: &str,
+    width: usize,
+) -> Vec<String> {
+    render_model_selection_screen_lines_with_style(config, prompt_default, width, false)
+}
+
+fn render_model_selection_screen_lines_with_style(
+    config: &mvp::config::LoongClawConfig,
+    prompt_default: &str,
+    width: usize,
+    color_enabled: bool,
+) -> Vec<String> {
+    let mut context_lines = vec![
+        format!(
+            "- provider: {}",
+            crate::provider_presentation::guided_provider_label(config.provider.kind)
+        ),
+        format!("- current model: {}", config.provider.model),
+    ];
+    if let Some(default_model) = config
+        .provider
+        .kind
+        .default_model()
+        .filter(|default_model| *default_model != config.provider.model)
+    {
+        context_lines.push(format!("- provider default: {default_model}"));
+    }
+
+    render_onboard_input_screen(
+        width,
+        "choose model",
+        GuidedOnboardStep::Model,
+        context_lines,
+        vec![
+            render_model_selection_default_hint_line(config, prompt_default),
+            "- type any provider model id to override it".to_owned(),
+        ],
+        color_enabled,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn render_api_key_env_selection_screen_lines(
+    config: &mvp::config::LoongClawConfig,
+    default_api_key_env: &str,
+    width: usize,
+) -> Vec<String> {
+    render_api_key_env_selection_screen_lines_with_style(
+        config,
+        default_api_key_env,
+        default_api_key_env,
+        width,
+        false,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn render_api_key_env_selection_screen_lines_with_default(
+    config: &mvp::config::LoongClawConfig,
+    default_api_key_env: &str,
+    prompt_default: &str,
+    width: usize,
+) -> Vec<String> {
+    render_api_key_env_selection_screen_lines_with_style(
+        config,
+        default_api_key_env,
+        prompt_default,
+        width,
+        false,
+    )
+}
+
+fn render_api_key_env_selection_screen_lines_with_style(
+    config: &mvp::config::LoongClawConfig,
+    default_api_key_env: &str,
+    prompt_default: &str,
+    width: usize,
+    color_enabled: bool,
+) -> Vec<String> {
+    let mut context_lines = vec![format!(
+        "- provider: {}",
+        crate::provider_presentation::guided_provider_label(config.provider.kind)
+    )];
+    if let Some(current_env) = config
+        .provider
+        .api_key_env
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        context_lines.push(format!("- current env: {current_env}"));
+    }
+    if !default_api_key_env.trim().is_empty() {
+        context_lines.push(format!("- suggested env: {}", default_api_key_env.trim()));
+    }
+
+    let mut hint_lines = vec![render_api_key_env_selection_default_hint_line(
+        config,
+        default_api_key_env,
+        prompt_default,
+    )];
+    if provider_supports_blank_api_key_env(config) {
+        hint_lines.push("- blank keeps inline or oauth credentials".to_owned());
+    }
+
+    render_onboard_input_screen(
+        width,
+        "choose credential env",
+        GuidedOnboardStep::CredentialEnv,
+        context_lines,
+        hint_lines,
+        color_enabled,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn render_system_prompt_selection_screen_lines(
+    config: &mvp::config::LoongClawConfig,
+    width: usize,
+) -> Vec<String> {
+    render_system_prompt_selection_screen_lines_with_style(
+        config,
+        config.cli.system_prompt.as_str(),
+        width,
+        false,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn render_system_prompt_selection_screen_lines_with_default(
+    config: &mvp::config::LoongClawConfig,
+    prompt_default: &str,
+    width: usize,
+) -> Vec<String> {
+    render_system_prompt_selection_screen_lines_with_style(config, prompt_default, width, false)
+}
+
+fn render_system_prompt_selection_screen_lines_with_style(
+    config: &mvp::config::LoongClawConfig,
+    prompt_default: &str,
+    width: usize,
+    color_enabled: bool,
+) -> Vec<String> {
+    let current_prompt = config.cli.system_prompt.trim();
+    let current_prompt_display = if current_prompt.is_empty() {
+        "built-in default".to_owned()
+    } else {
+        current_prompt.to_owned()
+    };
+
+    render_onboard_input_screen(
+        width,
+        "adjust cli behavior",
+        GuidedOnboardStep::SystemPrompt,
+        vec![format!("- current prompt: {current_prompt_display}")],
+        vec![
+            render_system_prompt_selection_default_hint_line(config, prompt_default),
+            "- blank keeps the built-in behavior".to_owned(),
+        ],
+        color_enabled,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn render_existing_config_write_screen_lines(
+    config_path: &str,
+    width: usize,
+) -> Vec<String> {
+    render_existing_config_write_screen_lines_with_style(config_path, width, false)
+}
+
+fn render_existing_config_write_screen_lines_with_style(
+    config_path: &str,
+    width: usize,
+    color_enabled: bool,
+) -> Vec<String> {
+    render_onboard_choice_screen(
+        OnboardHeaderStyle::Brand,
+        width,
+        "decide how to write the config",
+        "existing config found",
+        None,
+        vec![
+            format!("- config: {config_path}"),
+            "- choose whether to replace it, keep a backup, or cancel".to_owned(),
+        ],
+        vec![
+            OnboardScreenOption {
+                key: "o".to_owned(),
+                label: "Replace existing config".to_owned(),
+                detail_lines: vec![
+                    "overwrite the current file with this onboarding draft".to_owned(),
+                ],
+                recommended: false,
+            },
+            OnboardScreenOption {
+                key: "b".to_owned(),
+                label: "Create backup and replace".to_owned(),
+                detail_lines: vec![
+                    "save a timestamped .bak copy first, then write the new config".to_owned(),
+                ],
+                recommended: false,
+            },
+            OnboardScreenOption {
+                key: "c".to_owned(),
+                label: "Cancel".to_owned(),
+                detail_lines: vec!["leave the existing config untouched".to_owned()],
+                recommended: false,
+            },
+        ],
+        vec![render_default_choice_footer_line("c", "cancel")],
+        color_enabled,
+    )
+}
+
+fn render_onboard_review_digest_lines(config: &mvp::config::LoongClawConfig) -> Vec<String> {
+    let mut lines = vec![
+        format!(
+            "- provider: {}",
+            crate::provider_presentation::guided_provider_label(config.provider.kind)
+        ),
+        format!("- model: {}", config.provider.model),
+        format!(
+            "- transport: {}",
+            config.provider.transport_readiness().summary
+        ),
+    ];
+
+    if let Some(credential_line) = render_onboard_review_credential_line(&config.provider) {
+        lines.push(credential_line);
+    }
+
+    let enabled_channels = enabled_channel_ids(config)
+        .into_iter()
+        .filter(|channel| channel != "cli")
+        .collect::<Vec<_>>();
+    if !enabled_channels.is_empty() {
+        lines.push(format!("- channels: {}", enabled_channels.join(", ")));
+    }
+
+    lines
+}
+
+fn render_onboard_review_credential_line(provider: &mvp::config::ProviderConfig) -> Option<String> {
+    summarize_provider_credential(provider)
+        .map(|credential| format!("- {}: {}", credential.label, credential.value))
+}
+
+fn summarize_provider_credential(
+    provider: &mvp::config::ProviderConfig,
+) -> Option<OnboardingCredentialSummary> {
+    if provider
+        .oauth_access_token
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+    {
+        return Some(OnboardingCredentialSummary {
+            label: "credential",
+            value: "inline oauth token".to_owned(),
+        });
+    }
+    if let Some(oauth_env) = provider
+        .oauth_access_token_env
+        .as_deref()
+        .and_then(normalize_provider_credential_env_name)
+    {
+        return Some(OnboardingCredentialSummary {
+            label: "oauth env",
+            value: oauth_env,
+        });
+    }
+    if provider
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+    {
+        return Some(OnboardingCredentialSummary {
+            label: "credential",
+            value: "inline api key".to_owned(),
+        });
+    }
+    provider
+        .api_key_env
+        .as_deref()
+        .and_then(normalize_provider_credential_env_name)
+        .or_else(|| {
+            provider
+                .kind
+                .default_api_key_env()
+                .and_then(normalize_provider_credential_env_name)
+        })
+        .map(|api_key_env| OnboardingCredentialSummary {
+            label: "credential env",
+            value: api_key_env,
+        })
+}
+
+fn provider_supports_blank_api_key_env(config: &mvp::config::LoongClawConfig) -> bool {
+    config
+        .provider
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+        || config
+            .provider
+            .oauth_access_token
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        || config
+            .provider
+            .oauth_access_token_env
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+}
+
+fn prompt_import_candidate_choice(
+    ui: &mut impl OnboardUi,
+    count: usize,
+) -> CliResult<Option<usize>> {
+    loop {
+        let choice = ui.prompt_with_default("Starting point", "1")?;
+        let trimmed = choice.trim();
+        if trimmed == "0" {
+            return Ok(None);
+        }
+        let Ok(selected) = trimmed.parse::<usize>() else {
+            print_message(ui, format!("Invalid choice: {trimmed}"))?;
+            continue;
+        };
+        if (1..=count).contains(&selected) {
+            return Ok(Some(selected - 1));
+        }
+        print_message(ui, format!("Invalid choice: {trimmed}"))?;
+    }
+}
+
+fn prompt_onboard_shortcut_choice(ui: &mut impl OnboardUi) -> CliResult<OnboardShortcutChoice> {
+    loop {
+        let choice = ui.prompt_with_default("Your choice", "1")?;
+        match choice.trim() {
+            "1" => return Ok(OnboardShortcutChoice::UseShortcut),
+            "2" => return Ok(OnboardShortcutChoice::AdjustSettings),
+            trimmed => print_message(ui, format!("Invalid choice: {trimmed}"))?,
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn detect_import_starting_config_with_channel_readiness(
+    readiness: ChannelImportReadiness,
+) -> mvp::config::LoongClawConfig {
+    crate::migration::detect_import_starting_config_with_channel_readiness(to_migration_readiness(
+        readiness,
+    ))
+}
+
+fn resolve_channel_import_readiness(
+    config: &mvp::config::LoongClawConfig,
+) -> ChannelImportReadiness {
+    crate::migration::resolve_channel_import_readiness_from_config(config)
+}
+
+fn default_codex_config_paths() -> Vec<PathBuf> {
+    crate::migration::discovery::default_detected_codex_config_paths()
+}
+
+fn to_migration_readiness(
+    readiness: ChannelImportReadiness,
+) -> crate::migration::ChannelImportReadiness {
+    readiness
+}
+
+fn import_surface_from_migration(surface: crate::migration::ImportSurface) -> ImportSurface {
+    ImportSurface {
+        name: surface.name,
+        domain: surface.domain,
+        level: match surface.level {
+            crate::migration::ImportSurfaceLevel::Ready => ImportSurfaceLevel::Ready,
+            crate::migration::ImportSurfaceLevel::Review => ImportSurfaceLevel::Review,
+            crate::migration::ImportSurfaceLevel::Blocked => ImportSurfaceLevel::Blocked,
+        },
+        detail: surface.detail,
+    }
+}
+
+fn import_surface_to_migration(surface: &ImportSurface) -> crate::migration::ImportSurface {
+    crate::migration::ImportSurface {
+        name: surface.name,
+        domain: surface.domain,
+        level: match surface.level {
+            ImportSurfaceLevel::Ready => crate::migration::ImportSurfaceLevel::Ready,
+            ImportSurfaceLevel::Review => crate::migration::ImportSurfaceLevel::Review,
+            ImportSurfaceLevel::Blocked => crate::migration::ImportSurfaceLevel::Blocked,
+        },
+        detail: surface.detail.clone(),
+    }
+}
+
+fn import_candidate_from_migration(
+    candidate: crate::migration::ImportCandidate,
+) -> ImportCandidate {
+    ImportCandidate {
+        source_kind: candidate.source_kind,
+        source: candidate.source,
+        config: candidate.config,
+        surfaces: candidate
+            .surfaces
+            .into_iter()
+            .map(import_surface_from_migration)
+            .collect(),
+        domains: candidate.domains,
+        channel_candidates: candidate.channel_candidates,
+        workspace_guidance: candidate.workspace_guidance,
+    }
+}
+
+fn migration_candidate_from_onboard(
+    candidate: &ImportCandidate,
+) -> crate::migration::ImportCandidate {
+    crate::migration::ImportCandidate {
+        source_kind: candidate.source_kind,
+        source: candidate.source.clone(),
+        config: candidate.config.clone(),
+        surfaces: candidate
+            .surfaces
+            .iter()
+            .map(import_surface_to_migration)
+            .collect(),
+        domains: candidate.domains.clone(),
+        channel_candidates: candidate.channel_candidates.clone(),
+        workspace_guidance: candidate.workspace_guidance.clone(),
+    }
+}
+
+fn migration_candidate_for_onboard_display(
+    candidate: &ImportCandidate,
+) -> crate::migration::ImportCandidate {
+    let mut migration_candidate = migration_candidate_from_onboard(candidate);
+    migration_candidate.source =
+        onboard_starting_point_label(Some(candidate.source_kind), &candidate.source);
+    migration_candidate
+}
+
+fn onboard_starting_point_label(
+    source_kind: Option<crate::migration::ImportSourceKind>,
+    source: &str,
+) -> String {
+    crate::migration::ImportSourceKind::onboarding_label(source_kind, source)
+}
+
+fn detect_render_width() -> usize {
+    env::var("COLUMNS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|width| *width > 0)
+        .unwrap_or(80)
+}
+
+fn enabled_channel_ids(config: &mvp::config::LoongClawConfig) -> Vec<String> {
+    config.enabled_channel_ids()
 }
 
 pub(crate) fn validate_non_interactive_risk_gate(
@@ -1028,108 +3867,84 @@ pub(crate) fn validate_non_interactive_risk_gate(
     Ok(())
 }
 
-pub(crate) fn resolve_onboard_import_strategy(
-    summary: &mvp::migration::DiscoveryPlanSummary,
-    prefer_safe_profile_merge: bool,
-) -> CliResult<OnboardImportStrategy> {
-    let recommended_source_id = match summary.plans.len() {
-        0 => None,
-        1 => summary.plans.first().map(|plan| plan.source_id.clone()),
-        _ => Some(mvp::migration::recommend_primary_source(summary)?.source_id),
-    };
-
-    let mode = match (summary.plans.len(), prefer_safe_profile_merge) {
-        (0, _) => OnboardImportMode::Skip,
-        (_, true) if summary.plans.len() > 1 => OnboardImportMode::SafeProfileMerge,
-        _ => OnboardImportMode::RecommendedSingleSource {
-            source_id: recommended_source_id
-                .clone()
-                .ok_or_else(|| "missing recommended import source".to_owned())?,
-        },
-    };
-
-    Ok(OnboardImportStrategy {
-        mode,
-        recommended_source_id,
-    })
+pub(crate) fn should_offer_current_setup_shortcut(
+    options: &OnboardCommandOptions,
+    current_setup_state: crate::migration::CurrentSetupState,
+    entry_choice: OnboardEntryChoice,
+) -> bool {
+    !options.non_interactive
+        && entry_choice == OnboardEntryChoice::ContinueCurrentSetup
+        && current_setup_state == crate::migration::CurrentSetupState::Healthy
+        && !onboard_has_explicit_overrides(options)
 }
 
-pub(crate) fn build_onboard_import_summary(
-    summary: &mvp::migration::DiscoveryPlanSummary,
-    recommendation: Option<&mvp::migration::PrimarySourceRecommendation>,
-) -> String {
-    if summary.plans.is_empty() {
-        return "No legacy claw import sources detected.".to_owned();
-    }
-
-    let mut lines = Vec::new();
-    lines.push(format!(
-        "Detected {} legacy claw source(s).",
-        summary.plans.len()
-    ));
-
-    for plan in &summary.plans {
-        let prompt_state = if plan.prompt_addendum_present {
-            "prompt overlay"
-        } else {
-            "no prompt overlay"
-        };
-        let profile_state = if plan.profile_note_present {
-            "profile overlay"
-        } else {
-            "no profile overlay"
-        };
-        let warning_state = if plan.warning_count == 0 {
-            "no warnings".to_owned()
-        } else {
-            format!("{} warning(s)", plan.warning_count)
-        };
-        lines.push(format!(
-            "- {}: {} @ {}, score {}, {}, {}, {}",
-            plan.source_id,
-            plan.source.as_id(),
-            plan.input_path.display(),
-            plan.confidence_score,
-            prompt_state,
-            profile_state,
-            warning_state
-        ));
-    }
-
-    if let Some(recommendation) = recommendation {
-        lines.push(format!(
-            "Recommended import source: {} ({} @ {})",
-            recommendation.source_id,
-            recommendation.source.as_id(),
-            recommendation.input_path.display()
-        ));
-    }
-
-    if summary.plans.len() > 1 {
-        lines.push(
-            "Secondary option: safe profile merge keeps LoongClaw native prompts and merges only profile-lane traits."
-                .to_owned(),
-        );
-    }
-
-    lines.join("\n")
+pub(crate) fn should_offer_detected_setup_shortcut(
+    options: &OnboardCommandOptions,
+    entry_choice: OnboardEntryChoice,
+    provider_selection: &crate::migration::ProviderSelectionPlan,
+) -> bool {
+    !options.non_interactive
+        && entry_choice == OnboardEntryChoice::ImportDetectedSetup
+        && !provider_selection.requires_explicit_choice
+        && !onboard_has_explicit_overrides(options)
 }
 
-pub(crate) fn validate_non_interactive_import_strategy(
-    strategy: &OnboardImportStrategy,
-    allow_multi_source_merge: bool,
-) -> CliResult<()> {
-    if matches!(strategy.mode, OnboardImportMode::SafeProfileMerge) && !allow_multi_source_merge {
-        return Err(
-            "non-interactive onboarding blocks multi-source merge without explicit opt-in"
-                .to_owned(),
-        );
+fn resolve_onboard_shortcut_kind(
+    options: &OnboardCommandOptions,
+    starting_selection: &StartingConfigSelection,
+) -> Option<OnboardShortcutKind> {
+    if should_offer_current_setup_shortcut(
+        options,
+        starting_selection.current_setup_state,
+        starting_selection.entry_choice,
+    ) {
+        return Some(OnboardShortcutKind::CurrentSetup);
     }
-    Ok(())
+    if should_offer_detected_setup_shortcut(
+        options,
+        starting_selection.entry_choice,
+        &starting_selection.provider_selection,
+    ) {
+        return Some(OnboardShortcutKind::DetectedSetup);
+    }
+    None
+}
+
+fn onboard_has_explicit_overrides(options: &OnboardCommandOptions) -> bool {
+    options
+        .provider
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || options
+            .model
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || options
+            .api_key_env
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || options
+            .system_prompt
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn load_existing_output_config(output_path: &Path) -> Option<mvp::config::LoongClawConfig> {
+    let path_str = output_path.to_str()?;
+    mvp::config::load(Some(path_str))
+        .ok()
+        .map(|(_, config)| config)
+}
+
+pub(crate) fn should_skip_config_write(
+    existing_config: Option<&mvp::config::LoongClawConfig>,
+    draft: &mvp::config::LoongClawConfig,
+) -> bool {
+    existing_config.is_some_and(|existing| existing == draft)
 }
 
 pub(crate) fn parse_provider_kind(raw: &str) -> Option<mvp::config::ProviderKind> {
-    mvp::config::parse_provider_kind_id(raw)
+    mvp::config::ProviderKind::parse(raw)
 }
 
 pub(crate) fn parse_prompt_personality(raw: &str) -> Option<mvp::prompt::PromptPersonality> {
@@ -1160,10 +3975,8 @@ pub(crate) fn parse_memory_profile(raw: &str) -> Option<mvp::config::MemoryProfi
     }
 }
 
-pub(crate) fn provider_default_api_key_env(kind: mvp::config::ProviderKind) -> &'static str {
+pub(crate) fn provider_default_api_key_env(kind: mvp::config::ProviderKind) -> Option<&'static str> {
     kind.default_api_key_env()
-        .or(kind.default_oauth_access_token_env())
-        .unwrap_or("OPENAI_API_KEY")
 }
 
 pub(crate) fn provider_kind_id(kind: mvp::config::ProviderKind) -> &'static str {
@@ -1186,7 +3999,11 @@ pub(crate) fn memory_profile_id(profile: mvp::config::MemoryProfile) -> &'static
     }
 }
 
-fn supported_provider_list() -> String {
+pub(crate) fn provider_kind_display_name(kind: mvp::config::ProviderKind) -> &'static str {
+    kind.display_name()
+}
+
+pub(crate) fn supported_provider_list() -> String {
     mvp::config::ProviderKind::all_sorted()
         .iter()
         .map(|kind| kind.as_str())
@@ -1202,9 +4019,23 @@ fn supported_memory_profile_list() -> &'static str {
     "window_only, window_plus_summary, profile_plus_window"
 }
 
-fn resolve_force_write(output_path: &Path, options: &OnboardCommandOptions) -> CliResult<bool> {
-    if !output_path.exists() || options.force {
-        return Ok(options.force);
+fn resolve_write_plan(
+    output_path: &Path,
+    options: &OnboardCommandOptions,
+    ui: &mut impl OnboardUi,
+    context: &OnboardRuntimeContext,
+) -> CliResult<ConfigWritePlan> {
+    if !output_path.exists() {
+        return Ok(ConfigWritePlan {
+            force: false,
+            backup_path: None,
+        });
+    }
+    if options.force {
+        return Ok(ConfigWritePlan {
+            force: true,
+            backup_path: None,
+        });
     }
 
     if options.non_interactive {
@@ -1215,34 +4046,61 @@ fn resolve_force_write(output_path: &Path, options: &OnboardCommandOptions) -> C
     }
 
     let existing_path = output_path.display().to_string();
-    println!("Config file already exists: {}", existing_path);
-    println!("Options:");
-    println!("  [o] Overwrite (replace existing)");
-    println!("  [b] Backup (rename existing to .bak-YYYYMMDD-HHMMSS)");
-    println!("  [c] Cancel");
+    print_lines(
+        ui,
+        render_existing_config_write_screen_lines_with_style(
+            &existing_path,
+            context.render_width,
+            true,
+        ),
+    )?;
     loop {
-        let choice = prompt_with_default("Your choice", "c")?;
+        let choice = ui.prompt_with_default("Your choice", "c")?;
         match choice.trim().to_ascii_lowercase().as_str() {
             "o" | "overwrite" => {
-                return Ok(true);
+                return Ok(ConfigWritePlan {
+                    force: true,
+                    backup_path: None,
+                });
             }
             "b" | "backup" => {
-                let backup_path = resolve_backup_path(output_path)?;
-                fs::rename(output_path, &backup_path)
-                    .map_err(|e| format!("failed to backup config: {e}"))?;
-                println!("Backed up existing config to: {}", backup_path.display());
-                return Ok(false);
+                return Ok(ConfigWritePlan {
+                    force: true,
+                    backup_path: Some(resolve_backup_path(output_path)?),
+                });
             }
             "c" | "cancel" => {
                 return Err("onboarding cancelled: config file already exists".to_owned());
             }
             _ => {
-                println!(
-                    "Invalid choice. Please enter 'o' (overwrite), 'b' (backup), or 'c' (cancel)"
-                );
+                print_message(
+                    ui,
+                    "Invalid choice. Please enter 'o' (overwrite), 'b' (backup), or 'c' (cancel)",
+                )?;
             }
         }
     }
+}
+
+fn prepare_output_path_for_write(
+    output_path: &Path,
+    plan: &ConfigWritePlan,
+    ui: &mut impl OnboardUi,
+) -> CliResult<()> {
+    if let Some(backup_path) = plan.backup_path.as_deref() {
+        backup_existing_config(output_path, backup_path)?;
+        print_message(
+            ui,
+            format!("Backed up existing config to: {}", backup_path.display()),
+        )?;
+    }
+    Ok(())
+}
+
+pub(crate) fn backup_existing_config(output_path: &Path, backup_path: &Path) -> CliResult<()> {
+    fs::copy(output_path, backup_path)
+        .map_err(|error| format!("failed to backup config: {error}"))?;
+    Ok(())
 }
 
 fn resolve_backup_path(original: &Path) -> CliResult<PathBuf> {
@@ -1267,13 +4125,31 @@ fn format_backup_timestamp_at(timestamp: OffsetDateTime) -> CliResult<String> {
         .map_err(|error| format!("format backup timestamp failed: {error}"))
 }
 
-fn load_or_default_onboard_config(path: &Path) -> CliResult<mvp::config::LoongClawConfig> {
-    if !path.exists() {
-        return Ok(mvp::config::LoongClawConfig::default());
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_preflight_checks_includes_provider_transport_review_for_responses_compatibility_mode()
+     {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Deepseek;
+        config.provider.model = "deepseek-chat".to_owned();
+        config.provider.wire_api = mvp::config::ProviderWireApi::Responses;
+
+        let checks = run_preflight_checks(&config, true).await;
+
+        assert!(
+            checks.iter().any(|check| {
+                check.name == "provider transport"
+                    && check.level == OnboardCheckLevel::Warn
+                    && check
+                        .detail
+                        .contains("retry chat_completions automatically")
+            }),
+            "preflight should surface transport review before writing a Responses-compatible config: {checks:#?}"
+        );
     }
-    let path_string = path.display().to_string();
-    let (_, config) = mvp::config::load(Some(&path_string))?;
-    Ok(config)
 }
 
 #[cfg(test)]

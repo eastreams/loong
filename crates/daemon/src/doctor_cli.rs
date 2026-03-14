@@ -1,3 +1,4 @@
+use std::env;
 use std::fs;
 use std::path::Path;
 
@@ -51,26 +52,7 @@ pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<(
             detail: "provider credentials are available".to_owned(),
         });
     } else {
-        let mut hints = Vec::new();
-        if let Some(key) = config
-            .provider
-            .api_key
-            .as_deref()
-            .and_then(parse_provider_env_hint)
-        {
-            push_unique_hint(&mut hints, key);
-        }
-        if let Some(key) = config
-            .provider
-            .oauth_access_token
-            .as_deref()
-            .and_then(parse_provider_env_hint)
-        {
-            push_unique_hint(&mut hints, key);
-        }
-        for key in config.provider.credential_env_names() {
-            push_unique_hint(&mut hints, key.as_str());
-        }
+        let hints = crate::onboard_cli::provider_credential_env_hints(&config.provider);
         let detail = if hints.is_empty() {
             "provider credentials are missing".to_owned()
         } else {
@@ -85,6 +67,8 @@ pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<(
             detail,
         });
     }
+
+    checks.push(provider_transport_doctor_check(&config.provider));
 
     if options.skip_model_probe {
         checks.push(DoctorCheck {
@@ -161,7 +145,7 @@ pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<(
         "create tool file root",
     ));
 
-    checks.extend(check_channel_surfaces(&config));
+    checks.extend(collect_channel_doctor_checks(&config));
 
     if options.fix && config_mutated {
         let path = config_path
@@ -425,40 +409,28 @@ fn maybe_apply_provider_env_fix(
     fix: bool,
     fixes: &mut Vec<String>,
 ) -> bool {
-    if !fix
-        || config
-            .provider
-            .api_key
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_some()
-    {
+    if !fix {
         return false;
     }
-
-    if let Some(existing_key) = config
-        .provider
-        .api_key_env
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-    {
-        config.provider.api_key = Some(format!("${{{existing_key}}}"));
-        config.provider.api_key_env = None;
-        fixes.push(format!("migrate provider.api_key=${{{existing_key}}}"));
-        return true;
+    let Some(binding) =
+        crate::onboard_cli::preferred_provider_credential_env_binding(&config.provider)
+    else {
+        return false;
+    };
+    match binding.field {
+        crate::onboard_cli::ProviderCredentialEnvField::ApiKey => ensure_env_binding(
+            &mut config.provider.api_key_env,
+            &binding.env_name,
+            fixes,
+            "set provider.api_key_env",
+        ),
+        crate::onboard_cli::ProviderCredentialEnvField::OAuthAccessToken => ensure_env_binding(
+            &mut config.provider.oauth_access_token_env,
+            &binding.env_name,
+            fixes,
+            "set provider.oauth_access_token_env",
+        ),
     }
-
-    if let Some(default_key) = config.provider.kind.default_api_key_env() {
-        config.provider.api_key = Some(format!("${{{default_key}}}"));
-        config.provider.api_key_env = None;
-        fixes.push(format!("set provider.api_key=${{{default_key}}}"));
-        return true;
-    }
-
-    false
 }
 
 fn maybe_apply_channel_env_fix(
@@ -469,39 +441,9 @@ fn maybe_apply_channel_env_fix(
     if !fix {
         return false;
     }
-    let mut changed = false;
-
-    changed |= ensure_env_binding(
-        &mut config.telegram.bot_token_env,
-        "TELEGRAM_BOT_TOKEN",
-        fixes,
-        "set telegram.bot_token_env",
-    );
-    changed |= ensure_env_binding(
-        &mut config.feishu.app_id_env,
-        "FEISHU_APP_ID",
-        fixes,
-        "set feishu.app_id_env",
-    );
-    changed |= ensure_env_binding(
-        &mut config.feishu.app_secret_env,
-        "FEISHU_APP_SECRET",
-        fixes,
-        "set feishu.app_secret_env",
-    );
-    changed |= ensure_env_binding(
-        &mut config.feishu.verification_token_env,
-        "FEISHU_VERIFICATION_TOKEN",
-        fixes,
-        "set feishu.verification_token_env",
-    );
-    changed |= ensure_env_binding(
-        &mut config.feishu.encrypt_key_env,
-        "FEISHU_ENCRYPT_KEY",
-        fixes,
-        "set feishu.encrypt_key_env",
-    );
-
+    let channel_fixes = crate::migration::channels::apply_default_channel_env_bindings(config);
+    let changed = !channel_fixes.is_empty();
+    fixes.extend(channel_fixes);
     changed
 }
 
@@ -524,60 +466,24 @@ fn ensure_env_binding(
     true
 }
 
-fn push_unique_hint(hints: &mut Vec<String>, key: &str) {
-    if !hints.iter().any(|existing| existing == key) {
-        hints.push(key.to_owned());
+fn provider_transport_doctor_check(provider: &mvp::config::ProviderConfig) -> DoctorCheck {
+    let readiness = provider.transport_readiness();
+    DoctorCheck {
+        name: "provider transport".to_owned(),
+        level: match readiness.level {
+            mvp::config::ProviderTransportReadinessLevel::Ready => DoctorCheckLevel::Pass,
+            mvp::config::ProviderTransportReadinessLevel::Review => DoctorCheckLevel::Warn,
+            mvp::config::ProviderTransportReadinessLevel::Unsupported => DoctorCheckLevel::Fail,
+        },
+        detail: readiness.detail,
     }
 }
 
-fn parse_provider_env_hint(raw: &str) -> Option<&str> {
-    let trimmed = raw.trim();
-    if trimmed.len() >= 4 && trimmed[..4].eq_ignore_ascii_case("env:") {
-        let candidate = trimmed[4..].trim();
-        return looks_like_env_name(candidate).then_some(candidate);
-    }
-    if let Some(candidate) = parse_dollar_env_name(trimmed) {
-        return Some(candidate);
-    }
-    if let Some(candidate) = trimmed
-        .strip_prefix('%')
-        .and_then(|rest| rest.strip_suffix('%'))
-        .map(str::trim)
-        .filter(|value| looks_like_env_name(value))
-    {
-        return Some(candidate);
-    }
-    None
+fn collect_channel_doctor_checks(config: &mvp::config::LoongClawConfig) -> Vec<DoctorCheck> {
+    check_channel_surfaces(config)
 }
 
-fn parse_dollar_env_name(raw: &str) -> Option<&str> {
-    let stripped = raw.strip_prefix('$')?.trim();
-    if stripped.is_empty() {
-        return None;
-    }
-    let candidate = stripped
-        .strip_prefix('{')
-        .and_then(|rest| rest.strip_suffix('}'))
-        .map(str::trim)
-        .unwrap_or(stripped);
-    looks_like_env_name(candidate).then_some(candidate)
-}
-
-fn looks_like_env_name(raw: &str) -> bool {
-    let mut chars = raw.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !(first.is_ascii_alphanumeric() || first == '_') {
-        return false;
-    }
-    chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' || ch == '.')
-}
-
-#[cfg(test)]
 pub(crate) fn resolve_secret_value(inline: Option<&str>, env_key: Option<&str>) -> Option<String> {
-    use std::env;
-
     if let Some(value) = inline.map(str::trim).filter(|value| !value.is_empty()) {
         return Some(value.to_owned());
     }
@@ -728,23 +634,131 @@ mod tests {
     }
 
     #[test]
-    fn maybe_apply_provider_env_fix_prefers_generic_api_key_reference() {
-        let mut config = mvp::config::LoongClawConfig::default();
-        config.provider.api_key = None;
-        config.provider.api_key_env = None;
-        let mut fixes = Vec::new();
+    fn channel_doctor_checks_omit_disabled_channels() {
+        let checks = collect_channel_doctor_checks(&mvp::config::LoongClawConfig::default());
+        assert!(
+            checks.is_empty(),
+            "disabled optional channels should not generate doctor warnings by default: {checks:#?}"
+        );
+    }
 
+    #[test]
+    fn channel_doctor_checks_report_enabled_channels_from_registry() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.telegram.enabled = true;
+        config.telegram.bot_token = Some("123456:test-token".to_owned());
+        config.feishu.enabled = true;
+        config.feishu.app_id = Some("cli_a1b2c3".to_owned());
+        config.feishu.app_secret = Some("feishu-secret".to_owned());
+
+        let checks = collect_channel_doctor_checks(&config);
+        let names = checks.iter().map(|check| check.name).collect::<Vec<_>>();
+
+        assert_eq!(
+            names,
+            vec![
+                "telegram channel",
+                "feishu channel",
+                "feishu webhook verification"
+            ]
+        );
+        assert!(
+            checks
+                .iter()
+                .any(|check| check.name == "telegram channel"
+                    && check.level == DoctorCheckLevel::Pass),
+            "telegram doctor check should come from the channel registry: {checks:#?}"
+        );
+    }
+
+    #[test]
+    fn channel_env_fix_uses_registered_channel_defaults() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.telegram.bot_token_env = None;
+        config.feishu.app_id_env = None;
+        config.feishu.app_secret_env = None;
+        config.feishu.verification_token_env = None;
+        config.feishu.encrypt_key_env = None;
+
+        let mut fixes = Vec::new();
+        let changed = maybe_apply_channel_env_fix(&mut config, true, &mut fixes);
+
+        assert!(changed);
+        assert_eq!(
+            config.telegram.bot_token_env.as_deref(),
+            Some("TELEGRAM_BOT_TOKEN")
+        );
+        assert_eq!(config.feishu.app_id_env.as_deref(), Some("FEISHU_APP_ID"));
+        assert_eq!(
+            config.feishu.app_secret_env.as_deref(),
+            Some("FEISHU_APP_SECRET")
+        );
+        assert_eq!(
+            config.feishu.verification_token_env.as_deref(),
+            Some("FEISHU_VERIFICATION_TOKEN")
+        );
+        assert_eq!(
+            config.feishu.encrypt_key_env.as_deref(),
+            Some("FEISHU_ENCRYPT_KEY")
+        );
+        assert_eq!(fixes.len(), 5);
+    }
+
+    #[test]
+    fn provider_credential_env_hints_prioritize_oauth_defaults() {
+        let hints = crate::onboard_cli::provider_credential_env_hints(
+            &mvp::config::ProviderConfig::default(),
+        );
+
+        assert!(
+            hints.contains(&"OPENAI_CODEX_OAUTH_TOKEN".to_owned()),
+            "doctor hints should include the provider's oauth default when available: {hints:?}"
+        );
+        assert!(
+            hints.contains(&"OPENAI_API_KEY".to_owned()),
+            "doctor hints should still include the api key fallback for providers that support both auth paths: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn provider_env_fix_prefers_oauth_default_when_available() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.api_key_env = None;
+        config.provider.oauth_access_token_env = None;
+
+        let mut fixes = Vec::new();
         let changed = maybe_apply_provider_env_fix(&mut config, true, &mut fixes);
 
         assert!(changed);
         assert_eq!(
-            config.provider.api_key.as_deref(),
-            Some("${OPENAI_API_KEY}")
+            config.provider.oauth_access_token_env.as_deref(),
+            Some("OPENAI_CODEX_OAUTH_TOKEN")
         );
         assert_eq!(config.provider.api_key_env, None);
         assert_eq!(
             fixes,
-            vec!["set provider.api_key=${OPENAI_API_KEY}".to_owned()]
+            vec!["set provider.oauth_access_token_env=OPENAI_CODEX_OAUTH_TOKEN".to_owned()]
+        );
+    }
+
+    #[test]
+    fn provider_transport_doctor_check_warns_for_responses_compatibility_mode() {
+        let provider = mvp::config::ProviderConfig {
+            kind: mvp::config::ProviderKind::Deepseek,
+            model: "deepseek-chat".to_owned(),
+            wire_api: mvp::config::ProviderWireApi::Responses,
+            ..mvp::config::ProviderConfig::default()
+        };
+
+        let check = provider_transport_doctor_check(&provider);
+
+        assert_eq!(check.name, "provider transport");
+        assert_eq!(check.level, DoctorCheckLevel::Warn);
+        assert!(
+            check
+                .detail
+                .contains("retry chat_completions automatically"),
+            "doctor should surface the automatic transport fallback in review mode: {check:#?}"
         );
     }
 

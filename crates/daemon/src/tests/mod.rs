@@ -64,16 +64,88 @@ fn sign_security_scan_profile_for_test(profile: &SecurityScanProfile) -> (String
 
 mod acp;
 mod architecture;
+mod import_cli;
 mod import_claw_cli;
+mod migration;
 mod onboard_cli;
 mod programmatic;
 mod spec_runtime;
 mod spec_runtime_bridge;
 
 #[test]
-fn clap_command_name_is_loongclaw() {
+fn cli_uses_loongclaw_program_name() {
     let command = Cli::command();
     assert_eq!(command.get_name(), "loongclaw");
+}
+
+#[test]
+fn cli_import_help_explains_explicit_power_user_flow() {
+    let mut command = Cli::command();
+    let import = command
+        .find_subcommand_mut("import")
+        .expect("import subcommand should exist");
+    let mut help = Vec::new();
+    import
+        .write_long_help(&mut help)
+        .expect("render import help");
+    let help = String::from_utf8(help).expect("help should be utf8");
+
+    assert!(
+        help.contains("Power-user import flow"),
+        "import help should explain when to use the explicit import command: {help}"
+    );
+    assert!(
+        help.contains("--source-path"),
+        "import help should surface the path-level disambiguation flag: {help}"
+    );
+    assert!(
+        help.contains("loongclaw onboard"),
+        "import help should direct guided users back to onboard: {help}"
+    );
+    assert!(
+        help.contains(&format!(
+            "--provider <{}>",
+            mvp::config::PROVIDER_SELECTOR_PLACEHOLDER
+        )),
+        "import help should expose the shared provider selector placeholder: {help}"
+    );
+    assert!(
+        help.contains(mvp::config::PROVIDER_SELECTOR_HUMAN_SUMMARY),
+        "import help should reuse the shared provider selector summary: {help}"
+    );
+}
+
+#[test]
+fn cli_onboard_help_mentions_detected_reusable_settings() {
+    let mut command = Cli::command();
+    let onboard = command
+        .find_subcommand_mut("onboard")
+        .expect("onboard subcommand should exist");
+    let mut help = Vec::new();
+    onboard
+        .write_long_help(&mut help)
+        .expect("render onboard help");
+    let help = String::from_utf8(help).expect("help should be utf8");
+
+    assert!(
+        help.contains("detect"),
+        "onboard help should mention that it detects reusable settings: {help}"
+    );
+    assert!(
+        help.contains("provider, channels, or workspace guidance"),
+        "onboard help should explain the kinds of detected settings it can reuse: {help}"
+    );
+    assert!(
+        help.contains(&format!(
+            "--provider <{}>",
+            mvp::config::PROVIDER_SELECTOR_PLACEHOLDER
+        )),
+        "onboard help should expose the shared provider selector placeholder: {help}"
+    );
+    assert!(
+        help.contains(mvp::config::PROVIDER_SELECTOR_HUMAN_SUMMARY),
+        "onboard help should reuse the shared provider selector summary: {help}"
+    );
 }
 
 #[test]

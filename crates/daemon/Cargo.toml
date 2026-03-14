@@ -30,6 +30,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 time.workspace = true
+toml.workspace = true
 
 [[bin]]
 name = "loongclaw"

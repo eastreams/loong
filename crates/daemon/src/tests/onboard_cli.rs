@@ -1,8 +1,227 @@
+#![allow(unsafe_code)]
+
 use super::*;
-use std::{
-    fs,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::collections::VecDeque;
+use std::ffi::OsString;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+static TEMP_PATH_COUNTER: AtomicU64 = AtomicU64::new(0);
+static DETECTED_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+fn unique_temp_path(label: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before unix epoch")
+        .as_nanos();
+    let counter = TEMP_PATH_COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "loongclaw-onboard-{label}-{}-{nanos}-{counter}",
+        std::process::id(),
+    ))
+}
+
+struct DetectedEnvironmentGuard {
+    _lock: MutexGuard<'static, ()>,
+    saved: Vec<(String, Option<OsString>)>,
+}
+
+impl DetectedEnvironmentGuard {
+    fn without_detected_environment() -> Self {
+        let lock = DETECTED_ENV_LOCK
+            .lock()
+            .expect("detected-environment guard lock");
+        let mut keys = std::collections::BTreeSet::new();
+        let default_config = mvp::config::LoongClawConfig::default();
+        let default_provider_kind = default_config.provider.kind;
+
+        if let Some(key) = default_provider_kind.default_api_key_env() {
+            keys.insert(key.to_owned());
+        }
+        for alias in default_provider_kind.api_key_env_aliases() {
+            keys.insert((*alias).to_owned());
+        }
+        if let Some(key) = default_provider_kind.default_oauth_access_token_env() {
+            keys.insert(key.to_owned());
+        }
+        for alias in default_provider_kind.oauth_access_token_env_aliases() {
+            keys.insert((*alias).to_owned());
+        }
+        if let Some(key) = default_config.telegram.bot_token_env.as_deref() {
+            keys.insert(key.to_owned());
+        }
+        if let Some(key) = default_config.feishu.app_id_env.as_deref() {
+            keys.insert(key.to_owned());
+        }
+        if let Some(key) = default_config.feishu.app_secret_env.as_deref() {
+            keys.insert(key.to_owned());
+        }
+
+        let saved = keys
+            .into_iter()
+            .map(|key| {
+                let value = std::env::var_os(&key);
+                unsafe {
+                    std::env::remove_var(&key);
+                }
+                (key, value)
+            })
+            .collect();
+
+        Self { _lock: lock, saved }
+    }
+}
+
+impl Drop for DetectedEnvironmentGuard {
+    fn drop(&mut self) {
+        for (key, value) in self.saved.drain(..) {
+            match value {
+                Some(value) => unsafe {
+                    std::env::set_var(&key, value);
+                },
+                None => unsafe {
+                    std::env::remove_var(&key);
+                },
+            }
+        }
+    }
+}
+
+fn import_candidate_with_kind(
+    source_kind: crate::migration::types::ImportSourceKind,
+    source: &str,
+) -> crate::onboard_cli::ImportCandidate {
+    crate::onboard_cli::ImportCandidate {
+        source_kind,
+        source: source.to_owned(),
+        config: mvp::config::LoongClawConfig::default(),
+        surfaces: Vec::new(),
+        domains: Vec::new(),
+        channel_candidates: Vec::new(),
+        workspace_guidance: Vec::new(),
+    }
+}
+
+fn import_candidate_with_provider(
+    source_kind: crate::migration::types::ImportSourceKind,
+    source: &str,
+    kind: mvp::config::ProviderKind,
+    model: &str,
+    credential_env: &str,
+) -> crate::onboard_cli::ImportCandidate {
+    let mut candidate = import_candidate_with_kind(source_kind, source);
+    let profile = kind.profile();
+    candidate.config.provider.kind = kind;
+    candidate.config.provider.base_url = profile.base_url.to_owned();
+    candidate.config.provider.chat_completions_path = profile.chat_completions_path.to_owned();
+    candidate.config.provider.model = model.to_owned();
+    candidate.config.provider.api_key_env = Some(credential_env.to_owned());
+    candidate
+        .domains
+        .push(crate::migration::types::DomainPreview {
+            kind: crate::migration::types::SetupDomainKind::Provider,
+            status: crate::migration::types::PreviewStatus::Ready,
+            decision: Some(crate::migration::types::PreviewDecision::UseDetected),
+            source: source.to_owned(),
+            summary: crate::provider_presentation::provider_identity_summary(
+                &candidate.config.provider,
+            ),
+        });
+    candidate
+}
+
+struct ScriptedOnboardUi {
+    inputs: VecDeque<String>,
+    outputs: Vec<String>,
+}
+
+impl ScriptedOnboardUi {
+    fn new(inputs: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            inputs: inputs.into_iter().map(Into::into).collect(),
+            outputs: Vec::new(),
+        }
+    }
+
+    fn transcript(self) -> Vec<String> {
+        self.outputs
+    }
+
+    fn next_input(&mut self, label: &str) -> crate::CliResult<String> {
+        self.inputs
+            .pop_front()
+            .ok_or_else(|| format!("missing scripted input for {label}"))
+    }
+}
+
+impl crate::onboard_cli::OnboardUi for ScriptedOnboardUi {
+    fn print_line(&mut self, line: &str) -> crate::CliResult<()> {
+        self.outputs.push(line.to_owned());
+        Ok(())
+    }
+
+    fn prompt_with_default(&mut self, label: &str, default: &str) -> crate::CliResult<String> {
+        self.outputs.push(format!("PROMPT {label} [{default}]"));
+        self.next_input(label)
+    }
+
+    fn prompt_required(&mut self, label: &str) -> crate::CliResult<String> {
+        self.outputs.push(format!("PROMPT {label}"));
+        self.next_input(label)
+    }
+
+    fn prompt_confirm(&mut self, message: &str, default: bool) -> crate::CliResult<bool> {
+        self.outputs.push(format!(
+            "PROMPT {message} {}",
+            if default { "[Y/n]" } else { "[y/N]" }
+        ));
+        let value = self.next_input(message)?;
+        let trimmed = value.trim().to_ascii_lowercase();
+        if trimmed.is_empty() {
+            return Ok(default);
+        }
+        Ok(matches!(trimmed.as_str(), "y" | "yes"))
+    }
+}
+
+async fn run_scripted_onboard_flow(
+    options: crate::onboard_cli::OnboardCommandOptions,
+    inputs: impl IntoIterator<Item = impl Into<String>>,
+    workspace_root: Option<PathBuf>,
+    codex_config_path: Option<PathBuf>,
+) -> crate::CliResult<Vec<String>> {
+    let mut ui = ScriptedOnboardUi::new(inputs);
+    let context = crate::onboard_cli::OnboardRuntimeContext::new_for_tests(
+        80,
+        workspace_root,
+        codex_config_path,
+    );
+    crate::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context).await?;
+    Ok(ui.transcript())
+}
+
+fn extract_review_section_lines(transcript: &[String], progress_line: &str) -> Vec<String> {
+    let start = transcript
+        .windows(2)
+        .position(|window| window[0] == "review setup" && window[1] == progress_line)
+        .expect("transcript should include review section");
+    let end = transcript[start..]
+        .iter()
+        .position(|line| line == "preflight checks")
+        .map(|offset| start + offset)
+        .unwrap_or(transcript.len());
+    transcript[start..end].to_vec()
+}
+
+fn extract_success_section_lines(transcript: &[String]) -> Vec<String> {
+    let start = transcript
+        .iter()
+        .position(|line| line == "onboarding complete")
+        .expect("transcript should include success section");
+    transcript[start..].to_vec()
+}
 
 #[test]
 fn parse_provider_kind_accepts_primary_and_legacy_aliases() {
@@ -53,11 +272,11 @@ fn parse_provider_kind_accepts_primary_and_legacy_aliases() {
 fn provider_default_env_mapping_is_stable() {
     assert_eq!(
         crate::onboard_cli::provider_default_api_key_env(mvp::config::ProviderKind::Openai),
-        "OPENAI_API_KEY"
+        Some("OPENAI_API_KEY")
     );
     assert_eq!(
         crate::onboard_cli::provider_default_api_key_env(mvp::config::ProviderKind::Anthropic),
-        "ANTHROPIC_API_KEY"
+        Some("ANTHROPIC_API_KEY")
     );
     assert_eq!(
         crate::onboard_cli::provider_default_api_key_env(mvp::config::ProviderKind::Bedrock),
@@ -77,11 +296,11 @@ fn provider_default_env_mapping_is_stable() {
     );
     assert_eq!(
         crate::onboard_cli::provider_default_api_key_env(mvp::config::ProviderKind::Openrouter),
-        "OPENROUTER_API_KEY"
+        Some("OPENROUTER_API_KEY")
     );
     assert_eq!(
         crate::onboard_cli::provider_default_api_key_env(mvp::config::ProviderKind::KimiCoding),
-        "KIMI_CODING_API_KEY"
+        Some("KIMI_CODING_API_KEY")
     );
 }
 
@@ -114,40 +333,14 @@ fn provider_kind_id_mapping_includes_kimi_coding() {
 }
 
 #[test]
-fn parse_prompt_personality_accepts_supported_ids() {
-    assert_eq!(
-        crate::onboard_cli::parse_prompt_personality("calm_engineering"),
-        Some(mvp::prompt::PromptPersonality::CalmEngineering)
-    );
-    assert_eq!(
-        crate::onboard_cli::parse_prompt_personality("friendly_collab"),
-        Some(mvp::prompt::PromptPersonality::FriendlyCollab)
-    );
-    assert_eq!(
-        crate::onboard_cli::parse_prompt_personality("autonomous_executor"),
-        Some(mvp::prompt::PromptPersonality::AutonomousExecutor)
-    );
-    assert_eq!(
-        crate::onboard_cli::parse_prompt_personality("unknown"),
-        None
-    );
-}
+fn supported_provider_list_matches_canonical_provider_catalog() {
+    let expected = mvp::config::ProviderKind::all_sorted()
+        .iter()
+        .map(|kind| kind.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
 
-#[test]
-fn parse_memory_profile_accepts_supported_ids() {
-    assert_eq!(
-        crate::onboard_cli::parse_memory_profile("window_only"),
-        Some(mvp::config::MemoryProfile::WindowOnly)
-    );
-    assert_eq!(
-        crate::onboard_cli::parse_memory_profile("window_plus_summary"),
-        Some(mvp::config::MemoryProfile::WindowPlusSummary)
-    );
-    assert_eq!(
-        crate::onboard_cli::parse_memory_profile("profile_plus_window"),
-        Some(mvp::config::MemoryProfile::ProfilePlusWindow)
-    );
-    assert_eq!(crate::onboard_cli::parse_memory_profile("unknown"), None);
+    assert_eq!(crate::onboard_cli::supported_provider_list(), expected);
 }
 
 #[test]
@@ -163,171 +356,4042 @@ fn non_interactive_requires_explicit_risk_acknowledgement() {
 }
 
 #[test]
-fn onboard_import_strategy_defaults_to_recommended_single_source() {
-    let summary = mvp::migration::DiscoveryPlanSummary {
-        plans: vec![
-            mvp::migration::PlannedImportSource {
-                source: mvp::migration::LegacyClawSource::OpenClaw,
-                source_id: "openclaw".to_owned(),
-                input_path: std::path::PathBuf::from("/tmp/openclaw"),
-                confidence_score: 42,
-                prompt_addendum_present: true,
-                profile_note_present: true,
-                warning_count: 0,
-            },
-            mvp::migration::PlannedImportSource {
-                source: mvp::migration::LegacyClawSource::Nanobot,
-                source_id: "nanobot".to_owned(),
-                input_path: std::path::PathBuf::from("/tmp/nanobot"),
-                confidence_score: 18,
-                prompt_addendum_present: false,
-                profile_note_present: true,
-                warning_count: 0,
-            },
-        ],
-    };
+fn provider_credential_check_accepts_inline_api_key() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.api_key = Some("inline-secret".to_owned());
+    config.provider.api_key_env = None;
 
-    let recommendation = crate::onboard_cli::resolve_onboard_import_strategy(&summary, false)
-        .expect("strategy should resolve");
-    assert_eq!(
-        recommendation.mode,
-        crate::onboard_cli::OnboardImportMode::RecommendedSingleSource {
-            source_id: "openclaw".to_owned()
-        }
+    let check = crate::onboard_cli::provider_credential_check(&config);
+
+    assert_eq!(check.level, crate::onboard_cli::OnboardCheckLevel::Pass);
+    assert!(
+        check.detail.contains("inline api key"),
+        "inline provider credentials should pass preflight without forcing an env var: {check:#?}"
     );
 }
 
 #[test]
-fn onboard_import_summary_shows_safe_merge_as_secondary_option() {
-    let summary = mvp::migration::DiscoveryPlanSummary {
-        plans: vec![
-            mvp::migration::PlannedImportSource {
-                source: mvp::migration::LegacyClawSource::OpenClaw,
-                source_id: "openclaw".to_owned(),
-                input_path: std::path::PathBuf::from("/tmp/openclaw"),
-                confidence_score: 42,
-                prompt_addendum_present: true,
-                profile_note_present: true,
-                warning_count: 0,
+fn preferred_api_key_env_default_stays_blank_for_inline_credentials() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.api_key = Some("inline-secret".to_owned());
+    config.provider.api_key_env = None;
+
+    let value = crate::onboard_cli::preferred_api_key_env_default(&config);
+
+    assert!(
+        value.is_empty(),
+        "inline credentials should not be replaced with a default API key env prompt value: {value:?}"
+    );
+}
+
+#[test]
+fn preferred_api_key_env_default_stays_blank_when_provider_has_no_default_env() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.kind = mvp::config::ProviderKind::Ollama;
+    config.provider.api_key = None;
+    config.provider.api_key_env = None;
+    config.provider.oauth_access_token = None;
+    config.provider.oauth_access_token_env = None;
+
+    let value = crate::onboard_cli::preferred_api_key_env_default(&config);
+
+    assert!(
+        value.is_empty(),
+        "providers without a canonical default env should not surface a fake suggested env: {value:?}"
+    );
+}
+
+#[test]
+fn directory_preflight_check_has_no_filesystem_side_effects() {
+    let base = unique_temp_path("preflight-root");
+    let target = base.join("nested").join("tool-root");
+    std::fs::create_dir_all(&base).expect("create existing ancestor");
+
+    let check = crate::onboard_cli::directory_preflight_check("tool file root", &target);
+
+    assert_eq!(check.level, crate::onboard_cli::OnboardCheckLevel::Pass);
+    assert!(
+        !target.exists(),
+        "preflight inspection should not create the target directory before confirmation"
+    );
+    assert!(
+        check.detail.contains("would create under"),
+        "side-effect-free preflight should explain where the directory would be created: {check:#?}"
+    );
+}
+
+#[test]
+fn backup_existing_config_copies_without_removing_original() {
+    let original = unique_temp_path("original-config.toml");
+    let backup = unique_temp_path("backup-config.toml");
+    std::fs::write(&original, "provider = \"openai\"\n").expect("write original config");
+
+    crate::onboard_cli::backup_existing_config(&original, &backup)
+        .expect("backup copy should succeed");
+
+    assert!(
+        original.exists(),
+        "backup flow should leave the original config in place until the new write happens"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&backup).expect("read backup"),
+        "provider = \"openai\"\n"
+    );
+}
+
+#[test]
+fn onboard_risk_screen_includes_brand_header_and_continue_cancel_options() {
+    let lines = crate::onboard_cli::render_onboarding_risk_screen_lines(80);
+
+    assert!(
+        lines[0].starts_with("██╗"),
+        "risk screen should start with the shared LOONGCLAW brand block: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "security check"),
+        "risk screen should use a focused title: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("invoke tools and read local files")),
+        "risk screen should explain the core execution risk in plain language: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("[y] Continue onboarding")),
+        "risk screen should show the affirmative path explicitly: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("[n] Cancel")),
+        "risk screen should keep cancellation explicit: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "press Enter to use [n], cancel"),
+        "risk screen should make the safe default explicit on the screen itself: {lines:#?}"
+    );
+}
+
+#[test]
+fn import_surfaces_include_ready_provider_and_channels() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.api_key = Some("provider-secret".to_owned());
+    config.telegram.enabled = true;
+    config.telegram.bot_token = Some("123456:test-token".to_owned());
+    config.telegram.allowed_chat_ids = vec![42];
+    config.feishu.enabled = true;
+    config.feishu.app_id = Some("cli_a1b2c3".to_owned());
+    config.feishu.app_secret = Some("feishu-secret".to_owned());
+    config.feishu.verification_token = Some("verify-token".to_owned());
+
+    let surfaces = crate::onboard_cli::collect_import_surfaces(&config);
+    assert!(
+        surfaces.iter().any(|surface| surface.name == "provider"
+            && surface.level == crate::onboard_cli::ImportSurfaceLevel::Ready),
+        "provider import surface should be ready: {surfaces:#?}"
+    );
+    assert!(
+        surfaces
+            .iter()
+            .any(|surface| surface.name == "telegram channel"
+                && surface.level == crate::onboard_cli::ImportSurfaceLevel::Ready),
+        "telegram import surface should be ready: {surfaces:#?}"
+    );
+    assert!(
+        surfaces
+            .iter()
+            .any(|surface| surface.name == "feishu channel"
+                && surface.level == crate::onboard_cli::ImportSurfaceLevel::Ready),
+        "feishu import surface should be ready: {surfaces:#?}"
+    );
+}
+
+#[test]
+fn import_surfaces_mark_missing_channel_secret_for_review() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = true;
+    config.telegram.bot_token = None;
+    config.telegram.bot_token_env = Some("LOONGCLAW_TEST_MISSING_TELEGRAM_TOKEN".to_owned());
+
+    let surfaces = crate::onboard_cli::collect_import_surfaces(&config);
+    assert!(
+        surfaces.iter().any(|surface| {
+            surface.name == "telegram channel"
+                && surface.level == crate::onboard_cli::ImportSurfaceLevel::Review
+                && surface.detail.contains("token missing")
+        }),
+        "telegram import surface should require review when the token is missing: {surfaces:#?}"
+    );
+}
+
+#[test]
+fn channel_preflight_checks_report_enabled_channels() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = true;
+    config.telegram.bot_token = Some("123456:test-token".to_owned());
+    config.feishu.enabled = true;
+    config.feishu.app_id = Some("cli_a1b2c3".to_owned());
+    config.feishu.app_secret = Some("feishu-secret".to_owned());
+    config.feishu.verification_token = Some("verify-token".to_owned());
+
+    let checks = crate::onboard_cli::collect_channel_preflight_checks(&config);
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "telegram channel"
+                && check.level == crate::onboard_cli::OnboardCheckLevel::Pass
+                && check.detail.contains("bot token resolved")
+        }),
+        "telegram preflight should pass when token is resolved: {checks:#?}"
+    );
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "feishu channel"
+                && check.level == crate::onboard_cli::OnboardCheckLevel::Pass
+                && check.detail.contains("app credentials resolved")
+        }),
+        "feishu credentials should pass when app credentials are present: {checks:#?}"
+    );
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "feishu webhook verification"
+                && check.level == crate::onboard_cli::OnboardCheckLevel::Pass
+        }),
+        "feishu verification should pass when a verification token is configured: {checks:#?}"
+    );
+}
+
+#[test]
+fn import_surfaces_detect_ready_channels_from_environment_only() {
+    let config = mvp::config::LoongClawConfig::default();
+    let surfaces = crate::onboard_cli::collect_import_surfaces_with_channel_readiness(
+        &config,
+        crate::onboard_cli::ChannelImportReadiness::default()
+            .with_state("telegram", crate::migration::ChannelCredentialState::Ready)
+            .with_state("feishu", crate::migration::ChannelCredentialState::Ready),
+    );
+    assert!(
+        surfaces.iter().any(|surface| {
+            surface.name == "telegram channel"
+                && surface.level == crate::onboard_cli::ImportSurfaceLevel::Ready
+        }),
+        "telegram env should surface as import-ready even without an existing config: {surfaces:#?}"
+    );
+    assert!(
+        surfaces.iter().any(|surface| {
+            surface.name == "feishu channel"
+                && surface.level == crate::onboard_cli::ImportSurfaceLevel::Ready
+        }),
+        "feishu env should surface as import-ready even without an existing config: {surfaces:#?}"
+    );
+}
+
+#[test]
+fn detect_env_import_starting_config_enables_ready_channels() {
+    let imported = crate::onboard_cli::detect_import_starting_config_with_channel_readiness(
+        crate::onboard_cli::ChannelImportReadiness::default()
+            .with_state("telegram", crate::migration::ChannelCredentialState::Ready)
+            .with_state("feishu", crate::migration::ChannelCredentialState::Ready),
+    );
+    assert!(
+        imported.telegram.enabled,
+        "telegram should be enabled when onboarding can reuse TELEGRAM_BOT_TOKEN"
+    );
+    assert!(
+        imported.feishu.enabled,
+        "feishu should be enabled when onboarding can reuse FEISHU_APP_ID and FEISHU_APP_SECRET"
+    );
+    assert_eq!(
+        imported.telegram.bot_token_env.as_deref(),
+        Some("TELEGRAM_BOT_TOKEN")
+    );
+    assert_eq!(imported.feishu.app_id_env.as_deref(), Some("FEISHU_APP_ID"));
+    assert_eq!(
+        imported.feishu.app_secret_env.as_deref(),
+        Some("FEISHU_APP_SECRET")
+    );
+}
+
+#[test]
+fn detect_env_import_starting_config_only_enables_ready_channels() {
+    let imported = crate::onboard_cli::detect_import_starting_config_with_channel_readiness(
+        crate::onboard_cli::ChannelImportReadiness::default()
+            .with_state("telegram", crate::migration::ChannelCredentialState::Ready)
+            .with_state("feishu", crate::migration::ChannelCredentialState::Partial),
+    );
+
+    assert!(
+        imported.telegram.enabled,
+        "telegram should be enabled when its credentials are ready"
+    );
+    assert!(
+        !imported.feishu.enabled,
+        "feishu should stay disabled when only part of its credentials are resolved"
+    );
+}
+
+#[test]
+fn collect_import_candidates_include_codex_config_with_env_channels() {
+    let output_path = unique_temp_path("output-missing.toml");
+    let codex_path = unique_temp_path("codex-config.toml");
+    std::fs::write(
+        &codex_path,
+        r#"
+model_provider = "sub2api"
+model = "openai/gpt-5.1-codex"
+
+[model_providers.sub2api]
+name = "Sub2API"
+base_url = "https://codex.example.com/v1"
+chat_completions_path = "/codex/chat/completions"
+wire_api = "responses"
+requires_openai_auth = true
+"#,
+    )
+    .expect("write codex config");
+
+    let candidates = crate::onboard_cli::collect_import_candidates_with_paths(
+        &output_path,
+        Some(&codex_path),
+        crate::onboard_cli::ChannelImportReadiness::default()
+            .with_state("telegram", crate::migration::ChannelCredentialState::Ready)
+            .with_state("feishu", crate::migration::ChannelCredentialState::Ready),
+    )
+    .expect("collect import candidates");
+
+    let codex_candidate = candidates
+        .iter()
+        .find(|candidate| candidate.source.contains("Codex config"))
+        .expect("codex candidate");
+    assert_eq!(
+        codex_candidate.config.provider.kind,
+        mvp::config::ProviderKind::Openai
+    );
+    assert_eq!(
+        codex_candidate.config.provider.model,
+        "openai/gpt-5.1-codex"
+    );
+    assert_eq!(
+        codex_candidate.config.provider.base_url,
+        "https://codex.example.com/v1"
+    );
+    assert_eq!(
+        codex_candidate.config.provider.chat_completions_path,
+        "/codex/chat/completions"
+    );
+    assert!(
+        codex_candidate.config.telegram.enabled,
+        "env-backed telegram readiness should carry into codex import candidate"
+    );
+    assert!(
+        codex_candidate.config.feishu.enabled,
+        "env-backed feishu readiness should carry into codex import candidate"
+    );
+}
+
+#[test]
+fn collect_import_candidates_maps_codex_provider_names_with_canonical_catalog() {
+    let output_path = unique_temp_path("output-missing.toml");
+    let codex_path = unique_temp_path("codex-kimi-coding-config.toml");
+    std::fs::write(
+        &codex_path,
+        r#"
+model_provider = "kimi_coding"
+model = "kimi-coder"
+
+[model_providers.kimi_coding]
+base_url = "https://kimi-coding.example.com/v1"
+"#,
+    )
+    .expect("write codex config");
+
+    let candidates = crate::onboard_cli::collect_import_candidates_with_paths(
+        &output_path,
+        Some(&codex_path),
+        crate::onboard_cli::ChannelImportReadiness::default(),
+    )
+    .expect("collect import candidates");
+
+    let codex_candidate = candidates
+        .iter()
+        .find(|candidate| candidate.source.contains("Codex config"))
+        .expect("codex candidate");
+    assert_eq!(
+        codex_candidate.config.provider.kind,
+        mvp::config::ProviderKind::KimiCoding
+    );
+    assert_eq!(codex_candidate.config.provider.model, "kimi-coder");
+}
+
+#[test]
+fn collect_import_candidates_uses_provider_default_auth_env_for_codex_provider() {
+    let output_path = unique_temp_path("output-missing.toml");
+    let codex_path = unique_temp_path("codex-kimi-coding-auth-config.toml");
+    std::fs::write(
+        &codex_path,
+        r#"
+model_provider = "kimi_coding"
+model = "kimi-coder"
+
+[model_providers.kimi_coding]
+base_url = "https://kimi-coding.example.com/v1"
+requires_openai_auth = true
+"#,
+    )
+    .expect("write codex config");
+
+    let candidates = crate::onboard_cli::collect_import_candidates_with_paths(
+        &output_path,
+        Some(&codex_path),
+        crate::onboard_cli::ChannelImportReadiness::default(),
+    )
+    .expect("collect import candidates");
+
+    let codex_candidate = candidates
+        .iter()
+        .find(|candidate| candidate.source.contains("Codex config"))
+        .expect("codex candidate");
+    assert_eq!(
+        codex_candidate.config.provider.kind,
+        mvp::config::ProviderKind::KimiCoding
+    );
+    assert_eq!(
+        codex_candidate.config.provider.api_key_env.as_deref(),
+        Some("KIMI_CODING_API_KEY")
+    );
+}
+
+#[test]
+fn collect_import_candidates_prepend_recommended_plan_before_detected_sources() {
+    let output_path = unique_temp_path("existing-config.toml");
+    let codex_path = unique_temp_path("codex-config.toml");
+
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.api_key = Some("provider-secret".to_owned());
+    let output_str = output_path
+        .to_str()
+        .expect("temp output path should be valid utf-8");
+    mvp::config::write(Some(output_str), &existing, true).expect("write existing config");
+
+    std::fs::write(
+        &codex_path,
+        r#"
+model_provider = "sub2api"
+model = "openai/gpt-5.1-codex"
+
+[model_providers.sub2api]
+name = "Sub2API"
+base_url = "https://codex.example.com/v1"
+wire_api = "responses"
+requires_openai_auth = true
+"#,
+    )
+    .expect("write codex config");
+
+    let candidates = crate::onboard_cli::collect_import_candidates_with_paths(
+        &output_path,
+        Some(&codex_path),
+        crate::onboard_cli::ChannelImportReadiness::default()
+            .with_state("telegram", crate::migration::ChannelCredentialState::Ready),
+    )
+    .expect("collect import candidates");
+
+    assert!(
+        candidates.len() >= 4,
+        "expected recommended plan plus existing config, codex config, and environment candidates: {candidates:#?}"
+    );
+    assert_eq!(
+        candidates[0].source_kind,
+        crate::migration::types::ImportSourceKind::RecommendedPlan,
+        "recommended composed plan should be the first import option: {candidates:#?}"
+    );
+    assert!(
+        candidates[1].source.contains("existing config"),
+        "existing loongclaw config should remain the first detected source after the recommended plan: {candidates:#?}"
+    );
+    assert!(
+        candidates[2].source.contains("Codex config"),
+        "codex config should remain the second detected source: {candidates:#?}"
+    );
+    assert_eq!(
+        candidates[3].source, "your current environment",
+        "environment import should remain the fallback candidate"
+    );
+}
+
+#[test]
+fn onboard_entry_prefers_current_setup_when_it_is_healthy() {
+    let options = crate::onboard_cli::build_onboard_entry_options(
+        crate::migration::types::CurrentSetupState::Healthy,
+        &[
+            import_candidate_with_kind(
+                crate::migration::types::ImportSourceKind::ExistingLoongClawConfig,
+                "existing config at ~/.config/loongclaw/config.toml",
+            ),
+            import_candidate_with_kind(
+                crate::migration::types::ImportSourceKind::CodexConfig,
+                "Codex config at ~/.codex/config.toml",
+            ),
+        ],
+    );
+
+    assert_eq!(
+        options[0].choice,
+        crate::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup
+    );
+    assert!(
+        options[0].recommended,
+        "healthy current setup should be the recommended first choice: {options:#?}"
+    );
+    assert!(
+        options
+            .iter()
+            .any(|option| option.choice == crate::onboard_cli::OnboardEntryChoice::StartFresh),
+        "start fresh should remain available: {options:#?}"
+    );
+}
+
+#[test]
+fn onboard_entry_prefers_import_when_current_setup_is_absent() {
+    let options = crate::onboard_cli::build_onboard_entry_options(
+        crate::migration::types::CurrentSetupState::Absent,
+        &[import_candidate_with_kind(
+            crate::migration::types::ImportSourceKind::Environment,
+            "your current environment",
+        )],
+    );
+
+    assert_eq!(
+        options[0].choice,
+        crate::onboard_cli::OnboardEntryChoice::ImportDetectedSetup
+    );
+    assert!(
+        options[0].recommended,
+        "import should be recommended when current setup is absent and reusable sources exist: {options:#?}"
+    );
+    assert!(
+        options
+            .iter()
+            .all(|option| option.choice
+                != crate::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup),
+        "continue current setup should not appear when no current setup exists: {options:#?}"
+    );
+    assert!(
+        options
+            .iter()
+            .any(|option| option.choice == crate::onboard_cli::OnboardEntryChoice::StartFresh),
+        "start fresh should remain available: {options:#?}"
+    );
+}
+
+#[test]
+fn onboard_entry_prefers_import_when_current_setup_is_repairable_and_sources_exist() {
+    let options = crate::onboard_cli::build_onboard_entry_options(
+        crate::migration::types::CurrentSetupState::Repairable,
+        &[
+            import_candidate_with_kind(
+                crate::migration::types::ImportSourceKind::ExistingLoongClawConfig,
+                "existing config at ~/.config/loongclaw/config.toml",
+            ),
+            import_candidate_with_kind(
+                crate::migration::types::ImportSourceKind::RecommendedPlan,
+                "recommended import plan",
+            ),
+            import_candidate_with_kind(
+                crate::migration::types::ImportSourceKind::Environment,
+                "your current environment",
+            ),
+        ],
+    );
+
+    let import_option = options
+        .iter()
+        .find(|option| option.choice == crate::onboard_cli::OnboardEntryChoice::ImportDetectedSetup)
+        .expect("import option");
+
+    assert_eq!(import_option.label, "Use detected starting point");
+    assert!(
+        import_option.recommended,
+        "repairable current setup should recommend import instead of falling through to start fresh: {options:#?}"
+    );
+    assert!(
+        !import_option.detail.contains("import"),
+        "main onboarding wording should describe detected setup without exposing import terminology: {options:#?}"
+    );
+}
+
+#[test]
+fn onboard_presentation_review_and_shortcut_copy_stays_canonical() {
+    let guided = crate::onboard_presentation::review_flow_copy(
+        crate::onboard_presentation::ReviewFlowKind::Guided,
+    );
+    assert_eq!(guided.progress_line, "step 5 of 5 · review");
+    assert_eq!(guided.header_subtitle, "review setup");
+
+    let quick_current = crate::onboard_presentation::review_flow_copy(
+        crate::onboard_presentation::ReviewFlowKind::QuickCurrentSetup,
+    );
+    assert_eq!(quick_current.progress_line, "quick review · current setup");
+    assert_eq!(quick_current.header_subtitle, "review current setup");
+
+    let quick_detected = crate::onboard_presentation::review_flow_copy(
+        crate::onboard_presentation::ReviewFlowKind::QuickDetectedSetup,
+    );
+    assert_eq!(
+        quick_detected.progress_line,
+        "quick review · detected starting point"
+    );
+    assert_eq!(
+        quick_detected.header_subtitle,
+        "review detected starting point"
+    );
+
+    let current_shortcut = crate::onboard_presentation::shortcut_copy(
+        crate::onboard_presentation::ShortcutKind::CurrentSetup,
+    );
+    assert_eq!(
+        current_shortcut.subtitle,
+        "keep the current setup or fine-tune it"
+    );
+    assert_eq!(current_shortcut.title, "continue current setup");
+    assert_eq!(
+        current_shortcut.summary_line,
+        "you can keep moving with this setup through a quick review, or adjust a few settings first"
+    );
+    assert_eq!(current_shortcut.primary_label, "Keep current setup");
+    assert_eq!(
+        current_shortcut.default_choice_description,
+        "keep current setup"
+    );
+
+    let detected_shortcut = crate::onboard_presentation::shortcut_copy(
+        crate::onboard_presentation::ShortcutKind::DetectedSetup,
+    );
+    assert_eq!(
+        detected_shortcut.subtitle,
+        "use the detected starting point or fine-tune it"
+    );
+    assert_eq!(
+        detected_shortcut.title,
+        "continue with detected starting point"
+    );
+    assert_eq!(
+        detected_shortcut.summary_line,
+        "you can keep moving with this detected starting point through a quick review, or adjust a few settings first"
+    );
+    assert_eq!(
+        detected_shortcut.primary_label,
+        "Use detected starting point"
+    );
+    assert_eq!(
+        detected_shortcut.default_choice_description,
+        "the detected starting point"
+    );
+    assert_eq!(
+        crate::onboard_presentation::single_detected_starting_point_preview_subtitle(),
+        "review the detected starting point"
+    );
+    assert_eq!(
+        crate::onboard_presentation::single_detected_starting_point_preview_title(),
+        "review detected starting point"
+    );
+    assert_eq!(
+        crate::onboard_presentation::single_detected_starting_point_preview_footer(),
+        "continuing with the only detected starting point"
+    );
+}
+
+#[test]
+fn onboard_presentation_entry_and_digest_copy_stays_canonical() {
+    assert_eq!(
+        crate::onboard_presentation::current_setup_option_label(),
+        "Continue current setup"
+    );
+    assert_eq!(
+        crate::onboard_presentation::detected_setup_option_label(),
+        "Use detected starting point"
+    );
+    assert_eq!(
+        crate::onboard_presentation::start_fresh_option_label(),
+        "Start fresh"
+    );
+    assert_eq!(
+        crate::onboard_presentation::start_fresh_option_detail(),
+        "Configure provider, channels, and local behavior from scratch."
+    );
+    assert_eq!(
+        crate::onboard_presentation::current_setup_state_label(
+            crate::migration::types::CurrentSetupState::LegacyOrIncomplete,
+        ),
+        "legacy or incomplete"
+    );
+    assert_eq!(
+        crate::onboard_presentation::current_setup_option_detail(
+            crate::migration::types::CurrentSetupState::Repairable,
+        ),
+        "Current config exists, but a few settings should be reviewed."
+    );
+    assert_eq!(
+        crate::onboard_presentation::import_option_detail(true, true, 1),
+        "A suggested starting point can supplement the current config with 1 reusable source."
+    );
+    assert_eq!(
+        crate::onboard_presentation::import_option_detail(false, true, 2),
+        "A suggested starting point is ready, built from 2 reusable sources."
+    );
+    assert_eq!(
+        crate::onboard_presentation::import_option_detail(false, false, 2),
+        "2 reusable sources were detected for provider, channels, or workspace guidance."
+    );
+    assert_eq!(
+        crate::onboard_presentation::detected_coverage_prefix(true),
+        "- suggested starting point covers: "
+    );
+    assert_eq!(
+        crate::onboard_presentation::detected_coverage_prefix(false),
+        "- detected coverage: "
+    );
+    assert_eq!(
+        crate::onboard_presentation::suggested_starting_point_ready_line(),
+        "- suggested starting point: ready"
+    );
+    assert_eq!(
+        crate::onboard_presentation::entry_default_choice_description(
+            crate::onboard_presentation::EntryChoiceKind::CurrentSetup,
+        ),
+        "continue current setup"
+    );
+    assert_eq!(
+        crate::onboard_presentation::entry_default_choice_description(
+            crate::onboard_presentation::EntryChoiceKind::DetectedSetup,
+        ),
+        "the detected starting point"
+    );
+    assert_eq!(
+        crate::onboard_presentation::entry_default_choice_description(
+            crate::onboard_presentation::EntryChoiceKind::StartFresh,
+        ),
+        "start fresh"
+    );
+    assert_eq!(
+        crate::onboard_presentation::starting_point_footer_description(
+            crate::migration::types::ImportSourceKind::RecommendedPlan,
+        ),
+        "the suggested starting point"
+    );
+    assert_eq!(
+        crate::onboard_presentation::starting_point_footer_description(
+            crate::migration::types::ImportSourceKind::CodexConfig,
+        ),
+        "the first starting point"
+    );
+    assert_eq!(
+        crate::onboard_presentation::starting_point_selection_subtitle(),
+        "choose the starting point for this setup"
+    );
+    assert_eq!(
+        crate::onboard_presentation::starting_point_selection_title(),
+        "choose detected starting point"
+    );
+    assert_eq!(
+        crate::onboard_presentation::starting_point_selection_hint(),
+        "detected settings can still supplement the chosen starting point when they do not conflict"
+    );
+    assert_eq!(
+        crate::onboard_presentation::detected_settings_section_heading(),
+        "Detected settings"
+    );
+    assert_eq!(
+        crate::onboard_presentation::entry_choice_section_heading(),
+        "Choose how to start"
+    );
+    assert_eq!(
+        crate::onboard_presentation::adjust_settings_label(),
+        "Adjust settings"
+    );
+}
+
+#[test]
+fn onboard_presentation_risk_preflight_and_write_copy_stays_canonical() {
+    let risk = crate::onboard_presentation::risk_screen_copy();
+    assert_eq!(risk.subtitle, "security check before setup");
+    assert_eq!(risk.title, "security check");
+    assert_eq!(risk.continue_label, "Continue onboarding");
+    assert_eq!(
+        risk.continue_detail,
+        "review provider, channels, and local behavior now"
+    );
+    assert_eq!(risk.cancel_label, "Cancel");
+    assert_eq!(
+        risk.cancel_detail,
+        "stop before changing or writing any config"
+    );
+    assert_eq!(risk.default_choice_description, "cancel");
+    assert_eq!(risk.confirm_prompt, "Continue");
+
+    assert_eq!(
+        crate::onboard_presentation::preflight_header_title(),
+        "verify before write"
+    );
+    assert_eq!(
+        crate::onboard_presentation::preflight_section_title(),
+        "preflight checks"
+    );
+    assert_eq!(
+        crate::onboard_presentation::preflight_attention_summary_line(),
+        "- some checks need attention before write"
+    );
+    assert_eq!(
+        crate::onboard_presentation::preflight_green_summary_line(),
+        "- all checks are green for this draft"
+    );
+    assert_eq!(
+        crate::onboard_presentation::preflight_probe_rerun_hint(),
+        "- rerun with --skip-model-probe if your provider blocks model listing during setup"
+    );
+    assert_eq!(
+        crate::onboard_presentation::preflight_continue_label(),
+        "Continue anyway"
+    );
+    assert_eq!(
+        crate::onboard_presentation::preflight_continue_detail(),
+        "accept the remaining warnings and continue with this draft"
+    );
+    assert_eq!(
+        crate::onboard_presentation::preflight_cancel_label(),
+        "Cancel"
+    );
+    assert_eq!(
+        crate::onboard_presentation::preflight_cancel_detail(),
+        "stop here and return without writing any config"
+    );
+    assert_eq!(
+        crate::onboard_presentation::preflight_default_choice_description(),
+        "cancel"
+    );
+    assert_eq!(
+        crate::onboard_presentation::preflight_confirm_prompt(),
+        "Continue anyway"
+    );
+
+    assert_eq!(
+        crate::onboard_presentation::write_confirmation_title(),
+        "ready to write config"
+    );
+    assert_eq!(
+        crate::onboard_presentation::write_confirmation_status_line(true),
+        "- warnings were kept by choice"
+    );
+    assert_eq!(
+        crate::onboard_presentation::write_confirmation_status_line(false),
+        "- preflight is green for this draft"
+    );
+    assert_eq!(
+        crate::onboard_presentation::write_confirmation_label(),
+        "Write config"
+    );
+    assert_eq!(
+        crate::onboard_presentation::write_confirmation_detail(),
+        "persist this onboarding draft to the target path"
+    );
+    assert_eq!(
+        crate::onboard_presentation::write_confirmation_cancel_label(),
+        "Cancel"
+    );
+    assert_eq!(
+        crate::onboard_presentation::write_confirmation_cancel_detail(),
+        "return without writing any config"
+    );
+    assert_eq!(
+        crate::onboard_presentation::write_confirmation_default_choice_description(),
+        "write config"
+    );
+    assert_eq!(
+        crate::onboard_presentation::write_confirmation_prompt(),
+        "Write config"
+    );
+}
+
+#[test]
+fn onboard_entry_avoids_double_recommendation_when_suggested_starting_point_has_rollup_sources() {
+    let current = import_candidate_with_kind(
+        crate::migration::types::ImportSourceKind::ExistingLoongClawConfig,
+        "existing config at ~/.config/loongclaw/config.toml",
+    );
+    let mut recommended = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::RecommendedPlan,
+        "recommended import plan",
+        mvp::config::ProviderKind::Openai,
+        "openai/gpt-5.1-codex",
+        "OPENAI_API_KEY",
+    );
+    recommended
+        .workspace_guidance
+        .push(crate::migration::types::WorkspaceGuidanceCandidate {
+            kind: crate::migration::types::WorkspaceGuidanceKind::Agents,
+            path: "/tmp/project/AGENTS.md".to_owned(),
+        });
+
+    let options = crate::onboard_cli::build_onboard_entry_options(
+        crate::migration::types::CurrentSetupState::Repairable,
+        &[current, recommended],
+    );
+
+    let current_option = options
+        .iter()
+        .find(|option| {
+            option.choice == crate::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup
+        })
+        .expect("current option");
+    let import_option = options
+        .iter()
+        .find(|option| option.choice == crate::onboard_cli::OnboardEntryChoice::ImportDetectedSetup)
+        .expect("import option");
+
+    assert!(
+        !current_option.recommended,
+        "repairable current setup should stop being recommended once the suggested starting point has reusable rollup sources: {options:#?}"
+    );
+    assert!(
+        import_option.recommended,
+        "the suggested starting point should remain the single recommended path in that case: {options:#?}"
+    );
+}
+
+#[test]
+fn onboard_entry_import_option_explains_detected_additions_when_current_setup_exists() {
+    let options = crate::onboard_cli::build_onboard_entry_options(
+        crate::migration::types::CurrentSetupState::Healthy,
+        &[
+            import_candidate_with_kind(
+                crate::migration::types::ImportSourceKind::ExistingLoongClawConfig,
+                "existing config at ~/.config/loongclaw/config.toml",
+            ),
+            import_candidate_with_kind(
+                crate::migration::types::ImportSourceKind::RecommendedPlan,
+                "recommended import plan",
+            ),
+            import_candidate_with_kind(
+                crate::migration::types::ImportSourceKind::Environment,
+                "your current environment",
+            ),
+        ],
+    );
+
+    let import_option = options
+        .iter()
+        .find(|option| option.choice == crate::onboard_cli::OnboardEntryChoice::ImportDetectedSetup)
+        .expect("import option");
+
+    assert!(
+        import_option
+            .detail
+            .contains("supplement the current config"),
+        "when a current config already exists, the detected-setup path should explain that it adds reusable settings on top instead of sounding like a parallel fresh-start path: {options:#?}"
+    );
+}
+
+#[test]
+fn onboard_entry_screen_includes_brand_block_and_detected_setup_digest() {
+    let current = import_candidate_with_kind(
+        crate::migration::types::ImportSourceKind::ExistingLoongClawConfig,
+        "existing config at ~/.config/loongclaw/config.toml",
+    );
+    let mut recommended = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::RecommendedPlan,
+        "recommended import plan",
+        mvp::config::ProviderKind::Openai,
+        "openai/gpt-5.1-codex",
+        "OPENAI_API_KEY",
+    );
+    recommended
+        .workspace_guidance
+        .push(crate::migration::types::WorkspaceGuidanceCandidate {
+            kind: crate::migration::types::WorkspaceGuidanceKind::Agents,
+            path: "/tmp/project/AGENTS.md".to_owned(),
+        });
+    recommended
+        .channel_candidates
+        .push(crate::migration::types::ChannelCandidate {
+            id: "telegram",
+            label: "telegram",
+            status: crate::migration::types::PreviewStatus::Ready,
+            source: "your current environment".to_owned(),
+            summary: "enabled · token resolved".to_owned(),
+        });
+    recommended
+        .domains
+        .push(crate::migration::types::DomainPreview {
+            kind: crate::migration::types::SetupDomainKind::Channels,
+            status: crate::migration::types::PreviewStatus::Ready,
+            decision: Some(crate::migration::types::PreviewDecision::Supplement),
+            source: "your current environment".to_owned(),
+            summary: "telegram Ready".to_owned(),
+        });
+    let options = crate::onboard_cli::build_onboard_entry_options(
+        crate::migration::types::CurrentSetupState::Repairable,
+        &[current.clone(), recommended.clone()],
+    );
+
+    let lines = crate::onboard_cli::render_onboard_entry_screen_lines(
+        crate::migration::types::CurrentSetupState::Repairable,
+        Some(&current),
+        &[recommended],
+        &options,
+        Some(std::path::Path::new("/tmp/project")),
+        80,
+    );
+
+    assert!(
+        lines[0].starts_with("██╗"),
+        "entry screen should start with the shared LOONGCLAW brand block: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.starts_with('v')),
+        "entry screen should include a build/version line under the banner: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "guided setup for provider, channels, and workspace guidance"),
+        "entry screen should include the new onboarding subtitle: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- workspace: /tmp/project")),
+        "entry screen should anchor the flow to the current workspace: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- workspace guidance: AGENTS.md")),
+        "entry screen should summarize detected workspace guidance files: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| {
+            line.contains("- suggested starting point covers:")
+                && line.contains("provider")
+                && line.contains("channels")
+                && line.contains("workspace guidance")
+        }),
+        "entry screen should summarize what the suggested starting point already covers: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- channels detected: telegram")),
+        "entry screen should summarize detected channel handoffs separately from the higher-level starting-point coverage: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("[2] Use detected starting point (recommended)")),
+        "entry screen should keep the detected-setup path visible and recommended: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "press Enter to use [2], the detected starting point"),
+        "entry screen should make the recommended default path explicit instead of hiding it only in the prompt default: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_entry_screen_compacts_to_plain_wordmark_on_narrow_width() {
+    let options = crate::onboard_cli::build_onboard_entry_options(
+        crate::migration::types::CurrentSetupState::Absent,
+        &[import_candidate_with_kind(
+            crate::migration::types::ImportSourceKind::Environment,
+            "your current environment",
+        )],
+    );
+
+    let lines = crate::onboard_cli::render_onboard_entry_screen_lines(
+        crate::migration::types::CurrentSetupState::Absent,
+        None,
+        &[import_candidate_with_kind(
+            crate::migration::types::ImportSourceKind::Environment,
+            "your current environment",
+        )],
+        &options,
+        None,
+        40,
+    );
+
+    assert_eq!(lines[0], "LOONGCLAW");
+    assert!(
+        lines.iter().any(|line| line == "Detected settings"),
+        "narrow layout should retain the detected-settings section heading: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "[1] Use detected starting point"),
+        "narrow layout should keep the primary entry choice readable: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "    (recommended)"),
+        "narrow layout should still surface the recommendation marker when the longer label wraps: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_entry_screen_wraps_detected_setup_digest_and_option_details() {
+    let mut recommended = import_candidate_with_kind(
+        crate::migration::types::ImportSourceKind::RecommendedPlan,
+        "recommended import plan",
+    );
+    recommended
+        .workspace_guidance
+        .push(crate::migration::types::WorkspaceGuidanceCandidate {
+            kind: crate::migration::types::WorkspaceGuidanceKind::Agents,
+            path: "/tmp/project/AGENTS.md".to_owned(),
+        });
+    recommended
+        .workspace_guidance
+        .push(crate::migration::types::WorkspaceGuidanceCandidate {
+            kind: crate::migration::types::WorkspaceGuidanceKind::Claude,
+            path: "/tmp/project/CLAUDE.md".to_owned(),
+        });
+    recommended
+        .workspace_guidance
+        .push(crate::migration::types::WorkspaceGuidanceCandidate {
+            kind: crate::migration::types::WorkspaceGuidanceKind::Gemini,
+            path: "/tmp/project/GEMINI.md".to_owned(),
+        });
+    let options = crate::onboard_cli::build_onboard_entry_options(
+        crate::migration::types::CurrentSetupState::Absent,
+        &[recommended.clone()],
+    );
+
+    let lines = crate::onboard_cli::render_onboard_entry_screen_lines(
+        crate::migration::types::CurrentSetupState::Absent,
+        None,
+        &[recommended],
+        &options,
+        Some(std::path::Path::new("/tmp/project with shared guidance")),
+        42,
+    );
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- workspace: /tmp/project with shared"),
+        "entry screen should keep the workspace label visible before wrapping long paths: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "  guidance"),
+        "entry screen should continue wrapped workspace paths on an indented line: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- workspace guidance: AGENTS.md,"),
+        "entry screen should wrap long workspace-guidance digests instead of overflowing them: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "  CLAUDE.md, GEMINI.md"),
+        "entry screen should continue workspace-guidance digests on readable continuation lines: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "    A suggested starting point is ready,"),
+        "entry screen should wrap long option details instead of keeping them on one overflowing line: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "    built from 1 reusable source."),
+        "entry screen should keep wrapped option-detail continuations aligned under the option: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_provider_selection_plan_requires_explicit_choice_for_conflicting_recommended_import() {
+    let mut recommended = import_candidate_with_kind(
+        crate::migration::types::ImportSourceKind::RecommendedPlan,
+        "recommended import plan",
+    );
+    recommended
+        .domains
+        .push(crate::migration::types::DomainPreview {
+            kind: crate::migration::types::SetupDomainKind::Channels,
+            status: crate::migration::types::PreviewStatus::Ready,
+            decision: Some(crate::migration::types::PreviewDecision::UseDetected),
+            source: "Codex config at ~/.codex/config.toml".to_owned(),
+            summary: "telegram Ready".to_owned(),
+        });
+    recommended.config.telegram.enabled = true;
+    recommended.config.telegram.bot_token_env = Some("TELEGRAM_BOT_TOKEN".to_owned());
+
+    let codex = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml",
+        mvp::config::ProviderKind::Openai,
+        "openai/gpt-5.1-codex",
+        "OPENAI_API_KEY",
+    );
+    let env = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::Environment,
+        "your current environment",
+        mvp::config::ProviderKind::Deepseek,
+        "deepseek-chat",
+        "DEEPSEEK_API_KEY",
+    );
+
+    let plan = crate::onboard_cli::build_provider_selection_plan_for_candidate(
+        &recommended,
+        &[recommended.clone(), codex, env],
+    );
+
+    assert!(
+        plan.requires_explicit_choice,
+        "recommended import should require an explicit provider choice when multiple imported providers conflict and no safe provider was composed: {plan:#?}"
+    );
+    assert_eq!(
+        plan.default_kind, None,
+        "there should be no silent fallback provider in a conflicted recommended import: {plan:#?}"
+    );
+    assert_eq!(plan.imported_choices.len(), 2);
+    assert_eq!(
+        plan.imported_choices[0].kind,
+        mvp::config::ProviderKind::Openai
+    );
+    assert_eq!(
+        plan.imported_choices[1].kind,
+        mvp::config::ProviderKind::Deepseek
+    );
+}
+
+#[test]
+fn onboard_provider_selection_screen_includes_focus_title_and_choices() {
+    let recommended = import_candidate_with_kind(
+        crate::migration::types::ImportSourceKind::RecommendedPlan,
+        "recommended import plan",
+    );
+    let openai = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml",
+        mvp::config::ProviderKind::Openai,
+        "openai/gpt-5.1-codex",
+        "OPENAI_API_KEY",
+    );
+    let deepseek = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::Environment,
+        "your current environment",
+        mvp::config::ProviderKind::Deepseek,
+        "deepseek-chat",
+        "DEEPSEEK_API_KEY",
+    );
+    let plan = crate::onboard_cli::build_provider_selection_plan_for_candidate(
+        &recommended,
+        &[recommended.clone(), openai, deepseek],
+    );
+
+    let lines = crate::onboard_cli::render_provider_selection_screen_lines(&plan, 80);
+
+    assert!(
+        lines[0].starts_with("██╗"),
+        "provider choice screen should start with the shared LOONGCLAW brand block: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "choose active provider"),
+        "provider choice screen should use a focused decision title: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "step 1 of 5 · provider"),
+        "provider choice screen should keep the guided-flow progress context inside the screen: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("other detected settings stay merged")),
+        "provider choice screen should reassure users that non-provider domains stay merged: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("OpenAI")),
+        "provider choice screen should list the first candidate: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("DeepSeek")),
+        "provider choice screen should list the second candidate: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_provider_selection_screen_shows_default_enter_choice_when_provider_is_resolved() {
+    let plan = crate::migration::ProviderSelectionPlan {
+        imported_choices: vec![
+            crate::migration::ImportedProviderChoice {
+                kind: mvp::config::ProviderKind::Openai,
+                source: "Codex config at ~/.codex/config.toml".to_owned(),
+                summary: "OpenAI · openai/gpt-5.1-codex · credentials resolved".to_owned(),
+                config: mvp::config::ProviderConfig {
+                    kind: mvp::config::ProviderKind::Openai,
+                    model: "openai/gpt-5.1-codex".to_owned(),
+                    api_key_env: Some("OPENAI_API_KEY".to_owned()),
+                    ..mvp::config::ProviderConfig::default()
+                },
             },
-            mvp::migration::PlannedImportSource {
-                source: mvp::migration::LegacyClawSource::Nanobot,
-                source_id: "nanobot".to_owned(),
-                input_path: std::path::PathBuf::from("/tmp/nanobot"),
-                confidence_score: 18,
-                prompt_addendum_present: false,
-                profile_note_present: true,
-                warning_count: 1,
+            crate::migration::ImportedProviderChoice {
+                kind: mvp::config::ProviderKind::Deepseek,
+                source: "your current environment".to_owned(),
+                summary: "DeepSeek · deepseek-chat · credentials resolved".to_owned(),
+                config: mvp::config::ProviderConfig {
+                    kind: mvp::config::ProviderKind::Deepseek,
+                    model: "deepseek-chat".to_owned(),
+                    api_key_env: Some("DEEPSEEK_API_KEY".to_owned()),
+                    ..mvp::config::ProviderConfig::default()
+                },
             },
         ],
-    };
-    let recommendation = mvp::migration::PrimarySourceRecommendation {
-        source: mvp::migration::LegacyClawSource::OpenClaw,
-        source_id: "openclaw".to_owned(),
-        input_path: std::path::PathBuf::from("/tmp/openclaw"),
-        reasons: vec!["contains imported prompt overlay".to_owned()],
+        default_kind: Some(mvp::config::ProviderKind::Openai),
+        requires_explicit_choice: false,
     };
 
-    let summary_text =
-        crate::onboard_cli::build_onboard_import_summary(&summary, Some(&recommendation));
-    assert!(summary_text.contains("Recommended import source: openclaw"));
-    assert!(summary_text.contains("safe profile merge"));
+    let lines = crate::onboard_cli::render_provider_selection_screen_lines(&plan, 80);
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "press Enter to use [openai], the OpenAI provider"),
+        "provider choice screen should make the resolved default provider explicit instead of relying only on the prompt default: {lines:#?}"
+    );
 }
 
 #[test]
-fn non_interactive_onboard_blocks_multi_source_merge_without_explicit_opt_in() {
-    let strategy = crate::onboard_cli::OnboardImportStrategy {
-        mode: crate::onboard_cli::OnboardImportMode::SafeProfileMerge,
-        recommended_source_id: Some("openclaw".to_owned()),
+fn onboard_provider_selection_screen_wraps_long_choice_details() {
+    let plan = crate::migration::ProviderSelectionPlan {
+        imported_choices: vec![
+            crate::migration::ImportedProviderChoice {
+                kind: mvp::config::ProviderKind::Openai,
+                source: "Codex config at ~/.codex/agents/loongclaw/config.toml".to_owned(),
+                summary: "OpenAI · openai/gpt-5.1-codex · credentials resolved".to_owned(),
+                config: mvp::config::ProviderConfig {
+                    kind: mvp::config::ProviderKind::Openai,
+                    model: "openai/gpt-5.1-codex".to_owned(),
+                    api_key_env: Some("OPENAI_API_KEY".to_owned()),
+                    ..mvp::config::ProviderConfig::default()
+                },
+            },
+            crate::migration::ImportedProviderChoice {
+                kind: mvp::config::ProviderKind::Deepseek,
+                source: "your current environment".to_owned(),
+                summary: "DeepSeek · deepseek-chat · credentials resolved".to_owned(),
+                config: mvp::config::ProviderConfig {
+                    kind: mvp::config::ProviderKind::Deepseek,
+                    model: "deepseek-chat".to_owned(),
+                    api_key_env: Some("DEEPSEEK_API_KEY".to_owned()),
+                    ..mvp::config::ProviderConfig::default()
+                },
+            },
+        ],
+        default_kind: None,
+        requires_explicit_choice: true,
     };
 
-    let err = crate::onboard_cli::validate_non_interactive_import_strategy(&strategy, false)
-        .expect_err("should block");
-    assert!(err.contains("multi-source"));
+    let lines = crate::onboard_cli::render_provider_selection_screen_lines(&plan, 52);
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "    source: Codex config at"),
+        "provider choice screen should wrap long source labels instead of overflowing them: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "      ~/.codex/agents/loongclaw/config.toml"),
+        "provider choice screen should continue long source paths on an indented line: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "    summary: OpenAI · openai/gpt-5.1-codex ·"),
+        "provider choice screen should keep the summary label visible before wrapping: {lines:#?}"
+    );
 }
 
 #[test]
-fn non_interactive_onboard_allows_selected_single_source_strategy() {
-    let strategy = crate::onboard_cli::OnboardImportStrategy {
-        mode: crate::onboard_cli::OnboardImportMode::SelectedSingleSource {
-            source_id: "openclaw".to_owned(),
+fn onboard_provider_selection_screen_surfaces_responses_transport_for_choices() {
+    let plan = crate::migration::ProviderSelectionPlan {
+        imported_choices: vec![crate::migration::ImportedProviderChoice {
+            kind: mvp::config::ProviderKind::Deepseek,
+            source: "Codex config at ~/.codex/config.toml".to_owned(),
+            summary: "DeepSeek · deepseek-chat · credentials resolved".to_owned(),
+            config: mvp::config::ProviderConfig {
+                kind: mvp::config::ProviderKind::Deepseek,
+                model: "deepseek-chat".to_owned(),
+                wire_api: mvp::config::ProviderWireApi::Responses,
+                api_key_env: Some("DEEPSEEK_API_KEY".to_owned()),
+                ..mvp::config::ProviderConfig::default()
+            },
+        }],
+        default_kind: Some(mvp::config::ProviderKind::Deepseek),
+        requires_explicit_choice: false,
+    };
+
+    let lines = crate::onboard_cli::render_provider_selection_screen_lines(&plan, 80);
+
+    assert!(
+        lines.iter().any(|line| {
+            line == "    transport: responses compatibility mode with chat fallback"
+        }),
+        "provider choice screen should surface Responses compatibility transport before the user confirms a provider: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_current_setup_shortcut_screen_summarizes_existing_setup_and_choices() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.model = "gpt-4.1".to_owned();
+    config.telegram.enabled = true;
+
+    let lines = crate::onboard_cli::render_continue_current_setup_screen_lines(&config, 80);
+
+    assert!(
+        lines[0].starts_with("██╗"),
+        "current-setup shortcut should start with the shared LOONGCLAW brand block: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "continue current setup"),
+        "current-setup shortcut should use a focused title: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("- provider: OpenAI")),
+        "current-setup shortcut should summarize the active provider with the guided display name: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("- model: gpt-4.1")),
+        "current-setup shortcut should summarize the active model: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- channels: telegram")),
+        "current-setup shortcut should summarize enabled non-cli channels: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("[1] Keep current setup (recommended)")),
+        "current-setup shortcut should make the keep-as-is path primary: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("[2] Adjust settings")),
+        "current-setup shortcut should keep an explicit path into detailed edits: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "press Enter to use [1], keep current setup"),
+        "current-setup shortcut should make the fast-lane default explicit on the screen: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_current_setup_shortcut_is_limited_to_healthy_interactive_keep_flow() {
+    let base_options = crate::onboard_cli::OnboardCommandOptions {
+        output: None,
+        force: false,
+        non_interactive: false,
+        accept_risk: false,
+        provider: None,
+        model: None,
+        api_key_env: None,
+        system_prompt: None,
+        skip_model_probe: false,
+    };
+
+    assert!(
+        crate::onboard_cli::should_offer_current_setup_shortcut(
+            &base_options,
+            crate::migration::types::CurrentSetupState::Healthy,
+            crate::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup,
+        ),
+        "healthy interactive continue-current-setup should offer the fast lane"
+    );
+
+    let mut override_options = base_options.clone();
+    override_options.model = Some("gpt-5".to_owned());
+    assert!(
+        !crate::onboard_cli::should_offer_current_setup_shortcut(
+            &override_options,
+            crate::migration::types::CurrentSetupState::Healthy,
+            crate::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup,
+        ),
+        "explicit overrides should go straight into detailed editing instead of the fast lane"
+    );
+
+    assert!(
+        !crate::onboard_cli::should_offer_current_setup_shortcut(
+            &base_options,
+            crate::migration::types::CurrentSetupState::Repairable,
+            crate::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup,
+        ),
+        "repairable setups should stay on the explicit review/edit path"
+    );
+}
+
+#[test]
+fn onboard_detected_setup_shortcut_screen_summarizes_starting_point_and_choices() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.model = "gpt-5.4".to_owned();
+    config.telegram.enabled = true;
+
+    let lines = crate::onboard_cli::render_continue_detected_setup_screen_lines(
+        &config,
+        "Codex config at ~/.codex/config.toml",
+        80,
+    );
+
+    assert!(
+        lines[0].starts_with("██╗"),
+        "detected-setup shortcut should start with the shared LOONGCLAW brand block: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "continue with detected starting point"),
+        "detected-setup shortcut should use a focused title: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- starting point: Codex config at ~/.codex/config.toml")),
+        "detected-setup shortcut should keep the chosen starting point visible: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("- provider: OpenAI")),
+        "detected-setup shortcut should summarize the active provider with the guided display name: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("- model: gpt-5.4")),
+        "detected-setup shortcut should summarize the active model: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- channels: telegram")),
+        "detected-setup shortcut should summarize enabled non-cli channels: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("[1] Use detected starting point (recommended)")),
+        "detected-setup shortcut should make the detected fast lane primary: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("skip detailed edits and continue to quick review")),
+        "detected-setup shortcut should explain that the fast lane still goes through a quick review: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("go straight to verification and next actions")),
+        "detected-setup shortcut should not imply that review is skipped entirely: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("[2] Adjust settings")),
+        "detected-setup shortcut should keep an explicit path into detailed edits: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "press Enter to use [1], the detected starting point"),
+        "detected-setup shortcut should make the fast-lane default explicit on the screen: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_detected_setup_shortcut_is_limited_to_interactive_import_flow_with_default_provider_choice()
+ {
+    let base_options = crate::onboard_cli::OnboardCommandOptions {
+        output: None,
+        force: false,
+        non_interactive: false,
+        accept_risk: false,
+        provider: None,
+        model: None,
+        api_key_env: None,
+        system_prompt: None,
+        skip_model_probe: false,
+    };
+    let default_provider_plan = crate::migration::ProviderSelectionPlan {
+        imported_choices: Vec::new(),
+        default_kind: Some(mvp::config::ProviderKind::Openai),
+        requires_explicit_choice: false,
+    };
+
+    assert!(
+        crate::onboard_cli::should_offer_detected_setup_shortcut(
+            &base_options,
+            crate::onboard_cli::OnboardEntryChoice::ImportDetectedSetup,
+            &default_provider_plan,
+        ),
+        "interactive detected-setup flows with a default provider should offer the fast lane"
+    );
+
+    let mut override_options = base_options.clone();
+    override_options.api_key_env = Some("DEEPSEEK_API_KEY".to_owned());
+    assert!(
+        !crate::onboard_cli::should_offer_detected_setup_shortcut(
+            &override_options,
+            crate::onboard_cli::OnboardEntryChoice::ImportDetectedSetup,
+            &default_provider_plan,
+        ),
+        "explicit overrides should go straight into detailed editing instead of the fast lane"
+    );
+
+    let explicit_choice_plan = crate::migration::ProviderSelectionPlan {
+        imported_choices: Vec::new(),
+        default_kind: None,
+        requires_explicit_choice: true,
+    };
+    assert!(
+        !crate::onboard_cli::should_offer_detected_setup_shortcut(
+            &base_options,
+            crate::onboard_cli::OnboardEntryChoice::ImportDetectedSetup,
+            &explicit_choice_plan,
+        ),
+        "detected setups that still need an explicit provider choice should not skip the guided path"
+    );
+
+    assert!(
+        !crate::onboard_cli::should_offer_detected_setup_shortcut(
+            &base_options,
+            crate::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup,
+            &default_provider_plan,
+        ),
+        "the detected-setup fast lane should stay scoped to detected-setup entry choices"
+    );
+}
+
+#[test]
+fn onboard_starting_point_selection_screen_includes_brand_header_and_detected_options() {
+    let mut recommended = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::RecommendedPlan,
+        "recommended import plan",
+        mvp::config::ProviderKind::Openai,
+        "openai/gpt-5.1-codex",
+        "OPENAI_API_KEY",
+    );
+    recommended
+        .domains
+        .push(crate::migration::types::DomainPreview {
+            kind: crate::migration::types::SetupDomainKind::WorkspaceGuidance,
+            status: crate::migration::types::PreviewStatus::Ready,
+            decision: Some(crate::migration::types::PreviewDecision::UseDetected),
+            source: "/tmp/project/AGENTS.md".to_owned(),
+            summary: "AGENTS.md detected".to_owned(),
+        });
+    let env = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::Environment,
+        "your current environment",
+        mvp::config::ProviderKind::Deepseek,
+        "deepseek-chat",
+        "DEEPSEEK_API_KEY",
+    );
+
+    let lines =
+        crate::onboard_cli::render_starting_point_selection_screen_lines(&[recommended, env], 80);
+
+    assert!(
+        lines[0].starts_with("██╗"),
+        "starting-point screen should start with the shared LOONGCLAW brand block: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "choose detected starting point"),
+        "starting-point screen should use a focused decision title: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("[1] suggested starting point (recommended)")),
+        "starting-point screen should promote the suggested starting point first: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("OpenAI · openai/gpt-5.1-codex")),
+        "starting-point screen should summarize provider/model details for the first option: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("AGENTS.md detected")),
+        "starting-point screen should surface workspace guidance signals in the option details: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "press Enter to use [1], the suggested starting point"),
+        "starting-point screen should make the default Enter behavior explicit when a suggested starting point is available: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_starting_point_selection_screen_deduplicates_workspace_guidance_and_channel_rollups() {
+    let mut recommended = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::RecommendedPlan,
+        "recommended import plan",
+        mvp::config::ProviderKind::Deepseek,
+        "deepseek-chat",
+        "DEEPSEEK_API_KEY",
+    );
+    recommended
+        .channel_candidates
+        .push(crate::migration::types::ChannelCandidate {
+            id: "telegram",
+            label: "telegram",
+            status: crate::migration::types::PreviewStatus::Ready,
+            source: "your current environment".to_owned(),
+            summary: "enabled · token resolved · 0 allowed chat id(s)".to_owned(),
+        });
+    recommended
+        .domains
+        .push(crate::migration::types::DomainPreview {
+            kind: crate::migration::types::SetupDomainKind::Channels,
+            status: crate::migration::types::PreviewStatus::Ready,
+            decision: Some(crate::migration::types::PreviewDecision::Supplement),
+            source: "multiple sources".to_owned(),
+            summary: "telegram Ready from your current environment".to_owned(),
+        });
+    recommended
+        .workspace_guidance
+        .push(crate::migration::types::WorkspaceGuidanceCandidate {
+            kind: crate::migration::types::WorkspaceGuidanceKind::Agents,
+            path: "/tmp/project/AGENTS.md".to_owned(),
+        });
+    recommended
+        .domains
+        .push(crate::migration::types::DomainPreview {
+            kind: crate::migration::types::SetupDomainKind::WorkspaceGuidance,
+            status: crate::migration::types::PreviewStatus::Ready,
+            decision: Some(crate::migration::types::PreviewDecision::UseDetected),
+            source: "workspace".to_owned(),
+            summary: "AGENTS.md".to_owned(),
+        });
+
+    let lines =
+        crate::onboard_cli::render_starting_point_selection_screen_lines(&[recommended], 80);
+
+    assert!(
+        lines
+            .iter()
+            .filter(|line| line.contains("workspace guidance"))
+            .count()
+            == 1,
+        "starting-point details should not repeat workspace guidance when a candidate already lists the detected files: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("channels: telegram Ready from")),
+        "starting-point details should avoid a redundant channel rollup when the per-channel detail lines are already present: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("telegram: enabled · token resolved")),
+        "starting-point details should keep the readable per-channel summary: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_starting_point_selection_screen_summarizes_multi_source_origin() {
+    let mut recommended = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::RecommendedPlan,
+        "recommended import plan",
+        mvp::config::ProviderKind::Openai,
+        "openai/gpt-5.1-codex",
+        "OPENAI_API_KEY",
+    );
+    recommended.domains[0].source = "existing config at ~/.config/loongclaw/config.toml".to_owned();
+    recommended
+        .channel_candidates
+        .push(crate::migration::types::ChannelCandidate {
+            id: "telegram",
+            label: "telegram",
+            status: crate::migration::types::PreviewStatus::Ready,
+            source: "your current environment".to_owned(),
+            summary: "enabled · token resolved · 0 allowed chat id(s)".to_owned(),
+        });
+    recommended
+        .workspace_guidance
+        .push(crate::migration::types::WorkspaceGuidanceCandidate {
+            kind: crate::migration::types::WorkspaceGuidanceKind::Agents,
+            path: "/tmp/project/AGENTS.md".to_owned(),
+        });
+
+    let joined =
+        crate::onboard_cli::render_starting_point_selection_screen_lines(&[recommended], 80)
+            .join("\n");
+
+    assert!(
+        joined.contains("sources:"),
+        "starting-point details should summarize the origin of a composed detected setup: {joined}"
+    );
+    assert!(
+        joined.contains("existing config at ~/.config/loongclaw/config.toml"),
+        "starting-point details should keep the current-config contribution visible: {joined}"
+    );
+    assert!(
+        joined.contains("your current") && joined.contains("environment"),
+        "starting-point details should keep environment-derived contributions visible: {joined}"
+    );
+    assert!(
+        joined.contains("workspace guidance"),
+        "starting-point details should call out workspace guidance as one of the composed sources: {joined}"
+    );
+}
+
+#[test]
+fn onboard_single_detected_setup_preview_screen_uses_branded_preview_layout() {
+    let candidate = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml",
+        mvp::config::ProviderKind::Openai,
+        "openai/gpt-5.1-codex",
+        "OPENAI_API_KEY",
+    );
+
+    let lines = crate::onboard_cli::render_single_detected_setup_preview_screen_lines(
+        &candidate,
+        std::slice::from_ref(&candidate),
+        80,
+    );
+
+    assert!(
+        lines[0].starts_with("██╗"),
+        "single detected-setup preview should start with the shared LOONGCLAW brand block: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "review detected starting point"),
+        "single detected-setup preview should use a focused title instead of a bare inline label: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("continuing with the only detected starting point")),
+        "single detected-setup preview should explain why no separate starting-point chooser is shown: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("source: Codex config at ~/.codex/config.toml")),
+        "single detected-setup preview should still show the detected source attribution: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("good fit: reuse Codex config as your starting point")),
+        "single detected-setup preview should explain why this detected starting point is being carried forward: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_starting_point_selection_screen_surfaces_keep_and_supplement_actions() {
+    let mut recommended = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::RecommendedPlan,
+        "recommended import plan",
+        mvp::config::ProviderKind::Openai,
+        "openai/gpt-5.1-codex",
+        "OPENAI_API_KEY",
+    );
+    recommended.domains[0].decision = Some(crate::migration::types::PreviewDecision::KeepCurrent);
+    recommended
+        .domains
+        .push(crate::migration::types::DomainPreview {
+            kind: crate::migration::types::SetupDomainKind::Channels,
+            status: crate::migration::types::PreviewStatus::Ready,
+            decision: Some(crate::migration::types::PreviewDecision::Supplement),
+            source: "multiple sources".to_owned(),
+            summary: "telegram Ready".to_owned(),
+        });
+
+    let lines =
+        crate::onboard_cli::render_starting_point_selection_screen_lines(&[recommended], 80);
+
+    assert!(
+        lines.iter().any(|line| {
+            line.contains("provider: keep current value")
+                || line.contains("provider: use detected value")
+        }),
+        "starting-point details should expose how the provider domain will be handled: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("channels: supplement with detected values")),
+        "starting-point details should expose when channels are supplemented across sources: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_starting_point_selection_screen_explains_why_suggested_starting_point_is_recommended() {
+    let mut recommended = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::RecommendedPlan,
+        "recommended import plan",
+        mvp::config::ProviderKind::Openai,
+        "openai/gpt-5.1-codex",
+        "OPENAI_API_KEY",
+    );
+    recommended.domains[0].decision = Some(crate::migration::types::PreviewDecision::KeepCurrent);
+    recommended
+        .domains
+        .push(crate::migration::types::DomainPreview {
+            kind: crate::migration::types::SetupDomainKind::Channels,
+            status: crate::migration::types::PreviewStatus::Ready,
+            decision: Some(crate::migration::types::PreviewDecision::Supplement),
+            source: "your current environment".to_owned(),
+            summary: "telegram Ready".to_owned(),
+        });
+    recommended
+        .workspace_guidance
+        .push(crate::migration::types::WorkspaceGuidanceCandidate {
+            kind: crate::migration::types::WorkspaceGuidanceKind::Agents,
+            path: "/tmp/project/AGENTS.md".to_owned(),
+        });
+
+    let lines =
+        crate::onboard_cli::render_starting_point_selection_screen_lines(&[recommended], 80);
+    let joined = lines.join("\n");
+
+    assert!(
+        joined
+            .contains("good fit: keep current provider + add detected channels + reuse workspace")
+            && joined.contains("guidance"),
+        "starting-point screen should explain why the suggested starting point is the recommended choice: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_starting_point_selection_screen_explains_when_direct_source_is_a_good_fit() {
+    let codex = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml",
+        mvp::config::ProviderKind::Openai,
+        "openai/gpt-5.1-codex",
+        "OPENAI_API_KEY",
+    );
+    let environment = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::Environment,
+        "your current environment",
+        mvp::config::ProviderKind::Deepseek,
+        "deepseek-chat",
+        "DEEPSEEK_API_KEY",
+    );
+
+    let joined =
+        crate::onboard_cli::render_starting_point_selection_screen_lines(&[codex, environment], 80)
+            .join("\n");
+
+    assert!(
+        joined.contains("good fit: reuse Codex config as your starting point"),
+        "starting-point screen should explain when a Codex-derived starting point is the right choice: {joined}"
+    );
+    assert!(
+        joined.contains("good fit: start from detected environment settings"),
+        "starting-point screen should explain when the environment-derived starting point is the right choice: {joined}"
+    );
+    assert!(
+        joined.contains("provider: OpenAI · openai/gpt-5.1-codex · credentials resolved"),
+        "direct-source starting points should summarize provider details with the guided display name without repeating decision jargon: {joined}"
+    );
+    assert!(
+        !joined.contains("provider: use detected value · OpenAI"),
+        "direct-source starting points should avoid repeating detected-decision wording once the card already explains the fit: {joined}"
+    );
+}
+
+#[test]
+fn onboard_starting_point_selection_screen_explains_explicit_path_fit() {
+    let explicit = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::ExplicitPath,
+        "selected config at /tmp/loongclaw-import.toml",
+        mvp::config::ProviderKind::Openai,
+        "openai/gpt-5.1-codex",
+        "OPENAI_API_KEY",
+    );
+
+    let joined = crate::onboard_cli::render_starting_point_selection_screen_lines(&[explicit], 80)
+        .join("\n");
+
+    assert!(
+        joined.contains("good fit: reuse the selected config file as your starting point"),
+        "starting-point screen should keep explicit-path copy ready for future path-based import entry points: {joined}"
+    );
+}
+
+#[test]
+fn onboard_starting_point_selection_screen_explains_when_direct_source_can_supplement_setup() {
+    let mut environment = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::Environment,
+        "your current environment",
+        mvp::config::ProviderKind::Deepseek,
+        "deepseek-chat",
+        "DEEPSEEK_API_KEY",
+    );
+    environment
+        .channel_candidates
+        .push(crate::migration::types::ChannelCandidate {
+            id: "telegram",
+            label: "telegram",
+            status: crate::migration::types::PreviewStatus::Ready,
+            source: "your current environment".to_owned(),
+            summary: "enabled · token resolved".to_owned(),
+        });
+    environment
+        .domains
+        .push(crate::migration::types::DomainPreview {
+            kind: crate::migration::types::SetupDomainKind::Channels,
+            status: crate::migration::types::PreviewStatus::Ready,
+            decision: Some(crate::migration::types::PreviewDecision::Supplement),
+            source: "your current environment".to_owned(),
+            summary: "telegram Ready".to_owned(),
+        });
+    environment
+        .workspace_guidance
+        .push(crate::migration::types::WorkspaceGuidanceCandidate {
+            kind: crate::migration::types::WorkspaceGuidanceKind::Agents,
+            path: "/tmp/project/AGENTS.md".to_owned(),
+        });
+
+    let joined =
+        crate::onboard_cli::render_starting_point_selection_screen_lines(&[environment], 120)
+            .join("\n");
+
+    assert!(
+        joined.contains(
+            "good fit: start from detected environment settings + add detected channels + reuse workspace guidance"
+        ),
+        "starting-point screen should explain both the direct source and the supplemental setup it brings: {joined}"
+    );
+}
+
+#[test]
+fn onboard_starting_point_selection_screen_explains_why_starting_fresh_is_a_good_fit() {
+    let candidate = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml",
+        mvp::config::ProviderKind::Openai,
+        "openai/gpt-5.1-codex",
+        "OPENAI_API_KEY",
+    );
+
+    let joined = crate::onboard_cli::render_starting_point_selection_screen_lines(&[candidate], 80)
+        .join("\n");
+
+    assert!(
+        joined.contains("good fit: start clean with full control"),
+        "starting-point screen should explain why starting fresh is the right choice for users who want a manual setup: {joined}"
+    );
+}
+
+#[test]
+fn onboard_starting_point_selection_screen_prioritizes_richer_direct_sources() {
+    let codex = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml",
+        mvp::config::ProviderKind::Openai,
+        "openai/gpt-5.1-codex",
+        "OPENAI_API_KEY",
+    );
+    let mut environment = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::Environment,
+        "your current environment",
+        mvp::config::ProviderKind::Deepseek,
+        "deepseek-chat",
+        "DEEPSEEK_API_KEY",
+    );
+    environment
+        .channel_candidates
+        .push(crate::migration::types::ChannelCandidate {
+            id: "telegram",
+            label: "telegram",
+            status: crate::migration::types::PreviewStatus::Ready,
+            source: "your current environment".to_owned(),
+            summary: "enabled · token resolved".to_owned(),
+        });
+    environment
+        .workspace_guidance
+        .push(crate::migration::types::WorkspaceGuidanceCandidate {
+            kind: crate::migration::types::WorkspaceGuidanceKind::Agents,
+            path: "/tmp/project/AGENTS.md".to_owned(),
+        });
+
+    let joined =
+        crate::onboard_cli::render_starting_point_selection_screen_lines(&[codex, environment], 80)
+            .join("\n");
+
+    let environment_index = joined
+        .find("[1] your current environment")
+        .expect("environment option should render first when it covers more setup domains");
+    let codex_index = joined
+        .find("[2] Codex config at ~/.codex/config.toml")
+        .expect("codex option should render after the richer environment candidate");
+
+    assert!(
+        environment_index < codex_index,
+        "starting-point screen should prioritize broader direct sources ahead of narrower ones: {joined}"
+    );
+}
+
+#[test]
+fn onboard_starting_point_selection_screen_prefers_explicit_config_sources_when_coverage_ties() {
+    let codex = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml",
+        mvp::config::ProviderKind::Openai,
+        "openai/gpt-5.1-codex",
+        "OPENAI_API_KEY",
+    );
+    let environment = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::Environment,
+        "your current environment",
+        mvp::config::ProviderKind::Deepseek,
+        "deepseek-chat",
+        "DEEPSEEK_API_KEY",
+    );
+
+    let joined =
+        crate::onboard_cli::render_starting_point_selection_screen_lines(&[environment, codex], 80)
+            .join("\n");
+
+    let codex_index = joined
+        .find("[1] Codex config at ~/.codex/config.toml")
+        .expect("codex option should render first when direct-source coverage is tied");
+    let environment_index = joined
+        .find("[2] your current environment")
+        .expect("environment option should render after codex when coverage is tied");
+
+    assert!(
+        codex_index < environment_index,
+        "starting-point screen should prefer explicit config sources over ambient environment sources when they are otherwise equally complete: {joined}"
+    );
+}
+
+#[test]
+fn onboard_starting_point_selection_screen_wraps_long_option_labels_and_details() {
+    let mut codex = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/agents/loongclaw/config.toml",
+        mvp::config::ProviderKind::Openai,
+        "openai/gpt-5.1-codex",
+        "OPENAI_API_KEY",
+    );
+    codex.domains[0].summary =
+        "OpenAI · openai/gpt-5.1-codex · credentials resolved from environment".to_owned();
+
+    let lines = crate::onboard_cli::render_starting_point_selection_screen_lines(&[codex], 48);
+
+    assert!(
+        lines.iter().any(|line| line == "[1] Codex config at"),
+        "starting-point screen should wrap long option labels instead of overflowing them: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "    ~/.codex/agents/loongclaw/config.toml"),
+        "starting-point screen should continue long option labels on an indented line: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "    provider: OpenAI · openai/gpt-5.1-codex ·"),
+        "direct-source starting-point cards should keep the concise detail label visible before wrapping long summaries, using the guided display name: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "      credentials resolved from environment"),
+        "starting-point screen should continue long detail summaries on readable continuation lines: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_starting_point_selection_screen_wraps_header_title_and_subtitle_on_narrow_width() {
+    let candidate = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::RecommendedPlan,
+        "recommended import plan",
+        mvp::config::ProviderKind::Openai,
+        "openai/gpt-5.1-codex",
+        "OPENAI_API_KEY",
+    );
+
+    let lines = crate::onboard_cli::render_starting_point_selection_screen_lines(&[candidate], 22);
+
+    assert!(
+        lines.iter().all(|line| line.len() <= 22),
+        "starting-point screen should keep brand subtitle and title within narrow widths: {lines:#?}"
+    );
+    assert_eq!(lines[0], "LOONGCLAW");
+    assert!(
+        lines.iter().any(|line| line == "choose detected"),
+        "narrow starting-point screen should wrap the long title instead of leaving it on one overflowing line: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "starting point"),
+        "narrow starting-point screen should continue the wrapped title on a readable second line: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_model_selection_screen_keeps_provider_context() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.kind = mvp::config::ProviderKind::Deepseek;
+    config.provider.model = "deepseek-reasoner".to_owned();
+
+    let lines = crate::onboard_cli::render_model_selection_screen_lines(&config, 80);
+
+    assert!(
+        lines[0].starts_with("LOONGCLAW  v"),
+        "model screen should start with the compact LOONGCLAW step header: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "choose model"),
+        "model screen should use a focused title: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "step 2 of 5 · model"),
+        "model screen should include guided progress context without relying on an external step header: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- provider: DeepSeek")),
+        "model screen should keep provider context visible with the guided display name: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- current model: deepseek-reasoner")),
+        "model screen should show the current model before prompting: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- press Enter to keep current model"),
+        "model screen should explain that Enter keeps the current model instead of using a vague current-value hint: {lines:#?}"
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.as_str() == "choose model")
+            .count(),
+        1,
+        "model screen should avoid duplicating the title in both the compact header and the body: {lines:#?}"
+    );
+    assert!(
+        lines.iter().all(|line| line.as_str() != "choose the model"),
+        "model screen should not repeat a near-identical subtitle above the main title: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_model_selection_screen_shows_prefilled_model_when_enter_default_differs() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.kind = mvp::config::ProviderKind::Openai;
+    config.provider.model = "openai/gpt-5.1-codex".to_owned();
+
+    let lines = crate::onboard_cli::render_model_selection_screen_lines_with_default(
+        &config,
+        "openai/gpt-5.2",
+        80,
+    );
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- press Enter to use prefilled model: openai/gpt-5.2"),
+        "model screen should surface the actual Enter default when it differs from the current model: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| line != "- press Enter to keep current model"),
+        "model screen should not claim Enter keeps the current model when a different default is prefilled: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_model_selection_screen_wraps_compact_header_and_progress_on_narrow_width() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.kind = mvp::config::ProviderKind::Openai;
+    config.provider.model = "openai/gpt-5.1-codex".to_owned();
+
+    let lines = crate::onboard_cli::render_model_selection_screen_lines(&config, 22);
+
+    assert!(
+        lines.iter().all(|line| line.len() <= 22),
+        "model screen should keep compact header and progress copy within narrow terminal widths: {lines:#?}"
+    );
+    assert_eq!(
+        lines[0], "LOONGCLAW",
+        "narrow model screen should split the compact header instead of forcing brand and version onto one line: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "step 2 of 5 · model"),
+        "narrow model screen should still keep the step context visible: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_api_key_env_screen_explains_suggested_env_and_blank_behavior() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.kind = mvp::config::ProviderKind::Openai;
+    config.provider.api_key_env = None;
+    config.provider.oauth_access_token_env = Some("OPENAI_CODEX_OAUTH_TOKEN".to_owned());
+
+    let lines = crate::onboard_cli::render_api_key_env_selection_screen_lines(
+        &config,
+        "OPENAI_API_KEY",
+        80,
+    );
+
+    assert!(
+        lines[0].starts_with("LOONGCLAW  v"),
+        "credential-env screen should start with the compact LOONGCLAW step header: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "choose credential env"),
+        "credential-env screen should use a focused title: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "step 3 of 5 · credential env"),
+        "credential-env screen should include guided progress context inside the screen: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("- provider: OpenAI")),
+        "credential-env screen should keep provider context visible with the guided display name: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- suggested env: OPENAI_API_KEY")),
+        "credential-env screen should surface the suggested env var name: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- press Enter to use suggested env: OPENAI_API_KEY"),
+        "credential-env screen should state that Enter uses the suggested env when no current env is set: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("blank keeps inline or oauth credentials")),
+        "credential-env screen should explain when leaving the field blank is valid: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_api_key_env_screen_shows_prefilled_env_when_enter_default_is_overridden() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.kind = mvp::config::ProviderKind::Openai;
+    config.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
+
+    let lines = crate::onboard_cli::render_api_key_env_selection_screen_lines_with_default(
+        &config,
+        "OPENAI_API_KEY",
+        "TEAM_OPENAI_KEY",
+        80,
+    );
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- press Enter to use prefilled env: TEAM_OPENAI_KEY"),
+        "credential-env screen should surface the actual prefilled env when it differs from both the current and suggested env: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| line != "- press Enter to keep current env"),
+        "credential-env screen should not claim Enter keeps the current env when another env is prefilled: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_api_key_env_screen_wraps_long_unbroken_env_names() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.kind = mvp::config::ProviderKind::Openai;
+    config.provider.api_key_env =
+        Some("OPENAI_COMPATIBLE_PROVIDER_SUPER_LONG_ENV_POINTER".to_owned());
+
+    let lines = crate::onboard_cli::render_api_key_env_selection_screen_lines(
+        &config,
+        "OPENAI_COMPATIBLE_PROVIDER_DEFAULT_ENV_POINTER",
+        36,
+    );
+
+    assert!(
+        lines.iter().all(|line| line.len() <= 36),
+        "credential-env screen should split long env tokens instead of letting them overflow narrow widths: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.starts_with("- current env: ")),
+        "credential-env screen should keep the current-env label visible while wrapping long values: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_api_key_env_screen_wraps_progress_line_on_narrow_width() {
+    let config = mvp::config::LoongClawConfig::default();
+
+    let lines = crate::onboard_cli::render_api_key_env_selection_screen_lines(
+        &config,
+        "OPENAI_API_KEY",
+        22,
+    );
+
+    assert!(
+        lines.iter().all(|line| line.len() <= 22),
+        "credential-env screen should keep the progress line within narrow terminal widths: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "step 3 of 5 ·"),
+        "narrow credential-env screen should keep the step label on the first wrapped line: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "credential env"),
+        "narrow credential-env screen should continue the wrapped progress line on a second line: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_system_prompt_screen_explains_blank_behavior() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.cli.system_prompt = "be terse and code-focused".to_owned();
+
+    let lines = crate::onboard_cli::render_system_prompt_selection_screen_lines(&config, 80);
+
+    assert!(
+        lines[0].starts_with("LOONGCLAW  v"),
+        "system-prompt screen should start with the compact LOONGCLAW step header: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "adjust cli behavior"),
+        "system-prompt screen should frame this as a behavior adjustment: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "step 4 of 5 · system prompt"),
+        "system-prompt screen should include guided progress context inside the screen: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- current prompt: be terse and code-focused")),
+        "system-prompt screen should show the current prompt value before editing: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- press Enter to keep current prompt"),
+        "system-prompt screen should explain that Enter keeps the current prompt when no other default is prefilled: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("blank keeps the built-in behavior")),
+        "system-prompt screen should explain the blank-value behavior clearly: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_system_prompt_screen_shows_prefilled_prompt_when_enter_default_differs() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.cli.system_prompt = "be terse and code-focused".to_owned();
+
+    let lines = crate::onboard_cli::render_system_prompt_selection_screen_lines_with_default(
+        &config,
+        "speak with concise release-manager tone",
+        80,
+    );
+
+    assert!(
+        lines.iter().any(|line| {
+            line == "- press Enter to use prefilled prompt: speak with concise release-manager tone"
+        }),
+        "system-prompt screen should surface the actual prefilled prompt when Enter no longer keeps the current prompt: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| line != "- press Enter to keep current prompt"),
+        "system-prompt screen should not claim Enter keeps the current prompt when another prompt is prefilled: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_system_prompt_screen_wraps_long_current_prompt() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.cli.system_prompt =
+        "keep replies short and code-focused when reviewing repo state".to_owned();
+
+    let lines = crate::onboard_cli::render_system_prompt_selection_screen_lines(&config, 48);
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- current prompt: keep replies short and"),
+        "system-prompt screen should keep the current-prompt label visible before wrapping long text: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "  code-focused when reviewing repo state"),
+        "system-prompt screen should continue wrapped prompt text on an indented line: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_provider_selection_uses_imported_provider_config_for_selected_choice() {
+    let recommended = import_candidate_with_kind(
+        crate::migration::types::ImportSourceKind::RecommendedPlan,
+        "recommended import plan",
+    );
+    let deepseek = import_candidate_with_provider(
+        crate::migration::types::ImportSourceKind::Environment,
+        "your current environment",
+        mvp::config::ProviderKind::Deepseek,
+        "deepseek-chat",
+        "DEEPSEEK_API_KEY",
+    );
+    let plan = crate::onboard_cli::build_provider_selection_plan_for_candidate(
+        &recommended,
+        &[recommended.clone(), deepseek],
+    );
+
+    let resolved = crate::onboard_cli::resolve_provider_config_from_selection(
+        &mvp::config::ProviderConfig::default(),
+        &plan,
+        mvp::config::ProviderKind::Deepseek,
+    );
+
+    assert_eq!(resolved.kind, mvp::config::ProviderKind::Deepseek);
+    assert_eq!(resolved.model, "deepseek-chat");
+    assert_eq!(resolved.api_key_env.as_deref(), Some("DEEPSEEK_API_KEY"));
+}
+
+#[test]
+fn onboard_provider_selection_manual_override_resets_model_for_new_provider() {
+    let current = mvp::config::ProviderConfig {
+        kind: mvp::config::ProviderKind::Openai,
+        model: "openai/gpt-5.1-codex".to_owned(),
+        api_key_env: Some("OPENAI_API_KEY".to_owned()),
+        ..mvp::config::ProviderConfig::default()
+    };
+    let plan = crate::onboard_cli::build_provider_selection_plan_for_candidate(
+        &import_candidate_with_provider(
+            crate::migration::types::ImportSourceKind::CodexConfig,
+            "Codex config at ~/.codex/config.toml",
+            mvp::config::ProviderKind::Openai,
+            "openai/gpt-5.1-codex",
+            "OPENAI_API_KEY",
+        ),
+        &[],
+    );
+
+    let resolved = crate::onboard_cli::resolve_provider_config_from_selection(
+        &current,
+        &plan,
+        mvp::config::ProviderKind::Anthropic,
+    );
+
+    assert_eq!(resolved.kind, mvp::config::ProviderKind::Anthropic);
+    assert_eq!(
+        resolved.model, "auto",
+        "manual provider overrides should reset the inherited model when switching away from the imported provider"
+    );
+    assert_eq!(resolved.base_url, "https://api.anthropic.com/v1");
+    assert_eq!(resolved.chat_completions_path, "/chat/completions");
+    assert_eq!(resolved.api_key_env.as_deref(), Some("ANTHROPIC_API_KEY"));
+}
+
+#[test]
+fn onboarding_success_summary_reports_import_source_and_enabled_channels() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.model = "openai/gpt-5.1-codex".to_owned();
+    config.telegram.enabled = true;
+    config.feishu.enabled = true;
+
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary = crate::onboard_cli::build_onboarding_success_summary(
+        &path,
+        &config,
+        Some("Codex config at ~/.codex/config.toml"),
+    );
+
+    assert_eq!(
+        summary.import_source.as_deref(),
+        Some("Codex config at ~/.codex/config.toml")
+    );
+    assert_eq!(
+        summary.channels,
+        vec!["cli".to_owned(), "telegram".to_owned(), "feishu".to_owned()]
+    );
+    assert!(
+        summary.next_actions.iter().any(|action| action
+            .command
+            .contains("loongclaw chat --config /tmp/loongclaw-config.toml")),
+        "success summary should keep a direct chat handoff: {summary:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_derives_structured_actions() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = true;
+    config.feishu.enabled = true;
+
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary = crate::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+
+    assert_eq!(
+        summary.next_actions[0].kind,
+        crate::onboard_cli::OnboardingActionKind::Chat
+    );
+    assert_eq!(
+        summary.next_actions[1].kind,
+        crate::onboard_cli::OnboardingActionKind::Channel
+    );
+    assert_eq!(
+        summary.next_actions[2].kind,
+        crate::onboard_cli::OnboardingActionKind::Channel
+    );
+    assert_eq!(summary.next_actions[1].label, "telegram");
+    assert_eq!(summary.next_actions[2].label, "feishu");
+}
+
+#[test]
+fn onboard_existing_config_write_screen_offers_replace_backup_and_cancel() {
+    let lines = crate::onboard_cli::render_existing_config_write_screen_lines(
+        "/tmp/loongclaw-config.toml",
+        80,
+    );
+
+    assert!(
+        lines[0].starts_with("██╗"),
+        "existing-config write screen should start with the shared LOONGCLAW brand block: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "existing config found"),
+        "existing-config write screen should use a focused title: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- config: /tmp/loongclaw-config.toml")),
+        "existing-config write screen should show the target path: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("[o] Replace existing config")),
+        "existing-config write screen should keep the replace path visible: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("[b] Create backup and replace")),
+        "existing-config write screen should keep the safer backup path visible: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("[c] Cancel")),
+        "existing-config write screen should keep cancellation explicit: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "press Enter to use [c], cancel"),
+        "existing-config write screen should make the safe default explicit on the screen itself: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_preflight_screen_summarizes_status_counts_and_guidance() {
+    let checks = vec![
+        crate::onboard_cli::OnboardCheck {
+            name: "provider credentials",
+            level: crate::onboard_cli::OnboardCheckLevel::Pass,
+            detail: "OPENAI_API_KEY is available".to_owned(),
         },
-        recommended_source_id: Some("openclaw".to_owned()),
+        crate::onboard_cli::OnboardCheck {
+            name: "provider model probe",
+            level: crate::onboard_cli::OnboardCheckLevel::Fail,
+            detail: "provider rejected the model list".to_owned(),
+        },
+        crate::onboard_cli::OnboardCheck {
+            name: "telegram channel",
+            level: crate::onboard_cli::OnboardCheckLevel::Warn,
+            detail: "enabled but bot token is missing".to_owned(),
+        },
+    ];
+
+    let lines = crate::onboard_cli::render_preflight_summary_screen_lines(&checks, 80);
+
+    assert!(
+        lines[0].starts_with("LOONGCLAW  v"),
+        "preflight screen should use the compact LOONGCLAW step header after review to avoid banner repetition: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "preflight checks"),
+        "preflight screen should use a focused title: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "step 5 of 5 · review"),
+        "preflight screen should stay anchored to the review step: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- status: 1 pass · 1 warn · 1 fail")),
+        "preflight screen should summarize pass/warn/fail counts before the raw checks: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("[FAIL] provider model probe")),
+        "preflight screen should preserve per-check failure detail: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("some checks need attention before write")),
+        "preflight screen should explain the decision context when warnings or failures exist: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("[y] Continue anyway")),
+        "preflight screen should show the continue path explicitly when attention is still required: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("[n] Cancel")),
+        "preflight screen should keep the cancel path explicit when checks are not green: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "press Enter to use [n], cancel"),
+        "preflight screen should make the safe default explicit when attention is still required: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_preflight_screen_omits_continue_cancel_choices_when_all_checks_are_green() {
+    let checks = vec![crate::onboard_cli::OnboardCheck {
+        name: "provider credentials",
+        level: crate::onboard_cli::OnboardCheckLevel::Pass,
+        detail: "OPENAI_API_KEY is available".to_owned(),
+    }];
+
+    let lines = crate::onboard_cli::render_preflight_summary_screen_lines(&checks, 80);
+
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("[y] Continue anyway")),
+        "fully green preflight should not render a continue-anyway choice that will never be asked: {lines:#?}"
+    );
+    assert!(
+        lines.iter().all(|line| !line.contains("[n] Cancel")),
+        "fully green preflight should not render a cancellation choice that does not apply on this screen: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| line.as_str() != "press Enter to use [n], cancel"),
+        "fully green preflight should not show a default-cancel hint when the flow proceeds automatically: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_preflight_screen_falls_back_to_stacked_rows_when_details_overflow() {
+    let checks = vec![crate::onboard_cli::OnboardCheck {
+        name: "provider model probe",
+        level: crate::onboard_cli::OnboardCheckLevel::Fail,
+        detail:
+            "provider rejected the model list because the configured endpoint requires a different compatibility mode"
+                .to_owned(),
+    }];
+
+    let lines = crate::onboard_cli::render_preflight_summary_screen_lines(&checks, 80);
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "[FAIL] provider model probe"),
+        "preflight screen should fall back to a stacked row when a wide check line would overflow: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line
+            == "  provider rejected the model list because the configured endpoint requires a"),
+        "stacked preflight fallback should wrap the long detail across readable continuation lines: {lines:#?}"
+    );
+}
+
+#[test]
+fn current_setup_preflight_screen_uses_quick_review_progress_copy() {
+    let checks = vec![crate::onboard_cli::OnboardCheck {
+        name: "provider credentials",
+        level: crate::onboard_cli::OnboardCheckLevel::Pass,
+        detail: "OPENAI_API_KEY is available".to_owned(),
+    }];
+
+    let lines =
+        crate::onboard_cli::render_current_setup_preflight_summary_screen_lines(&checks, 80);
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "quick review · current setup"),
+        "current-setup preflight should use quick-review progress copy: {lines:#?}"
+    );
+    assert!(
+        lines.iter().all(|line| line != "step 5 of 5 · review"),
+        "current-setup preflight should not reuse the guided step progress copy: {lines:#?}"
+    );
+}
+
+#[test]
+fn detected_setup_preflight_screen_uses_quick_review_progress_copy() {
+    let checks = vec![crate::onboard_cli::OnboardCheck {
+        name: "provider credentials",
+        level: crate::onboard_cli::OnboardCheckLevel::Pass,
+        detail: "OPENAI_API_KEY is available".to_owned(),
+    }];
+
+    let lines =
+        crate::onboard_cli::render_detected_setup_preflight_summary_screen_lines(&checks, 80);
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "quick review · detected starting point"),
+        "detected-setup preflight should use quick-review progress copy: {lines:#?}"
+    );
+    assert!(
+        lines.iter().all(|line| line != "step 5 of 5 · review"),
+        "detected-setup preflight should not reuse the guided step progress copy: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_write_confirmation_screen_shows_target_path_and_write_choice() {
+    let lines = crate::onboard_cli::render_write_confirmation_screen_lines(
+        "/tmp/loongclaw-config.toml",
+        true,
+        80,
+    );
+
+    assert!(
+        lines[0].starts_with("LOONGCLAW  v"),
+        "write-confirm screen should use the compact branded header: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "ready to write config"),
+        "write-confirm screen should use a focused title: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- config: /tmp/loongclaw-config.toml")),
+        "write-confirm screen should show the target config path: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("warnings were kept by choice")),
+        "write-confirm screen should remind users when they are writing despite warnings: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("[y] Write config")),
+        "write-confirm screen should show the affirmative path explicitly: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "press Enter to use [y], write config"),
+        "write-confirm screen should make the default write action explicit instead of relying only on the prompt suffix: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_write_confirmation_screen_wraps_long_path_and_option_copy() {
+    let lines = crate::onboard_cli::render_write_confirmation_screen_lines(
+        "/tmp/shared workspace/loongclaw config.toml",
+        true,
+        42,
+    );
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- config: /tmp/shared workspace/loongclaw"),
+        "write-confirm screen should keep the config label visible before wrapping long paths: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "  config.toml"),
+        "write-confirm screen should continue wrapped config paths on an indented line: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "    persist this onboarding draft to the"),
+        "write-confirm screen should wrap long action copy instead of overflowing it: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "    target path"),
+        "write-confirm screen should keep wrapped action-copy continuations aligned under the option: {lines:#?}"
+    );
+}
+
+#[test]
+fn current_setup_write_confirmation_screen_uses_quick_review_progress_copy() {
+    let lines = crate::onboard_cli::render_current_setup_write_confirmation_screen_lines(
+        "/tmp/loongclaw-config.toml",
+        true,
+        80,
+    );
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "quick review · current setup"),
+        "current-setup write-confirm should use quick-review progress copy: {lines:#?}"
+    );
+    assert!(
+        lines.iter().all(|line| line != "step 5 of 5 · review"),
+        "current-setup write-confirm should not reuse the guided step progress copy: {lines:#?}"
+    );
+}
+
+#[test]
+fn detected_setup_write_confirmation_screen_uses_quick_review_progress_copy() {
+    let lines = crate::onboard_cli::render_detected_setup_write_confirmation_screen_lines(
+        "/tmp/loongclaw-config.toml",
+        true,
+        80,
+    );
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "quick review · detected starting point"),
+        "detected-setup write-confirm should use quick-review progress copy: {lines:#?}"
+    );
+    assert!(
+        lines.iter().all(|line| line != "step 5 of 5 · review"),
+        "detected-setup write-confirm should not reuse the guided step progress copy: {lines:#?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn onboard_current_setup_shortcut_flow_skips_detailed_edit_screens() {
+    let workspace_root = unique_temp_path("current-shortcut-workspace");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
+        .expect("write workspace guidance");
+
+    let output_path = unique_temp_path("current-shortcut-config.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key = Some("inline-secret".to_owned());
+    existing.telegram.enabled = true;
+    existing.telegram.bot_token = Some("123456:test-token".to_owned());
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        crate::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        ["1", "1", "y"],
+        Some(workspace_root),
+        None,
+    )
+    .await
+    .expect("run scripted current-setup onboarding");
+
+    let joined = transcript.join("\n");
+    let review_index = joined
+        .find("review setup\nquick review · current setup")
+        .expect("current-setup flow should include a quick-review section");
+    let review_section = &joined[review_index..];
+    assert!(
+        joined.contains("continue current setup"),
+        "current-setup fast lane should render its shortcut screen: {transcript:#?}"
+    );
+    assert!(
+        joined.contains("quick review · current setup"),
+        "current-setup fast lane should stay on quick-review copy: {transcript:#?}"
+    );
+    assert!(
+        review_section.contains("keep current value"),
+        "current-setup review should preserve how detected domains are being handled: {transcript:#?}"
+    );
+    assert!(
+        joined.contains("existing config kept; no changes were needed"),
+        "current-setup fast lane should reuse the current config when nothing changed: {transcript:#?}"
+    );
+    assert!(
+        !joined.contains("choose active provider"),
+        "current-setup fast lane should skip the provider screen: {transcript:#?}"
+    );
+    assert!(
+        !joined.contains("choose model"),
+        "current-setup fast lane should skip the model screen: {transcript:#?}"
+    );
+    assert!(
+        !joined.contains("choose credential env"),
+        "current-setup fast lane should skip the credential env screen: {transcript:#?}"
+    );
+    assert!(
+        !joined.contains("adjust cli behavior"),
+        "current-setup fast lane should skip the CLI behavior screen: {transcript:#?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn onboard_detected_setup_shortcut_flow_skips_detailed_edit_screens() {
+    let workspace_root = unique_temp_path("detected-shortcut-workspace");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
+        .expect("write workspace guidance");
+
+    let output_path = unique_temp_path("detected-shortcut-config.toml");
+    let codex_path = unique_temp_path("detected-shortcut-codex.toml");
+    std::fs::write(
+        &codex_path,
+        r#"
+model_provider = "sub2api"
+model = "openai/gpt-5.1-codex"
+
+[model_providers.sub2api]
+base_url = "https://codex.example.com/v1"
+requires_openai_auth = true
+"#,
+    )
+    .expect("write codex config");
+
+    let transcript = run_scripted_onboard_flow(
+        crate::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        ["1", "1", "1", "y", "y"],
+        Some(workspace_root),
+        Some(codex_path),
+    )
+    .await
+    .expect("run scripted detected-setup onboarding");
+
+    let joined = transcript.join("\n");
+    let review_index = joined
+        .find("review setup\nquick review · detected starting point")
+        .expect("detected-setup flow should include a quick-review section");
+    let review_section = &joined[review_index..];
+    assert!(
+        joined.contains("choose detected starting point"),
+        "detected-setup flow should still show the starting-point chooser before the shortcut: {transcript:#?}"
+    );
+    assert!(
+        joined.contains("continue with detected starting point"),
+        "detected-setup fast lane should render its shortcut screen: {transcript:#?}"
+    );
+    assert!(
+        joined.contains("quick review · detected starting point"),
+        "detected-setup fast lane should stay on quick-review copy: {transcript:#?}"
+    );
+    assert!(
+        joined.contains("starting point: suggested starting point"),
+        "detected-setup fast lane should keep the selected starting point visible through review: {transcript:#?}"
+    );
+    assert!(
+        review_section.contains("use detected value"),
+        "detected-setup review should preserve how detected domains are being applied: {transcript:#?}"
+    );
+    assert!(
+        !joined.contains("choose active provider"),
+        "detected-setup fast lane should skip the provider screen when the provider is already resolved: {transcript:#?}"
+    );
+    assert!(
+        !joined.contains("choose model"),
+        "detected-setup fast lane should skip the model screen: {transcript:#?}"
+    );
+    assert!(
+        !joined.contains("choose credential env"),
+        "detected-setup fast lane should skip the credential env screen: {transcript:#?}"
+    );
+    assert!(
+        !joined.contains("adjust cli behavior"),
+        "detected-setup fast lane should skip the CLI behavior screen: {transcript:#?}"
+    );
+    assert!(
+        output_path.exists(),
+        "detected-setup fast lane should still write the config after quick review: {}",
+        output_path.display()
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn onboard_detected_setup_selection_uses_the_same_order_the_screen_shows() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    unsafe {
+        std::env::set_var("DEEPSEEK_API_KEY", "deepseek-test-token");
+        std::env::set_var("TELEGRAM_BOT_TOKEN", "123456:test-token");
+    }
+
+    let workspace_root = unique_temp_path("detected-selection-order-workspace");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
+        .expect("write workspace guidance");
+
+    let output_path = unique_temp_path("detected-selection-order-config.toml");
+    let codex_path = unique_temp_path("detected-selection-order-codex.toml");
+    std::fs::write(
+        &codex_path,
+        r#"
+model_provider = "sub2api"
+model = "openai/gpt-5.1-codex"
+
+[model_providers.sub2api]
+base_url = "https://codex.example.com/v1"
+requires_openai_auth = true
+"#,
+    )
+    .expect("write codex config");
+
+    let transcript = run_scripted_onboard_flow(
+        crate::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        ["1", "2", "1", "y", "y"],
+        Some(workspace_root),
+        Some(codex_path),
+    )
+    .await
+    .expect("run scripted detected-setup onboarding with explicit starting-point selection");
+
+    let joined = transcript.join("\n");
+    assert!(
+        joined.contains("[2] Codex config at"),
+        "the Codex candidate should remain selectable by the same index it shows on screen: {transcript:#?}"
+    );
+    assert!(
+        joined.contains("starting point: Codex config at")
+            && joined.contains("selection-order-codex.toml"),
+        "after choosing [2], the rest of onboarding should carry the displayed Codex option forward, not some internal candidate order: {transcript:#?}"
+    );
+    assert!(
+        !joined.contains("starting point: your current environment"),
+        "selection should stay aligned with the on-screen numbering when candidates are reordered for UX: {transcript:#?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn onboard_single_detected_setup_flow_uses_preview_screen_instead_of_plain_label() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let output_path = unique_temp_path("single-detected-config.toml");
+    let codex_path = unique_temp_path("single-detected-codex.toml");
+    std::fs::write(
+        &codex_path,
+        r#"
+model_provider = "sub2api"
+model = "openai/gpt-5.1-codex"
+
+[model_providers.sub2api]
+base_url = "https://codex.example.com/v1"
+requires_openai_auth = true
+"#,
+    )
+    .expect("write codex config");
+
+    let transcript = run_scripted_onboard_flow(
+        crate::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        ["1", "1", "y", "y"],
+        None,
+        Some(codex_path),
+    )
+    .await
+    .expect("run scripted onboarding with a single detected setup");
+
+    let joined = transcript.join("\n");
+    assert!(
+        joined.contains("review detected starting point"),
+        "single detected-setup flow should render a branded preview screen before continuing: {transcript:#?}"
+    );
+    assert!(
+        joined.contains("continuing with the only detected starting point"),
+        "single detected-setup flow should explain why it skips the starting-point chooser: {transcript:#?}"
+    );
+    assert!(
+        !joined.contains("\nDetected setup:\n"),
+        "single detected-setup flow should no longer fall back to the old plain inline preview label: {transcript:#?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn onboard_current_setup_adjustments_preserve_unchanged_domain_actions_in_review() {
+    let workspace_root = unique_temp_path("current-adjusted-review-workspace");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
+        .expect("write workspace guidance");
+
+    let output_path = unique_temp_path("current-adjusted-review-config.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key = Some("inline-secret".to_owned());
+    existing.telegram.enabled = true;
+    existing.telegram.bot_token = Some("123456:test-token".to_owned());
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        crate::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        [
+            "1",
+            "2",
+            "openai",
+            "gpt-4.1",
+            "OPENAI_API_KEY",
+            "custom review prompt",
+            "y",
+            "y",
+            "o",
+        ],
+        Some(workspace_root),
+        None,
+    )
+    .await
+    .expect("run scripted current-setup onboarding with adjustments");
+
+    let review_lines = extract_review_section_lines(&transcript, "step 5 of 5 · review");
+    let has_domain_action = |domain_label: &str, action_label: &str| {
+        review_lines.iter().enumerate().any(|(index, line)| {
+            line.contains(&format!("- {domain_label} ["))
+                && review_lines[index + 1..review_lines.len().min(index + 4)]
+                    .iter()
+                    .any(|candidate| candidate.contains(action_label))
+        })
     };
 
-    crate::onboard_cli::validate_non_interactive_import_strategy(&strategy, false)
-        .expect("single-source strategy should pass");
+    assert!(
+        review_lines
+            .iter()
+            .any(|line| line == "source: current onboarding draft"),
+        "after edits, review should present the whole draft as a current onboarding draft: {review_lines:#?}"
+    );
+    assert!(
+        has_domain_action("provider", "keep current value"),
+        "unchanged provider settings should keep their current-setup action label in review: {review_lines:#?}"
+    );
+    assert!(
+        has_domain_action("channels", "keep current value"),
+        "unchanged channels should keep their current-setup action label in review: {review_lines:#?}"
+    );
+    assert!(
+        has_domain_action("workspace guidance", "keep current value"),
+        "unchanged workspace guidance should keep its current-setup action label in review: {review_lines:#?}"
+    );
+    assert!(
+        has_domain_action("cli", "adjusted in this setup"),
+        "the edited cli domain should be called out as manually adjusted in this setup: {review_lines:#?}"
+    );
+
+    let success_lines = extract_success_section_lines(&transcript);
+    assert!(
+        success_lines.iter().any(|line| line == "setup outcome"),
+        "success summary should include a compact setup outcome section when decision context exists: {success_lines:#?}"
+    );
+    assert!(
+        success_lines
+            .iter()
+            .any(|line| line == "- kept current: provider, channels, workspace guidance"),
+        "success summary should group unchanged current-setup domains into a readable outcome line: {success_lines:#?}"
+    );
+    assert!(
+        success_lines
+            .iter()
+            .any(|line| line == "- adjusted now: cli"),
+        "success summary should group domains adjusted during onboarding: {success_lines:#?}"
+    );
 }
 
-#[tokio::test]
-async fn non_interactive_onboard_persists_generic_provider_api_key_reference() {
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock before unix epoch")
-        .as_nanos();
-    let temp_dir = std::env::temp_dir().join(format!("loongclaw-onboard-api-key-{unique}"));
-    fs::create_dir_all(&temp_dir).expect("create temp directory");
-    let config_path = temp_dir.join("config.toml");
-    let path_string = config_path.display().to_string();
+#[tokio::test(flavor = "current_thread")]
+async fn onboard_detected_setup_adjustments_preserve_unchanged_detected_actions_in_review() {
+    let workspace_root = unique_temp_path("detected-adjusted-review-workspace");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
+        .expect("write workspace guidance");
 
-    crate::onboard_cli::run_onboard_cli(crate::onboard_cli::OnboardCommandOptions {
-        output: Some(path_string.clone()),
-        force: true,
-        non_interactive: true,
-        accept_risk: true,
-        provider: Some("openai".to_owned()),
-        model: Some("auto".to_owned()),
-        api_key: Some("PATH".to_owned()),
-        personality: None,
-        memory_profile: None,
-        system_prompt: None,
-        skip_model_probe: true,
-    })
+    let output_path = unique_temp_path("detected-adjusted-review-config.toml");
+    let codex_path = unique_temp_path("detected-adjusted-review-codex.toml");
+    std::fs::write(
+        &codex_path,
+        r#"
+model_provider = "sub2api"
+model = "openai/gpt-5.1-codex"
+
+[model_providers.sub2api]
+base_url = "https://codex.example.com/v1"
+requires_openai_auth = true
+"#,
+    )
+    .expect("write codex config");
+
+    let transcript = run_scripted_onboard_flow(
+        crate::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        [
+            "1",
+            "1",
+            "2",
+            "openai",
+            "openai/gpt-5.1-codex-preview",
+            "OPENAI_API_KEY",
+            "",
+            "y",
+            "y",
+        ],
+        Some(workspace_root),
+        Some(codex_path),
+    )
     .await
-    .expect("non-interactive onboarding should succeed with populated env");
+    .expect("run scripted detected-setup onboarding with adjustments");
 
-    let (_, config) = mvp::config::load(Some(&path_string)).expect("load written config");
-    assert_eq!(config.provider.api_key.as_deref(), Some("${PATH}"));
-    assert_eq!(config.provider.api_key_env, None);
+    let review_lines = extract_review_section_lines(&transcript, "step 5 of 5 · review");
+    let has_domain_action = |domain_label: &str, action_label: &str| {
+        review_lines.iter().enumerate().any(|(index, line)| {
+            line.contains(&format!("- {domain_label} ["))
+                && review_lines[index + 1..review_lines.len().min(index + 4)]
+                    .iter()
+                    .any(|candidate| candidate.contains(action_label))
+        })
+    };
 
-    fs::remove_file(&config_path).ok();
-    fs::remove_dir_all(&temp_dir).ok();
+    assert!(
+        review_lines
+            .iter()
+            .any(|line| line == "source: current onboarding draft"),
+        "after edits, guided review should present the whole draft as a current onboarding draft: {review_lines:#?}"
+    );
+    assert!(
+        has_domain_action("workspace guidance", "use detected value"),
+        "unchanged workspace guidance should keep its detected action label in review: {review_lines:#?}"
+    );
+    assert!(
+        has_domain_action("provider", "adjusted in this setup"),
+        "the edited provider domain should be called out as manually adjusted in this setup: {review_lines:#?}"
+    );
+
+    let success_lines = extract_success_section_lines(&transcript);
+    assert!(
+        success_lines.iter().any(|line| line == "setup outcome"),
+        "success summary should include a compact setup outcome section when detected decisions exist: {success_lines:#?}"
+    );
+    assert!(
+        success_lines
+            .iter()
+            .any(|line| line == "- adjusted now: provider"),
+        "success summary should group manually adjusted domains in the final handoff: {success_lines:#?}"
+    );
+    assert!(
+        success_lines
+            .iter()
+            .any(|line| line == "- used detected: workspace guidance"),
+        "success summary should group unchanged detected domains into a readable outcome line: {success_lines:#?}"
+    );
 }
 
-#[tokio::test]
-async fn non_interactive_onboard_preserves_inline_api_key_literals() {
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock before unix epoch")
-        .as_nanos();
-    let temp_dir = std::env::temp_dir().join(format!("loongclaw-onboard-api-key-inline-{unique}"));
-    fs::create_dir_all(&temp_dir).expect("create temp directory");
-    let config_path = temp_dir.join("config.toml");
-    let path_string = config_path.display().to_string();
-    let literal_api_key = "sk-proj-demo-token";
+#[test]
+fn onboard_review_lines_include_starting_point_and_domain_preview() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
+    config.provider.model = "openai/gpt-5.1-codex".to_owned();
+    config.telegram.enabled = true;
+    config.telegram.bot_token = Some("123456:test-token".to_owned());
 
-    crate::onboard_cli::run_onboard_cli(crate::onboard_cli::OnboardCommandOptions {
-        output: Some(path_string.clone()),
-        force: true,
-        non_interactive: true,
-        accept_risk: true,
-        provider: Some("openai".to_owned()),
-        model: Some("auto".to_owned()),
-        api_key: Some(literal_api_key.to_owned()),
-        personality: None,
-        memory_profile: None,
-        system_prompt: None,
-        skip_model_probe: true,
-    })
-    .await
-    .expect("non-interactive onboarding should accept inline api key literals");
+    let lines = crate::onboard_cli::render_onboard_review_lines_with_guidance(
+        &config,
+        Some("Codex config at ~/.codex/config.toml"),
+        &[crate::migration::types::WorkspaceGuidanceCandidate {
+            kind: crate::migration::types::WorkspaceGuidanceKind::Agents,
+            path: "/tmp/project/AGENTS.md".to_owned(),
+        }],
+        80,
+    );
 
-    let (_, config) = mvp::config::load(Some(&path_string)).expect("load written config");
-    assert_eq!(config.provider.api_key.as_deref(), Some(literal_api_key));
-    assert_eq!(config.provider.api_key_env, None);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("starting point: Codex config at ~/.codex/config.toml")),
+        "review should preserve the detected starting point: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("provider")),
+        "review should include typed provider preview lines: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("workspace guidance")),
+        "review should include workspace guidance as its own domain: {lines:#?}"
+    );
+}
 
-    fs::remove_file(&config_path).ok();
-    fs::remove_dir_all(&temp_dir).ok();
+#[test]
+fn onboard_review_lines_include_brand_header() {
+    let lines = crate::onboard_cli::render_onboard_review_lines_with_guidance(
+        &mvp::config::LoongClawConfig::default(),
+        None,
+        &[],
+        80,
+    );
+
+    assert!(
+        lines[0].starts_with("██╗"),
+        "review screen should start with the shared LOONGCLAW brand block: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.starts_with('v')),
+        "review screen should include a version line: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "review setup"),
+        "review screen should retain a clear review heading under the brand block: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "step 5 of 5 · review"),
+        "review screen should include guided progress context inside the screen: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_review_lines_include_core_setup_summary_for_fresh_setup() {
+    let lines = crate::onboard_cli::render_onboard_review_lines_with_guidance(
+        &mvp::config::LoongClawConfig::default(),
+        None,
+        &[],
+        80,
+    );
+
+    assert!(
+        lines.iter().any(|line| line.contains("- provider: OpenAI")),
+        "review should summarize the active provider with the guided display name even when the draft is still close to defaults: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("- model: auto")),
+        "review should summarize the active model for first-run onboarding: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- credential env: OPENAI_API_KEY")),
+        "review should keep the suggested credential env visible for fresh setup flows: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_review_lines_prefer_oauth_env_over_api_key_env_when_both_are_configured() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.oauth_access_token_env = Some("OPENAI_CODEX_OAUTH_TOKEN".to_owned());
+
+    let lines =
+        crate::onboard_cli::render_onboard_review_lines_with_guidance(&config, None, &[], 80);
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- oauth env: OPENAI_CODEX_OAUTH_TOKEN")),
+        "review should reflect the higher-priority oauth credential path when both bindings exist: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("- credential env: OPENAI_API_KEY")),
+        "review should not keep advertising the api key env as primary once oauth is configured: {lines:#?}"
+    );
+}
+
+#[test]
+fn current_setup_review_lines_use_quick_review_progress_copy() {
+    let lines = crate::onboard_cli::render_current_setup_review_lines_with_guidance(
+        &mvp::config::LoongClawConfig::default(),
+        None,
+        &[],
+        80,
+    );
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "quick review · current setup"),
+        "current-setup review should use quick-review progress copy: {lines:#?}"
+    );
+    assert!(
+        lines.iter().all(|line| line != "step 5 of 5 · review"),
+        "current-setup review should not reuse the guided step progress copy: {lines:#?}"
+    );
+}
+
+#[test]
+fn detected_setup_review_lines_use_quick_review_progress_copy() {
+    let lines = crate::onboard_cli::render_detected_setup_review_lines_with_guidance(
+        &mvp::config::LoongClawConfig::default(),
+        Some("Codex config at ~/.codex/config.toml"),
+        &[],
+        80,
+    );
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "quick review · detected starting point"),
+        "detected-setup review should use quick-review progress copy: {lines:#?}"
+    );
+    assert!(
+        lines.iter().all(|line| line != "step 5 of 5 · review"),
+        "detected-setup review should not reuse the guided step progress copy: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_review_lines_sanitize_suggested_starting_point_label() {
+    let lines = crate::onboard_cli::render_onboard_review_lines_with_guidance(
+        &mvp::config::LoongClawConfig::default(),
+        Some("recommended import plan"),
+        &[],
+        80,
+    );
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("starting point: suggested starting point")),
+        "guided onboarding review should translate the internal recommended-plan label into user-facing suggested-starting-point wording: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("recommended import plan")),
+        "guided onboarding review should not leak the internal recommended import label: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_review_lines_compact_on_narrow_width() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
+    config.telegram.enabled = true;
+    config.telegram.bot_token = Some("123456:test-token".to_owned());
+
+    let lines =
+        crate::onboard_cli::render_onboard_review_lines_with_guidance(&config, None, &[], 54);
+
+    assert!(
+        lines.iter().any(|line| line.contains("- provider [Ready]")),
+        "narrow review should use compact domain rows: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("source: current onboarding draft")),
+        "narrow review should keep source attribution on a separate line: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_review_lines_wrap_long_starting_point_on_narrow_width() {
+    let lines = crate::onboard_cli::render_detected_setup_review_lines_with_guidance(
+        &mvp::config::LoongClawConfig::default(),
+        Some("Codex config at ~/.codex/agents/loongclaw/config.toml"),
+        &[],
+        48,
+    );
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- starting point: Codex config at"),
+        "narrow review should keep the starting-point label readable before wrapping the path: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "  ~/.codex/agents/loongclaw/config.toml"),
+        "narrow review should continue long starting-point paths on an indented line: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_should_skip_config_write_when_existing_config_matches_draft() {
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "openai/gpt-5.1".to_owned();
+    existing.cli.system_prompt = "keep current setup".to_owned();
+
+    assert!(
+        crate::onboard_cli::should_skip_config_write(Some(&existing), &existing),
+        "matching draft and existing config should reuse the current file instead of forcing another write decision"
+    );
+
+    let mut changed = existing.clone();
+    changed.provider.model = "openai/gpt-5.2".to_owned();
+    assert!(
+        !crate::onboard_cli::should_skip_config_write(Some(&existing), &changed),
+        "a changed draft should still go through the normal write flow"
+    );
+}
+
+#[test]
+fn render_onboarding_success_summary_compacts_for_narrow_width() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = true;
+    config.feishu.enabled = true;
+
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary = crate::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let lines = crate::onboard_cli::render_onboarding_success_summary_with_width(&summary, 48);
+
+    assert!(
+        lines.iter().any(|line| line == "start here"),
+        "narrow renderer should explicitly call out the primary next action: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- chat: loongclaw chat --config"),
+        "narrow renderer should keep the primary action readable while wrapping the long path separately: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "  /tmp/loongclaw-config.toml"),
+        "narrow renderer should wrap the long config path onto an indented continuation line: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "also available"),
+        "narrow renderer should group secondary channel actions under a separate heading: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- telegram: loongclaw telegram-serve --config"),
+        "narrow renderer should wrap secondary actions without hiding the command name: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_uses_starting_point_language() {
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary = crate::onboard_cli::build_onboarding_success_summary(
+        &path,
+        &mvp::config::LoongClawConfig::default(),
+        Some("Codex config at ~/.codex/config.toml"),
+    );
+
+    let lines = crate::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("starting point: Codex config at ~/.codex/config.toml")),
+        "onboarding summary should use starting-point wording instead of import terminology: {lines:#?}"
+    );
+    assert!(
+        lines.iter().all(|line| !line.contains("imported from")),
+        "onboarding summary should avoid import language in the main guided flow: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_includes_brand_header() {
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary = crate::onboard_cli::build_onboarding_success_summary(
+        &path,
+        &mvp::config::LoongClawConfig::default(),
+        None,
+    );
+
+    let lines = crate::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+
+    assert!(
+        lines[0].starts_with("██╗"),
+        "success summary should start with the shared LOONGCLAW brand block: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.starts_with('v')),
+        "success summary should include a version line under the banner: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "onboarding complete"),
+        "success summary should retain a clear completion heading: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "start here: loongclaw chat --config /tmp/loongclaw-config.toml"),
+        "success summary should elevate chat as the primary handoff command: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_prefers_oauth_env_over_api_key_env_when_both_are_configured() {
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.oauth_access_token_env = Some("OPENAI_CODEX_OAUTH_TOKEN".to_owned());
+
+    let summary = crate::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let lines = crate::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- oauth env: OPENAI_CODEX_OAUTH_TOKEN"),
+        "success summary should surface the primary oauth binding when oauth and api key envs both exist: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| line != "- credential env: OPENAI_API_KEY"),
+        "success summary should not keep the api key env as the primary credential line once oauth is configured: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_reports_existing_config_kept() {
+    let summary = crate::onboard_cli::OnboardingSuccessSummary {
+        import_source: None,
+        config_path: "/tmp/loongclaw-config.toml".to_owned(),
+        config_status: Some("existing config kept; no changes were needed".to_owned()),
+        provider: "openai".to_owned(),
+        model: "auto".to_owned(),
+        transport: "chat_completions compatibility mode".to_owned(),
+        credential: Some(crate::onboard_cli::OnboardingCredentialSummary {
+            label: "credential env",
+            value: "OPENAI_API_KEY".to_owned(),
+        }),
+        memory_path: None,
+        channels: vec!["cli".to_owned()],
+        domain_outcomes: Vec::new(),
+        next_actions: vec![crate::onboard_cli::OnboardingAction {
+            kind: crate::onboard_cli::OnboardingActionKind::Chat,
+            label: "chat".to_owned(),
+            command: "loongclaw chat --config /tmp/loongclaw-config.toml".to_owned(),
+        }],
+    };
+
+    let lines = crate::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- config status: existing config kept; no changes were needed"),
+        "success summary should tell the user when onboarding reused the current config without rewriting it: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_groups_domain_outcomes_by_decision() {
+    let summary = crate::onboard_cli::OnboardingSuccessSummary {
+        import_source: Some("suggested starting point".to_owned()),
+        config_path: "/tmp/loongclaw-config.toml".to_owned(),
+        config_status: None,
+        provider: "openai".to_owned(),
+        model: "openai/gpt-5.1-codex".to_owned(),
+        transport: "chat_completions compatibility mode".to_owned(),
+        credential: Some(crate::onboard_cli::OnboardingCredentialSummary {
+            label: "credential env",
+            value: "OPENAI_API_KEY".to_owned(),
+        }),
+        memory_path: None,
+        channels: vec!["cli".to_owned()],
+        domain_outcomes: vec![
+            crate::onboard_cli::OnboardingDomainOutcome {
+                kind: crate::migration::types::SetupDomainKind::Provider,
+                decision: crate::migration::types::PreviewDecision::AdjustedInSession,
+            },
+            crate::onboard_cli::OnboardingDomainOutcome {
+                kind: crate::migration::types::SetupDomainKind::Channels,
+                decision: crate::migration::types::PreviewDecision::Supplement,
+            },
+            crate::onboard_cli::OnboardingDomainOutcome {
+                kind: crate::migration::types::SetupDomainKind::WorkspaceGuidance,
+                decision: crate::migration::types::PreviewDecision::UseDetected,
+            },
+        ],
+        next_actions: vec![crate::onboard_cli::OnboardingAction {
+            kind: crate::onboard_cli::OnboardingActionKind::Chat,
+            label: "chat".to_owned(),
+            command: "loongclaw chat --config /tmp/loongclaw-config.toml".to_owned(),
+        }],
+    };
+
+    let lines = crate::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+
+    assert!(
+        lines.iter().any(|line| line == "setup outcome"),
+        "success summary should include a dedicated setup outcome heading when domain decisions exist: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "- adjusted now: provider"),
+        "success summary should group adjusted domains under one readable label: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "- supplemented: channels"),
+        "success summary should group supplemented domains under one readable label: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- used detected: workspace guidance"),
+        "success summary should group detected domains under one readable label: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_wraps_domain_outcomes_for_narrow_width() {
+    let summary = crate::onboard_cli::OnboardingSuccessSummary {
+        import_source: Some("suggested starting point".to_owned()),
+        config_path: "/tmp/loongclaw-config.toml".to_owned(),
+        config_status: None,
+        provider: "openai".to_owned(),
+        model: "openai/gpt-5.1-codex".to_owned(),
+        transport: "chat_completions compatibility mode".to_owned(),
+        credential: Some(crate::onboard_cli::OnboardingCredentialSummary {
+            label: "credential env",
+            value: "OPENAI_API_KEY".to_owned(),
+        }),
+        memory_path: None,
+        channels: vec!["cli".to_owned()],
+        domain_outcomes: vec![
+            crate::onboard_cli::OnboardingDomainOutcome {
+                kind: crate::migration::types::SetupDomainKind::Provider,
+                decision: crate::migration::types::PreviewDecision::AdjustedInSession,
+            },
+            crate::onboard_cli::OnboardingDomainOutcome {
+                kind: crate::migration::types::SetupDomainKind::Channels,
+                decision: crate::migration::types::PreviewDecision::AdjustedInSession,
+            },
+            crate::onboard_cli::OnboardingDomainOutcome {
+                kind: crate::migration::types::SetupDomainKind::WorkspaceGuidance,
+                decision: crate::migration::types::PreviewDecision::AdjustedInSession,
+            },
+        ],
+        next_actions: vec![crate::onboard_cli::OnboardingAction {
+            kind: crate::onboard_cli::OnboardingActionKind::Chat,
+            label: "chat".to_owned(),
+            command: "loongclaw chat --config /tmp/loongclaw-config.toml".to_owned(),
+        }],
+    };
+
+    let lines = crate::onboard_cli::render_onboarding_success_summary_with_width(&summary, 48);
+
+    assert!(
+        lines.iter().any(|line| line == "setup outcome"),
+        "narrow renderer should keep the setup outcome heading visible: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- adjusted now: provider, channels"),
+        "narrow renderer should keep as many related outcome items together as fit: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "  workspace guidance"),
+        "narrow renderer should wrap remaining outcome items onto an indented continuation line: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_groups_secondary_channel_actions_after_primary_handoff() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = true;
+    config.feishu.enabled = true;
+
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary = crate::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let lines = crate::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "start here: loongclaw chat --config /tmp/loongclaw-config.toml"),
+        "wide success summary should call out a single primary next action: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "also available"),
+        "wide success summary should group secondary channel actions under a separate heading: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line
+            == "- telegram: loongclaw telegram-serve --config /tmp/loongclaw-config.toml"),
+        "wide success summary should list telegram as a secondary action: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line
+                == "- feishu: loongclaw feishu-serve --config /tmp/loongclaw-config.toml"),
+        "wide success summary should list feishu as a secondary action: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_uses_channel_handoff_when_cli_is_disabled() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.cli.enabled = false;
+    config.telegram.enabled = true;
+
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary = crate::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let lines = crate::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+
+    assert_eq!(
+        summary.next_actions[0].kind,
+        crate::onboard_cli::OnboardingActionKind::Channel,
+        "structured actions should promote the first enabled channel when cli is disabled: {summary:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line
+            == "start here: loongclaw telegram-serve --config /tmp/loongclaw-config.toml"),
+        "success summary should guide users into the first enabled channel when cli is disabled: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| line != "start here: loongclaw chat --config /tmp/loongclaw-config.toml"),
+        "success summary should not keep chat as the primary handoff once cli is disabled: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_sanitizes_suggested_starting_point_label() {
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary = crate::onboard_cli::build_onboarding_success_summary(
+        &path,
+        &mvp::config::LoongClawConfig::default(),
+        Some("recommended import plan"),
+    );
+
+    let lines = crate::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("starting point: suggested starting point")),
+        "guided onboarding summary should translate the internal recommended-plan label into suggested-starting-point wording: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("recommended import plan")),
+        "guided onboarding summary should not leak the internal recommended import label: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_review_lines_surface_transport_summary_for_responses_compatibility_mode() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.kind = mvp::config::ProviderKind::Deepseek;
+    config.provider.model = "deepseek-chat".to_owned();
+    config.provider.wire_api = mvp::config::ProviderWireApi::Responses;
+
+    let lines =
+        crate::onboard_cli::render_onboard_review_lines_with_guidance(&config, None, &[], 80);
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| { line == "- transport: responses compatibility mode with chat fallback" }),
+        "review screen should surface the active provider transport before writing config: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_surfaces_transport_summary() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.kind = mvp::config::ProviderKind::Deepseek;
+    config.provider.model = "deepseek-chat".to_owned();
+    config.provider.wire_api = mvp::config::ProviderWireApi::Responses;
+
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary = crate::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let lines = crate::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| { line == "- transport: responses compatibility mode with chat fallback" }),
+        "success summary should preserve the transport mode so imported Responses configs stay explainable: {lines:#?}"
+    );
 }
 
 #[test]

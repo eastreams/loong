@@ -1,0 +1,1763 @@
+#![allow(unsafe_code)]
+
+use super::*;
+use std::ffi::OsString;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+static MIGRATION_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+static MIGRATION_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+fn unique_temp_dir(label: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before unix epoch")
+        .as_nanos();
+    let counter = MIGRATION_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "loongclaw-migration-{label}-{}-{nanos}-{counter}",
+        std::process::id(),
+    ))
+}
+
+struct MigrationEnvironmentGuard {
+    _lock: MutexGuard<'static, ()>,
+    saved: Vec<(String, Option<OsString>)>,
+}
+
+impl MigrationEnvironmentGuard {
+    fn set(pairs: &[(&str, Option<&str>)]) -> Self {
+        let lock = MIGRATION_ENV_LOCK.lock().expect("migration env guard lock");
+        let mut saved = Vec::new();
+        for (key, value) in pairs {
+            saved.push(((*key).to_owned(), std::env::var_os(key)));
+            match value {
+                Some(value) => unsafe {
+                    std::env::set_var(key, value);
+                },
+                None => unsafe {
+                    std::env::remove_var(key);
+                },
+            }
+        }
+        Self { _lock: lock, saved }
+    }
+}
+
+impl Drop for MigrationEnvironmentGuard {
+    fn drop(&mut self) {
+        for (key, value) in self.saved.drain(..).rev() {
+            match value {
+                Some(value) => unsafe {
+                    std::env::set_var(&key, value);
+                },
+                None => unsafe {
+                    std::env::remove_var(&key);
+                },
+            }
+        }
+    }
+}
+
+#[test]
+fn source_presentation_canonical_labels_are_stable() {
+    assert_eq!(
+        crate::source_presentation::recommended_plan_source_label(),
+        "recommended import plan"
+    );
+    assert_eq!(
+        crate::source_presentation::environment_source_label(),
+        "your current environment"
+    );
+    assert_eq!(
+        crate::source_presentation::workspace_source_label(),
+        "workspace"
+    );
+    assert_eq!(
+        crate::source_presentation::current_onboarding_draft_source_label(),
+        "current onboarding draft"
+    );
+    assert_eq!(
+        crate::source_presentation::suggested_starting_point_label(),
+        "suggested starting point"
+    );
+}
+
+#[test]
+fn source_presentation_rollup_and_onboarding_labels_follow_canonical_rules() {
+    assert_eq!(
+        crate::source_presentation::onboarding_source_label(
+            Some(crate::migration::ImportSourceKind::RecommendedPlan),
+            crate::source_presentation::recommended_plan_source_label(),
+        ),
+        "suggested starting point"
+    );
+    assert_eq!(
+        crate::source_presentation::rollup_source_label(
+            crate::source_presentation::recommended_plan_source_label()
+        ),
+        None
+    );
+    assert_eq!(
+        crate::source_presentation::rollup_source_label(
+            crate::source_presentation::workspace_source_label()
+        ),
+        Some("workspace guidance".to_owned())
+    );
+    assert_eq!(
+        crate::source_presentation::rollup_source_label(
+            crate::source_presentation::environment_source_label()
+        ),
+        Some("your current environment".to_owned())
+    );
+    assert_eq!(
+        crate::source_presentation::source_path(
+            Some(crate::migration::ImportSourceKind::CodexConfig),
+            "Codex config at ~/.codex/config.toml"
+        ),
+        Some(PathBuf::from("~/.codex/config.toml"))
+    );
+    assert_eq!(
+        crate::source_presentation::source_path(
+            Some(crate::migration::ImportSourceKind::ExistingLoongClawConfig),
+            "existing config at ~/.config/loongclaw/config.toml"
+        ),
+        Some(PathBuf::from("~/.config/loongclaw/config.toml"))
+    );
+    assert_eq!(
+        crate::source_presentation::source_path(
+            Some(crate::migration::ImportSourceKind::Environment),
+            crate::source_presentation::environment_source_label()
+        ),
+        None
+    );
+}
+
+#[test]
+fn migration_preview_descriptors_and_starting_point_reasons_are_stable() {
+    assert_eq!(
+        crate::migration::types::PreviewStatus::NeedsReview.label(),
+        "Needs review"
+    );
+    assert_eq!(
+        crate::migration::types::PreviewDecision::AdjustedInSession.label(),
+        "adjusted in this setup"
+    );
+    assert_eq!(
+        crate::migration::types::PreviewDecision::AdjustedInSession.outcome_label(),
+        "adjusted now"
+    );
+    assert!(
+        crate::migration::types::PreviewDecision::ReviewConflict.outcome_rank()
+            < crate::migration::types::PreviewDecision::UseDetected.outcome_rank()
+    );
+    assert_eq!(
+        crate::migration::types::ImportSourceKind::CodexConfig.direct_starting_point_reason(),
+        Some("reuse Codex config as your starting point")
+    );
+    assert_eq!(
+        crate::migration::types::ImportSourceKind::ExplicitPath.direct_starting_point_reason(),
+        Some("reuse the selected config file as your starting point")
+    );
+    assert_eq!(
+        crate::migration::types::ImportSourceKind::RecommendedPlan.direct_starting_point_reason(),
+        None
+    );
+    assert_eq!(
+        crate::migration::types::SetupDomainKind::Provider
+            .starting_point_reason(crate::migration::types::PreviewDecision::KeepCurrent),
+        Some("keep current provider")
+    );
+    assert_eq!(
+        crate::migration::types::SetupDomainKind::Channels
+            .starting_point_reason(crate::migration::types::PreviewDecision::Supplement),
+        Some("add detected channels")
+    );
+    assert_eq!(
+        crate::migration::types::SetupDomainKind::WorkspaceGuidance
+            .starting_point_reason(crate::migration::types::PreviewDecision::UseDetected),
+        Some("reuse workspace guidance")
+    );
+    assert_eq!(
+        crate::migration::types::SetupDomainKind::Provider
+            .starting_point_reason(crate::migration::types::PreviewDecision::Supplement),
+        None
+    );
+}
+
+#[test]
+fn migration_collect_import_candidates_maps_unknown_codex_provider_with_openai_compatible_wire_api()
+{
+    let root = unique_temp_dir("codex-compatible-provider");
+    std::fs::create_dir_all(&root).expect("create temp root");
+    let output_path = root.join("config.toml");
+    let codex_path = root.join("codex.toml");
+    std::fs::write(
+        &codex_path,
+        r#"
+model_provider = "sub2api"
+model = "openai/gpt-5.1-codex"
+
+[model_providers.sub2api]
+base_url = "https://codex.example.com/v1"
+wire_api = "responses"
+"#,
+    )
+    .expect("write codex config");
+
+    let candidates = crate::migration::collect_import_candidates_with_paths_and_readiness(
+        &output_path,
+        Some(&codex_path),
+        None,
+        crate::migration::ChannelImportReadiness::default(),
+    )
+    .expect("collect import candidates");
+
+    let codex_candidate = candidates
+        .iter()
+        .find(|candidate| candidate.source_kind == crate::migration::ImportSourceKind::CodexConfig)
+        .expect("codex candidate");
+    assert_eq!(
+        codex_candidate.config.provider.kind,
+        mvp::config::ProviderKind::Openai,
+        "unknown Codex provider should fall back only when the provider section clearly looks OpenAI-compatible"
+    );
+    assert_eq!(
+        codex_candidate.config.provider.base_url,
+        "https://codex.example.com/v1"
+    );
+    assert_eq!(
+        codex_candidate.config.provider.model,
+        "openai/gpt-5.1-codex"
+    );
+}
+
+#[test]
+fn migration_collect_import_candidates_skip_unknown_codex_provider_without_compatibility_signals() {
+    let root = unique_temp_dir("codex-unknown-provider");
+    std::fs::create_dir_all(&root).expect("create temp root");
+    let output_path = root.join("config.toml");
+    let codex_path = root.join("codex.toml");
+    std::fs::write(
+        &codex_path,
+        r#"
+model_provider = "mystery_proxy"
+model = "mystery/model"
+
+[model_providers.mystery_proxy]
+base_url = "https://mystery.example.com/v1"
+"#,
+    )
+    .expect("write codex config");
+
+    let candidates = crate::migration::collect_import_candidates_with_paths_and_readiness(
+        &output_path,
+        Some(&codex_path),
+        None,
+        crate::migration::ChannelImportReadiness::default(),
+    )
+    .expect("collect import candidates");
+
+    assert!(
+        candidates
+            .iter()
+            .all(|candidate| candidate.source_kind
+                != crate::migration::ImportSourceKind::CodexConfig),
+        "unknown Codex providers without compatibility evidence should be skipped instead of silently imported as OpenAI"
+    );
+}
+
+#[test]
+fn migration_collect_import_candidates_preserves_provider_default_auth_env_for_recognized_codex_provider()
+ {
+    let root = unique_temp_dir("codex-recognized-provider-env");
+    std::fs::create_dir_all(&root).expect("create temp root");
+    let output_path = root.join("config.toml");
+    let codex_path = root.join("codex.toml");
+    std::fs::write(
+        &codex_path,
+        r#"
+model_provider = "deepseek"
+model = "deepseek-chat"
+"#,
+    )
+    .expect("write codex config");
+
+    let candidates = crate::migration::collect_import_candidates_with_paths_and_readiness(
+        &output_path,
+        Some(&codex_path),
+        None,
+        crate::migration::ChannelImportReadiness::default(),
+    )
+    .expect("collect import candidates");
+
+    let codex_candidate = candidates
+        .iter()
+        .find(|candidate| candidate.source_kind == crate::migration::ImportSourceKind::CodexConfig)
+        .expect("codex candidate");
+    assert_eq!(
+        codex_candidate.config.provider.kind,
+        mvp::config::ProviderKind::Deepseek
+    );
+    assert_eq!(
+        codex_candidate.config.provider.api_key_env.as_deref(),
+        Some("DEEPSEEK_API_KEY"),
+        "recognized Codex providers should start from their provider baseline so imports keep the correct credential env even without an explicit provider section"
+    );
+    assert_eq!(
+        codex_candidate.config.provider.oauth_access_token_env, None,
+        "Codex imports should not infer an unrelated OAuth credential path unless the source config explicitly describes one"
+    );
+}
+
+#[test]
+fn migration_collect_import_candidates_preserves_api_key_flow_for_openai_codex_provider() {
+    let root = unique_temp_dir("codex-openai-api-key-flow");
+    std::fs::create_dir_all(&root).expect("create temp root");
+    let output_path = root.join("config.toml");
+    let codex_path = root.join("codex.toml");
+    std::fs::write(
+        &codex_path,
+        r#"
+model_provider = "openai"
+model = "openai/gpt-5.1-codex"
+"#,
+    )
+    .expect("write codex config");
+
+    let candidates = crate::migration::collect_import_candidates_with_paths_and_readiness(
+        &output_path,
+        Some(&codex_path),
+        None,
+        crate::migration::ChannelImportReadiness::default(),
+    )
+    .expect("collect import candidates");
+
+    let codex_candidate = candidates
+        .iter()
+        .find(|candidate| candidate.source_kind == crate::migration::ImportSourceKind::CodexConfig)
+        .expect("codex candidate");
+    assert_eq!(
+        codex_candidate.config.provider.kind,
+        mvp::config::ProviderKind::Openai
+    );
+    assert_eq!(
+        codex_candidate.config.provider.api_key_env.as_deref(),
+        Some("OPENAI_API_KEY")
+    );
+    assert_eq!(
+        codex_candidate.config.provider.oauth_access_token_env, None,
+        "Codex imports should keep the portable API-key path by default instead of auto-enabling machine-local OAuth envs"
+    );
+}
+
+#[test]
+fn migration_collect_import_candidates_detects_base_and_agent_scoped_codex_configs() {
+    let root = unique_temp_dir("codex-detected-paths");
+    let home = root.join("home");
+    let output_path = root.join("config.toml");
+    let base_codex_path = home.join(".codex/config.toml");
+    let agent_codex_path = home
+        .join(".codex/agents")
+        .join(mvp::config::CLI_COMMAND_NAME)
+        .join("config.toml");
+
+    std::fs::create_dir_all(base_codex_path.parent().expect("base codex parent"))
+        .expect("create base codex parent");
+    std::fs::create_dir_all(agent_codex_path.parent().expect("agent codex parent"))
+        .expect("create agent codex parent");
+    std::fs::write(
+        &base_codex_path,
+        r#"
+model_provider = "openai"
+model = "openai/gpt-5.1-codex"
+"#,
+    )
+    .expect("write base codex config");
+    std::fs::write(
+        &agent_codex_path,
+        r#"
+model_provider = "deepseek"
+model = "deepseek-chat"
+"#,
+    )
+    .expect("write agent codex config");
+
+    let _env_guard =
+        MigrationEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
+
+    let candidates =
+        crate::migration::discovery::collect_import_candidates_with_path_list_and_readiness(
+            &output_path,
+            &crate::migration::discovery::default_detected_codex_config_paths(),
+            None,
+            crate::migration::ChannelImportReadiness::default(),
+        )
+        .expect("collect import candidates");
+
+    let codex_sources = candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.source_kind == crate::migration::ImportSourceKind::CodexConfig
+        })
+        .map(|candidate| candidate.source.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(
+        codex_sources.contains(&"Codex config at /home/.codex/config.toml")
+            || codex_sources
+                .iter()
+                .any(|source: &&str| source.ends_with("/.codex/config.toml")),
+        "detected candidates should include the base Codex config path: {codex_sources:#?}"
+    );
+    assert!(
+        codex_sources
+            .iter()
+            .any(|source: &&str| source.ends_with(&format!(
+                "/.codex/agents/{}/config.toml",
+                mvp::config::CLI_COMMAND_NAME
+            ))),
+        "detected candidates should include the agent-scoped Codex config path: {codex_sources:#?}"
+    );
+}
+
+#[test]
+fn migration_domain_previews_preserve_source_attribution() {
+    let workspace_root = unique_temp_dir("guidance");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(workspace_root.join("AGENTS.md"), "# repo guidance\n").expect("write AGENTS");
+
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.api_key = Some("provider-secret".to_owned());
+    config.provider.model = "openai/gpt-5.1-codex".to_owned();
+    config.telegram.enabled = true;
+    config.telegram.bot_token = Some("123456:test-token".to_owned());
+    config.cli.system_prompt = "Use the repo rules.".to_owned();
+
+    let guidance = crate::migration::discovery::detect_workspace_guidance(&workspace_root);
+    let candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml".to_owned(),
+        config,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        guidance,
+    )
+    .expect("candidate should be generated");
+
+    assert!(
+        candidate.domains.iter().any(|domain| {
+            domain.kind == crate::migration::types::SetupDomainKind::Provider
+                && domain.source == "Codex config at ~/.codex/config.toml"
+        }),
+        "provider preview should keep source attribution: {candidate:#?}"
+    );
+    assert!(
+        candidate.domains.iter().any(|domain| {
+            domain.kind == crate::migration::types::SetupDomainKind::WorkspaceGuidance
+                && domain.summary.contains("AGENTS.md")
+        }),
+        "workspace guidance preview should be present when repo guidance exists: {candidate:#?}"
+    );
+}
+
+#[test]
+fn migration_classify_current_setup_distinguishes_basic_states() {
+    let missing = unique_temp_dir("missing").join("config.toml");
+    assert_eq!(
+        crate::migration::discovery::classify_current_setup(&missing),
+        crate::migration::types::CurrentSetupState::Absent
+    );
+
+    let healthy_path = unique_temp_dir("healthy").join("config.toml");
+    let mut healthy = mvp::config::LoongClawConfig::default();
+    healthy.provider.api_key = Some("provider-secret".to_owned());
+    healthy.provider.model = "openai/gpt-5.1-codex".to_owned();
+    mvp::config::write(
+        Some(healthy_path.to_string_lossy().as_ref()),
+        &healthy,
+        true,
+    )
+    .expect("write healthy config");
+    assert_eq!(
+        crate::migration::discovery::classify_current_setup(&healthy_path),
+        crate::migration::types::CurrentSetupState::Healthy
+    );
+
+    let repairable_path = unique_temp_dir("repairable").join("config.toml");
+    let mut repairable = mvp::config::LoongClawConfig::default();
+    repairable.telegram.enabled = true;
+    mvp::config::write(
+        Some(repairable_path.to_string_lossy().as_ref()),
+        &repairable,
+        true,
+    )
+    .expect("write repairable config");
+    assert_eq!(
+        crate::migration::discovery::classify_current_setup(&repairable_path),
+        crate::migration::types::CurrentSetupState::Repairable
+    );
+
+    let legacy_path = unique_temp_dir("legacy").join("config.toml");
+    let mut legacy = mvp::config::LoongClawConfig::default();
+    legacy.provider.kind = mvp::config::ProviderKind::Ollama;
+    let profile = legacy.provider.kind.profile();
+    legacy.provider.base_url = profile.base_url.to_owned();
+    legacy.provider.chat_completions_path = profile.chat_completions_path.to_owned();
+    legacy.provider.api_key_env = None;
+    legacy.provider.oauth_access_token_env = None;
+    mvp::config::write(Some(legacy_path.to_string_lossy().as_ref()), &legacy, true)
+        .expect("write legacy config");
+    assert_eq!(
+        crate::migration::discovery::classify_current_setup(&legacy_path),
+        crate::migration::types::CurrentSetupState::LegacyOrIncomplete
+    );
+}
+
+#[test]
+fn migration_classify_current_setup_treats_provider_tuning_changes_as_repairable() {
+    let path = unique_temp_dir("provider-tuning").join("config.toml");
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.kind = mvp::config::ProviderKind::Ollama;
+    let profile = config.provider.kind.profile();
+    config.provider.base_url = profile.base_url.to_owned();
+    config.provider.chat_completions_path = profile.chat_completions_path.to_owned();
+    config.provider.api_key_env = None;
+    config.provider.oauth_access_token_env = None;
+    config.provider.temperature = 0.75;
+    mvp::config::write(Some(path.to_string_lossy().as_ref()), &config, true)
+        .expect("write config with provider tuning change");
+
+    assert_eq!(
+        crate::migration::discovery::classify_current_setup(&path),
+        crate::migration::types::CurrentSetupState::Repairable,
+        "provider transport/tuning changes should not be collapsed into the legacy selection-only bucket"
+    );
+}
+
+#[test]
+fn migration_build_import_candidate_detects_provider_env_pointer_only_changes() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.api_key_env = Some("LOONGCLAW_CUSTOM_OPENAI_KEY".to_owned());
+
+    let candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::ExistingLoongClawConfig,
+        "existing config at ~/.config/loongclaw/config.toml".to_owned(),
+        config,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("provider env pointer change should produce an import candidate");
+
+    assert!(
+        candidate
+            .domains
+            .iter()
+            .any(|domain| domain.kind == crate::migration::types::SetupDomainKind::Provider),
+        "provider env-pointer-only changes should still surface as a provider import domain: {candidate:#?}"
+    );
+}
+
+#[test]
+fn channel_registry_lists_registered_channel_ids() {
+    assert_eq!(
+        crate::migration::channels::registered_channel_ids(),
+        vec!["telegram", "feishu"]
+    );
+}
+
+#[test]
+fn channel_registry_registered_ids_follow_shared_service_channel_catalog_order() {
+    let service_ids = mvp::config::service_channel_descriptors()
+        .into_iter()
+        .map(|descriptor| descriptor.id)
+        .collect::<Vec<_>>();
+    let registry_ids = crate::migration::channels::registered_channel_ids();
+    let ordered_subset = service_ids
+        .into_iter()
+        .filter(|channel_id| registry_ids.contains(channel_id))
+        .collect::<Vec<_>>();
+
+    assert_eq!(registry_ids, ordered_subset);
+}
+
+#[test]
+fn channel_import_readiness_tracks_channel_states_by_id() {
+    let readiness = crate::migration::ChannelImportReadiness::default()
+        .with_state("telegram", crate::migration::ChannelCredentialState::Ready)
+        .with_state("feishu", crate::migration::ChannelCredentialState::Partial);
+
+    assert_eq!(
+        readiness.state("telegram"),
+        crate::migration::ChannelCredentialState::Ready
+    );
+    assert_eq!(
+        readiness.state("feishu"),
+        crate::migration::ChannelCredentialState::Partial
+    );
+    assert_eq!(
+        readiness.state("unknown"),
+        crate::migration::ChannelCredentialState::Missing
+    );
+}
+
+#[test]
+fn channel_registry_collects_ready_channel_candidates() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = true;
+    config.telegram.bot_token = Some("123456:test-token".to_owned());
+    config.feishu.enabled = true;
+    config.feishu.app_id = Some("cli_a1b2c3".to_owned());
+    config.feishu.app_secret = Some("feishu-secret".to_owned());
+
+    let previews = crate::migration::channels::collect_channel_previews(
+        &config,
+        &crate::migration::discovery::resolve_channel_import_readiness_from_config(&config),
+        "test source",
+    );
+    let ids = previews
+        .iter()
+        .map(|preview| preview.candidate.id)
+        .collect::<Vec<_>>();
+
+    assert_eq!(ids, vec!["telegram", "feishu"]);
+    assert!(
+        previews.iter().all(|preview| {
+            preview.candidate.status == crate::migration::types::PreviewStatus::Ready
+        }),
+        "all registered channels should be ready when credentials resolve: {previews:#?}"
+    );
+}
+
+#[test]
+fn channel_preview_order_follows_shared_service_channel_catalog_order() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = true;
+    config.telegram.bot_token = Some("123456:test-token".to_owned());
+    config.feishu.enabled = true;
+    config.feishu.app_id = Some("cli_a1b2c3".to_owned());
+    config.feishu.app_secret = Some("feishu-secret".to_owned());
+
+    let previews = crate::migration::channels::collect_channel_previews(
+        &config,
+        &crate::migration::discovery::resolve_channel_import_readiness_from_config(&config),
+        "test source",
+    );
+    let preview_ids = previews
+        .iter()
+        .map(|preview| preview.candidate.id)
+        .collect::<Vec<_>>();
+    let ordered_subset = mvp::config::service_channel_descriptors()
+        .into_iter()
+        .map(|descriptor| descriptor.id)
+        .filter(|channel_id| preview_ids.contains(channel_id))
+        .collect::<Vec<_>>();
+
+    assert_eq!(preview_ids, ordered_subset);
+}
+
+#[test]
+fn resolve_channel_import_readiness_reports_partial_channel_credentials() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.feishu.app_id = Some("cli_a1b2c3".to_owned());
+
+    let readiness =
+        crate::migration::discovery::resolve_channel_import_readiness_from_config(&config);
+
+    assert_eq!(
+        readiness.state("telegram"),
+        crate::migration::ChannelCredentialState::Missing
+    );
+    assert_eq!(
+        readiness.state("feishu"),
+        crate::migration::ChannelCredentialState::Partial
+    );
+}
+
+#[test]
+fn channel_registry_lists_enabled_channel_ids() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = true;
+    config.feishu.enabled = true;
+
+    assert_eq!(
+        crate::migration::channels::registered_enabled_channel_ids(&config),
+        vec!["telegram", "feishu"]
+    );
+}
+
+#[test]
+fn channel_registry_enabled_ids_follow_app_service_channel_catalog() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = true;
+    config.feishu.enabled = true;
+
+    assert_eq!(
+        config.enabled_service_channel_ids(),
+        vec!["telegram".to_owned(), "feishu".to_owned()]
+    );
+    assert_eq!(
+        crate::migration::channels::registered_enabled_channel_ids(&config),
+        vec!["telegram", "feishu"]
+    );
+}
+
+#[test]
+fn channel_registry_collects_preflight_checks_for_enabled_channels() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = true;
+    config.telegram.bot_token = Some("123456:test-token".to_owned());
+    config.feishu.enabled = true;
+    config.feishu.app_id = Some("cli_a1b2c3".to_owned());
+    config.feishu.app_secret = Some("feishu-secret".to_owned());
+    config.feishu.verification_token = Some("verify-token".to_owned());
+
+    let checks = crate::migration::channels::collect_channel_preflight_checks(&config);
+
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "telegram channel"
+                && check.level == crate::migration::channels::ChannelCheckLevel::Pass
+                && check.detail.contains("bot token resolved")
+        }),
+        "registry preflight should include telegram readiness: {checks:#?}"
+    );
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "feishu channel"
+                && check.level == crate::migration::channels::ChannelCheckLevel::Pass
+                && check.detail.contains("app credentials resolved")
+        }),
+        "registry preflight should include feishu app-credential readiness: {checks:#?}"
+    );
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "feishu webhook verification"
+                && check.level == crate::migration::channels::ChannelCheckLevel::Pass
+        }),
+        "registry preflight should include feishu webhook verification readiness: {checks:#?}"
+    );
+}
+
+#[test]
+fn channel_registry_collects_serve_actions_for_enabled_channels() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = true;
+    config.feishu.enabled = true;
+
+    let actions = crate::migration::channels::collect_channel_next_actions(
+        &config,
+        "/tmp/loongclaw-config.toml",
+    );
+
+    assert_eq!(actions.len(), 2);
+    assert_eq!(actions[0].label, "telegram");
+    assert_eq!(
+        actions[0].command,
+        "loongclaw telegram-serve --config /tmp/loongclaw-config.toml"
+    );
+    assert_eq!(actions[1].label, "feishu");
+    assert_eq!(
+        actions[1].command,
+        "loongclaw feishu-serve --config /tmp/loongclaw-config.toml"
+    );
+}
+
+#[test]
+fn migration_render_preview_compacts_for_narrow_width() {
+    let candidate = crate::migration::types::ImportCandidate {
+        source_kind: crate::migration::types::ImportSourceKind::CodexConfig,
+        source: "Codex config at ~/.codex/config.toml".to_owned(),
+        config: mvp::config::LoongClawConfig::default(),
+        surfaces: Vec::new(),
+        domains: vec![
+            crate::migration::types::DomainPreview {
+                kind: crate::migration::types::SetupDomainKind::Provider,
+                status: crate::migration::types::PreviewStatus::Ready,
+                decision: Some(crate::migration::types::PreviewDecision::UseDetected),
+                source: "Codex config at ~/.codex/config.toml".to_owned(),
+                summary: "openai · openai/gpt-5.1-codex · credentials resolved".to_owned(),
+            },
+            crate::migration::types::DomainPreview {
+                kind: crate::migration::types::SetupDomainKind::WorkspaceGuidance,
+                status: crate::migration::types::PreviewStatus::Ready,
+                decision: Some(crate::migration::types::PreviewDecision::UseDetected),
+                source: "workspace".to_owned(),
+                summary: "AGENTS.md".to_owned(),
+            },
+        ],
+        channel_candidates: vec![crate::migration::types::ChannelCandidate {
+            id: "telegram",
+            label: "telegram",
+            status: crate::migration::types::PreviewStatus::Ready,
+            source: "Codex config at ~/.codex/config.toml".to_owned(),
+            summary: "token resolved · can enable during onboarding".to_owned(),
+        }],
+        workspace_guidance: vec![crate::migration::types::WorkspaceGuidanceCandidate {
+            kind: crate::migration::types::WorkspaceGuidanceKind::Agents,
+            path: "/tmp/project/AGENTS.md".to_owned(),
+        }],
+    };
+
+    let lines = crate::migration::render::render_candidate_preview_lines(&candidate, 54);
+
+    assert!(
+        lines.iter().any(|line| line.contains("provider [Ready]")),
+        "narrow preview should keep a compact domain header: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("source: workspace")),
+        "narrow preview should preserve source attribution on its own line: {lines:#?}"
+    );
+}
+
+#[test]
+fn migration_render_preview_wraps_long_domain_and_channel_details_for_narrow_width() {
+    let candidate = crate::migration::types::ImportCandidate {
+        source_kind: crate::migration::types::ImportSourceKind::CodexConfig,
+        source: "Codex config at ~/.codex/agents/loongclaw/config.toml".to_owned(),
+        config: mvp::config::LoongClawConfig::default(),
+        surfaces: Vec::new(),
+        domains: vec![crate::migration::types::DomainPreview {
+            kind: crate::migration::types::SetupDomainKind::Provider,
+            status: crate::migration::types::PreviewStatus::Ready,
+            decision: Some(crate::migration::types::PreviewDecision::UseDetected),
+            source: "Codex config at ~/.codex/agents/loongclaw/config.toml".to_owned(),
+            summary: "openai · openai/gpt-5.1-codex · credentials resolved from environment"
+                .to_owned(),
+        }],
+        channel_candidates: vec![crate::migration::types::ChannelCandidate {
+            id: "telegram",
+            label: "telegram",
+            status: crate::migration::types::PreviewStatus::Ready,
+            source: "Codex config at ~/.codex/agents/loongclaw/config.toml".to_owned(),
+            summary: "token resolved · can enable during onboarding".to_owned(),
+        }],
+        workspace_guidance: Vec::new(),
+    };
+
+    let lines = crate::migration::render::render_candidate_preview_lines(&candidate, 48);
+
+    assert!(
+        lines.iter().any(|line| line == "source: Codex config at"),
+        "narrow preview should keep the source label on the first wrapped line: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "  ~/.codex/agents/loongclaw/config.toml"),
+        "narrow preview should continue long source paths on an indented line: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "  summary: openai · openai/gpt-5.1-codex ·"),
+        "narrow preview should wrap long domain summaries without dropping the action context: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "  credentials resolved from environment"),
+        "narrow preview should continue wrapped domain summaries on a readable continuation line: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "- telegram [Ready]"),
+        "narrow preview should keep channel rows compact before detail lines: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "  summary: token resolved · can enable during"),
+        "narrow preview should wrap long channel summaries instead of cramming them into the header row: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "  onboarding"),
+        "narrow preview should continue wrapped channel summaries on an indented line: {lines:#?}"
+    );
+}
+
+#[test]
+fn migration_render_preview_includes_channel_details_and_guidance() {
+    let candidate = crate::migration::types::ImportCandidate {
+        source_kind: crate::migration::types::ImportSourceKind::Environment,
+        source: "your current environment".to_owned(),
+        config: mvp::config::LoongClawConfig::default(),
+        surfaces: Vec::new(),
+        domains: vec![
+            crate::migration::types::DomainPreview {
+                kind: crate::migration::types::SetupDomainKind::Channels,
+                status: crate::migration::types::PreviewStatus::Ready,
+                decision: Some(crate::migration::types::PreviewDecision::UseDetected),
+                source: "your current environment".to_owned(),
+                summary: "telegram Ready · feishu Ready".to_owned(),
+            },
+            crate::migration::types::DomainPreview {
+                kind: crate::migration::types::SetupDomainKind::WorkspaceGuidance,
+                status: crate::migration::types::PreviewStatus::Ready,
+                decision: Some(crate::migration::types::PreviewDecision::UseDetected),
+                source: "workspace".to_owned(),
+                summary: "AGENTS.md, CLAUDE.md".to_owned(),
+            },
+        ],
+        channel_candidates: vec![
+            crate::migration::types::ChannelCandidate {
+                id: "telegram",
+                label: "telegram",
+                status: crate::migration::types::PreviewStatus::Ready,
+                source: "your current environment".to_owned(),
+                summary: "token resolved · can enable during onboarding".to_owned(),
+            },
+            crate::migration::types::ChannelCandidate {
+                id: "feishu",
+                label: "feishu",
+                status: crate::migration::types::PreviewStatus::Ready,
+                source: "your current environment".to_owned(),
+                summary: "app credentials resolved · can enable during onboarding".to_owned(),
+            },
+        ],
+        workspace_guidance: vec![
+            crate::migration::types::WorkspaceGuidanceCandidate {
+                kind: crate::migration::types::WorkspaceGuidanceKind::Agents,
+                path: "/tmp/project/AGENTS.md".to_owned(),
+            },
+            crate::migration::types::WorkspaceGuidanceCandidate {
+                kind: crate::migration::types::WorkspaceGuidanceKind::Claude,
+                path: "/tmp/project/CLAUDE.md".to_owned(),
+            },
+        ],
+    };
+
+    let lines = crate::migration::render::render_candidate_preview_lines(&candidate, 100);
+
+    assert!(
+        lines.iter().any(|line| line.contains("channels:")),
+        "wide preview should include a channel detail section: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("your current environment")),
+        "channel detail lines should preserve source attribution: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("workspace guidance")),
+        "typed preview should expose workspace guidance as a first-class domain: {lines:#?}"
+    );
+}
+
+#[test]
+fn migration_render_preview_falls_back_to_stacked_rows_when_wide_table_would_overflow() {
+    let candidate = crate::migration::types::ImportCandidate {
+        source_kind: crate::migration::types::ImportSourceKind::CodexConfig,
+        source: "Codex config at ~/.codex/agents/loongclaw/config.toml".to_owned(),
+        config: mvp::config::LoongClawConfig::default(),
+        surfaces: Vec::new(),
+        domains: vec![
+            crate::migration::types::DomainPreview {
+                kind: crate::migration::types::SetupDomainKind::Provider,
+                status: crate::migration::types::PreviewStatus::Ready,
+                decision: Some(crate::migration::types::PreviewDecision::UseDetected),
+                source: "Codex config at ~/.codex/agents/loongclaw/config.toml".to_owned(),
+                summary: "openai · openai/gpt-5.1-codex · credentials resolved from environment"
+                    .to_owned(),
+            },
+            crate::migration::types::DomainPreview {
+                kind: crate::migration::types::SetupDomainKind::WorkspaceGuidance,
+                status: crate::migration::types::PreviewStatus::Ready,
+                decision: Some(crate::migration::types::PreviewDecision::UseDetected),
+                source: "workspace".to_owned(),
+                summary: "AGENTS.md, CLAUDE.md, and custom workspace instructions".to_owned(),
+            },
+        ],
+        channel_candidates: vec![crate::migration::types::ChannelCandidate {
+            id: "telegram",
+            label: "telegram",
+            status: crate::migration::types::PreviewStatus::Ready,
+            source: "Codex config at ~/.codex/agents/loongclaw/config.toml".to_owned(),
+            summary: "token resolved · can enable during onboarding".to_owned(),
+        }],
+        workspace_guidance: Vec::new(),
+    };
+
+    let lines = crate::migration::render::render_candidate_preview_lines(&candidate, 80);
+
+    assert!(
+        lines.iter().all(|line| line != "domains:"),
+        "medium-width preview should avoid switching into a wide table when rows would overflow: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "- provider [Ready]"),
+        "medium-width preview should fall back to stacked domain rows when the wide row would be too long: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line
+                == "  summary: openai · openai/gpt-5.1-codex · credentials resolved from"),
+        "stacked fallback should keep long summaries readable instead of forcing one overlong table row: {lines:#?}"
+    );
+}
+
+#[test]
+fn migration_render_preview_falls_back_to_stacked_channel_rows_when_wide_line_would_overflow() {
+    let candidate = crate::migration::types::ImportCandidate {
+        source_kind: crate::migration::types::ImportSourceKind::Environment,
+        source: "your current environment".to_owned(),
+        config: mvp::config::LoongClawConfig::default(),
+        surfaces: Vec::new(),
+        domains: vec![crate::migration::types::DomainPreview {
+            kind: crate::migration::types::SetupDomainKind::Channels,
+            status: crate::migration::types::PreviewStatus::Ready,
+            decision: Some(crate::migration::types::PreviewDecision::UseDetected),
+            source: "your current environment".to_owned(),
+            summary: "telegram Ready".to_owned(),
+        }],
+        channel_candidates: vec![crate::migration::types::ChannelCandidate {
+            id: "telegram",
+            label: "telegram",
+            status: crate::migration::types::PreviewStatus::Ready,
+            source: "Codex config at ~/.codex/agents/loongclaw/config.toml".to_owned(),
+            summary:
+                "token resolved and channel defaults can be imported during onboarding without losing existing allowlist or timeout settings"
+                    .to_owned(),
+        }],
+        workspace_guidance: Vec::new(),
+    };
+
+    let lines = crate::migration::render::render_candidate_preview_lines(&candidate, 80);
+
+    assert!(
+        lines.iter().any(|line| line == "channels:"),
+        "channel fallback should keep the channel section heading visible: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "- telegram [Ready]"),
+        "medium-width preview should fall back to stacked channel rows when the wide row would overflow: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "  source: Codex config at ~/.codex/agents/loongclaw/config.toml"),
+        "stacked channel fallback should keep source attribution on its own readable line: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line
+            == "  summary: token resolved and channel defaults can be imported during onboarding"),
+        "stacked channel fallback should wrap long summary text instead of reverting to a wide single-line row: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "  without losing existing allowlist or timeout settings"),
+        "stacked channel fallback should continue wrapped summary text on a readable continuation line: {lines:#?}"
+    );
+}
+
+#[test]
+fn migration_render_preview_surfaces_domain_actions() {
+    let candidate = crate::migration::types::ImportCandidate {
+        source_kind: crate::migration::types::ImportSourceKind::RecommendedPlan,
+        source: "recommended import plan".to_owned(),
+        config: mvp::config::LoongClawConfig::default(),
+        surfaces: Vec::new(),
+        domains: vec![
+            crate::migration::types::DomainPreview {
+                kind: crate::migration::types::SetupDomainKind::Provider,
+                status: crate::migration::types::PreviewStatus::Ready,
+                decision: Some(crate::migration::types::PreviewDecision::KeepCurrent),
+                source: "existing config at ~/.config/loongclaw/config.toml".to_owned(),
+                summary: "openai · openai/gpt-5.1-codex · credentials resolved".to_owned(),
+            },
+            crate::migration::types::DomainPreview {
+                kind: crate::migration::types::SetupDomainKind::Channels,
+                status: crate::migration::types::PreviewStatus::Ready,
+                decision: Some(crate::migration::types::PreviewDecision::Supplement),
+                source: "multiple sources".to_owned(),
+                summary: "telegram Ready".to_owned(),
+            },
+        ],
+        channel_candidates: Vec::new(),
+        workspace_guidance: Vec::new(),
+    };
+
+    let lines = crate::migration::render::render_candidate_preview_lines(&candidate, 100);
+
+    assert!(
+        lines.iter().any(|line| line.contains("keep current value")),
+        "preview should explicitly show when a domain keeps the current value: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("supplement with detected values")),
+        "preview should explicitly show when a domain is being supplemented from other detected sources: {lines:#?}"
+    );
+}
+
+#[test]
+fn migration_render_preview_summarizes_multi_source_inputs() {
+    let candidate = crate::migration::types::ImportCandidate {
+        source_kind: crate::migration::types::ImportSourceKind::RecommendedPlan,
+        source: "recommended import plan".to_owned(),
+        config: mvp::config::LoongClawConfig::default(),
+        surfaces: Vec::new(),
+        domains: vec![
+            crate::migration::types::DomainPreview {
+                kind: crate::migration::types::SetupDomainKind::Provider,
+                status: crate::migration::types::PreviewStatus::Ready,
+                decision: Some(crate::migration::types::PreviewDecision::KeepCurrent),
+                source: "existing config at ~/.config/loongclaw/config.toml".to_owned(),
+                summary: "openai · openai/gpt-5.1-codex · credentials resolved".to_owned(),
+            },
+            crate::migration::types::DomainPreview {
+                kind: crate::migration::types::SetupDomainKind::WorkspaceGuidance,
+                status: crate::migration::types::PreviewStatus::Ready,
+                decision: Some(crate::migration::types::PreviewDecision::UseDetected),
+                source: "workspace".to_owned(),
+                summary: "AGENTS.md".to_owned(),
+            },
+        ],
+        channel_candidates: vec![crate::migration::types::ChannelCandidate {
+            id: "telegram",
+            label: "telegram",
+            status: crate::migration::types::PreviewStatus::Ready,
+            source: "your current environment".to_owned(),
+            summary: "token resolved · can enable during onboarding".to_owned(),
+        }],
+        workspace_guidance: vec![crate::migration::types::WorkspaceGuidanceCandidate {
+            kind: crate::migration::types::WorkspaceGuidanceKind::Agents,
+            path: "/tmp/project/AGENTS.md".to_owned(),
+        }],
+    };
+
+    let joined =
+        crate::migration::render::render_candidate_preview_lines(&candidate, 80).join("\n");
+
+    assert!(
+        joined.contains("derived from:"),
+        "preview should add a dedicated multi-source attribution line for composed candidates: {joined}"
+    );
+    assert!(
+        joined.contains("existing config at ~/.config/loongclaw/config.toml"),
+        "preview should keep the current-config contribution visible in the source rollup: {joined}"
+    );
+    assert!(
+        joined.contains("your current environment"),
+        "preview should keep environment-derived contributions visible in the source rollup: {joined}"
+    );
+    assert!(
+        joined.contains("workspace guidance"),
+        "preview should call out workspace guidance as one of the composed sources: {joined}"
+    );
+}
+
+#[test]
+fn migration_compose_recommended_candidate_supplements_channels_without_overwriting_ready_provider()
+{
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.api_key = Some("openai-secret".to_owned());
+    existing.provider.model = "openai/gpt-5.1-codex".to_owned();
+    existing.feishu.enabled = true;
+    existing.feishu.app_id = Some("cli_a1b2c3".to_owned());
+    existing.feishu.app_secret = Some("feishu-secret".to_owned());
+    let existing_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::ExistingLoongClawConfig,
+        "existing config at ~/.config/loongclaw/config.toml".to_owned(),
+        existing,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("existing candidate");
+
+    let mut codex = mvp::config::LoongClawConfig::default();
+    codex.provider.kind = mvp::config::ProviderKind::Deepseek;
+    let profile = codex.provider.kind.profile();
+    codex.provider.base_url = profile.base_url.to_owned();
+    codex.provider.chat_completions_path = profile.chat_completions_path.to_owned();
+    codex.provider.api_key = Some("deepseek-secret".to_owned());
+    codex.provider.api_key_env = Some("DEEPSEEK_API_KEY".to_owned());
+    let codex_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml".to_owned(),
+        codex,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("codex candidate");
+
+    let mut env = mvp::config::LoongClawConfig::default();
+    env.telegram.enabled = true;
+    env.telegram.bot_token = Some("123456:test-token".to_owned());
+    let env_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::Environment,
+        "your current environment".to_owned(),
+        env,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("env candidate");
+
+    let composed = crate::migration::planner::compose_recommended_import_candidate(&[
+        existing_candidate,
+        codex_candidate,
+        env_candidate,
+    ])
+    .expect("recommended candidate");
+
+    assert_eq!(
+        composed.source_kind,
+        crate::migration::types::ImportSourceKind::RecommendedPlan
+    );
+    assert_eq!(
+        composed.config.provider.kind,
+        mvp::config::ProviderKind::Openai,
+        "ready current provider should win over conflicting alternative providers"
+    );
+    assert!(
+        composed.config.telegram.enabled,
+        "telegram should be supplemented from a secondary source"
+    );
+    assert!(
+        composed.config.feishu.enabled,
+        "existing ready channels should remain in the recommended plan"
+    );
+    assert!(
+        composed
+            .channel_candidates
+            .iter()
+            .any(|channel| channel.source == "your current environment"),
+        "channel attribution should preserve the source used for supplementation: {composed:#?}"
+    );
+    let provider_domain = composed
+        .domains
+        .iter()
+        .find(|domain| domain.kind == crate::migration::types::SetupDomainKind::Provider)
+        .expect("provider domain");
+    assert_eq!(
+        provider_domain.decision,
+        Some(crate::migration::types::PreviewDecision::KeepCurrent),
+        "composed provider preview should explicitly say that the current provider is being kept"
+    );
+    let channels_domain = composed
+        .domains
+        .iter()
+        .find(|domain| domain.kind == crate::migration::types::SetupDomainKind::Channels)
+        .expect("channels domain");
+    assert_eq!(
+        channels_domain.decision,
+        Some(crate::migration::types::PreviewDecision::Supplement),
+        "composed channels preview should explicitly say that channels were supplemented from detected sources"
+    );
+}
+
+#[test]
+fn migration_compose_recommended_candidate_upgrades_incomplete_provider_from_compatible_source() {
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.kind = mvp::config::ProviderKind::KimiCoding;
+    let existing_profile = existing.provider.kind.profile();
+    existing.provider.base_url = existing_profile.base_url.to_owned();
+    existing.provider.chat_completions_path = existing_profile.chat_completions_path.to_owned();
+    existing.provider.model = "kimi-for-coding".to_owned();
+    existing.provider.api_key_env = Some(format!(
+        "LOONGCLAW_TEST_UNSET_KIMI_CODING_KEY_{}",
+        std::process::id()
+    ));
+    let existing_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::ExistingLoongClawConfig,
+        "existing config at ~/.config/loongclaw/config.toml".to_owned(),
+        existing,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("existing candidate");
+
+    let mut codex = mvp::config::LoongClawConfig::default();
+    codex.provider.kind = mvp::config::ProviderKind::KimiCoding;
+    let codex_profile = codex.provider.kind.profile();
+    codex.provider.base_url = codex_profile.base_url.to_owned();
+    codex.provider.chat_completions_path = codex_profile.chat_completions_path.to_owned();
+    codex.provider.model = "kimi-for-coding".to_owned();
+    codex.provider.api_key_env = Some("KIMI_CODING_API_KEY".to_owned());
+    codex.provider.api_key = Some("kimi-coding-secret".to_owned());
+    let codex_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml".to_owned(),
+        codex,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("codex candidate");
+
+    let composed = crate::migration::planner::compose_recommended_import_candidate(&[
+        existing_candidate,
+        codex_candidate,
+    ])
+    .expect("recommended candidate");
+
+    let provider_domain = composed
+        .domains
+        .iter()
+        .find(|domain| domain.kind == crate::migration::types::SetupDomainKind::Provider)
+        .expect("provider domain");
+    assert_eq!(
+        provider_domain.source, "Codex config at ~/.codex/config.toml",
+        "compatible ready provider should upgrade an incomplete current provider"
+    );
+    assert_eq!(
+        composed.config.provider.api_key_env.as_deref(),
+        Some("KIMI_CODING_API_KEY")
+    );
+}
+
+#[test]
+fn migration_compose_recommended_candidate_supplements_channel_fields_across_sources() {
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.telegram.enabled = true;
+    existing.telegram.allowed_chat_ids = vec![42];
+    existing.telegram.polling_timeout_s = 90;
+    let existing_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::ExistingLoongClawConfig,
+        "existing config at ~/.config/loongclaw/config.toml".to_owned(),
+        existing,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("existing candidate");
+
+    let mut env = mvp::config::LoongClawConfig::default();
+    env.telegram.enabled = true;
+    env.telegram.bot_token = Some("123456:test-token".to_owned());
+    let env_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::Environment,
+        "your current environment".to_owned(),
+        env,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("env candidate");
+
+    let composed = crate::migration::planner::compose_recommended_import_candidate(&[
+        existing_candidate,
+        env_candidate,
+    ])
+    .expect("recommended candidate");
+
+    assert_eq!(
+        composed.config.telegram.allowed_chat_ids,
+        vec![42],
+        "recommended plan should preserve existing telegram allowlist while filling credentials"
+    );
+    assert_eq!(
+        composed.config.telegram.polling_timeout_s, 90,
+        "recommended plan should preserve non-default channel settings from the existing config"
+    );
+    assert_eq!(
+        composed.config.telegram.bot_token.as_deref(),
+        Some("123456:test-token"),
+        "recommended plan should still fill missing telegram credentials from another source"
+    );
+}
+
+#[test]
+fn migration_compose_recommended_candidate_preserves_current_custom_provider_endpoint() {
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.kind = mvp::config::ProviderKind::Openrouter;
+    existing.provider.model = "openrouter/openai/gpt-5.1".to_owned();
+    existing.provider.base_url = "https://proxy.example.com/v1".to_owned();
+    existing.provider.chat_completions_path = "/chat/completions".to_owned();
+    existing.provider.api_key_env = Some(format!(
+        "LOONGCLAW_TEST_UNSET_OPENROUTER_KEY_{}",
+        std::process::id()
+    ));
+    let existing_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::ExistingLoongClawConfig,
+        "existing config at ~/.config/loongclaw/config.toml".to_owned(),
+        existing,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("existing candidate");
+
+    let mut codex = mvp::config::LoongClawConfig::default();
+    codex.provider.kind = mvp::config::ProviderKind::Openrouter;
+    let profile = codex.provider.kind.profile();
+    codex.provider.base_url = profile.base_url.to_owned();
+    codex.provider.chat_completions_path = profile.chat_completions_path.to_owned();
+    codex.provider.model = "openrouter/openai/gpt-5.1".to_owned();
+    codex.provider.api_key = Some("openrouter-secret".to_owned());
+    codex.provider.api_key_env = Some("OPENROUTER_API_KEY".to_owned());
+    let codex_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml".to_owned(),
+        codex,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("codex candidate");
+
+    let composed = crate::migration::planner::compose_recommended_import_candidate(&[
+        existing_candidate,
+        codex_candidate,
+    ])
+    .expect("recommended candidate");
+
+    assert_eq!(
+        composed.config.provider.base_url, "https://proxy.example.com/v1",
+        "recommended plan should preserve the current custom provider base URL when only credentials are supplemented"
+    );
+    assert_eq!(
+        composed.config.provider.chat_completions_path, "/chat/completions",
+        "recommended plan should preserve the current compatible endpoint path when only credentials are supplemented"
+    );
+    assert_eq!(
+        composed.config.provider.api_key_env.as_deref(),
+        Some("OPENROUTER_API_KEY"),
+        "recommended plan should still upgrade missing credentials from the compatible source"
+    );
+}
+
+#[test]
+fn migration_compose_recommended_candidate_supplements_provider_wire_api() {
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.kind = mvp::config::ProviderKind::Openrouter;
+    existing.provider.model = "openrouter/openai/gpt-5.1".to_owned();
+    existing.provider.api_key_env = Some(format!(
+        "LOONGCLAW_TEST_UNSET_OPENROUTER_WIRE_API_{}",
+        std::process::id()
+    ));
+    let existing_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::ExistingLoongClawConfig,
+        "existing config at ~/.config/loongclaw/config.toml".to_owned(),
+        existing,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("existing candidate");
+
+    let mut env = mvp::config::LoongClawConfig::default();
+    env.provider.kind = mvp::config::ProviderKind::Openrouter;
+    let profile = env.provider.kind.profile();
+    env.provider.base_url = profile.base_url.to_owned();
+    env.provider.chat_completions_path = profile.chat_completions_path.to_owned();
+    env.provider.model = "openrouter/openai/gpt-5.1".to_owned();
+    env.provider.wire_api = mvp::config::ProviderWireApi::Responses;
+    env.provider.api_key = Some("openrouter-secret".to_owned());
+    env.provider.api_key_env = Some("OPENROUTER_API_KEY".to_owned());
+    let env_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::Environment,
+        "your current environment".to_owned(),
+        env,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("env candidate");
+
+    let composed = crate::migration::planner::compose_recommended_import_candidate(&[
+        existing_candidate,
+        env_candidate,
+    ])
+    .expect("recommended candidate");
+
+    assert_eq!(
+        composed.config.provider.wire_api,
+        mvp::config::ProviderWireApi::Responses,
+        "recommended plan should supplement the imported provider wire_api so compatible Responses setups remain runnable after merge"
+    );
+    assert_eq!(
+        composed.config.provider.transport_readiness().summary,
+        "responses compatibility mode with chat fallback",
+        "recommended plan should preserve the supplemented transport explanation for the merged provider"
+    );
+}
+
+#[test]
+fn migration_compose_recommended_candidate_supplements_provider_transport_tuning() {
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.kind = mvp::config::ProviderKind::Openrouter;
+    existing.provider.model = "openrouter/openai/gpt-5.1".to_owned();
+    existing.provider.api_key_env = Some(format!(
+        "LOONGCLAW_TEST_UNSET_OPENROUTER_KEY_{}",
+        std::process::id()
+    ));
+    let existing_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::ExistingLoongClawConfig,
+        "existing config at ~/.config/loongclaw/config.toml".to_owned(),
+        existing,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("existing candidate");
+
+    let mut env = mvp::config::LoongClawConfig::default();
+    env.provider.kind = mvp::config::ProviderKind::Openrouter;
+    env.provider.model = "openrouter/openai/gpt-5.1".to_owned();
+    env.provider.api_key = Some("openrouter-secret".to_owned());
+    env.provider.api_key_env = Some("OPENROUTER_API_KEY".to_owned());
+    env.provider.temperature = 0.55;
+    env.provider.request_timeout_ms = 45_000;
+    env.provider.retry_max_attempts = 5;
+    env.provider.retry_initial_backoff_ms = 450;
+    env.provider.retry_max_backoff_ms = 4_500;
+    let env_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::Environment,
+        "your current environment".to_owned(),
+        env,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("env candidate");
+
+    let composed = crate::migration::planner::compose_recommended_import_candidate(&[
+        existing_candidate,
+        env_candidate,
+    ])
+    .expect("recommended candidate");
+
+    assert_eq!(composed.config.provider.temperature, 0.55);
+    assert_eq!(composed.config.provider.request_timeout_ms, 45_000);
+    assert_eq!(composed.config.provider.retry_max_attempts, 5);
+    assert_eq!(composed.config.provider.retry_initial_backoff_ms, 450);
+    assert_eq!(composed.config.provider.retry_max_backoff_ms, 4_500);
+}
+
+#[test]
+fn migration_compose_recommended_candidate_avoids_provider_auto_pick_on_cross_source_conflict() {
+    let mut codex = mvp::config::LoongClawConfig::default();
+    codex.provider.model = "openai/gpt-5.1-codex".to_owned();
+    codex.provider.api_key = Some("openai-secret".to_owned());
+    let codex_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml".to_owned(),
+        codex,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("codex candidate");
+
+    let mut env = mvp::config::LoongClawConfig::default();
+    env.provider.kind = mvp::config::ProviderKind::Deepseek;
+    let profile = env.provider.kind.profile();
+    env.provider.base_url = profile.base_url.to_owned();
+    env.provider.chat_completions_path = profile.chat_completions_path.to_owned();
+    env.provider.model = "deepseek-chat".to_owned();
+    env.provider.api_key = Some("deepseek-secret".to_owned());
+    let env_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::Environment,
+        "your current environment".to_owned(),
+        env,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("env candidate");
+
+    let composed = crate::migration::planner::compose_recommended_import_candidate(&[
+        codex_candidate,
+        env_candidate,
+    ]);
+    assert!(
+        composed.is_none(),
+        "recommended plan should be omitted when the only available import signal is a cross-source provider conflict"
+    );
+}
+
+#[test]
+fn migration_compose_recommended_candidate_keeps_non_provider_domains_when_cross_source_provider_conflict_requires_manual_choice()
+ {
+    let mut codex = mvp::config::LoongClawConfig::default();
+    codex.provider.model = "openai/gpt-5.1-codex".to_owned();
+    codex.provider.api_key = Some("openai-secret".to_owned());
+    codex.telegram.enabled = true;
+    codex.telegram.bot_token = Some("123456:test-token".to_owned());
+    let codex_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml".to_owned(),
+        codex,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("codex candidate");
+
+    let mut env = mvp::config::LoongClawConfig::default();
+    env.provider.kind = mvp::config::ProviderKind::Deepseek;
+    let profile = env.provider.kind.profile();
+    env.provider.base_url = profile.base_url.to_owned();
+    env.provider.chat_completions_path = profile.chat_completions_path.to_owned();
+    env.provider.model = "deepseek-chat".to_owned();
+    env.provider.api_key = Some("deepseek-secret".to_owned());
+    let env_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::Environment,
+        "your current environment".to_owned(),
+        env,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("env candidate");
+
+    let composed = crate::migration::planner::compose_recommended_import_candidate(&[
+        codex_candidate,
+        env_candidate,
+    ])
+    .expect("recommended candidate should still exist for non-provider domains");
+
+    assert!(
+        composed
+            .domains
+            .iter()
+            .all(|domain| domain.kind != crate::migration::types::SetupDomainKind::Provider),
+        "provider should stay unresolved when multiple ready providers conflict without a safe anchor: {composed:#?}"
+    );
+    assert!(
+        composed
+            .domains
+            .iter()
+            .any(|domain| domain.kind == crate::migration::types::SetupDomainKind::Channels),
+        "non-provider domains should still be preserved in the recommended plan: {composed:#?}"
+    );
+    assert!(
+        composed.config.telegram.enabled,
+        "recommended plan should still carry reusable channel configuration while provider choice is deferred"
+    );
+}
+
+#[test]
+fn migration_compose_recommended_candidate_supplements_cli_memory_and_tools_across_sources() {
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.cli.system_prompt = "Use repo guidance".to_owned();
+    existing.tools.file_root = Some("~/workspace/current".to_owned());
+    existing.memory.sqlite_path = "~/.loongclaw/current.sqlite".to_owned();
+    let existing_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::ExistingLoongClawConfig,
+        "existing config at ~/.config/loongclaw/config.toml".to_owned(),
+        existing,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("existing candidate");
+
+    let mut codex = mvp::config::LoongClawConfig::default();
+    codex.cli.exit_commands.push("/bye".to_owned());
+    codex.tools.shell_allowlist.push("git".to_owned());
+    codex.memory.sliding_window = 24;
+    let codex_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml".to_owned(),
+        codex,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("codex candidate");
+
+    let composed = crate::migration::planner::compose_recommended_import_candidate(&[
+        existing_candidate,
+        codex_candidate,
+    ])
+    .expect("recommended candidate");
+
+    assert_eq!(
+        composed.config.cli.system_prompt, "Use repo guidance",
+        "recommended plan should preserve existing custom CLI prompt"
+    );
+    assert!(
+        composed
+            .config
+            .cli
+            .exit_commands
+            .iter()
+            .any(|value| value == "/bye"),
+        "recommended plan should supplement additional CLI exit commands"
+    );
+    assert_eq!(
+        composed.config.tools.file_root.as_deref(),
+        Some("~/workspace/current"),
+        "recommended plan should preserve the existing tools root"
+    );
+    assert!(
+        composed
+            .config
+            .tools
+            .shell_allowlist
+            .iter()
+            .any(|value| value == "git"),
+        "recommended plan should supplement additional tool permissions"
+    );
+    assert_eq!(
+        composed.config.memory.sqlite_path, "~/.loongclaw/current.sqlite",
+        "recommended plan should preserve the existing memory database path"
+    );
+    assert_eq!(
+        composed.config.memory.sliding_window, 24,
+        "recommended plan should supplement a non-default memory window"
+    );
+}
+
+#[test]
+fn migration_compose_recommended_candidate_keeps_incomplete_current_provider_when_alternative_conflicts()
+ {
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.kind = mvp::config::ProviderKind::KimiCoding;
+    let existing_profile = existing.provider.kind.profile();
+    existing.provider.base_url = existing_profile.base_url.to_owned();
+    existing.provider.chat_completions_path = existing_profile.chat_completions_path.to_owned();
+    existing.provider.model = "kimi-for-coding".to_owned();
+    existing.provider.api_key_env = Some(format!(
+        "LOONGCLAW_TEST_UNSET_KIMI_CODING_CONFLICT_{}",
+        std::process::id()
+    ));
+    let existing_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::ExistingLoongClawConfig,
+        "existing config at ~/.config/loongclaw/config.toml".to_owned(),
+        existing,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("existing candidate");
+
+    let mut codex = mvp::config::LoongClawConfig::default();
+    codex.provider.kind = mvp::config::ProviderKind::Deepseek;
+    let codex_profile = codex.provider.kind.profile();
+    codex.provider.base_url = codex_profile.base_url.to_owned();
+    codex.provider.chat_completions_path = codex_profile.chat_completions_path.to_owned();
+    codex.provider.model = "deepseek-chat".to_owned();
+    codex.provider.api_key = Some("deepseek-secret".to_owned());
+    codex.provider.api_key_env = Some("DEEPSEEK_API_KEY".to_owned());
+    let codex_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml".to_owned(),
+        codex,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("codex candidate");
+
+    let composed = crate::migration::planner::compose_recommended_import_candidate(&[
+        existing_candidate,
+        codex_candidate,
+    ])
+    .expect("recommended candidate");
+
+    let provider_domain = composed
+        .domains
+        .iter()
+        .find(|domain| domain.kind == crate::migration::types::SetupDomainKind::Provider)
+        .expect("provider domain");
+    assert_eq!(
+        composed.config.provider.kind,
+        mvp::config::ProviderKind::KimiCoding,
+        "recommended plan should not auto-switch to a conflicting provider"
+    );
+    assert_eq!(
+        provider_domain.source, "existing config at ~/.config/loongclaw/config.toml",
+        "current provider should remain the source of truth when alternatives conflict"
+    );
+    assert_eq!(
+        provider_domain.status,
+        crate::migration::types::PreviewStatus::NeedsReview
+    );
+    assert!(
+        provider_domain
+            .summary
+            .contains("also detected from Codex config at ~/.codex/config.toml"),
+        "preview should still surface the conflicting ready alternative: {provider_domain:#?}"
+    );
+}

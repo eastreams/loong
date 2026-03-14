@@ -38,8 +38,14 @@ use loongclaw_bench::{
     run_programmatic_pressure_benchmark_cli, run_wasm_cache_benchmark_cli,
 };
 mod doctor_cli;
+mod import_cli;
 mod import_claw_cli;
+mod migration;
+mod next_actions;
 mod onboard_cli;
+mod onboard_presentation;
+mod provider_presentation;
+mod source_presentation;
 #[cfg(test)]
 pub(crate) use loongclaw_spec::programmatic::{
     acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
@@ -48,6 +54,7 @@ pub(crate) use loongclaw_spec::programmatic::{
 mod tests;
 
 const PUBLIC_GITHUB_REPO: &str = "loongclaw-ai/loongclaw";
+const CLI_COMMAND_NAME: &str = mvp::config::CLI_COMMAND_NAME;
 
 fn native_spec_tool_executor(request: ToolCoreRequest) -> Option<Result<ToolCoreOutcome, String>> {
     if mvp::tools::canonical_tool_name(request.tool_name.as_str()) != "claw.import" {
@@ -91,7 +98,7 @@ struct ChannelServeCliSpec {
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "loongclaw",
+    name = CLI_COMMAND_NAME,
     about = "LoongClaw low-level runtime daemon",
     version
 )]
@@ -233,74 +240,80 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         fail_on_diagnostics: bool,
     },
-    /// Guided onboarding for a fast first chat with preflight diagnostics
+    #[command(
+        about = "Guided onboarding for fast first-chat setup with preflight diagnostics",
+        long_about = "Guided onboarding for fast first-chat setup with preflight diagnostics.\n\nThis is the default path for most users. LoongClaw will detect reusable settings for provider, channels, or workspace guidance, suggest a starting point, and walk through quick review before first chat."
+    )]
     Onboard {
-        /// Target config output path (defaults to ~/.loongclaw/config.toml)
+        /// Write the resulting config to a custom path instead of the default loongclaw config location
         #[arg(long)]
         output: Option<String>,
-        /// Overwrite existing output config if present
+        /// Overwrite an existing target config path instead of stopping for manual review
         #[arg(long, default_value_t = false)]
         force: bool,
-        /// Run onboarding in non-interactive mode using provided flags/defaults
+        /// Use provided flags only and skip interactive prompts except required safety checks
         #[arg(long, default_value_t = false)]
         non_interactive: bool,
-        /// Accept generated config values that may require manual hardening later
+        /// Confirm the onboarding risk acknowledgement in non-interactive mode
         #[arg(long, default_value_t = false)]
         accept_risk: bool,
-        /// Provider identifier to prefill in generated config
-        #[arg(long)]
+        #[arg(
+            long,
+            value_name = mvp::config::PROVIDER_SELECTOR_PLACEHOLDER,
+            help = mvp::config::PROVIDER_SELECTOR_HUMAN_SUMMARY
+        )]
         provider: Option<String>,
-        /// Model identifier to prefill in generated config
+        /// Preselect the model to use after the provider choice is resolved
         #[arg(long)]
         model: Option<String>,
-        /// Environment variable name holding the provider API key
-        #[arg(long, alias = "api-key-env")]
-        api_key: Option<String>,
-        /// Default personality profile for the generated config
-        #[arg(long)]
-        personality: Option<String>,
-        /// Default memory profile for the generated config
-        #[arg(long)]
-        memory_profile: Option<String>,
-        /// Override system prompt text in generated config
+        /// Provider credential environment variable name, for example OPENAI_API_KEY
+        #[arg(long = "api-key", alias = "api-key-env")]
+        api_key_env: Option<String>,
+        /// Preseed the CLI system prompt instead of editing it interactively
         #[arg(long)]
         system_prompt: Option<String>,
-        /// Skip provider model probe during onboarding diagnostics
+        /// Skip probing the resolved provider model list during onboarding
         #[arg(long, default_value_t = false)]
         skip_model_probe: bool,
     },
-    /// Import prompt/identity traits from another claw workspace into LoongClaw config
-    ImportClaw {
-        /// Source config file to import from
-        #[arg(long)]
-        input: Option<String>,
-        /// Target config file to write import plan/apply result
+    #[command(
+        about = "Preview or apply migration sources explicitly",
+        long_about = "Power-user import flow for previewing or applying detected migration sources explicitly.\n\nUse this when you want exact CLI control over which source and domains are reused. If you want the guided path, use `loongclaw onboard` instead. When the same source kind resolves to multiple detected configs, rerun with `--source-path <path>` to choose one exact source."
+    )]
+    Import {
+        /// Write the imported config to a custom path instead of the default loongclaw config location
         #[arg(long)]
         output: Option<String>,
-        /// Explicit source kind (auto-detected when omitted)
-        #[arg(long)]
-        source: Option<String>,
-        /// Import mode (`plan` preview or `apply` mutation)
-        #[arg(long, value_enum, default_value = "plan")]
-        mode: import_claw_cli::ImportClawMode,
-        /// Emit machine-readable JSON output
-        #[arg(long, default_value_t = false)]
-        json: bool,
-        /// Source selection identifier (alias: --selection-id)
-        #[arg(long, visible_alias = "selection-id")]
-        source_id: Option<String>,
-        /// Merge memory profiles conservatively to avoid destructive overwrites
-        #[arg(long, default_value_t = false)]
-        safe_profile_merge: bool,
-        /// Primary source identifier for multi-source imports
-        #[arg(long, visible_alias = "primary-selection-id")]
-        primary_source_id: Option<String>,
-        /// Apply external-skills import plan when running in apply mode
-        #[arg(long, default_value_t = false)]
-        apply_external_skills_plan: bool,
-        /// Force apply even when importer detects non-fatal safeguards
+        /// Overwrite an existing target config path instead of stopping for manual review
         #[arg(long, default_value_t = false)]
         force: bool,
+        /// Print the selected import candidate preview in text mode
+        #[arg(long, default_value_t = false)]
+        preview: bool,
+        /// Apply the selected import candidate to the target config path
+        #[arg(long, default_value_t = false)]
+        apply: bool,
+        /// Emit machine-readable preview JSON for scripting or automation
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Limit selection to one source kind such as recommended, existing, codex, or env
+        #[arg(long)]
+        from: Option<String>,
+        /// Choose one exact detected source path when multiple candidates of the same kind exist
+        #[arg(long)]
+        source_path: Option<String>,
+        #[arg(
+            long,
+            value_name = mvp::config::PROVIDER_SELECTOR_PLACEHOLDER,
+            help = mvp::config::PROVIDER_SELECTOR_HUMAN_SUMMARY
+        )]
+        provider: Option<String>,
+        /// Reuse only the listed domains, for example provider,channels
+        #[arg(long, value_delimiter = ',')]
+        include: Vec<String>,
+        /// Exclude the listed domains from the selected import candidate
+        #[arg(long, value_delimiter = ',')]
+        exclude: Vec<String>,
     },
     /// Run configuration diagnostics and optionally apply safe config/path fixes
     Doctor {
@@ -613,9 +626,7 @@ async fn main() {
             accept_risk,
             provider,
             model,
-            api_key,
-            personality,
-            memory_profile,
+            api_key_env,
             system_prompt,
             skip_model_probe,
         } => {
@@ -626,37 +637,38 @@ async fn main() {
                 accept_risk,
                 provider,
                 model,
-                api_key,
-                personality,
-                memory_profile,
+                api_key_env,
                 system_prompt,
                 skip_model_probe,
             })
             .await
         }
-        Commands::ImportClaw {
-            input,
+        Commands::Import {
             output,
-            source,
-            mode,
-            json,
-            source_id,
-            safe_profile_merge,
-            primary_source_id,
-            apply_external_skills_plan,
             force,
-        } => import_claw_cli::run_import_claw_cli(import_claw_cli::ImportClawCommandOptions {
-            input,
-            output,
-            source,
-            mode,
+            preview,
+            apply,
             json,
-            source_id,
-            safe_profile_merge,
-            primary_source_id,
-            apply_external_skills_plan,
-            force,
-        }),
+            from,
+            source_path,
+            provider,
+            include,
+            exclude,
+        } => {
+            import_cli::run_import_cli(import_cli::ImportCommandOptions {
+                output,
+                force,
+                preview,
+                apply,
+                json,
+                from,
+                source_path,
+                provider,
+                include,
+                exclude,
+            })
+            .await
+        }
         Commands::Doctor {
             config,
             fix,
@@ -2869,13 +2881,13 @@ mod cli_tests {
             "--non-interactive",
             "--accept-risk",
             "--api-key",
-            "${OPENAI_API_KEY}",
+            "OPENAI_API_KEY",
         ])
         .expect("`--api-key` should parse");
 
         match cli.command {
-            Some(Commands::Onboard { api_key, .. }) => {
-                assert_eq!(api_key.as_deref(), Some("${OPENAI_API_KEY}"));
+            Some(Commands::Onboard { api_key_env, .. }) => {
+                assert_eq!(api_key_env.as_deref(), Some("OPENAI_API_KEY"));
             }
             other => panic!("unexpected command parsed: {other:?}"),
         }
@@ -2894,8 +2906,8 @@ mod cli_tests {
         .expect("legacy `--api-key-env` alias should still parse");
 
         match cli.command {
-            Some(Commands::Onboard { api_key, .. }) => {
-                assert_eq!(api_key.as_deref(), Some("OPENAI_API_KEY"));
+            Some(Commands::Onboard { api_key_env, .. }) => {
+                assert_eq!(api_key_env.as_deref(), Some("OPENAI_API_KEY"));
             }
             other => panic!("unexpected command parsed: {other:?}"),
         }
