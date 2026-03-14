@@ -280,48 +280,59 @@ git add crates/app/src/memory/orchestrator.rs crates/app/src/config/tools_memory
 git commit -m "feat: add fail-open memory system policy"
 ```
 
-### Task 7: Land One Experimental External Adapter
+### Task 7: Keep Concrete External Adapters Deferred
 
 **Files:**
-- Create: `crates/app/src/memory/adapters/mod.rs`
-- Create: `crates/app/src/memory/adapters/<adapter>.rs`
-- Modify: `crates/app/src/memory/system_registry.rs`
+- Modify: `crates/app/src/config/mod.rs`
 - Modify: `crates/app/src/config/tools_memory.rs`
-- Test: `crates/app/src/memory/adapters/<adapter>.rs`
+- Modify: `crates/app/src/memory/mod.rs`
+- Modify: `crates/app/src/memory/orchestrator.rs`
+- Modify: `crates/app/src/memory/system_registry.rs`
+- Delete if present: `crates/app/src/memory/adapters/mod.rs`
+- Delete if present: `crates/app/src/memory/adapters/<adapter>.rs`
 
 **Step 1: Write the failing test**
 
 Add tests that assert:
 
-- the adapter registers cleanly
-- adapter metadata advertises the right capabilities
-- fallback to built-in behavior works when the adapter is unavailable
+- unsupported future ids remain rejected
+- the registry stays builtin-only
+- fail-open built-in hydration behavior remains intact
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p loongclaw-app memory_adapters -- --nocapture`
+Run: `cargo test -p loongclaw-app config::tools_memory::tests::memory_system_rejects_unimplemented_future_variant_ids -- --exact --nocapture`
 
-Expected: FAIL because no adapter exists yet.
+Run: `cargo test -p loongclaw-app config::tests::memory_system_field_rejects_unimplemented_future_variant -- --exact --nocapture`
+
+Run: `cargo test -p loongclaw-app memory::system_registry::tests::memory_system_registry_stays_builtin_only_until_adapter_lands -- --exact --nocapture`
+
+Expected: FAIL because a concrete experimental adapter is still exposed.
 
 **Step 3: Write minimal implementation**
 
-Add the lowest-risk adapter first:
-
-- prefer a local-first experimental adapter
-- keep the canonical store in LoongClaw
-- wire only derivation and retrieval
+- remove concrete non-builtin ids from config and registry
+- keep the generic memory-system metadata and capability seam
+- keep fail-open diagnostics and session-scoped fault injection stability
+- defer the first real adapter to a later dedicated track
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p loongclaw-app memory_adapters -- --nocapture`
+Run: `cargo test -p loongclaw-app config::tools_memory::tests::memory_system_rejects_unimplemented_future_variant_ids -- --exact --nocapture`
 
-Expected: PASS for registration and fallback contract tests.
+Run: `cargo test -p loongclaw-app config::tests::memory_system_field_rejects_unimplemented_future_variant -- --exact --nocapture`
+
+Run: `cargo test -p loongclaw-app memory::system_registry::tests::memory_system_registry_stays_builtin_only_until_adapter_lands -- --exact --nocapture`
+
+Run: `cargo test -p loongclaw-app fail_open_memory -- --nocapture`
+
+Expected: PASS for builtin-only surface and fail-open stability checks.
 
 **Step 5: Commit**
 
 ```bash
-git add crates/app/src/memory/adapters crates/app/src/memory/system_registry.rs crates/app/src/config/tools_memory.rs
-git commit -m "feat: add experimental external memory adapter"
+git add crates/app/src/config/mod.rs crates/app/src/config/tools_memory.rs crates/app/src/memory/mod.rs crates/app/src/memory/orchestrator.rs crates/app/src/memory/system_registry.rs
+git commit -m "refactor: keep memory architecture builtin-only for now"
 ```
 
 ### Task 8: Add Operator-Facing Docs And Runtime Diagnostics

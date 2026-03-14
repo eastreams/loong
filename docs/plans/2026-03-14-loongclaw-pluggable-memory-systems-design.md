@@ -148,8 +148,11 @@ Add a single selector like:
 
 ```toml
 [memory]
-backend = "sqlite|lucid|mem0|cortex"
+backend = "sqlite|<future-system-id>"
 ```
+
+The example intentionally avoids naming concrete systems. The current runtime
+surface should remain builtin-only until a real integration is accepted.
 
 Pros:
 
@@ -427,16 +430,9 @@ system = "builtin"
 fail_open = true
 ingest_mode = "sync_minimal"
 
-[memory.systems.lucid]
+[memory.systems.<future_system_id>]
 enabled = true
-
-[memory.systems.mem0]
-enabled = true
-api_key_env = "MEM0_API_KEY"
-
-[memory.systems.cortex]
-enabled = true
-endpoint = "http://127.0.0.1:8085"
+# Adapter-specific fields stay nested here once a concrete system lands.
 ```
 
 The nested tables are intentionally adapter-specific. LoongClaw should not
@@ -458,15 +454,12 @@ Initial value:
 
 Which derivation and retrieval family is active?
 
-Initial value:
+Current runtime surface:
 
 - `builtin`
 
-Future examples:
-
-- `lucid`
-- `mem0`
-- `cortex`
+Future values should stay deferred until the first real integration lands.
+No non-builtin ids should be exposed only for planning convenience.
 
 ### 3. Memory Profile
 
