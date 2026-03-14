@@ -1682,8 +1682,6 @@ fn now_ms() -> u64 {
 mod tests {
     use std::collections::BTreeMap;
     #[cfg(unix)]
-    use std::io::Write as _;
-    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     #[cfg(unix)]
     use std::path::{Path, PathBuf};
