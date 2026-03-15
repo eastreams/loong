@@ -67,6 +67,13 @@ impl Drop for ImportEnvironmentGuard {
     }
 }
 
+fn provider_choice_preview_env_guard() -> ImportEnvironmentGuard {
+    ImportEnvironmentGuard::set(&[
+        ("OPENAI_API_KEY", Some("test-openai-key")),
+        ("DEEPSEEK_API_KEY", Some("test-deepseek-key")),
+    ])
+}
+
 fn sample_import_candidate() -> crate::migration::types::ImportCandidate {
     let mut config = mvp::config::LoongClawConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Openrouter;
@@ -618,6 +625,7 @@ fn import_cli_apply_summary_uses_channel_handoff_when_cli_is_disabled() {
 
 #[test]
 fn import_cli_render_preview_marks_provider_choice_required_for_unresolved_recommended_plan() {
+    let _env_guard = provider_choice_preview_env_guard();
     let mut recommended = sample_import_candidate();
     recommended.source_kind = crate::migration::types::ImportSourceKind::RecommendedPlan;
     recommended.source = "recommended import plan".to_owned();
@@ -664,6 +672,7 @@ fn import_cli_render_preview_marks_provider_choice_required_for_unresolved_recom
 
 #[test]
 fn import_cli_render_preview_explains_provider_conflict_apply_behavior() {
+    let _env_guard = provider_choice_preview_env_guard();
     let mut recommended = sample_import_candidate();
     recommended.source_kind = crate::migration::types::ImportSourceKind::RecommendedPlan;
     recommended.source = "recommended import plan".to_owned();
@@ -722,6 +731,7 @@ fn import_cli_render_preview_explains_provider_conflict_apply_behavior() {
 
 #[test]
 fn import_cli_render_preview_wraps_provider_choices_for_narrow_width() {
+    let _env_guard = provider_choice_preview_env_guard();
     let mut recommended = sample_import_candidate();
     recommended.source_kind = crate::migration::types::ImportSourceKind::RecommendedPlan;
     recommended.source = "recommended import plan".to_owned();
@@ -793,6 +803,7 @@ fn import_cli_render_preview_wraps_provider_choices_for_narrow_width() {
 
 #[test]
 fn import_cli_render_preview_falls_back_to_stacked_provider_rows_when_medium_width_overflows() {
+    let _env_guard = provider_choice_preview_env_guard();
     let mut recommended = sample_import_candidate();
     recommended.source_kind = crate::migration::types::ImportSourceKind::RecommendedPlan;
     recommended.source = "recommended import plan".to_owned();
