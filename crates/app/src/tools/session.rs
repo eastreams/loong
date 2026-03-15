@@ -1440,20 +1440,22 @@ fn execute_session_recover_batch_result(
             Some(outcome.inspection),
         )),
         Err(error) if error.starts_with("session_recover_state_changed:") => {
+            let inspection = match inspect_visible_session_with_policies(
+                target_session_id,
+                current_session_id,
+                config,
+                tool_config,
+                10,
+            ) {
+                Ok(snapshot) => Some(session_inspection_payload(snapshot)),
+                Err(_) => None,
+            };
             Ok(session_batch_result(
                 target_session_id.to_owned(),
                 "skipped_state_changed",
                 Some(error),
                 Some(action),
-                inspect_visible_session_with_policies(
-                    target_session_id,
-                    current_session_id,
-                    config,
-                    tool_config,
-                    10,
-                )
-                .ok()
-                .map(session_inspection_payload),
+                inspection,
             ))
         }
         Err(error) => Err(error),
@@ -1751,20 +1753,22 @@ fn execute_session_cancel_batch_result(
             Some(outcome.inspection),
         )),
         Err(error) if error.starts_with("session_cancel_state_changed:") => {
+            let inspection = match inspect_visible_session_with_policies(
+                target_session_id,
+                current_session_id,
+                config,
+                tool_config,
+                10,
+            ) {
+                Ok(snapshot) => Some(session_inspection_payload(snapshot)),
+                Err(_) => None,
+            };
             Ok(session_batch_result(
                 target_session_id.to_owned(),
                 "skipped_state_changed",
                 Some(error),
                 Some(action),
-                inspect_visible_session_with_policies(
-                    target_session_id,
-                    current_session_id,
-                    config,
-                    tool_config,
-                    10,
-                )
-                .ok()
-                .map(session_inspection_payload),
+                inspection,
             ))
         }
         Err(error) => Err(error),

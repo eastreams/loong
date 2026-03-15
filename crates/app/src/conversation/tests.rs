@@ -1102,7 +1102,7 @@ fn default_runtime_tool_view_uses_persisted_delegate_child_restrictions() {
 
 #[cfg(feature = "memory-sqlite")]
 #[test]
-fn default_runtime_tool_view_treats_broken_lineage_child_as_depth_zero_for_delegate_budget() {
+fn default_runtime_tool_view_denies_delegate_for_broken_lineage_child() {
     let mut config = test_config();
     config.tools.delegate.allow_shell_in_child = false;
     let db_path = std::env::temp_dir().join(format!(
@@ -1132,8 +1132,8 @@ fn default_runtime_tool_view_treats_broken_lineage_child_as_depth_zero_for_deleg
     assert!(child_view.contains("file.read"));
     assert!(child_view.contains("file.write"));
     assert!(!child_view.contains("shell.exec"));
-    assert!(child_view.contains("delegate"));
-    assert!(child_view.contains("delegate_async"));
+    assert!(!child_view.contains("delegate"));
+    assert!(!child_view.contains("delegate_async"));
 }
 
 #[cfg(feature = "memory-sqlite")]

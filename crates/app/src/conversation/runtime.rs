@@ -121,7 +121,10 @@ impl AsyncDelegateSpawner for DefaultAsyncDelegateSpawner {
             },
         )?;
         if started.is_none() {
-            return Ok(());
+            return Err(format!(
+                "async_delegate_spawn_skipped: session `{}` was not in Ready state",
+                request.child_session_id,
+            ));
         }
 
         let runtime = DefaultConversationRuntime::from_config_or_env(self.config.as_ref())?;
@@ -472,7 +475,10 @@ where
                                 if error.starts_with("session_lineage_broken:")
                                     || error.starts_with("session_lineage_cycle_detected:") =>
                             {
-                                0
+                                return Ok(delegate_child_tool_view_for_config_with_delegate(
+                                    &config.tools,
+                                    false,
+                                ));
                             }
                             Err(error) => {
                                 return Err(format!(

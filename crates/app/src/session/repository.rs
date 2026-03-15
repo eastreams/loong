@@ -945,9 +945,6 @@ impl SessionRepository {
     pub fn append_event(&self, event: NewSessionEvent) -> Result<SessionEventRecord, String> {
         let session_id = normalize_required_text(&event.session_id, "session_id")?;
         let event_kind = normalize_required_text(&event.event_kind, "event_kind")?;
-        if self.load_session(&session_id)?.is_none() {
-            return Err(format!("session `{session_id}` not found"));
-        }
 
         let ts = unix_ts_now();
         let payload_json = serde_json::to_string(&event.payload_json)
@@ -955,6 +952,17 @@ impl SessionRepository {
         let actor_session_id = normalize_optional_text(event.actor_session_id);
 
         let conn = self.open_connection()?;
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id = ?1)",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("check session exists failed: {error}"))?;
+        if !exists {
+            return Err(format!("session `{session_id}` not found"));
+        }
+
         conn.execute(
             "INSERT INTO session_events(
                 session_id, event_kind, actor_session_id, payload_json, ts
