@@ -38,9 +38,8 @@ pub(crate) use runtime::{normalize_dispatch_account_id, normalize_dispatch_chann
 pub use shared::expand_path;
 #[allow(unused_imports)]
 pub use tools_memory::{
-    DEFAULT_SHELL_ALLOW, ExternalSkillsConfig, MemoryBackendKind, MemoryConfig,
-    MemoryIngestMode, MemoryMode,
-    MemoryProfile, MemorySystemKind, ToolConfig,
+    DEFAULT_SHELL_ALLOW, ExternalSkillsConfig, MemoryBackendKind, MemoryConfig, MemoryIngestMode,
+    MemoryMode, MemoryProfile, MemorySystemKind, ToolConfig,
 };
 
 #[cfg(test)]

@@ -92,7 +92,9 @@ impl MemoryRuntimeConfig {
             self.ingest_mode = ingest_mode;
         }
 
-        if let Some(sqlite_path) = std::env::var("LOONGCLAW_SQLITE_PATH").ok().map(PathBuf::from)
+        if let Some(sqlite_path) = std::env::var("LOONGCLAW_SQLITE_PATH")
+            .ok()
+            .map(PathBuf::from)
         {
             self.sqlite_path = Some(sqlite_path);
         }
@@ -318,9 +320,6 @@ mod tests {
             runtime.sqlite_path,
             Some(PathBuf::from("/tmp/env-memory.sqlite3"))
         );
-        assert_eq!(
-            runtime.profile_note.as_deref(),
-            Some("env profile note")
-        );
+        assert_eq!(runtime.profile_note.as_deref(), Some("env profile note"));
     }
 }
