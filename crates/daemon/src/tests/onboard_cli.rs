@@ -662,6 +662,83 @@ async fn non_interactive_api_key_env_override_clears_existing_inline_api_key() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn non_interactive_api_key_env_clear_keeps_existing_inline_credential() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let root = unique_temp_path("non-interactive-api-key-env-clear-root");
+    std::fs::create_dir_all(&root).expect("create test root");
+    let output = root.join("loongclaw.toml");
+
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "openai/gpt-5.1-codex".to_owned();
+    existing.provider.api_key = Some("inline-secret".to_owned());
+    existing.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
+    mvp::config::write(Some(output.to_string_lossy().as_ref()), &existing, true)
+        .expect("write existing config with inline credential and env binding");
+
+    let mut options = default_non_interactive_onboard_options(&output);
+    options.force = true;
+    options.skip_model_probe = true;
+    options.model = Some("openai/gpt-5.1-codex".to_owned());
+    options.api_key_env = Some(":clear".to_owned());
+
+    let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
+    let context = crate::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    crate::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+        .await
+        .expect("explicit clear token should keep the existing inline credential");
+
+    let raw = std::fs::read_to_string(&output).expect("read written onboarding config");
+    assert!(
+        !raw.contains("OPENAI_API_KEY"),
+        "explicit clear token should remove the api-key env binding in non-interactive onboarding: {raw}"
+    );
+
+    let (_, config) = mvp::config::load(Some(output.to_string_lossy().as_ref()))
+        .expect("load written onboarding config");
+    assert_eq!(
+        config.provider.api_key.as_deref(),
+        Some("inline-secret"),
+        "explicit clear token should preserve the existing inline provider credential"
+    );
+    assert_eq!(config.provider.api_key_env, None);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn non_interactive_system_prompt_clear_restores_builtin_prompt() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let root = unique_temp_path("non-interactive-system-prompt-clear-root");
+    std::fs::create_dir_all(&root).expect("create test root");
+    let output = root.join("loongclaw.toml");
+
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "openai/gpt-5.1-codex".to_owned();
+    existing.provider.api_key = Some("inline-secret".to_owned());
+    existing.cli.system_prompt = "custom review prompt".to_owned();
+    mvp::config::write(Some(output.to_string_lossy().as_ref()), &existing, true)
+        .expect("write existing config with custom system prompt");
+
+    let mut options = default_non_interactive_onboard_options(&output);
+    options.force = true;
+    options.skip_model_probe = true;
+    options.model = Some("openai/gpt-5.1-codex".to_owned());
+    options.system_prompt = Some(":clear".to_owned());
+
+    let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
+    let context = crate::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    crate::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+        .await
+        .expect("explicit clear token should restore the built-in system prompt");
+
+    let (_, config) = mvp::config::load(Some(output.to_string_lossy().as_ref()))
+        .expect("load written onboarding config");
+    assert_eq!(
+        config.cli.system_prompt,
+        mvp::config::CliChannelConfig::default().system_prompt,
+        "non-interactive clear token should restore the built-in CLI system prompt"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn interactive_onboard_clear_token_keeps_inline_provider_credential() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let output_path = unique_temp_path("interactive-clear-inline-credential.toml");
