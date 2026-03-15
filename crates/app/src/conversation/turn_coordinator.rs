@@ -3111,19 +3111,22 @@ fn finalize_async_delegate_spawn_failure(
         error.clone(),
         0,
     );
-    repo.finalize_session_terminal(
+    let request = FinalizeSessionTerminalRequest {
+        state: SessionState::Failed,
+        last_error: Some(error.clone()),
+        event_kind: "delegate_spawn_failed".to_owned(),
+        actor_session_id: Some(parent_session_id.to_owned()),
+        event_payload_json: json!({
+            "error": error,
+        }),
+        outcome_status: outcome.status,
+        outcome_payload_json: outcome.payload,
+    };
+    finalize_terminal_if_current_allowing_stale_state(
+        &repo,
         child_session_id,
-        FinalizeSessionTerminalRequest {
-            state: SessionState::Failed,
-            last_error: Some(error.clone()),
-            event_kind: "delegate_spawn_failed".to_owned(),
-            actor_session_id: Some(parent_session_id.to_owned()),
-            event_payload_json: json!({
-                "error": error,
-            }),
-            outcome_status: outcome.status,
-            outcome_payload_json: outcome.payload,
-        },
+        SessionState::Ready,
+        request,
     )?;
     Ok(())
 }
@@ -3250,8 +3253,13 @@ fn finalize_delegate_child_terminal_with_recovery(
     request: FinalizeSessionTerminalRequest,
 ) -> Result<(), String> {
     let recovery_request = request.clone();
-    match repo.finalize_session_terminal(child_session_id, request) {
-        Ok(_) => Ok(()),
+    match finalize_terminal_if_current_allowing_stale_state(
+        repo,
+        child_session_id,
+        SessionState::Running,
+        request,
+    ) {
+        Ok(()) => Ok(()),
         Err(finalize_error) => {
             let recovery_error = format!("delegate_terminal_finalize_failed: {finalize_error}");
             match repo.transition_session_with_event_if_current(
@@ -3290,6 +3298,25 @@ fn finalize_delegate_child_terminal_with_recovery(
                         "{recovery_error}; delegate_terminal_recovery_failed: {mark_error}"
                     )),
                 },
+            }
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn finalize_terminal_if_current_allowing_stale_state(
+    repo: &SessionRepository,
+    session_id: &str,
+    expected_state: SessionState,
+    request: FinalizeSessionTerminalRequest,
+) -> Result<(), String> {
+    match repo.finalize_session_terminal_if_current(session_id, expected_state, request)? {
+        Some(_) => Ok(()),
+        None => {
+            if repo.load_session(session_id)?.is_some() {
+                Ok(())
+            } else {
+                Err(format!("session `{session_id}` not found"))
             }
         }
     }
@@ -5063,6 +5090,257 @@ async fn execute_single_tool_intent(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::repository::FinalizeSessionTerminalResult;
+    use std::path::PathBuf;
+
+    fn unique_sqlite_path(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "loongclaw-turn-coordinator-{label}-{}.sqlite3",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ))
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn sqlite_memory_config(label: &str) -> MemoryRuntimeConfig {
+        let path = unique_sqlite_path(label);
+        let _ = std::fs::remove_file(&path);
+        let mut config = LoongClawConfig::default();
+        config.memory.sqlite_path = path.display().to_string();
+        MemoryRuntimeConfig::from_memory_config(&config.memory)
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn finalize_recovered_child(
+        repo: &SessionRepository,
+        expected_state: SessionState,
+    ) -> FinalizeSessionTerminalResult {
+        repo.finalize_session_terminal_if_current(
+            "child-session",
+            expected_state,
+            FinalizeSessionTerminalRequest {
+                state: SessionState::Failed,
+                last_error: Some("delegate_recovered".to_owned()),
+                event_kind: RECOVERY_EVENT_KIND.to_owned(),
+                actor_session_id: Some("root-session".to_owned()),
+                event_payload_json: json!({
+                    "recovery_kind": "forced_recovery",
+                    "recovered_state": "failed",
+                }),
+                outcome_status: "error".to_owned(),
+                outcome_payload_json: json!({
+                    "error": "delegate_recovered"
+                }),
+            },
+        )
+        .expect("recover child terminal state")
+        .expect("recovery should transition child")
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn finalize_delegate_child_terminal_with_recovery_does_not_overwrite_recovered_failure() {
+        let memory_config = sqlite_memory_config("recovered-running-child");
+        let repo = SessionRepository::new(&memory_config).expect("session repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create child session");
+
+        let recovered = finalize_recovered_child(&repo, SessionState::Running);
+        assert_eq!(recovered.session.state, SessionState::Failed);
+        assert_eq!(recovered.terminal_outcome.status, "error");
+
+        finalize_delegate_child_terminal_with_recovery(
+            &repo,
+            "child-session",
+            FinalizeSessionTerminalRequest {
+                state: SessionState::Completed,
+                last_error: None,
+                event_kind: "delegate_completed".to_owned(),
+                actor_session_id: Some("root-session".to_owned()),
+                event_payload_json: json!({
+                    "turn_count": 1,
+                    "duration_ms": 12,
+                }),
+                outcome_status: "ok".to_owned(),
+                outcome_payload_json: json!({
+                    "child_session_id": "child-session",
+                    "final_output": "late success",
+                }),
+            },
+        )
+        .expect("stale running finalizer should no-op");
+
+        let child = repo
+            .load_session("child-session")
+            .expect("load child session")
+            .expect("child session row");
+        assert_eq!(child.state, SessionState::Failed);
+        assert_eq!(child.last_error.as_deref(), Some("delegate_recovered"));
+
+        let events = repo
+            .list_recent_events("child-session", 10)
+            .expect("list child events");
+        let event_kinds: Vec<&str> = events
+            .iter()
+            .map(|event| event.event_kind.as_str())
+            .collect();
+        assert!(event_kinds.contains(&RECOVERY_EVENT_KIND));
+        assert!(!event_kinds.contains(&"delegate_completed"));
+
+        let terminal_outcome = repo
+            .load_terminal_outcome("child-session")
+            .expect("load terminal outcome")
+            .expect("terminal outcome row");
+        assert_eq!(terminal_outcome.status, "error");
+        assert_eq!(terminal_outcome.payload_json["error"], "delegate_recovered");
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn finalize_async_delegate_spawn_failure_does_not_overwrite_recovered_failure() {
+        let memory_config = sqlite_memory_config("recovered-ready-child");
+        let repo = SessionRepository::new(&memory_config).expect("session repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create child session");
+
+        let recovered = finalize_recovered_child(&repo, SessionState::Ready);
+        assert_eq!(recovered.session.state, SessionState::Failed);
+        assert_eq!(recovered.terminal_outcome.status, "error");
+
+        finalize_async_delegate_spawn_failure(
+            &memory_config,
+            "child-session",
+            "root-session",
+            Some("Child".to_owned()),
+            "spawn unavailable".to_owned(),
+        )
+        .expect("stale queued spawn failure finalizer should no-op");
+
+        let child = repo
+            .load_session("child-session")
+            .expect("load child session")
+            .expect("child session row");
+        assert_eq!(child.state, SessionState::Failed);
+        assert_eq!(child.last_error.as_deref(), Some("delegate_recovered"));
+
+        let events = repo
+            .list_recent_events("child-session", 10)
+            .expect("list child events");
+        let event_kinds: Vec<&str> = events
+            .iter()
+            .map(|event| event.event_kind.as_str())
+            .collect();
+        assert!(event_kinds.contains(&RECOVERY_EVENT_KIND));
+        assert!(!event_kinds.contains(&"delegate_spawn_failed"));
+
+        let terminal_outcome = repo
+            .load_terminal_outcome("child-session")
+            .expect("load terminal outcome")
+            .expect("terminal outcome row");
+        assert_eq!(terminal_outcome.status, "error");
+        assert_eq!(terminal_outcome.payload_json["error"], "delegate_recovered");
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn finalize_delegate_child_terminal_with_recovery_errors_when_child_session_missing() {
+        let memory_config = sqlite_memory_config("missing-running-child");
+        let repo = SessionRepository::new(&memory_config).expect("session repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+
+        let error = finalize_delegate_child_terminal_with_recovery(
+            &repo,
+            "child-session",
+            FinalizeSessionTerminalRequest {
+                state: SessionState::Completed,
+                last_error: None,
+                event_kind: "delegate_completed".to_owned(),
+                actor_session_id: Some("root-session".to_owned()),
+                event_payload_json: json!({
+                    "turn_count": 1,
+                    "duration_ms": 12,
+                }),
+                outcome_status: "ok".to_owned(),
+                outcome_payload_json: json!({
+                    "child_session_id": "child-session",
+                    "final_output": "late success",
+                }),
+            },
+        )
+        .expect_err("missing child session should not be treated as stale");
+
+        assert!(error.contains("session `child-session` not found"));
+        assert!(error.contains("delegate_terminal_recovery_skipped_from_state: missing"));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn finalize_async_delegate_spawn_failure_with_recovery_errors_when_child_session_missing() {
+        let memory_config = sqlite_memory_config("missing-ready-child");
+        let repo = SessionRepository::new(&memory_config).expect("session repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+
+        let error = finalize_async_delegate_spawn_failure_with_recovery(
+            &memory_config,
+            "child-session",
+            "root-session",
+            Some("Child".to_owned()),
+            "spawn unavailable".to_owned(),
+        )
+        .expect_err("missing child session should not bypass spawn failure recovery");
+
+        assert!(error.contains("session `child-session` not found"));
+        assert!(error.contains("delegate_async_spawn_recovery_skipped_from_state: missing"));
+        assert_eq!(
+            repo.load_session("child-session")
+                .expect("load child session"),
+            None
+        );
+    }
 
     #[test]
     fn build_turn_reply_followup_messages_include_truncation_hint_for_truncated_tool_results() {
