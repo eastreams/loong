@@ -24,7 +24,7 @@ pub(super) async fn request_across_model_candidates<T, F, Fut>(
     mut request_with_model: F,
 ) -> CliResult<T>
 where
-    F: FnMut(String, bool, Option<String>) -> Fut,
+    F: FnMut(String, bool, ProviderAuthProfile) -> Fut,
     Fut: Future<Output = Result<T, ModelRequestError>>,
 {
     if model_candidates.is_empty() {
@@ -38,13 +38,7 @@ where
     for (model_index, model) in model_candidates.iter().enumerate() {
         let mut model_switch_reason = None;
         for (profile_index, profile) in ordered_profiles.iter().enumerate() {
-            match request_with_model(
-                model.clone(),
-                auto_model_mode,
-                profile.authorization_header.clone(),
-            )
-            .await
-            {
+            match request_with_model(model.clone(), auto_model_mode, profile.clone()).await {
                 Ok(value) => {
                     if let Some(policy) = profile_state_policy {
                         mark_provider_profile_success(policy, profile);

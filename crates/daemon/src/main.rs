@@ -17,7 +17,10 @@ use clap::CommandFactory;
 use clap::{Parser, Subcommand, ValueEnum};
 #[cfg(test)]
 use kernel::{AuditEventKind, ExecutionRoute, HarnessKind, PluginBridgeKind, VerticalPackManifest};
-use kernel::{Capability, ConnectorCommand, FixedClock, InMemoryAuditSink, TaskIntent};
+use kernel::{
+    Capability, ConnectorCommand, FixedClock, InMemoryAuditSink, TaskIntent, ToolCoreOutcome,
+    ToolCoreRequest,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 #[cfg(test)]
@@ -45,6 +48,13 @@ pub(crate) use loongclaw_spec::programmatic::{
 mod tests;
 
 const PUBLIC_GITHUB_REPO: &str = "loongclaw-ai/loongclaw";
+
+fn native_spec_tool_executor(request: ToolCoreRequest) -> Option<Result<ToolCoreOutcome, String>> {
+    if mvp::tools::canonical_tool_name(request.tool_name.as_str()) != "claw.import" {
+        return None;
+    }
+    Some(mvp::tools::execute_tool_core(request))
+}
 
 type ChannelCliCommandFuture<'a> = Pin<Box<dyn Future<Output = CliResult<()>> + Send + 'a>>;
 
@@ -328,6 +338,13 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    /// List available memory systems and selected runtime memory system
+    ListMemorySystems {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     /// List available ACP runtime backends and current control-plane selection
     ListAcpBackends {
         #[arg(long)]
@@ -515,6 +532,7 @@ async fn main() {
                 &output,
                 enforce_gate,
                 preflight_fail_on_warnings,
+                Some(native_spec_tool_executor),
             )
             .await
         }
@@ -657,6 +675,9 @@ async fn main() {
         Commands::ListModels { config, json } => run_list_models_cli(config.as_deref(), json).await,
         Commands::ListContextEngines { config, json } => {
             run_list_context_engines_cli(config.as_deref(), json)
+        }
+        Commands::ListMemorySystems { config, json } => {
+            run_list_memory_systems_cli(config.as_deref(), json)
         }
         Commands::ListAcpBackends { config, json } => {
             run_list_acp_backends_cli(config.as_deref(), json)
@@ -987,7 +1008,9 @@ fn init_spec_cli(output_path: &str) -> CliResult<()> {
 
 async fn run_spec_cli(spec_path: &str, print_audit: bool) -> CliResult<()> {
     let spec = read_spec_file(spec_path)?;
-    let report = execute_spec(&spec, print_audit).await;
+    let report =
+        execute_spec_with_native_tool_executor(&spec, print_audit, Some(native_spec_tool_executor))
+            .await;
     let pretty = serde_json::to_string_pretty(&report)
         .map_err(|error| format!("serialize spec run report failed: {error}"))?;
     println!("{pretty}");
@@ -1426,6 +1449,26 @@ fn run_list_context_engines_cli(config_path: Option<&str>, as_json: bool) -> Cli
             format_capability_names(&metadata.capability_names())
         );
     }
+    Ok(())
+}
+
+fn run_list_memory_systems_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
+    let (resolved_path, config) = mvp::config::load(config_path)?;
+    let snapshot = mvp::memory::collect_memory_system_runtime_snapshot(&config)?;
+
+    if as_json {
+        let payload =
+            build_memory_systems_cli_json_payload(&resolved_path.display().to_string(), &snapshot);
+        let pretty = serde_json::to_string_pretty(&payload)
+            .map_err(|error| format!("serialize memory-system output failed: {error}"))?;
+        println!("{pretty}");
+        return Ok(());
+    }
+
+    println!(
+        "{}",
+        render_memory_system_snapshot_text(&resolved_path.display().to_string(), &snapshot)
+    );
     Ok(())
 }
 
@@ -2348,6 +2391,97 @@ fn context_engine_metadata_json(
     Value::Object(payload)
 }
 
+fn memory_system_metadata_json(
+    metadata: &mvp::memory::MemorySystemMetadata,
+    source: Option<&str>,
+) -> Value {
+    let mut payload = serde_json::Map::new();
+    payload.insert("id".to_owned(), json!(metadata.id));
+    payload.insert("api_version".to_owned(), json!(metadata.api_version));
+    payload.insert(
+        "capabilities".to_owned(),
+        json!(metadata.capability_names()),
+    );
+    payload.insert("summary".to_owned(), json!(metadata.summary));
+    if let Some(source) = source {
+        payload.insert("source".to_owned(), json!(source));
+    }
+    Value::Object(payload)
+}
+
+fn memory_system_policy_json(policy: &mvp::memory::MemorySystemPolicySnapshot) -> Value {
+    json!({
+        "backend": policy.backend.as_str(),
+        "profile": policy.profile.as_str(),
+        "mode": policy.mode.as_str(),
+        "ingest_mode": policy.ingest_mode.as_str(),
+        "fail_open": policy.fail_open,
+        "strict_mode_requested": policy.strict_mode_requested,
+        "strict_mode_active": policy.strict_mode_active,
+        "effective_fail_open": policy.effective_fail_open,
+    })
+}
+
+fn build_memory_systems_cli_json_payload(
+    config_path: &str,
+    snapshot: &mvp::memory::MemorySystemRuntimeSnapshot,
+) -> Value {
+    json!({
+        "config": config_path,
+        "selected": memory_system_metadata_json(
+            &snapshot.selected_metadata,
+            Some(snapshot.selected.source.as_str())
+        ),
+        "available": snapshot
+            .available
+            .iter()
+            .map(|metadata| memory_system_metadata_json(metadata, None))
+            .collect::<Vec<_>>(),
+        "policy": memory_system_policy_json(&snapshot.policy),
+    })
+}
+
+fn render_memory_system_snapshot_text(
+    config_path: &str,
+    snapshot: &mvp::memory::MemorySystemRuntimeSnapshot,
+) -> String {
+    let mut lines = vec![
+        format!("config={config_path}"),
+        format!(
+            "selected={} source={} api_version={} capabilities={} summary={}",
+            snapshot.selected_metadata.id,
+            snapshot.selected.source.as_str(),
+            snapshot.selected_metadata.api_version,
+            format_capability_names(&snapshot.selected_metadata.capability_names()),
+            snapshot.selected_metadata.summary
+        ),
+        format!(
+            "policy=backend:{} profile:{} mode:{} ingest_mode:{} fail_open:{} strict_mode_requested:{} strict_mode_active:{} effective_fail_open:{}",
+            snapshot.policy.backend.as_str(),
+            snapshot.policy.profile.as_str(),
+            snapshot.policy.mode.as_str(),
+            snapshot.policy.ingest_mode.as_str(),
+            snapshot.policy.fail_open,
+            snapshot.policy.strict_mode_requested,
+            snapshot.policy.strict_mode_active,
+            snapshot.policy.effective_fail_open,
+        ),
+        "available:".to_owned(),
+    ];
+
+    for metadata in &snapshot.available {
+        lines.push(format!(
+            "- {} api_version={} capabilities={} summary={}",
+            metadata.id,
+            metadata.api_version,
+            format_capability_names(&metadata.capability_names()),
+            metadata.summary
+        ));
+    }
+
+    lines.join("\n")
+}
+
 fn acp_backend_metadata_json(
     metadata: &mvp::acp::AcpBackendMetadata,
     source: Option<&str>,
@@ -2850,6 +2984,20 @@ mod cli_tests {
                 assert_eq!(hot_iterations, 32);
                 assert_eq!(warmup_iterations, 4);
                 assert_eq!(suite_repetitions, 1);
+            }
+            other => panic!("unexpected command parsed: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn memory_systems_cli_parses() {
+        let cli = Cli::try_parse_from(["loongclaw", "list-memory-systems"])
+            .expect("`list-memory-systems` should parse");
+
+        match cli.command {
+            Some(Commands::ListMemorySystems { config, json }) => {
+                assert!(config.is_none());
+                assert!(!json);
             }
             other => panic!("unexpected command parsed: {other:?}"),
         }

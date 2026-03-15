@@ -130,14 +130,20 @@ mod tests {
         let alpha = ProviderAuthProfile {
             id: "alpha".to_owned(),
             authorization_header: None,
+            x_api_key_header: None,
+            auth_cache_key: None,
         };
         let beta = ProviderAuthProfile {
             id: "beta".to_owned(),
             authorization_header: None,
+            x_api_key_header: None,
+            auth_cache_key: None,
         };
         let gamma = ProviderAuthProfile {
             id: "gamma".to_owned(),
             authorization_header: None,
+            x_api_key_header: None,
+            auth_cache_key: None,
         };
         let profiles = [alpha, beta, gamma];
         let ordered = prioritize_profiles_by_health(
@@ -174,10 +180,14 @@ mod tests {
         let alpha = ProviderAuthProfile {
             id: "alpha".to_owned(),
             authorization_header: None,
+            x_api_key_header: None,
+            auth_cache_key: None,
         };
         let beta = ProviderAuthProfile {
             id: "beta".to_owned(),
             authorization_header: None,
+            x_api_key_header: None,
+            auth_cache_key: None,
         };
         let profiles = [alpha, beta];
         let ordered = prioritize_profiles_by_health(

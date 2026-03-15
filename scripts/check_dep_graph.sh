@@ -45,7 +45,6 @@ allowed=(
   "spec -> contracts"
   "spec -> kernel"
   "spec -> protocol"
-  "spec -> app"
   "bench -> contracts"
   "bench -> kernel"
   "bench -> spec"

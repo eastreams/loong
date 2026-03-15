@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, path::PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::shared::{
     ConfigValidationIssue, DEFAULT_SQLITE_FILE, default_loongclaw_home, expand_path,
@@ -72,6 +72,12 @@ pub struct MemoryConfig {
     pub backend: MemoryBackendKind,
     #[serde(default)]
     pub profile: MemoryProfile,
+    #[serde(default)]
+    pub system: MemorySystemKind,
+    #[serde(default = "default_true")]
+    pub fail_open: bool,
+    #[serde(default)]
+    pub ingest_mode: MemoryIngestMode,
     #[serde(default = "default_sqlite_path")]
     pub sqlite_path: String,
     #[serde(default = "default_sliding_window")]
@@ -113,6 +119,83 @@ pub enum MemoryProfile {
     ProfilePlusWindow,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MemorySystemKind {
+    #[default]
+    Builtin,
+}
+
+impl MemorySystemKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Builtin => "builtin",
+        }
+    }
+
+    pub fn parse_id(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "builtin" => Some(Self::Builtin),
+            _ => None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MemorySystemKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse_id(&raw).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "unsupported memory.system `{}` (available: builtin)",
+                raw.trim()
+            ))
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryIngestMode {
+    #[default]
+    SyncMinimal,
+    AsyncBackground,
+}
+
+impl MemoryIngestMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SyncMinimal => "sync_minimal",
+            Self::AsyncBackground => "async_background",
+        }
+    }
+
+    pub fn parse_id(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "sync_minimal" => Some(Self::SyncMinimal),
+            "async_background" => Some(Self::AsyncBackground),
+            _ => None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MemoryIngestMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse_id(&raw).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "unsupported memory.ingest_mode `{}` (available: sync_minimal, async_background)",
+                raw.trim()
+            ))
+        })
+    }
+}
+
 impl MemoryProfile {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -146,6 +229,16 @@ pub enum MemoryMode {
     WindowOnly,
     WindowPlusSummary,
     ProfilePlusWindow,
+}
+
+impl MemoryMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::WindowOnly => "window_only",
+            Self::WindowPlusSummary => "window_plus_summary",
+            Self::ProfilePlusWindow => "profile_plus_window",
+        }
+    }
 }
 
 impl Default for ToolConfig {
@@ -204,6 +297,9 @@ impl Default for MemoryConfig {
         Self {
             backend: MemoryBackendKind::default(),
             profile: MemoryProfile::default(),
+            system: MemorySystemKind::default(),
+            fail_open: default_true(),
+            ingest_mode: MemoryIngestMode::default(),
             sqlite_path: default_sqlite_path(),
             sliding_window: default_sliding_window(),
             summary_max_chars: default_summary_max_chars(),
@@ -238,8 +334,24 @@ impl MemoryConfig {
         self.profile
     }
 
+    pub const fn resolved_system(&self) -> MemorySystemKind {
+        self.system
+    }
+
     pub const fn resolved_mode(&self) -> MemoryMode {
         self.profile.mode()
+    }
+
+    pub const fn strict_mode_requested(&self) -> bool {
+        !self.fail_open
+    }
+
+    pub const fn strict_mode_active(&self) -> bool {
+        false
+    }
+
+    pub const fn effective_fail_open(&self) -> bool {
+        !self.strict_mode_active()
     }
 
     pub fn summary_char_budget(&self) -> usize {
@@ -263,6 +375,10 @@ fn default_sqlite_path() -> String {
 }
 
 const fn default_require_download_approval() -> bool {
+    true
+}
+
+const fn default_true() -> bool {
     true
 }
 
@@ -291,6 +407,7 @@ const fn default_summary_max_chars() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::DEFAULT_MEMORY_SYSTEM_ID;
 
     #[test]
     fn memory_profile_defaults_to_window_only() {
@@ -298,6 +415,41 @@ mod tests {
         assert_eq!(config.backend, MemoryBackendKind::Sqlite);
         assert_eq!(config.profile, MemoryProfile::WindowOnly);
         assert_eq!(config.resolved_mode(), MemoryMode::WindowOnly);
+    }
+
+    #[test]
+    fn memory_system_defaults_to_builtin() {
+        let config = MemoryConfig::default();
+        assert_eq!(config.system, MemorySystemKind::Builtin);
+        assert_eq!(config.resolved_system(), MemorySystemKind::Builtin);
+        assert_eq!(config.resolved_system().as_str(), DEFAULT_MEMORY_SYSTEM_ID);
+    }
+
+    #[test]
+    fn memory_system_rejects_unimplemented_future_variant_ids() {
+        assert_eq!(MemorySystemKind::parse_id("lucid"), None);
+    }
+
+    #[test]
+    fn hydrated_memory_policy_defaults_are_fail_open_and_sync_minimal() {
+        let config = MemoryConfig::default();
+        assert!(config.fail_open);
+        assert!(config.effective_fail_open());
+        assert!(!config.strict_mode_requested());
+        assert!(!config.strict_mode_active());
+        assert_eq!(config.ingest_mode, MemoryIngestMode::SyncMinimal);
+    }
+
+    #[test]
+    fn strict_mode_request_remains_reserved_and_disabled_by_default() {
+        let config = MemoryConfig {
+            fail_open: false,
+            ..MemoryConfig::default()
+        };
+
+        assert!(config.strict_mode_requested());
+        assert!(!config.strict_mode_active());
+        assert!(config.effective_fail_open());
     }
 
     #[test]

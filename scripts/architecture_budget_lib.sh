@@ -86,6 +86,7 @@ architecture_boundary_check_keys() {
   cat <<'BOUNDARIES'
 memory_literals
 provider_mod_helper_definitions
+spec_app_dependency
 BOUNDARIES
 }
 
@@ -106,6 +107,15 @@ architecture_provider_mod_helper_definition_hits() {
   fi
 }
 
+architecture_spec_app_dependency_hits() {
+  local file="crates/spec/Cargo.toml"
+  if have_rg; then
+    rg -n '^loongclaw-app[[:space:]]*=' "$file" || true
+  else
+    grep -En '^loongclaw-app[[:space:]]*=' "$file" || true
+  fi
+}
+
 architecture_boundary_pass_summary() {
   case "$1" in
     memory_literals)
@@ -113,6 +123,9 @@ architecture_boundary_pass_summary() {
       ;;
     provider_mod_helper_definitions)
       echo "provider/mod.rs keeps payload, parse, and recovery helper implementations outside the top-level module"
+      ;;
+    spec_app_dependency)
+      echo "spec crate remains detached from app crate at the Cargo dependency boundary"
       ;;
     *)
       return 1
@@ -128,6 +141,9 @@ architecture_boundary_fail_summary() {
     provider_mod_helper_definitions)
       echo "provider/mod.rs still defines payload, parse, or recovery helpers directly"
       ;;
+    spec_app_dependency)
+      echo "spec crate depends on app crate directly"
+      ;;
     *)
       return 1
       ;;
@@ -141,6 +157,9 @@ architecture_boundary_hits() {
       ;;
     provider_mod_helper_definitions)
       architecture_provider_mod_helper_definition_hits
+      ;;
+    spec_app_dependency)
+      architecture_spec_app_dependency_hits
       ;;
     *)
       return 1

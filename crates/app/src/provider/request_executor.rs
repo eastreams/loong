@@ -6,6 +6,7 @@ use tokio::time::sleep;
 use crate::config::ProviderConfig;
 
 use super::{
+    auth_profile_runtime::ProviderAuthProfile,
     contracts::{
         CompletionPayloadMode, ProviderApiError, ProviderCapabilityContract,
         ProviderRuntimeContract, adapt_payload_mode_for_error, parse_provider_api_error,
@@ -27,11 +28,12 @@ pub(super) struct ModelRequestRuntime<'a> {
     pub(super) runtime_contract: ProviderRuntimeContract,
     pub(super) capability: ProviderCapabilityContract,
     pub(super) auto_model_mode: bool,
-    pub(super) authorization_header: Option<&'a str>,
+    pub(super) auth_profile: &'a ProviderAuthProfile,
     pub(super) endpoint: &'a str,
     pub(super) headers: &'a reqwest::header::HeaderMap,
     pub(super) request_policy: &'a policy::ProviderRequestPolicy,
     pub(super) client: &'a reqwest::Client,
+    pub(super) auth_context: &'a transport::RequestAuthContext,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,16 +105,109 @@ where
     loop {
         attempt += 1;
         let body = build_body(payload_mode);
-        let mut req = runtime
+        let request_endpoint =
+            transport::resolve_request_endpoint(runtime.provider, runtime.endpoint, runtime.model);
+        let request_endpoint =
+            transport::resolve_request_url(runtime.provider, request_endpoint.as_str(), runtime.auth_context)
+                .map_err(|error| {
+                    build_model_request_error(
+                        format!(
+                            "provider request setup failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
+                            model = runtime.model,
+                            max_attempts = runtime.request_policy.max_attempts
+                        ),
+                        false,
+                        ProviderFailoverReason::TransportFailure,
+                        ProviderFailoverStage::TransportFailure,
+                        runtime.model,
+                        attempt,
+                        runtime.request_policy.max_attempts,
+                        None,
+                    )
+                })?;
+        let body_bytes = transport::encode_json_request_body(&body).map_err(|error| {
+            build_model_request_error(
+                format!(
+                    "provider request setup failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
+                    model = runtime.model,
+                    max_attempts = runtime.request_policy.max_attempts
+                ),
+                false,
+                ProviderFailoverReason::TransportFailure,
+                ProviderFailoverStage::TransportFailure,
+                runtime.model,
+                attempt,
+                runtime.request_policy.max_attempts,
+                None,
+            )
+        })?;
+        let mut headers = runtime.headers.clone();
+        transport::apply_json_request_defaults(&mut headers).map_err(|error| {
+            build_model_request_error(
+                format!(
+                    "provider request setup failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
+                    model = runtime.model,
+                    max_attempts = runtime.request_policy.max_attempts
+                ),
+                false,
+                ProviderFailoverReason::TransportFailure,
+                ProviderFailoverStage::TransportFailure,
+                runtime.model,
+                attempt,
+                runtime.request_policy.max_attempts,
+                None,
+            )
+        })?;
+        transport::apply_auth_profile_headers(&mut headers, Some(runtime.auth_profile)).map_err(
+            |error| {
+                build_model_request_error(
+                    format!(
+                        "provider request setup failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
+                        model = runtime.model,
+                        max_attempts = runtime.request_policy.max_attempts
+                    ),
+                    false,
+                    ProviderFailoverReason::TransportFailure,
+                    ProviderFailoverStage::TransportFailure,
+                    runtime.model,
+                    attempt,
+                    runtime.request_policy.max_attempts,
+                    None,
+                )
+            },
+        )?;
+        let req = runtime
             .client
-            .post(runtime.endpoint)
-            .headers(runtime.headers.clone())
-            .json(&body);
-        if let Some(auth_header) = runtime.authorization_header {
-            req = req.header(reqwest::header::AUTHORIZATION, auth_header);
-        }
+            .post(request_endpoint.as_str())
+            .headers(headers)
+            .body(body_bytes.clone())
+            .build()
+            .map_err(|error| {
+                build_model_request_error(
+                    format!(
+                        "provider request setup failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
+                        model = runtime.model,
+                        max_attempts = runtime.request_policy.max_attempts
+                    ),
+                    false,
+                    ProviderFailoverReason::TransportFailure,
+                    ProviderFailoverStage::TransportFailure,
+                    runtime.model,
+                    attempt,
+                    runtime.request_policy.max_attempts,
+                    None,
+                )
+            })?;
 
-        match req.send().await {
+        match transport::execute_request(
+            runtime.client,
+            req,
+            Some(body_bytes.as_slice()),
+            runtime.auth_context,
+            Some(transport::BedrockService::Runtime),
+        )
+        .await
+        {
             Ok(response) => {
                 let status = response.status();
                 let response_headers = response.headers().clone();
@@ -224,7 +319,7 @@ where
                     }
                 }
             }
-            Err(error) => {
+            Err(transport::RequestExecutionError::Transport(error)) => {
                 if let Some((retry_delay_ms, next_backoff_ms)) =
                     plan_transport_error_retry(attempt, runtime.request_policy, &error, backoff_ms)
                 {
@@ -235,6 +330,22 @@ where
                 return Err(build_model_request_error(
                     format!(
                         "provider request failed for model `{}` on attempt {attempt}/{max_attempts}: {error}",
+                        runtime.model,
+                        max_attempts = runtime.request_policy.max_attempts
+                    ),
+                    false,
+                    ProviderFailoverReason::TransportFailure,
+                    ProviderFailoverStage::TransportFailure,
+                    runtime.model,
+                    attempt,
+                    runtime.request_policy.max_attempts,
+                    None,
+                ));
+            }
+            Err(transport::RequestExecutionError::Setup(error)) => {
+                return Err(build_model_request_error(
+                    format!(
+                        "provider request setup failed for model `{}` on attempt {attempt}/{max_attempts}: {error}",
                         runtime.model,
                         max_attempts = runtime.request_policy.max_attempts
                     ),

@@ -6,6 +6,22 @@ use super::contracts::{ProviderFeatureFamily, provider_runtime_contract};
 pub(super) fn validate_provider_feature_gate(config: &LoongClawConfig) -> CliResult<()> {
     let runtime_contract = provider_runtime_contract(&config.provider);
     match runtime_contract.feature_family {
+        ProviderFeatureFamily::Anthropic => {
+            if !cfg!(feature = "provider-anthropic") {
+                return Err(
+                    "anthropic provider family is disabled (enable feature `provider-anthropic`)"
+                        .to_owned(),
+                );
+            }
+        }
+        ProviderFeatureFamily::Bedrock => {
+            if !cfg!(feature = "provider-bedrock") {
+                return Err(
+                    "bedrock provider family is disabled (enable feature `provider-bedrock`)"
+                        .to_owned(),
+                );
+            }
+        }
         ProviderFeatureFamily::VolcengineCompatible => {
             if !cfg!(feature = "provider-volcengine") {
                 return Err(

@@ -174,7 +174,7 @@ pub async fn request_completion(
         &session.model_candidates,
         session.auto_model_mode,
         session.model_candidate_cooldown_policy.as_ref(),
-        |model, auto_model_mode, authorization_header| {
+        |model, auto_model_mode, auth_profile| {
             request_completion_with_model(
                 config,
                 messages,
@@ -182,11 +182,12 @@ pub async fn request_completion(
                 session.runtime_contract,
                 &session.capability_profile,
                 auto_model_mode,
-                authorization_header,
+                auth_profile,
                 &session.endpoint,
                 &session.headers,
                 &session.request_policy,
                 &session.client,
+                &session.auth_context,
             )
         },
     )
@@ -207,7 +208,7 @@ pub async fn request_turn(
         &session.model_candidates,
         session.auto_model_mode,
         session.model_candidate_cooldown_policy.as_ref(),
-        |model, auto_model_mode, authorization_header| {
+        |model, auto_model_mode, auth_profile| {
             request_turn_with_model(
                 config,
                 messages,
@@ -215,11 +216,12 @@ pub async fn request_turn(
                 session.runtime_contract,
                 &session.capability_profile,
                 auto_model_mode,
-                authorization_header,
+                auth_profile,
                 &session.endpoint,
                 &session.headers,
                 &session.request_policy,
                 &session.client,
+                &session.auth_context,
             )
         },
     )
@@ -228,6 +230,30 @@ pub async fn request_turn(
 
 pub async fn fetch_available_models(config: &LoongClawConfig) -> CliResult<Vec<String>> {
     fetch_available_models_with_profiles(config).await
+}
+
+pub async fn provider_auth_ready(config: &LoongClawConfig) -> bool {
+    if config.provider.resolved_auth_secret().is_some() {
+        return true;
+    }
+
+    for header_name in ["authorization", "x-api-key"] {
+        if config
+            .provider
+            .header_value(header_name)
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return true;
+        }
+    }
+
+    if config.provider.kind == crate::config::ProviderKind::Bedrock
+        && let Ok(auth_context) = transport::resolve_request_auth_context(&config.provider).await
+    {
+        return auth_context.has_bedrock_sigv4_fallback();
+    }
+
+    false
 }
 
 #[cfg(test)]

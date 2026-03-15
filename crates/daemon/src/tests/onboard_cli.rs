@@ -11,6 +11,22 @@ fn parse_provider_kind_accepts_primary_and_legacy_aliases() {
         Some(mvp::config::ProviderKind::Openai)
     );
     assert_eq!(
+        crate::onboard_cli::parse_provider_kind("bedrock"),
+        Some(mvp::config::ProviderKind::Bedrock)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_provider_kind("byteplus"),
+        Some(mvp::config::ProviderKind::Byteplus)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_provider_kind("byteplus_coding_compatible"),
+        Some(mvp::config::ProviderKind::ByteplusCoding)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_provider_kind("custom"),
+        Some(mvp::config::ProviderKind::Custom)
+    );
+    assert_eq!(
         crate::onboard_cli::parse_provider_kind("openrouter_compatible"),
         Some(mvp::config::ProviderKind::Openrouter)
     );
@@ -26,6 +42,10 @@ fn parse_provider_kind_accepts_primary_and_legacy_aliases() {
         crate::onboard_cli::parse_provider_kind("kimi_coding_compatible"),
         Some(mvp::config::ProviderKind::KimiCoding)
     );
+    assert_eq!(
+        crate::onboard_cli::parse_provider_kind("volcengine_coding"),
+        Some(mvp::config::ProviderKind::VolcengineCoding)
+    );
     assert_eq!(crate::onboard_cli::parse_provider_kind("unsupported"), None);
 }
 
@@ -38,6 +58,22 @@ fn provider_default_env_mapping_is_stable() {
     assert_eq!(
         crate::onboard_cli::provider_default_api_key_env(mvp::config::ProviderKind::Anthropic),
         "ANTHROPIC_API_KEY"
+    );
+    assert_eq!(
+        crate::onboard_cli::provider_default_api_key_env(mvp::config::ProviderKind::Bedrock),
+        "AWS_BEARER_TOKEN_BEDROCK"
+    );
+    assert_eq!(
+        crate::onboard_cli::provider_default_api_key_env(mvp::config::ProviderKind::Byteplus),
+        "BYTEPLUS_API_KEY"
+    );
+    assert_eq!(
+        crate::onboard_cli::provider_default_api_key_env(mvp::config::ProviderKind::ByteplusCoding),
+        "BYTEPLUS_API_KEY"
+    );
+    assert_eq!(
+        crate::onboard_cli::provider_default_api_key_env(mvp::config::ProviderKind::Custom),
+        "CUSTOM_PROVIDER_API_KEY"
     );
     assert_eq!(
         crate::onboard_cli::provider_default_api_key_env(mvp::config::ProviderKind::Openrouter),
@@ -54,6 +90,26 @@ fn provider_kind_id_mapping_includes_kimi_coding() {
     assert_eq!(
         crate::onboard_cli::provider_kind_id(mvp::config::ProviderKind::KimiCoding),
         "kimi_coding"
+    );
+    assert_eq!(
+        crate::onboard_cli::provider_kind_id(mvp::config::ProviderKind::Byteplus),
+        "byteplus"
+    );
+    assert_eq!(
+        crate::onboard_cli::provider_kind_id(mvp::config::ProviderKind::ByteplusCoding),
+        "byteplus_coding"
+    );
+    assert_eq!(
+        crate::onboard_cli::provider_kind_id(mvp::config::ProviderKind::VolcengineCoding),
+        "volcengine_coding"
+    );
+    assert_eq!(
+        crate::onboard_cli::provider_kind_id(mvp::config::ProviderKind::Bedrock),
+        "bedrock"
+    );
+    assert_eq!(
+        crate::onboard_cli::provider_kind_id(mvp::config::ProviderKind::Custom),
+        "custom"
     );
 }
 

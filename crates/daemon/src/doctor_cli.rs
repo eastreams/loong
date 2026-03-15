@@ -43,7 +43,7 @@ pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<(
     config_mutated |= maybe_apply_provider_env_fix(&mut config, options.fix, &mut fixes);
     config_mutated |= maybe_apply_channel_env_fix(&mut config, options.fix, &mut fixes);
 
-    let has_provider_credentials = config.provider.authorization_header().is_some();
+    let has_provider_credentials = mvp::provider::provider_auth_ready(&config).await;
     if has_provider_credentials {
         checks.push(DoctorCheck {
             name: "provider credentials".to_owned(),
@@ -56,21 +56,20 @@ pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<(
             .provider
             .api_key
             .as_deref()
-            .and_then(parse_provider_api_key_env_hint)
-            && !hints.iter().any(|existing| existing == key)
+            .and_then(parse_provider_env_hint)
         {
-            hints.push(key.to_owned());
+            push_unique_hint(&mut hints, key);
         }
-        if let Some(key) = config.provider.api_key_env.as_deref().map(str::trim)
-            && !key.is_empty()
-            && !hints.iter().any(|existing| existing == key)
+        if let Some(key) = config
+            .provider
+            .oauth_access_token
+            .as_deref()
+            .and_then(parse_provider_env_hint)
         {
-            hints.push(key.to_owned());
+            push_unique_hint(&mut hints, key);
         }
-        if let Some(default_key) = config.provider.kind.default_api_key_env()
-            && !hints.iter().any(|existing| existing == default_key)
-        {
-            hints.push(default_key.to_owned());
+        for key in config.provider.credential_env_names() {
+            push_unique_hint(&mut hints, key.as_str());
         }
         let detail = if hints.is_empty() {
             "provider credentials are missing".to_owned()
@@ -525,7 +524,13 @@ fn ensure_env_binding(
     true
 }
 
-fn parse_provider_api_key_env_hint(raw: &str) -> Option<&str> {
+fn push_unique_hint(hints: &mut Vec<String>, key: &str) {
+    if !hints.iter().any(|existing| existing == key) {
+        hints.push(key.to_owned());
+    }
+}
+
+fn parse_provider_env_hint(raw: &str) -> Option<&str> {
     let trimmed = raw.trim();
     if trimmed.len() >= 4 && trimmed[..4].eq_ignore_ascii_case("env:") {
         let candidate = trimmed[4..].trim();

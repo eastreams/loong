@@ -65,6 +65,11 @@ LoongClaw is a layered Agentic OS kernel focused on stable kernel contracts, str
 - `setup` bootstraps a beginner-friendly TOML config and local SQLite memory.
 - `chat` provides an interactive CLI channel with sliding-window conversation memory.
 - Core tool runtime currently ships `shell.exec`, `file.read`, and `file.write`.
+- Memory-system selection is now a stable builtin-only seam:
+  - config: `[memory] system = "builtin"`
+  - env: `LOONGCLAW_MEMORY_SYSTEM=builtin`
+  - the runtime keeps LoongClaw-owned canonical history and reserves concrete external adapters for
+    later dedicated tracks
 - Conversation runtime now exposes a pluggable `context engine` seam with explicit lifecycle hooks
   (`bootstrap`, `ingest`, `assemble`, `after_turn`, `compact_context`) plus reserved subagent
   hooks for future multi-agent orchestration.
@@ -115,6 +120,7 @@ LoongClaw is a layered Agentic OS kernel focused on stable kernel contracts, str
   `activation_origin`, so operators can distinguish explicit ACP entry from automatic ACP routing.
 - The daemon now exposes operator-facing diagnostics for:
   - `list-context-engines`
+  - `list-memory-systems`
   - `list-acp-backends`
   - `list-acp-sessions`
   - `acp-doctor`
@@ -132,6 +138,7 @@ LoongClaw is a layered Agentic OS kernel focused on stable kernel contracts, str
 ```bash
 cargo run -p loongclaw-daemon --bin loongclawd -- list-models --json
 cargo run -p loongclaw-daemon --bin loongclawd -- list-context-engines --json
+cargo run -p loongclaw-daemon --bin loongclawd -- list-memory-systems --json
 cargo run -p loongclaw-daemon --bin loongclawd -- list-acp-backends --json
 cargo run -p loongclaw-daemon --bin loongclawd -- list-acp-sessions --json
 cargo run -p loongclaw-daemon --bin loongclawd -- acp-doctor --backend acpx --json
@@ -249,6 +256,26 @@ backend is SQLite, with three operator-selectable context injection modes:
 `profile_note` is the first migration-friendly durable memory lane. It is meant
 to carry imported claw identity, stable preferences, or long-lived operator
 tuning without forcing everything into the system prompt.
+
+## Memory Systems
+
+LoongClaw now treats `memory.system` as a stable selection seam, but the current
+runtime surface remains intentionally builtin-only:
+
+- `builtin` keeps canonical raw conversation history, typed canonical records,
+  and deterministic prompt hydration inside LoongClaw.
+- Future external memory systems are expected to plug in below final prompt
+  projection, not replace LoongClaw's context authority.
+- Memory-system failures are designed to fail open, preserving the baseline
+  recent-window chat experience instead of turning memory into a hidden
+  availability dependency.
+
+Use the runtime diagnostics command below to inspect the selected system,
+capability set, memory profile, ingest mode, and effective fail-open policy:
+
+```bash
+loongclaw list-memory-systems --json
+```
 
 ## Migration And Import
 

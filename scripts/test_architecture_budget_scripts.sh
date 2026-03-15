@@ -20,6 +20,7 @@ make_fixture_repo() {
   mkdir -p \
     "$fixture/scripts" \
     "$fixture/crates/spec/src" \
+    "$fixture/crates/spec" \
     "$fixture/crates/app/src/provider" \
     "$fixture/crates/app/src/memory"
 
@@ -33,6 +34,7 @@ make_fixture_repo() {
 
   cp "$REPO_ROOT/crates/spec/src/spec_runtime.rs" "$fixture/crates/spec/src/spec_runtime.rs"
   cp "$REPO_ROOT/crates/spec/src/spec_execution.rs" "$fixture/crates/spec/src/spec_execution.rs"
+  cp "$REPO_ROOT/crates/spec/Cargo.toml" "$fixture/crates/spec/Cargo.toml"
   cp "$REPO_ROOT/crates/app/src/provider/mod.rs" "$fixture/crates/app/src/provider/mod.rs"
   cp "$REPO_ROOT/crates/app/src/memory/mod.rs" "$fixture/crates/app/src/memory/mod.rs"
 

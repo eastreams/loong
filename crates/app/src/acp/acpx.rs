@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::time::{Duration, Instant, sleep_until, timeout};
+use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 
 use crate::CliResult;
 use crate::config::{AcpxMcpServerConfig, LoongClawConfig};
@@ -30,6 +30,8 @@ const ACPX_DEFAULT_PERMISSION_MODE: &str = "approve-reads";
 const ACPX_DEFAULT_NON_INTERACTIVE_PERMISSIONS: &str = "fail";
 const ACPX_DEFAULT_QUEUE_OWNER_TTL_SECONDS: f64 = 0.1;
 const ACPX_PERMISSION_DENIED_EXIT_CODE: i32 = 5;
+const ACPX_SPAWN_RETRY_ATTEMPTS: usize = 5;
+const ACPX_SPAWN_RETRY_DELAY: Duration = Duration::from_millis(25);
 const ACPX_MCP_PROXY_NODE_COMMAND: &str = "node";
 const ACPX_MCP_PROXY_SCRIPT_NAME: &str = "loongclaw-acpx-mcp-proxy.mjs";
 const ACPX_MCP_PROXY_SCRIPT_SOURCE: &str = include_str!("assets/acpx-mcp-proxy.mjs");
@@ -1202,16 +1204,7 @@ async fn run_prompt_process(
         });
     }
 
-    let mut process = Command::new(command);
-    process
-        .args(args)
-        .current_dir(cwd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = process
-        .spawn()
-        .map_err(|error| map_spawn_error(command, cwd, error))?;
+    let mut child = spawn_acpx_child(command, args, cwd, true).await?;
 
     let Some(mut stdin) = child.stdin.take() else {
         return Err("ACPX command spawned without stdin pipe".to_owned());
@@ -1352,20 +1345,7 @@ async fn run_process(
         ));
     }
 
-    let mut process = Command::new(command);
-    process
-        .args(args)
-        .current_dir(cwd)
-        .stdin(if stdin_payload.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = process
-        .spawn()
-        .map_err(|error| map_spawn_error(command, cwd, error))?;
+    let mut child = spawn_acpx_child(command, args, cwd, stdin_payload.is_some()).await?;
 
     if let Some(payload) = stdin_payload {
         let Some(mut stdin) = child.stdin.take() else {
@@ -1459,6 +1439,53 @@ fn map_spawn_error(command: &str, cwd: &str, error: std::io::Error) -> String {
         return format!("acpx command not found: {command}");
     }
     format!("spawn ACPX command failed: {error}")
+}
+
+async fn spawn_acpx_child(
+    command: &str,
+    args: &[String],
+    cwd: &str,
+    pipe_stdin: bool,
+) -> CliResult<tokio::process::Child> {
+    retry_executable_file_busy(|| {
+        let mut process = Command::new(command);
+        process
+            .args(args)
+            .current_dir(cwd)
+            .stdin(if pipe_stdin {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        process.spawn()
+    })
+    .await
+    .map_err(|error| map_spawn_error(command, cwd, error))
+}
+
+async fn retry_executable_file_busy<T, F>(mut operation: F) -> std::io::Result<T>
+where
+    F: FnMut() -> std::io::Result<T>,
+{
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if should_retry_spawn_error(&error) && attempt < ACPX_SPAWN_RETRY_ATTEMPTS =>
+            {
+                sleep(ACPX_SPAWN_RETRY_DELAY).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn should_retry_spawn_error(error: &std::io::Error) -> bool {
+    error.kind() == ErrorKind::ExecutableFileBusy
 }
 
 fn parse_json_lines(stdout: &str) -> Vec<Value> {
@@ -1686,7 +1713,7 @@ mod tests {
     #[cfg(unix)]
     use std::path::{Path, PathBuf};
     #[cfg(unix)]
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     use super::*;
     use crate::config::{AcpBackendProfilesConfig, AcpConfig, AcpxBackendConfig, LoongClawConfig};
@@ -1708,6 +1735,70 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn write_executable_script_atomically(
+        script_path: &Path,
+        contents: &str,
+    ) -> std::io::Result<()> {
+        write_executable_script_atomically_with(script_path, |file| {
+            std::io::Write::write_all(file, contents.as_bytes())
+        })
+    }
+
+    #[cfg(unix)]
+    fn write_executable_script_atomically_with<F>(
+        script_path: &Path,
+        writer: F,
+    ) -> std::io::Result<()>
+    where
+        F: FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+    {
+        static NEXT_STAGING_FILE_SEED: AtomicU64 = AtomicU64::new(1);
+
+        let Some(parent) = script_path.parent() else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "fake acpx script path `{}` has no parent directory",
+                    script_path.display()
+                ),
+            ));
+        };
+        let Some(file_name) = script_path.file_name().and_then(|name| name.to_str()) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "fake acpx script path `{}` has no UTF-8 file name",
+                    script_path.display()
+                ),
+            ));
+        };
+
+        let seed = NEXT_STAGING_FILE_SEED.fetch_add(1, Ordering::Relaxed);
+        let staged_path = parent.join(format!(".{file_name}.{}.{seed}.tmp", std::process::id()));
+        let mut staged_file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&staged_path)?;
+        let write_result = writer(&mut staged_file).and_then(|()| staged_file.sync_all());
+        drop(staged_file);
+
+        if let Err(error) = write_result {
+            let _ = std::fs::remove_file(&staged_path);
+            return Err(error);
+        }
+
+        let mut permissions = std::fs::metadata(&staged_path)?.permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&staged_path, permissions)?;
+        if let Err(error) = std::fs::rename(&staged_path, script_path) {
+            let _ = std::fs::remove_file(&staged_path);
+            return Err(error);
+        }
+
+        Ok(())
+    }
+
+    #[cfg(unix)]
     fn write_fake_acpx_script(
         temp_dir: &Path,
         script_name: &str,
@@ -1715,21 +1806,94 @@ mod tests {
         body: &str,
     ) -> PathBuf {
         let script_path = temp_dir.join(script_name);
-        std::fs::write(
+        write_executable_script_atomically(
             &script_path,
-            format!(
+            &format!(
                 "#!/bin/sh\nset -eu\nLOG_PATH=\"{}\"\nprintf '%s\\n' \"$*\" >> \"$LOG_PATH\"\n{}\n",
                 log_path.display(),
                 body
             ),
         )
         .expect("write fake acpx script");
-        let mut permissions = std::fs::metadata(&script_path)
-            .expect("stat fake acpx script")
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&script_path, permissions).expect("chmod fake acpx script");
         script_path
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn write_executable_script_atomically_preserves_existing_script_when_write_fails() {
+        let temp_dir = unique_temp_dir("loongclaw-acpx-script-atomic");
+        let script_path = temp_dir.join("fake-acpx");
+
+        write_executable_script_atomically(&script_path, "#!/bin/sh\necho old\n")
+            .expect("write baseline fake acpx script");
+
+        let error = write_executable_script_atomically_with(&script_path, |file| {
+            std::io::Write::write_all(file, b"#!/bin/sh\necho new\n")?;
+            Err(std::io::Error::other("simulated staging failure"))
+        })
+        .expect_err("staging failure should surface");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert_eq!(
+            std::fs::read_to_string(&script_path).expect("read baseline fake acpx script"),
+            "#!/bin/sh\necho old\n"
+        );
+
+        let staging_entries = std::fs::read_dir(&temp_dir)
+            .expect("list temp dir")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp"))
+            .count();
+        assert_eq!(staging_entries, 0, "staging files should be cleaned up");
+    }
+
+    #[tokio::test]
+    async fn retry_executable_file_busy_retries_until_success() {
+        let attempts = AtomicUsize::new(0);
+
+        let result = retry_executable_file_busy(|| {
+            let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+            if attempt < 2 {
+                Err(std::io::Error::from(ErrorKind::ExecutableFileBusy))
+            } else {
+                Ok("spawned")
+            }
+        })
+        .await
+        .expect("retry should recover once the executable is no longer busy");
+
+        assert_eq!(result, "spawned");
+        assert_eq!(attempts.load(Ordering::Relaxed), 3);
+    }
+
+    #[tokio::test]
+    async fn retry_executable_file_busy_surfaces_non_retryable_error_immediately() {
+        let attempts = AtomicUsize::new(0);
+
+        let error = retry_executable_file_busy::<(), _>(|| {
+            attempts.fetch_add(1, Ordering::Relaxed);
+            Err(std::io::Error::other("boom"))
+        })
+        .await
+        .expect_err("non-retryable spawn errors should surface immediately");
+
+        assert_eq!(error.kind(), ErrorKind::Other);
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn retry_executable_file_busy_stops_after_retry_budget() {
+        let attempts = AtomicUsize::new(0);
+
+        let error = retry_executable_file_busy::<(), _>(|| {
+            attempts.fetch_add(1, Ordering::Relaxed);
+            Err(std::io::Error::from(ErrorKind::ExecutableFileBusy))
+        })
+        .await
+        .expect_err("persistent executable-file-busy errors should stop after the retry budget");
+
+        assert_eq!(error.kind(), ErrorKind::ExecutableFileBusy);
+        assert_eq!(attempts.load(Ordering::Relaxed), ACPX_SPAWN_RETRY_ATTEMPTS);
     }
 
     #[cfg(unix)]
@@ -1835,13 +1999,8 @@ mod tests {
     async fn doctor_accepts_fake_version_command() {
         let temp_dir = unique_temp_dir("loongclaw-acpx-probe");
         let script_path = temp_dir.join("fake-acpx");
-        std::fs::write(&script_path, "#!/bin/sh\necho 'acpx 0.1.16'\n")
+        write_executable_script_atomically(&script_path, "#!/bin/sh\necho 'acpx 0.1.16'\n")
             .expect("write fake acpx script");
-        let mut permissions = std::fs::metadata(&script_path)
-            .expect("stat fake acpx script")
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&script_path, permissions).expect("chmod fake acpx script");
 
         let backend = AcpxCliProbeBackend;
         let config = LoongClawConfig {
@@ -1866,12 +2025,29 @@ mod tests {
             ..LoongClawConfig::default()
         };
 
-        let report = backend
-            .doctor(&config)
-            .await
-            .expect("doctor should not fail")
-            .expect("doctor report");
-        assert!(report.healthy);
+        let mut last_report = None;
+        for attempt in 0..5 {
+            let report = backend
+                .doctor(&config)
+                .await
+                .expect("doctor should not fail")
+                .expect("doctor report");
+            if report.healthy {
+                last_report = Some(report);
+                break;
+            }
+            last_report = Some(report);
+            if attempt < 4 {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        }
+
+        let report = last_report.expect("doctor report");
+        assert!(
+            report.healthy,
+            "doctor should accept fake version command: {:?}",
+            report.diagnostics
+        );
         assert_eq!(
             report.diagnostics.get("command"),
             Some(&script_path.display().to_string())

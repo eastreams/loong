@@ -20,8 +20,10 @@ pub(crate) use channels::{
 pub use conversation::{ConversationConfig, ConversationTurnLoopConfig};
 #[allow(unused_imports)]
 pub use provider::{
-    ProviderConfig, ProviderKind, ProviderProfileHealthModeConfig, ProviderProfileStateBackendKind,
+    ProviderAuthScheme, ProviderConfig, ProviderFeatureFamily, ProviderKind,
+    ProviderProfileHealthModeConfig, ProviderProfileStateBackendKind, ProviderProtocolFamily,
     ProviderReasoningExtraBodyModeConfig, ProviderToolSchemaModeConfig, ReasoningEffort,
+    parse_provider_kind_id,
 };
 #[allow(unused_imports)]
 pub use runtime::{
@@ -36,8 +38,8 @@ pub(crate) use runtime::{normalize_dispatch_account_id, normalize_dispatch_chann
 pub use shared::expand_path;
 #[allow(unused_imports)]
 pub use tools_memory::{
-    DEFAULT_SHELL_ALLOW, ExternalSkillsConfig, MemoryBackendKind, MemoryConfig, MemoryMode,
-    MemoryProfile, ToolConfig,
+    DEFAULT_SHELL_ALLOW, ExternalSkillsConfig, MemoryBackendKind, MemoryConfig, MemoryIngestMode,
+    MemoryMode, MemoryProfile, MemorySystemKind, ToolConfig,
 };
 
 #[cfg(test)]
@@ -60,11 +62,13 @@ mod tests {
 
     #[test]
     fn endpoint_resolution_for_volcengine_prefers_explicit_endpoint() {
-        let config = ProviderConfig {
+        let mut config = ProviderConfig {
             kind: ProviderKind::Volcengine,
-            endpoint: Some("https://example.volcengine.com/chat/completions".to_owned()),
             ..ProviderConfig::default()
         };
+        config.set_endpoint(Some(
+            "https://example.volcengine.com/chat/completions".to_owned(),
+        ));
         assert_eq!(
             config.endpoint(),
             "https://example.volcengine.com/chat/completions"
@@ -82,14 +86,41 @@ mod tests {
             ids,
             vec![
                 "anthropic",
+                "bedrock",
+                "byteplus",
+                "byteplus_coding",
+                "cerebras",
+                "cloudflare_ai_gateway",
+                "cohere",
+                "custom",
                 "deepseek",
+                "fireworks",
+                "gemini",
+                "groq",
                 "kimi",
                 "kimi_coding",
+                "llamacpp",
+                "lm_studio",
+                "mistral",
                 "minimax",
+                "novita",
+                "nvidia",
                 "ollama",
                 "openai",
                 "openrouter",
+                "perplexity",
+                "qianfan",
+                "qwen",
+                "sambanova",
+                "sglang",
+                "siliconflow",
+                "stepfun",
+                "together",
+                "venice",
+                "vercel_ai_gateway",
+                "vllm",
                 "volcengine",
+                "volcengine_coding",
                 "xai",
                 "zai",
                 "zhipu"
@@ -104,7 +135,7 @@ mod tests {
         let cases = vec![
             (
                 ProviderKind::Anthropic,
-                "https://api.anthropic.com/v1/chat/completions",
+                "https://api.anthropic.com/v1/messages",
             ),
             (
                 ProviderKind::Kimi,
@@ -205,12 +236,12 @@ mod tests {
             config.models_endpoint(),
             "https://api.kimi.com/coding/v1/models"
         );
-        assert_eq!(config.resolved_model().as_deref(), Some("kimi-for-coding"));
         assert_eq!(
             config.default_api_key_env().as_deref(),
             Some("KIMI_CODING_API_KEY")
         );
-        assert!(!config.model_selection_requires_fetch());
+        assert_eq!(config.resolved_model(), None);
+        assert!(config.model_selection_requires_fetch());
     }
 
     #[test]
@@ -528,7 +559,7 @@ mod tests {
     #[test]
     fn volcengine_coding_plan_oauth_can_override_api_key_auth() {
         let config = ProviderConfig {
-            kind: ProviderKind::Volcengine,
+            kind: ProviderKind::VolcengineCoding,
             oauth_access_token: Some("vc-oauth-token".to_owned()),
             api_key: Some("api-key-should-not-win".to_owned()),
             ..ProviderConfig::default()
@@ -684,14 +715,169 @@ kind = "kimi_coding"
             parsed.provider.models_endpoint(),
             "https://api.kimi.com/coding/v1/models"
         );
-        assert_eq!(
-            parsed.provider.resolved_model().as_deref(),
-            Some("kimi-for-coding")
-        );
+        assert_eq!(parsed.provider.resolved_model(), None);
         assert_eq!(
             parsed.provider.default_api_key_env().as_deref(),
             Some("KIMI_CODING_API_KEY")
         );
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn provider_kind_keeps_new_provider_aliases() {
+        let cases = vec![
+            ("aws-bedrock", ProviderKind::Bedrock),
+            ("byteplus_compatible", ProviderKind::Byteplus),
+            ("byteplus_coding_compatible", ProviderKind::ByteplusCoding),
+            ("openai_custom", ProviderKind::Custom),
+            (
+                "volcengine_coding_compatible",
+                ProviderKind::VolcengineCoding,
+            ),
+        ];
+
+        for (kind, expected) in cases {
+            let raw = format!(
+                r#"
+[provider]
+kind = "{kind}"
+model = "model-example"
+"#
+            );
+            let parsed = toml::from_str::<LoongClawConfig>(&raw)
+                .expect("parse provider alias should succeed");
+            assert_eq!(parsed.provider.kind, expected, "kind={kind}");
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn byteplus_coding_partial_config_uses_internal_defaults() {
+        let raw = r#"
+[provider]
+kind = "byteplus_coding"
+"#;
+        let parsed =
+            toml::from_str::<LoongClawConfig>(raw).expect("parse minimal byteplus coding config");
+        assert_eq!(parsed.provider.kind, ProviderKind::ByteplusCoding);
+        assert_eq!(
+            parsed.provider.endpoint(),
+            "https://ark.ap-southeast.bytepluses.com/api/coding/v3/chat/completions"
+        );
+        assert_eq!(
+            parsed.provider.models_endpoint(),
+            "https://ark.ap-southeast.bytepluses.com/api/coding/v3/models"
+        );
+        assert_eq!(
+            parsed.provider.default_api_key_env().as_deref(),
+            Some("BYTEPLUS_API_KEY")
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn volcengine_coding_partial_config_uses_internal_defaults() {
+        let raw = r#"
+[provider]
+kind = "volcengine_coding"
+"#;
+        let parsed =
+            toml::from_str::<LoongClawConfig>(raw).expect("parse minimal volcengine coding config");
+        assert_eq!(parsed.provider.kind, ProviderKind::VolcengineCoding);
+        assert_eq!(
+            parsed.provider.endpoint(),
+            "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions"
+        );
+        assert_eq!(
+            parsed.provider.models_endpoint(),
+            "https://ark.cn-beijing.volces.com/api/coding/v3/models"
+        );
+        assert_eq!(
+            parsed.provider.default_oauth_access_token_env().as_deref(),
+            Some("VOLCENGINE_CODING_PLAN_OAUTH_TOKEN")
+        );
+    }
+
+    #[test]
+    fn custom_provider_requires_concrete_base_url_configuration() {
+        let config = ProviderConfig {
+            kind: ProviderKind::Custom,
+            ..ProviderConfig::default()
+        };
+
+        assert!(config.has_unresolved_custom_base_url());
+        let hint = config
+            .configuration_hint()
+            .expect("custom provider should require a concrete base url");
+        assert!(hint.contains("custom"));
+        assert!(hint.contains("<openai-compatible-host>"));
+    }
+
+    #[test]
+    fn volcengine_coding_warns_when_pointed_at_generic_modelark_path() {
+        let config = ProviderConfig {
+            kind: ProviderKind::VolcengineCoding,
+            base_url: "https://ark.cn-beijing.volces.com/api/v3".to_owned(),
+            ..ProviderConfig::default()
+        };
+
+        let hint = config
+            .configuration_hint()
+            .expect("volcengine_coding should require the dedicated Coding Plan path");
+        assert!(hint.contains("volcengine_coding"));
+        assert!(hint.contains("/api/coding/v3"));
+    }
+
+    #[test]
+    fn bedrock_uses_region_template_endpoints() {
+        let config = ProviderConfig {
+            kind: ProviderKind::Bedrock,
+            ..ProviderConfig::default()
+        };
+
+        assert_eq!(
+            config.endpoint(),
+            "https://bedrock-runtime.<region>.amazonaws.com/model/{modelId}/converse"
+        );
+        assert_eq!(
+            config.models_endpoint(),
+            "https://bedrock.<region>.amazonaws.com/foundation-models"
+        );
+        assert_eq!(
+            config.default_api_key_env().as_deref(),
+            Some("AWS_BEARER_TOKEN_BEDROCK")
+        );
+    }
+
+    #[test]
+    fn models_endpoint_resolution_for_supported_provider_profiles_includes_new_first_class_providers()
+     {
+        let cases = vec![
+            (
+                ProviderKind::Bedrock,
+                "https://bedrock.<region>.amazonaws.com/foundation-models",
+            ),
+            (
+                ProviderKind::Byteplus,
+                "https://ark.ap-southeast.bytepluses.com/api/v3/models",
+            ),
+            (
+                ProviderKind::ByteplusCoding,
+                "https://ark.ap-southeast.bytepluses.com/api/coding/v3/models",
+            ),
+            (
+                ProviderKind::VolcengineCoding,
+                "https://ark.cn-beijing.volces.com/api/coding/v3/models",
+            ),
+        ];
+
+        for (kind, expected) in cases {
+            let config = ProviderConfig {
+                kind,
+                ..ProviderConfig::default()
+            };
+            assert_eq!(config.models_endpoint(), expected, "kind={kind:?}");
+        }
     }
 
     #[test]
@@ -1566,7 +1752,7 @@ safe_lane_health_replan_warn_threshold = 0.55
                 ProviderKind::Volcengine,
                 "https://ark.cn-beijing.volces.com/api/v3/models",
             ),
-            (ProviderKind::Xai, "https://api.x.ai/v1/models"),
+            (ProviderKind::Xai, "https://api.x.ai/v1/language-models"),
             (ProviderKind::Zai, "https://api.z.ai/api/paas/v4/models"),
             (
                 ProviderKind::Zhipu,
@@ -1607,6 +1793,32 @@ context_engine = " Legacy "
         assert_eq!(
             parsed.conversation.context_engine_id().as_deref(),
             Some("legacy")
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn memory_system_field_parses_and_normalizes() {
+        let raw = r#"
+[memory]
+system = " Builtin "
+"#;
+        let parsed = toml::from_str::<LoongClawConfig>(raw).expect("parse memory.system");
+        assert_eq!(parsed.memory.resolved_system().as_str(), "builtin");
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn memory_system_field_rejects_unimplemented_future_variant() {
+        let raw = r#"
+[memory]
+system = " LuCid "
+"#;
+        let error =
+            toml::from_str::<LoongClawConfig>(raw).expect_err("lucid should stay unsupported");
+        assert!(
+            error.to_string().contains("available: builtin"),
+            "error should keep builtin-only surface: {error}"
         );
     }
 

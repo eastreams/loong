@@ -1,6 +1,6 @@
 # LoongClaw Roadmap
 
-Last updated: 2026-03-08
+Last updated: 2026-03-14
 
 This roadmap is execution-focused. Every stage has:
 
@@ -196,6 +196,11 @@ Delivered in current baseline:
 - active `http_json` runtime execution lane (no longer plan-only):
   - timeout-controlled request execution
   - structured runtime evidence (`status_code`, `response_json`)
+- builtin-only memory-system foundation for `alpha-test`:
+  - typed memory-system metadata and registry seam
+  - hydrated memory orchestration over LoongClaw-owned canonical history
+  - operator diagnostics for selected system, capability set, and effective
+    memory fail-open policy
 
 Planned deliverables:
 

@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use kernel::{
-    AuditSink, Capability, Clock, ExecutionRoute, HarnessKind, InMemoryAuditSink, LoongClawKernel,
+    AuditSink, Capability, Clock, ExecutionRoute, HarnessKind, InMemoryAuditSink,
+    Kernel as FrozenKernel, KernelBuilder as RuntimeKernelBuilder, LoongClawKernel,
     StaticPolicyEngine, SystemClock, VerticalPackManifest,
 };
 
@@ -22,6 +23,7 @@ use crate::spec_runtime::{
 pub struct KernelBuilder {
     clock: Option<Arc<dyn Clock>>,
     audit: Option<Arc<dyn AuditSink>>,
+    native_tool_executor: Option<crate::NativeToolExecutor>,
 }
 
 impl KernelBuilder {
@@ -37,38 +39,97 @@ impl KernelBuilder {
         self
     }
 
+    pub fn native_tool_executor(mut self, executor: crate::NativeToolExecutor) -> Self {
+        self.native_tool_executor = Some(executor);
+        self
+    }
+
     /// Build and return a fully configured kernel with all builtin adapters
     /// and the default pack manifest registered.
     pub fn build(self) -> LoongClawKernel<StaticPolicyEngine> {
-        let mut kernel = match (self.clock, self.audit) {
-            (Some(clock), Some(audit)) => {
-                LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit)
-            }
-            (Some(clock), None) => LoongClawKernel::with_runtime(
-                StaticPolicyEngine::default(),
-                clock,
-                Arc::new(InMemoryAuditSink::default()) as Arc<dyn AuditSink>,
-            ),
-            (None, Some(audit)) => LoongClawKernel::with_runtime(
-                StaticPolicyEngine::default(),
-                Arc::new(SystemClock) as Arc<dyn Clock>,
-                audit,
-            ),
-            (None, None) => LoongClawKernel::with_runtime(
-                StaticPolicyEngine::default(),
-                Arc::new(SystemClock) as Arc<dyn Clock>,
-                Arc::new(InMemoryAuditSink::default()) as Arc<dyn AuditSink>,
-            ),
-        };
-        register_builtin_adapters(&mut kernel);
-        // The default pack manifest is hardcoded and always valid; ignore the
-        // impossible error branch to avoid panicking in production.
-        let _ = kernel.register_pack(default_pack_manifest());
-        kernel
+        configured_builder(self.clock, self.audit, self.native_tool_executor)
     }
 }
 
-fn register_builtin_adapters(kernel: &mut LoongClawKernel<StaticPolicyEngine>) {
+/// Additive bootstrap entrypoint that exposes the new builder/runtime split
+/// without breaking the legacy `KernelBuilder` API.
+///
+/// The returned runtime handle dereferences to the legacy kernel surface so
+/// helper code typed against `&LoongClawKernel<_>` can continue to work while
+/// callers migrate toward the explicit `Kernel<P>` name.
+#[derive(Default)]
+pub struct BootstrapBuilder {
+    clock: Option<Arc<dyn Clock>>,
+    audit: Option<Arc<dyn AuditSink>>,
+    native_tool_executor: Option<crate::NativeToolExecutor>,
+}
+
+impl BootstrapBuilder {
+    pub fn clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = Some(clock);
+        self
+    }
+
+    pub fn audit(mut self, audit: Arc<dyn AuditSink>) -> Self {
+        self.audit = Some(audit);
+        self
+    }
+
+    pub fn native_tool_executor(mut self, executor: crate::NativeToolExecutor) -> Self {
+        self.native_tool_executor = Some(executor);
+        self
+    }
+
+    pub fn build(self) -> FrozenKernel<StaticPolicyEngine> {
+        self.into_builder().build()
+    }
+
+    /// Return the additive migration builder surface.
+    ///
+    /// This remains a compatibility alias over `LoongClawKernel`, so it keeps
+    /// the legacy executable API while also supporting `.build()` into
+    /// `Kernel<P>`.
+    pub fn into_builder(self) -> RuntimeKernelBuilder<StaticPolicyEngine> {
+        configured_builder(self.clock, self.audit, self.native_tool_executor)
+    }
+}
+
+fn configured_builder(
+    clock: Option<Arc<dyn Clock>>,
+    audit: Option<Arc<dyn AuditSink>>,
+    native_tool_executor: Option<crate::NativeToolExecutor>,
+) -> RuntimeKernelBuilder<StaticPolicyEngine> {
+    let mut kernel = match (clock, audit) {
+        (Some(clock), Some(audit)) => {
+            RuntimeKernelBuilder::with_runtime(StaticPolicyEngine::default(), clock, audit)
+        }
+        (Some(clock), None) => RuntimeKernelBuilder::with_runtime(
+            StaticPolicyEngine::default(),
+            clock,
+            Arc::new(InMemoryAuditSink::default()) as Arc<dyn AuditSink>,
+        ),
+        (None, Some(audit)) => RuntimeKernelBuilder::with_runtime(
+            StaticPolicyEngine::default(),
+            Arc::new(SystemClock) as Arc<dyn Clock>,
+            audit,
+        ),
+        (None, None) => RuntimeKernelBuilder::with_runtime(
+            StaticPolicyEngine::default(),
+            Arc::new(SystemClock) as Arc<dyn Clock>,
+            Arc::new(InMemoryAuditSink::default()) as Arc<dyn AuditSink>,
+        ),
+    };
+    register_builtin_adapters(&mut kernel, native_tool_executor);
+    // The default pack manifest is hardcoded and always valid; ignore the
+    // impossible error branch to avoid panicking in production.
+    let _ = kernel.register_pack(default_pack_manifest());
+    kernel
+}
+
+fn register_builtin_adapters(
+    kernel: &mut RuntimeKernelBuilder<StaticPolicyEngine>,
+    native_tool_executor: Option<crate::NativeToolExecutor>,
+) {
     kernel.register_harness_adapter(EmbeddedPiHarness {
         seen: Mutex::new(Vec::new()),
     });
@@ -81,7 +142,7 @@ fn register_builtin_adapters(kernel: &mut LoongClawKernel<StaticPolicyEngine>) {
     kernel.register_core_runtime_adapter(FallbackCoreRuntime);
     kernel.register_runtime_extension_adapter(AcpBridgeRuntimeExtension);
 
-    kernel.register_core_tool_adapter(CoreToolRuntime);
+    kernel.register_core_tool_adapter(CoreToolRuntime::new(native_tool_executor));
     kernel.register_tool_extension_adapter(ClawMigrationToolExtension);
     kernel.register_tool_extension_adapter(SqlAnalyticsToolExtension);
 
@@ -124,7 +185,7 @@ pub fn default_pack_manifest() -> VerticalPackManifest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kernel::FixedClock;
+    use kernel::{FixedClock, LoongClawKernel};
 
     #[test]
     fn builder_default_creates_kernel() {
@@ -145,6 +206,46 @@ mod tests {
         let token = kernel
             .issue_token(DEFAULT_PACK_ID, "test-agent", 60)
             .expect("token issue should succeed with custom clock/audit");
+        assert!(!token.token_id.is_empty());
+    }
+
+    #[test]
+    fn into_builder_allows_extra_registration_before_freeze() {
+        let mut builder = BootstrapBuilder::default().into_builder();
+        builder
+            .register_pack(VerticalPackManifest {
+                pack_id: "extra-pack".to_owned(),
+                domain: "engineering".to_owned(),
+                version: "0.1.0".to_owned(),
+                default_route: ExecutionRoute {
+                    harness_kind: HarnessKind::EmbeddedPi,
+                    adapter: Some("pi-local".to_owned()),
+                },
+                allowed_connectors: BTreeSet::new(),
+                granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+                metadata: BTreeMap::new(),
+            })
+            .expect("extra pack should register");
+
+        let kernel = builder.build();
+        let token = kernel
+            .issue_token("extra-pack", "test-agent", 60)
+            .expect("token issue should succeed for extra pack");
+        assert!(!token.token_id.is_empty());
+    }
+
+    #[test]
+    fn bootstrap_builder_runtime_derefs_to_legacy_kernel_helpers() {
+        fn issue_default_pack_token(
+            kernel: &LoongClawKernel<StaticPolicyEngine>,
+        ) -> kernel::CapabilityToken {
+            kernel
+                .issue_token(DEFAULT_PACK_ID, "test-agent", 60)
+                .expect("token issue should succeed via legacy helper signature")
+        }
+
+        let kernel = BootstrapBuilder::default().build();
+        let token = issue_default_pack_token(&kernel);
         assert!(!token.token_id.is_empty());
     }
 }

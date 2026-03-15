@@ -245,6 +245,81 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
 }
 
 #[test]
+fn memory_system_metadata_json_includes_summary_and_source() {
+    use mvp::memory::MemorySystem as _;
+
+    let metadata = mvp::memory::BuiltinMemorySystem.metadata();
+    let payload = memory_system_metadata_json(&metadata, Some("default"));
+
+    assert_eq!(payload["id"], "builtin");
+    assert_eq!(payload["api_version"], 1);
+    assert_eq!(payload["source"], "default");
+    assert!(
+        payload["summary"]
+            .as_str()
+            .expect("summary should be a string")
+            .contains("Built-in")
+    );
+    assert!(
+        payload["capabilities"]
+            .as_array()
+            .expect("capabilities should be an array")
+            .iter()
+            .any(|entry| entry == "canonical_store")
+    );
+}
+
+#[test]
+fn build_memory_systems_cli_json_payload_includes_runtime_policy() {
+    let config = mvp::config::LoongClawConfig {
+        memory: mvp::config::MemoryConfig {
+            profile: mvp::config::MemoryProfile::WindowPlusSummary,
+            fail_open: false,
+            ingest_mode: mvp::config::MemoryIngestMode::AsyncBackground,
+            ..mvp::config::MemoryConfig::default()
+        },
+        ..mvp::config::LoongClawConfig::default()
+    };
+    let snapshot =
+        mvp::memory::collect_memory_system_runtime_snapshot(&config).expect("runtime snapshot");
+
+    let payload = build_memory_systems_cli_json_payload("/tmp/loongclaw.toml", &snapshot);
+
+    assert_eq!(payload["config"], "/tmp/loongclaw.toml");
+    assert_eq!(payload["selected"]["id"], "builtin");
+    assert_eq!(payload["selected"]["source"], "default");
+    assert_eq!(payload["policy"]["backend"], "sqlite");
+    assert_eq!(payload["policy"]["profile"], "window_plus_summary");
+    assert_eq!(payload["policy"]["mode"], "window_plus_summary");
+    assert_eq!(payload["policy"]["ingest_mode"], "async_background");
+    assert_eq!(payload["policy"]["fail_open"], false);
+    assert_eq!(payload["policy"]["strict_mode_requested"], true);
+    assert_eq!(payload["policy"]["strict_mode_active"], false);
+    assert_eq!(payload["policy"]["effective_fail_open"], true);
+}
+
+#[test]
+fn render_memory_system_snapshot_text_reports_fail_open_policy() {
+    let config = mvp::config::LoongClawConfig {
+        memory: mvp::config::MemoryConfig {
+            profile: mvp::config::MemoryProfile::WindowPlusSummary,
+            fail_open: false,
+            ingest_mode: mvp::config::MemoryIngestMode::AsyncBackground,
+            ..mvp::config::MemoryConfig::default()
+        },
+        ..mvp::config::LoongClawConfig::default()
+    };
+    let snapshot =
+        mvp::memory::collect_memory_system_runtime_snapshot(&config).expect("runtime snapshot");
+
+    let rendered = render_memory_system_snapshot_text("/tmp/loongclaw.toml", &snapshot);
+
+    assert!(rendered.contains("config=/tmp/loongclaw.toml"));
+    assert!(rendered.contains("selected=builtin source=default api_version=1"));
+    assert!(rendered.contains("policy=backend:sqlite profile:window_plus_summary mode:window_plus_summary ingest_mode:async_background fail_open:false strict_mode_requested:true strict_mode_active:false effective_fail_open:true"));
+}
+
+#[test]
 fn build_channels_cli_json_payload_includes_operation_requirement_metadata() {
     let config = mvp::config::LoongClawConfig::default();
     let inventory = mvp::channel::channel_inventory(&config);

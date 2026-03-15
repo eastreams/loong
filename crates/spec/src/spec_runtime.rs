@@ -2475,13 +2475,22 @@ fn stub_tool_core(request: ToolCoreRequest) -> Result<ToolCoreOutcome, String> {
     })
 }
 
-fn maybe_execute_native_app_tool(
+fn maybe_execute_native_tool(
     request: &ToolCoreRequest,
+    native_tool_executor: Option<crate::NativeToolExecutor>,
 ) -> Option<Result<ToolCoreOutcome, String>> {
-    if loongclaw_app::tools::canonical_tool_name(request.tool_name.as_str()) != "claw.import" {
-        return None;
+    if let Some(executor) = native_tool_executor
+        && let Some(result) = executor(request.clone())
+    {
+        return Some(result);
     }
-    Some(loongclaw_app::tools::execute_tool_core(request.clone()))
+    if crate::tool_name_requires_native_tool_executor(request.tool_name.as_str()) {
+        return Some(Err(format!(
+            "native tool executor required for tool `{}`",
+            request.tool_name
+        )));
+    }
+    None
 }
 
 fn stub_memory_core(request: MemoryCoreRequest) -> Result<MemoryCoreOutcome, String> {
@@ -2491,7 +2500,18 @@ fn stub_memory_core(request: MemoryCoreRequest) -> Result<MemoryCoreOutcome, Str
     })
 }
 
-pub struct CoreToolRuntime;
+#[derive(Clone, Copy, Default)]
+pub struct CoreToolRuntime {
+    native_tool_executor: Option<crate::NativeToolExecutor>,
+}
+
+impl CoreToolRuntime {
+    pub const fn new(native_tool_executor: Option<crate::NativeToolExecutor>) -> Self {
+        Self {
+            native_tool_executor,
+        }
+    }
+}
 
 #[async_trait]
 impl CoreToolAdapter for CoreToolRuntime {
@@ -2503,7 +2523,7 @@ impl CoreToolAdapter for CoreToolRuntime {
         &self,
         request: ToolCoreRequest,
     ) -> Result<ToolCoreOutcome, kernel::ToolPlaneError> {
-        if let Some(result) = maybe_execute_native_app_tool(&request) {
+        if let Some(result) = maybe_execute_native_tool(&request, self.native_tool_executor) {
             return result.map_err(kernel::ToolPlaneError::Execution);
         }
         stub_tool_core(request).map_err(kernel::ToolPlaneError::Execution)
@@ -2660,9 +2680,11 @@ mod tests {
         parse_wasm_signals_based_traps,
     };
     use super::{
-        BridgeRuntimePolicy, WasmModuleCache, build_wasm_module_cache_key, compile_wasm_module,
-        normalize_sha256_pin, resolve_expected_wasm_sha256,
+        BridgeRuntimePolicy, CoreToolRuntime, WasmModuleCache, build_wasm_module_cache_key,
+        compile_wasm_module, normalize_sha256_pin, resolve_expected_wasm_sha256,
     };
+    use kernel::{CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest};
+    use serde_json::json;
 
     const EMPTY_WASM_MODULE: [u8; 8] = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
 
@@ -2923,5 +2945,76 @@ mod tests {
 
         assert_ne!(identity_a, identity_b);
         let _ = fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn core_tool_runtime_claw_import_without_native_executor_fails_closed() {
+        let error = CoreToolRuntime::default()
+            .execute_core_tool(ToolCoreRequest {
+                tool_name: "claw.import".to_owned(),
+                payload: json!({"mode": "plan"}),
+            })
+            .await
+            .expect_err("native-only tool execution should fail without an injected executor");
+
+        assert!(error.to_string().contains("native tool executor"));
+    }
+
+    fn test_native_tool_executor(
+        request: ToolCoreRequest,
+    ) -> Option<Result<ToolCoreOutcome, String>> {
+        if request.tool_name != "claw.import" {
+            return None;
+        }
+        Some(Ok(ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "adapter": "native-tools",
+                "tool": request.tool_name,
+            }),
+        }))
+    }
+
+    #[tokio::test]
+    async fn core_tool_runtime_uses_explicit_native_executor_when_present() {
+        let outcome = CoreToolRuntime::new(Some(test_native_tool_executor))
+            .execute_core_tool(ToolCoreRequest {
+                tool_name: "claw.import".to_owned(),
+                payload: json!({"mode": "plan"}),
+            })
+            .await
+            .expect("native tool execution should succeed");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["adapter"], "native-tools");
+        assert_eq!(outcome.payload["tool"], "claw.import");
+    }
+
+    fn declining_native_tool_executor(
+        request: ToolCoreRequest,
+    ) -> Option<Result<ToolCoreOutcome, String>> {
+        if request.tool_name == "claw.import" {
+            return None;
+        }
+        Some(Ok(ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "adapter": "native-tools",
+                "tool": request.tool_name,
+            }),
+        }))
+    }
+
+    #[tokio::test]
+    async fn core_tool_runtime_claw_import_fails_closed_when_executor_declines_request() {
+        let error = CoreToolRuntime::new(Some(declining_native_tool_executor))
+            .execute_core_tool(ToolCoreRequest {
+                tool_name: "claw.import".to_owned(),
+                payload: json!({"mode": "plan"}),
+            })
+            .await
+            .expect_err("native-only tool execution should fail closed when executor declines");
+
+        assert!(error.to_string().contains("native tool executor"));
     }
 }

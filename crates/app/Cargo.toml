@@ -6,11 +6,13 @@ license.workspace = true
 authors.workspace = true
 
 [features]
-default = ["channel-cli", "channel-telegram", "channel-feishu", "config-toml", "memory-sqlite", "tool-shell", "tool-file", "provider-openai", "provider-volcengine"]
+default = ["channel-cli", "channel-telegram", "channel-feishu", "config-toml", "memory-sqlite", "tool-shell", "tool-file", "provider-openai", "provider-anthropic", "provider-bedrock", "provider-volcengine"]
 channel-cli = []
 channel-telegram = []
 channel-feishu = ["dep:axum", "dep:aes", "dep:cbc"]
 provider-openai = []
+provider-anthropic = []
+provider-bedrock = ["dep:aws-config", "dep:aws-credential-types", "dep:aws-sigv4", "dep:http"]
 provider-volcengine = []
 config-toml = ["dep:toml"]
 memory-sqlite = ["dep:rusqlite"]
@@ -30,6 +32,10 @@ flate2.workspace = true
 tar.workspace = true
 tokio.workspace = true
 base64.workspace = true
+aws-config = { version = "1.8.15", optional = true }
+aws-credential-types = { version = "1.2.14", optional = true }
+aws-sigv4 = { version = "1.4.2", optional = true }
+http = { version = "1.4.0", optional = true }
 time.workspace = true
 rusqlite = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }

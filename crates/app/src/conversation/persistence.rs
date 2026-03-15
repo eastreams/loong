@@ -5,6 +5,9 @@ use crate::KernelContext;
 use crate::acp::{
     AcpTurnResult, PersistedAcpRuntimeEventContext, build_persisted_runtime_event_records,
 };
+use crate::memory::{
+    build_conversation_event_content, build_tool_decision_content, build_tool_outcome_content,
+};
 
 use super::runtime::ConversationRuntime;
 use super::turn_engine::{ToolDecision, ToolOutcome};
@@ -66,21 +69,12 @@ pub(super) async fn persist_tool_decision<R: ConversationRuntime + ?Sized>(
     decision: &ToolDecision,
     kernel_ctx: Option<&KernelContext>,
 ) -> CliResult<()> {
-    let content = json!({
-        "type": "tool_decision",
-        "turn_id": turn_id,
-        "tool_call_id": tool_call_id,
-        "decision": serde_json::to_value(decision)
-            .map_err(|e| format!("serialize tool decision: {e}"))?,
-    });
-    persist_and_ingest_turn(
-        runtime,
-        session_id,
-        "assistant",
-        &content.to_string(),
-        kernel_ctx,
-    )
-    .await
+    let content = build_tool_decision_content(
+        turn_id,
+        tool_call_id,
+        serde_json::to_value(decision).map_err(|e| format!("serialize tool decision: {e}"))?,
+    );
+    persist_and_ingest_turn(runtime, session_id, "assistant", &content, kernel_ctx).await
 }
 
 /// Persist a tool outcome as a structured JSON assistant message.
@@ -97,21 +91,12 @@ pub(super) async fn persist_tool_outcome<R: ConversationRuntime + ?Sized>(
     outcome: &ToolOutcome,
     kernel_ctx: Option<&KernelContext>,
 ) -> CliResult<()> {
-    let content = json!({
-        "type": "tool_outcome",
-        "turn_id": turn_id,
-        "tool_call_id": tool_call_id,
-        "outcome": serde_json::to_value(outcome)
-            .map_err(|e| format!("serialize tool outcome: {e}"))?,
-    });
-    persist_and_ingest_turn(
-        runtime,
-        session_id,
-        "assistant",
-        &content.to_string(),
-        kernel_ctx,
-    )
-    .await
+    let content = build_tool_outcome_content(
+        turn_id,
+        tool_call_id,
+        serde_json::to_value(outcome).map_err(|e| format!("serialize tool outcome: {e}"))?,
+    );
+    persist_and_ingest_turn(runtime, session_id, "assistant", &content, kernel_ctx).await
 }
 
 pub(super) async fn persist_error_turns<R: ConversationRuntime + ?Sized>(
@@ -221,13 +206,9 @@ pub(super) async fn persist_conversation_event<R: ConversationRuntime + ?Sized>(
     payload: Value,
     kernel_ctx: Option<&KernelContext>,
 ) -> CliResult<()> {
-    let content = json!({
-        "type": "conversation_event",
-        "event": event_name,
-        "payload": payload,
-    });
+    let content = build_conversation_event_content(event_name, payload);
     runtime
-        .persist_turn(session_id, "assistant", &content.to_string(), kernel_ctx)
+        .persist_turn(session_id, "assistant", &content, kernel_ctx)
         .await
 }
 

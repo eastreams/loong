@@ -5,6 +5,7 @@ use tokio::time::sleep;
 use crate::{CliResult, config::ProviderConfig};
 
 use super::{
+    auth_profile_runtime::ProviderAuthProfile,
     http_client_runtime::build_http_client,
     policy::ProviderRequestPolicy,
     request_planner::{plan_status_retry, plan_transport_error_retry},
@@ -15,7 +16,8 @@ pub(super) struct ModelCatalogRequestRuntime<'a> {
     pub(super) provider: &'a ProviderConfig,
     pub(super) headers: &'a reqwest::header::HeaderMap,
     pub(super) request_policy: &'a ProviderRequestPolicy,
-    pub(super) authorization_header: Option<&'a str>,
+    pub(super) auth_profile: Option<&'a ProviderAuthProfile>,
+    pub(super) auth_context: &'a transport::RequestAuthContext,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,14 +58,28 @@ pub(super) async fn fetch_available_models_with_policy(
     let mut backoff_ms = runtime.request_policy.initial_backoff_ms;
     loop {
         attempt += 1;
-        let mut req = client
-            .get(endpoint.clone())
-            .headers(runtime.headers.clone());
-        if let Some(auth_header) = runtime.authorization_header {
-            req = req.header(reqwest::header::AUTHORIZATION, auth_header);
-        }
+        let request_endpoint = transport::resolve_request_url(
+            runtime.provider,
+            endpoint.as_str(),
+            runtime.auth_context,
+        )?;
+        let mut headers = runtime.headers.clone();
+        transport::apply_auth_profile_headers(&mut headers, runtime.auth_profile)?;
+        let req = client
+            .get(request_endpoint.as_str())
+            .headers(headers)
+            .build()
+            .map_err(|error| format!("provider model-list request setup failed: {error}"))?;
 
-        match req.send().await {
+        match transport::execute_request(
+            &client,
+            req,
+            None,
+            runtime.auth_context,
+            Some(transport::BedrockService::ModelCatalog),
+        )
+        .await
+        {
             Ok(response) => {
                 let status = response.status();
                 let response_headers = response.headers().clone();
@@ -110,7 +126,7 @@ pub(super) async fn fetch_available_models_with_policy(
                     max_attempts = runtime.request_policy.max_attempts
                 ));
             }
-            Err(error) => {
+            Err(transport::RequestExecutionError::Transport(error)) => {
                 if let Some((retry_delay_ms, next_backoff_ms)) =
                     plan_transport_error_retry(attempt, runtime.request_policy, &error, backoff_ms)
                 {
@@ -120,6 +136,12 @@ pub(super) async fn fetch_available_models_with_policy(
                 }
                 return Err(format!(
                     "provider model-list request failed on attempt {attempt}/{max_attempts}: {error}",
+                    max_attempts = runtime.request_policy.max_attempts
+                ));
+            }
+            Err(transport::RequestExecutionError::Setup(error)) => {
+                return Err(format!(
+                    "provider model-list request setup failed on attempt {attempt}/{max_attempts}: {error}",
                     max_attempts = runtime.request_policy.max_attempts
                 ));
             }

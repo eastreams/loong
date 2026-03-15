@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    ops::Deref,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -69,6 +70,17 @@ pub struct LoongClawKernel<P: PolicyEngine> {
     clock: Arc<dyn Clock>,
     audit: Arc<dyn AuditSink>,
     event_seq: AtomicU64,
+}
+
+/// Additive migration alias for the legacy kernel surface.
+///
+/// During the compatibility window this still exposes the executable
+/// `LoongClawKernel` API, while also supporting `.build()` into the new
+/// frozen `Kernel<P>` handle.
+pub type KernelBuilder<P> = LoongClawKernel<P>;
+
+pub struct Kernel<P: PolicyEngine> {
+    inner: LoongClawKernel<P>,
 }
 
 impl<P: PolicyEngine> LoongClawKernel<P> {
@@ -193,6 +205,11 @@ impl<P: PolicyEngine> LoongClawKernel<P> {
         self.memory_plane
             .set_default_core_adapter(name)
             .map_err(KernelError::from)
+    }
+
+    #[must_use]
+    pub fn build(self) -> Kernel<P> {
+        Kernel { inner: self }
     }
 
     pub fn issue_token(
@@ -819,5 +836,205 @@ impl<P: PolicyEngine> LoongClawKernel<P> {
             agent_id,
             kind,
         }
+    }
+}
+
+impl<P: PolicyEngine> Kernel<P> {
+    pub fn get_namespace(&self, pack_id: &str) -> Option<&loongclaw_contracts::Namespace> {
+        self.inner.get_namespace(pack_id)
+    }
+
+    pub fn issue_token(
+        &self,
+        pack_id: &str,
+        agent_id: &str,
+        ttl_s: u64,
+    ) -> Result<CapabilityToken, KernelError> {
+        self.inner.issue_token(pack_id, agent_id, ttl_s)
+    }
+
+    pub fn revoke_token(
+        &self,
+        token_id: &str,
+        actor_agent_id: Option<&str>,
+    ) -> Result<(), KernelError> {
+        self.inner.revoke_token(token_id, actor_agent_id)
+    }
+
+    pub fn revoke_generation(&self, below: u64) {
+        self.inner.revoke_generation(below);
+    }
+
+    pub fn record_audit_event(
+        &self,
+        agent_id: Option<&str>,
+        kind: AuditEventKind,
+    ) -> Result<(), KernelError> {
+        self.inner.record_audit_event(agent_id, kind)
+    }
+
+    pub async fn execute_task(
+        &self,
+        pack_id: &str,
+        token: &CapabilityToken,
+        task: TaskIntent,
+    ) -> Result<KernelDispatch, KernelError> {
+        self.inner.execute_task(pack_id, token, task).await
+    }
+
+    pub async fn execute_connector_core(
+        &self,
+        pack_id: &str,
+        token: &CapabilityToken,
+        core_name: Option<&str>,
+        command: ConnectorCommand,
+    ) -> Result<ConnectorDispatch, KernelError> {
+        self.inner
+            .execute_connector_core(pack_id, token, core_name, command)
+            .await
+    }
+
+    pub async fn execute_connector_extension(
+        &self,
+        pack_id: &str,
+        token: &CapabilityToken,
+        extension_name: &str,
+        core_name: Option<&str>,
+        command: ConnectorCommand,
+    ) -> Result<ConnectorDispatch, KernelError> {
+        self.inner
+            .execute_connector_extension(pack_id, token, extension_name, core_name, command)
+            .await
+    }
+
+    pub async fn execute_runtime_core(
+        &self,
+        pack_id: &str,
+        token: &CapabilityToken,
+        required_capabilities: &BTreeSet<Capability>,
+        core_name: Option<&str>,
+        request: RuntimeCoreRequest,
+    ) -> Result<RuntimeCoreOutcome, KernelError> {
+        self.inner
+            .execute_runtime_core(pack_id, token, required_capabilities, core_name, request)
+            .await
+    }
+
+    pub async fn execute_runtime_extension(
+        &self,
+        pack_id: &str,
+        token: &CapabilityToken,
+        required_capabilities: &BTreeSet<Capability>,
+        extension_name: &str,
+        core_name: Option<&str>,
+        request: RuntimeExtensionRequest,
+    ) -> Result<RuntimeExtensionOutcome, KernelError> {
+        self.inner
+            .execute_runtime_extension(
+                pack_id,
+                token,
+                required_capabilities,
+                extension_name,
+                core_name,
+                request,
+            )
+            .await
+    }
+
+    pub async fn execute_tool_core(
+        &self,
+        pack_id: &str,
+        token: &CapabilityToken,
+        required_capabilities: &BTreeSet<Capability>,
+        core_name: Option<&str>,
+        request: ToolCoreRequest,
+    ) -> Result<ToolCoreOutcome, KernelError> {
+        self.inner
+            .execute_tool_core(pack_id, token, required_capabilities, core_name, request)
+            .await
+    }
+
+    pub async fn execute_tool_extension(
+        &self,
+        pack_id: &str,
+        token: &CapabilityToken,
+        required_capabilities: &BTreeSet<Capability>,
+        extension_name: &str,
+        core_name: Option<&str>,
+        request: ToolExtensionRequest,
+    ) -> Result<ToolExtensionOutcome, KernelError> {
+        self.inner
+            .execute_tool_extension(
+                pack_id,
+                token,
+                required_capabilities,
+                extension_name,
+                core_name,
+                request,
+            )
+            .await
+    }
+
+    pub async fn execute_memory_core(
+        &self,
+        pack_id: &str,
+        token: &CapabilityToken,
+        required_capabilities: &BTreeSet<Capability>,
+        core_name: Option<&str>,
+        request: MemoryCoreRequest,
+    ) -> Result<MemoryCoreOutcome, KernelError> {
+        self.inner
+            .execute_memory_core(pack_id, token, required_capabilities, core_name, request)
+            .await
+    }
+
+    pub async fn execute_memory_extension(
+        &self,
+        pack_id: &str,
+        token: &CapabilityToken,
+        required_capabilities: &BTreeSet<Capability>,
+        extension_name: &str,
+        core_name: Option<&str>,
+        request: MemoryExtensionRequest,
+    ) -> Result<MemoryExtensionOutcome, KernelError> {
+        self.inner
+            .execute_memory_extension(
+                pack_id,
+                token,
+                required_capabilities,
+                extension_name,
+                core_name,
+                request,
+            )
+            .await
+    }
+}
+
+impl<P: PolicyEngine> AsRef<LoongClawKernel<P>> for Kernel<P> {
+    fn as_ref(&self) -> &LoongClawKernel<P> {
+        &self.inner
+    }
+}
+
+impl<P: PolicyEngine> Deref for Kernel<P> {
+    type Target = LoongClawKernel<P>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+#[cfg(test)]
+mod send_sync_tests {
+    use super::*;
+    use crate::StaticPolicyEngine;
+
+    fn assert_send<T: Send>() {}
+    fn assert_sync<T: Sync>() {}
+
+    #[test]
+    fn kernel_is_send_and_sync() {
+        assert_send::<Kernel<StaticPolicyEngine>>();
+        assert_sync::<Kernel<StaticPolicyEngine>>();
     }
 }

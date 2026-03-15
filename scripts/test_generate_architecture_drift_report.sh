@@ -35,6 +35,7 @@ run_no_baseline_test() {
   assert_contains "$output_file" "<!-- arch-hotspot key=spec_runtime"
   assert_contains "$output_file" "<!-- arch-boundary key=memory_literals status=PASS -->"
   assert_contains "$output_file" "<!-- arch-boundary key=provider_mod_helper_definitions status=PASS -->"
+  assert_contains "$output_file" "<!-- arch-boundary key=spec_app_dependency status=PASS -->"
 }
 
 run_breach_baseline_test() {
@@ -47,6 +48,7 @@ run_breach_baseline_test() {
 <!-- arch-hotspot key=spec_runtime lines=1 functions=1 -->
 <!-- arch-boundary key=memory_literals status=PASS -->
 <!-- arch-boundary key=provider_mod_helper_definitions status=PASS -->
+<!-- arch-boundary key=spec_app_dependency status=PASS -->
 BASELINE
 
   local output_file="$tmp_dir/architecture-drift-2099-01.md"

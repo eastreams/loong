@@ -1,7 +1,8 @@
 use super::*;
 use crate::config::{
-    FeishuChannelConfig, MemoryConfig, ProviderConfig, ReasoningEffort, ToolConfig,
+    FeishuChannelConfig, LoongClawConfig, MemoryConfig, ProviderConfig, ReasoningEffort, ToolConfig,
 };
+use crate::test_support::ScopedEnv;
 use loongclaw_contracts::{Capability, ExecutionRoute, HarnessKind};
 use loongclaw_kernel::{
     AuditEventKind, FixedClock, InMemoryAuditSink, LoongClawKernel, StaticPolicyEngine,
@@ -82,6 +83,54 @@ fn next_temp_path(prefix: &str, extension: &str) -> PathBuf {
     ))
 }
 
+#[tokio::test]
+async fn provider_auth_ready_accepts_x_api_key_providers() {
+    let config = LoongClawConfig {
+        provider: ProviderConfig {
+            kind: ProviderKind::Anthropic,
+            api_key: Some("anthropic-secret".to_owned()),
+            ..ProviderConfig::default()
+        },
+        ..LoongClawConfig::default()
+    };
+
+    assert!(provider_auth_ready(&config).await);
+}
+
+#[tokio::test]
+async fn provider_auth_ready_accepts_manual_auth_headers_for_custom_provider() {
+    let config = LoongClawConfig {
+        provider: ProviderConfig {
+            kind: ProviderKind::Custom,
+            headers: BTreeMap::from([("authorization".to_owned(), "Token manual-auth".to_owned())]),
+            ..ProviderConfig::default()
+        },
+        ..LoongClawConfig::default()
+    };
+
+    assert!(provider_auth_ready(&config).await);
+}
+
+#[cfg(feature = "provider-bedrock")]
+#[tokio::test]
+async fn provider_auth_ready_accepts_bedrock_sigv4_credentials() {
+    let mut env = ScopedEnv::new();
+    env.set("AWS_ACCESS_KEY_ID", "test-access-key");
+    env.set("AWS_SECRET_ACCESS_KEY", "test-secret-key");
+    env.set("AWS_REGION", "us-west-2");
+    env.remove("AWS_SESSION_TOKEN");
+
+    let config = LoongClawConfig {
+        provider: ProviderConfig {
+            kind: ProviderKind::Bedrock,
+            ..ProviderConfig::default()
+        },
+        ..LoongClawConfig::default()
+    };
+
+    assert!(provider_auth_ready(&config).await);
+}
+
 fn cleanup_sqlite_artifacts(path: &Path) {
     let _ = std::fs::remove_file(path);
     let wal = format!("{}-wal", path.display());
@@ -113,6 +162,8 @@ fn resolve_provider_auth_profiles_prefers_oauth_then_api_key() {
         profiles[1].authorization_header.as_deref(),
         Some("Bearer api-key")
     );
+    assert_eq!(profiles[0].x_api_key_header, None);
+    assert_eq!(profiles[1].x_api_key_header, None);
 }
 
 #[test]
@@ -145,10 +196,14 @@ fn provider_profile_health_prioritizes_available_profile() {
     let first = ProviderAuthProfile {
         id: "profile-a".to_owned(),
         authorization_header: Some("Bearer a".to_owned()),
+        x_api_key_header: None,
+        auth_cache_key: Some("Bearer a".to_owned()),
     };
     let second = ProviderAuthProfile {
         id: "profile-b".to_owned(),
         authorization_header: Some("Bearer b".to_owned()),
+        x_api_key_header: None,
+        auth_cache_key: Some("Bearer b".to_owned()),
     };
 
     mark_provider_profile_failure(&policy, &first, ProviderFailoverReason::RateLimited);
@@ -232,6 +287,8 @@ fn provider_profile_health_observe_only_mode_bypasses_cooldown_windows() {
     let profile = ProviderAuthProfile {
         id: "profile-observe".to_owned(),
         authorization_header: Some("Bearer observe".to_owned()),
+        x_api_key_header: None,
+        auth_cache_key: Some("Bearer observe".to_owned()),
     };
 
     mark_provider_profile_failure(&policy, &profile, ProviderFailoverReason::RateLimited);
@@ -762,6 +819,105 @@ fn completion_body_omits_optional_fields_when_not_configured() {
 }
 
 #[test]
+fn anthropic_completion_body_uses_native_messages_shape() {
+    let config = LoongClawConfig {
+        provider: ProviderConfig {
+            kind: ProviderKind::Anthropic,
+            max_tokens: Some(2_048),
+            ..ProviderConfig::default()
+        },
+        cli: crate::config::CliChannelConfig::default(),
+        telegram: crate::config::TelegramChannelConfig::default(),
+        feishu: FeishuChannelConfig::default(),
+        tools: ToolConfig::default(),
+        memory: MemoryConfig::default(),
+        conversation: crate::config::ConversationConfig::default(),
+        external_skills: crate::config::ExternalSkillsConfig::default(),
+        acp: crate::config::AcpConfig::default(),
+    };
+    let messages = vec![
+        json!({"role": "system", "content": "sys"}),
+        json!({"role": "user", "content": "hello"}),
+    ];
+
+    let body = build_completion_request_body(
+        &config,
+        &messages,
+        "claude-test",
+        CompletionPayloadMode::default_for(&config.provider),
+    );
+    assert_eq!(body["system"], "sys");
+    assert_eq!(body["messages"][0]["role"], "user");
+    assert_eq!(body["messages"][0]["content"][0]["type"], "text");
+    assert_eq!(body["messages"][0]["content"][0]["text"], "hello");
+    assert_eq!(body["max_tokens"], 2_048);
+    assert!(body.get("reasoning_effort").is_none());
+    assert!(body.get("max_completion_tokens").is_none());
+}
+
+#[test]
+fn bedrock_completion_body_uses_converse_shape() {
+    let config = LoongClawConfig {
+        provider: ProviderConfig {
+            kind: ProviderKind::Bedrock,
+            max_tokens: Some(2_048),
+            ..ProviderConfig::default()
+        },
+        cli: crate::config::CliChannelConfig::default(),
+        telegram: crate::config::TelegramChannelConfig::default(),
+        feishu: FeishuChannelConfig::default(),
+        tools: ToolConfig::default(),
+        memory: MemoryConfig::default(),
+        conversation: crate::config::ConversationConfig::default(),
+        external_skills: crate::config::ExternalSkillsConfig::default(),
+        acp: crate::config::AcpConfig::default(),
+    };
+    let messages = vec![
+        json!({"role": "system", "content": "sys"}),
+        json!({"role": "user", "content": "hello"}),
+    ];
+
+    let body = build_completion_request_body(
+        &config,
+        &messages,
+        "anthropic.claude-3-7-sonnet-20250219-v1:0",
+        CompletionPayloadMode::default_for(&config.provider),
+    );
+    assert!(body.get("model").is_none());
+    assert_eq!(body["system"][0]["text"], "sys");
+    assert_eq!(body["messages"][0]["role"], "user");
+    assert_eq!(body["messages"][0]["content"][0]["text"], "hello");
+    assert_eq!(body["inferenceConfig"]["maxTokens"], 2_048);
+    assert_eq!(body["inferenceConfig"]["temperature"], 0.2);
+}
+
+#[test]
+fn anthropic_headers_use_native_auth_and_version() {
+    let provider = ProviderConfig {
+        kind: ProviderKind::Anthropic,
+        api_key: Some("anthropic-test-key".to_owned()),
+        ..ProviderConfig::default()
+    };
+    let headers = transport::build_request_headers(&provider).expect("headers");
+    assert_eq!(
+        headers
+            .get("x-api-key")
+            .and_then(|value| value.to_str().ok()),
+        Some("anthropic-test-key")
+    );
+    assert_eq!(
+        headers
+            .get("anthropic-version")
+            .and_then(|value| value.to_str().ok()),
+        Some("2023-06-01")
+    );
+    assert!(
+        headers.get(reqwest::header::AUTHORIZATION).is_none(),
+        "anthropic should not fall back to bearer auth headers"
+    );
+}
+
+#[test]
 fn kimi_coding_request_headers_include_default_user_agent() {
     let provider = ProviderConfig {
         kind: ProviderKind::KimiCoding,
@@ -847,6 +1003,280 @@ fn turn_body_includes_tool_schema_and_auto_choice() {
         );
     }
     assert_eq!(body["tool_choice"], "auto");
+}
+
+#[cfg(any(feature = "tool-file", feature = "tool-shell"))]
+#[test]
+fn anthropic_turn_body_uses_native_messages_shape_and_tool_schema() {
+    let config = LoongClawConfig {
+        provider: ProviderConfig {
+            kind: ProviderKind::Anthropic,
+            ..ProviderConfig::default()
+        },
+        cli: crate::config::CliChannelConfig::default(),
+        telegram: crate::config::TelegramChannelConfig::default(),
+        feishu: FeishuChannelConfig::default(),
+        tools: ToolConfig::default(),
+        memory: MemoryConfig::default(),
+        conversation: crate::config::ConversationConfig::default(),
+        external_skills: crate::config::ExternalSkillsConfig::default(),
+        acp: crate::config::AcpConfig::default(),
+    };
+    let messages = vec![
+        json!({
+            "role": "system",
+            "content": "system rules"
+        }),
+        json!({
+            "role": "user",
+            "content": "hello"
+        }),
+        json!({
+            "role": "assistant",
+            "content": "working"
+        }),
+        json!({
+            "role": "assistant",
+            "content": "[tool_result]\n{}"
+        }),
+        json!({
+            "role": "user",
+            "content": "continue"
+        }),
+    ];
+
+    let body = build_turn_request_body(
+        &config,
+        &messages,
+        "claude-3-7-sonnet-latest",
+        CompletionPayloadMode::default_for(&config.provider),
+        true,
+        &crate::tools::provider_tool_definitions(),
+    );
+
+    assert_eq!(body["system"], "system rules");
+    assert_eq!(body["max_tokens"], 4096);
+    let adapted_messages = body["messages"].as_array().expect("anthropic messages");
+    assert_eq!(adapted_messages.len(), 3);
+    assert_eq!(adapted_messages[0]["role"], "user");
+    assert_eq!(adapted_messages[1]["role"], "assistant");
+    assert_eq!(
+        adapted_messages[1]["content"].as_array().map(Vec::len),
+        Some(2)
+    );
+
+    let tools = body["tools"].as_array().expect("anthropic tools");
+    assert!(!tools.is_empty());
+    assert!(tools[0].get("function").is_none());
+    assert!(tools[0].get("input_schema").is_some());
+    assert_eq!(body["tool_choice"]["type"], "auto");
+}
+
+#[cfg(any(feature = "tool-file", feature = "tool-shell"))]
+#[test]
+fn anthropic_turn_body_converts_tool_schema_to_native_format() {
+    let config = LoongClawConfig {
+        provider: ProviderConfig {
+            kind: ProviderKind::Anthropic,
+            ..ProviderConfig::default()
+        },
+        cli: crate::config::CliChannelConfig::default(),
+        telegram: crate::config::TelegramChannelConfig::default(),
+        feishu: FeishuChannelConfig::default(),
+        tools: ToolConfig::default(),
+        memory: MemoryConfig::default(),
+        conversation: crate::config::ConversationConfig::default(),
+        external_skills: crate::config::ExternalSkillsConfig::default(),
+        acp: crate::config::AcpConfig::default(),
+    };
+
+    let body = build_turn_request_body(
+        &config,
+        &[json!({"role": "user", "content": "inspect README"})],
+        "claude-test",
+        CompletionPayloadMode::default_for(&config.provider),
+        true,
+        &crate::tools::provider_tool_definitions(),
+    );
+    let tools = body
+        .get("tools")
+        .and_then(Value::as_array)
+        .expect("anthropic tools array");
+    assert!(!tools.is_empty());
+    let first = &tools[0];
+    assert!(first.get("function").is_none());
+    assert!(first.get("input_schema").is_some());
+    assert_eq!(body["tool_choice"]["type"], "auto");
+}
+
+#[test]
+fn anthropic_turn_body_preserves_native_tool_use_and_tool_result_blocks() {
+    let config = LoongClawConfig {
+        provider: ProviderConfig {
+            kind: ProviderKind::Anthropic,
+            ..ProviderConfig::default()
+        },
+        cli: crate::config::CliChannelConfig::default(),
+        telegram: crate::config::TelegramChannelConfig::default(),
+        feishu: FeishuChannelConfig::default(),
+        tools: ToolConfig::default(),
+        memory: MemoryConfig::default(),
+        conversation: crate::config::ConversationConfig::default(),
+        external_skills: crate::config::ExternalSkillsConfig::default(),
+        acp: crate::config::AcpConfig::default(),
+    };
+
+    let body = build_turn_request_body(
+        &config,
+        &[
+            json!({
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "checking"
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "file_read",
+                        "input": {
+                            "path": "README.md"
+                        }
+                    }
+                ]
+            }),
+            json!({
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_1",
+                        "content": "[ok] {\"path\":\"README.md\"}"
+                    },
+                    {
+                        "type": "text",
+                        "text": "Use the tool result above to answer."
+                    }
+                ]
+            }),
+        ],
+        "claude-test",
+        CompletionPayloadMode::default_for(&config.provider),
+        true,
+        &crate::tools::provider_tool_definitions(),
+    );
+
+    let adapted_messages = body["messages"].as_array().expect("anthropic messages");
+    assert_eq!(adapted_messages.len(), 2);
+    assert_eq!(adapted_messages[0]["role"], "assistant");
+    assert_eq!(adapted_messages[0]["content"][1]["type"], "tool_use");
+    assert_eq!(adapted_messages[0]["content"][1]["id"], "toolu_1");
+    assert_eq!(adapted_messages[1]["role"], "user");
+    assert_eq!(adapted_messages[1]["content"][0]["type"], "tool_result");
+    assert_eq!(adapted_messages[1]["content"][0]["tool_use_id"], "toolu_1");
+    assert_eq!(adapted_messages[1]["content"][1]["type"], "text");
+}
+
+#[cfg(any(feature = "tool-file", feature = "tool-shell"))]
+#[test]
+fn bedrock_turn_body_uses_native_tool_blocks_and_tool_config() {
+    let config = LoongClawConfig {
+        provider: ProviderConfig {
+            kind: ProviderKind::Bedrock,
+            ..ProviderConfig::default()
+        },
+        cli: crate::config::CliChannelConfig::default(),
+        telegram: crate::config::TelegramChannelConfig::default(),
+        feishu: FeishuChannelConfig::default(),
+        tools: ToolConfig::default(),
+        memory: MemoryConfig::default(),
+        conversation: crate::config::ConversationConfig::default(),
+        external_skills: crate::config::ExternalSkillsConfig::default(),
+        acp: crate::config::AcpConfig::default(),
+    };
+
+    let body = build_turn_request_body(
+        &config,
+        &[
+            json!({
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "checking"
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "file_read",
+                        "input": {
+                            "path": "README.md"
+                        }
+                    }
+                ]
+            }),
+            json!({
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_1",
+                        "content": "[ok] README contents"
+                    },
+                    {
+                        "type": "text",
+                        "text": "Use the tool result above to answer."
+                    }
+                ]
+            }),
+        ],
+        "anthropic.claude-3-7-sonnet-20250219-v1:0",
+        CompletionPayloadMode::default_for(&config.provider),
+        true,
+        &crate::tools::provider_tool_definitions(),
+    );
+
+    let adapted_messages = body["messages"].as_array().expect("bedrock messages");
+    assert_eq!(adapted_messages.len(), 2);
+    assert_eq!(adapted_messages[0]["role"], "assistant");
+    assert_eq!(
+        adapted_messages[0]["content"][1]["toolUse"]["toolUseId"],
+        "toolu_1"
+    );
+    assert_eq!(adapted_messages[1]["role"], "user");
+    assert_eq!(
+        adapted_messages[1]["content"][0]["toolResult"]["toolUseId"],
+        "toolu_1"
+    );
+    assert_eq!(
+        adapted_messages[1]["content"][1]["text"],
+        "Use the tool result above to answer."
+    );
+
+    let tools = body["toolConfig"]["tools"]
+        .as_array()
+        .expect("bedrock tools");
+    assert!(!tools.is_empty());
+    assert!(tools[0].get("toolSpec").is_some());
+    assert_eq!(body["toolConfig"]["toolChoice"]["auto"], json!({}));
+}
+
+#[test]
+fn bedrock_request_endpoint_encodes_model_id_in_path() {
+    let provider = ProviderConfig {
+        kind: ProviderKind::Bedrock,
+        ..ProviderConfig::default()
+    };
+    let endpoint = transport::resolve_request_endpoint(
+        &provider,
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/{modelId}/converse",
+        "anthropic.claude-3-7-sonnet-20250219-v1:0",
+    );
+    assert_eq!(
+        endpoint,
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-3-7-sonnet-20250219-v1%3A0/converse"
+    );
 }
 
 #[test]
@@ -1019,6 +1449,40 @@ fn provider_runtime_contract_defaults_are_stable() {
             .tool_schema_downgrade_on_unsupported()
     );
     assert!(!openai_contract.capability.include_reasoning_extra_body());
+
+    let anthropic_contract = provider_runtime_contract(&ProviderConfig {
+        kind: ProviderKind::Anthropic,
+        ..ProviderConfig::default()
+    });
+    assert_eq!(
+        anthropic_contract.feature_family,
+        ProviderFeatureFamily::Anthropic
+    );
+    assert_eq!(
+        anthropic_contract.transport_mode,
+        ProviderTransportMode::AnthropicMessages
+    );
+    assert_eq!(
+        anthropic_contract.default_reasoning_field,
+        ReasoningField::Omit
+    );
+
+    let bedrock_contract = provider_runtime_contract(&ProviderConfig {
+        kind: ProviderKind::Bedrock,
+        ..ProviderConfig::default()
+    });
+    assert_eq!(
+        bedrock_contract.feature_family,
+        ProviderFeatureFamily::Bedrock
+    );
+    assert_eq!(
+        bedrock_contract.transport_mode,
+        ProviderTransportMode::BedrockConverse
+    );
+    assert_eq!(
+        bedrock_contract.default_reasoning_field,
+        ReasoningField::Omit
+    );
 
     let kimi_coding_contract = provider_runtime_contract(&ProviderConfig {
         kind: ProviderKind::KimiCoding,
@@ -1331,7 +1795,7 @@ fn model_error_parser_detects_endpoint_mismatch() {
     let runtime_contract = provider_runtime_contract(&ProviderConfig::default());
     let body = json!({
         "error": {
-            "message": "The model `gpt-5.4-pro` only supports /v1/responses and not this endpoint."
+            "message": "The model `gpt-5-pro` only supports /v1/responses and not this endpoint."
         }
     });
     let parsed = parse_provider_api_error(&body);

@@ -19,7 +19,7 @@ use crate::{
     },
     errors::{ConnectorError, KernelError, PolicyError},
     harness::HarnessAdapter,
-    kernel::LoongClawKernel,
+    kernel::{KernelBuilder, LoongClawKernel},
     memory::{
         CoreMemoryAdapter, MemoryCoreOutcome, MemoryCoreRequest, MemoryExtensionAdapter,
         MemoryExtensionOutcome, MemoryExtensionRequest,
@@ -1986,4 +1986,61 @@ fn namespace_membrane_defaults_to_pack_id() {
 
     let ns = kernel.get_namespace("sales-intel").unwrap();
     assert_eq!(ns.membrane, "sales-intel");
+}
+
+#[tokio::test]
+async fn kernel_is_usable_from_concurrent_tasks() {
+    let mut builder = KernelBuilder::new(StaticPolicyEngine::default());
+    builder
+        .register_pack(sample_pack())
+        .expect("pack should register");
+    builder.register_core_connector_adapter(MockCoreConnector);
+    builder
+        .set_default_core_connector_adapter("http-core")
+        .expect("default connector adapter should register");
+    let kernel = Arc::new(builder.build());
+
+    let token = kernel
+        .issue_token("sales-intel", "agent-alpha", 120)
+        .expect("token should issue");
+
+    let mut handles = Vec::new();
+    for i in 0..4 {
+        let kernel = Arc::clone(&kernel);
+        let token = token.clone();
+        handles.push(tokio::spawn(async move {
+            kernel
+                .execute_connector_core(
+                    "sales-intel",
+                    &token,
+                    None,
+                    ConnectorCommand {
+                        connector_name: "crm".to_owned(),
+                        operation: "lookup".to_owned(),
+                        required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+                        payload: json!({"id": format!("concurrent-{i}")}),
+                    },
+                )
+                .await
+        }));
+    }
+
+    for (i, handle) in handles.into_iter().enumerate() {
+        let dispatch = handle
+            .await
+            .expect("task should not panic")
+            .expect("concurrent dispatch should succeed");
+        assert_eq!(dispatch.connector_name, "crm");
+        assert_eq!(dispatch.outcome.status, "ok");
+        assert_eq!(
+            dispatch.outcome.payload,
+            json!({
+                "tier": "core",
+                "adapter": "http-core",
+                "connector": "crm",
+                "operation": "lookup",
+                "payload": {"id": format!("concurrent-{i}")},
+            })
+        );
+    }
 }

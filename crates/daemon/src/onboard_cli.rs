@@ -99,10 +99,16 @@ pub(crate) async fn run_onboard_cli(options: OnboardCommandOptions) -> CliResult
         print_step_header(1, total_steps, "provider");
     }
     let selected_provider = resolve_provider_selection(&options, &config)?;
-    config.provider.kind = selected_provider;
+    config.provider.set_kind(selected_provider);
     let profile = config.provider.kind.profile();
-    config.provider.base_url = profile.base_url.to_owned();
-    config.provider.chat_completions_path = profile.chat_completions_path.to_owned();
+    config.provider.set_base_url(profile.base_url.to_owned());
+    config
+        .provider
+        .set_chat_completions_path(profile.chat_completions_path.to_owned());
+    config.provider.set_endpoint(None);
+    config.provider.set_models_endpoint(None);
+    config.provider.set_api_key_env(None);
+    config.provider.set_oauth_access_token_env(None);
 
     if !options.non_interactive {
         print_step_header(2, total_steps, "model");
@@ -116,7 +122,7 @@ pub(crate) async fn run_onboard_cli(options: OnboardCommandOptions) -> CliResult
     let default_api_key_env = provider_default_api_key_env(config.provider.kind).to_owned();
     let selected_api_key = resolve_api_key_selection(&options, default_api_key_env)?;
     config.provider.api_key = normalize_provider_api_key_source(&selected_api_key);
-    config.provider.api_key_env = None;
+    config.provider.set_api_key_env(None);
 
     if using_prompt_override {
         if !options.non_interactive {
@@ -1123,23 +1129,7 @@ pub(crate) fn validate_non_interactive_import_strategy(
 }
 
 pub(crate) fn parse_provider_kind(raw: &str) -> Option<mvp::config::ProviderKind> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "anthropic" | "anthropic_compatible" => Some(mvp::config::ProviderKind::Anthropic),
-        "deepseek" | "deepseek_compatible" => Some(mvp::config::ProviderKind::Deepseek),
-        "kimi" | "kimi_compatible" => Some(mvp::config::ProviderKind::Kimi),
-        "kimi_coding" | "kimi_coding_compatible" => Some(mvp::config::ProviderKind::KimiCoding),
-        "minimax" | "minimax_compatible" => Some(mvp::config::ProviderKind::Minimax),
-        "ollama" | "ollama_compatible" => Some(mvp::config::ProviderKind::Ollama),
-        "openai" | "openai_compatible" => Some(mvp::config::ProviderKind::Openai),
-        "openrouter" | "openrouter_compatible" => Some(mvp::config::ProviderKind::Openrouter),
-        "volcengine" | "volcengine_custom" | "volcengine_compatible" => {
-            Some(mvp::config::ProviderKind::Volcengine)
-        }
-        "xai" | "xai_compatible" => Some(mvp::config::ProviderKind::Xai),
-        "zai" | "zai_compatible" => Some(mvp::config::ProviderKind::Zai),
-        "zhipu" | "zhipu_compatible" => Some(mvp::config::ProviderKind::Zhipu),
-        _ => None,
-    }
+    mvp::config::parse_provider_kind_id(raw)
 }
 
 pub(crate) fn parse_prompt_personality(raw: &str) -> Option<mvp::prompt::PromptPersonality> {
@@ -1171,37 +1161,13 @@ pub(crate) fn parse_memory_profile(raw: &str) -> Option<mvp::config::MemoryProfi
 }
 
 pub(crate) fn provider_default_api_key_env(kind: mvp::config::ProviderKind) -> &'static str {
-    match kind {
-        mvp::config::ProviderKind::Anthropic => "ANTHROPIC_API_KEY",
-        mvp::config::ProviderKind::Deepseek => "DEEPSEEK_API_KEY",
-        mvp::config::ProviderKind::Kimi => "MOONSHOT_API_KEY",
-        mvp::config::ProviderKind::KimiCoding => "KIMI_CODING_API_KEY",
-        mvp::config::ProviderKind::Minimax => "MINIMAX_API_KEY",
-        mvp::config::ProviderKind::Ollama => "OLLAMA_API_KEY",
-        mvp::config::ProviderKind::Openai => "OPENAI_API_KEY",
-        mvp::config::ProviderKind::Openrouter => "OPENROUTER_API_KEY",
-        mvp::config::ProviderKind::Volcengine => "ARK_API_KEY",
-        mvp::config::ProviderKind::Xai => "XAI_API_KEY",
-        mvp::config::ProviderKind::Zai => "ZAI_API_KEY",
-        mvp::config::ProviderKind::Zhipu => "ZHIPU_API_KEY",
-    }
+    kind.default_api_key_env()
+        .or(kind.default_oauth_access_token_env())
+        .unwrap_or("OPENAI_API_KEY")
 }
 
 pub(crate) fn provider_kind_id(kind: mvp::config::ProviderKind) -> &'static str {
-    match kind {
-        mvp::config::ProviderKind::Anthropic => "anthropic",
-        mvp::config::ProviderKind::Deepseek => "deepseek",
-        mvp::config::ProviderKind::Kimi => "kimi",
-        mvp::config::ProviderKind::KimiCoding => "kimi_coding",
-        mvp::config::ProviderKind::Minimax => "minimax",
-        mvp::config::ProviderKind::Ollama => "ollama",
-        mvp::config::ProviderKind::Openai => "openai",
-        mvp::config::ProviderKind::Openrouter => "openrouter",
-        mvp::config::ProviderKind::Volcengine => "volcengine",
-        mvp::config::ProviderKind::Xai => "xai",
-        mvp::config::ProviderKind::Zai => "zai",
-        mvp::config::ProviderKind::Zhipu => "zhipu",
-    }
+    kind.as_str()
 }
 
 pub(crate) fn prompt_personality_id(personality: mvp::prompt::PromptPersonality) -> &'static str {
@@ -1220,8 +1186,12 @@ pub(crate) fn memory_profile_id(profile: mvp::config::MemoryProfile) -> &'static
     }
 }
 
-fn supported_provider_list() -> &'static str {
-    "openai, anthropic, openrouter, kimi, kimi_coding, minimax, ollama, volcengine, xai, zai, zhipu, deepseek"
+fn supported_provider_list() -> String {
+    mvp::config::ProviderKind::all_sorted()
+        .iter()
+        .map(|kind| kind.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn supported_personality_list() -> &'static str {

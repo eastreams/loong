@@ -9,16 +9,94 @@ use crate::conversation::turn_engine::{ProviderTurn, ToolIntent};
 use crate::tools;
 
 pub fn extract_provider_turn(body: &Value) -> Option<ProviderTurn> {
-    let message = body
-        .get("choices")
+    if let Some(message) = openai_message(body) {
+        let mut assistant_text = message_content(message).unwrap_or_default();
+        let mut raw_meta = message.clone();
+        let mut tool_intents = extract_openai_tool_intents(message);
+
+        if tool_intents.is_empty() {
+            match extract_inline_function_call_turn(assistant_text.as_str()) {
+                InlineFunctionParseResult::Parsed {
+                    cleaned_text,
+                    tool_intents: inline_tool_intents,
+                    telemetry,
+                } => {
+                    assistant_text = cleaned_text;
+                    tool_intents = inline_tool_intents;
+                    attach_inline_function_parse_telemetry(&mut raw_meta, telemetry);
+                }
+                InlineFunctionParseResult::Malformed { telemetry } => {
+                    attach_inline_function_parse_telemetry(&mut raw_meta, telemetry);
+                }
+                InlineFunctionParseResult::Absent => {}
+            }
+        }
+
+        return Some(ProviderTurn {
+            assistant_text,
+            tool_intents,
+            raw_meta,
+        });
+    }
+
+    if let Some(message) = bedrock_message(body) {
+        return Some(ProviderTurn {
+            assistant_text: message_content(message).unwrap_or_default(),
+            tool_intents: extract_bedrock_tool_intents(message),
+            raw_meta: normalize_bedrock_message(message),
+        });
+    }
+
+    let assistant_text = extract_body_content_text(body).unwrap_or_default();
+    let tool_intents = extract_anthropic_tool_intents(body);
+    if assistant_text.is_empty() && tool_intents.is_empty() {
+        return None;
+    }
+
+    Some(ProviderTurn {
+        assistant_text,
+        tool_intents,
+        raw_meta: body.clone(),
+    })
+}
+
+pub(super) fn extract_message_content(body: &Value) -> Option<String> {
+    openai_message(body)
+        .or_else(|| bedrock_message(body))
+        .and_then(message_content_value)
+        .or_else(|| body_content_value(body))
+        .and_then(extract_content_text)
+}
+
+fn message_content(message: &Value) -> Option<String> {
+    message_content_value(message).and_then(extract_content_text)
+}
+
+fn message_content_value(message: &Value) -> Option<&Value> {
+    message.get("content")
+}
+
+fn body_content_value(body: &Value) -> Option<&Value> {
+    body.get("content")
+}
+
+fn openai_message(body: &Value) -> Option<&Value> {
+    body.get("choices")
         .and_then(Value::as_array)
         .and_then(|choices| choices.first())
-        .and_then(|choice| choice.get("message"))?;
+        .and_then(|choice| choice.get("message"))
+}
 
-    let mut assistant_text = message_content(message).unwrap_or_default();
-    let mut raw_meta = message.clone();
+fn bedrock_message(body: &Value) -> Option<&Value> {
+    body.get("output").and_then(|output| output.get("message"))
+}
 
-    let mut tool_intents: Vec<ToolIntent> = message
+fn extract_body_content_text(body: &Value) -> Option<String> {
+    body_content_value(body).and_then(extract_content_text)
+}
+
+fn extract_openai_tool_intents(message: &Value) -> Vec<ToolIntent> {
+    message
         .get("tool_calls")
         .and_then(Value::as_array)
         .map(|calls| {
@@ -34,8 +112,8 @@ pub fn extract_provider_turn(body: &Value) -> Option<ProviderTurn> {
                         .unwrap_or("{}");
                     let args_json = match serde_json::from_str::<Value>(args_str) {
                         Ok(value) => value,
-                        Err(e) => json!({
-                            "_parse_error": format!("{e}"),
+                        Err(error) => json!({
+                            "_parse_error": format!("{error}"),
                             "_raw_arguments": args_str
                         }),
                     };
@@ -55,51 +133,108 @@ pub fn extract_provider_turn(body: &Value) -> Option<ProviderTurn> {
                 })
                 .collect()
         })
+        .unwrap_or_default()
+}
+
+fn extract_anthropic_tool_intents(body: &Value) -> Vec<ToolIntent> {
+    body.get("content")
+        .and_then(Value::as_array)
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter_map(|block| {
+                    if block.get("type").and_then(Value::as_str) != Some("tool_use") {
+                        return None;
+                    }
+                    let raw_tool_name = block.get("name").and_then(Value::as_str)?;
+                    Some(ToolIntent {
+                        tool_name: tools::canonical_tool_name(raw_tool_name).to_owned(),
+                        args_json: block.get("input").cloned().unwrap_or_else(|| json!({})),
+                        source: "provider_tool_call".to_owned(),
+                        session_id: String::new(),
+                        turn_id: String::new(),
+                        tool_call_id: block
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_owned(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn extract_bedrock_tool_intents(message: &Value) -> Vec<ToolIntent> {
+    message
+        .get("content")
+        .and_then(Value::as_array)
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter_map(|block| {
+                    let tool_use = block.get("toolUse")?;
+                    let raw_tool_name = tool_use.get("name").and_then(Value::as_str)?;
+                    Some(ToolIntent {
+                        tool_name: tools::canonical_tool_name(raw_tool_name).to_owned(),
+                        args_json: tool_use.get("input").cloned().unwrap_or_else(|| json!({})),
+                        source: "provider_tool_call".to_owned(),
+                        session_id: String::new(),
+                        turn_id: String::new(),
+                        tool_call_id: tool_use
+                            .get("toolUseId")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_owned(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn normalize_bedrock_message(message: &Value) -> Value {
+    let role = message
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("assistant");
+    let content = message
+        .get("content")
+        .and_then(Value::as_array)
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter_map(normalize_bedrock_content_block)
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
-
-    if tool_intents.is_empty() {
-        match extract_inline_function_call_turn(assistant_text.as_str()) {
-            InlineFunctionParseResult::Parsed {
-                cleaned_text,
-                tool_intents: inline_tool_intents,
-                telemetry,
-            } => {
-                assistant_text = cleaned_text;
-                tool_intents = inline_tool_intents;
-                attach_inline_function_parse_telemetry(&mut raw_meta, telemetry);
-            }
-            InlineFunctionParseResult::Malformed { telemetry } => {
-                attach_inline_function_parse_telemetry(&mut raw_meta, telemetry);
-            }
-            InlineFunctionParseResult::Absent => {}
-        }
-    }
-
-    Some(ProviderTurn {
-        assistant_text,
-        tool_intents,
-        raw_meta,
+    json!({
+        "role": role,
+        "content": content,
     })
 }
 
-pub(super) fn extract_message_content(body: &Value) -> Option<String> {
-    let content = body
-        .get("choices")
-        .and_then(Value::as_array)
-        .and_then(|choices| choices.first())
-        .and_then(|choice| choice.get("message"))
-        .and_then(message_content_value)?;
+fn normalize_bedrock_content_block(block: &Value) -> Option<Value> {
+    if let Some(text) = block
+        .get("text")
+        .and_then(Value::as_str)
+        .and_then(normalize_text)
+    {
+        return Some(json!({
+            "type": "text",
+            "text": text,
+        }));
+    }
 
-    extract_content_text(content)
-}
-
-fn message_content(message: &Value) -> Option<String> {
-    let content = message_content_value(message)?;
-    extract_content_text(content)
-}
-
-fn message_content_value(message: &Value) -> Option<&Value> {
-    message.get("content")
+    let tool_use = block.get("toolUse")?;
+    let id = tool_use.get("toolUseId").and_then(Value::as_str)?;
+    let name = tool_use.get("name").and_then(Value::as_str)?;
+    Some(json!({
+        "type": "tool_use",
+        "id": id,
+        "name": name,
+        "input": tool_use.get("input").cloned().unwrap_or_else(|| json!({}))
+    }))
 }
 
 fn extract_content_text(content: &Value) -> Option<String> {
@@ -607,6 +742,8 @@ fn markdown_fence_marker(line: &str) -> Option<char> {
 struct ModelCandidate {
     id: String,
     created: Option<i64>,
+    created_text: Option<String>,
+    deprecated: bool,
 }
 
 pub(super) fn extract_model_ids(body: &Value) -> Vec<String> {
@@ -616,9 +753,14 @@ pub(super) fn extract_model_ids(body: &Value) -> Vec<String> {
     }
 
     candidates.sort_by(|left, right| {
-        right
-            .created
-            .cmp(&left.created)
+        left.deprecated
+            .cmp(&right.deprecated)
+            .then_with(|| {
+                right
+                    .created
+                    .cmp(&left.created)
+                    .then_with(|| right.created_text.cmp(&left.created_text))
+            })
             .then_with(|| left.id.cmp(&right.id))
     });
 
@@ -639,10 +781,15 @@ fn collect_model_candidates(body: &Value) -> Vec<ModelCandidate> {
     };
 
     for item in items {
+        if model_is_known_non_chat_candidate(item) {
+            continue;
+        }
         if let Some(id) = model_id_from_value(item) {
             out.push(ModelCandidate {
                 id,
                 created: model_created_from_value(item),
+                created_text: model_created_text_from_value(item),
+                deprecated: model_is_deprecated(item),
             });
         }
     }
@@ -653,7 +800,17 @@ fn model_items(body: &Value) -> Option<&[Value]> {
     if let Some(data) = body.get("data").and_then(Value::as_array) {
         return Some(data);
     }
+    if let Some(models) = body.get("modelSummaries").and_then(Value::as_array) {
+        return Some(models);
+    }
     if let Some(models) = body.get("models").and_then(Value::as_array) {
+        return Some(models);
+    }
+    if let Some(models) = body
+        .get("Result")
+        .and_then(|value| value.get("Items"))
+        .and_then(Value::as_array)
+    {
         return Some(models);
     }
     if let Some(models) = body
@@ -673,6 +830,9 @@ fn model_id_from_value(value: &Value) -> Option<String> {
     if let Some(id) = value.get("id").and_then(Value::as_str) {
         return normalize_text(id);
     }
+    if let Some(id) = value.get("modelId").and_then(Value::as_str) {
+        return normalize_text(id);
+    }
     if let Some(id) = value.get("model").and_then(Value::as_str) {
         return normalize_text(id);
     }
@@ -680,6 +840,91 @@ fn model_id_from_value(value: &Value) -> Option<String> {
         return normalize_text(id);
     }
     None
+}
+
+fn model_is_known_non_chat_candidate(value: &Value) -> bool {
+    if model_has_explicit_non_chat_endpoint_compatibility(value) {
+        return true;
+    }
+
+    if model_has_explicit_non_chat_completion_capability(value) {
+        return true;
+    }
+
+    if model_is_archived(value) {
+        return true;
+    }
+
+    if model_has_explicit_non_text_output_capability(value) {
+        return true;
+    }
+
+    false
+}
+
+fn model_has_explicit_non_chat_endpoint_compatibility(value: &Value) -> bool {
+    let Some(array) = value
+        .get("supportedEndpointTypes")
+        .or_else(|| value.get("supported_endpoint_types"))
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    let endpoints = array
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|entry| entry.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    !endpoints.is_empty()
+        && !endpoints.iter().any(|entry| {
+            matches!(
+                entry.as_str(),
+                "chat" | "chat_completion" | "chat-completion"
+            )
+        })
+}
+
+fn model_has_explicit_non_chat_completion_capability(value: &Value) -> bool {
+    if value
+        .get("supports_chat")
+        .and_then(Value::as_bool)
+        .is_some_and(|enabled| !enabled)
+    {
+        return true;
+    }
+    if value
+        .get("chat_completion")
+        .and_then(Value::as_bool)
+        .is_some_and(|enabled| !enabled)
+    {
+        return true;
+    }
+    false
+}
+
+fn model_is_archived(value: &Value) -> bool {
+    value
+        .get("archived")
+        .and_then(Value::as_bool)
+        .or_else(|| value.get("is_archived").and_then(Value::as_bool))
+        == Some(true)
+}
+
+fn model_has_explicit_non_text_output_capability(value: &Value) -> bool {
+    let Some(output_modalities) = value
+        .get("output_modalities")
+        .or_else(|| value.get("outputModalities"))
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+
+    let modalities = output_modalities
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|entry| entry.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    !modalities.is_empty() && !modalities.iter().any(|entry| entry == "text")
 }
 
 fn model_created_from_value(value: &Value) -> Option<i64> {
@@ -696,6 +941,50 @@ fn model_created_from_value(value: &Value) -> Option<i64> {
         return i64::try_from(created).ok();
     }
     None
+}
+
+fn model_created_text_from_value(value: &Value) -> Option<String> {
+    for key in ["created_at", "createdAt", "release_date", "releaseDate"] {
+        if let Some(text) = value.get(key).and_then(Value::as_str)
+            && let Some(normalized) = normalize_text(text)
+        {
+            return Some(normalized);
+        }
+    }
+    None
+}
+
+fn model_is_deprecated(value: &Value) -> bool {
+    if value
+        .get("deprecated")
+        .and_then(Value::as_bool)
+        .is_some_and(|deprecated| deprecated)
+    {
+        return true;
+    }
+    if value
+        .get("status")
+        .and_then(Value::as_str)
+        .is_some_and(|status| {
+            matches!(
+                status.trim().to_ascii_lowercase().as_str(),
+                "deprecated" | "deprecation" | "retired" | "sunset"
+            )
+        })
+    {
+        return true;
+    }
+    if let Some(tags) = value.get("tags").and_then(Value::as_array) {
+        let normalized = tags
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|entry| entry.to_ascii_lowercase())
+            .collect::<BTreeSet<_>>();
+        if normalized.contains("deprecated") || normalized.contains("retired") {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -799,7 +1088,7 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "抱歉，刚才的命令执行失败了。让我用更简单的方式重试:\n<function=shell.exec><parameter=command>ls /root</parameter></function>"
+                    "content": "sorry, that command failed. let me retry with a simpler approach:\n<function=shell.exec><parameter=command>ls /root</parameter></function>"
                 }
             }]
         });
@@ -807,7 +1096,7 @@ mod tests {
         let turn = extract_provider_turn(&body).expect("turn");
         assert_eq!(
             turn.assistant_text,
-            "抱歉，刚才的命令执行失败了。让我用更简单的方式重试:"
+            "sorry, that command failed. let me retry with a simpler approach:"
         );
         assert_eq!(turn.tool_intents.len(), 1);
         assert_eq!(turn.tool_intents[0].tool_name, "shell.exec");
@@ -830,7 +1119,7 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "我看到已经安装了 Home Assistant 技能。让我调用它来获取所有实体状态。\n<function=external_skills.invoke><parameter=skill_id>home-assistant-1-0-0</parameter><parameter=action>get_states</parameter></function>"
+                    "content": "i can see the Home Assistant skill is installed. let me call it to fetch all entity states.\n<function=external_skills.invoke><parameter=skill_id>home-assistant-1-0-0</parameter><parameter=action>get_states</parameter></function>"
                 }
             }]
         });
@@ -838,7 +1127,7 @@ mod tests {
         let turn = extract_provider_turn(&body).expect("turn");
         assert_eq!(
             turn.assistant_text,
-            "我看到已经安装了 Home Assistant 技能。让我调用它来获取所有实体状态。"
+            "i can see the Home Assistant skill is installed. let me call it to fetch all entity states."
         );
         assert_eq!(turn.tool_intents.len(), 1);
         assert_eq!(turn.tool_intents[0].tool_name, "external_skills.invoke");
@@ -853,7 +1142,7 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "如果你想手动调用，可以写成 ` <function=shell.exec><parameter=command>ls</parameter></function> ` 这样的格式。"
+                    "content": "if you want to invoke it manually, you can write it like ` <function=shell.exec><parameter=command>ls</parameter></function> `."
                 }
             }]
         });
@@ -862,7 +1151,7 @@ mod tests {
         assert!(turn.tool_intents.is_empty());
         assert_eq!(
             turn.assistant_text,
-            "如果你想手动调用，可以写成 ` <function=shell.exec><parameter=command>ls</parameter></function> ` 这样的格式。"
+            "if you want to invoke it manually, you can write it like ` <function=shell.exec><parameter=command>ls</parameter></function> `."
         );
     }
 
@@ -871,7 +1160,7 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "示例：\n```xml\n<function=shell.exec><parameter=command>ls</parameter></function>\n```"
+                    "content": "example:\n```xml\n<function=shell.exec><parameter=command>ls</parameter></function>\n```"
                 }
             }]
         });
@@ -880,7 +1169,7 @@ mod tests {
         assert!(turn.tool_intents.is_empty());
         assert_eq!(
             turn.assistant_text,
-            "示例：\n```xml\n<function=shell.exec><parameter=command>ls</parameter></function>\n```"
+            "example:\n```xml\n<function=shell.exec><parameter=command>ls</parameter></function>\n```"
         );
     }
 
@@ -889,7 +1178,7 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "示例：\n\n    <function=shell.exec><parameter=command>ls</parameter></function>"
+                    "content": "example:\n\n    <function=shell.exec><parameter=command>ls</parameter></function>"
                 }
             }]
         });
@@ -898,7 +1187,7 @@ mod tests {
         assert!(turn.tool_intents.is_empty());
         assert_eq!(
             turn.assistant_text,
-            "示例：\n\n    <function=shell.exec><parameter=command>ls</parameter></function>"
+            "example:\n\n    <function=shell.exec><parameter=command>ls</parameter></function>"
         );
     }
 
@@ -907,7 +1196,7 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "示例：\n\n    第一步\n    <function=shell.exec><parameter=command>ls</parameter></function>"
+                    "content": "example:\n\n    step one\n    <function=shell.exec><parameter=command>ls</parameter></function>"
                 }
             }]
         });
@@ -916,7 +1205,7 @@ mod tests {
         assert!(turn.tool_intents.is_empty());
         assert_eq!(
             turn.assistant_text,
-            "示例：\n\n    第一步\n    <function=shell.exec><parameter=command>ls</parameter></function>"
+            "example:\n\n    step one\n    <function=shell.exec><parameter=command>ls</parameter></function>"
         );
     }
 
@@ -925,7 +1214,7 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "示例：\n\n\t<function=shell.exec><parameter=command>ls</parameter></function>"
+                    "content": "example:\n\n\t<function=shell.exec><parameter=command>ls</parameter></function>"
                 }
             }]
         });
@@ -934,7 +1223,7 @@ mod tests {
         assert!(turn.tool_intents.is_empty());
         assert_eq!(
             turn.assistant_text,
-            "示例：\n\n\t<function=shell.exec><parameter=command>ls</parameter></function>"
+            "example:\n\n\t<function=shell.exec><parameter=command>ls</parameter></function>"
         );
     }
 
@@ -943,13 +1232,13 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "让我重试：\n    <function=shell.exec><parameter=command>ls</parameter></function>"
+                    "content": "let me retry:\n    <function=shell.exec><parameter=command>ls</parameter></function>"
                 }
             }]
         });
 
         let turn = extract_provider_turn(&body).expect("turn");
-        assert_eq!(turn.assistant_text, "让我重试：");
+        assert_eq!(turn.assistant_text, "let me retry:");
         assert_eq!(turn.tool_intents.len(), 1);
         assert_eq!(turn.tool_intents[0].tool_name, "shell.exec");
         assert_eq!(turn.tool_intents[0].args_json, json!({"command": "ls"}));
@@ -960,13 +1249,13 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "让我重试：\n\t<function=shell.exec><parameter=command>ls</parameter></function>"
+                    "content": "let me retry:\n\t<function=shell.exec><parameter=command>ls</parameter></function>"
                 }
             }]
         });
 
         let turn = extract_provider_turn(&body).expect("turn");
-        assert_eq!(turn.assistant_text, "让我重试：");
+        assert_eq!(turn.assistant_text, "let me retry:");
         assert_eq!(turn.tool_intents.len(), 1);
         assert_eq!(turn.tool_intents[0].tool_name, "shell.exec");
         assert_eq!(turn.tool_intents[0].args_json, json!({"command": "ls"}));
@@ -977,7 +1266,7 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "让我按结构化参数重试。\n<function=shell.exec><parameter=command>\"echo\"</parameter><parameter=args>[\"hello\",\"world\"]</parameter><parameter=timeout_ms>3000</parameter><parameter=login>false</parameter></function>"
+                    "content": "let me retry with structured parameters.\n<function=shell.exec><parameter=command>\"echo\"</parameter><parameter=args>[\"hello\",\"world\"]</parameter><parameter=timeout_ms>3000</parameter><parameter=login>false</parameter></function>"
                 }
             }]
         });
@@ -1000,7 +1289,7 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "让我重试。\n<function=shell.exec><parameter=command>true</parameter><parameter=args>[\"hello\"]</parameter></function>"
+                    "content": "let me retry.\n<function=shell.exec><parameter=command>true</parameter><parameter=args>[\"hello\"]</parameter></function>"
                 }
             }]
         });
@@ -1021,7 +1310,7 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "让我重试。\n<function=shell.exec><parameter=command>ls /root</parameter>"
+                    "content": "let me retry.\n<function=shell.exec><parameter=command>ls /root</parameter>"
                 }
             }]
         });
@@ -1029,7 +1318,7 @@ mod tests {
         let turn = extract_provider_turn(&body).expect("turn");
         assert_eq!(
             turn.assistant_text,
-            "让我重试。\n<function=shell.exec><parameter=command>ls /root</parameter>"
+            "let me retry.\n<function=shell.exec><parameter=command>ls /root</parameter>"
         );
         assert!(turn.tool_intents.is_empty());
         assert_eq!(
@@ -1072,6 +1361,66 @@ mod tests {
         let turn = extract_provider_turn(&body).expect("turn");
         assert_eq!(turn.assistant_text, "done");
         assert_eq!(turn.raw_meta["reasoning_content"], "thinking");
+    }
+
+    #[test]
+    fn extract_provider_turn_supports_anthropic_native_content_blocks() {
+        let body = json!({
+            "content": [
+                {
+                    "type": "text",
+                    "text": "checking"
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "file_read",
+                    "input": {
+                        "path": "README.md"
+                    }
+                }
+            ]
+        });
+        let turn = extract_provider_turn(&body).expect("turn");
+        assert_eq!(turn.assistant_text, "checking");
+        assert_eq!(turn.tool_intents.len(), 1);
+        assert_eq!(turn.tool_intents[0].tool_name, "file.read");
+        assert_eq!(turn.tool_intents[0].tool_call_id, "toolu_1");
+        assert_eq!(turn.tool_intents[0].args_json["path"], "README.md");
+    }
+
+    #[test]
+    fn extract_provider_turn_supports_bedrock_converse_content_blocks() {
+        let body = json!({
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "text": "checking"
+                        },
+                        {
+                            "toolUse": {
+                                "toolUseId": "toolu_1",
+                                "name": "file_read",
+                                "input": {
+                                    "path": "README.md"
+                                }
+                            }
+                        }
+                    ]
+                }
+            },
+            "stopReason": "tool_use"
+        });
+        let turn = extract_provider_turn(&body).expect("turn");
+        assert_eq!(turn.assistant_text, "checking");
+        assert_eq!(turn.tool_intents.len(), 1);
+        assert_eq!(turn.tool_intents[0].tool_name, "file.read");
+        assert_eq!(turn.tool_intents[0].tool_call_id, "toolu_1");
+        assert_eq!(turn.tool_intents[0].args_json["path"], "README.md");
+        assert_eq!(turn.raw_meta["content"][1]["type"], "tool_use");
+        assert_eq!(turn.raw_meta["content"][1]["id"], "toolu_1");
     }
 
     #[test]
@@ -1141,6 +1490,32 @@ mod tests {
         });
         let ids = extract_model_ids(&body);
         assert_eq!(ids, vec!["model-a", "model-b", "model-c"]);
+    }
+
+    #[test]
+    fn extract_model_ids_supports_bedrock_model_summaries() {
+        let body = json!({
+            "modelSummaries": [
+                {
+                    "modelId": "amazon.nova-lite-v1:0",
+                    "modelName": "Nova Lite",
+                    "providerName": "Amazon"
+                },
+                {
+                    "modelId": "anthropic.claude-3-7-sonnet-20250219-v1:0",
+                    "modelName": "Claude 3.7 Sonnet",
+                    "providerName": "Anthropic"
+                }
+            ]
+        });
+        let ids = extract_model_ids(&body);
+        assert_eq!(
+            ids,
+            vec![
+                "amazon.nova-lite-v1:0",
+                "anthropic.claude-3-7-sonnet-20250219-v1:0"
+            ]
+        );
     }
 
     #[test]

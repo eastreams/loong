@@ -318,6 +318,14 @@ impl ConversationContextEngine for DefaultContextEngine {
         include_system_prompt: bool,
         kernel_ctx: Option<&KernelContext>,
     ) -> CliResult<Vec<Value>> {
+        if kernel_ctx.is_none() {
+            return crate::provider::build_messages_for_session(
+                config,
+                session_id,
+                include_system_prompt,
+            );
+        }
+
         #[cfg_attr(not(feature = "memory-sqlite"), allow(unused_mut))]
         let mut messages = crate::provider::build_base_messages(config, include_system_prompt);
 

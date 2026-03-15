@@ -5,6 +5,7 @@ use serde_json::Value;
 use crate::config::LoongClawConfig;
 use crate::tools;
 
+use super::auth_profile_runtime::ProviderAuthProfile;
 use super::capability_profile_runtime::ProviderCapabilityProfile;
 use super::contracts::{ProviderRuntimeContract, should_disable_tool_schema_for_error};
 use super::failover::ModelRequestError;
@@ -23,11 +24,12 @@ pub(super) async fn request_completion_with_model(
     runtime_contract: ProviderRuntimeContract,
     capability_profile: &ProviderCapabilityProfile,
     auto_model_mode: bool,
-    authorization_header: Option<String>,
+    auth_profile: ProviderAuthProfile,
     endpoint: &str,
     headers: &reqwest::header::HeaderMap,
     request_policy: &policy::ProviderRequestPolicy,
     client: &reqwest::Client,
+    auth_context: &super::transport::RequestAuthContext,
 ) -> Result<String, ModelRequestError> {
     let capability = capability_profile.resolve_for_model(model.as_str());
     let runtime = ModelRequestRuntime {
@@ -36,11 +38,12 @@ pub(super) async fn request_completion_with_model(
         runtime_contract,
         capability,
         auto_model_mode,
-        authorization_header: authorization_header.as_deref(),
+        auth_profile: &auth_profile,
         endpoint,
         headers,
         request_policy,
         client,
+        auth_context,
     };
 
     execute_model_request(
@@ -69,11 +72,12 @@ pub(super) async fn request_turn_with_model(
     runtime_contract: ProviderRuntimeContract,
     capability_profile: &ProviderCapabilityProfile,
     auto_model_mode: bool,
-    authorization_header: Option<String>,
+    auth_profile: ProviderAuthProfile,
     endpoint: &str,
     headers: &reqwest::header::HeaderMap,
     request_policy: &policy::ProviderRequestPolicy,
     client: &reqwest::Client,
+    auth_context: &super::transport::RequestAuthContext,
 ) -> Result<crate::conversation::turn_engine::ProviderTurn, ModelRequestError> {
     let tool_definitions = tools::provider_tool_definitions();
     let capability = capability_profile.resolve_for_model(model.as_str());
@@ -85,11 +89,12 @@ pub(super) async fn request_turn_with_model(
         runtime_contract,
         capability,
         auto_model_mode,
-        authorization_header: authorization_header.as_deref(),
+        auth_profile: &auth_profile,
         endpoint,
         headers,
         request_policy,
         client,
+        auth_context,
     };
 
     execute_model_request(

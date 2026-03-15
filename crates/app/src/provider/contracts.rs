@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::config::{
-    ProviderConfig, ProviderKind, ProviderProfileHealthModeConfig,
+    ProviderConfig, ProviderKind, ProviderProfileHealthModeConfig, ProviderProtocolFamily,
     ProviderReasoningExtraBodyModeConfig, ProviderToolSchemaModeConfig,
 };
 
@@ -36,15 +36,23 @@ const DEFAULT_MODEL_MISMATCH_MESSAGE_FRAGMENTS: &[&str] = &[
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ProviderTransportMode {
     OpenAiChatCompletions,
+    AnthropicMessages,
+    BedrockConverse,
     KimiApi,
 }
 
 impl ProviderTransportMode {
     fn for_provider(provider: &ProviderConfig) -> Self {
-        if matches!(provider.kind, ProviderKind::KimiCoding) {
-            Self::KimiApi
-        } else {
-            Self::OpenAiChatCompletions
+        match provider.kind.protocol_family() {
+            ProviderProtocolFamily::AnthropicMessages => Self::AnthropicMessages,
+            ProviderProtocolFamily::BedrockConverse => Self::BedrockConverse,
+            ProviderProtocolFamily::OpenAiChatCompletions => {
+                if matches!(provider.kind, ProviderKind::KimiCoding) {
+                    Self::KimiApi
+                } else {
+                    Self::OpenAiChatCompletions
+                }
+            }
         }
     }
 }
@@ -52,6 +60,8 @@ impl ProviderTransportMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ProviderFeatureFamily {
     OpenAiCompatible,
+    Anthropic,
+    Bedrock,
     VolcengineCompatible,
 }
 
@@ -144,10 +154,15 @@ pub(super) fn provider_runtime_contract(provider: &ProviderConfig) -> ProviderRu
     } else {
         TokenLimitField::MaxTokens
     };
-    let feature_family = if matches!(provider.kind, ProviderKind::Volcengine) {
-        ProviderFeatureFamily::VolcengineCompatible
-    } else {
-        ProviderFeatureFamily::OpenAiCompatible
+    let feature_family = match provider.kind.feature_family() {
+        crate::config::ProviderFeatureFamily::OpenAiCompatible => {
+            ProviderFeatureFamily::OpenAiCompatible
+        }
+        crate::config::ProviderFeatureFamily::Anthropic => ProviderFeatureFamily::Anthropic,
+        crate::config::ProviderFeatureFamily::Bedrock => ProviderFeatureFamily::Bedrock,
+        crate::config::ProviderFeatureFamily::Volcengine => {
+            ProviderFeatureFamily::VolcengineCompatible
+        }
     };
     let validation = if matches!(provider.kind, ProviderKind::Kimi) {
         ProviderValidationContract {
@@ -178,7 +193,12 @@ pub(super) fn provider_runtime_contract(provider: &ProviderConfig) -> ProviderRu
         }
         ProviderProfileHealthModeConfig::ObserveOnly => ProviderProfileHealthMode::ObserveOnly,
     };
-    let default_reasoning_field = ReasoningField::ReasoningEffort;
+    let default_reasoning_field = match feature_family {
+        ProviderFeatureFamily::Anthropic | ProviderFeatureFamily::Bedrock => ReasoningField::Omit,
+        ProviderFeatureFamily::OpenAiCompatible | ProviderFeatureFamily::VolcengineCompatible => {
+            ReasoningField::ReasoningEffort
+        }
+    };
     let default_temperature_field = TemperatureField::Include;
     let payload_adaptation = provider_payload_adaptation_contract(
         feature_family,
@@ -222,21 +242,20 @@ fn provider_payload_adaptation_contract(
     default_temperature_field: TemperatureField,
 ) -> ProviderPayloadAdaptationContract {
     match feature_family {
-        ProviderFeatureFamily::OpenAiCompatible | ProviderFeatureFamily::VolcengineCompatible => {
-            ProviderPayloadAdaptationContract {
-                token_field_progression: token_field_progression(default_token_field),
-                reasoning_field_progression: reasoning_field_progression(default_reasoning_field),
-                temperature_field_progression: temperature_field_progression(
-                    default_temperature_field,
-                ),
-                unsupported_parameter_message_fragments:
-                    DEFAULT_UNSUPPORTED_PARAMETER_MESSAGE_FRAGMENTS,
-                token_error_parameters: &["max_tokens", "max_completion_tokens"],
-                reasoning_error_parameters: &["reasoning_effort", "reasoning"],
-                temperature_error_parameters: &["temperature"],
-                temperature_default_only_fragments: &["only the default"],
-            }
-        }
+        ProviderFeatureFamily::OpenAiCompatible
+        | ProviderFeatureFamily::Anthropic
+        | ProviderFeatureFamily::Bedrock
+        | ProviderFeatureFamily::VolcengineCompatible => ProviderPayloadAdaptationContract {
+            token_field_progression: token_field_progression(default_token_field),
+            reasoning_field_progression: reasoning_field_progression(default_reasoning_field),
+            temperature_field_progression: temperature_field_progression(default_temperature_field),
+            unsupported_parameter_message_fragments:
+                DEFAULT_UNSUPPORTED_PARAMETER_MESSAGE_FRAGMENTS,
+            token_error_parameters: &["max_tokens", "max_completion_tokens"],
+            reasoning_error_parameters: &["reasoning_effort", "reasoning"],
+            temperature_error_parameters: &["temperature"],
+            temperature_default_only_fragments: &["only the default"],
+        },
     }
 }
 
@@ -244,17 +263,18 @@ fn provider_error_classification_contract(
     feature_family: ProviderFeatureFamily,
 ) -> ProviderErrorClassificationContract {
     match feature_family {
-        ProviderFeatureFamily::OpenAiCompatible | ProviderFeatureFamily::VolcengineCompatible => {
-            ProviderErrorClassificationContract {
-                unsupported_parameter_message_fragments:
-                    DEFAULT_UNSUPPORTED_PARAMETER_MESSAGE_FRAGMENTS,
-                tool_schema_error_parameters: DEFAULT_TOOL_SCHEMA_ERROR_PARAMETERS,
-                tool_schema_error_message_fragments: DEFAULT_TOOL_SCHEMA_ERROR_MESSAGE_FRAGMENTS,
-                model_not_found_codes: DEFAULT_MODEL_NOT_FOUND_CODES,
-                model_error_parameters: DEFAULT_MODEL_ERROR_PARAMETERS,
-                model_mismatch_message_fragments: DEFAULT_MODEL_MISMATCH_MESSAGE_FRAGMENTS,
-            }
-        }
+        ProviderFeatureFamily::OpenAiCompatible
+        | ProviderFeatureFamily::Anthropic
+        | ProviderFeatureFamily::Bedrock
+        | ProviderFeatureFamily::VolcengineCompatible => ProviderErrorClassificationContract {
+            unsupported_parameter_message_fragments:
+                DEFAULT_UNSUPPORTED_PARAMETER_MESSAGE_FRAGMENTS,
+            tool_schema_error_parameters: DEFAULT_TOOL_SCHEMA_ERROR_PARAMETERS,
+            tool_schema_error_message_fragments: DEFAULT_TOOL_SCHEMA_ERROR_MESSAGE_FRAGMENTS,
+            model_not_found_codes: DEFAULT_MODEL_NOT_FOUND_CODES,
+            model_error_parameters: DEFAULT_MODEL_ERROR_PARAMETERS,
+            model_mismatch_message_fragments: DEFAULT_MODEL_MISMATCH_MESSAGE_FRAGMENTS,
+        },
     }
 }
 
@@ -263,12 +283,13 @@ fn provider_capability_contract(
     provider: &ProviderConfig,
 ) -> ProviderCapabilityContract {
     let mut capability = match feature_family {
-        ProviderFeatureFamily::OpenAiCompatible | ProviderFeatureFamily::VolcengineCompatible => {
-            ProviderCapabilityContract {
-                tool_schema_mode: ProviderToolSchemaMode::EnabledWithDowngradeOnUnsupported,
-                reasoning_extra_body_mode: ProviderReasoningExtraBodyMode::Omit,
-            }
-        }
+        ProviderFeatureFamily::OpenAiCompatible
+        | ProviderFeatureFamily::Anthropic
+        | ProviderFeatureFamily::Bedrock
+        | ProviderFeatureFamily::VolcengineCompatible => ProviderCapabilityContract {
+            tool_schema_mode: ProviderToolSchemaMode::EnabledWithDowngradeOnUnsupported,
+            reasoning_extra_body_mode: ProviderReasoningExtraBodyMode::Omit,
+        },
     };
 
     let overrides = provider_capability_overrides(provider.kind);
@@ -433,21 +454,83 @@ pub(super) struct ProviderApiError {
 }
 
 pub(super) fn parse_provider_api_error(body: &Value) -> ProviderApiError {
-    let error = body.get("error").unwrap_or(body);
+    let error = provider_error_value(body);
     ProviderApiError {
-        code: error
-            .get("code")
-            .and_then(Value::as_str)
-            .map(str::to_lowercase),
-        param: error
-            .get("param")
-            .and_then(Value::as_str)
-            .map(str::to_lowercase),
-        message: error
-            .get("message")
-            .and_then(Value::as_str)
-            .map(str::to_lowercase),
+        code: extract_error_string(error, &["code", "Code", "type", "Type", "CodeN"])
+            .map(|value| normalize_error_token(value.as_str())),
+        param: extract_error_string(
+            error,
+            &["param", "Param", "parameter", "Parameter", "field", "Field"],
+        )
+        .map(|value| normalize_error_token(value.as_str())),
+        message: extract_error_message(error).map(|value| value.to_ascii_lowercase()),
     }
+}
+
+fn provider_error_value(body: &Value) -> &Value {
+    body.get("error")
+        .or_else(|| body.get("Error"))
+        .or_else(|| {
+            body.get("ResponseMetadata")
+                .and_then(|metadata| metadata.get("Error"))
+        })
+        .or_else(|| {
+            body.get("response_metadata")
+                .and_then(|metadata| metadata.get("error"))
+        })
+        .unwrap_or(body)
+}
+
+fn extract_error_string(error: &Value, field_names: &[&str]) -> Option<String> {
+    field_names.iter().find_map(|field| {
+        error
+            .get(*field)
+            .and_then(value_to_trimmed_string)
+            .or_else(|| {
+                error
+                    .get("details")
+                    .and_then(Value::as_array)
+                    .and_then(|details| {
+                        details
+                            .iter()
+                            .find_map(|detail| detail.get(*field).and_then(value_to_trimmed_string))
+                    })
+            })
+    })
+}
+
+fn extract_error_message(error: &Value) -> Option<String> {
+    extract_error_string(error, &["message", "Message", "detail", "Detail"]).or_else(|| {
+        error
+            .get("details")
+            .and_then(Value::as_array)
+            .and_then(|details| {
+                details
+                    .iter()
+                    .filter_map(|detail| detail.get("message").and_then(value_to_trimmed_string))
+                    .find(|message| !message.is_empty())
+            })
+    })
+}
+
+fn value_to_trimmed_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_owned())
+            }
+        }
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(boolean) => Some(boolean.to_string()),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+fn normalize_error_token(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace([' ', '-'], "_")
 }
 
 fn is_parameter_unsupported_with_fragments(
@@ -465,6 +548,8 @@ fn is_parameter_unsupported_with_fragments(
         return false;
     }
     message.contains(param.as_str())
+        || message.contains(param.replace('_', "-").as_str())
+        || message.contains(param.replace('_', " ").as_str())
 }
 
 pub(super) fn should_disable_tool_schema_for_error(

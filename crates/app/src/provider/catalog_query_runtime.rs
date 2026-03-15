@@ -17,7 +17,8 @@ pub(super) async fn fetch_available_models_with_profiles(
 ) -> CliResult<Vec<String>> {
     validate_provider_configuration(config)?;
     validate_provider_feature_gate(config)?;
-    let headers = super::transport::build_request_headers(&config.provider)?;
+    let auth_context = super::transport::resolve_request_auth_context(&config.provider).await?;
+    let headers = super::transport::build_request_headers_without_provider_auth(&config.provider)?;
     let request_policy = policy::ProviderRequestPolicy::from_config(&config.provider);
     let endpoint = config.provider.models_endpoint();
     let profile_state_policy =
@@ -33,7 +34,8 @@ pub(super) async fn fetch_available_models_with_profiles(
             provider: &config.provider,
             headers: &headers,
             request_policy: &request_policy,
-            authorization_header: profile.authorization_header.as_deref(),
+            auth_profile: Some(profile),
+            auth_context: &auth_context,
         })
         .await
         {

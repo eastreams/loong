@@ -11,17 +11,32 @@ use serde_json::json;
 
 use crate::config::MemoryBackendKind;
 
+mod canonical;
 mod context;
 mod kernel_adapter;
+mod orchestrator;
 mod protocol;
 pub mod runtime_config;
 #[cfg(feature = "memory-sqlite")]
 mod sqlite;
+mod system;
+mod system_registry;
 #[cfg(test)]
 mod tests;
 
+pub use canonical::{
+    CANONICAL_MEMORY_RECORD_TYPE, CanonicalMemoryKind, CanonicalMemoryRecord,
+    INTERNAL_PERSISTED_RECORD_MARKER, MemoryScope, build_conversation_event_content,
+    build_tool_decision_content, build_tool_outcome_content,
+    canonical_memory_record_from_persisted_turn,
+};
 pub use context::load_prompt_context;
 pub use kernel_adapter::MvpMemoryAdapter;
+pub use orchestrator::{
+    BuiltinMemoryOrchestrator, HydratedMemoryContext, MemoryDiagnostics, hydrate_memory_context,
+};
+#[cfg(test)]
+pub use orchestrator::{MemoryOrchestratorTestFaults, ScopedMemoryOrchestratorTestFaults};
 pub use protocol::{
     MEMORY_OP_APPEND_TURN, MEMORY_OP_CLEAR_SESSION, MEMORY_OP_READ_CONTEXT, MEMORY_OP_WINDOW,
     MemoryContextEntry, MemoryContextKind, WindowTurn, build_append_turn_request,
@@ -30,6 +45,17 @@ pub use protocol::{
 };
 #[cfg(feature = "memory-sqlite")]
 pub use sqlite::{ConversationTurn, SqliteBootstrapDiagnostics, SqliteContextLoadDiagnostics};
+pub use system::{
+    BuiltinMemorySystem, DEFAULT_MEMORY_SYSTEM_ID, MEMORY_SYSTEM_API_VERSION, MemorySystem,
+    MemorySystemCapability, MemorySystemMetadata,
+};
+pub use system_registry::{
+    MEMORY_SYSTEM_ENV, MemorySystemPolicySnapshot, MemorySystemRuntimeSnapshot,
+    MemorySystemSelection, MemorySystemSelectionSource, collect_memory_system_runtime_snapshot,
+    describe_memory_system, list_memory_system_ids, list_memory_system_metadata,
+    memory_system_id_from_env, register_memory_system, resolve_memory_system,
+    resolve_memory_system_selection, supported_memory_system_kind_from_env,
+};
 
 pub fn execute_memory_core(request: MemoryCoreRequest) -> Result<MemoryCoreOutcome, String> {
     execute_memory_core_with_config(request, runtime_config::get_memory_runtime_config())

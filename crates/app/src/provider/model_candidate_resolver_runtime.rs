@@ -5,6 +5,7 @@ use crate::{
     config::{LoongClawConfig, ProviderConfig},
 };
 
+use super::auth_profile_runtime::ProviderAuthProfile;
 use super::catalog_executor::{ModelCatalogRequestRuntime, fetch_available_models_with_policy};
 use super::catalog_runtime::{
     ModelCatalogCacheLookup, fetch_model_catalog_singleflight, load_cached_model_catalog,
@@ -21,7 +22,8 @@ pub(super) async fn resolve_request_models(
     headers: &reqwest::header::HeaderMap,
     request_policy: &policy::ProviderRequestPolicy,
     model_candidate_cooldown_policy: Option<&ModelCandidateCooldownPolicy>,
-    authorization_header: Option<&str>,
+    auth_profile: Option<&ProviderAuthProfile>,
+    auth_context: &super::transport::RequestAuthContext,
 ) -> CliResult<Vec<String>> {
     if let Some(model) = config.provider.resolved_model() {
         return Ok(vec![model]);
@@ -30,8 +32,9 @@ pub(super) async fn resolve_request_models(
     let stale_if_error_ms = config.provider.resolved_model_catalog_stale_if_error_ms();
     let cache_max_entries = config.provider.resolved_model_catalog_cache_max_entries();
     let models_endpoint = config.provider.models_endpoint();
+    let auth_cache_key = auth_profile.and_then(|profile| profile.auth_cache_key.as_deref());
     let cache_key = (cache_ttl_ms > 0)
-        .then(|| build_model_catalog_cache_key(&models_endpoint, headers, authorization_header));
+        .then(|| build_model_catalog_cache_key(&models_endpoint, headers, auth_cache_key));
     let mut stale_models = None;
 
     if let Some(cache_key) = cache_key.as_deref()
@@ -64,7 +67,8 @@ pub(super) async fn resolve_request_models(
                 provider: &config.provider,
                 headers,
                 request_policy,
-                authorization_header,
+                auth_profile,
+                auth_context,
             })
             .await
         })
@@ -74,7 +78,8 @@ pub(super) async fn resolve_request_models(
             provider: &config.provider,
             headers,
             request_policy,
-            authorization_header,
+            auth_profile,
+            auth_context,
         })
         .await
     };
