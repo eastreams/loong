@@ -34,6 +34,10 @@ pub use catalog::{
 };
 pub use kernel_adapter::MvpToolAdapter;
 
+pub fn normalize_external_skill_domain_rule(raw: &str) -> Result<String, String> {
+    external_skills::normalize_domain_rule(raw)
+}
+
 /// Execute a tool request, routing through the kernel for
 /// policy enforcement and audit recording.
 ///
@@ -465,6 +469,98 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
+    #[test]
+    fn capability_snapshot_lists_resolved_project_and_user_external_skills_once() {
+        use std::{
+            fs,
+            path::{Path, PathBuf},
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        fn unique_temp_dir(prefix: &str) -> PathBuf {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos();
+            std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+        }
+
+        fn write_file(root: &Path, relative: &str, content: &str) {
+            let path = root.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create parent directory");
+            }
+            fs::write(path, content).expect("write fixture");
+        }
+
+        let root = unique_temp_dir("loongclaw-tool-capability-snapshot-discovery");
+        let home = unique_temp_dir("loongclaw-tool-capability-snapshot-home");
+        fs::create_dir_all(&root).expect("create fixture root");
+        fs::create_dir_all(&home).expect("create home root");
+
+        write_file(
+            &root,
+            "skills/demo-skill/SKILL.md",
+            "---\nname: demo-skill\ndescription: Project-scoped snapshot skill.\n---\n\nProject snapshot instructions.\n",
+        );
+        write_file(
+            &home,
+            ".agents/skills/user-only/SKILL.md",
+            "---\nname: user-only\ndescription: User-scoped snapshot skill.\n---\n\nUser snapshot instructions.\n",
+        );
+        write_file(
+            &root,
+            "source/demo-skill/SKILL.md",
+            "# Managed Snapshot Skill\n\nManaged install should win snapshot precedence.\n",
+        );
+
+        let config = runtime_config::ToolRuntimeConfig {
+            file_root: Some(root.clone()),
+            config_path: None,
+            external_skills: runtime_config::ExternalSkillsRuntimePolicy {
+                enabled: true,
+                require_download_approval: true,
+                allowed_domains: BTreeSet::new(),
+                blocked_domains: BTreeSet::new(),
+                install_root: None,
+                auto_expose_installed: true,
+            },
+            ..runtime_config::ToolRuntimeConfig::default()
+        };
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("HOME", &home);
+
+        execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "external_skills.install".to_owned(),
+                payload: json!({
+                    "path": "source/demo-skill"
+                }),
+            },
+            &config,
+        )
+        .expect("install should succeed");
+
+        let snapshot = capability_snapshot_with_config(&config);
+        assert!(snapshot.contains("[available_external_skills]"));
+        assert_eq!(
+            snapshot.matches("- demo-skill").count(),
+            1,
+            "resolved snapshot should not duplicate shadowed skills: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("demo-skill"),
+            "managed duplicate should still appear in snapshot: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("user-only"),
+            "user-scoped skills should be exposed in snapshot: {snapshot}"
+        );
+
+        fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&home).ok();
+    }
+
     #[cfg(all(
         feature = "tool-file",
         feature = "tool-shell",
@@ -495,14 +591,14 @@ mod tests {
         assert!(snapshot.contains("- external_skills.install: Install a managed external skill from a local directory or archive"));
         assert!(
             snapshot.contains(
-                "- external_skills.inspect: Read metadata for an installed external skill"
+                "- external_skills.inspect: Read metadata for a resolved external skill across managed, user, and project scopes"
             )
         );
         assert!(snapshot.contains(
-            "- external_skills.invoke: Load an installed external skill into the conversation loop"
+            "- external_skills.invoke: Load a resolved external skill into the conversation loop"
         ));
         assert!(snapshot.contains(
-            "- external_skills.list: List managed external skills available for invocation"
+            "- external_skills.list: List resolved external skills across managed, user, and project scopes"
         ));
         assert!(snapshot.contains("- external_skills.policy: Read/update external skills domain allow/block policy at runtime"));
         assert!(snapshot.contains(

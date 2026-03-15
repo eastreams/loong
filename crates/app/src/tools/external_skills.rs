@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{ErrorKind, Read},
     path::{Path, PathBuf},
@@ -21,6 +21,21 @@ const DEFAULT_INDEX_FILENAME: &str = "index.json";
 const DEFAULT_MAX_DOWNLOAD_BYTES: usize = 5 * 1024 * 1024;
 const HARD_MAX_DOWNLOAD_BYTES: usize = 20 * 1024 * 1024;
 const INSTALLED_SKILL_SNAPSHOT_HINT: &str = "installed managed external skill; use external_skills.inspect or external_skills.invoke for details";
+const USER_SKILL_SNAPSHOT_HINT: &str =
+    "user external skill; use external_skills.inspect or external_skills.invoke for details";
+const PROJECT_SKILL_SNAPSHOT_HINT: &str =
+    "project external skill; use external_skills.inspect or external_skills.invoke for details";
+const PROJECT_DISCOVERY_DIRS: [(&str, usize); 4] = [
+    (".agents/skills", 0),
+    (".codex/skills", 1),
+    (".claude/skills", 2),
+    ("skills", 3),
+];
+const USER_DISCOVERY_DIRS: [(&str, usize); 3] = [
+    (".agents/skills", 0),
+    (".codex/skills", 1),
+    (".claude/skills", 2),
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct InstalledSkillEntry {
@@ -39,6 +54,57 @@ struct InstalledSkillEntry {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 struct InstalledSkillIndex {
     skills: Vec<InstalledSkillEntry>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+enum DiscoveredSkillScope {
+    Managed,
+    User,
+    Project,
+}
+
+impl DiscoveredSkillScope {
+    const fn precedence_rank(self) -> usize {
+        match self {
+            Self::Managed => 0,
+            Self::User => 1,
+            Self::Project => 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct DiscoveredSkillEntry {
+    skill_id: String,
+    display_name: String,
+    summary: String,
+    scope: DiscoveredSkillScope,
+    source_kind: String,
+    source_path: String,
+    skill_md_path: String,
+    sha256: String,
+    active: bool,
+    install_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SkillFrontmatter {
+    name: Option<String>,
+    description: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct DiscoveredSkillCandidate {
+    entry: DiscoveredSkillEntry,
+    probe_rank: usize,
+    root_rank: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SkillDiscoveryInventory {
+    skills: Vec<DiscoveredSkillEntry>,
+    shadowed_skills: Vec<DiscoveredSkillEntry>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -389,7 +455,7 @@ pub(super) fn execute_external_skills_install_tool_with_config(
         .and_then(|value| (!value.is_empty()).then_some(value))
         .map(normalize_skill_id)
         .transpose()?
-        .unwrap_or_else(|| derive_skill_id(&skill_root));
+        .unwrap_or_else(|| derive_skill_id_from_markdown(&skill_root, skill_markdown.as_str()));
     let display_name = derive_skill_display_name(skill_markdown.as_str(), skill_id.as_str());
     let summary = derive_skill_summary(skill_markdown.as_str());
 
@@ -534,19 +600,14 @@ pub(super) fn execute_external_skills_list_tool_with_config(
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
     require_enabled_runtime_policy(config)?;
-    let install_root = resolve_install_root(config);
-    let index = load_installed_skill_index(&install_root)?;
-    let skills = index
-        .skills
-        .into_iter()
-        .map(|entry| rehydrate_installed_skill_entry(&install_root, entry))
-        .collect::<Result<Vec<_>, _>>()?;
+    let inventory = discover_skill_inventory(config)?;
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
         payload: json!({
             "adapter": "core-tools",
             "tool_name": request.tool_name,
-            "skills": skills,
+            "skills": inventory.skills,
+            "shadowed_skills": inventory.shadowed_skills,
         }),
     })
 }
@@ -568,15 +629,21 @@ pub(super) fn execute_external_skills_inspect_tool_with_config(
 
     require_enabled_runtime_policy(config)?;
 
-    let install_root = resolve_install_root(config);
-    let (entry, instructions) = load_installed_skill_material(&install_root, skill_id)?;
+    let inventory = discover_skill_inventory(config)?;
+    let skill = resolve_discovered_skill(&inventory, skill_id)?;
+    let instructions = load_discovered_skill_markdown(config, &skill)?;
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
         payload: json!({
             "adapter": "core-tools",
             "tool_name": request.tool_name,
-            "skill": entry,
+            "skill": skill,
             "instructions_preview": build_preview(instructions.as_str(), 240),
+            "shadowed_skills": inventory
+                .shadowed_skills
+                .into_iter()
+                .filter(|entry| entry.skill_id == skill_id)
+                .collect::<Vec<_>>(),
         }),
     })
 }
@@ -598,23 +665,25 @@ pub(super) fn execute_external_skills_invoke_tool_with_config(
 
     require_enabled_runtime_policy(config)?;
 
-    let install_root = resolve_install_root(config);
-    let (entry, instructions) = load_installed_skill_material(&install_root, skill_id)?;
-    if !entry.active {
+    let skill = resolve_discovered_skill(&discover_skill_inventory(config)?, skill_id)?;
+    if !skill.active {
         return Err(format!(
             "external skill `{skill_id}` is installed but inactive"
         ));
     }
+    let instructions = load_discovered_skill_markdown(config, &skill)?;
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
         payload: json!({
             "adapter": "core-tools",
             "tool_name": request.tool_name,
-            "skill_id": entry.skill_id,
-            "display_name": entry.display_name,
-            "summary": entry.summary,
-            "install_path": entry.install_path,
-            "skill_md_path": entry.skill_md_path,
+            "skill_id": skill.skill_id,
+            "display_name": skill.display_name,
+            "summary": skill.summary,
+            "scope": skill.scope,
+            "source_path": skill.source_path,
+            "install_path": skill.install_path,
+            "skill_md_path": skill.skill_md_path,
             "instructions": instructions,
             "invocation_summary": format!(
                 "Loaded external skill `{}`. Apply the instructions in `SKILL.md` before continuing the task.",
@@ -800,7 +869,7 @@ fn parse_optional_domain_list(
     Ok(Some(normalized))
 }
 
-fn normalize_domain_rule(raw: &str) -> Result<String, String> {
+pub(crate) fn normalize_domain_rule(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err("domain rule cannot be empty".to_owned());
@@ -1167,6 +1236,14 @@ fn derive_skill_id(root: &Path) -> String {
     normalize_skill_id(fallback).unwrap_or_else(|_| "external-skill".to_owned())
 }
 
+fn derive_skill_id_from_markdown(root: &Path, skill_markdown: &str) -> String {
+    parse_skill_frontmatter(skill_markdown)
+        .name
+        .as_deref()
+        .and_then(|name| normalize_skill_id(name).ok())
+        .unwrap_or_else(|| derive_skill_id(root))
+}
+
 fn normalize_skill_id(raw: &str) -> Result<String, String> {
     let mut normalized = String::new();
     let mut last_dash = false;
@@ -1198,7 +1275,8 @@ fn normalize_skill_id(raw: &str) -> Result<String, String> {
 }
 
 fn derive_skill_display_name(skill_markdown: &str, fallback: &str) -> String {
-    for line in skill_markdown.lines() {
+    let frontmatter = parse_skill_frontmatter(skill_markdown);
+    for line in skill_content_lines(skill_markdown) {
         let trimmed = line.trim();
         if let Some(title) = trimmed.strip_prefix("# ") {
             let title = title.trim();
@@ -1207,11 +1285,22 @@ fn derive_skill_display_name(skill_markdown: &str, fallback: &str) -> String {
             }
         }
     }
+    if let Some(name) = frontmatter.name
+        && !name.is_empty()
+    {
+        return name;
+    }
     fallback.to_owned()
 }
 
 fn derive_skill_summary(skill_markdown: &str) -> String {
-    for line in skill_markdown.lines() {
+    let frontmatter = parse_skill_frontmatter(skill_markdown);
+    if let Some(description) = frontmatter.description
+        && !description.is_empty()
+    {
+        return build_preview(description.as_str(), 120);
+    }
+    for line in skill_content_lines(skill_markdown) {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
@@ -1219,6 +1308,63 @@ fn derive_skill_summary(skill_markdown: &str) -> String {
         return build_preview(trimmed, 120);
     }
     "No summary provided.".to_owned()
+}
+
+fn parse_skill_frontmatter(skill_markdown: &str) -> SkillFrontmatter {
+    let mut lines = skill_markdown.lines();
+    if lines.next().map(str::trim) != Some("---") {
+        return SkillFrontmatter::default();
+    }
+
+    let mut frontmatter = SkillFrontmatter::default();
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed == "---" {
+            break;
+        }
+        if let Some(value) = parse_frontmatter_scalar(trimmed, "name") {
+            frontmatter.name = Some(value);
+            continue;
+        }
+        if let Some(value) = parse_frontmatter_scalar(trimmed, "description") {
+            frontmatter.description = Some(value);
+        }
+    }
+    frontmatter
+}
+
+fn parse_frontmatter_scalar(line: &str, key: &str) -> Option<String> {
+    let raw = line.strip_prefix(key)?.strip_prefix(':')?.trim();
+    let unquoted = raw
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .or_else(|| {
+            raw.strip_prefix('\'')
+                .and_then(|value| value.strip_suffix('\''))
+        })
+        .unwrap_or(raw)
+        .trim();
+    (!unquoted.is_empty()).then(|| unquoted.to_owned())
+}
+
+fn skill_content_lines(skill_markdown: &str) -> impl Iterator<Item = &str> {
+    let mut in_frontmatter = false;
+    let mut frontmatter_started = false;
+    skill_markdown.lines().filter(move |line| {
+        let trimmed = line.trim();
+        if !frontmatter_started && trimmed == "---" {
+            frontmatter_started = true;
+            in_frontmatter = true;
+            return false;
+        }
+        if in_frontmatter {
+            if trimmed == "---" {
+                in_frontmatter = false;
+            }
+            return false;
+        }
+        true
+    })
 }
 
 fn build_preview(content: &str, max_chars: usize) -> String {
@@ -1371,6 +1517,60 @@ fn installed_skill_by_id(
         .ok_or_else(|| format!("external skill `{skill_id}` is not installed"))
 }
 
+fn discover_skill_inventory(
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<SkillDiscoveryInventory, String> {
+    let mut grouped = BTreeMap::<String, Vec<DiscoveredSkillCandidate>>::new();
+    for candidate in discover_managed_skill_candidates(config)?
+        .into_iter()
+        .chain(discover_user_skill_candidates()?)
+        .chain(discover_project_skill_candidates(config)?)
+    {
+        grouped
+            .entry(candidate.entry.skill_id.clone())
+            .or_default()
+            .push(candidate);
+    }
+
+    let mut inventory = SkillDiscoveryInventory::default();
+    for mut candidates in grouped.into_values() {
+        candidates.sort_by(|left, right| {
+            left.entry
+                .scope
+                .precedence_rank()
+                .cmp(&right.entry.scope.precedence_rank())
+                .then_with(|| left.probe_rank.cmp(&right.probe_rank))
+                .then_with(|| left.root_rank.cmp(&right.root_rank))
+                .then_with(|| left.entry.source_path.cmp(&right.entry.source_path))
+        });
+
+        let winner_index = candidates
+            .iter()
+            .position(|candidate| candidate.entry.active)
+            .unwrap_or(0);
+        let winner = candidates.remove(winner_index);
+        inventory.skills.push(winner.entry);
+        inventory
+            .shadowed_skills
+            .extend(candidates.into_iter().map(|candidate| candidate.entry));
+    }
+
+    inventory
+        .skills
+        .sort_by(|left, right| left.skill_id.cmp(&right.skill_id));
+    inventory.shadowed_skills.sort_by(|left, right| {
+        left.skill_id
+            .cmp(&right.skill_id)
+            .then_with(|| {
+                left.scope
+                    .precedence_rank()
+                    .cmp(&right.scope.precedence_rank())
+            })
+            .then_with(|| left.source_path.cmp(&right.source_path))
+    });
+    Ok(inventory)
+}
+
 pub(super) fn installed_skill_snapshot_lines_with_config(
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<Vec<String>, String> {
@@ -1378,20 +1578,254 @@ pub(super) fn installed_skill_snapshot_lines_with_config(
     if !policy.enabled || !policy.auto_expose_installed {
         return Ok(Vec::new());
     }
-    let install_root = resolve_install_root(config);
-    let index = load_installed_skill_index(&install_root)?;
-    Ok(index
+    Ok(discover_skill_inventory(config)?
         .skills
         .into_iter()
         .filter_map(|entry| {
             if !entry.active {
                 return None;
             }
-            rehydrate_installed_skill_entry(&install_root, entry)
-                .ok()
-                .map(|entry| format!("- {}: {}", entry.skill_id, INSTALLED_SKILL_SNAPSHOT_HINT))
+            let hint = match entry.scope {
+                DiscoveredSkillScope::Managed => INSTALLED_SKILL_SNAPSHOT_HINT,
+                DiscoveredSkillScope::User => USER_SKILL_SNAPSHOT_HINT,
+                DiscoveredSkillScope::Project => PROJECT_SKILL_SNAPSHOT_HINT,
+            };
+            Some(format!("- {}: {}", entry.skill_id, hint))
         })
         .collect())
+}
+
+fn discover_managed_skill_candidates(
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<Vec<DiscoveredSkillCandidate>, String> {
+    let install_root = resolve_install_root(config);
+    let index = load_installed_skill_index(&install_root)?;
+    index
+        .skills
+        .into_iter()
+        .map(|entry| {
+            let entry = rehydrate_installed_skill_entry(&install_root, entry)?;
+            Ok(DiscoveredSkillCandidate {
+                probe_rank: 0,
+                root_rank: 0,
+                entry: DiscoveredSkillEntry {
+                    skill_id: entry.skill_id,
+                    display_name: entry.display_name,
+                    summary: entry.summary,
+                    scope: DiscoveredSkillScope::Managed,
+                    source_kind: entry.source_kind,
+                    source_path: entry.source_path,
+                    skill_md_path: entry.skill_md_path,
+                    sha256: entry.sha256,
+                    active: entry.active,
+                    install_path: Some(entry.install_path),
+                },
+            })
+        })
+        .collect()
+}
+
+fn discover_user_skill_candidates() -> Result<Vec<DiscoveredSkillCandidate>, String> {
+    let Some(home_root) = user_home_dir() else {
+        return Ok(Vec::new());
+    };
+    discover_scoped_skill_candidates(
+        &[home_root],
+        DiscoveredSkillScope::User,
+        &USER_DISCOVERY_DIRS,
+    )
+}
+
+fn discover_project_skill_candidates(
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<Vec<DiscoveredSkillCandidate>, String> {
+    discover_scoped_skill_candidates(
+        &project_discovery_probe_roots(config),
+        DiscoveredSkillScope::Project,
+        &PROJECT_DISCOVERY_DIRS,
+    )
+}
+
+fn discover_scoped_skill_candidates(
+    probe_roots: &[PathBuf],
+    scope: DiscoveredSkillScope,
+    dir_specs: &[(&str, usize)],
+) -> Result<Vec<DiscoveredSkillCandidate>, String> {
+    let mut candidates = Vec::new();
+    let mut seen = BTreeSet::new();
+    for (probe_rank, probe_root) in probe_roots.iter().enumerate() {
+        for (relative_dir, root_rank) in dir_specs {
+            let container = probe_root.join(relative_dir);
+            if !container.is_dir() {
+                continue;
+            }
+            for skill_root in find_discoverable_skill_roots(&container) {
+                let skill_md_path = skill_root.join(DEFAULT_SKILL_FILENAME);
+                let key = skill_md_path.display().to_string();
+                if !seen.insert(key.clone()) {
+                    continue;
+                }
+                let skill_markdown = load_directory_skill_markdown(&skill_root)?;
+                let skill_id = derive_skill_id_from_markdown(&skill_root, skill_markdown.as_str());
+                candidates.push(DiscoveredSkillCandidate {
+                    probe_rank,
+                    root_rank: *root_rank,
+                    entry: DiscoveredSkillEntry {
+                        skill_id: skill_id.clone(),
+                        display_name: derive_skill_display_name(
+                            skill_markdown.as_str(),
+                            skill_id.as_str(),
+                        ),
+                        summary: derive_skill_summary(skill_markdown.as_str()),
+                        scope,
+                        source_kind: "directory".to_owned(),
+                        source_path: skill_root.display().to_string(),
+                        skill_md_path: key,
+                        sha256: format!("{:x}", Sha256::digest(skill_markdown.as_bytes())),
+                        active: true,
+                        install_path: None,
+                    },
+                });
+            }
+        }
+    }
+    Ok(candidates)
+}
+
+fn project_discovery_probe_roots(
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Vec<PathBuf> {
+    let Some(project_root) = config
+        .file_root
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+    else {
+        return Vec::new();
+    };
+
+    let mut roots = Vec::new();
+    if let Ok(current_dir) = std::env::current_dir()
+        && current_dir.starts_with(&project_root)
+    {
+        let mut next = Some(current_dir.as_path());
+        while let Some(path) = next {
+            roots.push(path.to_path_buf());
+            if path == project_root.as_path() {
+                break;
+            }
+            next = path.parent();
+        }
+    } else {
+        roots.push(project_root);
+    }
+
+    let mut seen = BTreeSet::new();
+    roots.retain(|root| seen.insert(root.display().to_string()));
+    roots
+}
+
+fn user_home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
+
+fn resolve_discovered_skill(
+    inventory: &SkillDiscoveryInventory,
+    skill_id: &str,
+) -> Result<DiscoveredSkillEntry, String> {
+    inventory
+        .skills
+        .iter()
+        .find(|entry| entry.skill_id == skill_id)
+        .cloned()
+        .ok_or_else(|| format!("external skill `{skill_id}` is not available"))
+}
+
+fn load_discovered_skill_markdown(
+    config: &super::runtime_config::ToolRuntimeConfig,
+    skill: &DiscoveredSkillEntry,
+) -> Result<String, String> {
+    match skill.scope {
+        DiscoveredSkillScope::Managed => {
+            let install_root = resolve_install_root(config);
+            let (_entry, instructions) =
+                load_installed_skill_material(&install_root, skill.skill_id.as_str())?;
+            Ok(instructions)
+        }
+        DiscoveredSkillScope::User | DiscoveredSkillScope::Project => {
+            load_directory_skill_markdown(Path::new(&skill.source_path))
+        }
+    }
+}
+
+fn load_directory_skill_markdown(skill_root: &Path) -> Result<String, String> {
+    let metadata = fs::metadata(skill_root).map_err(|error| {
+        format!(
+            "failed to inspect external skill source {}: {error}",
+            skill_root.display()
+        )
+    })?;
+    if !metadata.is_dir() {
+        return Err(format!(
+            "external skill source {} must be a directory",
+            skill_root.display()
+        ));
+    }
+    let skill_md_path = skill_root.join(DEFAULT_SKILL_FILENAME);
+    if !skill_md_path.is_file() {
+        return Err(format!(
+            "external skill source {} is missing `{DEFAULT_SKILL_FILENAME}`",
+            skill_root.display()
+        ));
+    }
+    fs::read_to_string(&skill_md_path).map_err(|error| {
+        format!(
+            "failed to read external skill source {}: {error}",
+            skill_md_path.display()
+        )
+    })
+}
+
+fn find_discoverable_skill_roots(root: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let mut visited = BTreeSet::new();
+    visit_discoverable_skill_roots(root, &mut roots, &mut visited);
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+fn visit_discoverable_skill_roots(
+    root: &Path,
+    roots: &mut Vec<PathBuf>,
+    visited: &mut BTreeSet<String>,
+) {
+    let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let key = canonical.display().to_string();
+    if !visited.insert(key) {
+        return;
+    }
+
+    let Ok(metadata) = fs::metadata(&canonical) else {
+        return;
+    };
+    if metadata.is_file() || !metadata.is_dir() {
+        return;
+    }
+
+    let skill_md_path = canonical.join(DEFAULT_SKILL_FILENAME);
+    if skill_md_path.is_file() {
+        roots.push(canonical);
+        return;
+    }
+
+    let Ok(entries) = fs::read_dir(&canonical) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        visit_discoverable_skill_roots(&entry.path(), roots, visited);
+    }
 }
 
 fn contains_regular_skill_markdown(root: &Path) -> Result<bool, String> {
@@ -1538,7 +1972,7 @@ mod tests {
 
     fn with_policy_test_lock<T>(f: impl FnOnce() -> T) -> T {
         let lock = POLICY_TEST_LOCK.get_or_init(|| Mutex::new(()));
-        let _guard = lock.lock().expect("policy test lock");
+        let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         f()
     }
 
@@ -1588,6 +2022,27 @@ mod tests {
             .unwrap_or_default()
             .as_nanos();
         std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+    }
+
+    struct ScopedHomeFixture {
+        _env: crate::test_support::ScopedEnv,
+        path: PathBuf,
+    }
+
+    impl ScopedHomeFixture {
+        fn new(prefix: &str) -> Self {
+            let path = unique_temp_dir(prefix);
+            fs::create_dir_all(&path).expect("create isolated home");
+            let mut env = crate::test_support::ScopedEnv::new();
+            env.set("HOME", &path);
+            Self { _env: env, path }
+        }
+    }
+
+    impl Drop for ScopedHomeFixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.path).ok();
+        }
     }
 
     fn write_file(root: &Path, relative: &str, content: &str) {
@@ -1822,6 +2277,24 @@ mod tests {
     }
 
     #[test]
+    fn policy_test_lock_recovers_after_mutex_poison() {
+        let panic_result = std::thread::spawn(|| {
+            with_policy_test_lock(|| {
+                panic!("poison policy lock for test");
+            });
+        })
+        .join();
+
+        assert!(panic_result.is_err(), "setup thread should poison the lock");
+
+        let recovered = std::panic::catch_unwind(|| with_policy_test_lock(|| ()));
+        assert!(
+            recovered.is_ok(),
+            "with_policy_test_lock should recover from a poisoned mutex"
+        );
+    }
+
+    #[test]
     fn install_from_directory_writes_managed_index_and_copy() {
         with_managed_runtime_test(|| {
             let root = unique_temp_dir("loongclaw-ext-skill-install-dir");
@@ -2006,6 +2479,7 @@ mod tests {
         with_managed_runtime_test(|| {
             let root = unique_temp_dir("loongclaw-ext-skill-list-invoke");
             fs::create_dir_all(&root).expect("create fixture root");
+            let _home = ScopedHomeFixture::new("loongclaw-ext-skill-list-invoke-home");
             write_file(
                 &root,
                 "source/demo-skill/SKILL.md",
@@ -2033,7 +2507,16 @@ mod tests {
             )
             .expect("list should succeed");
             assert_eq!(list_outcome.status, "ok");
-            assert_eq!(list_outcome.payload["skills"][0]["skill_id"], "demo-skill");
+            assert!(
+                list_outcome.payload["skills"]
+                    .as_array()
+                    .expect("skills should be an array")
+                    .iter()
+                    .any(|skill| {
+                        skill["skill_id"] == "demo-skill" && skill["scope"] == "managed"
+                    }),
+                "managed install should appear in resolved skills list"
+            );
 
             let invoke_outcome = crate::tools::execute_tool_core_with_config(
                 ToolCoreRequest {
@@ -2055,6 +2538,233 @@ mod tests {
             );
 
             fs::remove_dir_all(&root).ok();
+        });
+    }
+
+    #[test]
+    fn discovery_resolves_managed_user_and_project_scopes_with_shadowed_duplicates() {
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-discovery-precedence");
+            let home = unique_temp_dir("loongclaw-ext-skill-discovery-home");
+            fs::create_dir_all(&root).expect("create fixture root");
+            fs::create_dir_all(&home).expect("create home root");
+
+            write_file(
+                &root,
+                "source/demo-skill/SKILL.md",
+                "# Managed Demo Skill\n\nManaged install should win precedence.\n",
+            );
+            write_file(
+                &root,
+                ".agents/skills/demo-skill/SKILL.md",
+                "---\nname: demo-skill\ndescription: Project-scoped demo skill.\n---\n\n# Project Demo Skill\n\nProject copy should be shadowed by managed.\n",
+            );
+            write_file(
+                &root,
+                ".claude/skills/project-only/SKILL.md",
+                "---\nname: project-only\ndescription: Project-only skill.\n---\n\nProject-only instructions.\n",
+            );
+            write_file(
+                &home,
+                ".agents/skills/demo-skill/SKILL.md",
+                "---\nname: demo-skill\ndescription: User-scoped demo skill.\n---\n\n# User Demo Skill\n\nUser copy should be shadowed by managed.\n",
+            );
+            write_file(
+                &home,
+                ".agents/skills/user-only/SKILL.md",
+                "---\nname: user-only\ndescription: User-only skill.\n---\n\nUser-only instructions.\n",
+            );
+
+            let config = managed_runtime_config(&root);
+            let mut env = crate::test_support::ScopedEnv::new();
+            env.set("HOME", &home);
+
+            crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "source/demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect("install should succeed");
+
+            let list_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.list".to_owned(),
+                    payload: json!({}),
+                },
+                &config,
+            )
+            .expect("list should succeed");
+            let skills = list_outcome.payload["skills"]
+                .as_array()
+                .expect("skills should be an array");
+            assert_eq!(
+                skills.len(),
+                3,
+                "resolved list should contain one entry per skill id"
+            );
+            assert!(
+                skills.iter().any(|skill| {
+                    skill["skill_id"] == "demo-skill"
+                        && skill["scope"] == "managed"
+                        && skill["display_name"] == "Managed Demo Skill"
+                }),
+                "managed skill should win precedence in resolved list: {skills:?}"
+            );
+            assert!(
+                skills.iter().any(|skill| {
+                    skill["skill_id"] == "project-only"
+                        && skill["scope"] == "project"
+                        && skill["summary"] == "Project-only skill."
+                }),
+                "project-only skill should be discovered from project scope: {skills:?}"
+            );
+            assert!(
+                skills.iter().any(|skill| {
+                    skill["skill_id"] == "user-only"
+                        && skill["scope"] == "user"
+                        && skill["summary"] == "User-only skill."
+                }),
+                "user-only skill should be discovered from user scope: {skills:?}"
+            );
+
+            let shadowed = list_outcome.payload["shadowed_skills"]
+                .as_array()
+                .expect("shadowed_skills should be an array");
+            assert_eq!(
+                shadowed.len(),
+                2,
+                "duplicate lower-priority skills should be reported as shadowed"
+            );
+            assert!(
+                shadowed
+                    .iter()
+                    .any(|skill| skill["skill_id"] == "demo-skill" && skill["scope"] == "user"),
+                "user duplicate should be shadowed by managed precedence: {shadowed:?}"
+            );
+            assert!(
+                shadowed
+                    .iter()
+                    .any(|skill| skill["skill_id"] == "demo-skill" && skill["scope"] == "project"),
+                "project duplicate should be shadowed by managed precedence: {shadowed:?}"
+            );
+
+            let inspect_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.inspect".to_owned(),
+                    payload: json!({
+                        "skill_id": "demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect("inspect should resolve the managed winner");
+            assert_eq!(inspect_outcome.payload["skill"]["scope"], "managed");
+            assert_eq!(
+                inspect_outcome.payload["skill"]["display_name"],
+                "Managed Demo Skill"
+            );
+            assert_eq!(
+                inspect_outcome.payload["shadowed_skills"]
+                    .as_array()
+                    .expect("inspect should include shadowed duplicates")
+                    .len(),
+                2
+            );
+
+            let user_invoke = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.invoke".to_owned(),
+                    payload: json!({
+                        "skill_id": "user-only"
+                    }),
+                },
+                &config,
+            )
+            .expect("invoke should resolve user-only skills");
+            assert_eq!(user_invoke.payload["scope"], "user");
+            assert!(
+                user_invoke.payload["instructions"]
+                    .as_str()
+                    .expect("instructions should be text")
+                    .contains("User-only instructions"),
+                "invoke should load user-scope instructions"
+            );
+
+            let project_invoke = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.invoke".to_owned(),
+                    payload: json!({
+                        "skill_id": "project-only"
+                    }),
+                },
+                &config,
+            )
+            .expect("invoke should resolve project-only skills");
+            assert_eq!(project_invoke.payload["scope"], "project");
+            assert!(
+                project_invoke.payload["instructions"]
+                    .as_str()
+                    .expect("instructions should be text")
+                    .contains("Project-only instructions"),
+                "invoke should load project-scope instructions"
+            );
+
+            fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&home).ok();
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_follows_symlinked_user_skill_directories() {
+        with_managed_runtime_test(|| {
+            use std::os::unix::fs::symlink;
+
+            let root = unique_temp_dir("loongclaw-ext-skill-discovery-symlink-root");
+            let home = unique_temp_dir("loongclaw-ext-skill-discovery-symlink-home");
+            let shared = unique_temp_dir("loongclaw-ext-skill-discovery-symlink-target");
+            fs::create_dir_all(&root).expect("create fixture root");
+            fs::create_dir_all(home.join(".agents/skills")).expect("create user skills root");
+            fs::create_dir_all(&shared).expect("create shared skill root");
+            write_file(
+                &shared,
+                "portable-skill/SKILL.md",
+                "---\nname: portable-skill\ndescription: Symlinked user skill.\n---\n\nPortable instructions.\n",
+            );
+            symlink(
+                shared.join("portable-skill"),
+                home.join(".agents/skills/portable-skill"),
+            )
+            .expect("create user skill symlink");
+
+            let mut env = crate::test_support::ScopedEnv::new();
+            env.set("HOME", &home);
+            let list_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.list".to_owned(),
+                    payload: json!({}),
+                },
+                &managed_runtime_config(&root),
+            )
+            .expect("symlinked user skills should be discoverable");
+            assert!(
+                list_outcome.payload["skills"]
+                    .as_array()
+                    .expect("skills should be an array")
+                    .iter()
+                    .any(|skill| {
+                        skill["skill_id"] == "portable-skill" && skill["scope"] == "user"
+                    }),
+                "symlinked user skill should appear in resolved discovery output"
+            );
+
+            fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&home).ok();
+            fs::remove_dir_all(&shared).ok();
         });
     }
 
@@ -2105,6 +2815,7 @@ mod tests {
         with_managed_runtime_test(|| {
             let root = unique_temp_dir("loongclaw-ext-skill-remove");
             fs::create_dir_all(&root).expect("create fixture root");
+            let _home = ScopedHomeFixture::new("loongclaw-ext-skill-remove-home");
             write_file(
                 &root,
                 "source/demo-skill/SKILL.md",
@@ -2347,6 +3058,7 @@ mod tests {
         with_managed_runtime_test(|| {
             let root = unique_temp_dir("loongclaw-ext-skill-index-metadata");
             fs::create_dir_all(&root).expect("create fixture root");
+            let _home = ScopedHomeFixture::new("loongclaw-ext-skill-index-metadata-home");
             write_file(
                 &root,
                 "source/demo-skill/SKILL.md",
@@ -2387,15 +3099,18 @@ mod tests {
                 &config,
             )
             .expect("list should succeed with rehydrated metadata");
+            let demo_skill = list_outcome.payload["skills"]
+                .as_array()
+                .expect("skills should be an array")
+                .iter()
+                .find(|skill| skill["skill_id"] == "demo-skill")
+                .expect("managed demo-skill should remain discoverable");
+            assert_eq!(demo_skill["display_name"], "Demo Skill");
             assert_eq!(
-                list_outcome.payload["skills"][0]["display_name"],
-                "Demo Skill"
-            );
-            assert_eq!(
-                list_outcome.payload["skills"][0]["summary"],
+                demo_skill["summary"],
                 "Prefer evidence over stale index metadata."
             );
-            assert_ne!(list_outcome.payload["skills"][0]["sha256"], "forged-digest");
+            assert_ne!(demo_skill["sha256"], "forged-digest");
 
             let invoke_outcome = crate::tools::execute_tool_core_with_config(
                 ToolCoreRequest {

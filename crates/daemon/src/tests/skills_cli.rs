@@ -1,7 +1,16 @@
+#![allow(unsafe_code)]
+#![allow(
+    clippy::disallowed_methods,
+    clippy::multiple_unsafe_ops_per_block,
+    clippy::undocumented_unsafe_blocks
+)]
+
 use super::*;
 use std::{
+    ffi::OsString,
     fs,
     path::{Path, PathBuf},
+    sync::MutexGuard,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -31,6 +40,45 @@ fn write_external_skills_config(root: &Path, enabled: bool) -> PathBuf {
     mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
         .expect("write config fixture");
     config_path
+}
+
+struct SkillsCliEnvironmentGuard {
+    _lock: MutexGuard<'static, ()>,
+    saved: Vec<(String, Option<OsString>)>,
+}
+
+impl SkillsCliEnvironmentGuard {
+    fn set(pairs: &[(&str, Option<&str>)]) -> Self {
+        let lock = super::lock_daemon_test_environment();
+        let mut saved = Vec::new();
+        for (key, value) in pairs {
+            saved.push(((*key).to_owned(), std::env::var_os(key)));
+            match value {
+                Some(value) => unsafe {
+                    std::env::set_var(key, value);
+                },
+                None => unsafe {
+                    std::env::remove_var(key);
+                },
+            }
+        }
+        Self { _lock: lock, saved }
+    }
+}
+
+impl Drop for SkillsCliEnvironmentGuard {
+    fn drop(&mut self) {
+        for (key, value) in self.saved.drain(..).rev() {
+            match value {
+                Some(value) => unsafe {
+                    std::env::set_var(&key, value);
+                },
+                None => unsafe {
+                    std::env::remove_var(&key);
+                },
+            }
+        }
+    }
 }
 
 #[test]
@@ -139,7 +187,10 @@ fn skills_policy_set_cli_parses_domain_and_approval_flags() {
 #[test]
 fn execute_skills_command_installs_lists_inspects_and_removes_skill() {
     let root = unique_temp_dir("loongclaw-skills-cli-install");
+    let home = unique_temp_dir("loongclaw-skills-cli-install-home");
     let config_path = write_external_skills_config(&root, true);
+    fs::create_dir_all(&home).expect("create home root");
+    let _env = SkillsCliEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
     write_file(
         &root,
         "source/demo-skill/SKILL.md",
@@ -189,11 +240,13 @@ fn execute_skills_command_installs_lists_inspects_and_removes_skill() {
         command: crate::skills_cli::SkillsCommands::List,
     })
     .expect("skills list should succeed");
-    assert_eq!(list.outcome.payload["skills"][0]["skill_id"], "demo-skill");
-    assert_eq!(
-        list.outcome.payload["skills"][0]["display_name"],
-        "Demo Skill"
-    );
+    let listed_demo_skill = list.outcome.payload["skills"]
+        .as_array()
+        .expect("skills should be an array")
+        .iter()
+        .find(|skill| skill["skill_id"] == "demo-skill")
+        .expect("managed skill should appear in CLI list");
+    assert_eq!(listed_demo_skill["display_name"], "Demo Skill");
 
     let info = crate::skills_cli::execute_skills_command(crate::skills_cli::SkillsCommandOptions {
         config: Some(config_path.display().to_string()),
@@ -236,6 +289,63 @@ fn execute_skills_command_installs_lists_inspects_and_removes_skill() {
     );
 
     fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&home).ok();
+}
+
+#[test]
+fn execute_skills_command_list_reports_scopes_and_shadowed_skills() {
+    let root = unique_temp_dir("loongclaw-skills-cli-scopes");
+    let home = unique_temp_dir("loongclaw-skills-cli-home");
+    let config_path = write_external_skills_config(&root, true);
+    fs::create_dir_all(&home).expect("create home root");
+    write_file(
+        &root,
+        "source/demo-skill/SKILL.md",
+        "# Managed Demo Skill\n\nManaged CLI install should win precedence.\n",
+    );
+    write_file(
+        &root,
+        ".agents/skills/demo-skill/SKILL.md",
+        "---\nname: demo-skill\ndescription: Project CLI demo skill.\n---\n\nProject CLI copy should be shadowed.\n",
+    );
+    let _env = SkillsCliEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
+
+    crate::skills_cli::execute_skills_command(crate::skills_cli::SkillsCommandOptions {
+        config: Some(config_path.display().to_string()),
+        json: false,
+        command: crate::skills_cli::SkillsCommands::Install {
+            path: "source/demo-skill".to_owned(),
+            skill_id: None,
+            replace: false,
+        },
+    })
+    .expect("skills install should succeed");
+
+    let list = crate::skills_cli::execute_skills_command(crate::skills_cli::SkillsCommandOptions {
+        config: Some(config_path.display().to_string()),
+        json: false,
+        command: crate::skills_cli::SkillsCommands::List,
+    })
+    .expect("skills list should succeed");
+    assert_eq!(list.outcome.payload["skills"][0]["skill_id"], "demo-skill");
+    assert_eq!(list.outcome.payload["skills"][0]["scope"], "managed");
+    assert_eq!(
+        list.outcome.payload["shadowed_skills"][0]["scope"],
+        "project"
+    );
+    let rendered =
+        crate::skills_cli::render_skills_cli_text(&list).expect("text rendering should succeed");
+    assert!(
+        rendered.contains("scope=managed"),
+        "CLI text should show resolved scope: {rendered}"
+    );
+    assert!(
+        rendered.contains("shadowed skills:"),
+        "CLI text should render shadowed entries for operator debugging: {rendered}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&home).ok();
 }
 
 #[test]
@@ -438,6 +548,42 @@ fn execute_skills_command_policy_set_requires_explicit_approval() {
         mvp::config::load(Some(config_string.as_str())).expect("reload unchanged config");
     assert!(!reloaded.external_skills.enabled);
     assert!(reloaded.external_skills.require_download_approval);
+    assert!(reloaded.external_skills.allowed_domains.is_empty());
+    assert!(reloaded.external_skills.blocked_domains.is_empty());
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn execute_skills_command_policy_set_rejects_invalid_domain_rules() {
+    let root = unique_temp_dir("loongclaw-skills-cli-policy-invalid-domains");
+    let config_path = write_external_skills_config(&root, false);
+    let config_string = config_path.display().to_string();
+
+    let error =
+        crate::skills_cli::execute_skills_command(crate::skills_cli::SkillsCommandOptions {
+            config: Some(config_string.as_str().to_owned()),
+            json: false,
+            command: crate::skills_cli::SkillsCommands::Policy {
+                command: crate::skills_cli::SkillsPolicyCommands::Set {
+                    enabled: None,
+                    require_download_approval: None,
+                    allowed_domains: vec!["https://skills.sh/demo.tgz".to_owned()],
+                    clear_allowed_domains: false,
+                    blocked_domains: vec!["not-a-domain".to_owned()],
+                    clear_blocked_domains: false,
+                    approve_policy_update: true,
+                },
+            },
+        })
+        .expect_err("policy set should reject invalid domain rules");
+    assert!(
+        error.contains("invalid domain rule"),
+        "invalid domain error should point operators at the malformed rule: {error}"
+    );
+
+    let (_, reloaded) =
+        mvp::config::load(Some(config_string.as_str())).expect("reload unchanged config");
     assert!(reloaded.external_skills.allowed_domains.is_empty());
     assert!(reloaded.external_skills.blocked_domains.is_empty());
 
