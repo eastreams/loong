@@ -46,6 +46,7 @@ mod next_actions;
 mod onboard_cli;
 mod onboard_presentation;
 mod provider_presentation;
+mod skills_cli;
 mod source_presentation;
 #[cfg(test)]
 pub(crate) use loongclaw_spec::programmatic::{
@@ -330,6 +331,15 @@ enum Commands {
         /// Skip provider model probing during diagnostics
         #[arg(long, default_value_t = false)]
         skip_model_probe: bool,
+    },
+    /// Manage installed external skills through an operator-facing CLI surface
+    Skills {
+        #[arg(long, global = true)]
+        config: Option<String>,
+        #[arg(long, global = true, default_value_t = false)]
+        json: bool,
+        #[command(subcommand)]
+        command: skills_cli::SkillsCommands,
     },
     /// List compiled channel surfaces, aliases, and readiness status
     Channels {
@@ -684,6 +694,15 @@ async fn main() {
             })
             .await
         }
+        Commands::Skills {
+            config,
+            json,
+            command,
+        } => skills_cli::run_skills_cli(skills_cli::SkillsCommandOptions {
+            config,
+            json,
+            command,
+        }),
         Commands::Channels { config, json } => run_channels_cli(config.as_deref(), json),
         Commands::ListModels { config, json } => run_list_models_cli(config.as_deref(), json).await,
         Commands::ListContextEngines { config, json } => {
