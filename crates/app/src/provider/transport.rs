@@ -30,6 +30,20 @@ pub(super) struct RequestAuthContext {
     bedrock_signing: Option<BedrockSigningContext>,
 }
 
+impl RequestAuthContext {
+    pub(super) fn has_bedrock_sigv4_fallback(&self) -> bool {
+        #[cfg(feature = "provider-bedrock")]
+        {
+            self.bedrock_signing.is_some()
+        }
+
+        #[cfg(not(feature = "provider-bedrock"))]
+        {
+            false
+        }
+    }
+}
+
 #[cfg(feature = "provider-bedrock")]
 #[derive(Debug, Clone)]
 struct BedrockSigningContext {
@@ -66,28 +80,36 @@ pub(super) async fn resolve_request_auth_context(
     }
 
     let region = resolve_bedrock_region(provider).await?;
-    if provider.resolved_auth_secret().is_some() {
-        return Ok(RequestAuthContext {
-            bedrock_region: Some(region),
-            #[cfg(feature = "provider-bedrock")]
-            bedrock_signing: None,
-        });
-    }
 
     #[cfg(feature = "provider-bedrock")]
     {
-        let credentials = resolve_bedrock_credentials(region.as_str()).await?;
-        Ok(RequestAuthContext {
-            bedrock_region: Some(region.clone()),
-            bedrock_signing: Some(BedrockSigningContext {
-                region,
-                credentials,
+        match resolve_bedrock_credentials(region.as_str()).await {
+            Ok(credentials) => Ok(RequestAuthContext {
+                bedrock_region: Some(region.clone()),
+                bedrock_signing: Some(BedrockSigningContext {
+                    region,
+                    credentials,
+                }),
             }),
-        })
+            Err(error) => {
+                if provider.resolved_auth_secret().is_some() {
+                    return Ok(RequestAuthContext {
+                        bedrock_region: Some(region),
+                        bedrock_signing: None,
+                    });
+                }
+                Err(error)
+            }
+        }
     }
 
     #[cfg(not(feature = "provider-bedrock"))]
     {
+        if provider.resolved_auth_secret().is_some() {
+            return Ok(RequestAuthContext {
+                bedrock_region: Some(region),
+            });
+        }
         Err("bedrock provider family is disabled (enable feature `provider-bedrock`)".to_owned())
     }
 }
@@ -130,13 +152,18 @@ pub(super) fn resolve_request_url(
 pub(super) fn build_request_headers_without_provider_auth(
     provider: &ProviderConfig,
 ) -> CliResult<HeaderMap> {
-    let mut headers = build_request_headers(provider)?;
-    headers.remove(AUTHORIZATION);
-    headers.remove(HeaderName::from_static("x-api-key"));
-    Ok(headers)
+    build_request_headers_internal(provider, false)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn build_request_headers(provider: &ProviderConfig) -> CliResult<HeaderMap> {
+    build_request_headers_internal(provider, true)
+}
+
+fn build_request_headers_internal(
+    provider: &ProviderConfig,
+    include_provider_auth: bool,
+) -> CliResult<HeaderMap> {
     let mut headers = HeaderMap::new();
     for (key, value) in &provider.headers {
         let name = HeaderName::from_bytes(key.as_bytes())
@@ -162,7 +189,7 @@ pub(super) fn build_request_headers(provider: &ProviderConfig) -> CliResult<Head
             .map_err(|error| format!("invalid default provider header `{key}`: {error}"))?;
         headers.insert(name, header_value);
     }
-    if let Some(secret) = provider.resolved_auth_secret() {
+    if include_provider_auth && let Some(secret) = provider.resolved_auth_secret() {
         apply_raw_auth_secret(&mut headers, provider.kind.auth_scheme(), secret.as_str())?;
     }
     Ok(headers)
@@ -240,7 +267,10 @@ pub(super) async fn execute_request(
     bedrock_service: Option<BedrockService>,
 ) -> Result<reqwest::Response, RequestExecutionError> {
     #[cfg(feature = "provider-bedrock")]
-    if let Some(signing) = auth_context.bedrock_signing.as_ref() {
+    if let Some(signing) = auth_context.bedrock_signing.as_ref()
+        && !request.headers().contains_key(AUTHORIZATION)
+        && !request.headers().contains_key("x-api-key")
+    {
         let Some(service) = bedrock_service else {
             return Err(RequestExecutionError::Setup(
                 "bedrock request missing service classification for SigV4 signing".to_owned(),
@@ -443,4 +473,60 @@ fn percent_encode_path_segment(value: &str) -> String {
         }
     }
     encoded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::ScopedEnv;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn build_request_headers_without_provider_auth_preserves_manual_auth_headers() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Custom,
+            headers: BTreeMap::from([
+                ("authorization".to_owned(), "Token custom-auth".to_owned()),
+                ("x-api-key".to_owned(), "custom-key".to_owned()),
+            ]),
+            ..ProviderConfig::default()
+        };
+
+        let headers =
+            build_request_headers_without_provider_auth(&provider).expect("transport headers");
+        assert_eq!(
+            headers
+                .get(AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Token custom-auth")
+        );
+        assert_eq!(
+            headers
+                .get("x-api-key")
+                .and_then(|value| value.to_str().ok()),
+            Some("custom-key")
+        );
+    }
+
+    #[cfg(feature = "provider-bedrock")]
+    #[tokio::test]
+    async fn resolve_request_auth_context_keeps_bedrock_sigv4_fallback_with_bearer_secret() {
+        let mut env = ScopedEnv::new();
+        env.set("AWS_ACCESS_KEY_ID", "test-access-key");
+        env.set("AWS_SECRET_ACCESS_KEY", "test-secret-key");
+        env.set("AWS_REGION", "us-west-2");
+        env.remove("AWS_SESSION_TOKEN");
+
+        let provider = ProviderConfig {
+            kind: ProviderKind::Bedrock,
+            api_key: Some("bedrock-bearer-token".to_owned()),
+            ..ProviderConfig::default()
+        };
+
+        let auth_context = resolve_request_auth_context(&provider)
+            .await
+            .expect("bedrock auth context");
+        assert_eq!(auth_context.bedrock_region.as_deref(), Some("us-west-2"));
+        assert!(auth_context.bedrock_signing.is_some());
+    }
 }

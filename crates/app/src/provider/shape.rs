@@ -1088,7 +1088,7 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "抱歉，刚才的命令执行失败了。让我用更简单的方式重试:\n<function=shell.exec><parameter=command>ls /root</parameter></function>"
+                    "content": "sorry, that command failed. let me retry with a simpler approach:\n<function=shell.exec><parameter=command>ls /root</parameter></function>"
                 }
             }]
         });
@@ -1096,7 +1096,7 @@ mod tests {
         let turn = extract_provider_turn(&body).expect("turn");
         assert_eq!(
             turn.assistant_text,
-            "抱歉，刚才的命令执行失败了。让我用更简单的方式重试:"
+            "sorry, that command failed. let me retry with a simpler approach:"
         );
         assert_eq!(turn.tool_intents.len(), 1);
         assert_eq!(turn.tool_intents[0].tool_name, "shell.exec");
@@ -1119,7 +1119,7 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "我看到已经安装了 Home Assistant 技能。让我调用它来获取所有实体状态。\n<function=external_skills.invoke><parameter=skill_id>home-assistant-1-0-0</parameter><parameter=action>get_states</parameter></function>"
+                    "content": "i can see the Home Assistant skill is installed. let me call it to fetch all entity states.\n<function=external_skills.invoke><parameter=skill_id>home-assistant-1-0-0</parameter><parameter=action>get_states</parameter></function>"
                 }
             }]
         });
@@ -1127,7 +1127,7 @@ mod tests {
         let turn = extract_provider_turn(&body).expect("turn");
         assert_eq!(
             turn.assistant_text,
-            "我看到已经安装了 Home Assistant 技能。让我调用它来获取所有实体状态。"
+            "i can see the Home Assistant skill is installed. let me call it to fetch all entity states."
         );
         assert_eq!(turn.tool_intents.len(), 1);
         assert_eq!(turn.tool_intents[0].tool_name, "external_skills.invoke");
@@ -1142,7 +1142,7 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "如果你想手动调用，可以写成 ` <function=shell.exec><parameter=command>ls</parameter></function> ` 这样的格式。"
+                    "content": "if you want to invoke it manually, you can write it like ` <function=shell.exec><parameter=command>ls</parameter></function> `."
                 }
             }]
         });
@@ -1151,7 +1151,7 @@ mod tests {
         assert!(turn.tool_intents.is_empty());
         assert_eq!(
             turn.assistant_text,
-            "如果你想手动调用，可以写成 ` <function=shell.exec><parameter=command>ls</parameter></function> ` 这样的格式。"
+            "if you want to invoke it manually, you can write it like ` <function=shell.exec><parameter=command>ls</parameter></function> `."
         );
     }
 
@@ -1160,7 +1160,7 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "示例：\n```xml\n<function=shell.exec><parameter=command>ls</parameter></function>\n```"
+                    "content": "example:\n```xml\n<function=shell.exec><parameter=command>ls</parameter></function>\n```"
                 }
             }]
         });
@@ -1169,7 +1169,7 @@ mod tests {
         assert!(turn.tool_intents.is_empty());
         assert_eq!(
             turn.assistant_text,
-            "示例：\n```xml\n<function=shell.exec><parameter=command>ls</parameter></function>\n```"
+            "example:\n```xml\n<function=shell.exec><parameter=command>ls</parameter></function>\n```"
         );
     }
 
@@ -1178,7 +1178,7 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "示例：\n\n    <function=shell.exec><parameter=command>ls</parameter></function>"
+                    "content": "example:\n\n    <function=shell.exec><parameter=command>ls</parameter></function>"
                 }
             }]
         });
@@ -1187,7 +1187,7 @@ mod tests {
         assert!(turn.tool_intents.is_empty());
         assert_eq!(
             turn.assistant_text,
-            "示例：\n\n    <function=shell.exec><parameter=command>ls</parameter></function>"
+            "example:\n\n    <function=shell.exec><parameter=command>ls</parameter></function>"
         );
     }
 
@@ -1196,7 +1196,7 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "示例：\n\n    第一步\n    <function=shell.exec><parameter=command>ls</parameter></function>"
+                    "content": "example:\n\n    step one\n    <function=shell.exec><parameter=command>ls</parameter></function>"
                 }
             }]
         });
@@ -1205,7 +1205,7 @@ mod tests {
         assert!(turn.tool_intents.is_empty());
         assert_eq!(
             turn.assistant_text,
-            "示例：\n\n    第一步\n    <function=shell.exec><parameter=command>ls</parameter></function>"
+            "example:\n\n    step one\n    <function=shell.exec><parameter=command>ls</parameter></function>"
         );
     }
 
@@ -1214,7 +1214,7 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "示例：\n\n\t<function=shell.exec><parameter=command>ls</parameter></function>"
+                    "content": "example:\n\n\t<function=shell.exec><parameter=command>ls</parameter></function>"
                 }
             }]
         });
@@ -1223,7 +1223,7 @@ mod tests {
         assert!(turn.tool_intents.is_empty());
         assert_eq!(
             turn.assistant_text,
-            "示例：\n\n\t<function=shell.exec><parameter=command>ls</parameter></function>"
+            "example:\n\n\t<function=shell.exec><parameter=command>ls</parameter></function>"
         );
     }
 
@@ -1232,13 +1232,13 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "让我重试：\n    <function=shell.exec><parameter=command>ls</parameter></function>"
+                    "content": "let me retry:\n    <function=shell.exec><parameter=command>ls</parameter></function>"
                 }
             }]
         });
 
         let turn = extract_provider_turn(&body).expect("turn");
-        assert_eq!(turn.assistant_text, "让我重试：");
+        assert_eq!(turn.assistant_text, "let me retry:");
         assert_eq!(turn.tool_intents.len(), 1);
         assert_eq!(turn.tool_intents[0].tool_name, "shell.exec");
         assert_eq!(turn.tool_intents[0].args_json, json!({"command": "ls"}));
@@ -1249,13 +1249,13 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "让我重试：\n\t<function=shell.exec><parameter=command>ls</parameter></function>"
+                    "content": "let me retry:\n\t<function=shell.exec><parameter=command>ls</parameter></function>"
                 }
             }]
         });
 
         let turn = extract_provider_turn(&body).expect("turn");
-        assert_eq!(turn.assistant_text, "让我重试：");
+        assert_eq!(turn.assistant_text, "let me retry:");
         assert_eq!(turn.tool_intents.len(), 1);
         assert_eq!(turn.tool_intents[0].tool_name, "shell.exec");
         assert_eq!(turn.tool_intents[0].args_json, json!({"command": "ls"}));
@@ -1266,7 +1266,7 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "让我按结构化参数重试。\n<function=shell.exec><parameter=command>\"echo\"</parameter><parameter=args>[\"hello\",\"world\"]</parameter><parameter=timeout_ms>3000</parameter><parameter=login>false</parameter></function>"
+                    "content": "let me retry with structured parameters.\n<function=shell.exec><parameter=command>\"echo\"</parameter><parameter=args>[\"hello\",\"world\"]</parameter><parameter=timeout_ms>3000</parameter><parameter=login>false</parameter></function>"
                 }
             }]
         });
@@ -1289,7 +1289,7 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "让我重试。\n<function=shell.exec><parameter=command>true</parameter><parameter=args>[\"hello\"]</parameter></function>"
+                    "content": "let me retry.\n<function=shell.exec><parameter=command>true</parameter><parameter=args>[\"hello\"]</parameter></function>"
                 }
             }]
         });
@@ -1310,7 +1310,7 @@ mod tests {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "让我重试。\n<function=shell.exec><parameter=command>ls /root</parameter>"
+                    "content": "let me retry.\n<function=shell.exec><parameter=command>ls /root</parameter>"
                 }
             }]
         });
@@ -1318,7 +1318,7 @@ mod tests {
         let turn = extract_provider_turn(&body).expect("turn");
         assert_eq!(
             turn.assistant_text,
-            "让我重试。\n<function=shell.exec><parameter=command>ls /root</parameter>"
+            "let me retry.\n<function=shell.exec><parameter=command>ls /root</parameter>"
         );
         assert!(turn.tool_intents.is_empty());
         assert_eq!(
@@ -1502,7 +1502,7 @@ mod tests {
                     "providerName": "Amazon"
                 },
                 {
-                    "modelId": "anthropic.claude-3-7-sonnet-v1:0",
+                    "modelId": "anthropic.claude-3-7-sonnet-20250219-v1:0",
                     "modelName": "Claude 3.7 Sonnet",
                     "providerName": "Anthropic"
                 }
@@ -1511,7 +1511,10 @@ mod tests {
         let ids = extract_model_ids(&body);
         assert_eq!(
             ids,
-            vec!["amazon.nova-lite-v1:0", "anthropic.claude-3-7-sonnet-v1:0"]
+            vec![
+                "amazon.nova-lite-v1:0",
+                "anthropic.claude-3-7-sonnet-20250219-v1:0"
+            ]
         );
     }
 

@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::config::{ProviderAuthScheme, ProviderConfig};
+use crate::config::{ProviderAuthScheme, ProviderConfig, ProviderKind};
 
 use super::provider_keyspace::build_provider_auth_profile_id;
 
@@ -35,16 +35,20 @@ pub(super) fn resolve_provider_auth_profiles(
         }
     }
 
-    if profiles.is_empty() {
-        profiles.push(ProviderAuthProfile {
-            id: "anonymous".to_owned(),
-            authorization_header: None,
-            x_api_key_header: None,
-            auth_cache_key: None,
-        });
+    if profiles.is_empty() || provider.kind == ProviderKind::Bedrock {
+        profiles.push(anonymous_auth_profile());
     }
 
     profiles
+}
+
+fn anonymous_auth_profile() -> ProviderAuthProfile {
+    ProviderAuthProfile {
+        id: "anonymous".to_owned(),
+        authorization_header: None,
+        x_api_key_header: None,
+        auth_cache_key: None,
+    }
 }
 
 fn push_bearer_profile(
@@ -148,5 +152,27 @@ mod tests {
         assert_eq!(profiles[0].authorization_header, None);
         assert_eq!(profiles[0].x_api_key_header, None);
         assert_eq!(profiles[0].auth_cache_key, None);
+    }
+
+    #[test]
+    fn resolve_provider_auth_profiles_adds_bedrock_sigv4_fallback_after_bearer_profiles() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Bedrock,
+            api_key: Some("bedrock-bearer-token".to_owned()),
+            api_key_env: None,
+            oauth_access_token: None,
+            oauth_access_token_env: None,
+            ..ProviderConfig::default()
+        };
+
+        let profiles = resolve_provider_auth_profiles(&provider);
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(
+            profiles[0].authorization_header.as_deref(),
+            Some("Bearer bedrock-bearer-token")
+        );
+        assert_eq!(profiles[1].id, "anonymous");
+        assert_eq!(profiles[1].authorization_header, None);
+        assert_eq!(profiles[1].x_api_key_header, None);
     }
 }

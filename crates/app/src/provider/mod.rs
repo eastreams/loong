@@ -232,5 +232,29 @@ pub async fn fetch_available_models(config: &LoongClawConfig) -> CliResult<Vec<S
     fetch_available_models_with_profiles(config).await
 }
 
+pub async fn provider_auth_ready(config: &LoongClawConfig) -> bool {
+    if config.provider.resolved_auth_secret().is_some() {
+        return true;
+    }
+
+    for header_name in ["authorization", "x-api-key"] {
+        if config
+            .provider
+            .header_value(header_name)
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return true;
+        }
+    }
+
+    if config.provider.kind == crate::config::ProviderKind::Bedrock
+        && let Ok(auth_context) = transport::resolve_request_auth_context(&config.provider).await
+    {
+        return auth_context.has_bedrock_sigv4_fallback();
+    }
+
+    false
+}
+
 #[cfg(test)]
 mod tests;

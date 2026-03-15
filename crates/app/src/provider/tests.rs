@@ -1,7 +1,8 @@
 use super::*;
 use crate::config::{
-    FeishuChannelConfig, MemoryConfig, ProviderConfig, ReasoningEffort, ToolConfig,
+    FeishuChannelConfig, LoongClawConfig, MemoryConfig, ProviderConfig, ReasoningEffort, ToolConfig,
 };
+use crate::test_support::ScopedEnv;
 use loongclaw_contracts::{Capability, ExecutionRoute, HarnessKind};
 use loongclaw_kernel::{
     AuditEventKind, FixedClock, InMemoryAuditSink, LoongClawKernel, StaticPolicyEngine,
@@ -80,6 +81,54 @@ fn next_temp_path(prefix: &str, extension: &str) -> PathBuf {
         "{prefix}-{}-{seed}.{extension}",
         std::process::id()
     ))
+}
+
+#[tokio::test]
+async fn provider_auth_ready_accepts_x_api_key_providers() {
+    let config = LoongClawConfig {
+        provider: ProviderConfig {
+            kind: ProviderKind::Anthropic,
+            api_key: Some("anthropic-secret".to_owned()),
+            ..ProviderConfig::default()
+        },
+        ..LoongClawConfig::default()
+    };
+
+    assert!(provider_auth_ready(&config).await);
+}
+
+#[tokio::test]
+async fn provider_auth_ready_accepts_manual_auth_headers_for_custom_provider() {
+    let config = LoongClawConfig {
+        provider: ProviderConfig {
+            kind: ProviderKind::Custom,
+            headers: BTreeMap::from([("authorization".to_owned(), "Token manual-auth".to_owned())]),
+            ..ProviderConfig::default()
+        },
+        ..LoongClawConfig::default()
+    };
+
+    assert!(provider_auth_ready(&config).await);
+}
+
+#[cfg(feature = "provider-bedrock")]
+#[tokio::test]
+async fn provider_auth_ready_accepts_bedrock_sigv4_credentials() {
+    let mut env = ScopedEnv::new();
+    env.set("AWS_ACCESS_KEY_ID", "test-access-key");
+    env.set("AWS_SECRET_ACCESS_KEY", "test-secret-key");
+    env.set("AWS_REGION", "us-west-2");
+    env.remove("AWS_SESSION_TOKEN");
+
+    let config = LoongClawConfig {
+        provider: ProviderConfig {
+            kind: ProviderKind::Bedrock,
+            ..ProviderConfig::default()
+        },
+        ..LoongClawConfig::default()
+    };
+
+    assert!(provider_auth_ready(&config).await);
 }
 
 fn cleanup_sqlite_artifacts(path: &Path) {
@@ -831,7 +880,7 @@ fn bedrock_completion_body_uses_converse_shape() {
     let body = build_completion_request_body(
         &config,
         &messages,
-        "anthropic.claude-3-7-sonnet-v1:0",
+        "anthropic.claude-3-7-sonnet-20250219-v1:0",
         CompletionPayloadMode::default_for(&config.provider),
     );
     assert!(body.get("model").is_none());
@@ -1182,7 +1231,7 @@ fn bedrock_turn_body_uses_native_tool_blocks_and_tool_config() {
                 ]
             }),
         ],
-        "anthropic.claude-3-7-sonnet-v1:0",
+        "anthropic.claude-3-7-sonnet-20250219-v1:0",
         CompletionPayloadMode::default_for(&config.provider),
         true,
         &crate::tools::provider_tool_definitions(),
@@ -1222,11 +1271,11 @@ fn bedrock_request_endpoint_encodes_model_id_in_path() {
     let endpoint = transport::resolve_request_endpoint(
         &provider,
         "https://bedrock-runtime.us-west-2.amazonaws.com/model/{modelId}/converse",
-        "anthropic.claude-3-7-sonnet-v1:0",
+        "anthropic.claude-3-7-sonnet-20250219-v1:0",
     );
     assert_eq!(
         endpoint,
-        "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-3-7-sonnet-v1%3A0/converse"
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-3-7-sonnet-20250219-v1%3A0/converse"
     );
 }
 
@@ -1746,7 +1795,7 @@ fn model_error_parser_detects_endpoint_mismatch() {
     let runtime_contract = provider_runtime_contract(&ProviderConfig::default());
     let body = json!({
         "error": {
-            "message": "The model `gpt-5.4-pro` only supports /v1/responses and not this endpoint."
+            "message": "The model `gpt-5-pro` only supports /v1/responses and not this endpoint."
         }
     });
     let parsed = parse_provider_api_error(&body);

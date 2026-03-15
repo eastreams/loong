@@ -681,6 +681,8 @@ impl ProviderConfig {
             default_openai_chat_path().as_str(),
             default_provider_base_url().as_str(),
         );
+        let resolved_chat_path =
+            maybe_normalize_custom_chat_path(self.kind, &resolved_base_url, &resolved_chat_path);
         let models_path = profile
             .models_path
             .map(normalize_api_path)
@@ -2608,5 +2610,20 @@ mod tests {
         for kind in ProviderKind::all_sorted() {
             assert_eq!(kind.profile().kind, *kind);
         }
+    }
+
+    #[test]
+    fn custom_models_endpoint_avoids_double_v1_suffix() {
+        let config = ProviderConfig {
+            kind: ProviderKind::Custom,
+            base_url: "https://example.test/v1".to_owned(),
+            ..ProviderConfig::default()
+        };
+
+        assert_eq!(
+            config.endpoint(),
+            "https://example.test/v1/chat/completions"
+        );
+        assert_eq!(config.models_endpoint(), "https://example.test/v1/models");
     }
 }
