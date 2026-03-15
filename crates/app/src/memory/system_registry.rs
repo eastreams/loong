@@ -109,6 +109,23 @@ where
     if normalized.is_empty() {
         return Err("memory system id must not be empty".to_owned());
     }
+    if normalized == DEFAULT_MEMORY_SYSTEM_ID {
+        return Err(format!(
+            "memory system `{DEFAULT_MEMORY_SYSTEM_ID}` is reserved and cannot be overridden"
+        ));
+    }
+
+    let system = factory();
+    let runtime_id = normalize_system_id(system.id());
+    let metadata = system.metadata();
+    let metadata_id = normalize_system_id(metadata.id);
+    if runtime_id != normalized || metadata_id != normalized {
+        return Err(format!(
+            "registered memory system id `{normalized}` must match system.id `{}` and metadata.id `{}`",
+            system.id(),
+            metadata.id
+        ));
+    }
 
     let mut guard = registry()
         .write()
@@ -172,10 +189,16 @@ pub fn memory_system_id_from_env() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+pub fn supported_memory_system_kind_from_env() -> Option<MemorySystemKind> {
+    memory_system_id_from_env()
+        .as_deref()
+        .and_then(MemorySystemKind::parse_id)
+}
+
 pub fn resolve_memory_system_selection(config: &LoongClawConfig) -> MemorySystemSelection {
-    if let Some(id) = memory_system_id_from_env() {
+    if let Some(system) = supported_memory_system_kind_from_env() {
         return MemorySystemSelection {
-            id,
+            id: system.as_str().to_owned(),
             source: MemorySystemSelectionSource::Env,
         };
     }
@@ -233,18 +256,34 @@ mod tests {
     use crate::test_support::ScopedEnv;
     use crate::memory::{MEMORY_SYSTEM_API_VERSION, MemorySystemCapability};
 
-    struct TestRegistrySystem;
+    struct MatchingRegistrySystem;
 
-    impl MemorySystem for TestRegistrySystem {
+    impl MemorySystem for MatchingRegistrySystem {
         fn id(&self) -> &'static str {
-            "registry-test"
+            "registry-custom"
         }
 
         fn metadata(&self) -> MemorySystemMetadata {
             MemorySystemMetadata::new(
-                "registry-test",
+                "registry-custom",
                 [MemorySystemCapability::PromptHydration],
                 "Test registry system",
+            )
+        }
+    }
+
+    struct MismatchedRegistrySystem;
+
+    impl MemorySystem for MismatchedRegistrySystem {
+        fn id(&self) -> &'static str {
+            "registry-mismatch"
+        }
+
+        fn metadata(&self) -> MemorySystemMetadata {
+            MemorySystemMetadata::new(
+                "registry-mismatch",
+                [MemorySystemCapability::PromptHydration],
+                "Mismatched registry system",
             )
         }
     }
@@ -260,10 +299,28 @@ mod tests {
 
     #[test]
     fn registry_can_register_and_resolve_custom_system() {
-        register_memory_system("registry-custom", || Box::new(TestRegistrySystem))
+        register_memory_system("registry-custom", || Box::new(MatchingRegistrySystem))
             .expect("register custom system");
         let system = resolve_memory_system(Some("registry-custom")).expect("resolve custom system");
-        assert_eq!(system.id(), "registry-test");
+        assert_eq!(system.id(), "registry-custom");
+    }
+
+    #[test]
+    fn registry_rejects_builtin_override() {
+        let error = register_memory_system(DEFAULT_MEMORY_SYSTEM_ID, || {
+            Box::new(MatchingRegistrySystem)
+        })
+        .expect_err("builtin memory system should stay reserved");
+        assert!(error.contains("reserved"), "error: {error}");
+    }
+
+    #[test]
+    fn registry_rejects_registry_id_mismatches() {
+        let error = register_memory_system("registry-custom-alias", || {
+            Box::new(MismatchedRegistrySystem)
+        })
+        .expect_err("registry id mismatch should fail");
+        assert!(error.contains("must match"), "error: {error}");
     }
 
     #[test]
@@ -297,6 +354,7 @@ mod tests {
 
     #[test]
     fn memory_system_env_overrides_default_selection() {
+        let _env = ScopedEnv::new();
         set_memory_system_env_override(Some("builtin"));
         let config = LoongClawConfig::default();
         let selection = resolve_memory_system_selection(&config);
@@ -383,6 +441,22 @@ mod tests {
         assert_eq!(
             snapshot.policy.ingest_mode,
             crate::config::MemoryIngestMode::AsyncBackground
+        );
+    }
+
+    #[test]
+    fn invalid_memory_system_env_is_ignored_so_snapshot_matches_runtime_behavior() {
+        let mut env = ScopedEnv::new();
+        env.set(MEMORY_SYSTEM_ENV, "lucid");
+
+        let config = LoongClawConfig::default();
+        let snapshot =
+            collect_memory_system_runtime_snapshot(&config).expect("collect runtime snapshot");
+
+        assert_eq!(snapshot.selected.id, DEFAULT_MEMORY_SYSTEM_ID);
+        assert_eq!(
+            snapshot.selected.source,
+            MemorySystemSelectionSource::Default
         );
     }
 }

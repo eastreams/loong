@@ -76,10 +76,7 @@ impl MemoryRuntimeConfig {
             self.mode = profile.mode();
         }
 
-        if let Some(system) = crate::memory::memory_system_id_from_env()
-            .as_deref()
-            .and_then(MemorySystemKind::parse_id)
-        {
+        if let Some(system) = crate::memory::supported_memory_system_kind_from_env() {
             self.system = system;
         }
 
@@ -250,6 +247,7 @@ mod tests {
 
     #[test]
     fn runtime_config_from_memory_config_carries_profile_and_limits() {
+        let _env = ScopedEnv::new();
         let config = MemoryConfig {
             profile: MemoryProfile::WindowPlusSummary,
             summary_max_chars: 900,
@@ -266,6 +264,7 @@ mod tests {
 
     #[test]
     fn hydrated_memory_runtime_config_carries_system_policy() {
+        let _env = ScopedEnv::new();
         let config = MemoryConfig {
             system: crate::config::MemorySystemKind::Builtin,
             fail_open: false,
