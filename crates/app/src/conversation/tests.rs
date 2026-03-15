@@ -3899,11 +3899,11 @@ async fn handle_turn_with_runtime_tool_search_raw_request_still_uses_followup_pr
             Some(&harness.kernel_ctx),
         )
         .await
-        .expect("raw tool-search turn should succeed");
+        .expect("tool search raw-output turn should succeed");
 
     assert!(
         reply.contains("[ok]"),
-        "raw-request mode should keep tool marker after followup, got: {reply}"
+        "raw-request mode should return the invoked tool output, got: {reply}"
     );
     assert!(
         reply.contains("hello from coordinator raw search followup test"),
@@ -12374,6 +12374,130 @@ async fn durable_turn_checkpoint_repair_persists_finalized_checkpoint_and_repeat
         Some(TurnCheckpointStage::Finalized)
     );
     assert!(!summary_after_second.requires_recovery);
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn repair_turn_checkpoint_tail_with_runtime_recovers_discovery_followup_checkpoint() {
+    use super::integration_tests::TurnTestHarness;
+
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-turn-checkpoint", "discovery-followup-repair")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.memory.sliding_window = 16;
+    config.conversation.compact_enabled = true;
+    config.conversation.compact_min_messages = Some(1);
+    config.conversation.compact_trigger_estimated_tokens = Some(1);
+    config.conversation.compact_fail_open = false;
+
+    let session_id = "session-turn-checkpoint-discovery-followup-repair";
+    let user_input = "search for the right tool, then read and summarize note.md";
+    let final_reply = "Summary: the note says hello from discovery followup repair.";
+    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+
+    let harness = TurnTestHarness::new();
+    std::fs::write(
+        harness.temp_dir.join("note.md"),
+        "hello from discovery followup repair",
+    )
+    .expect("seed discovery followup repair note");
+
+    let failing_runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "Let me search first.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "tool.search",
+                    json!({"query": "read note.md", "limit": 3}),
+                    session_id,
+                    "turn-discovery-followup-repair",
+                    "call-search-repair",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Now I'll read the file.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "file.read",
+                    json!({"path": "note.md"}),
+                    session_id,
+                    "turn-discovery-followup-repair",
+                    "call-invoke-repair",
+                )],
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![Ok(final_reply.to_owned())],
+    )
+    .with_durable_memory_config(mem_config.clone())
+    .with_compact_result(Err("discovery followup compaction failed".to_owned()));
+    let coordinator = ConversationTurnCoordinator::new();
+
+    let error = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            session_id,
+            user_input,
+            ProviderErrorMode::Propagate,
+            &failing_runtime,
+            Some(&harness.kernel_ctx),
+        )
+        .await
+        .expect_err("initial run should persist a failed checkpoint when compaction fails");
+    assert!(error.contains("discovery followup compaction failed"));
+
+    let summary_after_failure =
+        load_turn_checkpoint_event_summary(session_id, 32, None, &mem_config)
+            .await
+            .expect("load summary after failed discovery followup run");
+    assert!(summary_after_failure.requires_recovery);
+    assert_eq!(
+        plan_turn_checkpoint_recovery(&summary_after_failure),
+        TurnCheckpointRecoveryAction::RunCompaction
+    );
+
+    let retry_runtime = FakeRuntime::with_turns_and_completions(
+        vec![
+            json!({"role": "user", "content": user_input}),
+            json!({"role": "assistant", "content": final_reply}),
+        ],
+        vec![],
+        vec![],
+    )
+    .with_durable_memory_config(mem_config.clone());
+
+    let repair = coordinator
+        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &retry_runtime, None)
+        .await
+        .expect("discovery followup checkpoint should remain repairable");
+    assert_eq!(repair.status().as_str(), "repaired");
+    assert_eq!(repair.action().as_str(), "run_compaction");
+    assert_eq!(repair.reason(), TurnCheckpointTailRepairReason::Repaired);
+    assert_eq!(
+        retry_runtime
+            .after_turn_calls
+            .lock()
+            .expect("after-turn lock")
+            .len(),
+        0,
+        "compaction-only retry should not rerun after_turn"
+    );
+    assert_eq!(
+        retry_runtime
+            .compact_calls
+            .lock()
+            .expect("compact lock")
+            .len(),
+        1
+    );
 
     let _ = std::fs::remove_file(&db_path);
 }
