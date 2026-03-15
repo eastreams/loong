@@ -2479,8 +2479,10 @@ fn maybe_execute_native_tool(
     request: &ToolCoreRequest,
     native_tool_executor: Option<crate::NativeToolExecutor>,
 ) -> Option<Result<ToolCoreOutcome, String>> {
-    if let Some(executor) = native_tool_executor {
-        return executor(request.clone());
+    if let Some(executor) = native_tool_executor
+        && let Some(result) = executor(request.clone())
+    {
+        return Some(result);
     }
     if crate::tool_name_requires_native_tool_executor(request.tool_name.as_str()) {
         return Some(Err(format!(
@@ -2986,5 +2988,33 @@ mod tests {
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["adapter"], "native-tools");
         assert_eq!(outcome.payload["tool"], "claw.import");
+    }
+
+    fn declining_native_tool_executor(
+        request: ToolCoreRequest,
+    ) -> Option<Result<ToolCoreOutcome, String>> {
+        if request.tool_name == "claw.import" {
+            return None;
+        }
+        Some(Ok(ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "adapter": "native-tools",
+                "tool": request.tool_name,
+            }),
+        }))
+    }
+
+    #[tokio::test]
+    async fn core_tool_runtime_claw_import_fails_closed_when_executor_declines_request() {
+        let error = CoreToolRuntime::new(Some(declining_native_tool_executor))
+            .execute_core_tool(ToolCoreRequest {
+                tool_name: "claw.import".to_owned(),
+                payload: json!({"mode": "plan"}),
+            })
+            .await
+            .expect_err("native-only tool execution should fail closed when executor declines");
+
+        assert!(error.to_string().contains("native tool executor"));
     }
 }

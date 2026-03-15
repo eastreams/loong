@@ -1,7 +1,7 @@
 # Architecture Drift Report 2026-03
 
 ## Summary
-- Generated at: 2026-03-15T05:59:15Z
+- Generated at: 2026-03-15T06:09:02Z
 - Report month: `2026-03`
 - Baseline report: none
 - Hotspots tracked: 4
@@ -11,7 +11,7 @@
 ## Hotspot Metrics
 | Key | File | Lines | Max Lines | Line Headroom | Functions | Max Functions | Fn Headroom | Prev Lines | Line Growth | Growth SLO | Prev Functions |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|
-| spec_runtime | `crates/spec/src/spec_runtime.rs` | 2990 | 3600 | 610 | 47 | 65 | 18 | n/a | n/a | N/A | n/a |
+| spec_runtime | `crates/spec/src/spec_runtime.rs` | 3020 | 3600 | 580 | 47 | 65 | 18 | n/a | n/a | N/A | n/a |
 | spec_execution | `crates/spec/src/spec_execution.rs` | 1478 | 3700 | 2222 | 23 | 80 | 57 | n/a | n/a | N/A | n/a |
 | provider_mod | `crates/app/src/provider/mod.rs` | 234 | 1000 | 766 | 5 | 20 | 15 | n/a | n/a | N/A | n/a |
 | memory_mod | `crates/app/src/memory/mod.rs` | 620 | 650 | 30 | 14 | 16 | 2 | n/a | n/a | N/A | n/a |
@@ -38,7 +38,7 @@
 - [Release template](TEMPLATE.md)
 - [CI workflow](../../.github/workflows/ci.yml)
 
-<!-- arch-hotspot key=spec_runtime lines=2990 functions=47 -->
+<!-- arch-hotspot key=spec_runtime lines=3020 functions=47 -->
 <!-- arch-hotspot key=spec_execution lines=1478 functions=23 -->
 <!-- arch-hotspot key=provider_mod lines=234 functions=5 -->
 <!-- arch-hotspot key=memory_mod lines=620 functions=14 -->

@@ -1079,12 +1079,23 @@ async fn run_spec_pressure_once(
     scenario: &ProgrammaticPressureScenario,
     native_tool_executor: Option<NativeToolExecutor>,
 ) -> CliResult<ScenarioRunSample> {
-    if spec_requires_native_tool_executor(spec) && native_tool_executor.is_none() {
+    let requires_native_tool_executor = spec_requires_native_tool_executor(spec);
+    if requires_native_tool_executor && native_tool_executor.is_none() {
         return Err(
             "spec benchmark scenario requires a native tool executor; move this claw.import/claw-migration run to daemon composition root".to_owned(),
         );
     }
     let report = execute_spec_with_native_tool_executor(spec, false, native_tool_executor).await;
+    if requires_native_tool_executor
+        && report
+            .blocked_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("native tool executor"))
+    {
+        return Err(
+            "spec benchmark scenario requires a native tool executor that handles the requested native tool; move this claw.import/claw-migration run to daemon composition root".to_owned(),
+        );
+    }
     let blocked = report.operation_kind == "blocked" || report.blocked_reason.is_some();
 
     let mut sample = ScenarioRunSample {
@@ -2721,6 +2732,21 @@ mod tests {
         }))
     }
 
+    fn declining_native_tool_executor(
+        request: ToolCoreRequest,
+    ) -> Option<Result<ToolCoreOutcome, String>> {
+        if loongclaw_spec::tool_name_requires_native_tool_executor(request.tool_name.as_str()) {
+            return None;
+        }
+        Some(Ok(ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "adapter": "native-tools",
+                "tool": request.tool_name,
+            }),
+        }))
+    }
+
     #[tokio::test]
     async fn run_spec_pressure_once_uses_native_executor_when_present() {
         let spec = RunnerSpec {
@@ -2769,5 +2795,54 @@ mod tests {
 
         assert!(sample.passed);
         assert!(!sample.blocked);
+    }
+
+    #[tokio::test]
+    async fn run_spec_pressure_once_errors_when_executor_declines_native_request() {
+        let spec = RunnerSpec {
+            pack: VerticalPackManifest {
+                pack_id: "bench-spec-native-claw-import-declined".to_owned(),
+                domain: "ops".to_owned(),
+                version: "0.1.0".to_owned(),
+                default_route: ExecutionRoute {
+                    harness_kind: HarnessKind::EmbeddedPi,
+                    adapter: Some("pi-local".to_owned()),
+                },
+                allowed_connectors: BTreeSet::new(),
+                granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+                metadata: BTreeMap::new(),
+            },
+            agent_id: "bench-agent-native-claw-import-declined".to_owned(),
+            ttl_s: 60,
+            approval: None,
+            defaults: None,
+            self_awareness: None,
+            plugin_scan: None,
+            bridge_support: None,
+            bootstrap: None,
+            auto_provision: None,
+            hotfixes: Vec::new(),
+            operation: loongclaw_spec::OperationSpec::ToolCore {
+                tool_name: "claw.import".to_owned(),
+                required_capabilities: BTreeSet::from([Capability::InvokeTool]),
+                payload: json!({"mode": "plan"}),
+                core: None,
+            },
+        };
+        let scenario = ProgrammaticPressureScenario {
+            name: "native-claw-import-declined".to_owned(),
+            description: None,
+            iterations: Some(1),
+            warmup_iterations: Some(0),
+            expected_operation_kind: "tool_core".to_owned(),
+            allow_blocked: true,
+            kind: ProgrammaticPressureScenarioKind::SpecRun { spec: spec.clone() },
+        };
+
+        let error = run_spec_pressure_once(&spec, &scenario, Some(declining_native_tool_executor))
+            .await
+            .expect_err("bench spec runs should error when executor declines native requests");
+
+        assert!(error.contains("native tool executor"));
     }
 }
