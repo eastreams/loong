@@ -256,6 +256,18 @@ mod tests {
     use crate::memory::{MEMORY_SYSTEM_API_VERSION, MemorySystemCapability};
     use crate::test_support::ScopedEnv;
 
+    fn clear_memory_runtime_env_overrides(env: &mut ScopedEnv) {
+        env.remove(MEMORY_SYSTEM_ENV);
+        env.remove("LOONGCLAW_MEMORY_BACKEND");
+        env.remove("LOONGCLAW_MEMORY_PROFILE");
+        env.remove("LOONGCLAW_MEMORY_FAIL_OPEN");
+        env.remove("LOONGCLAW_MEMORY_INGEST_MODE");
+        env.remove("LOONGCLAW_SQLITE_PATH");
+        env.remove("LOONGCLAW_SLIDING_WINDOW");
+        env.remove("LOONGCLAW_MEMORY_SUMMARY_MAX_CHARS");
+        env.remove("LOONGCLAW_MEMORY_PROFILE_NOTE");
+    }
+
     struct MatchingRegistrySystem;
 
     impl MemorySystem for MatchingRegistrySystem {
@@ -374,6 +386,9 @@ mod tests {
 
     #[test]
     fn memory_system_runtime_snapshot_captures_runtime_policy() {
+        let mut env = ScopedEnv::new();
+        clear_memory_runtime_env_overrides(&mut env);
+
         let config = LoongClawConfig {
             memory: crate::config::MemoryConfig {
                 profile: crate::config::MemoryProfile::WindowPlusSummary,
@@ -412,6 +427,7 @@ mod tests {
     #[test]
     fn memory_system_runtime_snapshot_uses_memory_env_policy_overrides() {
         let mut env = ScopedEnv::new();
+        clear_memory_runtime_env_overrides(&mut env);
         env.set(MEMORY_SYSTEM_ENV, "builtin");
         env.set("LOONGCLAW_MEMORY_PROFILE", "profile_plus_window");
         env.set("LOONGCLAW_MEMORY_FAIL_OPEN", "true");
@@ -450,6 +466,7 @@ mod tests {
     #[test]
     fn invalid_memory_system_env_is_ignored_so_snapshot_matches_runtime_behavior() {
         let mut env = ScopedEnv::new();
+        clear_memory_runtime_env_overrides(&mut env);
         env.set(MEMORY_SYSTEM_ENV, "lucid");
 
         let config = LoongClawConfig::default();

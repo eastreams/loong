@@ -1,7 +1,5 @@
 # LoongClaw Pluggable Memory Systems Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
 **Goal:** Add a phased, backward-compatible architecture foundation for user-selectable memory systems while preserving LoongClaw-owned canonical history and the current built-in SQLite baseline.
 
 **Architecture:** Introduce a `MemorySystem` selection surface and metadata first, then evolve the current memory module into a richer memory orchestrator that separates canonical persistence, derivation, retrieval, and context projection. Keep `ConversationContextEngine` as the final prompt projection seam and keep ACP feeding the same canonical fact layer without reusing provider-only lifecycle hooks.
