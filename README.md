@@ -375,6 +375,7 @@ Operator-facing CLI:
   - Removes one managed installed skill from the local index.
 - `loongclaw skills policy get|set|reset [--config PATH] [--json]`
   - Reads or updates the config-backed external-skills runtime policy with the same policy fields exposed by `external_skills.policy`.
+  - Mutating `set` and `reset` calls require `--approve-policy-update`.
 
 Recommended runtime flow:
 

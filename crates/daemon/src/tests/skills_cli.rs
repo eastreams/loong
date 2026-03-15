@@ -162,6 +162,26 @@ fn execute_skills_command_installs_lists_inspects_and_removes_skill() {
         "resolved config path should be returned for CLI rendering"
     );
     assert_eq!(install.outcome.payload["skill_id"], "demo-skill");
+    assert_eq!(install.outcome.payload["display_name"], "Demo Skill");
+    assert_eq!(install.outcome.payload["replaced"], false);
+
+    let replace_install =
+        crate::skills_cli::execute_skills_command(crate::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: crate::skills_cli::SkillsCommands::Install {
+                path: "source/demo-skill".to_owned(),
+                skill_id: None,
+                replace: true,
+            },
+        })
+        .expect("skills replace should succeed");
+    assert_eq!(replace_install.outcome.payload["skill_id"], "demo-skill");
+    assert_eq!(
+        replace_install.outcome.payload["display_name"],
+        "Demo Skill"
+    );
+    assert_eq!(replace_install.outcome.payload["replaced"], true);
 
     let list = crate::skills_cli::execute_skills_command(crate::skills_cli::SkillsCommandOptions {
         config: Some(config_path.display().to_string()),
