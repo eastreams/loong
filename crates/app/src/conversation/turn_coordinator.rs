@@ -5007,14 +5007,11 @@ async fn execute_single_tool_intent(
         .await
     {
         TurnResult::FinalText(output) => Ok(output),
-        TurnResult::NeedsApproval(failure) | TurnResult::ToolDenied(failure) => {
-            Err(PlanNodeError::policy_denied(failure.reason))
-        }
+        TurnResult::ToolDenied(failure) => Err(PlanNodeError::policy_denied(failure.reason)),
         TurnResult::ToolError(failure) => Err(PlanNodeError {
             kind: match failure.kind {
                 TurnFailureKind::Retryable => PlanNodeErrorKind::Retryable,
-                TurnFailureKind::ApprovalRequired
-                | TurnFailureKind::PolicyDenied
+                TurnFailureKind::PolicyDenied
                 | TurnFailureKind::NonRetryable
                 | TurnFailureKind::Provider => PlanNodeErrorKind::NonRetryable,
             },

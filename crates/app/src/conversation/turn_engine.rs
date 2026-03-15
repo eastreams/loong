@@ -519,7 +519,7 @@ impl TurnEngine {
     /// 2. Too many intents → `ToolDenied("max_tool_steps_exceeded")`
     /// 3. Unknown tool → `ToolDenied("tool_not_found: ...")`
     /// 4. No kernel context → `ToolDenied("no_kernel_context")`
-    /// 5. Policy/capability check via kernel → `NeedsApproval` or `ToolDenied`
+    /// 5. Policy/capability check via kernel → `ToolDenied`
     /// 6. Execute tool → map result to `TurnResult`
     pub async fn execute_turn(
         &self,

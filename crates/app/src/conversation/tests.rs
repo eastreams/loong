@@ -5534,7 +5534,6 @@ fn turn_engine_denies_known_tool_outside_restricted_view() {
             );
         }
         other @ TurnResult::FinalText(_)
-        | other @ TurnResult::NeedsApproval(_)
         | other @ TurnResult::ToolError(_)
         | other @ TurnResult::ProviderError(_) => {
             panic!("expected ToolDenied, got {:?}", other)
@@ -5614,8 +5613,7 @@ async fn turn_engine_routes_app_tools_through_dispatcher() {
                 "expected dispatcher payload in output, got: {text}"
             );
         }
-        other @ TurnResult::NeedsApproval(_)
-        | other @ TurnResult::ToolDenied(_)
+        other @ TurnResult::ToolDenied(_)
         | other @ TurnResult::ToolError(_)
         | other @ TurnResult::ProviderError(_) => {
             panic!("expected FinalText, got: {other:?}")
