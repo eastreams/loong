@@ -60,6 +60,51 @@ struct FakeRuntime {
     compact_calls: Mutex<Vec<(String, usize)>>,
 }
 
+struct TraitDefaultToolViewRuntime;
+
+#[async_trait]
+impl ConversationRuntime for TraitDefaultToolViewRuntime {
+    async fn build_messages(
+        &self,
+        _config: &LoongClawConfig,
+        _session_id: &str,
+        _include_system_prompt: bool,
+        _tool_view: &crate::tools::ToolView,
+        _binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<Vec<Value>> {
+        Ok(Vec::new())
+    }
+
+    async fn request_completion(
+        &self,
+        _config: &LoongClawConfig,
+        _messages: &[Value],
+        _binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<String> {
+        Err("trait default tool view test should not request a completion".to_owned())
+    }
+
+    async fn request_turn(
+        &self,
+        _config: &LoongClawConfig,
+        _messages: &[Value],
+        _tool_view: &crate::tools::ToolView,
+        _binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<ProviderTurn> {
+        Err("trait default tool view test should not request a provider turn".to_owned())
+    }
+
+    async fn persist_turn(
+        &self,
+        _session_id: &str,
+        _role: &str,
+        _content: &str,
+        _binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<()> {
+        Ok(())
+    }
+}
+
 #[cfg(feature = "memory-sqlite")]
 #[derive(Default)]
 struct FakeAsyncDelegateSpawner {
@@ -1616,6 +1661,32 @@ async fn default_runtime_prefers_env_context_engine_over_config() {
 
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0]["content"], "stub-env-context-engine");
+}
+
+#[cfg(feature = "feishu-integration")]
+#[test]
+fn conversation_runtime_trait_default_tool_view_includes_runtime_discovered_feishu_tools() {
+    let runtime = TraitDefaultToolViewRuntime;
+    let config = LoongClawConfig {
+        feishu: crate::config::FeishuChannelConfig {
+            enabled: true,
+            app_id: Some("test-feishu-app-id".to_owned()),
+            app_secret: Some("test-feishu-app-secret".to_owned()),
+            ..crate::config::FeishuChannelConfig::default()
+        },
+        ..test_config()
+    };
+
+    let tool_view = runtime
+        .tool_view(
+            &config,
+            "session-feishu-runtime-tools",
+            ConversationRuntimeBinding::direct(),
+        )
+        .expect("trait default tool view");
+
+    assert!(tool_view.contains("feishu.whoami"));
+    assert!(tool_view.contains("feishu.messages.send"));
 }
 
 #[tokio::test]
@@ -11387,8 +11458,7 @@ async fn handle_turn_with_runtime_executes_session_wait_via_default_dispatcher()
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
-async fn handle_turn_with_runtime_safe_lane_executes_session_tools_via_default_dispatcher_when_kernel_bound()
- {
+async fn handle_turn_with_runtime_safe_lane_executes_session_tools_via_default_dispatcher() {
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-session-tools", "safe-lane")
@@ -11435,7 +11505,6 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_tools_via_default_d
         Ok("unused".to_owned()),
     );
     let coordinator = ConversationTurnCoordinator::new();
-    let (kernel_ctx, _invocations) = build_kernel_context(Arc::new(InMemoryAuditSink::default()));
 
     let reply = coordinator
         .handle_turn_with_runtime(
@@ -11444,7 +11513,7 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_tools_via_default_d
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("safe-lane handle turn success");
@@ -11461,8 +11530,7 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_tools_via_default_d
 
 #[cfg(all(feature = "memory-sqlite", feature = "channel-telegram"))]
 #[tokio::test]
-async fn handle_turn_with_runtime_safe_lane_executes_sessions_send_via_default_dispatcher_when_kernel_bound()
- {
+async fn handle_turn_with_runtime_safe_lane_executes_sessions_send_via_default_dispatcher() {
     let (base_url, request_rx, server) = spawn_telegram_send_server_once();
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
@@ -11520,7 +11588,6 @@ async fn handle_turn_with_runtime_safe_lane_executes_sessions_send_via_default_d
         Ok("unused".to_owned()),
     );
     let coordinator = ConversationTurnCoordinator::new();
-    let (kernel_ctx, _invocations) = build_kernel_context(Arc::new(InMemoryAuditSink::default()));
 
     let reply = coordinator
         .handle_turn_with_runtime(
@@ -11529,7 +11596,7 @@ async fn handle_turn_with_runtime_safe_lane_executes_sessions_send_via_default_d
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("safe-lane handle turn success");
@@ -11562,8 +11629,7 @@ async fn handle_turn_with_runtime_safe_lane_executes_sessions_send_via_default_d
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
-async fn handle_turn_with_runtime_safe_lane_executes_session_wait_via_default_dispatcher_when_kernel_bound()
- {
+async fn handle_turn_with_runtime_safe_lane_executes_session_wait_via_default_dispatcher() {
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-session-wait", "safe-lane")
@@ -11622,7 +11688,6 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_wait_via_default_di
         Ok("unused".to_owned()),
     );
     let coordinator = ConversationTurnCoordinator::new();
-    let (kernel_ctx, _invocations) = build_kernel_context(Arc::new(InMemoryAuditSink::default()));
 
     let reply = coordinator
         .handle_turn_with_runtime(
@@ -11631,7 +11696,7 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_wait_via_default_di
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("safe-lane handle turn success");

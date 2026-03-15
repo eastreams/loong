@@ -1,7 +1,5 @@
 # Conversation Runtime Binding Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
 **Goal:** Replace raw optional kernel context propagation at conversation/runtime boundaries with an explicit conversation runtime binding type while preserving current behavior.
 
 **Architecture:** Add a conversation-scoped binding enum that explicitly represents kernel-bound versus direct-fallback execution. Thread that type through the conversation runtime, context assembly, persistence helpers, turn loop, turn coordinator, and app-tool dispatcher boundaries, while keeping lower-level provider helpers behaviorally unchanged by converting the binding to an optional kernel reference only at the leaf.

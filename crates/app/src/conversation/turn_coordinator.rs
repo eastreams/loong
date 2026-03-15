@@ -4378,14 +4378,11 @@ async fn evaluate_safe_lane_round(
         state.tool_node_max_attempts(),
         state.plan_start_tool_index,
     );
-    let Some(kernel_ctx) = binding.kernel_context() else {
-        return synthetic_safe_lane_round_without_kernel(&plan);
-    };
     let executor = SafeLanePlanNodeExecutor::new(
         turn.tool_intents.as_slice(),
         session_context,
         app_dispatcher,
-        Some(kernel_ctx),
+        binding.kernel_context(),
         ingress,
         config.conversation.safe_lane_verify_output_non_empty,
         state.seed_tool_outputs.clone(),
@@ -4401,39 +4398,6 @@ async fn evaluate_safe_lane_round(
         report,
         tool_outputs,
         tool_output_stats,
-    }
-}
-
-fn synthetic_safe_lane_round_without_kernel(plan: &PlanGraph) -> SafeLaneRoundExecution {
-    let ordered_nodes = plan
-        .nodes
-        .iter()
-        .map(|node| node.id.clone())
-        .collect::<Vec<_>>();
-    let failed_node_id = plan
-        .nodes
-        .iter()
-        .find(|node| matches!(node.kind, PlanNodeKind::Tool))
-        .or_else(|| plan.nodes.first())
-        .map(|node| node.id.clone())
-        .unwrap_or_else(|| "tool-1".to_owned());
-    let failure = PlanRunFailure::NodeFailed {
-        node_id: failed_node_id,
-        attempts_used: 1,
-        last_error_kind: PlanNodeErrorKind::PolicyDenied,
-        last_error: "no_kernel_context".to_owned(),
-    };
-
-    SafeLaneRoundExecution {
-        report: PlanRunReport {
-            status: PlanRunStatus::Failed(failure),
-            ordered_nodes,
-            attempts_used: 1,
-            attempt_events: Vec::new(),
-            elapsed_ms: 0,
-        },
-        tool_outputs: Vec::new(),
-        tool_output_stats: summarize_safe_lane_tool_output_stats(&[]),
     }
 }
 

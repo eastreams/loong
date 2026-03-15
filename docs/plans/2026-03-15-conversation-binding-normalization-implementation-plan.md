@@ -1,7 +1,5 @@
 # Conversation Binding Normalization Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
 **Goal:** Complete conversation-layer runtime binding normalization so the remaining conversation entrypoints and history helpers use `ConversationRuntimeBinding` instead of raw optional kernel context.
 
 **Architecture:** Keep the scope inside the conversation module. Move the remaining `turn_loop`, `turn_coordinator`, `session_history`, and shared followup-helper seams onto `ConversationRuntimeBinding`, and only convert back to `Option<&KernelContext>` at lower-level leaf helpers that have not been normalized yet.

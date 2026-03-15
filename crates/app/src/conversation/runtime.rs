@@ -9,7 +9,7 @@ use crate::CliResult;
 use crate::KernelContext;
 use crate::tools::{
     ToolView, delegate_child_tool_view_for_config,
-    delegate_child_tool_view_for_config_with_delegate, runtime_tool_view_for_config,
+    delegate_child_tool_view_for_config_with_delegate,
 };
 
 use super::super::memory;
@@ -291,7 +291,9 @@ pub trait ConversationRuntime: Send + Sync {
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ToolView> {
         let _ = (session_id, binding);
-        Ok(runtime_tool_view_for_config(&config.tools))
+        Ok(crate::tools::runtime_tool_view_from_loongclaw_config(
+            config,
+        ))
     }
 
     #[cfg(feature = "memory-sqlite")]

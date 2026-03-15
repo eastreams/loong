@@ -1,7 +1,5 @@
 # Provider Binding Normalization Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
 **Goal:** Replace the remaining raw optional-kernel provider request and
 failover seams with an explicit provider runtime binding while preserving direct
 provider execution and kernel-backed failover audit behavior.
@@ -32,8 +30,8 @@ instead of raw optional kernel context.
 **Step 2: Run test to verify it fails**
 
 Run:
-- `/Users/chum/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test -p loongclaw-app provider_failover_audit_event_records_structured_payload -- --test-threads=1`
-- `/Users/chum/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test -p loongclaw-app provider_failover_metrics_record_even_without_kernel_context -- --test-threads=1`
+- `cargo test -p loongclaw-app provider_failover_audit_event_records_structured_payload -- --test-threads=1`
+- `cargo test -p loongclaw-app provider_failover_metrics_record_even_without_kernel_context -- --test-threads=1`
 
 Expected: FAIL because provider APIs still accept `Option<&KernelContext>`.
 
@@ -63,9 +61,9 @@ they use the explicit provider binding.
 **Step 2: Run test to verify it fails**
 
 Run:
-- `/Users/chum/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test -p loongclaw-app responses_completion_falls_back_to_chat_completions_for_compatible_endpoints -- --test-threads=1`
-- `/Users/chum/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test -p loongclaw-app responses_turn_falls_back_to_chat_completions_for_compatible_endpoints -- --test-threads=1`
-- `/Users/chum/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test -p loongclaw-app provider_failover_metrics_track_continue_path -- --test-threads=1`
+- `cargo test -p loongclaw-app responses_completion_falls_back_to_chat_completions_for_compatible_endpoints -- --test-threads=1`
+- `cargo test -p loongclaw-app responses_turn_falls_back_to_chat_completions_for_compatible_endpoints -- --test-threads=1`
+- `cargo test -p loongclaw-app provider_failover_metrics_track_continue_path -- --test-threads=1`
 
 Expected: FAIL until the provider request/failover signatures accept
 `ProviderRuntimeBinding`.
@@ -95,7 +93,7 @@ and kernel-bound provider calls through the existing binding-based runtime path.
 **Step 2: Run test to verify it fails**
 
 Run:
-- `/Users/chum/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test -p loongclaw-app conversation_runtime_binding_direct_reports_no_kernel_context -- --test-threads=1`
+- `cargo test -p loongclaw-app conversation_runtime_binding_direct_reports_no_kernel_context -- --test-threads=1`
 
 Expected: FAIL only if a new translation helper/test is introduced; otherwise
 this task is compile-time coverage plus targeted provider regression coverage.
@@ -127,20 +125,20 @@ still limited to explicit boundary wrappers such as channel entrypoints.
 **Step 2: Run targeted verification**
 
 Run:
-- `/Users/chum/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test -p loongclaw-app responses_completion_falls_back_to_chat_completions_for_compatible_endpoints -- --test-threads=1`
-- `/Users/chum/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test -p loongclaw-app responses_turn_falls_back_to_chat_completions_for_compatible_endpoints -- --test-threads=1`
-- `/Users/chum/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test -p loongclaw-app provider_failover_audit_event_records_structured_payload -- --test-threads=1`
-- `/Users/chum/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test -p loongclaw-app provider_failover_metrics_record_even_without_kernel_context -- --test-threads=1`
-- `/Users/chum/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test -p loongclaw-app provider_failover_metrics_track_continue_path -- --test-threads=1`
+- `cargo test -p loongclaw-app responses_completion_falls_back_to_chat_completions_for_compatible_endpoints -- --test-threads=1`
+- `cargo test -p loongclaw-app responses_turn_falls_back_to_chat_completions_for_compatible_endpoints -- --test-threads=1`
+- `cargo test -p loongclaw-app provider_failover_audit_event_records_structured_payload -- --test-threads=1`
+- `cargo test -p loongclaw-app provider_failover_metrics_record_even_without_kernel_context -- --test-threads=1`
+- `cargo test -p loongclaw-app provider_failover_metrics_track_continue_path -- --test-threads=1`
 
 Expected: PASS
 
 **Step 3: Run full verification**
 
 Run:
-- `/Users/chum/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo fmt --all -- --check`
-- `/Users/chum/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- `/Users/chum/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test --workspace --all-features -- --test-threads=1`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo test --workspace --all-features -- --test-threads=1`
 
 Expected: PASS
 
