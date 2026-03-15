@@ -1,6 +1,7 @@
 pub mod analytics;
 mod context_engine;
 mod context_engine_registry;
+mod ingress;
 mod lane_arbiter;
 mod persistence;
 pub mod plan_executor;
@@ -34,6 +35,11 @@ pub use context_engine_registry::{
     CONTEXT_ENGINE_ENV, DEFAULT_CONTEXT_ENGINE_ID, LEGACY_CONTEXT_ENGINE_ID,
     context_engine_id_from_env, describe_context_engine, list_context_engine_ids,
     list_context_engine_metadata, register_context_engine, resolve_context_engine,
+};
+pub use ingress::{
+    ConversationIngressChannel, ConversationIngressContext, ConversationIngressDelivery,
+    ConversationIngressDeliveryResource, ConversationIngressFeishuCallbackContext,
+    ConversationIngressPrivateContext,
 };
 pub use lane_arbiter::{ExecutionLane, LaneArbiterPolicy, LaneDecision};
 #[allow(unused_imports)]

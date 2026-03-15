@@ -328,7 +328,7 @@ async fn evaluate_round_kernel(
         Err(failure) => TurnResult::ToolDenied(failure),
         Ok(TurnValidation::ToolExecutionRequired) => {
             engine
-                .execute_turn_in_context(turn, session_context, app_dispatcher, kernel_ctx)
+                .execute_turn_in_context(turn, session_context, app_dispatcher, kernel_ctx, None)
                 .await
         }
     };
