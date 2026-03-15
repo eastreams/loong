@@ -2,12 +2,12 @@ use super::super::config::LoongClawConfig;
 use super::ProviderErrorMode;
 use super::persistence::format_provider_error_reply;
 use super::runtime::ConversationRuntime;
+use super::runtime_binding::ConversationRuntimeBinding;
 use super::turn_engine::{ApprovalRequirement, ApprovalRequirementKind, ProviderTurn, TurnResult};
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::CliResult;
-use crate::KernelContext;
 
 pub const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to answer the original user request in natural language. Do not include raw JSON, payload wrappers, or status markers unless the user explicitly asks for raw output.";
 pub const TOOL_TRUNCATION_HINT_PROMPT: &str = "One or more tool results were truncated for context safety. If exact missing details are needed, explicitly state the truncation and request a narrower rerun.";
@@ -542,13 +542,10 @@ pub async fn request_completion_with_raw_fallback<R: ConversationRuntime + ?Size
     runtime: &R,
     config: &LoongClawConfig,
     messages: &[Value],
-    kernel_ctx: Option<&KernelContext>,
+    binding: ConversationRuntimeBinding<'_>,
     raw_reply: &str,
 ) -> String {
-    match runtime
-        .request_completion(config, messages, kernel_ctx)
-        .await
-    {
+    match runtime.request_completion(config, messages, binding).await {
         Ok(final_reply) => {
             let trimmed = final_reply.trim();
             if trimmed.is_empty() {

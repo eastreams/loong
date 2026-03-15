@@ -1,8 +1,12 @@
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use super::shell_policy_ext::ShellPolicyDefault;
+use crate::config::LoongClawConfig;
+#[cfg(feature = "feishu-integration")]
+use crate::config::{FeishuChannelConfig, FeishuIntegrationConfig};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalSkillsRuntimePolicy {
@@ -71,6 +75,33 @@ impl Default for WebFetchRuntimePolicy {
     }
 }
 
+#[cfg(feature = "feishu-integration")]
+#[derive(Debug, Clone)]
+pub struct FeishuToolRuntimeConfig {
+    pub channel: FeishuChannelConfig,
+    pub integration: FeishuIntegrationConfig,
+}
+
+#[cfg(feature = "feishu-integration")]
+impl FeishuToolRuntimeConfig {
+    pub fn from_loongclaw_config(config: &LoongClawConfig) -> Option<Self> {
+        has_enabled_feishu_runtime_credentials(&config.feishu).then(|| Self {
+            channel: config.feishu.clone(),
+            integration: config.feishu_integration.clone(),
+        })
+    }
+
+    fn from_env() -> Option<Self> {
+        has_feishu_runtime_credentials(&FeishuChannelConfig::default()).then(|| Self {
+            channel: FeishuChannelConfig {
+                enabled: true,
+                ..FeishuChannelConfig::default()
+            },
+            integration: FeishuIntegrationConfig::default(),
+        })
+    }
+}
+
 /// Typed runtime configuration for tool executors.
 ///
 /// Replaces per-call `std::env::var` lookups with a single read from a
@@ -88,6 +119,8 @@ pub struct ToolRuntimeConfig {
     pub browser: BrowserRuntimePolicy,
     pub web_fetch: WebFetchRuntimePolicy,
     pub external_skills: ExternalSkillsRuntimePolicy,
+    #[cfg(feature = "feishu-integration")]
+    pub feishu: Option<FeishuToolRuntimeConfig>,
 }
 
 impl Default for ToolRuntimeConfig {
@@ -107,11 +140,79 @@ impl Default for ToolRuntimeConfig {
             browser: BrowserRuntimePolicy::default(),
             web_fetch: WebFetchRuntimePolicy::default(),
             external_skills: ExternalSkillsRuntimePolicy::default(),
+            #[cfg(feature = "feishu-integration")]
+            feishu: None,
         }
     }
 }
 
 impl ToolRuntimeConfig {
+    pub fn from_loongclaw_config(config: &LoongClawConfig, config_path: Option<&Path>) -> Self {
+        Self {
+            file_root: Some(config.tools.resolved_file_root()),
+            shell_allow: config
+                .tools
+                .shell_allow
+                .iter()
+                .map(|value| value.to_ascii_lowercase())
+                .collect(),
+            shell_deny: config
+                .tools
+                .shell_deny
+                .iter()
+                .map(|value| value.to_ascii_lowercase())
+                .collect(),
+            shell_default_mode: ShellPolicyDefault::parse(&config.tools.shell_default_mode),
+            config_path: config_path.map(Path::to_path_buf),
+            sessions_enabled: config.tools.sessions.enabled,
+            messages_enabled: config.tools.messages.enabled,
+            delegate_enabled: config.tools.delegate.enabled,
+            browser: BrowserRuntimePolicy {
+                enabled: config.tools.browser.enabled,
+                max_sessions: config.tools.browser.max_sessions,
+                max_links: config.tools.browser.max_links,
+                max_text_chars: config.tools.browser.max_text_chars,
+            },
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: config.tools.web.enabled,
+                allow_private_hosts: config.tools.web.allow_private_hosts,
+                allowed_domains: config
+                    .tools
+                    .web
+                    .normalized_allowed_domains()
+                    .into_iter()
+                    .collect(),
+                blocked_domains: config
+                    .tools
+                    .web
+                    .normalized_blocked_domains()
+                    .into_iter()
+                    .collect(),
+                timeout_seconds: config.tools.web.timeout_seconds,
+                max_bytes: config.tools.web.max_bytes,
+                max_redirects: config.tools.web.max_redirects,
+            },
+            external_skills: ExternalSkillsRuntimePolicy {
+                enabled: config.external_skills.enabled,
+                require_download_approval: config.external_skills.require_download_approval,
+                allowed_domains: config
+                    .external_skills
+                    .normalized_allowed_domains()
+                    .into_iter()
+                    .collect(),
+                blocked_domains: config
+                    .external_skills
+                    .normalized_blocked_domains()
+                    .into_iter()
+                    .collect(),
+                install_root: config.external_skills.resolved_install_root(),
+                auto_expose_installed: config.external_skills.auto_expose_installed,
+            },
+            #[cfg(feature = "feishu-integration")]
+            feishu: FeishuToolRuntimeConfig::from_loongclaw_config(config),
+        }
+    }
+
     /// Build a config by reading the legacy environment variables.
     ///
     /// Keeps full backward compatibility for callers that still rely on
@@ -176,16 +277,25 @@ impl ToolRuntimeConfig {
                 max_bytes: web_fetch_max_bytes,
                 max_redirects: web_fetch_max_redirects,
             },
-            external_skills: ExternalSkillsRuntimePolicy {
-                enabled,
-                require_download_approval,
-                allowed_domains,
-                blocked_domains,
-                install_root,
-                auto_expose_installed,
-            },
             ..Self::default()
         }
+        .with_external_skills_policy(ExternalSkillsRuntimePolicy {
+            enabled,
+            require_download_approval,
+            allowed_domains,
+            blocked_domains,
+            install_root,
+            auto_expose_installed,
+        })
+    }
+
+    fn with_external_skills_policy(mut self, external_skills: ExternalSkillsRuntimePolicy) -> Self {
+        self.external_skills = external_skills;
+        #[cfg(feature = "feishu-integration")]
+        {
+            self.feishu = FeishuToolRuntimeConfig::from_env();
+        }
+        self
     }
 }
 
@@ -223,6 +333,66 @@ fn parse_env_domain_list(key: &str) -> BTreeSet<String> {
         .collect()
 }
 
+#[cfg(feature = "feishu-integration")]
+fn has_enabled_feishu_runtime_credentials(config: &FeishuChannelConfig) -> bool {
+    if !config.enabled {
+        return false;
+    }
+
+    has_secret_binding(config.app_id.as_deref(), config.app_id_env.as_deref())
+        && has_secret_binding(
+            config.app_secret.as_deref(),
+            config.app_secret_env.as_deref(),
+        )
+        || config
+            .accounts
+            .values()
+            .any(account_has_enabled_feishu_runtime_credentials)
+}
+
+#[cfg(feature = "feishu-integration")]
+fn has_feishu_runtime_credentials(config: &FeishuChannelConfig) -> bool {
+    has_secret_binding(config.app_id.as_deref(), config.app_id_env.as_deref())
+        && has_secret_binding(
+            config.app_secret.as_deref(),
+            config.app_secret_env.as_deref(),
+        )
+        || config
+            .accounts
+            .values()
+            .any(account_has_feishu_runtime_credentials)
+}
+
+#[cfg(feature = "feishu-integration")]
+fn account_has_enabled_feishu_runtime_credentials(
+    account: &crate::config::FeishuAccountConfig,
+) -> bool {
+    account.enabled.unwrap_or(true) && account_has_feishu_runtime_credentials(account)
+}
+
+#[cfg(feature = "feishu-integration")]
+fn account_has_feishu_runtime_credentials(account: &crate::config::FeishuAccountConfig) -> bool {
+    has_secret_binding(account.app_id.as_deref(), account.app_id_env.as_deref())
+        && has_secret_binding(
+            account.app_secret.as_deref(),
+            account.app_secret_env.as_deref(),
+        )
+}
+
+#[cfg(feature = "feishu-integration")]
+fn has_secret_binding(inline: Option<&str>, env_name: Option<&str>) -> bool {
+    inline
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+        || env_name
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .and_then(|name| std::env::var(name).ok())
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+}
+
 static TOOL_RUNTIME_CONFIG: OnceLock<ToolRuntimeConfig> = OnceLock::new();
 
 /// Initialise the process-wide tool runtime config.
@@ -247,6 +417,8 @@ pub fn get_tool_runtime_config() -> &'static ToolRuntimeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "feishu-integration")]
+    use std::collections::BTreeMap;
 
     #[test]
     fn tool_runtime_config_from_env_defaults() {
@@ -560,5 +732,77 @@ mod tests {
         assert_eq!(policy.timeout_seconds, 9);
         assert_eq!(policy.max_bytes, 262_144);
         assert_eq!(policy.max_redirects, 1);
+    }
+
+    #[cfg(feature = "feishu-integration")]
+    #[test]
+    fn from_env_enables_feishu_runtime_when_credentials_exist() {
+        crate::process_env::set_var("FEISHU_APP_ID", "cli_env_a1b2c3");
+        crate::process_env::set_var("FEISHU_APP_SECRET", "env-secret");
+
+        let config = ToolRuntimeConfig::from_env();
+        let feishu = config
+            .feishu
+            .as_ref()
+            .expect("feishu runtime should be enabled from env");
+
+        assert!(feishu.channel.enabled);
+        assert_eq!(feishu.channel.app_id_env.as_deref(), Some("FEISHU_APP_ID"));
+        assert_eq!(
+            feishu.channel.app_secret_env.as_deref(),
+            Some("FEISHU_APP_SECRET")
+        );
+        assert_eq!(
+            feishu.integration.resolved_sqlite_path(),
+            crate::config::default_loongclaw_home().join("feishu.sqlite3")
+        );
+
+        crate::process_env::remove_var("FEISHU_APP_ID");
+        crate::process_env::remove_var("FEISHU_APP_SECRET");
+    }
+
+    #[cfg(feature = "feishu-integration")]
+    #[test]
+    fn from_loongclaw_config_ignores_disabled_feishu_channel_even_when_root_credentials_exist() {
+        let config = crate::config::LoongClawConfig {
+            feishu: crate::config::FeishuChannelConfig {
+                enabled: false,
+                app_id: Some("cli_disabled_root".to_owned()),
+                app_secret: Some("disabled-root-secret".to_owned()),
+                ..crate::config::FeishuChannelConfig::default()
+            },
+            ..crate::config::LoongClawConfig::default()
+        };
+
+        assert!(
+            FeishuToolRuntimeConfig::from_loongclaw_config(&config).is_none(),
+            "disabled Feishu channel should not expose Feishu tools through runtime config"
+        );
+    }
+
+    #[cfg(feature = "feishu-integration")]
+    #[test]
+    fn from_loongclaw_config_ignores_disabled_feishu_accounts_when_detecting_runtime() {
+        let config = crate::config::LoongClawConfig {
+            feishu: crate::config::FeishuChannelConfig {
+                enabled: true,
+                accounts: BTreeMap::from([(
+                    "disabled_account".to_owned(),
+                    crate::config::FeishuAccountConfig {
+                        enabled: Some(false),
+                        app_id: Some("cli_disabled_account".to_owned()),
+                        app_secret: Some("disabled-account-secret".to_owned()),
+                        ..crate::config::FeishuAccountConfig::default()
+                    },
+                )]),
+                ..crate::config::FeishuChannelConfig::default()
+            },
+            ..crate::config::LoongClawConfig::default()
+        };
+
+        assert!(
+            FeishuToolRuntimeConfig::from_loongclaw_config(&config).is_none(),
+            "disabled Feishu accounts should not enable Feishu tool runtime on their own"
+        );
     }
 }

@@ -7,7 +7,6 @@ use loongclaw_contracts::{Capability, MemoryCoreRequest};
 use serde_json::{Value, json};
 
 use crate::CliResult;
-use crate::KernelContext;
 #[cfg(feature = "memory-sqlite")]
 use crate::memory;
 #[cfg(feature = "memory-sqlite")]
@@ -17,6 +16,7 @@ use super::analytics::{
     SafeLaneEventSummary, TurnCheckpointEventSummary, summarize_safe_lane_events,
     summarize_turn_checkpoint_history,
 };
+use super::runtime_binding::ConversationRuntimeBinding;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TurnCheckpointLatestEntry {
@@ -63,13 +63,13 @@ impl TurnCheckpointHistorySnapshot {
 pub async fn load_turn_checkpoint_event_summary(
     session_id: &str,
     limit: usize,
-    kernel_ctx: Option<&KernelContext>,
+    binding: ConversationRuntimeBinding<'_>,
     #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
 ) -> CliResult<TurnCheckpointEventSummary> {
     #[cfg(feature = "memory-sqlite")]
     {
         Ok(
-            load_turn_checkpoint_history_snapshot(session_id, limit, kernel_ctx, memory_config)
+            load_turn_checkpoint_history_snapshot(session_id, limit, binding, memory_config)
                 .await?
                 .into_summary(),
         )
@@ -77,7 +77,7 @@ pub async fn load_turn_checkpoint_event_summary(
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let _ = (session_id, limit, kernel_ctx);
+        let _ = (session_id, limit, binding);
         Err("turn checkpoint summary unavailable: memory-sqlite feature disabled".to_owned())
     }
 }
@@ -85,18 +85,14 @@ pub async fn load_turn_checkpoint_event_summary(
 pub async fn load_safe_lane_event_summary(
     session_id: &str,
     limit: usize,
-    kernel_ctx: Option<&KernelContext>,
+    binding: ConversationRuntimeBinding<'_>,
     #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
 ) -> CliResult<SafeLaneEventSummary> {
     #[cfg(feature = "memory-sqlite")]
     {
-        let assistant_contents = load_assistant_contents_from_session_window(
-            session_id,
-            limit,
-            kernel_ctx,
-            memory_config,
-        )
-        .await?;
+        let assistant_contents =
+            load_assistant_contents_from_session_window(session_id, limit, binding, memory_config)
+                .await?;
         Ok(summarize_safe_lane_events(
             assistant_contents.iter().map(String::as_str),
         ))
@@ -104,7 +100,7 @@ pub async fn load_safe_lane_event_summary(
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let _ = (session_id, limit, kernel_ctx);
+        let _ = (session_id, limit, binding);
         Err("safe-lane summary unavailable: memory-sqlite feature disabled".to_owned())
     }
 }
@@ -112,13 +108,13 @@ pub async fn load_safe_lane_event_summary(
 pub(crate) async fn load_latest_turn_checkpoint_entry(
     session_id: &str,
     limit: usize,
-    kernel_ctx: Option<&KernelContext>,
+    binding: ConversationRuntimeBinding<'_>,
     #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
 ) -> CliResult<Option<TurnCheckpointLatestEntry>> {
     #[cfg(feature = "memory-sqlite")]
     {
         Ok(
-            load_turn_checkpoint_history_snapshot(session_id, limit, kernel_ctx, memory_config)
+            load_turn_checkpoint_history_snapshot(session_id, limit, binding, memory_config)
                 .await?
                 .into_latest_entry(),
         )
@@ -126,7 +122,7 @@ pub(crate) async fn load_latest_turn_checkpoint_entry(
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let _ = (session_id, limit, kernel_ctx);
+        let _ = (session_id, limit, binding);
         Err("turn checkpoint entry unavailable: memory-sqlite feature disabled".to_owned())
     }
 }
@@ -135,11 +131,11 @@ pub(crate) async fn load_latest_turn_checkpoint_entry(
 pub(crate) async fn load_turn_checkpoint_history_snapshot(
     session_id: &str,
     limit: usize,
-    kernel_ctx: Option<&KernelContext>,
+    binding: ConversationRuntimeBinding<'_>,
     memory_config: &MemoryRuntimeConfig,
 ) -> CliResult<TurnCheckpointHistorySnapshot> {
     let assistant_contents =
-        load_assistant_contents_from_session_window(session_id, limit, kernel_ctx, memory_config)
+        load_assistant_contents_from_session_window(session_id, limit, binding, memory_config)
             .await?;
     Ok(build_turn_checkpoint_history_snapshot(&assistant_contents))
 }
@@ -148,10 +144,10 @@ pub(crate) async fn load_turn_checkpoint_history_snapshot(
 pub(crate) async fn load_assistant_contents_from_session_window(
     session_id: &str,
     limit: usize,
-    kernel_ctx: Option<&KernelContext>,
+    binding: ConversationRuntimeBinding<'_>,
     memory_config: &MemoryRuntimeConfig,
 ) -> CliResult<Vec<String>> {
-    if let Some(ctx) = kernel_ctx {
+    if let Some(ctx) = binding.kernel_context() {
         let request = MemoryCoreRequest {
             operation: memory::MEMORY_OP_WINDOW.to_owned(),
             payload: json!({

@@ -38,7 +38,8 @@ use loongclaw_bench::{
     run_programmatic_pressure_benchmark_cli, run_wasm_cache_benchmark_cli,
 };
 mod doctor_cli;
-#[cfg(test)]
+mod feishu_cli;
+mod feishu_support;
 mod import_claw_cli;
 mod import_cli;
 mod migration;
@@ -46,6 +47,7 @@ mod next_actions;
 mod onboard_cli;
 mod onboard_presentation;
 mod provider_presentation;
+mod skills_cli;
 mod source_presentation;
 #[cfg(test)]
 pub(crate) use loongclaw_spec::programmatic::{
@@ -331,6 +333,15 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         skip_model_probe: bool,
     },
+    /// Manage installed external skills through an operator-facing CLI surface
+    Skills {
+        #[arg(long, global = true)]
+        config: Option<String>,
+        #[arg(long, global = true, default_value_t = false)]
+        json: bool,
+        #[command(subcommand)]
+        command: skills_cli::SkillsCommands,
+    },
     /// List compiled channel surfaces, aliases, and readiness status
     Channels {
         #[arg(long)]
@@ -508,6 +519,8 @@ enum Commands {
         config: Option<String>,
         #[arg(long)]
         account: Option<String>,
+        #[arg(long)]
+        receive_id_type: Option<String>,
         #[arg(long = "target", visible_alias = "receive-id")]
         target: String,
         #[arg(
@@ -517,9 +530,23 @@ enum Commands {
         )]
         target_kind: mvp::channel::ChannelOutboundTargetKind,
         #[arg(long)]
-        text: String,
+        text: Option<String>,
+        #[arg(long = "post-json")]
+        post_json: Option<String>,
+        #[arg(long)]
+        image_key: Option<String>,
+        #[arg(long)]
+        file_key: Option<String>,
+        #[arg(long)]
+        image_path: Option<String>,
+        #[arg(long)]
+        file_path: Option<String>,
+        #[arg(long)]
+        file_type: Option<String>,
         #[arg(long, default_value_t = false)]
         card: bool,
+        #[arg(long)]
+        uuid: Option<String>,
     },
     /// Run Feishu event callback server and auto-reply via provider
     FeishuServe {
@@ -531,6 +558,11 @@ enum Commands {
         bind: Option<String>,
         #[arg(long)]
         path: Option<String>,
+    },
+    /// Run the Feishu integration namespace
+    Feishu {
+        #[command(subcommand)]
+        command: feishu_cli::FeishuCommand,
     },
 }
 
@@ -704,6 +736,15 @@ async fn main() {
             })
             .await
         }
+        Commands::Skills {
+            config,
+            json,
+            command,
+        } => skills_cli::run_skills_cli(skills_cli::SkillsCommandOptions {
+            config,
+            json,
+            command,
+        }),
         Commands::Channels { config, json } => run_channels_cli(config.as_deref(), json),
         Commands::ListModels { config, json } => run_list_models_cli(config.as_deref(), json).await,
         Commands::ListContextEngines { config, json } => {
@@ -849,23 +890,43 @@ async fn main() {
         Commands::FeishuSend {
             config,
             account,
+            receive_id_type,
             target,
             target_kind,
             text,
+            post_json,
+            image_key,
+            file_key,
+            image_path,
+            file_path,
+            file_type,
             card,
+            uuid,
         } => {
-            run_channel_send_cli(
-                FEISHU_SEND_CLI_SPEC,
-                ChannelSendCliArgs {
-                    config_path: config.as_deref(),
-                    account: account.as_deref(),
-                    target: &target,
-                    target_kind,
-                    text: &text,
-                    as_card: card,
-                },
-            )
-            .await
+            if target_kind == mvp::channel::ChannelOutboundTargetKind::MessageReply {
+                Err(
+                    "legacy `feishu-send` no longer supports `message_reply` execution; use `loongclaw feishu reply` for reply targets".to_owned(),
+                )
+            } else {
+                mvp::channel::run_feishu_send(
+                    config.as_deref(),
+                    account.as_deref(),
+                    &mvp::channel::FeishuChannelSendRequest {
+                        receive_id: target,
+                        receive_id_type,
+                        text,
+                        post_json,
+                        image_key,
+                        file_key,
+                        image_path,
+                        file_path,
+                        file_type,
+                        card,
+                        uuid,
+                    },
+                )
+                .await
+            }
         }
         Commands::FeishuServe {
             config,
@@ -885,6 +946,7 @@ async fn main() {
             )
             .await
         }
+        Commands::Feishu { command } => feishu_cli::run_feishu_command(command).await,
     };
     if let Err(error) = result {
         // startup error reporting
@@ -2363,10 +2425,19 @@ fn run_feishu_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFu
         mvp::channel::run_feishu_send(
             args.config_path,
             args.account,
-            args.target,
-            args.target_kind,
-            args.text,
-            args.as_card,
+            &mvp::channel::FeishuChannelSendRequest {
+                receive_id: args.target.to_owned(),
+                receive_id_type: Some(args.target_kind.as_str().to_owned()),
+                text: Some(args.text.to_owned()),
+                post_json: None,
+                image_key: None,
+                file_key: None,
+                image_path: None,
+                file_path: None,
+                file_type: None,
+                card: args.as_card,
+                uuid: None,
+            },
         )
         .await
     })
@@ -3242,7 +3313,7 @@ mod cli_tests {
                     target_kind,
                     mvp::channel::ChannelOutboundTargetKind::MessageReply
                 );
-                assert_eq!(text, "hello");
+                assert_eq!(text.as_deref(), Some("hello"));
             }
             other => panic!("unexpected command parse result: {other:?}"),
         }
@@ -3272,7 +3343,7 @@ mod cli_tests {
                     target_kind,
                     mvp::channel::ChannelOutboundTargetKind::ReceiveId
                 );
-                assert_eq!(text, "hello");
+                assert_eq!(text.as_deref(), Some("hello"));
             }
             other => panic!("unexpected command parse result: {other:?}"),
         }

@@ -4,6 +4,8 @@ pub mod chat;
 pub mod config;
 pub mod context;
 pub mod conversation;
+#[cfg(feature = "feishu-integration")]
+pub mod feishu;
 pub mod memory;
 pub mod migration;
 pub mod presentation;

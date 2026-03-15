@@ -4,9 +4,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use loongclaw_contracts::{
-    Capability, KernelError, ToolCoreOutcome, ToolCoreRequest, ToolPlaneError,
-};
+use loongclaw_contracts::{KernelError, ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -25,6 +23,9 @@ use crate::tools::{
 };
 
 use super::runtime::SessionContext;
+use super::runtime_binding::ConversationRuntimeBinding;
+
+use super::ingress::{ConversationIngressContext, inject_internal_tool_ingress};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderTurn {
@@ -261,7 +262,7 @@ pub trait AppToolDispatcher: Send + Sync {
         &self,
         session_context: &SessionContext,
         request: ToolCoreRequest,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolCoreOutcome, String>;
 }
 
@@ -273,7 +274,7 @@ impl AppToolDispatcher for NoopAppToolDispatcher {
         &self,
         _session_context: &SessionContext,
         request: ToolCoreRequest,
-        _kernel_ctx: Option<&KernelContext>,
+        _binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolCoreOutcome, String> {
         Err(format!("app_tool_not_implemented: {}", request.tool_name))
     }
@@ -557,7 +558,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
         &self,
         session_context: &SessionContext,
         request: ToolCoreRequest,
-        _kernel_ctx: Option<&KernelContext>,
+        _binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolCoreOutcome, String> {
         let canonical_tool_name = crate::tools::canonical_tool_name(request.tool_name.as_str());
         let effective_tool_view = self.effective_tool_view_for_session(session_context)?;
@@ -595,28 +596,11 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
 }
 
 pub(crate) async fn execute_tool_intent_via_kernel(
-    intent: &ToolIntent,
+    request: ToolCoreRequest,
     kernel_ctx: &KernelContext,
+    trusted_internal_context: bool,
 ) -> Result<ToolCoreOutcome, TurnFailure> {
-    let canonical_tool_name = crate::tools::canonical_tool_name(intent.tool_name.as_str());
-    let request = ToolCoreRequest {
-        tool_name: canonical_tool_name.to_owned(),
-        payload: augment_tool_payload_for_kernel(
-            canonical_tool_name,
-            intent.args_json.clone(),
-            intent.session_id.as_str(),
-        ),
-    };
-    let caps = BTreeSet::from([Capability::InvokeTool]);
-    kernel_ctx
-        .kernel
-        .execute_tool_core(
-            kernel_ctx.pack_id(),
-            &kernel_ctx.token,
-            &caps,
-            None,
-            request,
-        )
+    crate::tools::execute_kernel_tool_request(kernel_ctx, request, trusted_internal_context)
         .await
         .map_err(|error| {
             let reason = format!("{error}");
@@ -826,13 +810,16 @@ impl TurnEngine {
             ));
         }
 
-        let catalog = tool_catalog();
         for intent in &turn.tool_intents {
-            let Some(descriptor) = catalog.resolve(&intent.tool_name) else {
+            let Some(resolved_tool) = crate::tools::resolve_tool_execution(&intent.tool_name)
+            else {
                 let reason = format!("tool_not_found: {}", intent.tool_name);
                 return Err(TurnFailure::policy_denied("tool_not_found", reason));
             };
-            if !session_context.tool_view.contains(descriptor.name) {
+            if !session_context
+                .tool_view
+                .contains(resolved_tool.canonical_name)
+            {
                 let reason = format!("tool_not_visible: {}", intent.tool_name);
                 return Err(TurnFailure::policy_denied("tool_not_visible", reason));
             }
@@ -854,21 +841,42 @@ impl TurnEngine {
         turn: &ProviderTurn,
         kernel_ctx: &KernelContext,
     ) -> TurnResult {
-        self.execute_turn_in_view(turn, &runtime_tool_view(), Some(kernel_ctx))
-            .await
+        self.execute_turn_in_view(
+            turn,
+            &runtime_tool_view(),
+            ConversationRuntimeBinding::kernel(kernel_ctx),
+        )
+        .await
     }
 
     pub async fn execute_turn_in_view(
         &self,
         turn: &ProviderTurn,
         tool_view: &ToolView,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> TurnResult {
         self.execute_turn_in_context(
             turn,
             &session_context_from_turn(turn, tool_view.clone()),
             &DefaultAppToolDispatcher::runtime(),
-            kernel_ctx,
+            binding,
+            None,
+        )
+        .await
+    }
+
+    pub async fn execute_turn_with_ingress(
+        &self,
+        turn: &ProviderTurn,
+        binding: ConversationRuntimeBinding<'_>,
+        ingress: Option<&ConversationIngressContext>,
+    ) -> TurnResult {
+        self.execute_turn_in_context(
+            turn,
+            &session_context_from_turn(turn, runtime_tool_view()),
+            &DefaultAppToolDispatcher::runtime(),
+            binding,
+            ingress,
         )
         .await
     }
@@ -878,7 +886,8 @@ impl TurnEngine {
         turn: &ProviderTurn,
         session_context: &SessionContext,
         app_dispatcher: &D,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
+        ingress: Option<&ConversationIngressContext>,
     ) -> TurnResult {
         match self.validate_turn_in_context(turn, session_context) {
             Ok(TurnValidation::FinalText(text)) => return TurnResult::FinalText(text),
@@ -886,28 +895,54 @@ impl TurnEngine {
             Ok(TurnValidation::ToolExecutionRequired) => {}
         }
 
-        let catalog = tool_catalog();
         let mut outputs = Vec::new();
         for intent in &turn.tool_intents {
-            let Some(descriptor) = catalog.resolve(&intent.tool_name) else {
+            let Some(resolved_tool) = crate::tools::resolve_tool_execution(&intent.tool_name)
+            else {
                 let reason = format!("tool_not_found: {}", intent.tool_name);
                 return TurnResult::policy_denied("tool_not_found", reason);
             };
+            let injected = inject_internal_tool_ingress(
+                resolved_tool.canonical_name,
+                intent.args_json.clone(),
+                ingress,
+            );
+            let augmented_payload = augment_tool_payload_for_kernel(
+                resolved_tool.canonical_name,
+                injected.payload,
+                &intent.session_id,
+            );
             let request = ToolCoreRequest {
-                tool_name: descriptor.name.to_owned(),
-                payload: intent.args_json.clone(),
+                tool_name: resolved_tool.canonical_name.to_owned(),
+                payload: augmented_payload,
             };
-            let outcome = match descriptor.execution_kind {
+            let outcome = match resolved_tool.execution_kind {
                 ToolExecutionKind::Core => {
-                    let Some(kernel_ctx) = kernel_ctx else {
+                    let Some(kernel_ctx) = binding.kernel_context() else {
                         return TurnResult::policy_denied("no_kernel_context", "no_kernel_context");
                     };
-                    match execute_tool_intent_via_kernel(intent, kernel_ctx).await {
+                    match execute_tool_intent_via_kernel(
+                        request,
+                        kernel_ctx,
+                        injected.trusted_internal_context,
+                    )
+                    .await
+                    {
                         Ok(outcome) => outcome,
                         Err(failure) => return turn_result_from_tool_execution_failure(failure),
                     }
                 }
                 ToolExecutionKind::App => {
+                    let catalog = crate::tools::tool_catalog();
+                    let Some(descriptor) = catalog.resolve(resolved_tool.canonical_name) else {
+                        let reason =
+                            format!("tool_descriptor_missing: {}", resolved_tool.canonical_name);
+                        return TurnResult::non_retryable_tool_error(
+                            "tool_descriptor_missing",
+                            reason,
+                        );
+                    };
+                    let kernel_ctx = binding.kernel_context();
                     match app_dispatcher
                         .maybe_require_approval(session_context, intent, descriptor, kernel_ctx)
                         .await
@@ -926,7 +961,7 @@ impl TurnEngine {
                     }
 
                     match app_dispatcher
-                        .execute_app_tool(session_context, request, kernel_ctx)
+                        .execute_app_tool(session_context, request, binding)
                         .await
                     {
                         Ok(outcome) => outcome,
@@ -1042,6 +1077,7 @@ mod tests {
                 &delegate_async_turn("root-session", "turn-1", "call-1"),
                 &session_context,
                 &dispatcher,
+                ConversationRuntimeBinding::direct(),
                 None,
             )
             .await;
@@ -1101,10 +1137,22 @@ mod tests {
         let turn = delegate_async_turn("root-session", "turn-reuse", "call-reuse");
 
         let first = TurnEngine::new(4)
-            .execute_turn_in_context(&turn, &session_context, &dispatcher, None)
+            .execute_turn_in_context(
+                &turn,
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::direct(),
+                None,
+            )
             .await;
         let second = TurnEngine::new(4)
-            .execute_turn_in_context(&turn, &session_context, &dispatcher, None)
+            .execute_turn_in_context(
+                &turn,
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::direct(),
+                None,
+            )
             .await;
 
         let first_request_id = match first {

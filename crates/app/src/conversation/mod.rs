@@ -1,12 +1,14 @@
 pub mod analytics;
 mod context_engine;
 mod context_engine_registry;
+mod ingress;
 mod lane_arbiter;
 mod persistence;
 pub mod plan_executor;
 pub mod plan_ir;
 pub mod plan_verifier;
 mod runtime;
+mod runtime_binding;
 mod safe_lane_failure;
 mod session_address;
 mod session_history;
@@ -35,6 +37,11 @@ pub use context_engine_registry::{
     context_engine_id_from_env, describe_context_engine, list_context_engine_ids,
     list_context_engine_metadata, register_context_engine, resolve_context_engine,
 };
+pub use ingress::{
+    ConversationIngressChannel, ConversationIngressContext, ConversationIngressDelivery,
+    ConversationIngressDeliveryResource, ConversationIngressFeishuCallbackContext,
+    ConversationIngressPrivateContext,
+};
 pub use lane_arbiter::{ExecutionLane, LaneArbiterPolicy, LaneDecision};
 #[allow(unused_imports)]
 pub use runtime::{
@@ -43,6 +50,7 @@ pub use runtime::{
     ConversationRuntime, DefaultConversationRuntime, SessionContext,
     collect_context_engine_runtime_snapshot, resolve_context_engine_selection,
 };
+pub use runtime_binding::ConversationRuntimeBinding;
 pub use safe_lane_failure::{
     SafeLaneFailureCode, SafeLaneFailureRouteDecision, SafeLaneFailureRouteSource,
     SafeLaneTerminalRouteSnapshot, classify_safe_lane_plan_failure,

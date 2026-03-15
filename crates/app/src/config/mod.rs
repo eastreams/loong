@@ -1,5 +1,6 @@
 mod channels;
 mod conversation;
+mod feishu_integration;
 mod provider;
 mod runtime;
 mod shared;
@@ -13,12 +14,14 @@ pub use channels::{
     ResolvedTelegramChannelConfig, TelegramAccountConfig, TelegramChannelConfig,
     channel_descriptor, service_channel_descriptors,
 };
+#[allow(unused_imports)]
 pub(crate) use channels::{
     FEISHU_APP_ID_ENV, FEISHU_APP_SECRET_ENV, FEISHU_ENCRYPT_KEY_ENV,
     FEISHU_VERIFICATION_TOKEN_ENV, TELEGRAM_BOT_TOKEN_ENV,
 };
 #[allow(unused_imports)]
 pub use conversation::{ConversationConfig, ConversationTurnLoopConfig};
+pub use feishu_integration::FeishuIntegrationConfig;
 #[allow(unused_imports)]
 pub use provider::{
     ProviderAuthScheme, ProviderConfig, ProviderFeatureFamily, ProviderKind, ProviderProfileConfig,

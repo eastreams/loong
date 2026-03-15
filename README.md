@@ -413,12 +413,27 @@ Agent-facing tools:
 - `external_skills_remove`
   - Removes a managed installed skill and updates the local index.
 
+Operator-facing CLI:
+
+- `loongclaw skills list [--config PATH] [--json]`
+  - Lists managed installed skills using the current config/runtime guardrails.
+- `loongclaw skills info <skill-id> [--config PATH] [--json]`
+  - Shows structured metadata plus a short `SKILL.md` preview for one installed skill.
+- `loongclaw skills install <path> [--skill-id ID] [--replace] [--config PATH] [--json]`
+  - Installs a local skill directory or `.tgz` / `.tar.gz` archive through the same managed runtime path as `external_skills.install`.
+- `loongclaw skills remove <skill-id> [--config PATH] [--json]`
+  - Removes one managed installed skill from the local index.
+- `loongclaw skills policy get|set|reset [--config PATH] [--json]`
+  - Reads or updates the config-backed external-skills runtime policy with the same policy fields exposed by `external_skills.policy`.
+  - Mutating `set` and `reset` calls require `--approve-policy-update`.
+
 Recommended runtime flow:
 
 1. Download with `external_skills.fetch`
-2. Install with `external_skills.install`
-3. Discover with `external_skills.list`
-4. Load instructions with `external_skills.invoke`
+2. Install with `external_skills.install` or `loongclaw skills install`
+3. Discover with `external_skills.list` or `loongclaw skills list`
+4. Inspect with `external_skills.inspect` or `loongclaw skills info`
+5. Load instructions with `external_skills.invoke`
 
 ## Key Features
 

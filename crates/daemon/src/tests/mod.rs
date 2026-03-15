@@ -73,11 +73,14 @@ fn sign_security_scan_profile_for_test(profile: &SecurityScanProfile) -> (String
 
 mod acp;
 mod architecture;
+mod doctor_feishu;
+mod feishu_cli;
 mod import_claw_cli;
 mod import_cli;
 mod migration;
 mod onboard_cli;
 mod programmatic;
+mod skills_cli;
 mod spec_runtime;
 mod spec_runtime_bridge;
 

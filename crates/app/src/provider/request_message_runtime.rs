@@ -23,7 +23,7 @@ pub(super) fn build_system_message_for_view(
         config,
         include_system_prompt,
         tool_view,
-        tools::runtime_config::get_tool_runtime_config(),
+        &tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None),
     )
 }
 

@@ -10,6 +10,8 @@ use crate::{CliResult, KernelContext};
 use crate::memory;
 use std::collections::BTreeSet;
 
+use super::runtime_binding::ConversationRuntimeBinding;
+
 pub const CONTEXT_ENGINE_API_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -164,9 +166,9 @@ pub trait ConversationContextEngine: Send + Sync {
         config: &LoongClawConfig,
         session_id: &str,
         include_system_prompt: bool,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<AssembledConversationContext> {
-        self.assemble_messages(config, session_id, include_system_prompt, kernel_ctx)
+        self.assemble_messages(config, session_id, include_system_prompt, binding)
             .await
             .map(AssembledConversationContext::from_messages)
     }
@@ -176,7 +178,7 @@ pub trait ConversationContextEngine: Send + Sync {
         config: &LoongClawConfig,
         session_id: &str,
         include_system_prompt: bool,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>>;
 }
 
@@ -271,10 +273,10 @@ where
         config: &LoongClawConfig,
         session_id: &str,
         include_system_prompt: bool,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<AssembledConversationContext> {
         self.as_ref()
-            .assemble_context(config, session_id, include_system_prompt, kernel_ctx)
+            .assemble_context(config, session_id, include_system_prompt, binding)
             .await
     }
 
@@ -283,10 +285,10 @@ where
         config: &LoongClawConfig,
         session_id: &str,
         include_system_prompt: bool,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>> {
         self.as_ref()
-            .assemble_messages(config, session_id, include_system_prompt, kernel_ctx)
+            .assemble_messages(config, session_id, include_system_prompt, binding)
             .await
     }
 }
@@ -316,9 +318,9 @@ impl ConversationContextEngine for DefaultContextEngine {
         config: &LoongClawConfig,
         session_id: &str,
         include_system_prompt: bool,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>> {
-        if kernel_ctx.is_none() {
+        if !binding.is_kernel_bound() {
             return crate::provider::build_messages_for_session(
                 config,
                 session_id,
@@ -331,7 +333,7 @@ impl ConversationContextEngine for DefaultContextEngine {
 
         #[cfg(feature = "memory-sqlite")]
         {
-            let turns = load_memory_window(config, session_id, kernel_ctx).await?;
+            let turns = load_memory_window(config, session_id, binding).await?;
             for turn in turns {
                 crate::provider::push_history_message(
                     &mut messages,
@@ -343,7 +345,7 @@ impl ConversationContextEngine for DefaultContextEngine {
 
         #[cfg(not(feature = "memory-sqlite"))]
         {
-            let _ = (session_id, kernel_ctx);
+            let _ = (session_id, binding);
         }
 
         Ok(messages)
@@ -365,7 +367,7 @@ impl ConversationContextEngine for LegacyContextEngine {
         config: &LoongClawConfig,
         session_id: &str,
         include_system_prompt: bool,
-        _kernel_ctx: Option<&KernelContext>,
+        _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>> {
         crate::provider::build_messages_for_session(config, session_id, include_system_prompt)
     }
@@ -375,11 +377,11 @@ impl ConversationContextEngine for LegacyContextEngine {
 async fn load_memory_window(
     config: &LoongClawConfig,
     session_id: &str,
-    kernel_ctx: Option<&KernelContext>,
+    binding: ConversationRuntimeBinding<'_>,
 ) -> CliResult<Vec<memory::WindowTurn>> {
     use std::collections::BTreeSet;
 
-    if let Some(ctx) = kernel_ctx {
+    if let Some(ctx) = binding.kernel_context() {
         let request = memory::build_window_request(session_id, config.memory.sliding_window);
         let caps = BTreeSet::from([Capability::MemoryRead]);
         let outcome = ctx

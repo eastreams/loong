@@ -1,3 +1,5 @@
+#![allow(dead_code)] // legacy import-claw flow remains test-covered but is not exposed by the current daemon CLI
+
 use std::path::{Path, PathBuf};
 
 use clap::ValueEnum;
