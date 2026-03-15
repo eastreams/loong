@@ -25,13 +25,13 @@ impl ScopedEnv {
     #[allow(clippy::disallowed_methods)]
     pub(crate) fn set(&mut self, key: &'static str, value: impl AsRef<OsStr>) {
         self.capture_original(key);
-        std::env::set_var(key, value);
+        crate::process_env::set_var(key, value);
     }
 
     #[allow(clippy::disallowed_methods)]
     pub(crate) fn remove(&mut self, key: &'static str) {
         self.capture_original(key);
-        std::env::remove_var(key);
+        crate::process_env::remove_var(key);
     }
 
     fn capture_original(&mut self, key: &'static str) {
@@ -47,8 +47,8 @@ impl Drop for ScopedEnv {
     fn drop(&mut self) {
         for (key, original) in self.originals.iter().rev() {
             match original {
-                Some(value) => std::env::set_var(key, value),
-                None => std::env::remove_var(key),
+                Some(value) => crate::process_env::set_var(key, value),
+                None => crate::process_env::remove_var(key),
             }
         }
     }
