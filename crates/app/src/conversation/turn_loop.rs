@@ -553,6 +553,16 @@ fn tool_round_outcome(turn_result: &TurnResult) -> Option<ToolRoundOutcome> {
             fingerprint: text_fingerprint("tool_final_text", text),
             failed: false,
         }),
+        TurnResult::NeedsApproval(requirement) => Some(ToolRoundOutcome {
+            fingerprint: text_fingerprint(
+                "tool_approval_required",
+                requirement
+                    .approval_request_id
+                    .as_deref()
+                    .unwrap_or(requirement.reason.as_str()),
+            ),
+            failed: false,
+        }),
         TurnResult::ToolDenied(reason) => Some(ToolRoundOutcome {
             fingerprint: text_fingerprint("tool_denied", reason),
             failed: true,

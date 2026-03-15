@@ -502,6 +502,7 @@ mod tests {
                 );
             }
             other @ (TurnResult::FinalText(_)
+            | TurnResult::NeedsApproval(_)
             | TurnResult::ToolError(_)
             | TurnResult::ProviderError(_)) => {
                 panic!("expected ToolDenied with FilesystemWrite, got: {other:?}")
