@@ -2,8 +2,7 @@ use serde_json::Value;
 
 use crate::config::{
     ProviderConfig, ProviderKind, ProviderProfileHealthModeConfig, ProviderProtocolFamily,
-    ProviderWireApi,
-    ProviderReasoningExtraBodyModeConfig, ProviderToolSchemaModeConfig,
+    ProviderReasoningExtraBodyModeConfig, ProviderToolSchemaModeConfig, ProviderWireApi,
 };
 
 use super::ProviderProfileHealthMode;

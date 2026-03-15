@@ -1,7 +1,5 @@
 use super::*;
-use crate::config::{
-    FeishuChannelConfig, LoongClawConfig, MemoryConfig, ProviderConfig, ReasoningEffort, ToolConfig,
-};
+use crate::config::{LoongClawConfig, ProviderConfig, ReasoningEffort};
 use crate::test_support::ScopedEnv;
 use loongclaw_contracts::{Capability, ExecutionRoute, HarnessKind};
 use loongclaw_kernel::{
@@ -801,14 +799,7 @@ fn anthropic_completion_body_uses_native_messages_shape() {
             max_tokens: Some(2_048),
             ..ProviderConfig::default()
         },
-        cli: crate::config::CliChannelConfig::default(),
-        telegram: crate::config::TelegramChannelConfig::default(),
-        feishu: FeishuChannelConfig::default(),
-        tools: ToolConfig::default(),
-        memory: MemoryConfig::default(),
-        conversation: crate::config::ConversationConfig::default(),
-        external_skills: crate::config::ExternalSkillsConfig::default(),
-        acp: crate::config::AcpConfig::default(),
+        ..LoongClawConfig::default()
     };
     let messages = vec![
         json!({"role": "system", "content": "sys"}),
@@ -838,14 +829,7 @@ fn bedrock_completion_body_uses_converse_shape() {
             max_tokens: Some(2_048),
             ..ProviderConfig::default()
         },
-        cli: crate::config::CliChannelConfig::default(),
-        telegram: crate::config::TelegramChannelConfig::default(),
-        feishu: FeishuChannelConfig::default(),
-        tools: ToolConfig::default(),
-        memory: MemoryConfig::default(),
-        conversation: crate::config::ConversationConfig::default(),
-        external_skills: crate::config::ExternalSkillsConfig::default(),
-        acp: crate::config::AcpConfig::default(),
+        ..LoongClawConfig::default()
     };
     let messages = vec![
         json!({"role": "system", "content": "sys"}),
@@ -978,14 +962,7 @@ fn anthropic_turn_body_uses_native_messages_shape_and_tool_schema() {
             kind: ProviderKind::Anthropic,
             ..ProviderConfig::default()
         },
-        cli: crate::config::CliChannelConfig::default(),
-        telegram: crate::config::TelegramChannelConfig::default(),
-        feishu: FeishuChannelConfig::default(),
-        tools: ToolConfig::default(),
-        memory: MemoryConfig::default(),
-        conversation: crate::config::ConversationConfig::default(),
-        external_skills: crate::config::ExternalSkillsConfig::default(),
-        acp: crate::config::AcpConfig::default(),
+        ..LoongClawConfig::default()
     };
     let messages = vec![
         json!({
@@ -1045,14 +1022,7 @@ fn anthropic_turn_body_converts_tool_schema_to_native_format() {
             kind: ProviderKind::Anthropic,
             ..ProviderConfig::default()
         },
-        cli: crate::config::CliChannelConfig::default(),
-        telegram: crate::config::TelegramChannelConfig::default(),
-        feishu: FeishuChannelConfig::default(),
-        tools: ToolConfig::default(),
-        memory: MemoryConfig::default(),
-        conversation: crate::config::ConversationConfig::default(),
-        external_skills: crate::config::ExternalSkillsConfig::default(),
-        acp: crate::config::AcpConfig::default(),
+        ..LoongClawConfig::default()
     };
 
     let body = build_turn_request_body(
@@ -1081,14 +1051,7 @@ fn anthropic_turn_body_preserves_native_tool_use_and_tool_result_blocks() {
             kind: ProviderKind::Anthropic,
             ..ProviderConfig::default()
         },
-        cli: crate::config::CliChannelConfig::default(),
-        telegram: crate::config::TelegramChannelConfig::default(),
-        feishu: FeishuChannelConfig::default(),
-        tools: ToolConfig::default(),
-        memory: MemoryConfig::default(),
-        conversation: crate::config::ConversationConfig::default(),
-        external_skills: crate::config::ExternalSkillsConfig::default(),
-        acp: crate::config::AcpConfig::default(),
+        ..LoongClawConfig::default()
     };
 
     let body = build_turn_request_body(
@@ -1151,14 +1114,7 @@ fn bedrock_turn_body_uses_native_tool_blocks_and_tool_config() {
             kind: ProviderKind::Bedrock,
             ..ProviderConfig::default()
         },
-        cli: crate::config::CliChannelConfig::default(),
-        telegram: crate::config::TelegramChannelConfig::default(),
-        feishu: FeishuChannelConfig::default(),
-        tools: ToolConfig::default(),
-        memory: MemoryConfig::default(),
-        conversation: crate::config::ConversationConfig::default(),
-        external_skills: crate::config::ExternalSkillsConfig::default(),
-        acp: crate::config::AcpConfig::default(),
+        ..LoongClawConfig::default()
     };
 
     let body = build_turn_request_body(

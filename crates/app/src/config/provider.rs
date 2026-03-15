@@ -491,25 +491,25 @@ impl<'de> Deserialize<'de> for ProviderConfig {
             retry_initial_backoff_ms: u64,
             #[serde(default = "default_provider_retry_max_backoff_ms")]
             retry_max_backoff_ms: u64,
-            #[serde(default = "default_provider_model_catalog_cache_ttl_ms")]
+            #[serde(default = "default_model_catalog_cache_ttl_ms")]
             model_catalog_cache_ttl_ms: u64,
-            #[serde(default = "default_provider_model_catalog_stale_if_error_ms")]
+            #[serde(default = "default_model_catalog_stale_if_error_ms")]
             model_catalog_stale_if_error_ms: u64,
-            #[serde(default = "default_provider_model_catalog_cache_max_entries")]
+            #[serde(default = "default_model_catalog_cache_max_entries")]
             model_catalog_cache_max_entries: usize,
-            #[serde(default = "default_provider_model_candidate_cooldown_ms")]
+            #[serde(default = "default_model_candidate_cooldown_ms")]
             model_candidate_cooldown_ms: u64,
-            #[serde(default = "default_provider_model_candidate_cooldown_max_ms")]
+            #[serde(default = "default_model_candidate_cooldown_max_ms")]
             model_candidate_cooldown_max_ms: u64,
-            #[serde(default = "default_provider_model_candidate_cooldown_max_entries")]
+            #[serde(default = "default_model_candidate_cooldown_max_entries")]
             model_candidate_cooldown_max_entries: usize,
-            #[serde(default = "default_provider_profile_cooldown_ms")]
+            #[serde(default = "default_profile_cooldown_ms")]
             profile_cooldown_ms: u64,
-            #[serde(default = "default_provider_profile_cooldown_max_ms")]
+            #[serde(default = "default_profile_cooldown_max_ms")]
             profile_cooldown_max_ms: u64,
-            #[serde(default = "default_provider_profile_auth_reject_disable_ms")]
+            #[serde(default = "default_profile_auth_reject_disable_ms")]
             profile_auth_reject_disable_ms: u64,
-            #[serde(default = "default_provider_profile_state_max_entries")]
+            #[serde(default = "default_profile_state_max_entries")]
             profile_state_max_entries: usize,
             #[serde(default)]
             profile_state_backend: ProviderProfileStateBackendKind,
@@ -1414,10 +1414,19 @@ impl ProviderConfig {
 
     fn oauth_access_token_env_names(&self) -> Vec<String> {
         let mut env_keys = Vec::new();
-        push_unique_env_key(&mut env_keys, self.configured_oauth_access_token_env_name());
-        push_unique_env_key(&mut env_keys, self.kind.default_oauth_access_token_env());
-        for alias in self.kind.oauth_access_token_env_aliases() {
-            push_unique_env_key(&mut env_keys, Some(alias));
+        let configured_oauth_env = self.configured_oauth_access_token_env_name();
+        push_unique_env_key(&mut env_keys, configured_oauth_env);
+        if configured_oauth_env.is_none()
+            && self.configured_api_key_env_name().is_none()
+            && self
+                .api_key
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+        {
+            push_unique_env_key(&mut env_keys, self.kind.default_oauth_access_token_env());
+            for alias in self.kind.oauth_access_token_env_aliases() {
+                push_unique_env_key(&mut env_keys, Some(alias));
+            }
         }
         env_keys
     }
@@ -2777,6 +2786,10 @@ fn collect_non_empty_env_values(keys: &[String]) -> Vec<String> {
     values
 }
 
+fn first_non_empty_env_value(keys: &[String]) -> Option<String> {
+    collect_non_empty_env_values(keys).into_iter().next()
+}
+
 fn first_non_empty_env_name(keys: &[String]) -> Option<String> {
     for key in keys {
         if env::var(key)
@@ -2970,6 +2983,7 @@ fn derive_responses_path(chat_path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::ScopedEnv;
 
     #[test]
     fn provider_profile_lookup_matches_kind() {
@@ -2991,5 +3005,29 @@ mod tests {
             "https://example.test/v1/chat/completions"
         );
         assert_eq!(config.models_endpoint(), "https://example.test/v1/models");
+    }
+
+    #[test]
+    fn explicit_api_key_binding_beats_default_oauth_fallback() {
+        let mut env = ScopedEnv::new();
+        env.set("OPENAI_API_KEY", "api-key-wins");
+        env.set("OPENAI_CODEX_OAUTH_TOKEN", "oauth-fallback-should-not-win");
+
+        let config = ProviderConfig {
+            kind: ProviderKind::Openai,
+            api_key: Some("${OPENAI_API_KEY}".to_owned()),
+            ..ProviderConfig::default()
+        };
+
+        assert_eq!(config.oauth_access_token(), None);
+        assert_eq!(config.api_key().as_deref(), Some("api-key-wins"));
+        assert_eq!(
+            config.resolved_auth_secret().as_deref(),
+            Some("api-key-wins")
+        );
+        assert_eq!(
+            config.authorization_header().as_deref(),
+            Some("Bearer api-key-wins")
+        );
     }
 }

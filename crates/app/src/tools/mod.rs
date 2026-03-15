@@ -960,10 +960,11 @@ mod tests {
         .expect("write provider config");
 
         let runtime_config = runtime_config::ToolRuntimeConfig {
-            shell_allowlist: BTreeSet::new(),
+            shell_allow: BTreeSet::new(),
             file_root: Some(root.clone()),
             config_path: Some(config_path.clone()),
             external_skills: Default::default(),
+            ..runtime_config::ToolRuntimeConfig::default()
         };
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {
@@ -1041,10 +1042,11 @@ mod tests {
         .expect("write provider config");
 
         let runtime_config = runtime_config::ToolRuntimeConfig {
-            shell_allowlist: BTreeSet::new(),
+            shell_allow: BTreeSet::new(),
             file_root: Some(root.clone()),
             config_path: Some(config_path.clone()),
             external_skills: Default::default(),
+            ..runtime_config::ToolRuntimeConfig::default()
         };
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {
@@ -1108,10 +1110,11 @@ mod tests {
         .expect("write provider config");
 
         let runtime_config = runtime_config::ToolRuntimeConfig {
-            shell_allowlist: BTreeSet::new(),
+            shell_allow: BTreeSet::new(),
             file_root: Some(root.clone()),
             config_path: Some(config_path.clone()),
             external_skills: Default::default(),
+            ..runtime_config::ToolRuntimeConfig::default()
         };
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {

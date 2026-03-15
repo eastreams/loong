@@ -1645,7 +1645,7 @@ fn migration_compose_recommended_candidate_supplements_cli_memory_and_tools_acro
 
     let mut codex = mvp::config::LoongClawConfig::default();
     codex.cli.exit_commands.push("/bye".to_owned());
-    codex.tools.shell_allowlist.push("git".to_owned());
+    codex.tools.shell_allow.push("git".to_owned());
     codex.memory.sliding_window = 24;
     let codex_candidate = crate::migration::discovery::build_import_candidate(
         crate::migration::types::ImportSourceKind::CodexConfig,
@@ -1684,7 +1684,7 @@ fn migration_compose_recommended_candidate_supplements_cli_memory_and_tools_acro
         composed
             .config
             .tools
-            .shell_allowlist
+            .shell_allow
             .iter()
             .any(|value| value == "git"),
         "recommended plan should supplement additional tool permissions"

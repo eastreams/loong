@@ -282,19 +282,19 @@ fn provider_default_env_mapping_is_stable() {
     );
     assert_eq!(
         crate::onboard_cli::provider_default_api_key_env(mvp::config::ProviderKind::Bedrock),
-        "AWS_BEARER_TOKEN_BEDROCK"
+        Some("AWS_BEARER_TOKEN_BEDROCK")
     );
     assert_eq!(
         crate::onboard_cli::provider_default_api_key_env(mvp::config::ProviderKind::Byteplus),
-        "BYTEPLUS_API_KEY"
+        Some("BYTEPLUS_API_KEY")
     );
     assert_eq!(
         crate::onboard_cli::provider_default_api_key_env(mvp::config::ProviderKind::ByteplusCoding),
-        "BYTEPLUS_API_KEY"
+        Some("BYTEPLUS_API_KEY")
     );
     assert_eq!(
         crate::onboard_cli::provider_default_api_key_env(mvp::config::ProviderKind::Custom),
-        "CUSTOM_PROVIDER_API_KEY"
+        Some("CUSTOM_PROVIDER_API_KEY")
     );
     assert_eq!(
         crate::onboard_cli::provider_default_api_key_env(mvp::config::ProviderKind::Openrouter),
@@ -3206,8 +3206,8 @@ fn onboard_provider_selection_manual_override_resets_model_for_new_provider() {
         resolved.model, "auto",
         "manual provider overrides should reset the inherited model when switching away from the imported provider"
     );
-    assert_eq!(resolved.base_url, "https://api.anthropic.com/v1");
-    assert_eq!(resolved.chat_completions_path, "/chat/completions");
+    assert_eq!(resolved.base_url, "https://api.anthropic.com");
+    assert_eq!(resolved.chat_completions_path, "/v1/messages");
     assert_eq!(resolved.api_key_env.as_deref(), Some("ANTHROPIC_API_KEY"));
 }
 

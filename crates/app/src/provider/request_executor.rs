@@ -123,6 +123,7 @@ where
                         attempt,
                         runtime.request_policy.max_attempts,
                         None,
+                        None,
                     )
                 })?;
         let body_bytes = transport::encode_json_request_body(&body).map_err(|error| {
@@ -138,6 +139,7 @@ where
                 runtime.model,
                 attempt,
                 runtime.request_policy.max_attempts,
+                None,
                 None,
             )
         })?;
@@ -156,6 +158,7 @@ where
                 attempt,
                 runtime.request_policy.max_attempts,
                 None,
+                None,
             )
         })?;
         transport::apply_auth_profile_headers(&mut headers, Some(runtime.auth_profile)).map_err(
@@ -172,6 +175,7 @@ where
                     runtime.model,
                     attempt,
                     runtime.request_policy.max_attempts,
+                    None,
                     None,
                 )
             },
@@ -195,6 +199,7 @@ where
                     runtime.model,
                     attempt,
                     runtime.request_policy.max_attempts,
+                    None,
                     None,
                 )
             })?;
@@ -360,6 +365,7 @@ where
                     runtime.model,
                     attempt,
                     runtime.request_policy.max_attempts,
+                    None,
                     None,
                 ));
             }
