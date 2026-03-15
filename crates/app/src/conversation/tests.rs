@@ -6133,6 +6133,7 @@ fn turn_engine_denies_known_tool_outside_restricted_view() {
             );
         }
         other @ TurnResult::FinalText(_)
+        | other @ TurnResult::NeedsApproval(_)
         | other @ TurnResult::ToolError(_)
         | other @ TurnResult::ProviderError(_) => {
             panic!("expected ToolDenied, got {:?}", other)
@@ -6214,6 +6215,7 @@ async fn turn_engine_routes_app_tools_through_dispatcher() {
             );
         }
         other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::NeedsApproval(_)
         | other @ TurnResult::ToolError(_)
         | other @ TurnResult::ProviderError(_) => {
             panic!("expected FinalText, got: {other:?}")
@@ -6977,6 +6979,7 @@ async fn turn_engine_keeps_external_skill_invoke_payloads_intact() {
             );
         }
         other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::NeedsApproval(_)
         | other @ TurnResult::ToolError(_)
         | other @ TurnResult::ProviderError(_) => panic!("unexpected result: {other:?}"),
     }

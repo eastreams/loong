@@ -25,11 +25,32 @@ pub struct ToolConfig {
     #[serde(default = "default_shell_default_mode")]
     pub shell_default_mode: String,
     #[serde(default)]
+    pub approval: GovernedToolApprovalConfig,
+    #[serde(default)]
     pub sessions: SessionToolConfig,
     #[serde(default)]
     pub messages: MessageToolConfig,
     #[serde(default)]
     pub delegate: DelegateToolConfig,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GovernedToolApprovalMode {
+    #[default]
+    Disabled,
+    MediumBalanced,
+    Strict,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GovernedToolApprovalConfig {
+    #[serde(default)]
+    pub mode: GovernedToolApprovalMode,
+    #[serde(default)]
+    pub approved_calls: Vec<String>,
+    #[serde(default)]
+    pub denied_calls: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -295,9 +316,20 @@ impl Default for ToolConfig {
             shell_allow: default_shell_allow(),
             shell_deny: Vec::new(),
             shell_default_mode: default_shell_default_mode(),
+            approval: GovernedToolApprovalConfig::default(),
             sessions: SessionToolConfig::default(),
             messages: MessageToolConfig::default(),
             delegate: DelegateToolConfig::default(),
+        }
+    }
+}
+
+impl Default for GovernedToolApprovalConfig {
+    fn default() -> Self {
+        Self {
+            mode: GovernedToolApprovalMode::Disabled,
+            approved_calls: Vec::new(),
+            denied_calls: Vec::new(),
         }
     }
 }
@@ -511,6 +543,9 @@ mod tests {
         assert!(config.shell_allow.is_empty());
         assert!(config.shell_deny.is_empty());
         assert_eq!(config.shell_default_mode, "deny");
+        assert_eq!(config.approval.mode, GovernedToolApprovalMode::Disabled);
+        assert!(config.approval.approved_calls.is_empty());
+        assert!(config.approval.denied_calls.is_empty());
         assert!(config.sessions.enabled);
         assert_eq!(config.sessions.visibility, SessionVisibility::Children);
         assert_eq!(config.sessions.list_limit, 100);
@@ -530,6 +565,11 @@ mod tests {
     #[test]
     fn tool_config_parses_session_runtime_controls_from_toml() {
         let raw = r#"
+[tools.approval]
+mode = "strict"
+approved_calls = ["tool:delegate_async"]
+denied_calls = ["tool:session_cancel"]
+
 [tools.sessions]
 visibility = "self"
 list_limit = 12
@@ -548,6 +588,15 @@ child_tool_allowlist = ["file.read", "shell.exec"]
         let parsed =
             toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
 
+        assert_eq!(parsed.tools.approval.mode, GovernedToolApprovalMode::Strict);
+        assert_eq!(
+            parsed.tools.approval.approved_calls,
+            vec!["tool:delegate_async".to_owned()]
+        );
+        assert_eq!(
+            parsed.tools.approval.denied_calls,
+            vec!["tool:session_cancel".to_owned()]
+        );
         assert_eq!(
             parsed.tools.sessions.visibility,
             SessionVisibility::SelfOnly

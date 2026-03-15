@@ -2,7 +2,7 @@ use super::super::config::LoongClawConfig;
 use super::ProviderErrorMode;
 use super::persistence::format_provider_error_reply;
 use super::runtime::ConversationRuntime;
-use super::turn_engine::{ProviderTurn, TurnResult};
+use super::turn_engine::{ApprovalRequirement, ApprovalRequirementKind, ProviderTurn, TurnResult};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -193,6 +193,10 @@ impl<'a> ToolDrivenReplyKernel<'a> {
                 self.assistant_preface,
                 text.as_str(),
             ])),
+            TurnResult::NeedsApproval(requirement) => Some(format_approval_required_reply(
+                self.assistant_preface,
+                requirement,
+            )),
             TurnResult::ToolDenied(failure) | TurnResult::ToolError(failure) => {
                 Some(join_non_empty_lines(&[
                     self.assistant_preface,
@@ -211,6 +215,7 @@ impl<'a> ToolDrivenReplyKernel<'a> {
             TurnResult::FinalText(text) => {
                 Some(ToolDrivenFollowupPayload::ToolResult { text: text.clone() })
             }
+            TurnResult::NeedsApproval(_) => None,
             TurnResult::ToolDenied(failure) | TurnResult::ToolError(failure) => {
                 Some(ToolDrivenFollowupPayload::ToolFailure {
                     reason: failure.reason.clone(),
@@ -265,6 +270,9 @@ pub fn compose_assistant_reply(
                 text
             }
         }
+        TurnResult::NeedsApproval(requirement) => {
+            format_approval_required_reply(assistant_preface, &requirement)
+        }
         TurnResult::ToolDenied(failure) => {
             join_non_empty_lines(&[assistant_preface, failure.reason.as_str()])
         }
@@ -276,6 +284,34 @@ pub fn compose_assistant_reply(
             join_non_empty_lines(&[assistant_preface, inline.as_str()])
         }
     }
+}
+
+pub fn format_approval_required_reply(
+    assistant_preface: &str,
+    requirement: &ApprovalRequirement,
+) -> String {
+    let mut lines = Vec::new();
+    let marker = match requirement.kind {
+        ApprovalRequirementKind::GovernedTool => "[tool_approval_required]",
+        ApprovalRequirementKind::KernelContextRequired => "[approval_required]",
+    };
+    lines.push(marker.to_owned());
+    if let Some(tool_name) = requirement.tool_name.as_deref() {
+        lines.push(format!("tool: {tool_name}"));
+    }
+    if let Some(request_id) = requirement.approval_request_id.as_deref() {
+        lines.push(format!("request_id: {request_id}"));
+    }
+    if let Some(approval_key) = requirement.approval_key.as_deref() {
+        lines.push(format!("approval_key: {approval_key}"));
+    }
+    lines.push(format!("rule_id: {}", requirement.rule_id));
+    lines.push(format!("reason: {}", requirement.reason));
+    if requirement.kind == ApprovalRequirementKind::GovernedTool {
+        lines.push("allowed_decisions: approve_once, approve_always, deny".to_owned());
+    }
+    let body = lines.join("\n");
+    join_non_empty_lines(&[assistant_preface, body.as_str()])
 }
 
 pub fn tool_result_contains_truncation_signal(tool_result_text: &str) -> bool {
@@ -608,7 +644,9 @@ fn parse_external_skill_invoke_context_line(line: &str) -> Option<ExternalSkillI
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conversation::turn_engine::{TurnFailure, TurnResult};
+    use crate::conversation::turn_engine::{
+        ApprovalRequirement, ApprovalRequirementKind, TurnFailure, TurnResult,
+    };
     use serde_json::json;
 
     #[test]
@@ -628,6 +666,29 @@ mod tests {
             TurnResult::ToolError(TurnFailure::retryable("tool_error", "temporary failure")),
         );
         assert_eq!(reply, "preface\ntemporary failure");
+    }
+
+    #[test]
+    fn compose_assistant_reply_formats_governed_tool_approval_requirement() {
+        let reply = compose_assistant_reply(
+            "preface",
+            true,
+            TurnResult::NeedsApproval(ApprovalRequirement {
+                kind: ApprovalRequirementKind::GovernedTool,
+                reason: "operator approval required for governed tool".to_owned(),
+                rule_id: "governed_tool_requires_approval".to_owned(),
+                tool_name: Some("delegate_async".to_owned()),
+                approval_key: Some("tool:delegate_async".to_owned()),
+                approval_request_id: Some("apr_123".to_owned()),
+            }),
+        );
+
+        assert!(reply.contains("[tool_approval_required]"));
+        assert!(reply.contains("delegate_async"));
+        assert!(reply.contains("apr_123"));
+        assert!(reply.contains("approve_once"));
+        assert!(reply.contains("approve_always"));
+        assert!(reply.contains("deny"));
     }
 
     #[test]
@@ -846,6 +907,29 @@ mod tests {
                 payload: ToolDrivenFollowupPayload::ToolFailure {
                     reason: "temporary failure".to_owned(),
                 },
+            }
+        );
+    }
+
+    #[test]
+    fn tool_driven_reply_phase_finalizes_approval_requirement_directly() {
+        let result = TurnResult::NeedsApproval(ApprovalRequirement {
+            kind: ApprovalRequirementKind::GovernedTool,
+            reason: "operator approval required for governed tool".to_owned(),
+            rule_id: "governed_tool_requires_approval".to_owned(),
+            tool_name: Some("delegate_async".to_owned()),
+            approval_key: Some("tool:delegate_async".to_owned()),
+            approval_request_id: Some("apr_direct".to_owned()),
+        });
+        let phase = ToolDrivenReplyPhase::new("preface", true, false, &result);
+
+        assert_eq!(phase.resolution_mode(), ReplyResolutionMode::Direct);
+        assert_eq!(phase.followup_kind(), None);
+        assert_eq!(phase.raw_reply(), Some("preface\n[tool_approval_required]\ntool: delegate_async\nrequest_id: apr_direct\napproval_key: tool:delegate_async\nrule_id: governed_tool_requires_approval\nreason: operator approval required for governed tool\nallowed_decisions: approve_once, approve_always, deny"));
+        assert_eq!(
+            phase.decision(),
+            &ToolDrivenReplyBaseDecision::FinalizeDirect {
+                reply: "preface\n[tool_approval_required]\ntool: delegate_async\nrequest_id: apr_direct\napproval_key: tool:delegate_async\nrule_id: governed_tool_requires_approval\nreason: operator approval required for governed tool\nallowed_decisions: approve_once, approve_always, deny".to_owned(),
             }
         );
     }

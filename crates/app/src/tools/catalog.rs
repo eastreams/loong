@@ -16,6 +16,86 @@ pub enum ToolAvailability {
     Planned,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolGovernanceScope {
+    Routine,
+    TopologyMutation,
+}
+
+impl ToolGovernanceScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Routine => "routine",
+            Self::TopologyMutation => "topology_mutation",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolRiskClass {
+    Low,
+    Elevated,
+    High,
+}
+
+impl ToolRiskClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Elevated => "elevated",
+            Self::High => "high",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolApprovalMode {
+    Never,
+    PolicyDriven,
+}
+
+impl ToolApprovalMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Never => "never",
+            Self::PolicyDriven => "policy_driven",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolGovernanceProfile {
+    pub scope: ToolGovernanceScope,
+    pub risk_class: ToolRiskClass,
+    pub approval_mode: ToolApprovalMode,
+}
+
+pub fn governance_profile_for_tool_name(tool_name: &str) -> ToolGovernanceProfile {
+    match tool_name {
+        "delegate" | "delegate_async" => ToolGovernanceProfile {
+            scope: ToolGovernanceScope::TopologyMutation,
+            risk_class: ToolRiskClass::High,
+            approval_mode: ToolApprovalMode::PolicyDriven,
+        },
+        "session_archive" | "session_cancel" | "session_recover" | "sessions_send" => {
+            ToolGovernanceProfile {
+                scope: ToolGovernanceScope::Routine,
+                risk_class: ToolRiskClass::Elevated,
+                approval_mode: ToolApprovalMode::PolicyDriven,
+            }
+        }
+        _ => ToolGovernanceProfile {
+            scope: ToolGovernanceScope::Routine,
+            risk_class: ToolRiskClass::Low,
+            approval_mode: ToolApprovalMode::Never,
+        },
+    }
+}
+
+pub fn governance_profile_for_descriptor(descriptor: &ToolDescriptor) -> ToolGovernanceProfile {
+    governance_profile_for_tool_name(descriptor.name)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ToolDescriptor {
     pub name: &'static str,

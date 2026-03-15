@@ -76,8 +76,8 @@ use super::turn_shared::{
     ProviderTurnRequestAction, ReplyPersistenceMode, ReplyResolutionMode, ToolDrivenFollowupKind,
     ToolDrivenFollowupPayload, ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase,
     build_tool_driven_followup_tail, decide_provider_turn_request_action,
-    request_completion_with_raw_fallback, tool_result_contains_truncation_signal,
-    user_requested_raw_tool_output,
+    format_approval_required_reply, request_completion_with_raw_fallback,
+    tool_result_contains_truncation_signal, user_requested_raw_tool_output,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::session::recovery::{
@@ -963,6 +963,7 @@ struct TurnLaneExecutionSnapshot {
 #[serde(rename_all = "snake_case")]
 enum TurnCheckpointResultKind {
     FinalText,
+    NeedsApproval,
     ToolDenied,
     ToolError,
     ProviderError,
@@ -2132,6 +2133,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
 fn turn_checkpoint_result_kind(result: &TurnResult) -> TurnCheckpointResultKind {
     match result {
         TurnResult::FinalText(_) => TurnCheckpointResultKind::FinalText,
+        TurnResult::NeedsApproval(_) => TurnCheckpointResultKind::NeedsApproval,
         TurnResult::ToolDenied(_) => TurnCheckpointResultKind::ToolDenied,
         TurnResult::ToolError(_) => TurnCheckpointResultKind::ToolError,
         TurnResult::ProviderError(_) => TurnCheckpointResultKind::ProviderError,
@@ -5115,6 +5117,9 @@ async fn execute_single_tool_intent(
         .await
     {
         TurnResult::FinalText(output) => Ok(output),
+        TurnResult::NeedsApproval(requirement) => Err(PlanNodeError::policy_denied(
+            format_approval_required_reply("", &requirement),
+        )),
         TurnResult::ToolDenied(failure) => Err(PlanNodeError::policy_denied(failure.reason)),
         TurnResult::ToolError(failure) => Err(PlanNodeError {
             kind: match failure.kind {
