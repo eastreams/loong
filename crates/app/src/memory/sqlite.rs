@@ -877,21 +877,26 @@ fn acquire_sqlite_runtime_with_diagnostics(
     let normalized_path = normalize_runtime_db_path(&path)?;
     diagnostics.normalize_path_ms = elapsed_ms(normalize_started_at);
 
-    let registry_lock_started_at = StdInstant::now();
-    let mut registry = sqlite_runtime_registry()
-        .lock()
-        .map_err(|poisoned| format!("lock sqlite runtime registry failed: {poisoned}"))?;
-    diagnostics.registry_lock_ms = elapsed_ms(registry_lock_started_at);
+    // Fast path: check cache under a short-lived lock.
+    {
+        let registry_lock_started_at = StdInstant::now();
+        let registry = sqlite_runtime_registry()
+            .lock()
+            .map_err(|poisoned| format!("lock sqlite runtime registry failed: {poisoned}"))?;
+        diagnostics.registry_lock_ms = elapsed_ms(registry_lock_started_at);
 
-    let registry_lookup_started_at = StdInstant::now();
-    if let Some(runtime) = registry.get(&normalized_path) {
+        let registry_lookup_started_at = StdInstant::now();
+        if let Some(runtime) = registry.get(&normalized_path) {
+            diagnostics.registry_lookup_ms = elapsed_ms(registry_lookup_started_at);
+            diagnostics.cache_hit = true;
+            diagnostics.total_ms = elapsed_ms(total_started_at);
+            return Ok((runtime.clone(), diagnostics));
+        }
         diagnostics.registry_lookup_ms = elapsed_ms(registry_lookup_started_at);
-        diagnostics.cache_hit = true;
-        diagnostics.total_ms = elapsed_ms(total_started_at);
-        return Ok((runtime.clone(), diagnostics));
+        // Lock drops here — cold bootstrap runs without blocking other paths.
     }
-    diagnostics.registry_lookup_ms = elapsed_ms(registry_lookup_started_at);
 
+    // Slow path: bootstrap outside the lock, then re-acquire to insert.
     let runtime_create_started_at = StdInstant::now();
     let (runtime, connection_diagnostics) =
         SqliteRuntime::new_with_diagnostics(normalized_path.clone())?;
@@ -904,6 +909,17 @@ fn acquire_sqlite_runtime_with_diagnostics(
 
     let runtime = Arc::new(runtime);
     let registry_insert_started_at = StdInstant::now();
+    let mut registry = sqlite_runtime_registry()
+        .lock()
+        .map_err(|poisoned| format!("lock sqlite runtime registry failed: {poisoned}"))?;
+    // Another thread may have bootstrapped the same path concurrently; use its
+    // runtime if so, to avoid duplicate connections.
+    if let Some(existing) = registry.get(&normalized_path) {
+        diagnostics.registry_insert_ms = elapsed_ms(registry_insert_started_at);
+        diagnostics.cache_hit = true;
+        diagnostics.total_ms = elapsed_ms(total_started_at);
+        return Ok((existing.clone(), diagnostics));
+    }
     registry.insert(normalized_path, runtime.clone());
     diagnostics.registry_insert_ms = elapsed_ms(registry_insert_started_at);
     diagnostics.total_ms = elapsed_ms(total_started_at);
@@ -1397,7 +1413,11 @@ pub(super) fn drop_cached_sqlite_runtime(path: &Path) -> Result<bool, String> {
     let mut registry = sqlite_runtime_registry()
         .lock()
         .map_err(|poisoned| format!("lock sqlite runtime registry failed: {poisoned}"))?;
-    Ok(registry.remove(&normalized_path).is_some())
+    let removed = registry.remove(&normalized_path).is_some();
+    if removed && let Ok(mut alias_registry) = sqlite_runtime_path_alias_registry().lock() {
+        alias_registry.retain(|_key, value| *value != normalized_path);
+    }
+    Ok(removed)
 }
 
 #[cfg(test)]
@@ -2421,6 +2441,49 @@ fn materialize_summary_checkpoint_with_diagnostics(
         .map(|turn_id| turn_id.saturating_sub(1))
         .unwrap_or_default();
 
+    // Wrap all checkpoint writes in a savepoint so a mid-materialization
+    // failure (e.g. disk full) cannot leave the checkpoint deleted without
+    // a replacement — the entire write set rolls back atomically.
+    conn.execute_batch("SAVEPOINT materialize_summary")
+        .map_err(|error| format!("begin materialize summary savepoint failed: {error}"))?;
+
+    let result = materialize_summary_checkpoint_inner(
+        conn,
+        session_id,
+        summary_before_turn_id,
+        existing_meta_lookup,
+        summary_target_through_turn_id,
+        summary_budget_chars,
+        summary_window_size,
+        diagnostics,
+    );
+
+    match &result {
+        Ok(_) => {
+            conn.execute_batch("RELEASE materialize_summary")
+                .map_err(|error| format!("commit materialize summary savepoint failed: {error}"))?;
+        }
+        Err(_) => {
+            let _ = conn.execute_batch(
+                "ROLLBACK TO materialize_summary;
+                 RELEASE materialize_summary;",
+            );
+        }
+    }
+
+    result
+}
+
+fn materialize_summary_checkpoint_inner(
+    conn: &Connection,
+    session_id: &str,
+    summary_before_turn_id: Option<i64>,
+    existing_meta_lookup: SummaryCheckpointMetaLookup,
+    summary_target_through_turn_id: i64,
+    summary_budget_chars: usize,
+    summary_window_size: usize,
+    diagnostics: &mut SqliteContextLoadDiagnostics,
+) -> Result<Option<SummaryCheckpoint>, String> {
     if summary_target_through_turn_id <= 0 {
         delete_summary_checkpoint(conn, session_id)?;
         return Ok(None);
