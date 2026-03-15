@@ -38,7 +38,7 @@ struct FakeRuntime {
     assembled_context_without_system_prompt: Option<AssembledConversationContext>,
     tool_view_override: Option<crate::tools::ToolView>,
     completion_responses: Mutex<VecDeque<Result<String, String>>>,
-    turn_responses: Mutex<VecDeque<Result<ProviderTurn, String>>>,
+    turn_responses: Mutex<VecDeque<Result<FakeTurnResponse, String>>>,
     after_turn_result: Result<(), String>,
     compact_result: Result<(), String>,
     #[cfg(feature = "memory-sqlite")]
@@ -60,6 +60,11 @@ struct FakeRuntime {
     turn_calls: Mutex<usize>,
     after_turn_calls: Mutex<Vec<(String, String, String, usize)>>,
     compact_calls: Mutex<Vec<(String, usize)>>,
+}
+
+enum FakeTurnResponse {
+    Parsed(ProviderTurn),
+    RawBody(Value),
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -466,13 +471,37 @@ impl FakeRuntime {
         turns: Vec<Result<ProviderTurn, String>>,
         completions: Vec<Result<String, String>>,
     ) -> Self {
+        let turn_responses = turns
+            .into_iter()
+            .map(|turn| turn.map(FakeTurnResponse::Parsed))
+            .collect::<Vec<_>>();
+        Self::with_fake_turn_responses(seed_messages, turn_responses, completions)
+    }
+
+    fn with_turn_bodies_and_completions(
+        seed_messages: Vec<Value>,
+        bodies: Vec<Result<Value, String>>,
+        completions: Vec<Result<String, String>>,
+    ) -> Self {
+        let turn_responses = bodies
+            .into_iter()
+            .map(|body| body.map(FakeTurnResponse::RawBody))
+            .collect::<Vec<_>>();
+        Self::with_fake_turn_responses(seed_messages, turn_responses, completions)
+    }
+
+    fn with_fake_turn_responses(
+        seed_messages: Vec<Value>,
+        turn_responses: Vec<Result<FakeTurnResponse, String>>,
+        completions: Vec<Result<String, String>>,
+    ) -> Self {
         Self {
             seed_messages,
             assembled_context_with_system_prompt: None,
             assembled_context_without_system_prompt: None,
             tool_view_override: None,
             completion_responses: Mutex::new(VecDeque::from(completions)),
-            turn_responses: Mutex::new(VecDeque::from(turns)),
+            turn_responses: Mutex::new(VecDeque::from(turn_responses)),
             after_turn_result: Ok(()),
             compact_result: Ok(()),
             #[cfg(feature = "memory-sqlite")]
@@ -655,11 +684,6 @@ fn persisted_conversation_event_payloads_by_name(
         .collect()
 }
 
-fn provider_turn_from_body(body: Value, session_id: &str, turn_id: &str) -> ProviderTurn {
-    crate::provider::extract_provider_turn_with_scope(&body, Some(session_id), Some(turn_id))
-        .expect("provider body should parse into a turn")
-}
-
 fn assert_discovery_first_followup_summary(
     persisted: &[(String, String, String)],
     raw_tool_output_requested: bool,
@@ -709,20 +733,9 @@ async fn run_provider_shape_tool_search_followup(
     let harness = TurnTestHarness::new();
     std::fs::write(harness.temp_dir.join("note.md"), note_contents).expect("seed test note");
 
-    let runtime = FakeRuntime::with_turns_and_completions(
+    let runtime = FakeRuntime::with_turn_bodies_and_completions(
         vec![],
-        vec![
-            Ok(provider_turn_from_body(
-                first_body,
-                session_id,
-                &format!("{session_id}-provider-turn-0"),
-            )),
-            Ok(provider_turn_from_body(
-                second_body,
-                session_id,
-                &format!("{session_id}-provider-turn-1"),
-            )),
-        ],
+        vec![Ok(first_body), Ok(second_body)],
         vec![completion],
     );
 
@@ -1002,8 +1015,8 @@ impl ConversationRuntime for FakeRuntime {
     async fn request_turn(
         &self,
         config: &LoongClawConfig,
-        _session_id: &str,
-        _turn_id: &str,
+        session_id: &str,
+        turn_id: &str,
         messages: &[Value],
         tool_view: &crate::tools::ToolView,
         _kernel_ctx: Option<&KernelContext>,
@@ -1024,11 +1037,25 @@ impl ConversationRuntime for FakeRuntime {
             .expect("turn provider ids lock")
             .push(config.active_provider_id().unwrap_or_default().to_owned());
         drop(calls);
-        self.turn_responses
+        match self
+            .turn_responses
             .lock()
             .expect("turn response lock")
             .pop_front()
             .unwrap_or_else(|| Err("unexpected_turn_call".to_owned()))
+        {
+            Ok(FakeTurnResponse::Parsed(turn)) => Ok(turn),
+            Ok(FakeTurnResponse::RawBody(body)) => {
+                crate::provider::extract_provider_turn_with_scope_and_messages(
+                    &body,
+                    Some(session_id),
+                    Some(turn_id),
+                    messages,
+                )
+                .ok_or_else(|| "fake_runtime_failed_to_parse_provider_body".to_owned())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     async fn persist_turn(
@@ -6638,8 +6665,8 @@ fn turn_engine_no_tool_intents_returns_final_text() {
 }
 
 #[test]
-fn provider_tool_aliases_flow_through_parse_and_turn_validation() {
-    use crate::conversation::turn_engine::{TurnEngine, TurnValidation};
+fn provider_direct_discoverable_alias_without_search_is_rejected() {
+    use crate::conversation::turn_engine::{TurnEngine, TurnFailureKind};
     use crate::provider::extract_provider_turn;
 
     let response_body = serde_json::json!({
@@ -6660,18 +6687,66 @@ fn provider_tool_aliases_flow_through_parse_and_turn_validation() {
 
     let turn = extract_provider_turn(&response_body).expect("provider turn");
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
-    assert_eq!(turn.tool_intents[0].args_json["tool_id"], "file.read");
-    assert_eq!(
-        turn.tool_intents[0].args_json["arguments"],
-        serde_json::json!({"path":"README.md"})
-    );
+    assert_eq!(turn.tool_intents[0].tool_name, "file.read");
 
     let engine = TurnEngine::new(1);
     let result = engine.validate_turn(&turn);
     match result {
-        Ok(TurnValidation::ToolExecutionRequired) => {}
-        other => panic!("expected ToolExecutionRequired, got {:?}", other),
+        Err(failure) => {
+            assert_eq!(failure.kind, TurnFailureKind::PolicyDenied);
+            assert_eq!(failure.code, "tool_not_found");
+            assert!(
+                !failure.reason.contains("file.read"),
+                "provider denial should not confirm guessed discoverable tool names: {failure:?}"
+            );
+        }
+        other => panic!("expected provider denial, got {:?}", other),
+    }
+}
+
+#[test]
+fn provider_hidden_tool_denial_does_not_leak_name() {
+    use crate::conversation::turn_engine::{
+        ProviderTurn, ToolIntent, TurnEngine, TurnFailureKind, TurnResult,
+    };
+
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![ToolIntent {
+            tool_name: "tool.invoke".to_owned(),
+            args_json: serde_json::json!({
+                "tool_id": "sessions_send",
+                "lease": "guessed.invalid",
+                "arguments": {"session_id": "child", "text": "hi"}
+            }),
+            source: "provider_tool_call".to_owned(),
+            session_id: "child-session".to_owned(),
+            turn_id: "turn-hidden".to_owned(),
+            tool_call_id: "call-hidden".to_owned(),
+        }],
+        raw_meta: Value::Null,
+    };
+
+    let engine = TurnEngine::new(1);
+    let result = engine.evaluate_turn_in_view(
+        &turn,
+        &crate::tools::ToolView::from_tool_names(["tool.search", "tool.invoke", "file.read"]),
+    );
+
+    match result {
+        TurnResult::ToolDenied(failure) => {
+            assert_eq!(failure.kind, TurnFailureKind::PolicyDenied);
+            assert_eq!(failure.code, "tool_not_found");
+            assert!(
+                !failure.reason.contains("sessions_send"),
+                "provider denial should not leak hidden tool ids: {failure:?}"
+            );
+        }
+        other @ TurnResult::FinalText(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected ToolDenied, got {:?}", other)
+        }
     }
 }
 
@@ -6800,10 +6875,14 @@ fn turn_engine_denies_known_tool_outside_restricted_view() {
     match result {
         TurnResult::ToolDenied(failure) => {
             assert_eq!(failure.kind, TurnFailureKind::PolicyDenied);
-            assert_eq!(failure.code, "tool_not_visible");
+            assert_eq!(failure.code, "tool_not_found");
             assert!(
-                failure.reason.contains("tool_not_visible"),
+                failure.reason.contains("tool_not_found"),
                 "failure={failure:?}"
+            );
+            assert!(
+                !failure.reason.contains("shell.exec"),
+                "provider denial should not leak hidden tool names: {failure:?}"
             );
         }
         other @ TurnResult::FinalText(_)
@@ -11460,8 +11539,12 @@ async fn handle_turn_with_runtime_delegate_child_cannot_reenter_delegate_by_defa
         .expect("nested delegate denial reply");
 
     assert!(
-        reply.contains("tool_not_visible: delegate"),
-        "reply should surface nested delegate denial, got: {reply}"
+        reply.contains("tool_not_found: requested tool is not available"),
+        "reply should surface generic nested delegate denial, got: {reply}"
+    );
+    assert!(
+        !reply.contains("tool_not_visible: delegate"),
+        "reply should not leak the nested delegate tool id in the denial reason, got: {reply}"
     );
 }
 
@@ -11587,12 +11670,16 @@ async fn handle_turn_with_runtime_delegate_child_cannot_reenter_delegate_async_b
     assert_eq!(waited.payload["wait_status"], "completed");
     assert_eq!(waited.payload["session"]["state"], "completed");
     assert_eq!(waited.payload["terminal_outcome"]["status"], "ok");
+    let final_output = waited.payload["terminal_outcome"]["payload"]["final_output"]
+        .as_str()
+        .expect("delegate child final output");
     assert!(
-        waited.payload["terminal_outcome"]["payload"]["final_output"]
-            .as_str()
-            .expect("delegate child final output")
-            .contains("tool_not_visible: delegate_async"),
-        "child terminal output should surface nested delegate_async denial, got: {waited:?}"
+        final_output.contains("tool_not_found: requested tool is not available"),
+        "child terminal output should surface generic nested delegate_async denial, got: {waited:?}"
+    );
+    assert!(
+        !final_output.contains("delegate_async"),
+        "child terminal output should not leak hidden delegate_async by name, got: {waited:?}"
     );
 }
 

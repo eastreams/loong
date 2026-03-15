@@ -41,7 +41,10 @@ mod request_session_runtime;
 mod shape;
 mod transport;
 
-pub use shape::{extract_provider_turn, extract_provider_turn_with_scope};
+pub use shape::{
+    extract_provider_turn, extract_provider_turn_with_scope,
+    extract_provider_turn_with_scope_and_messages,
+};
 
 #[cfg(test)]
 use auth_profile_runtime::{ProviderAuthProfile, resolve_provider_auth_profiles};

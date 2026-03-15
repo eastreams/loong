@@ -207,7 +207,14 @@ async fn request_turn_with_provider(
                     tool_definitions,
                 )
             },
-            |body| shape::extract_provider_turn_with_scope(body, Some(session_id), Some(turn_id)),
+            |body| {
+                shape::extract_provider_turn_with_scope_and_messages(
+                    body,
+                    Some(session_id),
+                    Some(turn_id),
+                    messages,
+                )
+            },
             "choices[0].message",
             |api_error| {
                 if include_tool_schema.load(Ordering::Relaxed)
