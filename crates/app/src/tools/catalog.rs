@@ -307,7 +307,7 @@ pub fn tool_catalog() -> ToolCatalog {
             name: "external_skills.inspect",
             provider_name: "external_skills_inspect",
             aliases: &[],
-            description: "Read metadata for an installed external skill",
+            description: "Read metadata for a resolved external skill across managed, user, and project scopes",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
@@ -327,7 +327,7 @@ pub fn tool_catalog() -> ToolCatalog {
             name: "external_skills.invoke",
             provider_name: "external_skills_invoke",
             aliases: &[],
-            description: "Load an installed external skill into the conversation loop",
+            description: "Load a resolved external skill into the conversation loop",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
@@ -337,7 +337,7 @@ pub fn tool_catalog() -> ToolCatalog {
             name: "external_skills.list",
             provider_name: "external_skills_list",
             aliases: &[],
-            description: "List managed external skills available for invocation",
+            description: "List resolved external skills across managed, user, and project scopes",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
@@ -1139,13 +1139,13 @@ fn external_skills_inspect_definition(descriptor: &ToolDescriptor) -> Value {
         "type": "function",
         "function": {
             "name": descriptor.provider_name,
-            "description": "Read metadata and a short preview for an installed external skill.",
+            "description": "Read metadata and a short preview for a resolved external skill across managed, user, and project scopes.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "skill_id": {
                         "type": "string",
-                        "description": "Managed external skill identifier."
+                        "description": "Resolved external skill identifier."
                     }
                 },
                 "required": ["skill_id"],
@@ -1189,13 +1189,13 @@ fn external_skills_invoke_definition(descriptor: &ToolDescriptor) -> Value {
         "type": "function",
         "function": {
             "name": descriptor.provider_name,
-            "description": "Load an installed external skill's SKILL.md instructions into the conversation loop.",
+            "description": "Load a resolved external skill's SKILL.md instructions into the conversation loop across managed, user, and project scopes.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "skill_id": {
                         "type": "string",
-                        "description": "Managed external skill identifier."
+                        "description": "Resolved external skill identifier."
                     }
                 },
                 "required": ["skill_id"],
@@ -1210,7 +1210,7 @@ fn external_skills_list_definition(descriptor: &ToolDescriptor) -> Value {
         "type": "function",
         "function": {
             "name": descriptor.provider_name,
-            "description": "List managed external skills available for invocation.",
+            "description": "List resolved external skills available for invocation across managed, user, and project scopes.",
             "parameters": {
                 "type": "object",
                 "properties": {},

@@ -405,20 +405,23 @@ Agent-facing tools:
   - Accepts a directory containing `SKILL.md` or a local `.tgz` / `.tar.gz` archive.
   - Installs the skill under `<tools.file_root>/external-skills-installed/` by default.
 - `external_skills_list`
-  - Lists managed installed skills that are available for invocation.
+  - Lists resolved external skills across `managed`, `user`, and `project` scopes.
+  - Reports lower-priority duplicates under `shadowed_skills` so operators can debug precedence.
 - `external_skills_inspect`
-  - Returns metadata and a short preview for an installed skill.
+  - Returns metadata and a short preview for the resolved skill plus any shadowed duplicates with the same `skill_id`.
 - `external_skills_invoke`
-  - Loads an installed skill's `SKILL.md` instructions into the conversation loop.
+  - Loads the resolved skill's `SKILL.md` instructions into the conversation loop.
 - `external_skills_remove`
   - Removes a managed installed skill and updates the local index.
 
 Operator-facing CLI:
 
 - `loongclaw skills list [--config PATH] [--json]`
-  - Lists managed installed skills using the current config/runtime guardrails.
+  - Lists resolved external skills across `managed`, `user`, and `project` scopes using the current config/runtime guardrails.
+  - Includes `shadowed skills` in text output and `shadowed_skills` in JSON output when duplicate ids are hidden by precedence.
 - `loongclaw skills info <skill-id> [--config PATH] [--json]`
-  - Shows structured metadata plus a short `SKILL.md` preview for one installed skill.
+  - Shows structured metadata plus a short `SKILL.md` preview for one resolved skill.
+  - Includes any lower-priority duplicates that were shadowed by the selected skill.
 - `loongclaw skills install <path> [--skill-id ID] [--replace] [--config PATH] [--json]`
   - Installs a local skill directory or `.tgz` / `.tar.gz` archive through the same managed runtime path as `external_skills.install`.
 - `loongclaw skills remove <skill-id> [--config PATH] [--json]`
@@ -432,6 +435,9 @@ Recommended runtime flow:
 1. Download with `external_skills.fetch`
 2. Install with `external_skills.install` or `loongclaw skills install`
 3. Discover with `external_skills.list` or `loongclaw skills list`
+   - Resolution order is `managed > user > project`
+   - Project discovery probes `.agents/skills`, `.codex/skills`, `.claude/skills`, and `skills/`
+   - User discovery probes `~/.agents/skills`, `~/.codex/skills`, and `~/.claude/skills`
 4. Inspect with `external_skills.inspect` or `loongclaw skills info`
 5. Load instructions with `external_skills.invoke`
 

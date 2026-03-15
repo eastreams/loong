@@ -7,9 +7,9 @@ use std::{collections::BTreeSet, path::Path};
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SkillsCommands {
-    /// List installed managed external skills
+    /// List discovered external skills across managed, user, and project scopes
     List,
-    /// Inspect one installed managed external skill
+    /// Inspect one resolved external skill
     #[command(visible_alias = "inspect")]
     Info { skill_id: String },
     /// Install a managed external skill from a local directory or archive
@@ -233,15 +233,13 @@ fn execute_policy_command(
                 config.external_skills.allowed_domains.clear();
             } else if !allowed_domains.is_empty() {
                 config.external_skills.allowed_domains =
-                    normalize_domain_inputs(allowed_domains)
-                        .map_err(|error| format!("invalid --allow-domain value: {error}"))?;
+                    normalize_domain_inputs("--allow-domain", allowed_domains)?;
             }
             if clear_blocked_domains {
                 config.external_skills.blocked_domains.clear();
             } else if !blocked_domains.is_empty() {
                 config.external_skills.blocked_domains =
-                    normalize_domain_inputs(blocked_domains)
-                        .map_err(|error| format!("invalid --block-domain value: {error}"))?;
+                    normalize_domain_inputs("--block-domain", blocked_domains)?;
             }
 
             persist_config_update(resolved_path, config)?;
@@ -293,10 +291,11 @@ fn persistent_policy_payload(config: &mvp::config::LoongClawConfig) -> Value {
     })
 }
 
-fn normalize_domain_inputs(entries: Vec<String>) -> Result<Vec<String>, String> {
+fn normalize_domain_inputs(flag: &str, entries: Vec<String>) -> CliResult<Vec<String>> {
     let mut normalized = BTreeSet::new();
     for entry in entries {
-        let value = mvp::tools::normalize_external_skills_domain_rule(&entry)?;
+        let value = mvp::tools::normalize_external_skill_domain_rule(entry.as_str())
+            .map_err(|error| format!("invalid domain rule for {flag}: {error}"))?;
         normalized.insert(value);
     }
     Ok(normalized.into_iter().collect())
@@ -329,23 +328,17 @@ pub(crate) fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliR
             } else {
                 lines.push("skills:".to_owned());
                 for skill in skills {
-                    let skill_id = skill
-                        .get("skill_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or("<unknown>");
-                    let active = if skill.get("active").and_then(Value::as_bool).unwrap_or(true) {
-                        "active"
-                    } else {
-                        "inactive"
-                    };
-                    let display_name = skill
-                        .get("display_name")
-                        .and_then(Value::as_str)
-                        .unwrap_or("-");
-                    let summary = skill.get("summary").and_then(Value::as_str).unwrap_or("-");
-                    lines.push(format!(
-                        "- {skill_id} [{active}] display_name={display_name} summary={summary}"
-                    ));
+                    lines.push(format!("- {}", render_skill_summary_line(skill)));
+                }
+            }
+            let shadowed = payload
+                .get("shadowed_skills")
+                .and_then(Value::as_array)
+                .ok_or_else(|| "skills list payload missing `shadowed_skills` array".to_owned())?;
+            if !shadowed.is_empty() {
+                lines.push("shadowed skills:".to_owned());
+                for skill in shadowed {
+                    lines.push(format!("- {}", render_skill_summary_line(skill)));
                 }
             }
         }
@@ -366,8 +359,19 @@ pub(crate) fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliR
                     .unwrap_or("-")
             ));
             lines.push(format!(
+                "scope={}",
+                skill.get("scope").and_then(Value::as_str).unwrap_or("-")
+            ));
+            lines.push(format!(
                 "active={}",
                 skill.get("active").and_then(Value::as_bool).unwrap_or(true)
+            ));
+            lines.push(format!(
+                "source_path={}",
+                skill
+                    .get("source_path")
+                    .and_then(Value::as_str)
+                    .unwrap_or("-")
             ));
             lines.push(format!(
                 "install_path={}",
@@ -395,6 +399,16 @@ pub(crate) fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliR
                     .unwrap_or("-")
                     .to_owned(),
             );
+            let shadowed = payload
+                .get("shadowed_skills")
+                .and_then(Value::as_array)
+                .ok_or_else(|| "skills info payload missing `shadowed_skills` array".to_owned())?;
+            if !shadowed.is_empty() {
+                lines.push("shadowed skills:".to_owned());
+                for shadowed_skill in shadowed {
+                    lines.push(format!("- {}", render_skill_summary_line(shadowed_skill)));
+                }
+            }
         }
         "external_skills.install" => {
             lines.push(format!(
@@ -530,4 +544,23 @@ fn render_string_list(value: Option<&Value>) -> String {
             }
         })
         .unwrap_or_else(|| "-".to_owned())
+}
+
+fn render_skill_summary_line(skill: &Value) -> String {
+    let skill_id = skill
+        .get("skill_id")
+        .and_then(Value::as_str)
+        .unwrap_or("<unknown>");
+    let active = if skill.get("active").and_then(Value::as_bool).unwrap_or(true) {
+        "active"
+    } else {
+        "inactive"
+    };
+    let scope = skill.get("scope").and_then(Value::as_str).unwrap_or("-");
+    let display_name = skill
+        .get("display_name")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let summary = skill.get("summary").and_then(Value::as_str).unwrap_or("-");
+    format!("{skill_id} [{active}] scope={scope} display_name={display_name} summary={summary}")
 }
