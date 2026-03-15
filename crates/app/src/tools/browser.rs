@@ -659,7 +659,9 @@ fn collapse_whitespace(input: &str) -> String {
 #[cfg(test)]
 fn clear_browser_sessions() {
     if let Ok(mut sessions) = browser_sessions().lock() {
-        sessions.clear();
+        // Only clear the default scope so that tests using custom scope IDs
+        // (e.g. "scope-a", "scope-b") are not disrupted by parallel tests.
+        sessions.remove(DEFAULT_BROWSER_SCOPE_ID);
     }
 }
 

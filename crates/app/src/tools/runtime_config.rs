@@ -786,6 +786,8 @@ mod tests {
         let config = crate::config::LoongClawConfig {
             feishu: crate::config::FeishuChannelConfig {
                 enabled: true,
+                app_id_env: None,
+                app_secret_env: None,
                 accounts: BTreeMap::from([(
                     "disabled_account".to_owned(),
                     crate::config::FeishuAccountConfig {
