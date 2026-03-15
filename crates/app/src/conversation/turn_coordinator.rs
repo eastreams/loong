@@ -1791,7 +1791,9 @@ impl ConversationTurnCoordinator {
             AcpConversationTurnEntryDecision::StayOnProvider => {}
         }
 
-        runtime.bootstrap(config, session_id, kernel_ctx).await?;
+        if let Some(kernel_ctx) = kernel_ctx {
+            runtime.bootstrap(config, session_id, kernel_ctx).await?;
+        }
         let session_context = runtime.session_context(config, session_id, kernel_ctx)?;
         let tool_view = session_context.tool_view.clone();
         let preparation = ProviderTurnPreparation::from_assembled_context(
@@ -1977,6 +1979,9 @@ async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
     {
         return Ok(ContextCompactionOutcome::Skipped);
     }
+    let Some(kernel_ctx) = kernel_ctx else {
+        return Ok(ContextCompactionOutcome::Skipped);
+    };
 
     match runtime
         .compact_context(config, session_id, messages, kernel_ctx)
@@ -2405,6 +2410,31 @@ async fn repair_turn_checkpoint_tail_entry<R: ConversationRuntime + ?Sized>(
         restore_analytics_turn_checkpoint_progress_status(repair_plan.compaction_status());
 
     if repair_plan.should_run_after_turn() {
+        let Some(kernel_ctx) = kernel_ctx else {
+            after_turn_status = TurnCheckpointProgressStatus::Skipped;
+            if repair_plan.should_run_compaction() {
+                compaction_status = TurnCheckpointProgressStatus::Skipped;
+            }
+            persist_turn_checkpoint_event_value(
+                runtime,
+                session_id,
+                &entry.checkpoint,
+                TurnCheckpointStage::Finalized,
+                TurnCheckpointFinalizationProgress {
+                    after_turn: after_turn_status,
+                    compaction: compaction_status,
+                },
+                None,
+                kernel_ctx,
+            )
+            .await?;
+            return Ok(TurnCheckpointTailRepairOutcome::repaired(
+                action,
+                summary,
+                after_turn_status,
+                compaction_status,
+            ));
+        };
         match runtime
             .after_turn(
                 session_id,
@@ -2436,7 +2466,7 @@ async fn repair_turn_checkpoint_tail_entry<R: ConversationRuntime + ?Sized>(
                         step: TurnCheckpointFailureStep::AfterTurn,
                         error: error.clone(),
                     }),
-                    kernel_ctx,
+                    Some(kernel_ctx),
                 )
                 .await?;
                 return Err(error);
@@ -2643,36 +2673,40 @@ async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     .await?;
 
     let after_turn_status = if checkpoint.finalization.runs_after_turn() {
-        match runtime
-            .after_turn(
-                session_id,
-                user_input,
-                tail_phase.reply(),
-                tail_phase.after_turn_messages(),
-                kernel_ctx,
-            )
-            .await
-        {
-            Ok(()) => TurnCheckpointProgressStatus::Completed,
-            Err(error) => {
-                persist_turn_checkpoint_event(
-                    runtime,
+        if let Some(kernel_ctx) = kernel_ctx {
+            match runtime
+                .after_turn(
                     session_id,
-                    checkpoint,
-                    TurnCheckpointStage::FinalizationFailed,
-                    TurnCheckpointFinalizationProgress {
-                        after_turn: TurnCheckpointProgressStatus::Failed,
-                        compaction: TurnCheckpointProgressStatus::Skipped,
-                    },
-                    Some(TurnCheckpointFailure {
-                        step: TurnCheckpointFailureStep::AfterTurn,
-                        error: error.clone(),
-                    }),
+                    user_input,
+                    tail_phase.reply(),
+                    tail_phase.after_turn_messages(),
                     kernel_ctx,
                 )
-                .await?;
-                return Err(error);
+                .await
+            {
+                Ok(()) => TurnCheckpointProgressStatus::Completed,
+                Err(error) => {
+                    persist_turn_checkpoint_event(
+                        runtime,
+                        session_id,
+                        checkpoint,
+                        TurnCheckpointStage::FinalizationFailed,
+                        TurnCheckpointFinalizationProgress {
+                            after_turn: TurnCheckpointProgressStatus::Failed,
+                            compaction: TurnCheckpointProgressStatus::Skipped,
+                        },
+                        Some(TurnCheckpointFailure {
+                            step: TurnCheckpointFailureStep::AfterTurn,
+                            error: error.clone(),
+                        }),
+                        Some(kernel_ctx),
+                    )
+                    .await?;
+                    return Err(error);
+                }
             }
+        } else {
+            TurnCheckpointProgressStatus::Skipped
         }
     } else {
         TurnCheckpointProgressStatus::Skipped

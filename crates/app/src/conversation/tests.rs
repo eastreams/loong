@@ -337,7 +337,7 @@ impl ConversationContextEngine for RecordingLifecycleContextEngine {
         &self,
         _config: &LoongClawConfig,
         session_id: &str,
-        _kernel_ctx: Option<&KernelContext>,
+        _kernel_ctx: &KernelContext,
     ) -> CliResult<ContextEngineBootstrapResult> {
         self.calls
             .lock()
@@ -354,7 +354,7 @@ impl ConversationContextEngine for RecordingLifecycleContextEngine {
         &self,
         session_id: &str,
         message: &Value,
-        _kernel_ctx: Option<&KernelContext>,
+        _kernel_ctx: &KernelContext,
     ) -> CliResult<ContextEngineIngestResult> {
         let role = message
             .get("role")
@@ -371,7 +371,7 @@ impl ConversationContextEngine for RecordingLifecycleContextEngine {
         &self,
         parent_session_id: &str,
         subagent_session_id: &str,
-        _kernel_ctx: Option<&KernelContext>,
+        _kernel_ctx: &KernelContext,
     ) -> CliResult<()> {
         self.calls
             .lock()
@@ -386,7 +386,7 @@ impl ConversationContextEngine for RecordingLifecycleContextEngine {
         &self,
         parent_session_id: &str,
         subagent_session_id: &str,
-        _kernel_ctx: Option<&KernelContext>,
+        _kernel_ctx: &KernelContext,
     ) -> CliResult<()> {
         self.calls
             .lock()
@@ -817,7 +817,7 @@ impl ConversationRuntime for FakeRuntime {
         &self,
         _config: &LoongClawConfig,
         session_id: &str,
-        _kernel_ctx: Option<&KernelContext>,
+        _kernel_ctx: &KernelContext,
     ) -> CliResult<ContextEngineBootstrapResult> {
         self.bootstrap_calls
             .lock()
@@ -834,7 +834,7 @@ impl ConversationRuntime for FakeRuntime {
         &self,
         session_id: &str,
         message: &Value,
-        _kernel_ctx: Option<&KernelContext>,
+        _kernel_ctx: &KernelContext,
     ) -> CliResult<ContextEngineIngestResult> {
         self.ingested_messages
             .lock()
@@ -966,7 +966,7 @@ impl ConversationRuntime for FakeRuntime {
         user_input: &str,
         assistant_reply: &str,
         messages: &[Value],
-        _kernel_ctx: Option<&KernelContext>,
+        _kernel_ctx: &KernelContext,
     ) -> CliResult<()> {
         self.after_turn_calls
             .lock()
@@ -985,7 +985,7 @@ impl ConversationRuntime for FakeRuntime {
         _config: &LoongClawConfig,
         session_id: &str,
         messages: &[Value],
-        _kernel_ctx: Option<&KernelContext>,
+        _kernel_ctx: &KernelContext,
     ) -> CliResult<()> {
         self.compact_calls
             .lock()
@@ -999,6 +999,51 @@ fn test_config() -> LoongClawConfig {
     LoongClawConfig {
         provider: ProviderConfig::default(),
         ..LoongClawConfig::default()
+    }
+}
+
+fn test_kernel_context(agent_id: &str) -> KernelContext {
+    crate::context::bootstrap_kernel_context(agent_id, 60).expect("bootstrap test kernel context")
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn test_kernel_context_with_memory(
+    agent_id: &str,
+    memory_config: &MemoryRuntimeConfig,
+) -> KernelContext {
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack-memory".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::MemoryRead, Capability::MemoryWrite]),
+        metadata: BTreeMap::new(),
+    };
+    kernel
+        .register_pack(pack)
+        .expect("register memory test pack");
+    kernel.register_core_memory_adapter(crate::memory::MvpMemoryAdapter::with_config(
+        memory_config.clone(),
+    ));
+    kernel
+        .set_default_core_memory_adapter("mvp-memory")
+        .expect("set memory test adapter");
+
+    let token = kernel
+        .issue_token("test-pack-memory", agent_id, 60)
+        .expect("issue memory test token");
+
+    KernelContext {
+        kernel: Arc::new(kernel),
+        token,
     }
 }
 
@@ -1207,15 +1252,17 @@ fn default_runtime_session_context_uses_persisted_parent_session_id() {
 }
 
 #[tokio::test]
-async fn default_runtime_delegates_bootstrap_and_ingest_to_context_engine() {
+async fn default_runtime_delegates_bootstrap_and_ingest_to_context_engine_with_kernel() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let runtime =
         DefaultConversationRuntime::with_context_engine(RecordingLifecycleContextEngine {
             calls: calls.clone(),
         });
+    let kernel_ctx = crate::context::bootstrap_kernel_context("test-runtime-lifecycle", 60)
+        .expect("bootstrap kernel context");
 
     let bootstrap = runtime
-        .bootstrap(&test_config(), "session-lifecycle", None)
+        .bootstrap(&test_config(), "session-lifecycle", &kernel_ctx)
         .await
         .expect("bootstrap should delegate to context engine");
     let ingest = runtime
@@ -1225,7 +1272,7 @@ async fn default_runtime_delegates_bootstrap_and_ingest_to_context_engine() {
                 "role": "user",
                 "content": "hello",
             }),
-            None,
+            &kernel_ctx,
         )
         .await
         .expect("ingest should delegate to context engine");
@@ -1242,19 +1289,21 @@ async fn default_runtime_delegates_bootstrap_and_ingest_to_context_engine() {
 }
 
 #[tokio::test]
-async fn default_runtime_delegates_subagent_lifecycle_to_context_engine() {
+async fn default_runtime_delegates_subagent_lifecycle_to_context_engine_with_kernel() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let runtime =
         DefaultConversationRuntime::with_context_engine(RecordingLifecycleContextEngine {
             calls: calls.clone(),
         });
+    let kernel_ctx = crate::context::bootstrap_kernel_context("test-runtime-subagent", 60)
+        .expect("bootstrap kernel context");
 
     runtime
-        .prepare_subagent_spawn("session-parent", "session-child", None)
+        .prepare_subagent_spawn("session-parent", "session-child", &kernel_ctx)
         .await
         .expect("prepare_subagent_spawn should delegate to context engine");
     runtime
-        .on_subagent_ended("session-parent", "session-child", None)
+        .on_subagent_ended("session-parent", "session-child", &kernel_ctx)
         .await
         .expect("on_subagent_ended should delegate to context engine");
 
@@ -1525,12 +1574,14 @@ async fn default_runtime_prefers_env_context_engine_over_config() {
 }
 
 #[tokio::test]
-async fn handle_turn_with_runtime_success_persists_user_and_assistant_turns() {
+async fn handle_turn_with_runtime_success_with_kernel_runs_lifecycle_hooks() {
     let runtime = FakeRuntime::new(
         vec![json!({"role": "system", "content": "sys"})],
         Ok("assistant-reply".to_owned()),
     );
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = crate::context::bootstrap_kernel_context("test-handle-turn-success", 60)
+        .expect("bootstrap kernel context");
     let reply = coordinator
         .handle_turn_with_runtime(
             &test_config(),
@@ -1538,7 +1589,7 @@ async fn handle_turn_with_runtime_success_persists_user_and_assistant_turns() {
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            Some(&kernel_ctx),
         )
         .await
         .expect("handle turn success");
@@ -1606,6 +1657,76 @@ async fn handle_turn_with_runtime_success_persists_user_and_assistant_turns() {
     assert_eq!(compact.len(), 1);
     assert_eq!(compact[0].0, "session-1");
     assert_eq!(compact[0].1, 3);
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_success_without_kernel_skips_lifecycle_hooks() {
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("assistant-reply".to_owned()),
+    );
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &test_config(),
+            "session-1-no-kernel",
+            "hello",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("handle turn success without kernel");
+
+    assert_eq!(reply, "assistant-reply");
+    assert!(
+        runtime
+            .bootstrap_calls
+            .lock()
+            .expect("bootstrap lock")
+            .is_empty()
+    );
+    assert!(
+        runtime
+            .ingested_messages
+            .lock()
+            .expect("ingest lock")
+            .is_empty()
+    );
+    assert!(
+        runtime
+            .after_turn_calls
+            .lock()
+            .expect("after-turn lock")
+            .is_empty()
+    );
+    assert!(
+        runtime
+            .compact_calls
+            .lock()
+            .expect("compact lock")
+            .is_empty()
+    );
+
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    let visible_turns = persisted_visible_turns(&persisted);
+    assert_eq!(visible_turns.len(), 2);
+    assert_eq!(
+        visible_turns[0],
+        (
+            "session-1-no-kernel".to_owned(),
+            "user".to_owned(),
+            "hello".to_owned()
+        )
+    );
+    assert_eq!(
+        visible_turns[1],
+        (
+            "session-1-no-kernel".to_owned(),
+            "assistant".to_owned(),
+            "assistant-reply".to_owned(),
+        )
+    );
 }
 
 #[tokio::test]
@@ -2151,13 +2272,12 @@ async fn handle_turn_with_runtime_uses_provider_path_when_acp_dispatch_is_disabl
         "ACP backend should not receive turns when dispatch is disabled"
     );
     assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 1);
-    assert_eq!(
+    assert!(
         runtime
             .bootstrap_calls
             .lock()
             .expect("bootstrap lock")
-            .as_slice(),
-        ["telegram:424242"]
+            .is_empty()
     );
 }
 
@@ -3128,6 +3248,7 @@ async fn handle_turn_with_runtime_compacts_when_token_threshold_reached() {
     config.conversation.compact_trigger_estimated_tokens = Some(1);
 
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("test-compaction-token-threshold");
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
@@ -3135,7 +3256,7 @@ async fn handle_turn_with_runtime_compacts_when_token_threshold_reached() {
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            Some(&kernel_ctx),
         )
         .await
         .expect("handle turn success");
@@ -3157,6 +3278,7 @@ async fn handle_turn_with_runtime_compaction_error_is_ignored_when_fail_open() {
     config.conversation.compact_fail_open = true;
 
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("test-compaction-fail-open");
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
@@ -3164,7 +3286,7 @@ async fn handle_turn_with_runtime_compaction_error_is_ignored_when_fail_open() {
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            Some(&kernel_ctx),
         )
         .await
         .expect("fail-open mode should keep turn successful");
@@ -3185,6 +3307,7 @@ async fn handle_turn_with_runtime_compaction_error_propagates_when_fail_closed()
     config.conversation.compact_fail_open = false;
 
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("test-compaction-fail-closed");
     let error = coordinator
         .handle_turn_with_runtime(
             &config,
@@ -3192,7 +3315,7 @@ async fn handle_turn_with_runtime_compaction_error_propagates_when_fail_closed()
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            Some(&kernel_ctx),
         )
         .await
         .expect_err("fail-closed mode should propagate compaction error");
@@ -3213,6 +3336,7 @@ async fn handle_turn_with_runtime_persists_turn_checkpoint_events_for_successful
     config.conversation.compact_enabled = false;
 
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("test-turn-checkpoint-success");
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
@@ -3220,7 +3344,7 @@ async fn handle_turn_with_runtime_persists_turn_checkpoint_events_for_successful
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            Some(&kernel_ctx),
         )
         .await
         .expect("success path should persist checkpoint events");
@@ -3282,6 +3406,7 @@ async fn handle_turn_with_runtime_persists_turn_checkpoint_events_for_inline_pro
     config.conversation.compact_enabled = false;
 
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("test-turn-checkpoint-inline-error");
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
@@ -3289,7 +3414,7 @@ async fn handle_turn_with_runtime_persists_turn_checkpoint_events_for_inline_pro
             "hello",
             ProviderErrorMode::InlineMessage,
             &runtime,
-            None,
+            Some(&kernel_ctx),
         )
         .await
         .expect("inline provider error should persist checkpoint events");
@@ -3382,6 +3507,7 @@ async fn handle_turn_with_runtime_persists_failed_turn_checkpoint_when_compactio
     config.conversation.compact_trigger_estimated_tokens = Some(1);
 
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("test-turn-checkpoint-compaction-failure");
     let error = coordinator
         .handle_turn_with_runtime(
             &config,
@@ -3389,7 +3515,7 @@ async fn handle_turn_with_runtime_persists_failed_turn_checkpoint_when_compactio
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            Some(&kernel_ctx),
         )
         .await
         .expect_err("compaction failure should still persist failed checkpoint event");
@@ -3434,13 +3560,12 @@ async fn handle_turn_with_runtime_propagates_error_without_persisting_reply_turn
         .expect_err("propagate mode should return error");
 
     assert!(error.contains("timeout"));
-    assert_eq!(
+    assert!(
         runtime
             .bootstrap_calls
             .lock()
             .expect("bootstrap lock")
-            .as_slice(),
-        ["session-2"]
+            .is_empty()
     );
     let persisted = runtime.persisted.lock().expect("persisted lock").clone();
     let payloads = persisted_conversation_event_payloads_by_name(&persisted, "turn_checkpoint");
@@ -3487,13 +3612,12 @@ async fn handle_turn_with_runtime_inline_mode_returns_synthetic_reply_and_persis
         .expect("inline mode should return synthetic reply");
 
     assert_eq!(output, "[provider_error] timeout");
-    assert_eq!(
+    assert!(
         runtime
             .bootstrap_calls
             .lock()
             .expect("bootstrap lock")
-            .as_slice(),
-        ["session-3"]
+            .is_empty()
     );
 
     let persisted = runtime.persisted.lock().expect("persisted lock").clone();
@@ -3521,27 +3645,17 @@ async fn handle_turn_with_runtime_inline_mode_returns_synthetic_reply_and_persis
         .lock()
         .expect("ingest lock")
         .clone();
-    assert_eq!(ingested.len(), 2);
-    assert_eq!(ingested[0].1["role"], "user");
-    assert_eq!(ingested[0].1["content"], "hello");
-    assert_eq!(ingested[1].1["role"], "assistant");
-    assert_eq!(ingested[1].1["content"], "[provider_error] timeout");
+    assert!(ingested.is_empty());
 
     let after_turn = runtime
         .after_turn_calls
         .lock()
         .expect("after-turn lock")
         .clone();
-    assert_eq!(after_turn.len(), 1);
-    assert_eq!(after_turn[0].0, "session-3");
-    assert_eq!(after_turn[0].1, "hello");
-    assert_eq!(after_turn[0].2, "[provider_error] timeout");
-    assert_eq!(after_turn[0].3, 2);
+    assert!(after_turn.is_empty());
 
     let compact = runtime.compact_calls.lock().expect("compact lock").clone();
-    assert_eq!(compact.len(), 1);
-    assert_eq!(compact[0].0, "session-3");
-    assert_eq!(compact[0].1, 2);
+    assert!(compact.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -7706,9 +7820,11 @@ async fn repair_turn_checkpoint_tail_with_runtime_finalizes_pending_checkpoint()
         vec![],
     );
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx =
+        test_kernel_context_with_memory("test-turn-checkpoint-repair-pending", &mem_config);
 
     let outcome = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, None)
+        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, Some(&kernel_ctx))
         .await
         .expect("repair pending checkpoint");
 
@@ -8112,9 +8228,11 @@ async fn repair_turn_checkpoint_tail_with_runtime_retries_failed_compaction_only
         vec![],
     );
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx =
+        test_kernel_context_with_memory("test-turn-checkpoint-repair-compaction", &mem_config);
 
     let outcome = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, None)
+        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, Some(&kernel_ctx))
         .await
         .expect("repair failed compaction checkpoint");
 
@@ -8226,9 +8344,13 @@ async fn repair_turn_checkpoint_tail_rebuilds_original_finalization_context_for_
             },
         );
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context_with_memory(
+        "test-turn-checkpoint-repair-compaction-context",
+        &mem_config,
+    );
 
     let outcome = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, None)
+        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, Some(&kernel_ctx))
         .await
         .expect("repair should replay compaction against original finalization context");
 
@@ -8329,9 +8451,13 @@ async fn repair_turn_checkpoint_tail_prefers_checkpoint_estimate_for_compaction_
             system_prompt_addition: None,
         });
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context_with_memory(
+        "test-turn-checkpoint-repair-compaction-estimate",
+        &mem_config,
+    );
 
     let outcome = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, None)
+        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, Some(&kernel_ctx))
         .await
         .expect("repair should reuse checkpoint estimate for compaction retry");
 
@@ -11109,9 +11235,13 @@ async fn repair_turn_checkpoint_tail_with_runtime_persists_failed_after_turn_rep
     )
     .with_after_turn_result(Err("repair after_turn failed".to_owned()));
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context_with_memory(
+        "test-turn-checkpoint-repair-after-turn-failure",
+        &mem_config,
+    );
 
     let error = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, None)
+        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, Some(&kernel_ctx))
         .await
         .expect_err("after_turn repair should fail closed");
     assert!(error.contains("repair after_turn failed"));
@@ -11215,9 +11345,13 @@ async fn repair_turn_checkpoint_tail_with_runtime_persists_failed_compaction_rep
     )
     .with_compact_result(Err("repair compaction failed".to_owned()));
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context_with_memory(
+        "test-turn-checkpoint-repair-compaction-failure",
+        &mem_config,
+    );
 
     let error = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, None)
+        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, Some(&kernel_ctx))
         .await
         .expect_err("compaction repair should fail closed");
     assert!(error.contains("repair compaction failed"));
@@ -11319,9 +11453,13 @@ async fn durable_turn_checkpoint_repair_persists_finalized_checkpoint_and_repeat
     )
     .with_durable_memory_config(mem_config.clone());
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context_with_memory(
+        "test-turn-checkpoint-durable-repair-idempotent",
+        &mem_config,
+    );
 
     let first = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, None)
+        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, Some(&kernel_ctx))
         .await
         .expect("first durable repair should succeed");
     assert_eq!(first.status().as_str(), "repaired");
@@ -11357,7 +11495,7 @@ async fn durable_turn_checkpoint_repair_persists_finalized_checkpoint_and_repeat
     assert!(!summary_after_first.requires_recovery);
 
     let second = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, None)
+        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, Some(&kernel_ctx))
         .await
         .expect("second durable repair should be a noop");
     assert_eq!(second.status().as_str(), "not_needed");
@@ -11462,9 +11600,16 @@ async fn durable_turn_checkpoint_repair_persists_failed_terminal_checkpoint_then
     .with_durable_memory_config(mem_config.clone())
     .with_compact_result(Err("durable repair compaction failed".to_owned()));
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx =
+        test_kernel_context_with_memory("test-turn-checkpoint-durable-repair-retry", &mem_config);
 
     let error = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &failing_runtime, None)
+        .repair_turn_checkpoint_tail_with_runtime(
+            &config,
+            session_id,
+            &failing_runtime,
+            Some(&kernel_ctx),
+        )
         .await
         .expect_err("first durable repair should persist failure and return error");
     assert!(error.contains("durable repair compaction failed"));
@@ -11521,7 +11666,12 @@ async fn durable_turn_checkpoint_repair_persists_failed_terminal_checkpoint_then
     .with_durable_memory_config(mem_config.clone());
 
     let retry = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &retry_runtime, None)
+        .repair_turn_checkpoint_tail_with_runtime(
+            &config,
+            session_id,
+            &retry_runtime,
+            Some(&kernel_ctx),
+        )
         .await
         .expect("second durable repair should recover");
     assert_eq!(retry.status().as_str(), "repaired");
@@ -11565,7 +11715,12 @@ async fn durable_turn_checkpoint_repair_persists_failed_terminal_checkpoint_then
     assert!(!summary_after_retry.requires_recovery);
 
     let third = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &retry_runtime, None)
+        .repair_turn_checkpoint_tail_with_runtime(
+            &config,
+            session_id,
+            &retry_runtime,
+            Some(&kernel_ctx),
+        )
         .await
         .expect("finalized durable repair should stay noop");
     assert_eq!(third.status().as_str(), "not_needed");

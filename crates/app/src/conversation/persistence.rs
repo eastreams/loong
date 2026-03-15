@@ -186,16 +186,18 @@ async fn persist_and_ingest_turn<R: ConversationRuntime + ?Sized>(
     runtime
         .persist_turn(session_id, role, content, kernel_ctx)
         .await?;
-    runtime
-        .ingest(
-            session_id,
-            &json!({
-                "role": role,
-                "content": content,
-            }),
-            kernel_ctx,
-        )
-        .await?;
+    if let Some(kernel_ctx) = kernel_ctx {
+        runtime
+            .ingest(
+                session_id,
+                &json!({
+                    "role": role,
+                    "content": content,
+                }),
+                kernel_ctx,
+            )
+            .await?;
+    }
     Ok(())
 }
 

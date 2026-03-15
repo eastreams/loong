@@ -305,7 +305,7 @@ pub trait ConversationRuntime: Send + Sync {
         &self,
         _config: &LoongClawConfig,
         _session_id: &str,
-        _kernel_ctx: Option<&KernelContext>,
+        _kernel_ctx: &KernelContext,
     ) -> CliResult<ContextEngineBootstrapResult> {
         Ok(ContextEngineBootstrapResult::default())
     }
@@ -314,7 +314,7 @@ pub trait ConversationRuntime: Send + Sync {
         &self,
         _session_id: &str,
         _message: &Value,
-        _kernel_ctx: Option<&KernelContext>,
+        _kernel_ctx: &KernelContext,
     ) -> CliResult<ContextEngineIngestResult> {
         Ok(ContextEngineIngestResult::default())
     }
@@ -375,7 +375,7 @@ pub trait ConversationRuntime: Send + Sync {
         _user_input: &str,
         _assistant_reply: &str,
         _messages: &[Value],
-        _kernel_ctx: Option<&KernelContext>,
+        _kernel_ctx: &KernelContext,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -385,7 +385,7 @@ pub trait ConversationRuntime: Send + Sync {
         _config: &LoongClawConfig,
         _session_id: &str,
         _messages: &[Value],
-        _kernel_ctx: Option<&KernelContext>,
+        _kernel_ctx: &KernelContext,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -394,7 +394,7 @@ pub trait ConversationRuntime: Send + Sync {
         &self,
         _parent_session_id: &str,
         _subagent_session_id: &str,
-        _kernel_ctx: Option<&KernelContext>,
+        _kernel_ctx: &KernelContext,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -403,7 +403,7 @@ pub trait ConversationRuntime: Send + Sync {
         &self,
         _parent_session_id: &str,
         _subagent_session_id: &str,
-        _kernel_ctx: Option<&KernelContext>,
+        _kernel_ctx: &KernelContext,
     ) -> CliResult<()> {
         Ok(())
     }
@@ -511,7 +511,7 @@ where
         &self,
         config: &LoongClawConfig,
         session_id: &str,
-        kernel_ctx: Option<&KernelContext>,
+        kernel_ctx: &KernelContext,
     ) -> CliResult<ContextEngineBootstrapResult> {
         self.context_engine
             .bootstrap(config, session_id, kernel_ctx)
@@ -522,7 +522,7 @@ where
         &self,
         session_id: &str,
         message: &Value,
-        kernel_ctx: Option<&KernelContext>,
+        kernel_ctx: &KernelContext,
     ) -> CliResult<ContextEngineIngestResult> {
         self.context_engine
             .ingest(session_id, message, kernel_ctx)
@@ -636,7 +636,7 @@ where
         user_input: &str,
         assistant_reply: &str,
         messages: &[Value],
-        kernel_ctx: Option<&KernelContext>,
+        kernel_ctx: &KernelContext,
     ) -> CliResult<()> {
         self.context_engine
             .after_turn(
@@ -654,7 +654,7 @@ where
         config: &LoongClawConfig,
         session_id: &str,
         messages: &[Value],
-        kernel_ctx: Option<&KernelContext>,
+        kernel_ctx: &KernelContext,
     ) -> CliResult<()> {
         self.context_engine
             .compact_context(config, session_id, messages, kernel_ctx)
@@ -665,7 +665,7 @@ where
         &self,
         parent_session_id: &str,
         subagent_session_id: &str,
-        kernel_ctx: Option<&KernelContext>,
+        kernel_ctx: &KernelContext,
     ) -> CliResult<()> {
         self.context_engine
             .prepare_subagent_spawn(parent_session_id, subagent_session_id, kernel_ctx)
@@ -676,7 +676,7 @@ where
         &self,
         parent_session_id: &str,
         subagent_session_id: &str,
-        kernel_ctx: Option<&KernelContext>,
+        kernel_ctx: &KernelContext,
     ) -> CliResult<()> {
         self.context_engine
             .on_subagent_ended(parent_session_id, subagent_session_id, kernel_ctx)
