@@ -232,12 +232,16 @@ fn execute_policy_command(
             if clear_allowed_domains {
                 config.external_skills.allowed_domains.clear();
             } else if !allowed_domains.is_empty() {
-                config.external_skills.allowed_domains = normalize_domain_inputs(allowed_domains);
+                config.external_skills.allowed_domains =
+                    normalize_domain_inputs(allowed_domains)
+                        .map_err(|error| format!("invalid --allow-domain value: {error}"))?;
             }
             if clear_blocked_domains {
                 config.external_skills.blocked_domains.clear();
             } else if !blocked_domains.is_empty() {
-                config.external_skills.blocked_domains = normalize_domain_inputs(blocked_domains);
+                config.external_skills.blocked_domains =
+                    normalize_domain_inputs(blocked_domains)
+                        .map_err(|error| format!("invalid --block-domain value: {error}"))?;
             }
 
             persist_config_update(resolved_path, config)?;
@@ -289,18 +293,16 @@ fn persistent_policy_payload(config: &mvp::config::LoongClawConfig) -> Value {
     })
 }
 
-fn normalize_domain_inputs(entries: Vec<String>) -> Vec<String> {
+fn normalize_domain_inputs(entries: Vec<String>) -> Result<Vec<String>, String> {
     let mut normalized = BTreeSet::new();
     for entry in entries {
-        let value = entry.trim().to_ascii_lowercase();
-        if !value.is_empty() {
-            normalized.insert(value);
-        }
+        let value = mvp::tools::normalize_external_skills_domain_rule(&entry)?;
+        normalized.insert(value);
     }
-    normalized.into_iter().collect()
+    Ok(normalized.into_iter().collect())
 }
 
-fn skills_cli_json(execution: &SkillsCommandExecution) -> Value {
+pub(crate) fn skills_cli_json(execution: &SkillsCommandExecution) -> Value {
     json!({
         "config": execution.resolved_config_path,
         "status": execution.outcome.status,
@@ -308,7 +310,7 @@ fn skills_cli_json(execution: &SkillsCommandExecution) -> Value {
     })
 }
 
-fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliResult<String> {
+pub(crate) fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliResult<String> {
     let payload = &execution.outcome.payload;
     let tool_name = payload
         .get("tool_name")

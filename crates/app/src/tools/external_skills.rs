@@ -800,7 +800,7 @@ fn parse_optional_domain_list(
     Ok(Some(normalized))
 }
 
-fn normalize_domain_rule(raw: &str) -> Result<String, String> {
+pub(crate) fn normalize_domain_rule(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err("domain rule cannot be empty".to_owned());

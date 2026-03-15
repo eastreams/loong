@@ -45,6 +45,10 @@ pub use kernel_adapter::MvpToolAdapter;
 
 pub(crate) const LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY: &str = "_loongclaw";
 
+pub fn normalize_external_skills_domain_rule(raw: &str) -> Result<String, String> {
+    external_skills::normalize_domain_rule(raw)
+}
+
 tokio::task_local! {
     static TRUSTED_INTERNAL_TOOL_PAYLOAD_TASK: bool;
 }
