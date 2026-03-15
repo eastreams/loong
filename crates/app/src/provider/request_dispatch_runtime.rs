@@ -198,7 +198,7 @@ async fn request_turn_with_provider(
                     runtime_contract,
                     capability,
                     include_tool_schema.load(Ordering::Relaxed),
-                    &tool_definitions,
+                    tool_definitions,
                 )
             },
             shape::extract_provider_turn,

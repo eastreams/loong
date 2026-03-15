@@ -97,6 +97,7 @@ pub fn initialize_runtime_environment(
             .map(|value| value.to_ascii_lowercase())
             .collect(),
         file_root: Some(config.tools.resolved_file_root()),
+        config_path: resolved_config_path.map(Path::to_path_buf),
         shell_default_mode: crate::tools::shell_policy_ext::ShellPolicyDefault::parse(
             &config.tools.shell_default_mode,
         ),

@@ -490,6 +490,7 @@ mod tests {
         ));
         assert!(snapshot.contains("- file.read: Read file contents"));
         assert!(snapshot.contains("- file.write: Write file contents"));
+        assert!(snapshot.contains(
             "- provider.switch: Inspect current provider state or switch the default provider profile for subsequent turns"
         ));
         assert!(snapshot.contains(

@@ -3364,7 +3364,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
             runtime,
             session_id,
             &preparation.lane_plan.decision,
-            &turn,
+            turn,
             &session_context,
             &app_dispatcher,
             kernel_ctx,
@@ -3379,7 +3379,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
                     .conversation
                     .tool_result_payload_summary_limit_chars(),
             )
-            .execute_turn_in_context(&turn, &session_context, &app_dispatcher, kernel_ctx)
+            .execute_turn_in_context(turn, &session_context, &app_dispatcher, kernel_ctx)
             .await,
             None,
         )
