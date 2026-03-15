@@ -178,7 +178,7 @@ impl TurnTestHarness {
     /// Execute a provider turn through the full TurnEngine path.
     #[allow(dead_code)]
     pub async fn execute(&self, turn: &ProviderTurn) -> TurnResult {
-        self.engine.execute_turn(turn, Some(&self.kernel_ctx)).await
+        self.engine.execute_turn(turn, &self.kernel_ctx).await
     }
 }
 

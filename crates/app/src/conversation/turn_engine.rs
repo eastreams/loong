@@ -178,6 +178,12 @@ impl TurnResult {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnValidation {
+    FinalText(String),
+    ToolExecutionRequired,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KernelFailureClass {
     PolicyDenied,
@@ -372,6 +378,51 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
     }
 }
 
+pub(crate) async fn execute_tool_intent_via_kernel(
+    intent: &ToolIntent,
+    kernel_ctx: &KernelContext,
+) -> Result<ToolCoreOutcome, TurnFailure> {
+    let request = ToolCoreRequest {
+        tool_name: crate::tools::canonical_tool_name(intent.tool_name.as_str()).to_owned(),
+        payload: intent.args_json.clone(),
+    };
+    let caps = BTreeSet::from([Capability::InvokeTool]);
+    kernel_ctx
+        .kernel
+        .execute_tool_core(
+            kernel_ctx.pack_id(),
+            &kernel_ctx.token,
+            &caps,
+            None,
+            request,
+        )
+        .await
+        .map_err(|error| {
+            let reason = format!("{error}");
+            match classify_kernel_error(&error) {
+                KernelFailureClass::PolicyDenied => {
+                    TurnFailure::policy_denied("kernel_policy_denied", reason)
+                }
+                KernelFailureClass::RetryableExecution => {
+                    TurnFailure::retryable("tool_execution_failed", reason)
+                }
+                KernelFailureClass::NonRetryable => {
+                    TurnFailure::non_retryable("kernel_execution_failed", reason)
+                }
+            }
+        })
+}
+
+fn turn_result_from_tool_execution_failure(failure: TurnFailure) -> TurnResult {
+    match failure.kind {
+        TurnFailureKind::PolicyDenied => TurnResult::ToolDenied(failure),
+        TurnFailureKind::Retryable | TurnFailureKind::NonRetryable => {
+            TurnResult::ToolError(failure)
+        }
+        TurnFailureKind::Provider => TurnResult::ProviderError(failure),
+    }
+}
+
 #[allow(dead_code)]
 pub(crate) fn format_tool_result_line(intent: &ToolIntent, outcome: &ToolCoreOutcome) -> String {
     format_tool_result_line_with_limit(intent, outcome, TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS)
@@ -485,31 +536,60 @@ impl TurnEngine {
         turn: &ProviderTurn,
         session_context: &SessionContext,
     ) -> TurnResult {
-        // No tool intents → just return the text
+        match self.validate_turn_in_context(turn, session_context) {
+            Ok(TurnValidation::FinalText(text)) => TurnResult::FinalText(text),
+            Err(failure) => TurnResult::ToolDenied(failure),
+            Ok(TurnValidation::ToolExecutionRequired) => {
+                TurnResult::policy_denied("kernel_context_required", "kernel_context_required")
+            }
+        }
+    }
+
+    /// Validate a provider turn and describe whether tool execution is needed.
+    ///
+    /// This phase is pure: it validates the turn shape and tool budget, but it does
+    /// not make runtime binding decisions about whether a kernel is available.
+    pub fn validate_turn(&self, turn: &ProviderTurn) -> Result<TurnValidation, TurnFailure> {
+        self.validate_turn_in_view(turn, &runtime_tool_view())
+    }
+
+    pub fn validate_turn_in_view(
+        &self,
+        turn: &ProviderTurn,
+        tool_view: &ToolView,
+    ) -> Result<TurnValidation, TurnFailure> {
+        self.validate_turn_in_context(turn, &session_context_from_turn(turn, tool_view.clone()))
+    }
+
+    pub fn validate_turn_in_context(
+        &self,
+        turn: &ProviderTurn,
+        session_context: &SessionContext,
+    ) -> Result<TurnValidation, TurnFailure> {
         if turn.tool_intents.is_empty() {
-            return TurnResult::FinalText(turn.assistant_text.clone());
+            return Ok(TurnValidation::FinalText(turn.assistant_text.clone()));
         }
 
-        // Too many tool intents for current step limit
         if turn.tool_intents.len() > self.max_tool_steps {
-            return TurnResult::policy_denied("max_tool_steps_exceeded", "max_tool_steps_exceeded");
+            return Err(TurnFailure::policy_denied(
+                "max_tool_steps_exceeded",
+                "max_tool_steps_exceeded",
+            ));
         }
 
-        // Check each tool intent
         let catalog = tool_catalog();
         for intent in &turn.tool_intents {
             let Some(descriptor) = catalog.resolve(&intent.tool_name) else {
                 let reason = format!("tool_not_found: {}", intent.tool_name);
-                return TurnResult::policy_denied("tool_not_found", reason);
+                return Err(TurnFailure::policy_denied("tool_not_found", reason));
             };
             if !session_context.tool_view.contains(descriptor.name) {
                 let reason = format!("tool_not_visible: {}", intent.tool_name);
-                return TurnResult::policy_denied("tool_not_visible", reason);
+                return Err(TurnFailure::policy_denied("tool_not_visible", reason));
             }
         }
 
-        // All tools validated — execution requires a kernel context
-        TurnResult::policy_denied("kernel_context_required", "kernel_context_required")
+        Ok(TurnValidation::ToolExecutionRequired)
     }
 
     /// Execute a provider turn with policy-gated tool execution through the kernel.
@@ -518,13 +598,12 @@ impl TurnEngine {
     /// 1. No tool intents → `FinalText`
     /// 2. Too many intents → `ToolDenied("max_tool_steps_exceeded")`
     /// 3. Unknown tool → `ToolDenied("tool_not_found: ...")`
-    /// 4. No kernel context → `ToolDenied("no_kernel_context")`
-    /// 5. Policy/capability check via kernel → `ToolDenied`
-    /// 6. Execute tool → map result to `TurnResult`
+    /// 4. Policy/capability check via kernel → `ToolDenied`
+    /// 5. Execute tool → map result to `TurnResult`
     pub async fn execute_turn(
         &self,
         turn: &ProviderTurn,
-        kernel_ctx: Option<&KernelContext>,
+        kernel_ctx: &KernelContext,
     ) -> TurnResult {
         self.execute_turn_in_view(turn, &runtime_tool_view(), kernel_ctx)
             .await
@@ -534,7 +613,7 @@ impl TurnEngine {
         &self,
         turn: &ProviderTurn,
         tool_view: &ToolView,
-        kernel_ctx: Option<&KernelContext>,
+        kernel_ctx: &KernelContext,
     ) -> TurnResult {
         self.execute_turn_in_context(
             turn,
@@ -550,31 +629,15 @@ impl TurnEngine {
         turn: &ProviderTurn,
         session_context: &SessionContext,
         app_dispatcher: &D,
-        kernel_ctx: Option<&KernelContext>,
+        kernel_ctx: &KernelContext,
     ) -> TurnResult {
-        // No tool intents → just return the text
-        if turn.tool_intents.is_empty() {
-            return TurnResult::FinalText(turn.assistant_text.clone());
+        match self.validate_turn_in_context(turn, session_context) {
+            Ok(TurnValidation::FinalText(text)) => return TurnResult::FinalText(text),
+            Err(failure) => return TurnResult::ToolDenied(failure),
+            Ok(TurnValidation::ToolExecutionRequired) => {}
         }
 
-        // Too many tool intents for current step limit
-        if turn.tool_intents.len() > self.max_tool_steps {
-            return TurnResult::policy_denied("max_tool_steps_exceeded", "max_tool_steps_exceeded");
-        }
-
-        // Check each tool intent is known
         let catalog = tool_catalog();
-        for intent in &turn.tool_intents {
-            let Some(descriptor) = catalog.resolve(&intent.tool_name) else {
-                let reason = format!("tool_not_found: {}", intent.tool_name);
-                return TurnResult::policy_denied("tool_not_found", reason);
-            };
-            if !session_context.tool_view.contains(descriptor.name) {
-                let reason = format!("tool_not_visible: {}", intent.tool_name);
-                return TurnResult::policy_denied("tool_not_visible", reason);
-            }
-        }
-
         let mut outputs = Vec::new();
         for intent in &turn.tool_intents {
             let Some(descriptor) = catalog.resolve(&intent.tool_name) else {
@@ -587,46 +650,13 @@ impl TurnEngine {
             };
             let outcome = match descriptor.execution_kind {
                 ToolExecutionKind::Core => {
-                    let ctx = match kernel_ctx {
-                        Some(ctx) => ctx,
-                        None => {
-                            return TurnResult::policy_denied(
-                                "no_kernel_context",
-                                "no_kernel_context",
-                            );
-                        }
-                    };
-                    let caps = BTreeSet::from([Capability::InvokeTool]);
-                    match ctx
-                        .kernel
-                        .execute_tool_core(ctx.pack_id(), &ctx.token, &caps, None, request)
-                        .await
-                    {
+                    match execute_tool_intent_via_kernel(intent, kernel_ctx).await {
                         Ok(outcome) => outcome,
-                        Err(e) => {
-                            let reason = format!("{e}");
-                            return match classify_kernel_error(&e) {
-                                KernelFailureClass::PolicyDenied => {
-                                    TurnResult::policy_denied("kernel_policy_denied", reason)
-                                }
-                                KernelFailureClass::RetryableExecution => {
-                                    TurnResult::retryable_tool_error(
-                                        "tool_execution_failed",
-                                        reason,
-                                    )
-                                }
-                                KernelFailureClass::NonRetryable => {
-                                    TurnResult::non_retryable_tool_error(
-                                        "kernel_execution_failed",
-                                        reason,
-                                    )
-                                }
-                            };
-                        }
+                        Err(failure) => return turn_result_from_tool_execution_failure(failure),
                     }
                 }
                 ToolExecutionKind::App => match app_dispatcher
-                    .execute_app_tool(session_context, request, kernel_ctx)
+                    .execute_app_tool(session_context, request, Some(kernel_ctx))
                     .await
                 {
                     Ok(outcome) => outcome,

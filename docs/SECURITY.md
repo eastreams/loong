@@ -25,9 +25,11 @@ CapabilityToken → PolicyEngine → PolicyExtensionChain → Execution → Audi
 ```
 
 **Current coverage:**
-- `shell.exec` — Full policy check (allowlist, denylist, approval gates)
-- `file.read` / `file.write` — Path sandboxing only, no policy engine check (TD-002)
-- Runtime/memory/connector — No policy check
+- `shell.exec` — Kernel-mediated tool execution with capability checks, shell policy extensions, and audit events
+- `file.read` / `file.write` — Kernel-mediated tool execution with filesystem capabilities, file policy extension checks, and audit events
+- Conversation tool turns — Fast-lane and safe-lane inner tool execution now require a bound `KernelContext`; missing kernel authority is rejected at the runtime binding boundary as `no_kernel_context`
+- Memory/runtime/context orchestration — Partially kernelized; some surrounding traits still carry optional kernel context and remain architectural debt rather than full L1 enforcement
+- Connector/ACP/runtime-only analytics — Not uniformly routed through the L1 policy chain yet
 
 ### Capability Tokens
 

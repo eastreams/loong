@@ -13,7 +13,7 @@ use super::persistence::persist_reply_turns_with_mode;
 use super::runtime::{ConversationRuntime, DefaultConversationRuntime};
 use super::turn_budget::{TurnRoundBudget, TurnRoundBudgetDecision};
 use super::turn_engine::{
-    DefaultAppToolDispatcher, ProviderTurn, ToolIntent, TurnEngine, TurnResult,
+    DefaultAppToolDispatcher, ProviderTurn, ToolIntent, TurnEngine, TurnResult, TurnValidation,
 };
 use super::turn_shared::{
     ProviderTurnRequestAction, ReplyPersistenceMode, ToolDrivenFollowupPayload,
@@ -317,14 +317,24 @@ async fn evaluate_round_kernel(
     let current_tool_name_signature =
         had_tool_intents.then(|| tool_name_signature(&turn.tool_intents));
 
-    let turn_result = TurnEngine::with_tool_result_payload_summary_limit(
+    let engine = TurnEngine::with_tool_result_payload_summary_limit(
         policy.max_tool_steps_per_round,
         config
             .conversation
             .tool_result_payload_summary_limit_chars(),
-    )
-    .execute_turn_in_context(turn, session_context, app_dispatcher, kernel_ctx)
-    .await;
+    );
+    let turn_result = match engine.validate_turn_in_context(turn, session_context) {
+        Ok(TurnValidation::FinalText(text)) => TurnResult::FinalText(text),
+        Err(failure) => TurnResult::ToolDenied(failure),
+        Ok(TurnValidation::ToolExecutionRequired) => match kernel_ctx {
+            Some(kernel_ctx) => {
+                engine
+                    .execute_turn_in_context(turn, session_context, app_dispatcher, kernel_ctx)
+                    .await
+            }
+            None => TurnResult::policy_denied("no_kernel_context", "no_kernel_context"),
+        },
+    };
     let loop_verdict = if let (Some(signature), Some(name_signature)) = (
         current_tool_signature.as_deref(),
         current_tool_name_signature.as_deref(),

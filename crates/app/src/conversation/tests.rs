@@ -5832,24 +5832,23 @@ fn turn_contracts_have_stable_defaults() {
 
 #[test]
 fn turn_engine_no_tool_intents_returns_final_text() {
-    use crate::conversation::turn_engine::{ProviderTurn, TurnEngine, TurnResult};
+    use crate::conversation::turn_engine::{ProviderTurn, TurnEngine, TurnValidation};
     let engine = TurnEngine::new(1); // max_tool_steps = 1
     let turn = ProviderTurn {
         assistant_text: "Hello!".to_owned(),
         tool_intents: vec![],
         raw_meta: serde_json::Value::Null,
     };
-    let result = engine.evaluate_turn(&turn);
-    #[allow(clippy::wildcard_enum_match_arm)]
+    let result = engine.validate_turn(&turn);
     match result {
-        TurnResult::FinalText(text) => assert_eq!(text, "Hello!"),
+        Ok(TurnValidation::FinalText(text)) => assert_eq!(text, "Hello!"),
         other => panic!("expected FinalText, got {:?}", other),
     }
 }
 
 #[test]
 fn provider_tool_aliases_flow_through_parse_and_turn_validation() {
-    use crate::conversation::turn_engine::{TurnEngine, TurnResult};
+    use crate::conversation::turn_engine::{TurnEngine, TurnValidation};
     use crate::provider::extract_provider_turn;
 
     let response_body = serde_json::json!({
@@ -5873,22 +5872,16 @@ fn provider_tool_aliases_flow_through_parse_and_turn_validation() {
     assert_eq!(turn.tool_intents[0].tool_name, "file.read");
 
     let engine = TurnEngine::new(1);
-    let result = engine.evaluate_turn(&turn);
-    #[allow(clippy::wildcard_enum_match_arm)]
+    let result = engine.validate_turn(&turn);
     match result {
-        TurnResult::ToolDenied(reason) => {
-            assert!(
-                reason.contains("kernel_context_required"),
-                "reason: {reason}"
-            );
-        }
+        Ok(TurnValidation::ToolExecutionRequired) => {}
         other => panic!("expected ToolDenied, got {:?}", other),
     }
 }
 
 #[test]
 fn turn_engine_unknown_tool_returns_tool_denied() {
-    use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, TurnEngine, TurnResult};
+    use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, TurnEngine};
     let engine = TurnEngine::new(1);
     let turn = ProviderTurn {
         assistant_text: "".to_owned(),
@@ -5902,21 +5895,16 @@ fn turn_engine_unknown_tool_returns_tool_denied() {
         }],
         raw_meta: serde_json::Value::Null,
     };
-    let result = engine.evaluate_turn(&turn);
-    #[allow(clippy::wildcard_enum_match_arm)]
+    let result = engine.validate_turn(&turn);
     match result {
-        TurnResult::ToolDenied(reason) => {
-            assert!(reason.contains("tool_not_found"), "reason: {reason}")
-        }
+        Err(reason) => assert!(reason.contains("tool_not_found"), "reason: {reason}"),
         other => panic!("expected ToolDenied, got {:?}", other),
     }
 }
 
 #[test]
 fn turn_engine_unknown_tool_exposes_structured_policy_denial() {
-    use crate::conversation::turn_engine::{
-        ProviderTurn, ToolIntent, TurnEngine, TurnFailureKind, TurnResult,
-    };
+    use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, TurnEngine, TurnFailureKind};
     let engine = TurnEngine::new(1);
     let turn = ProviderTurn {
         assistant_text: "".to_owned(),
@@ -5931,10 +5919,9 @@ fn turn_engine_unknown_tool_exposes_structured_policy_denial() {
         raw_meta: serde_json::Value::Null,
     };
 
-    let result = engine.evaluate_turn(&turn);
-    #[allow(clippy::wildcard_enum_match_arm)]
+    let result = engine.validate_turn(&turn);
     match result {
-        TurnResult::ToolDenied(failure) => {
+        Err(failure) => {
             assert_eq!(failure.kind, TurnFailureKind::PolicyDenied);
             assert_eq!(failure.code, "tool_not_found");
             assert!(!failure.retryable);
@@ -5949,7 +5936,7 @@ fn turn_engine_unknown_tool_exposes_structured_policy_denial() {
 
 #[test]
 fn turn_engine_exceeding_max_steps_returns_denied() {
-    use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, TurnEngine, TurnResult};
+    use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, TurnEngine};
     let engine = TurnEngine::new(1);
     let intent = ToolIntent {
         tool_name: "file.read".to_owned(),
@@ -5964,10 +5951,9 @@ fn turn_engine_exceeding_max_steps_returns_denied() {
         tool_intents: vec![intent.clone(), intent],
         raw_meta: serde_json::Value::Null,
     };
-    let result = engine.evaluate_turn(&turn);
-    #[allow(clippy::wildcard_enum_match_arm)]
+    let result = engine.validate_turn(&turn);
     match result {
-        TurnResult::ToolDenied(reason) => assert!(
+        Err(reason) => assert!(
             reason.contains("max_tool_steps_exceeded"),
             "reason: {reason}"
         ),
@@ -5976,8 +5962,8 @@ fn turn_engine_exceeding_max_steps_returns_denied() {
 }
 
 #[test]
-fn turn_engine_known_tool_with_no_kernel_returns_tool_denied() {
-    use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, TurnEngine, TurnResult};
+fn turn_engine_known_tool_validates_to_execution_required() {
+    use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, TurnEngine, TurnValidation};
     let engine = TurnEngine::new(1);
     let turn = ProviderTurn {
         assistant_text: "".to_owned(),
@@ -5991,43 +5977,10 @@ fn turn_engine_known_tool_with_no_kernel_returns_tool_denied() {
         }],
         raw_meta: serde_json::Value::Null,
     };
-    // Without kernel context, known tools should be validated but flagged as needing execution
-    let result = engine.evaluate_turn(&turn);
-    #[allow(clippy::wildcard_enum_match_arm)]
+    let result = engine.validate_turn(&turn);
     match result {
-        TurnResult::ToolDenied(reason) => {
-            assert!(
-                reason.contains("kernel_context_required"),
-                "reason: {reason}"
-            );
-        }
-        other => panic!("expected ToolDenied, got {:?}", other),
-    }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn turn_engine_execute_turn_no_kernel_returns_denied() {
-    use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, TurnEngine, TurnResult};
-    let engine = TurnEngine::new(1);
-    let turn = ProviderTurn {
-        assistant_text: "".to_owned(),
-        tool_intents: vec![ToolIntent {
-            tool_name: "file.read".to_owned(),
-            args_json: serde_json::json!({"path": "test.txt"}),
-            source: "provider_tool_call".to_owned(),
-            session_id: "s1".to_owned(),
-            turn_id: "t1".to_owned(),
-            tool_call_id: "c1".to_owned(),
-        }],
-        raw_meta: serde_json::Value::Null,
-    };
-    let result = engine.execute_turn(&turn, None).await;
-    #[allow(clippy::wildcard_enum_match_arm)]
-    match result {
-        TurnResult::ToolDenied(reason) => {
-            assert!(reason.contains("no_kernel_context"), "reason: {reason}");
-        }
-        other => panic!("expected ToolDenied, got {:?}", other),
+        Ok(TurnValidation::ToolExecutionRequired) => {}
+        other => panic!("expected ToolExecutionRequired, got {:?}", other),
     }
 }
 
@@ -6123,9 +6076,10 @@ async fn turn_engine_routes_app_tools_through_dispatcher() {
         "root-session",
         crate::tools::planned_root_tool_view(),
     );
+    let (kernel_ctx, _invocations) = build_kernel_context(Arc::new(InMemoryAuditSink::default()));
 
     let result = engine
-        .execute_turn_in_context(&turn, &session_context, &dispatcher, None)
+        .execute_turn_in_context(&turn, &session_context, &dispatcher, &kernel_ctx)
         .await;
 
     match result {
@@ -6517,7 +6471,7 @@ async fn turn_engine_tool_execution_error_is_marked_retryable() {
         raw_meta: serde_json::Value::Null,
     };
 
-    let result = engine.execute_turn(&turn, Some(&ctx)).await;
+    let result = engine.execute_turn(&turn, &ctx).await;
     #[allow(clippy::wildcard_enum_match_arm)]
     match result {
         TurnResult::ToolError(failure) => {
@@ -6657,7 +6611,7 @@ async fn turn_engine_executes_known_tool_with_kernel() {
         raw_meta: serde_json::Value::Null,
     };
 
-    let result = engine.execute_turn(&turn, Some(&ctx)).await;
+    let result = engine.execute_turn(&turn, &ctx).await;
     #[allow(clippy::wildcard_enum_match_arm)]
     match result {
         TurnResult::FinalText(text) => {
@@ -6778,7 +6732,7 @@ async fn turn_engine_truncates_oversized_tool_payload_summary() {
         raw_meta: serde_json::Value::Null,
     };
 
-    let result = engine.execute_turn(&turn, Some(&ctx)).await;
+    let result = engine.execute_turn(&turn, &ctx).await;
     #[allow(clippy::wildcard_enum_match_arm)]
     match result {
         TurnResult::FinalText(text) => {
@@ -6889,7 +6843,7 @@ async fn turn_engine_keeps_external_skill_invoke_payloads_intact() {
         raw_meta: serde_json::Value::Null,
     };
 
-    let result = engine.execute_turn(&turn, Some(&ctx)).await;
+    let result = engine.execute_turn(&turn, &ctx).await;
     match result {
         TurnResult::FinalText(text) => {
             let line = text.lines().next().expect("tool result line should exist");
@@ -6985,7 +6939,7 @@ async fn turn_engine_execute_turn_denied_without_capability() {
         raw_meta: serde_json::Value::Null,
     };
 
-    let result = engine.execute_turn(&turn, Some(&ctx)).await;
+    let result = engine.execute_turn(&turn, &ctx).await;
     #[allow(clippy::wildcard_enum_match_arm)]
     match result {
         TurnResult::ToolDenied(reason) => {
