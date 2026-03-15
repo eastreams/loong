@@ -605,7 +605,7 @@ impl TurnEngine {
         turn: &ProviderTurn,
         kernel_ctx: &KernelContext,
     ) -> TurnResult {
-        self.execute_turn_in_view(turn, &runtime_tool_view(), kernel_ctx)
+        self.execute_turn_in_view(turn, &runtime_tool_view(), Some(kernel_ctx))
             .await
     }
 
@@ -613,7 +613,7 @@ impl TurnEngine {
         &self,
         turn: &ProviderTurn,
         tool_view: &ToolView,
-        kernel_ctx: &KernelContext,
+        kernel_ctx: Option<&KernelContext>,
     ) -> TurnResult {
         self.execute_turn_in_context(
             turn,
@@ -629,7 +629,7 @@ impl TurnEngine {
         turn: &ProviderTurn,
         session_context: &SessionContext,
         app_dispatcher: &D,
-        kernel_ctx: &KernelContext,
+        kernel_ctx: Option<&KernelContext>,
     ) -> TurnResult {
         match self.validate_turn_in_context(turn, session_context) {
             Ok(TurnValidation::FinalText(text)) => return TurnResult::FinalText(text),
@@ -650,13 +650,16 @@ impl TurnEngine {
             };
             let outcome = match descriptor.execution_kind {
                 ToolExecutionKind::Core => {
+                    let Some(kernel_ctx) = kernel_ctx else {
+                        return TurnResult::policy_denied("no_kernel_context", "no_kernel_context");
+                    };
                     match execute_tool_intent_via_kernel(intent, kernel_ctx).await {
                         Ok(outcome) => outcome,
                         Err(failure) => return turn_result_from_tool_execution_failure(failure),
                     }
                 }
                 ToolExecutionKind::App => match app_dispatcher
-                    .execute_app_tool(session_context, request, Some(kernel_ctx))
+                    .execute_app_tool(session_context, request, kernel_ctx)
                     .await
                 {
                     Ok(outcome) => outcome,

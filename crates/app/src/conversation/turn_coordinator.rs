@@ -3422,18 +3422,12 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
             .await;
             (outcome.result, outcome.terminal_route)
         }
-        Ok(TurnValidation::ToolExecutionRequired) => match kernel_ctx {
-            Some(kernel_ctx) => (
-                engine
-                    .execute_turn_in_context(turn, &session_context, &app_dispatcher, kernel_ctx)
-                    .await,
-                None,
-            ),
-            None => (
-                TurnResult::policy_denied("no_kernel_context", "no_kernel_context"),
-                None,
-            ),
-        },
+        Ok(TurnValidation::ToolExecutionRequired) => (
+            engine
+                .execute_turn_in_context(turn, &session_context, &app_dispatcher, kernel_ctx)
+                .await,
+            None,
+        ),
     };
 
     ProviderTurnLaneExecution {
@@ -5130,7 +5124,7 @@ async fn execute_single_tool_intent(
     };
 
     match engine
-        .execute_turn_in_context(&turn, session_context, app_dispatcher, kernel_ctx)
+        .execute_turn_in_context(&turn, session_context, app_dispatcher, Some(kernel_ctx))
         .await
     {
         TurnResult::FinalText(output) => Ok(output),
