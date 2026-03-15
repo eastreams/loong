@@ -28,7 +28,7 @@ CapabilityToken → PolicyEngine → PolicyExtensionChain → Execution → Audi
 - `shell.exec` — Kernel-mediated tool execution with capability checks, shell policy extensions, and audit events
 - `file.read` / `file.write` — Kernel-mediated tool execution with filesystem capabilities, file policy extension checks, and audit events
 - Conversation tool turns — Fast-lane and safe-lane inner tool execution now flow through an explicit `ConversationRuntimeBinding` (`Kernel` or `Direct`); core tools require a bound `KernelContext`, and missing authority is rejected at the binding boundary as `no_kernel_context`
-- Memory/runtime/context orchestration — Conversation-layer runtime, context, persistence, turn-engine, and app-dispatcher seams now normalize optional kernel access into the explicit runtime binding. Lower-level provider and connector surfaces still carry some raw optional kernel context and remain architectural debt rather than full L1 enforcement
+- Memory/runtime/context orchestration — The conversation module now carries `ConversationRuntimeBinding` end-to-end across runtime, context, persistence, turn coordination, loop followup, history, and app-dispatch seams. Raw optional kernel context is now pushed out to outer integration boundaries and lower non-conversation leaf helpers, which remain architectural debt rather than full L1 enforcement
 - Connector/ACP/runtime-only analytics — Not uniformly routed through the L1 policy chain yet
 
 **Conversation runtime binding note:**

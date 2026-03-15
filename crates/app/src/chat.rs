@@ -141,7 +141,11 @@ pub async fn run_cli_chat(
 
     #[cfg(feature = "memory-sqlite")]
     match turn_coordinator
-        .load_turn_checkpoint_diagnostics(&config, &session_id, Some(&kernel_ctx))
+        .load_turn_checkpoint_diagnostics(
+            &config,
+            &session_id,
+            crate::conversation::ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
         .await
     {
         Ok(diagnostics) => {
@@ -280,7 +284,7 @@ pub async fn run_cli_chat(
                 input,
                 ProviderErrorMode::InlineMessage,
                 &acp_options,
-                Some(&kernel_ctx),
+                crate::conversation::ConversationRuntimeBinding::kernel(&kernel_ctx),
             )
             .await?;
 
@@ -469,8 +473,15 @@ async fn print_safe_lane_summary(
 ) -> CliResult<()> {
     #[cfg(feature = "memory-sqlite")]
     {
-        let summary =
-            load_safe_lane_event_summary(session_id, limit, kernel_ctx, memory_config).await?;
+        let summary = load_safe_lane_event_summary(
+            session_id,
+            limit,
+            crate::conversation::ConversationRuntimeBinding::from_optional_kernel_context(
+                kernel_ctx,
+            ),
+            memory_config,
+        )
+        .await?;
         println!(
             "{}",
             format_safe_lane_summary(session_id, limit, conversation_config, &summary)
@@ -498,7 +509,14 @@ async fn print_turn_checkpoint_summary(
     #[cfg(feature = "memory-sqlite")]
     {
         let diagnostics = turn_coordinator
-            .load_turn_checkpoint_diagnostics_with_limit(config, session_id, limit, kernel_ctx)
+            .load_turn_checkpoint_diagnostics_with_limit(
+                config,
+                session_id,
+                limit,
+                crate::conversation::ConversationRuntimeBinding::from_optional_kernel_context(
+                    kernel_ctx,
+                ),
+            )
             .await?;
         println!(
             "{}",
@@ -525,7 +543,13 @@ async fn print_turn_checkpoint_repair(
     #[cfg(feature = "memory-sqlite")]
     {
         let outcome = turn_coordinator
-            .repair_turn_checkpoint_tail(config, session_id, kernel_ctx)
+            .repair_turn_checkpoint_tail(
+                config,
+                session_id,
+                crate::conversation::ConversationRuntimeBinding::from_optional_kernel_context(
+                    kernel_ctx,
+                ),
+            )
             .await?;
         println!("{}", format_turn_checkpoint_repair(session_id, &outcome));
         Ok(())

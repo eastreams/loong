@@ -145,7 +145,7 @@ impl crate::conversation::AsyncDelegateSpawner for LocalChildRuntimeAsyncDelegat
             request.label,
             &request.task,
             request.timeout_seconds,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await;
         Ok(())
@@ -1634,7 +1634,7 @@ async fn handle_turn_with_runtime_success_with_kernel_runs_lifecycle_hooks() {
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&kernel_ctx),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("handle turn success");
@@ -1718,7 +1718,7 @@ async fn handle_turn_with_runtime_success_without_kernel_skips_lifecycle_hooks()
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("handle turn success without kernel");
@@ -1788,7 +1788,7 @@ async fn persist_turn_provider_turns_expose_typed_canonical_records() {
             "hello canonical memory",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("provider turn should succeed");
@@ -1840,7 +1840,7 @@ async fn handle_turn_with_runtime_keeps_provider_path_by_default_when_acp_enable
             "hello from channel",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("default handle_turn should stay on provider path");
@@ -1879,7 +1879,7 @@ async fn handle_turn_with_runtime_routes_explicit_acp_turns_through_acp() {
                 routing_intent: AcpRoutingIntent::Explicit,
                 ..AcpConversationTurnOptions::default()
             },
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("explicit ACP turn should route through ACP");
@@ -2015,7 +2015,7 @@ async fn persist_turn_explicit_acp_routing_exposes_typed_canonical_records() {
                 routing_intent: AcpRoutingIntent::Explicit,
                 ..AcpConversationTurnOptions::default()
             },
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("explicit ACP turn should succeed");
@@ -2090,7 +2090,7 @@ async fn handle_turn_with_runtime_merges_additional_acp_bootstrap_mcp_servers_fr
                 additional_bootstrap_mcp_servers: Some(extra_servers.as_slice()),
                 ..AcpConversationTurnOptions::default()
             },
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("ACP-routed turn with additional bootstrap MCP servers should succeed");
@@ -2138,7 +2138,7 @@ async fn handle_turn_with_runtime_applies_acp_turn_provenance_metadata() {
                 },
                 ..AcpConversationTurnOptions::default()
             },
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("ACP-routed turn with provenance should succeed");
@@ -2207,7 +2207,7 @@ async fn handle_turn_with_runtime_applies_acp_working_directory_from_options() {
                 working_directory: Some(working_directory.as_path()),
                 ..AcpConversationTurnOptions::default()
             },
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("ACP-routed turn with working directory should succeed");
@@ -2259,7 +2259,7 @@ async fn handle_turn_with_runtime_falls_back_to_dispatch_acp_working_directory()
                 routing_intent: AcpRoutingIntent::Explicit,
                 ..AcpConversationTurnOptions::default()
             },
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("ACP-routed turn should inherit dispatch working directory");
@@ -2305,7 +2305,7 @@ async fn handle_turn_with_runtime_uses_provider_path_when_acp_dispatch_is_disabl
             "hello provider path",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("provider path should remain available when ACP dispatch is disabled");
@@ -2351,7 +2351,7 @@ async fn handle_turn_with_runtime_explicit_acp_request_bypasses_dispatch_gate() 
                 routing_intent: AcpRoutingIntent::Explicit,
                 ..AcpConversationTurnOptions::default()
             },
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("explicit ACP requests should bypass automatic dispatch gating");
@@ -2382,7 +2382,7 @@ async fn handle_turn_with_runtime_explicit_acp_request_fails_closed_when_acp_is_
                 routing_intent: AcpRoutingIntent::Explicit,
                 ..AcpConversationTurnOptions::default()
             },
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("inline mode should synthesize a clear ACP-disabled reply");
@@ -2416,7 +2416,7 @@ async fn handle_turn_with_runtime_routes_only_agent_prefixed_sessions_when_confi
             "should stay on provider path",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("non-prefixed session should stay on provider path");
@@ -2429,7 +2429,7 @@ async fn handle_turn_with_runtime_routes_only_agent_prefixed_sessions_when_confi
             "should route through ACP",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("prefixed session should route through ACP");
@@ -2495,7 +2495,7 @@ async fn persist_turn_automatic_acp_routing_exposes_typed_canonical_records() {
             "hello automatic canonical",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("automatic ACP turn should succeed");
@@ -2558,7 +2558,7 @@ async fn handle_turn_with_runtime_automatic_acp_routing_bypasses_context_engine_
             "route automatically through ACP",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("automatic ACP turn should succeed");
@@ -2635,7 +2635,7 @@ async fn handle_turn_with_runtime_routes_only_allowed_channels_into_acp() {
             "hello telegram",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("telegram session should route through ACP");
@@ -2674,7 +2674,7 @@ async fn handle_turn_with_runtime_routes_only_allowed_channels_into_acp() {
             "hello feishu",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("feishu session should stay on provider path");
@@ -2713,7 +2713,7 @@ async fn handle_turn_with_runtime_and_address_routes_structured_channel_scope_in
             "hello structured route",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("structured channel address should route through ACP");
@@ -2791,7 +2791,7 @@ async fn handle_turn_with_runtime_and_address_enforces_account_and_thread_dispat
             "hello allowed",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("thread-bound allowed address should route through ACP");
@@ -2804,7 +2804,7 @@ async fn handle_turn_with_runtime_and_address_enforces_account_and_thread_dispat
             "hello blocked",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("root conversation should stay on provider path");
@@ -2863,7 +2863,7 @@ async fn handle_turn_with_runtime_formats_acp_errors_inline_when_requested() {
                 routing_intent: AcpRoutingIntent::Explicit,
                 ..AcpConversationTurnOptions::default()
             },
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("ACP inline error mode should synthesize a reply");
@@ -2908,7 +2908,7 @@ async fn handle_turn_with_runtime_reuses_shared_acp_session_between_turns() {
                 routing_intent: AcpRoutingIntent::Explicit,
                 ..AcpConversationTurnOptions::default()
             },
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("first ACP-routed turn");
@@ -2923,7 +2923,7 @@ async fn handle_turn_with_runtime_reuses_shared_acp_session_between_turns() {
                 routing_intent: AcpRoutingIntent::Explicit,
                 ..AcpConversationTurnOptions::default()
             },
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("second ACP-routed turn");
@@ -2973,7 +2973,7 @@ async fn handle_turn_with_runtime_persists_acp_runtime_events_when_enabled() {
                 routing_intent: AcpRoutingIntent::Explicit,
                 ..AcpConversationTurnOptions::default()
             },
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("ACP-routed turn with runtime events should succeed");
@@ -3079,7 +3079,7 @@ async fn handle_turn_with_runtime_streams_acp_runtime_events_to_external_sink_wi
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("ACP-routed turn with external event sink should succeed");
@@ -3148,7 +3148,7 @@ async fn handle_turn_with_runtime_streams_and_persists_acp_runtime_events_when_b
             ProviderErrorMode::Propagate,
             &runtime,
             &acp_options,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("ACP-routed turn with external sink and persistence should succeed");
@@ -3202,7 +3202,7 @@ async fn handle_turn_with_runtime_skips_compaction_when_disabled() {
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("handle turn success");
@@ -3234,7 +3234,7 @@ async fn handle_turn_with_runtime_skips_compaction_below_min_messages() {
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("handle turn success");
@@ -3267,7 +3267,7 @@ async fn handle_turn_with_runtime_skips_compaction_below_token_threshold() {
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("handle turn success");
@@ -3301,7 +3301,7 @@ async fn handle_turn_with_runtime_compacts_when_token_threshold_reached() {
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&kernel_ctx),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("handle turn success");
@@ -3331,7 +3331,7 @@ async fn handle_turn_with_runtime_compaction_error_is_ignored_when_fail_open() {
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&kernel_ctx),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("fail-open mode should keep turn successful");
@@ -3360,7 +3360,7 @@ async fn handle_turn_with_runtime_compaction_error_propagates_when_fail_closed()
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&kernel_ctx),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect_err("fail-closed mode should propagate compaction error");
@@ -3389,7 +3389,7 @@ async fn handle_turn_with_runtime_persists_turn_checkpoint_events_for_successful
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&kernel_ctx),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("success path should persist checkpoint events");
@@ -3459,7 +3459,7 @@ async fn handle_turn_with_runtime_persists_turn_checkpoint_events_for_inline_pro
             "hello",
             ProviderErrorMode::InlineMessage,
             &runtime,
-            Some(&kernel_ctx),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("inline provider error should persist checkpoint events");
@@ -3510,7 +3510,7 @@ async fn handle_turn_with_runtime_persists_turn_checkpoint_event_for_propagated_
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect_err("propagated provider error should still persist checkpoint event");
@@ -3560,7 +3560,7 @@ async fn handle_turn_with_runtime_persists_failed_turn_checkpoint_when_compactio
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&kernel_ctx),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect_err("compaction failure should still persist failed checkpoint event");
@@ -3599,7 +3599,7 @@ async fn handle_turn_with_runtime_propagates_error_without_persisting_reply_turn
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect_err("propagate mode should return error");
@@ -3651,7 +3651,7 @@ async fn handle_turn_with_runtime_inline_mode_returns_synthetic_reply_and_persis
             "hello",
             ProviderErrorMode::InlineMessage,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("inline mode should return synthetic reply");
@@ -3739,7 +3739,7 @@ async fn handle_turn_with_runtime_tool_turn_uses_natural_language_completion_by_
             "read and summarize note.md",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&harness.kernel_ctx),
+            ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
         )
         .await
         .expect("tool turn should succeed");
@@ -3802,7 +3802,7 @@ async fn handle_turn_with_runtime_tool_turn_raw_request_skips_second_pass_comple
             "read note.md and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&harness.kernel_ctx),
+            ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
         )
         .await
         .expect("tool turn should succeed");
@@ -3886,7 +3886,7 @@ async fn handle_turn_with_runtime_provider_switch_tool_updates_provider_for_foll
             "switch to deepseek and continue",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&harness.kernel_ctx),
+            ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
         )
         .await
         .expect("provider switch turn should succeed");
@@ -3950,7 +3950,7 @@ async fn handle_turn_with_runtime_honors_configured_tool_result_summary_limit_on
             "read large-note.md and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&harness.kernel_ctx),
+            ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
         )
         .await
         .expect("tool turn should succeed");
@@ -4023,7 +4023,7 @@ async fn handle_turn_with_runtime_honors_configured_tool_result_summary_limit_on
             "deploy production safely and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&harness.kernel_ctx),
+            ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
         )
         .await
         .expect("safe-lane plan turn should succeed");
@@ -4099,7 +4099,7 @@ async fn handle_turn_with_runtime_safe_lane_honors_configured_tool_step_budget()
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("safe lane should execute with configured step budget");
@@ -4155,7 +4155,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_path_bypasses_turn_step_limit()
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("safe lane plan path should return inline tool error");
@@ -4202,7 +4202,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_persists_runtime_events_when_en
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("safe lane plan should produce a reply");
@@ -4328,7 +4328,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_skips_runtime_events_when_disab
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("safe lane plan should produce a reply");
@@ -4387,7 +4387,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_emits_kernel_runtime_audit_even
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&harness.kernel_ctx),
+            ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
         )
         .await
         .expect("safe lane plan should produce a reply");
@@ -4478,7 +4478,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_does_not_emit_kernel_runtime_au
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&harness.kernel_ctx),
+            ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
         )
         .await
         .expect("safe lane plan should produce a reply");
@@ -4604,7 +4604,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_replans_after_transient_tool_fa
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&ctx),
+            ConversationRuntimeBinding::kernel(&ctx),
         )
         .await
         .expect("safe lane plan should recover via bounded replan");
@@ -4821,7 +4821,7 @@ async fn handle_turn_with_runtime_safe_lane_backpressure_guard_blocks_retry_stor
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&ctx),
+            ConversationRuntimeBinding::kernel(&ctx),
         )
         .await
         .expect("safe lane should fail-fast under backpressure guard");
@@ -4958,7 +4958,7 @@ async fn handle_turn_with_runtime_safe_lane_verify_non_retryable_failure_skips_r
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&ctx),
+            ConversationRuntimeBinding::kernel(&ctx),
         )
         .await
         .expect("safe lane should return verify failure");
@@ -5193,7 +5193,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_forces_no_replan() 
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&ctx),
+            ConversationRuntimeBinding::kernel(&ctx),
         )
         .await
         .expect("safe lane should fail without replan under governor");
@@ -5425,7 +5425,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_requests_extended_h
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&ctx),
+            ConversationRuntimeBinding::kernel(&ctx),
         )
         .await
         .expect("safe lane turn should complete");
@@ -5601,7 +5601,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_falls_back_to_confi
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&ctx),
+            ConversationRuntimeBinding::kernel(&ctx),
         )
         .await
         .expect("safe lane should use sqlite governor fallback history");
@@ -5771,7 +5771,7 @@ async fn handle_turn_with_runtime_safe_lane_replans_failed_subgraph_only() {
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&ctx),
+            ConversationRuntimeBinding::kernel(&ctx),
         )
         .await
         .expect("safe lane should recover by replaying only failed subgraph");
@@ -5820,7 +5820,7 @@ async fn handle_turn_with_runtime_tool_denial_returns_inline_reply_even_in_propa
             "read note.md",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("tool denial should still return inline assistant text");
@@ -5879,7 +5879,7 @@ async fn handle_turn_with_runtime_tool_error_returns_natural_language_fallback()
             "read note.md",
             ProviderErrorMode::Propagate,
             &runtime,
-            Some(&harness.kernel_ctx),
+            ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
         )
         .await
         .expect("tool error should still return inline assistant text");
@@ -5936,7 +5936,7 @@ async fn handle_turn_with_runtime_tool_failure_completion_error_uses_raw_reason_
             "read note.md",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("fallback should still return assistant text");
@@ -7641,7 +7641,7 @@ async fn load_turn_checkpoint_event_summary_prefers_kernel_memory_window_when_co
     let summary = load_turn_checkpoint_event_summary(
         "session-k-turn-checkpoint",
         96,
-        Some(&ctx),
+        ConversationRuntimeBinding::kernel(&ctx),
         &mem_config,
     )
     .await
@@ -7905,9 +7905,14 @@ async fn load_turn_checkpoint_event_summary_reads_recovery_state_from_sqlite_his
     )
     .expect("persist failed checkpoint");
 
-    let summary = load_turn_checkpoint_event_summary(session_id, 32, None, &mem_config)
-        .await
-        .expect("load checkpoint event summary");
+    let summary = load_turn_checkpoint_event_summary(
+        session_id,
+        32,
+        ConversationRuntimeBinding::direct(),
+        &mem_config,
+    )
+    .await
+    .expect("load checkpoint event summary");
 
     assert_eq!(summary.checkpoint_events, 2);
     assert_eq!(
@@ -8015,7 +8020,12 @@ async fn repair_turn_checkpoint_tail_with_runtime_finalizes_pending_checkpoint()
         test_kernel_context_with_memory("test-turn-checkpoint-repair-pending", &mem_config);
 
     let outcome = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, Some(&kernel_ctx))
+        .repair_turn_checkpoint_tail_with_runtime(
+            &config,
+            session_id,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
         .await
         .expect("repair pending checkpoint");
 
@@ -8118,7 +8128,12 @@ async fn repair_turn_checkpoint_tail_with_runtime_requires_manual_repair_without
     let coordinator = ConversationTurnCoordinator::new();
 
     let outcome = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, None)
+        .repair_turn_checkpoint_tail_with_runtime(
+            &config,
+            session_id,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
         .await
         .expect("repair should fail closed when identity is missing");
 
@@ -8230,7 +8245,12 @@ async fn repair_turn_checkpoint_tail_with_runtime_preserves_safe_lane_override_r
     let coordinator = ConversationTurnCoordinator::new();
 
     let outcome = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, None)
+        .repair_turn_checkpoint_tail_with_runtime(
+            &config,
+            session_id,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
         .await
         .expect("repair should downgrade to manual inspection");
 
@@ -8321,7 +8341,12 @@ async fn repair_turn_checkpoint_tail_with_runtime_requires_manual_repair_on_iden
     let coordinator = ConversationTurnCoordinator::new();
 
     let outcome = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, None)
+        .repair_turn_checkpoint_tail_with_runtime(
+            &config,
+            session_id,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
         .await
         .expect("repair should fail closed on mismatched visible tail");
 
@@ -8423,7 +8448,12 @@ async fn repair_turn_checkpoint_tail_with_runtime_retries_failed_compaction_only
         test_kernel_context_with_memory("test-turn-checkpoint-repair-compaction", &mem_config);
 
     let outcome = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, Some(&kernel_ctx))
+        .repair_turn_checkpoint_tail_with_runtime(
+            &config,
+            session_id,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
         .await
         .expect("repair failed compaction checkpoint");
 
@@ -8541,7 +8571,12 @@ async fn repair_turn_checkpoint_tail_rebuilds_original_finalization_context_for_
     );
 
     let outcome = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, Some(&kernel_ctx))
+        .repair_turn_checkpoint_tail_with_runtime(
+            &config,
+            session_id,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
         .await
         .expect("repair should replay compaction against original finalization context");
 
@@ -8648,7 +8683,12 @@ async fn repair_turn_checkpoint_tail_prefers_checkpoint_estimate_for_compaction_
     );
 
     let outcome = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, Some(&kernel_ctx))
+        .repair_turn_checkpoint_tail_with_runtime(
+            &config,
+            session_id,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
         .await
         .expect("repair should reuse checkpoint estimate for compaction retry");
 
@@ -8751,7 +8791,12 @@ async fn probe_turn_checkpoint_tail_runtime_gate_reports_preparation_content_mis
     let coordinator = ConversationTurnCoordinator::new();
 
     let probe = coordinator
-        .probe_turn_checkpoint_tail_runtime_gate_with_runtime(&config, session_id, &runtime, None)
+        .probe_turn_checkpoint_tail_runtime_gate_with_runtime(
+            &config,
+            session_id,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
         .await
         .expect("runtime probe should succeed")
         .expect("fingerprint drift should produce a runtime probe");
@@ -8848,7 +8893,12 @@ async fn probe_turn_checkpoint_tail_runtime_gate_returns_none_when_repair_not_ne
     let coordinator = ConversationTurnCoordinator::new();
 
     let probe = coordinator
-        .probe_turn_checkpoint_tail_runtime_gate_with_runtime(&config, session_id, &runtime, None)
+        .probe_turn_checkpoint_tail_runtime_gate_with_runtime(
+            &config,
+            session_id,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
         .await
         .expect("not-needed probe should succeed");
 
@@ -8938,7 +8988,12 @@ async fn probe_turn_checkpoint_tail_runtime_gate_returns_none_for_summary_manual
     let coordinator = ConversationTurnCoordinator::new();
 
     let probe = coordinator
-        .probe_turn_checkpoint_tail_runtime_gate_with_runtime(&config, session_id, &runtime, None)
+        .probe_turn_checkpoint_tail_runtime_gate_with_runtime(
+            &config,
+            session_id,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
         .await
         .expect("summary-manual probe should succeed");
 
@@ -9030,7 +9085,12 @@ async fn probe_turn_checkpoint_tail_runtime_gate_returns_none_for_runnable_repai
     let coordinator = ConversationTurnCoordinator::new();
 
     let probe = coordinator
-        .probe_turn_checkpoint_tail_runtime_gate_with_runtime(&config, session_id, &runtime, None)
+        .probe_turn_checkpoint_tail_runtime_gate_with_runtime(
+            &config,
+            session_id,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
         .await
         .expect("runnable probe should succeed");
 
@@ -9123,7 +9183,11 @@ async fn load_turn_checkpoint_diagnostics_with_runtime_preserves_summary_manual_
 
     let diagnostics = coordinator
         .load_turn_checkpoint_diagnostics_with_runtime_and_limit(
-            &config, session_id, 12, &runtime, None,
+            &config,
+            session_id,
+            12,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("diagnostics should load");
@@ -9239,7 +9303,11 @@ async fn load_turn_checkpoint_diagnostics_with_runtime_preserves_summary_assessm
 
     let diagnostics = coordinator
         .load_turn_checkpoint_diagnostics_with_runtime_and_limit(
-            &config, session_id, 12, &runtime, None,
+            &config,
+            session_id,
+            12,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("diagnostics should load");
@@ -9363,7 +9431,7 @@ async fn load_turn_checkpoint_diagnostics_uses_single_kernel_window_snapshot_for
             session_id,
             12,
             &runtime,
-            Some(&ctx),
+            ConversationRuntimeBinding::kernel(&ctx),
         )
         .await
         .expect("diagnostics should load from one kernel window snapshot");
@@ -9428,7 +9496,7 @@ async fn handle_turn_with_runtime_passes_restricted_tool_view_into_provider_requ
             "hello",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("handle turn success");
@@ -9500,7 +9568,7 @@ async fn handle_turn_with_runtime_executes_session_tools_via_default_dispatcher(
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("handle turn success");
@@ -9586,7 +9654,7 @@ async fn handle_turn_with_runtime_executes_sessions_send_via_default_dispatcher(
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("handle turn success");
@@ -9794,7 +9862,7 @@ async fn handle_turn_with_runtime_executes_delegate_via_coordinator() {
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("delegate handle turn success");
@@ -10384,7 +10452,7 @@ async fn handle_turn_with_runtime_delegate_async_queue_failure_rolls_back_child_
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("delegate_async queue failure reply");
@@ -10465,7 +10533,7 @@ async fn handle_turn_with_runtime_executes_delegate_async_via_coordinator_withou
                 "show raw json tool output",
                 ProviderErrorMode::Propagate,
                 &runtime,
-                None,
+                ConversationRuntimeBinding::direct(),
             )
             .await
     });
@@ -10599,7 +10667,7 @@ async fn handle_turn_with_runtime_delegate_async_spawn_failure_is_observable_aft
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("delegate_async reply");
@@ -10712,7 +10780,7 @@ async fn handle_turn_with_runtime_delegate_async_spawn_panic_is_observable_after
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("delegate_async reply");
@@ -10839,7 +10907,7 @@ async fn handle_turn_with_runtime_delegate_async_spawn_failure_persistence_recov
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("delegate_async reply");
@@ -10974,7 +11042,7 @@ async fn handle_turn_with_runtime_delegate_child_cannot_reenter_delegate_by_defa
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("nested delegate denial reply");
@@ -11065,7 +11133,7 @@ async fn handle_turn_with_runtime_delegate_child_cannot_reenter_delegate_async_b
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             runtime.as_ref(),
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("nested delegate_async denial reply");
@@ -11193,7 +11261,7 @@ async fn handle_turn_with_runtime_delegate_child_can_reenter_when_max_depth_allo
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("nested delegate success");
@@ -11297,7 +11365,7 @@ async fn handle_turn_with_runtime_executes_session_wait_via_default_dispatcher()
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("handle turn success");
@@ -11373,7 +11441,7 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_tools_via_default_d
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("safe-lane handle turn success");
@@ -11456,7 +11524,7 @@ async fn handle_turn_with_runtime_safe_lane_executes_sessions_send_via_default_d
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("safe-lane handle turn success");
@@ -11556,7 +11624,7 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_wait_via_default_di
             "deploy to production with secret token and show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("safe-lane handle turn success");
@@ -11652,7 +11720,12 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_preparation_conte
     let coordinator = ConversationTurnCoordinator::new();
 
     let outcome = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, None)
+        .repair_turn_checkpoint_tail_with_runtime(
+            &config,
+            session_id,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
         .await
         .expect("context drift should downgrade to manual repair");
 
@@ -11765,7 +11838,12 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_preparation_conte
     let coordinator = ConversationTurnCoordinator::new();
 
     let outcome = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, None)
+        .repair_turn_checkpoint_tail_with_runtime(
+            &config,
+            session_id,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
         .await
         .expect("content drift should downgrade to manual repair");
 
@@ -11878,7 +11956,12 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_malformed_prepara
     let coordinator = ConversationTurnCoordinator::new();
 
     let outcome = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, None)
+        .repair_turn_checkpoint_tail_with_runtime(
+            &config,
+            session_id,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
         .await
         .expect("malformed preparation should downgrade to manual repair");
 
@@ -11981,7 +12064,12 @@ async fn repair_turn_checkpoint_tail_with_runtime_persists_failed_after_turn_rep
     );
 
     let error = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, Some(&kernel_ctx))
+        .repair_turn_checkpoint_tail_with_runtime(
+            &config,
+            session_id,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
         .await
         .expect_err("after_turn repair should fail closed");
     assert!(error.contains("repair after_turn failed"));
@@ -12091,7 +12179,12 @@ async fn repair_turn_checkpoint_tail_with_runtime_persists_failed_compaction_rep
     );
 
     let error = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, Some(&kernel_ctx))
+        .repair_turn_checkpoint_tail_with_runtime(
+            &config,
+            session_id,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
         .await
         .expect_err("compaction repair should fail closed");
     assert!(error.contains("repair compaction failed"));
@@ -12199,7 +12292,12 @@ async fn durable_turn_checkpoint_repair_persists_finalized_checkpoint_and_repeat
     );
 
     let first = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, Some(&kernel_ctx))
+        .repair_turn_checkpoint_tail_with_runtime(
+            &config,
+            session_id,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
         .await
         .expect("first durable repair should succeed");
     assert_eq!(first.status().as_str(), "repaired");
@@ -12215,9 +12313,14 @@ async fn durable_turn_checkpoint_repair_persists_finalized_checkpoint_and_repeat
     );
     assert_eq!(runtime.compact_calls.lock().expect("compact lock").len(), 1);
 
-    let summary_after_first = load_turn_checkpoint_event_summary(session_id, 32, None, &mem_config)
-        .await
-        .expect("load summary after first durable repair");
+    let summary_after_first = load_turn_checkpoint_event_summary(
+        session_id,
+        32,
+        ConversationRuntimeBinding::direct(),
+        &mem_config,
+    )
+    .await
+    .expect("load summary after first durable repair");
     assert_eq!(summary_after_first.checkpoint_events, 2);
     assert_eq!(
         summary_after_first.latest_stage,
@@ -12235,7 +12338,12 @@ async fn durable_turn_checkpoint_repair_persists_finalized_checkpoint_and_repeat
     assert!(!summary_after_first.requires_recovery);
 
     let second = coordinator
-        .repair_turn_checkpoint_tail_with_runtime(&config, session_id, &runtime, Some(&kernel_ctx))
+        .repair_turn_checkpoint_tail_with_runtime(
+            &config,
+            session_id,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
         .await
         .expect("second durable repair should be a noop");
     assert_eq!(second.status().as_str(), "not_needed");
@@ -12256,10 +12364,14 @@ async fn durable_turn_checkpoint_repair_persists_finalized_checkpoint_and_repeat
         "repeated repair must not rerun compaction"
     );
 
-    let summary_after_second =
-        load_turn_checkpoint_event_summary(session_id, 32, None, &mem_config)
-            .await
-            .expect("load summary after second durable repair");
+    let summary_after_second = load_turn_checkpoint_event_summary(
+        session_id,
+        32,
+        ConversationRuntimeBinding::direct(),
+        &mem_config,
+    )
+    .await
+    .expect("load summary after second durable repair");
     assert_eq!(summary_after_second.checkpoint_events, 2);
     assert_eq!(
         summary_after_second.latest_stage,
@@ -12348,7 +12460,7 @@ async fn durable_turn_checkpoint_repair_persists_failed_terminal_checkpoint_then
             &config,
             session_id,
             &failing_runtime,
-            Some(&kernel_ctx),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect_err("first durable repair should persist failure and return error");
@@ -12370,10 +12482,14 @@ async fn durable_turn_checkpoint_repair_persists_failed_terminal_checkpoint_then
         1
     );
 
-    let summary_after_failure =
-        load_turn_checkpoint_event_summary(session_id, 32, None, &mem_config)
-            .await
-            .expect("load summary after durable failure");
+    let summary_after_failure = load_turn_checkpoint_event_summary(
+        session_id,
+        32,
+        ConversationRuntimeBinding::direct(),
+        &mem_config,
+    )
+    .await
+    .expect("load summary after durable failure");
     assert_eq!(summary_after_failure.checkpoint_events, 2);
     assert_eq!(
         summary_after_failure.latest_stage,
@@ -12410,7 +12526,7 @@ async fn durable_turn_checkpoint_repair_persists_failed_terminal_checkpoint_then
             &config,
             session_id,
             &retry_runtime,
-            Some(&kernel_ctx),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("second durable repair should recover");
@@ -12435,9 +12551,14 @@ async fn durable_turn_checkpoint_repair_persists_failed_terminal_checkpoint_then
         1
     );
 
-    let summary_after_retry = load_turn_checkpoint_event_summary(session_id, 32, None, &mem_config)
-        .await
-        .expect("load summary after durable retry");
+    let summary_after_retry = load_turn_checkpoint_event_summary(
+        session_id,
+        32,
+        ConversationRuntimeBinding::direct(),
+        &mem_config,
+    )
+    .await
+    .expect("load summary after durable retry");
     assert_eq!(summary_after_retry.checkpoint_events, 3);
     assert_eq!(
         summary_after_retry.latest_stage,
@@ -12459,7 +12580,7 @@ async fn durable_turn_checkpoint_repair_persists_failed_terminal_checkpoint_then
             &config,
             session_id,
             &retry_runtime,
-            Some(&kernel_ctx),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("finalized durable repair should stay noop");

@@ -137,7 +137,7 @@ impl AsyncDelegateSpawner for DefaultAsyncDelegateSpawner {
             request.label,
             &request.task,
             request.timeout_seconds,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await;
         Ok(())
