@@ -407,6 +407,52 @@ fn execute_skills_command_policy_round_trips_persisted_config() {
 }
 
 #[test]
+fn execute_skills_command_policy_set_normalizes_domain_rules_for_persistence() {
+    let root = unique_temp_dir("loongclaw-skills-cli-policy-domain-rules");
+    let config_path = write_external_skills_config(&root, false);
+    let config_string = config_path.display().to_string();
+
+    let set = crate::skills_cli::execute_skills_command(crate::skills_cli::SkillsCommandOptions {
+        config: Some(config_string.clone()),
+        json: false,
+        command: crate::skills_cli::SkillsCommands::Policy {
+            command: crate::skills_cli::SkillsPolicyCommands::Set {
+                enabled: Some(true),
+                require_download_approval: None,
+                allowed_domains: vec!["https://Skills.SH/catalog".to_owned()],
+                clear_allowed_domains: false,
+                blocked_domains: vec!["HTTPS://evil.example/download".to_owned()],
+                clear_blocked_domains: false,
+                approve_policy_update: true,
+            },
+        },
+    })
+    .expect("policy set should normalize domain rules before writing config");
+
+    assert_eq!(
+        set.outcome.payload["policy"]["allowed_domains"],
+        serde_json::json!(["skills.sh"])
+    );
+    assert_eq!(
+        set.outcome.payload["policy"]["blocked_domains"],
+        serde_json::json!(["evil.example"])
+    );
+
+    let (_, reloaded) =
+        mvp::config::load(Some(config_string.as_str())).expect("reload normalized config");
+    assert_eq!(
+        reloaded.external_skills.allowed_domains,
+        vec!["skills.sh".to_owned()]
+    );
+    assert_eq!(
+        reloaded.external_skills.blocked_domains,
+        vec!["evil.example".to_owned()]
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn execute_skills_command_policy_set_requires_explicit_approval() {
     let root = unique_temp_dir("loongclaw-skills-cli-policy-approval");
     let config_path = write_external_skills_config(&root, false);
@@ -442,4 +488,88 @@ fn execute_skills_command_policy_set_requires_explicit_approval() {
     assert!(reloaded.external_skills.blocked_domains.is_empty());
 
     fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn execute_skills_command_policy_set_rejects_invalid_domain_rules() {
+    let root = unique_temp_dir("loongclaw-skills-cli-policy-invalid-domain");
+    let config_path = write_external_skills_config(&root, false);
+    let config_string = config_path.display().to_string();
+
+    let error =
+        crate::skills_cli::execute_skills_command(crate::skills_cli::SkillsCommandOptions {
+            config: Some(config_string.clone()),
+            json: false,
+            command: crate::skills_cli::SkillsCommands::Policy {
+                command: crate::skills_cli::SkillsPolicyCommands::Set {
+                    enabled: Some(true),
+                    require_download_approval: None,
+                    allowed_domains: vec!["not-a-domain".to_owned()],
+                    clear_allowed_domains: false,
+                    blocked_domains: Vec::new(),
+                    clear_blocked_domains: false,
+                    approve_policy_update: true,
+                },
+            },
+        })
+        .expect_err("policy set should reject malformed domain rules");
+    assert!(
+        error.contains("invalid --allow-domain value"),
+        "error should identify the invalid domain flag: {error}"
+    );
+
+    let (_, reloaded) =
+        mvp::config::load(Some(config_string.as_str())).expect("reload unchanged config");
+    assert!(!reloaded.external_skills.enabled);
+    assert!(reloaded.external_skills.allowed_domains.is_empty());
+    assert!(reloaded.external_skills.blocked_domains.is_empty());
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn render_skills_cli_text_surfaces_operator_install_summary() {
+    let rendered =
+        crate::skills_cli::render_skills_cli_text(&crate::skills_cli::SkillsCommandExecution {
+            resolved_config_path: "/tmp/loongclaw.toml".to_owned(),
+            outcome: kernel::ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: serde_json::json!({
+                    "tool_name": "external_skills.install",
+                    "skill_id": "demo-skill",
+                    "display_name": "Demo Skill",
+                    "source_path": "/tmp/source/demo-skill",
+                    "install_path": "/tmp/managed/demo-skill",
+                    "replaced": true
+                }),
+            },
+        })
+        .expect("install payload should render");
+
+    assert!(rendered.contains("config=/tmp/loongclaw.toml"));
+    assert!(rendered.contains("installed skill_id=demo-skill"));
+    assert!(rendered.contains("display_name=Demo Skill"));
+    assert!(rendered.contains("replaced=true"));
+}
+
+#[test]
+fn skills_cli_json_wraps_config_status_and_result_payload() {
+    let rendered = crate::skills_cli::skills_cli_json(&crate::skills_cli::SkillsCommandExecution {
+        resolved_config_path: "/tmp/loongclaw.toml".to_owned(),
+        outcome: kernel::ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: serde_json::json!({
+                "tool_name": "skills.policy",
+                "action": "get",
+                "policy": {
+                    "enabled": true
+                }
+            }),
+        },
+    });
+
+    assert_eq!(rendered["config"], "/tmp/loongclaw.toml");
+    assert_eq!(rendered["status"], "ok");
+    assert_eq!(rendered["result"]["tool_name"], "skills.policy");
+    assert_eq!(rendered["result"]["policy"]["enabled"], true);
 }
