@@ -28,12 +28,17 @@ CapabilityToken → PolicyEngine → PolicyExtensionChain → Execution → Audi
 - `shell.exec` — Kernel-mediated tool execution with capability checks, shell policy extensions, and audit events
 - `file.read` / `file.write` — Kernel-mediated tool execution with filesystem capabilities, file policy extension checks, and audit events
 - Conversation tool turns — Fast-lane and safe-lane inner tool execution now flow through an explicit `ConversationRuntimeBinding` (`Kernel` or `Direct`); core tools require a bound `KernelContext`, and missing authority is rejected at the binding boundary as `no_kernel_context`
-- Memory/runtime/context orchestration — The conversation module now carries `ConversationRuntimeBinding` end-to-end across runtime, context, persistence, turn coordination, loop followup, history, and app-dispatch seams. Raw optional kernel context is now pushed out to outer integration boundaries and lower non-conversation leaf helpers, which remain architectural debt rather than full L1 enforcement
+- Memory/runtime/context orchestration — The conversation module now carries `ConversationRuntimeBinding` end-to-end across runtime, context, persistence, turn coordination, loop followup, history, and app-dispatch seams
+- Provider request/failover orchestration — Provider request entrypoints and failover telemetry now use an explicit `ProviderRuntimeBinding` (`Kernel` or `Direct`). Provider failover metrics record in both modes, while kernel-backed audit emission only occurs when provider execution is explicitly kernel-bound
+- Outer integration wrappers — Raw optional kernel context is now limited to explicit integration boundaries such as `channel::process_inbound_with_provider`, which immediately normalize into a binding-first runtime seam instead of carrying shadow authority semantics deeper into the runtime
 - Connector/ACP/runtime-only analytics — Not uniformly routed through the L1 policy chain yet
 
 **Conversation runtime binding note:**
 - The binding makes the high-level execution mode explicit: `Kernel` means the turn is allowed to call kernel-mediated core tools; `Direct` means conversation orchestration may continue, but kernel-only tool execution must fail closed.
 - This removes ambiguity from conversation traits and dispatcher seams where `None` previously overloaded multiple meanings such as "direct mode", "not wired yet", or "forgot to pass kernel authority".
+
+**Provider runtime binding note:**
+- The provider binding makes provider governance explicit without importing conversation-layer semantics into provider code. `Kernel` means failover/audit behavior may emit kernel-backed audit events; `Direct` means provider execution is intentionally running without that authority while still recording in-process failover metrics.
 
 ### Capability Tokens
 

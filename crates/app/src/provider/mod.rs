@@ -7,7 +7,7 @@ use serde_json::Value;
 #[cfg(test)]
 use tokio::time::sleep;
 
-use crate::{CliResult, KernelContext};
+use crate::CliResult;
 
 use super::config::LoongClawConfig;
 #[cfg(test)]
@@ -38,9 +38,11 @@ mod request_message_runtime;
 mod request_payload_runtime;
 mod request_planner;
 mod request_session_runtime;
+mod runtime_binding;
 mod shape;
 mod transport;
 
+pub use runtime_binding::ProviderRuntimeBinding;
 pub use shape::extract_provider_turn;
 
 #[cfg(test)]
@@ -163,12 +165,12 @@ pub fn build_messages_for_session(
 pub async fn request_completion(
     config: &LoongClawConfig,
     messages: &[Value],
-    kernel_ctx: Option<&KernelContext>,
+    binding: ProviderRuntimeBinding<'_>,
 ) -> CliResult<String> {
     let session = prepare_provider_request_session(config).await?;
     request_across_model_candidates(
         &config.provider,
-        kernel_ctx,
+        binding,
         &session.auth_profiles,
         session.profile_state_policy.as_ref(),
         &session.model_candidates,
@@ -195,13 +197,13 @@ pub async fn request_completion(
 pub async fn request_turn(
     config: &LoongClawConfig,
     messages: &[Value],
-    kernel_ctx: Option<&KernelContext>,
+    binding: ProviderRuntimeBinding<'_>,
 ) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
     request_turn_in_view(
         config,
         messages,
         &crate::tools::runtime_tool_view(),
-        kernel_ctx,
+        binding,
     )
     .await
 }
@@ -210,7 +212,7 @@ pub async fn request_turn_in_view(
     config: &LoongClawConfig,
     messages: &[Value],
     tool_view: &crate::tools::ToolView,
-    kernel_ctx: Option<&KernelContext>,
+    binding: ProviderRuntimeBinding<'_>,
 ) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
     let session = prepare_provider_request_session(config).await?;
     let tool_runtime_config =
@@ -224,7 +226,7 @@ pub async fn request_turn_in_view(
     };
     request_across_model_candidates(
         &config.provider,
-        kernel_ctx,
+        binding,
         &session.auth_profiles,
         session.profile_state_policy.as_ref(),
         &session.model_candidates,

@@ -584,7 +584,14 @@ where
         messages: &[Value],
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
-        provider::request_completion(config, messages, binding.kernel_context()).await
+        provider::request_completion(
+            config,
+            messages,
+            provider::ProviderRuntimeBinding::from_optional_kernel_context(
+                binding.kernel_context(),
+            ),
+        )
+        .await
     }
 
     async fn request_turn(
@@ -594,7 +601,15 @@ where
         tool_view: &ToolView,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ProviderTurn> {
-        provider::request_turn_in_view(config, messages, tool_view, binding.kernel_context()).await
+        provider::request_turn_in_view(
+            config,
+            messages,
+            tool_view,
+            provider::ProviderRuntimeBinding::from_optional_kernel_context(
+                binding.kernel_context(),
+            ),
+        )
+        .await
     }
 
     async fn persist_turn(

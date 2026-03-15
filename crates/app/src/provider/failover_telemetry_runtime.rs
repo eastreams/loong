@@ -5,10 +5,10 @@ use std::sync::{Mutex, OnceLock};
 
 use loongclaw_kernel::AuditEventKind;
 
-use crate::KernelContext;
 use crate::config::ProviderConfig;
 
 use super::failover::ProviderFailoverSnapshot;
+use super::runtime_binding::ProviderRuntimeBinding;
 
 #[derive(Debug, Clone)]
 struct ProviderFailoverEvent {
@@ -135,7 +135,7 @@ fn build_provider_failover_event(
 }
 
 pub(super) fn record_provider_failover_audit_event(
-    kernel_ctx: Option<&KernelContext>,
+    binding: ProviderRuntimeBinding<'_>,
     provider: &ProviderConfig,
     snapshot: &ProviderFailoverSnapshot,
     try_next_model: bool,
@@ -155,7 +155,7 @@ pub(super) fn record_provider_failover_audit_event(
     );
     record_provider_failover_metrics(&event);
 
-    let Some(ctx) = kernel_ctx else {
+    let Some(ctx) = binding.kernel_context() else {
         return;
     };
     let _ = ctx.kernel.record_audit_event(
