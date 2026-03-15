@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -15,17 +16,17 @@ pub(crate) struct DoctorCommandOptions {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DoctorCheckLevel {
+pub(crate) enum DoctorCheckLevel {
     Pass,
     Warn,
     Fail,
 }
 
 #[derive(Debug, Clone)]
-struct DoctorCheck {
-    name: String,
-    level: DoctorCheckLevel,
-    detail: String,
+pub(crate) struct DoctorCheck {
+    pub(crate) name: String,
+    pub(crate) level: DoctorCheckLevel,
+    pub(crate) detail: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -33,6 +34,12 @@ struct DoctorSummary {
     pass: usize,
     warn: usize,
     fail: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DoctorChannelCheckSpec {
+    config_name: &'static str,
+    runtime_name: Option<&'static str>,
 }
 
 pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
@@ -145,6 +152,7 @@ pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<(
         "create tool file root",
     ));
 
+    checks.extend(check_feishu_integration(&config, options.fix, &mut fixes));
     checks.extend(check_channel_surfaces(&config));
 
     if options.fix && config_mutated {
@@ -253,65 +261,476 @@ fn check_directory_ready(
 }
 
 fn check_channel_surfaces(config: &mvp::config::LoongClawConfig) -> Vec<DoctorCheck> {
-    let inventory = mvp::channel::channel_inventory(config);
-    build_channel_surface_checks(&inventory.channel_surfaces)
+    let snapshots = mvp::channel::channel_status_snapshots(config);
+    build_channel_surface_checks(&snapshots)
+}
+
+pub(crate) fn check_feishu_integration(
+    config: &mvp::config::LoongClawConfig,
+    fix: bool,
+    fixes: &mut Vec<String>,
+) -> Vec<DoctorCheck> {
+    if !feishu_integration_requested(&config.feishu) {
+        return Vec::new();
+    }
+
+    let mut checks = Vec::new();
+    let sqlite_path = config.feishu_integration.resolved_sqlite_path();
+    let sqlite_parent = sqlite_path.parent().unwrap_or(Path::new("."));
+    checks.push(check_directory_ready(
+        "feishu integration store",
+        sqlite_parent,
+        fix,
+        fixes,
+        "create feishu integration store directory",
+    ));
+
+    let store = mvp::feishu::FeishuTokenStore::new(sqlite_path);
+    let configured_ids = config.feishu.configured_account_ids();
+    let scoped = configured_ids.len() > 1;
+
+    for configured_id in configured_ids {
+        let resolved = match config.feishu.resolve_account(Some(configured_id.as_str())) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                checks.push(DoctorCheck {
+                    name: scoped_feishu_check_name(
+                        "feishu integration account",
+                        &configured_id,
+                        scoped,
+                    ),
+                    level: DoctorCheckLevel::Fail,
+                    detail: error,
+                });
+                continue;
+            }
+        };
+
+        let credentials_name = scoped_feishu_check_name(
+            "feishu integration credentials",
+            &resolved.configured_account_id,
+            scoped,
+        );
+        let has_app_id = resolved
+            .app_id()
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some();
+        let has_app_secret = resolved
+            .app_secret()
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some();
+        checks.push(DoctorCheck {
+            name: credentials_name,
+            level: if has_app_id && has_app_secret {
+                DoctorCheckLevel::Pass
+            } else {
+                DoctorCheckLevel::Fail
+            },
+            detail: if has_app_id && has_app_secret {
+                format!(
+                    "configured_account={} account={} app credentials are available",
+                    resolved.configured_account_id, resolved.account.id
+                )
+            } else {
+                format!(
+                    "configured_account={} account={} missing app credentials (need feishu.app_id/app_secret or account overrides)",
+                    resolved.configured_account_id, resolved.account.id
+                )
+            },
+        });
+
+        let grant_name =
+            scoped_feishu_check_name("feishu user grant", &resolved.configured_account_id, scoped);
+        let inventory =
+            match mvp::feishu::inspect_grants_for_account(&store, resolved.account.id.as_str()) {
+                Ok(inventory) => inventory,
+                Err(error) => {
+                    checks.push(DoctorCheck {
+                        name: grant_name,
+                        level: DoctorCheckLevel::Fail,
+                        detail: error,
+                    });
+                    continue;
+                }
+            };
+
+        if inventory.grants.is_empty() {
+            checks.push(DoctorCheck {
+                name: grant_name,
+                level: DoctorCheckLevel::Warn,
+                detail: format!(
+                    "configured_account={} account={} missing stored user grant; run `{}`",
+                    resolved.configured_account_id,
+                    resolved.account.id,
+                    crate::feishu_support::feishu_auth_start_command_hint(
+                        resolved.configured_account_id.as_str(),
+                        false,
+                        false,
+                    )
+                ),
+            });
+            continue;
+        }
+
+        let now_s = chrono::Utc::now().timestamp();
+        let required_scopes = config.feishu_integration.trimmed_default_scopes();
+        let Some(latest) = inventory.grants.first() else {
+            continue;
+        };
+        let effective_grant = inventory.effective_grant();
+        let effective_status =
+            mvp::feishu::auth::summarize_grant_status(effective_grant, now_s, &required_scopes);
+
+        checks.push(DoctorCheck {
+            name: grant_name,
+            level: DoctorCheckLevel::Pass,
+            detail: format!(
+                "configured_account={} account={} grants={} latest_open_id={} selected_open_id={} effective_open_id={}",
+                resolved.configured_account_id,
+                resolved.account.id,
+                inventory.grants.len(),
+                latest.principal.open_id,
+                inventory.selected_open_id.as_deref().unwrap_or("-"),
+                inventory.effective_open_id.as_deref().unwrap_or("-"),
+            ),
+        });
+        checks.push(DoctorCheck {
+            name: scoped_feishu_check_name(
+                "feishu selected grant",
+                &resolved.configured_account_id,
+                scoped,
+            ),
+            level: if inventory.selected_open_id.is_some() {
+                DoctorCheckLevel::Pass
+            } else if inventory.stale_selected_open_id.is_some() || inventory.selection_required() {
+                DoctorCheckLevel::Warn
+            } else {
+                DoctorCheckLevel::Pass
+            },
+            detail: if let Some(selected_open_id) = inventory.selected_open_id.as_deref() {
+                if let Some(selected_grant) = inventory
+                    .grants
+                    .iter()
+                    .find(|grant| grant.principal.open_id == selected_open_id)
+                {
+                    format!(
+                        "configured_account={} account={} selected_open_id={} selected_name={}",
+                        resolved.configured_account_id,
+                        resolved.account.id,
+                        selected_grant.principal.open_id,
+                        selected_grant.principal.name.as_deref().unwrap_or("-")
+                    )
+                } else {
+                    format!(
+                        "configured_account={} account={} stale selected_open_id={} (grant not found); rerun `{}`",
+                        resolved.configured_account_id,
+                        resolved.account.id,
+                        selected_open_id,
+                        crate::feishu_support::feishu_auth_select_command_hint(
+                            resolved.configured_account_id.as_str(),
+                        )
+                    )
+                }
+            } else if let Some(selected_open_id) = inventory
+                .stale_selected_open_id
+                .as_deref()
+                .filter(|_| inventory.selection_required())
+            {
+                format!(
+                    "configured_account={} account={} stale selected_open_id={} (grant not found); rerun `{}`",
+                    resolved.configured_account_id,
+                    resolved.account.id,
+                    selected_open_id,
+                    crate::feishu_support::feishu_auth_select_command_hint(
+                        resolved.configured_account_id.as_str(),
+                    )
+                )
+            } else if let Some(selected_open_id) = inventory.stale_selected_open_id.as_deref() {
+                format!(
+                    "configured_account={} account={} stale selected_open_id={} was cleared; single stored grant open_id={} now routes implicitly",
+                    resolved.configured_account_id,
+                    resolved.account.id,
+                    selected_open_id,
+                    latest.principal.open_id
+                )
+            } else if inventory.selection_required() {
+                format!(
+                    "configured_account={} account={} multiple stored grants without selected default; run `{}`",
+                    resolved.configured_account_id,
+                    resolved.account.id
+                    ,
+                    crate::feishu_support::feishu_auth_select_command_hint(
+                        resolved.configured_account_id.as_str(),
+                    )
+                )
+            } else {
+                format!(
+                    "configured_account={} account={} single stored grant open_id={} explicit selection not required",
+                    resolved.configured_account_id,
+                    resolved.account.id,
+                    latest.principal.open_id
+                )
+            },
+        });
+        checks.push(DoctorCheck {
+            name: scoped_feishu_check_name(
+                "feishu token freshness",
+                &resolved.configured_account_id,
+                scoped,
+            ),
+            level: if effective_grant.is_none() {
+                DoctorCheckLevel::Warn
+            } else if effective_status.refresh_token_expired {
+                DoctorCheckLevel::Fail
+            } else if effective_status.access_token_expired {
+                DoctorCheckLevel::Warn
+            } else {
+                DoctorCheckLevel::Pass
+            },
+            detail: if let Some(grant) = effective_grant {
+                format!(
+                    "configured_account={} account={} effective_open_id={} access_expired={} refresh_expired={}",
+                    resolved.configured_account_id,
+                    resolved.account.id,
+                    grant.principal.open_id,
+                    effective_status.access_token_expired,
+                    effective_status.refresh_token_expired
+                )
+            } else {
+                format!(
+                    "configured_account={} account={} cannot determine effective token freshness until a selected grant exists; run `{}`",
+                    resolved.configured_account_id,
+                    resolved.account.id,
+                    crate::feishu_support::feishu_auth_select_command_hint(
+                        resolved.configured_account_id.as_str(),
+                    )
+                )
+            },
+        });
+        checks.push(DoctorCheck {
+            name: scoped_feishu_check_name(
+                "feishu scope coverage",
+                &resolved.configured_account_id,
+                scoped,
+            ),
+            level: if effective_grant.is_none() {
+                DoctorCheckLevel::Warn
+            } else if effective_status.missing_scopes.is_empty() {
+                DoctorCheckLevel::Pass
+            } else {
+                DoctorCheckLevel::Warn
+            },
+            detail: if let Some(grant) = effective_grant {
+                format!(
+                    "configured_account={} account={} effective_open_id={} required_scopes={} missing_scopes={}",
+                    resolved.configured_account_id,
+                    resolved.account.id,
+                    grant.principal.open_id,
+                    required_scopes.join(","),
+                    effective_status.missing_scopes.join(",")
+                )
+            } else {
+                format!(
+                    "configured_account={} account={} cannot determine effective scope coverage until a selected grant exists; run `{}`",
+                    resolved.configured_account_id,
+                    resolved.account.id,
+                    crate::feishu_support::feishu_auth_select_command_hint(
+                        resolved.configured_account_id.as_str(),
+                    )
+                )
+            },
+        });
+        let doc_write_status = mvp::feishu::summarize_doc_write_scope_status(effective_grant);
+        checks.push(DoctorCheck {
+            name: scoped_feishu_check_name(
+                "feishu doc write readiness",
+                &resolved.configured_account_id,
+                scoped,
+            ),
+            level: if effective_grant.is_none() {
+                DoctorCheckLevel::Warn
+            } else if doc_write_status.ready {
+                DoctorCheckLevel::Pass
+            } else {
+                DoctorCheckLevel::Warn
+            },
+            detail: if let Some(grant) = effective_grant {
+                if doc_write_status.ready {
+                    format!(
+                        "configured_account={} account={} open_id={} doc_write_ready={} matched_scopes={} accepted_scopes={}",
+                        resolved.configured_account_id,
+                        resolved.account.id,
+                        grant.principal.open_id,
+                        doc_write_status.ready,
+                        doc_write_status.matched_scopes.join(","),
+                        doc_write_status.accepted_scopes.join(","),
+                    )
+                } else {
+                    format!(
+                        "configured_account={} account={} open_id={} doc_write_ready={} matched_scopes={} accepted_scopes={}; rerun `{}` to request document write scopes",
+                        resolved.configured_account_id,
+                        resolved.account.id,
+                        grant.principal.open_id,
+                        doc_write_status.ready,
+                        doc_write_status.matched_scopes.join(","),
+                        doc_write_status.accepted_scopes.join(","),
+                        crate::feishu_support::feishu_auth_start_command_hint(
+                            resolved.configured_account_id.as_str(),
+                            false,
+                            true,
+                        )
+                    )
+                }
+            } else {
+                format!(
+                    "configured_account={} account={} cannot determine active doc write readiness until a selected grant exists; select one with `{}`",
+                    resolved.configured_account_id,
+                    resolved.account.id,
+                    crate::feishu_support::feishu_auth_select_command_hint(
+                        resolved.configured_account_id.as_str(),
+                    )
+                )
+            },
+        });
+        let write_status = mvp::feishu::summarize_message_write_scope_status(effective_grant);
+        checks.push(DoctorCheck {
+            name: scoped_feishu_check_name(
+                "feishu message write readiness",
+                &resolved.configured_account_id,
+                scoped,
+            ),
+            level: if effective_grant.is_none() {
+                DoctorCheckLevel::Warn
+            } else if write_status.ready {
+                DoctorCheckLevel::Pass
+            } else {
+                DoctorCheckLevel::Warn
+            },
+            detail: if let Some(grant) = effective_grant {
+                if write_status.ready {
+                    format!(
+                        "configured_account={} account={} open_id={} write_ready={} matched_scopes={} accepted_scopes={}",
+                        resolved.configured_account_id,
+                        resolved.account.id,
+                        grant.principal.open_id,
+                        write_status.ready,
+                        write_status.matched_scopes.join(","),
+                        write_status.accepted_scopes.join(","),
+                    )
+                } else {
+                    format!(
+                        "configured_account={} account={} open_id={} write_ready={} matched_scopes={} accepted_scopes={}; rerun `{}` to request the recommended write scopes",
+                        resolved.configured_account_id,
+                        resolved.account.id,
+                        grant.principal.open_id,
+                        write_status.ready,
+                        write_status.matched_scopes.join(","),
+                        write_status.accepted_scopes.join(","),
+                        crate::feishu_support::feishu_auth_start_command_hint(
+                            resolved.configured_account_id.as_str(),
+                            true,
+                            false,
+                        )
+                    )
+                }
+            } else {
+                format!(
+                    "configured_account={} account={} cannot determine active write readiness until a selected grant exists; select one with `{}`",
+                    resolved.configured_account_id,
+                    resolved.account.id,
+                    crate::feishu_support::feishu_auth_select_command_hint(
+                        resolved.configured_account_id.as_str(),
+                    )
+                )
+            },
+        });
+    }
+
+    checks
+}
+
+fn feishu_integration_requested(config: &mvp::config::FeishuChannelConfig) -> bool {
+    config.enabled
+        || config
+            .account_id
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        || config
+            .default_account
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        || config
+            .app_id
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        || config
+            .app_secret
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        || !config.accounts.is_empty()
+}
+
+fn scoped_feishu_check_name(base_name: &str, configured_account_id: &str, scoped: bool) -> String {
+    if !scoped {
+        return base_name.to_owned();
+    }
+    format!("{base_name} [{configured_account_id}]")
 }
 
 fn build_channel_surface_checks(
-    channel_surfaces: &[mvp::channel::ChannelSurface],
+    snapshots: &[mvp::channel::ChannelStatusSnapshot],
 ) -> Vec<DoctorCheck> {
     let mut checks = Vec::new();
-    for surface in channel_surfaces {
-        let scoped = surface.configured_accounts.len() > 1;
+    let mut counts = BTreeMap::new();
+    for snapshot in snapshots {
+        *counts.entry(snapshot.id).or_insert(0_usize) += 1;
+    }
 
-        if scoped
-            && let Some(default_snapshot) = surface.configured_accounts.iter().find(|snapshot| {
-                snapshot.is_default_account
-                    && snapshot.default_account_source
-                        == mvp::config::ChannelDefaultAccountSelectionSource::Fallback
-            })
+    for snapshot in snapshots {
+        let scoped = counts.get(snapshot.id).copied().unwrap_or(0) > 1;
+        if snapshot.is_default_account
+            && scoped
+            && snapshot.default_account_source
+                == mvp::config::ChannelDefaultAccountSelectionSource::Fallback
         {
             checks.push(DoctorCheck {
-                name: format!("{} default account policy", surface.catalog.id),
+                name: format!("{} default account policy", snapshot.id),
                 level: DoctorCheckLevel::Warn,
                 detail: format!(
                     "multiple configured accounts are using fallback default selection; omitting --account currently routes to `{}`. set default_account explicitly to avoid routing surprises",
-                    default_snapshot.configured_account_label
+                    snapshot.configured_account_label
                 ),
             });
         }
+        for operation in &snapshot.operations {
+            let Some(spec) = doctor_check_spec(snapshot.id, operation.id) else {
+                continue;
+            };
+            checks.push(DoctorCheck {
+                name: scoped_doctor_check_name(spec.config_name, snapshot, scoped),
+                level: doctor_check_level_for_health(operation.health),
+                detail: operation.detail.clone(),
+            });
 
-        for snapshot in &surface.configured_accounts {
-            for operation in &snapshot.operations {
-                let Some(descriptor) = mvp::channel::resolve_channel_operation_descriptor(
-                    surface.catalog.id,
-                    operation.id,
-                ) else {
-                    continue;
-                };
-                let Some(spec) = descriptor.doctor else {
-                    continue;
-                };
-                for check in spec.checks {
-                    match check.trigger {
-                        mvp::channel::ChannelDoctorCheckTrigger::OperationHealth => {
-                            checks.push(DoctorCheck {
-                                name: scoped_doctor_check_name(check.name, snapshot, scoped),
-                                level: doctor_check_level_for_health(operation.health),
-                                detail: operation.detail.clone(),
-                            });
-                        }
-                        mvp::channel::ChannelDoctorCheckTrigger::ReadyRuntime => {
-                            if operation.health == mvp::channel::ChannelOperationHealth::Ready {
-                                checks.push(build_channel_runtime_check(
-                                    scoped_doctor_check_name(check.name, snapshot, scoped).as_str(),
-                                    operation,
-                                ));
-                            }
-                        }
-                    }
-                }
+            if let Some(runtime_name) = spec.runtime_name
+                && operation.health == mvp::channel::ChannelOperationHealth::Ready
+            {
+                checks.push(build_channel_runtime_check(
+                    scoped_doctor_check_name(runtime_name, snapshot, scoped).as_str(),
+                    operation,
+                ));
             }
+        }
+        if let Some(check) = build_feishu_inbound_support_check(snapshot, scoped) {
+            checks.push(check);
         }
     }
 
@@ -327,6 +746,70 @@ fn scoped_doctor_check_name(
         return base_name.to_owned();
     }
     format!("{base_name} [{}]", snapshot.configured_account_label)
+}
+
+fn build_feishu_inbound_support_check(
+    snapshot: &mvp::channel::ChannelStatusSnapshot,
+    scoped: bool,
+) -> Option<DoctorCheck> {
+    if snapshot.id != "feishu" {
+        return None;
+    }
+    let serve = snapshot.operation("serve")?;
+    if serve.health != mvp::channel::ChannelOperationHealth::Ready {
+        return None;
+    }
+
+    let message_types = snapshot_note_value(snapshot, "webhook_inbound_message_types")?;
+    let non_text_mode =
+        snapshot_note_value(snapshot, "webhook_inbound_non_text_mode").unwrap_or("unknown");
+    let binary_fetch =
+        snapshot_note_value(snapshot, "webhook_inbound_binary_fetch").unwrap_or("unknown");
+    let resource_download_tool =
+        snapshot_note_value(snapshot, "webhook_resource_download_tool").unwrap_or("unknown");
+    let resource_selection_mode =
+        snapshot_note_value(snapshot, "webhook_resource_selection_mode").unwrap_or("unknown");
+    let callback_event_types =
+        snapshot_note_value(snapshot, "webhook_callback_event_types").unwrap_or("unknown");
+    let callback_response_mode =
+        snapshot_note_value(snapshot, "webhook_callback_response_mode").unwrap_or("unknown");
+
+    Some(DoctorCheck {
+        name: scoped_doctor_check_name("feishu webhook inbound support", snapshot, scoped),
+        level: DoctorCheckLevel::Pass,
+        detail: format!(
+            "message_types={message_types} non_text_mode={non_text_mode} binary_fetch={binary_fetch} resource_download_tool={resource_download_tool} resource_selection_mode={resource_selection_mode} callback_event_types={callback_event_types} callback_response_mode={callback_response_mode}"
+        ),
+    })
+}
+
+fn snapshot_note_value<'a>(
+    snapshot: &'a mvp::channel::ChannelStatusSnapshot,
+    key: &str,
+) -> Option<&'a str> {
+    let prefix = format!("{key}=");
+    snapshot
+        .notes
+        .iter()
+        .find_map(|note| note.strip_prefix(prefix.as_str()))
+}
+
+fn doctor_check_spec(channel_id: &str, operation_id: &str) -> Option<DoctorChannelCheckSpec> {
+    match (channel_id, operation_id) {
+        ("telegram", "serve") => Some(DoctorChannelCheckSpec {
+            config_name: "telegram channel",
+            runtime_name: Some("telegram channel runtime"),
+        }),
+        ("feishu", "send") => Some(DoctorChannelCheckSpec {
+            config_name: "feishu channel",
+            runtime_name: None,
+        }),
+        ("feishu", "serve") => Some(DoctorChannelCheckSpec {
+            config_name: "feishu webhook verification",
+            runtime_name: Some("feishu webhook runtime"),
+        }),
+        _ => None,
+    }
 }
 
 fn doctor_check_level_for_health(health: mvp::channel::ChannelOperationHealth) -> DoctorCheckLevel {
@@ -558,70 +1041,16 @@ fn check_level_json(level: DoctorCheckLevel) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static FEISHU_TEST_DB_COUNTER: AtomicU64 = AtomicU64::new(0);
+
     use super::*;
     use mvp::channel::{
-        CHANNEL_OPERATION_SERVE_ID, ChannelOperationHealth, ChannelOperationRuntime,
-        ChannelOperationStatus, ChannelStatusSnapshot, ChannelSurface,
+        ChannelOperationHealth, ChannelOperationRuntime, ChannelOperationStatus,
+        ChannelStatusSnapshot,
     };
-
-    fn runtime_channel_surface_from_catalog(
-        id: &'static str,
-        configured_accounts: Vec<ChannelStatusSnapshot>,
-    ) -> ChannelSurface {
-        let default_configured_account_id = configured_accounts
-            .iter()
-            .find(|snapshot| snapshot.is_default_account)
-            .map(|snapshot| snapshot.configured_account_id.clone());
-        let catalog = mvp::channel::resolve_channel_catalog_entry(id)
-            .expect("channel catalog entry for test surface");
-        ChannelSurface {
-            catalog,
-            configured_accounts,
-            default_configured_account_id,
-        }
-    }
-
-    fn runtime_operation_status(
-        channel_id: &str,
-        operation_id: &str,
-        health: ChannelOperationHealth,
-        detail: &str,
-        runtime: Option<ChannelOperationRuntime>,
-    ) -> ChannelOperationStatus {
-        let descriptor =
-            mvp::channel::resolve_channel_operation_descriptor(channel_id, operation_id)
-                .expect("channel operation descriptor for doctor test");
-        ChannelOperationStatus {
-            id: descriptor.operation.id,
-            label: descriptor.operation.label,
-            command: descriptor.operation.command,
-            health,
-            detail: detail.to_owned(),
-            issues: Vec::new(),
-            runtime,
-        }
-    }
-
-    #[test]
-    fn runtime_channel_surface_from_catalog_uses_registry_metadata() {
-        let surface = runtime_channel_surface_from_catalog("feishu", Vec::new());
-        let family = mvp::channel::resolve_channel_catalog_command_family_descriptor("feishu")
-            .expect("feishu catalog family");
-
-        assert_eq!(surface.catalog.id, "feishu");
-        assert_eq!(surface.catalog.label, "Feishu/Lark");
-        assert_eq!(surface.catalog.aliases, vec!["lark"]);
-        assert_eq!(surface.catalog.transport, "feishu_openapi_webhook");
-        assert_eq!(
-            surface
-                .catalog
-                .operations
-                .iter()
-                .map(|operation| operation.command)
-                .collect::<Vec<_>>(),
-            vec![family.send.command, family.serve.command]
-        );
-    }
 
     #[test]
     fn resolve_secret_prefers_inline_value() {
@@ -777,48 +1206,153 @@ mod tests {
         );
     }
 
+    fn unique_temp_feishu_db(label: &str) -> String {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before epoch")
+            .as_nanos();
+        let sequence = FEISHU_TEST_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir()
+            .join(format!(
+                "loongclaw-doctor-feishu-{label}-{}-{nanos}-{sequence}.sqlite3",
+                std::process::id()
+            ))
+            .display()
+            .to_string()
+    }
+
+    #[test]
+    fn feishu_integration_requested_is_false_for_default_config() {
+        let config = mvp::config::FeishuChannelConfig::default();
+        assert!(!feishu_integration_requested(&config));
+    }
+
+    #[test]
+    fn check_feishu_integration_warns_when_user_grants_are_missing() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.feishu.enabled = true;
+        config.feishu.app_id = Some("cli_a1b2c3".to_owned());
+        config.feishu.app_secret = Some("app-secret".to_owned());
+        config.feishu_integration.sqlite_path = unique_temp_feishu_db("missing-grant");
+        let mut fixes = Vec::new();
+
+        let checks = check_feishu_integration(&config, false, &mut fixes);
+
+        assert!(
+            checks.iter().any(|check| {
+                check.name == "feishu integration credentials"
+                    && check.level == DoctorCheckLevel::Pass
+            }),
+            "configured Feishu account should report available credentials"
+        );
+        assert!(
+            checks.iter().any(|check| {
+                check.level == DoctorCheckLevel::Warn
+                    && check.name.contains("feishu user grant")
+                    && check.detail.contains("missing stored user grant")
+            }),
+            "missing grants should warn rather than fail hard"
+        );
+    }
+
+    #[test]
+    fn check_feishu_integration_passes_when_ready_grant_exists() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.feishu.enabled = true;
+        config.feishu.app_id = Some("cli_a1b2c3".to_owned());
+        config.feishu.app_secret = Some("app-secret".to_owned());
+        config.feishu_integration.sqlite_path = unique_temp_feishu_db("ready-grant");
+        let resolved = config
+            .feishu
+            .resolve_account(None)
+            .expect("resolve default feishu account");
+        let store =
+            mvp::feishu::FeishuTokenStore::new(config.feishu_integration.resolved_sqlite_path());
+        store
+            .save_grant(&mvp::feishu::FeishuGrant {
+                principal: mvp::feishu::FeishuUserPrincipal {
+                    account_id: resolved.account.id,
+                    open_id: "ou_123".to_owned(),
+                    union_id: Some("on_456".to_owned()),
+                    user_id: Some("u_789".to_owned()),
+                    name: Some("Alice".to_owned()),
+                    tenant_key: Some("tenant_x".to_owned()),
+                    avatar_url: None,
+                    email: Some("alice@example.com".to_owned()),
+                    enterprise_email: None,
+                },
+                access_token: "u-token".to_owned(),
+                refresh_token: "r-token".to_owned(),
+                scopes: mvp::feishu::FeishuGrantScopeSet::from_scopes(
+                    config.feishu_integration.trimmed_default_scopes(),
+                ),
+                access_expires_at_s: chrono::Utc::now().timestamp() + 3600,
+                refresh_expires_at_s: chrono::Utc::now().timestamp() + 86_400,
+                refreshed_at_s: chrono::Utc::now().timestamp(),
+            })
+            .expect("save feishu grant");
+        let mut fixes = Vec::new();
+
+        let checks = check_feishu_integration(&config, false, &mut fixes);
+
+        assert!(
+            checks.iter().any(|check| {
+                check.name.contains("feishu user grant")
+                    && check.level == DoctorCheckLevel::Pass
+                    && check.detail.contains("latest_open_id=ou_123")
+            }),
+            "stored grants should be visible to doctor"
+        );
+        assert!(
+            checks.iter().any(|check| {
+                check.name.contains("feishu token freshness")
+                    && check.level == DoctorCheckLevel::Pass
+            }),
+            "ready grants should upgrade Feishu integration health to pass"
+        );
+    }
+
     #[test]
     fn build_channel_surface_checks_warns_when_ready_serve_operation_is_not_running() {
-        let surfaces = vec![runtime_channel_surface_from_catalog(
-            "telegram",
-            vec![ChannelStatusSnapshot {
-                id: "telegram",
-                configured_account_id: "bot_123456".to_owned(),
-                configured_account_label: "bot_123456".to_owned(),
-                is_default_account: true,
-                default_account_source:
-                    mvp::config::ChannelDefaultAccountSelectionSource::RuntimeIdentity,
-                label: "Telegram",
-                aliases: Vec::new(),
-                transport: "telegram_bot_api_polling",
-                compiled: true,
-                enabled: true,
-                api_base_url: Some("https://api.telegram.org".to_owned()),
-                notes: Vec::new(),
-                operations: vec![runtime_operation_status(
-                    "telegram",
-                    CHANNEL_OPERATION_SERVE_ID,
-                    ChannelOperationHealth::Ready,
-                    "ready",
-                    Some(ChannelOperationRuntime {
-                        running: false,
-                        stale: false,
-                        busy: false,
-                        active_runs: 0,
-                        last_run_activity_at: None,
-                        last_heartbeat_at: None,
-                        pid: None,
-                        account_id: Some("bot_123456".to_owned()),
-                        account_label: Some("bot:123456".to_owned()),
-                        instance_count: 1,
-                        running_instances: 0,
-                        stale_instances: 0,
-                    }),
-                )],
+        let snapshots = vec![ChannelStatusSnapshot {
+            id: "telegram",
+            configured_account_id: "bot_123456".to_owned(),
+            configured_account_label: "bot_123456".to_owned(),
+            is_default_account: true,
+            default_account_source:
+                mvp::config::ChannelDefaultAccountSelectionSource::RuntimeIdentity,
+            label: "Telegram",
+            aliases: Vec::new(),
+            transport: "telegram_bot_api_polling",
+            compiled: true,
+            enabled: true,
+            api_base_url: Some("https://api.telegram.org".to_owned()),
+            notes: Vec::new(),
+            operations: vec![ChannelOperationStatus {
+                id: "serve",
+                label: "reply loop",
+                command: "telegram-serve",
+                health: ChannelOperationHealth::Ready,
+                detail: "ready".to_owned(),
+                issues: Vec::new(),
+                runtime: Some(ChannelOperationRuntime {
+                    running: false,
+                    stale: false,
+                    busy: false,
+                    active_runs: 0,
+                    last_run_activity_at: None,
+                    last_heartbeat_at: None,
+                    pid: None,
+                    account_id: Some("bot_123456".to_owned()),
+                    account_label: Some("bot:123456".to_owned()),
+                    instance_count: 1,
+                    running_instances: 0,
+                    stale_instances: 0,
+                }),
             }],
-        )];
+        }];
 
-        let checks = build_channel_surface_checks(&surfaces);
+        let checks = build_channel_surface_checks(&snapshots);
 
         assert!(
             checks.iter().any(|check| {
@@ -833,46 +1367,45 @@ mod tests {
 
     #[test]
     fn build_channel_surface_checks_fails_when_ready_serve_operation_is_stale() {
-        let surfaces = vec![runtime_channel_surface_from_catalog(
-            "feishu",
-            vec![ChannelStatusSnapshot {
-                id: "feishu",
-                configured_account_id: "feishu_cli_a1b2c3".to_owned(),
-                configured_account_label: "feishu_cli_a1b2c3".to_owned(),
-                is_default_account: true,
-                default_account_source:
-                    mvp::config::ChannelDefaultAccountSelectionSource::RuntimeIdentity,
-                label: "Feishu/Lark",
-                aliases: vec!["lark"],
-                transport: "feishu_openapi_webhook",
-                compiled: true,
-                enabled: true,
-                api_base_url: Some("https://open.feishu.cn".to_owned()),
-                notes: Vec::new(),
-                operations: vec![runtime_operation_status(
-                    "feishu",
-                    CHANNEL_OPERATION_SERVE_ID,
-                    ChannelOperationHealth::Ready,
-                    "ready",
-                    Some(ChannelOperationRuntime {
-                        running: false,
-                        stale: true,
-                        busy: true,
-                        active_runs: 1,
-                        last_run_activity_at: Some(1_700_000_000_000),
-                        last_heartbeat_at: Some(1_700_000_005_000),
-                        pid: Some(4242),
-                        account_id: Some("feishu_cli_a1b2c3".to_owned()),
-                        account_label: Some("feishu:cli_a1b2c3".to_owned()),
-                        instance_count: 1,
-                        running_instances: 0,
-                        stale_instances: 1,
-                    }),
-                )],
+        let snapshots = vec![ChannelStatusSnapshot {
+            id: "feishu",
+            configured_account_id: "feishu_cli_a1b2c3".to_owned(),
+            configured_account_label: "feishu_cli_a1b2c3".to_owned(),
+            is_default_account: true,
+            default_account_source:
+                mvp::config::ChannelDefaultAccountSelectionSource::RuntimeIdentity,
+            label: "Feishu/Lark",
+            aliases: vec!["lark"],
+            transport: "feishu_openapi_webhook",
+            compiled: true,
+            enabled: true,
+            api_base_url: Some("https://open.feishu.cn".to_owned()),
+            notes: Vec::new(),
+            operations: vec![ChannelOperationStatus {
+                id: "serve",
+                label: "webhook reply server",
+                command: "feishu-serve",
+                health: ChannelOperationHealth::Ready,
+                detail: "ready".to_owned(),
+                issues: Vec::new(),
+                runtime: Some(ChannelOperationRuntime {
+                    running: false,
+                    stale: true,
+                    busy: true,
+                    active_runs: 1,
+                    last_run_activity_at: Some(1_700_000_000_000),
+                    last_heartbeat_at: Some(1_700_000_005_000),
+                    pid: Some(4242),
+                    account_id: Some("feishu_cli_a1b2c3".to_owned()),
+                    account_label: Some("feishu:cli_a1b2c3".to_owned()),
+                    instance_count: 1,
+                    running_instances: 0,
+                    stale_instances: 1,
+                }),
             }],
-        )];
+        }];
 
-        let checks = build_channel_surface_checks(&surfaces);
+        let checks = build_channel_surface_checks(&snapshots);
 
         assert!(
             checks.iter().any(|check| {
@@ -888,46 +1421,45 @@ mod tests {
 
     #[test]
     fn build_channel_surface_checks_warns_when_multiple_runtime_instances_are_running() {
-        let surfaces = vec![runtime_channel_surface_from_catalog(
-            "telegram",
-            vec![ChannelStatusSnapshot {
-                id: "telegram",
-                configured_account_id: "bot_123456".to_owned(),
-                configured_account_label: "bot_123456".to_owned(),
-                is_default_account: true,
-                default_account_source:
-                    mvp::config::ChannelDefaultAccountSelectionSource::RuntimeIdentity,
-                label: "Telegram",
-                aliases: Vec::new(),
-                transport: "telegram_bot_api_polling",
-                compiled: true,
-                enabled: true,
-                api_base_url: Some("https://api.telegram.org".to_owned()),
-                notes: Vec::new(),
-                operations: vec![runtime_operation_status(
-                    "telegram",
-                    CHANNEL_OPERATION_SERVE_ID,
-                    ChannelOperationHealth::Ready,
-                    "ready",
-                    Some(ChannelOperationRuntime {
-                        running: true,
-                        stale: false,
-                        busy: true,
-                        active_runs: 1,
-                        last_run_activity_at: Some(1_700_000_000_000),
-                        last_heartbeat_at: Some(1_700_000_005_000),
-                        pid: Some(3003),
-                        account_id: Some("bot_123456".to_owned()),
-                        account_label: Some("bot:123456".to_owned()),
-                        instance_count: 2,
-                        running_instances: 2,
-                        stale_instances: 0,
-                    }),
-                )],
+        let snapshots = vec![ChannelStatusSnapshot {
+            id: "telegram",
+            configured_account_id: "bot_123456".to_owned(),
+            configured_account_label: "bot_123456".to_owned(),
+            is_default_account: true,
+            default_account_source:
+                mvp::config::ChannelDefaultAccountSelectionSource::RuntimeIdentity,
+            label: "Telegram",
+            aliases: Vec::new(),
+            transport: "telegram_bot_api_polling",
+            compiled: true,
+            enabled: true,
+            api_base_url: Some("https://api.telegram.org".to_owned()),
+            notes: Vec::new(),
+            operations: vec![ChannelOperationStatus {
+                id: "serve",
+                label: "reply loop",
+                command: "telegram-serve",
+                health: ChannelOperationHealth::Ready,
+                detail: "ready".to_owned(),
+                issues: Vec::new(),
+                runtime: Some(ChannelOperationRuntime {
+                    running: true,
+                    stale: false,
+                    busy: true,
+                    active_runs: 1,
+                    last_run_activity_at: Some(1_700_000_000_000),
+                    last_heartbeat_at: Some(1_700_000_005_000),
+                    pid: Some(3003),
+                    account_id: Some("bot_123456".to_owned()),
+                    account_label: Some("bot:123456".to_owned()),
+                    instance_count: 2,
+                    running_instances: 2,
+                    stale_instances: 0,
+                }),
             }],
-        )];
+        }];
 
-        let checks = build_channel_surface_checks(&surfaces);
+        let checks = build_channel_surface_checks(&snapshots);
 
         assert!(
             checks.iter().any(|check| {
@@ -941,84 +1473,143 @@ mod tests {
     }
 
     #[test]
-    fn build_channel_surface_checks_scopes_names_for_multi_account_surfaces() {
-        let surfaces = vec![runtime_channel_surface_from_catalog(
-            "telegram",
-            vec![
-                ChannelStatusSnapshot {
-                    id: "telegram",
-                    configured_account_id: "ops".to_owned(),
-                    configured_account_label: "ops".to_owned(),
-                    is_default_account: true,
-                    default_account_source:
-                        mvp::config::ChannelDefaultAccountSelectionSource::ExplicitDefault,
-                    label: "Telegram",
-                    aliases: Vec::new(),
-                    transport: "telegram_bot_api_polling",
-                    compiled: true,
-                    enabled: true,
-                    api_base_url: Some("https://api.telegram.org".to_owned()),
-                    notes: vec!["configured_account_id=ops".to_owned()],
-                    operations: vec![runtime_operation_status(
-                        "telegram",
-                        CHANNEL_OPERATION_SERVE_ID,
-                        ChannelOperationHealth::Ready,
-                        "ready",
-                        Some(ChannelOperationRuntime {
-                            running: true,
-                            stale: false,
-                            busy: false,
-                            active_runs: 0,
-                            last_run_activity_at: None,
-                            last_heartbeat_at: None,
-                            pid: Some(2001),
-                            account_id: Some("bot_123456".to_owned()),
-                            account_label: Some("bot:123456".to_owned()),
-                            instance_count: 1,
-                            running_instances: 1,
-                            stale_instances: 0,
-                        }),
-                    )],
-                },
-                ChannelStatusSnapshot {
-                    id: "telegram",
-                    configured_account_id: "personal".to_owned(),
-                    configured_account_label: "personal".to_owned(),
-                    is_default_account: false,
-                    default_account_source:
-                        mvp::config::ChannelDefaultAccountSelectionSource::ExplicitDefault,
-                    label: "Telegram",
-                    aliases: Vec::new(),
-                    transport: "telegram_bot_api_polling",
-                    compiled: true,
-                    enabled: true,
-                    api_base_url: Some("https://api.telegram.org".to_owned()),
-                    notes: vec!["configured_account_id=personal".to_owned()],
-                    operations: vec![runtime_operation_status(
-                        "telegram",
-                        CHANNEL_OPERATION_SERVE_ID,
-                        ChannelOperationHealth::Ready,
-                        "ready",
-                        Some(ChannelOperationRuntime {
-                            running: false,
-                            stale: false,
-                            busy: false,
-                            active_runs: 0,
-                            last_run_activity_at: None,
-                            last_heartbeat_at: None,
-                            pid: None,
-                            account_id: Some("bot_654321".to_owned()),
-                            account_label: Some("bot:654321".to_owned()),
-                            instance_count: 0,
-                            running_instances: 0,
-                            stale_instances: 0,
-                        }),
-                    )],
-                },
+    fn build_channel_surface_checks_reports_feishu_inbound_support_matrix() {
+        let snapshots = vec![ChannelStatusSnapshot {
+            id: "feishu",
+            configured_account_id: "feishu_main".to_owned(),
+            configured_account_label: "feishu_main".to_owned(),
+            is_default_account: true,
+            default_account_source:
+                mvp::config::ChannelDefaultAccountSelectionSource::ExplicitDefault,
+            label: "Feishu/Lark",
+            aliases: vec!["lark"],
+            transport: "feishu_openapi_webhook",
+            compiled: true,
+            enabled: true,
+            api_base_url: Some("https://open.feishu.cn".to_owned()),
+            notes: vec![
+                "webhook_inbound_message_types=text,image,file,post,audio,media,folder,sticker,interactive,share_chat,share_user,system,location,video_chat,todo,vote,merge_forward,share_calendar_event,calendar,general_calendar".to_owned(),
+                "webhook_inbound_non_text_mode=structured_text_summary".to_owned(),
+                "webhook_inbound_binary_fetch=disabled".to_owned(),
+                "webhook_resource_download_tool=feishu.messages.resource.get".to_owned(),
+                "webhook_resource_selection_mode=single_resource_default_or_unique_partial_inference_or_resource_inventory".to_owned(),
+                "webhook_callback_event_types=card.action.trigger,card.action.trigger_v1".to_owned(),
+                "webhook_callback_response_mode=noop_json".to_owned(),
             ],
-        )];
+            operations: vec![ChannelOperationStatus {
+                id: "serve",
+                label: "webhook reply server",
+                command: "feishu-serve",
+                health: ChannelOperationHealth::Ready,
+                detail: "ready".to_owned(),
+                issues: Vec::new(),
+                runtime: None,
+            }],
+        }];
 
-        let checks = build_channel_surface_checks(&surfaces);
+        let checks = build_channel_surface_checks(&snapshots);
+
+        assert!(checks.iter().any(|check| {
+            check.name == "feishu webhook inbound support"
+                && check.level == DoctorCheckLevel::Pass
+                && check
+                    .detail
+                    .contains("text,image,file,post,audio,media,folder,sticker,interactive,share_chat,share_user,system,location,video_chat,todo,vote,merge_forward,share_calendar_event,calendar,general_calendar")
+                && check.detail.contains("structured_text_summary")
+                && check.detail.contains("binary_fetch=disabled")
+                && check
+                    .detail
+                    .contains("resource_download_tool=feishu.messages.resource.get")
+                && check.detail.contains(
+                    "resource_selection_mode=single_resource_default_or_unique_partial_inference_or_resource_inventory"
+                )
+                && check
+                    .detail
+                    .contains("callback_event_types=card.action.trigger,card.action.trigger_v1")
+                && check.detail.contains("callback_response_mode=noop_json")
+        }));
+    }
+
+    #[test]
+    fn build_channel_surface_checks_scopes_names_for_multi_account_snapshots() {
+        let snapshots = vec![
+            ChannelStatusSnapshot {
+                id: "telegram",
+                configured_account_id: "ops".to_owned(),
+                configured_account_label: "ops".to_owned(),
+                is_default_account: true,
+                default_account_source:
+                    mvp::config::ChannelDefaultAccountSelectionSource::ExplicitDefault,
+                label: "Telegram",
+                aliases: Vec::new(),
+                transport: "telegram_bot_api_polling",
+                compiled: true,
+                enabled: true,
+                api_base_url: Some("https://api.telegram.org".to_owned()),
+                notes: vec!["configured_account_id=ops".to_owned()],
+                operations: vec![ChannelOperationStatus {
+                    id: "serve",
+                    label: "reply loop",
+                    command: "telegram-serve",
+                    health: ChannelOperationHealth::Ready,
+                    detail: "ready".to_owned(),
+                    issues: Vec::new(),
+                    runtime: Some(ChannelOperationRuntime {
+                        running: true,
+                        stale: false,
+                        busy: false,
+                        active_runs: 0,
+                        last_run_activity_at: None,
+                        last_heartbeat_at: None,
+                        pid: Some(2001),
+                        account_id: Some("bot_123456".to_owned()),
+                        account_label: Some("bot:123456".to_owned()),
+                        instance_count: 1,
+                        running_instances: 1,
+                        stale_instances: 0,
+                    }),
+                }],
+            },
+            ChannelStatusSnapshot {
+                id: "telegram",
+                configured_account_id: "personal".to_owned(),
+                configured_account_label: "personal".to_owned(),
+                is_default_account: false,
+                default_account_source:
+                    mvp::config::ChannelDefaultAccountSelectionSource::ExplicitDefault,
+                label: "Telegram",
+                aliases: Vec::new(),
+                transport: "telegram_bot_api_polling",
+                compiled: true,
+                enabled: true,
+                api_base_url: Some("https://api.telegram.org".to_owned()),
+                notes: vec!["configured_account_id=personal".to_owned()],
+                operations: vec![ChannelOperationStatus {
+                    id: "serve",
+                    label: "reply loop",
+                    command: "telegram-serve",
+                    health: ChannelOperationHealth::Ready,
+                    detail: "ready".to_owned(),
+                    issues: Vec::new(),
+                    runtime: Some(ChannelOperationRuntime {
+                        running: false,
+                        stale: false,
+                        busy: false,
+                        active_runs: 0,
+                        last_run_activity_at: None,
+                        last_heartbeat_at: None,
+                        pid: None,
+                        account_id: Some("bot_654321".to_owned()),
+                        account_label: Some("bot:654321".to_owned()),
+                        instance_count: 0,
+                        running_instances: 0,
+                        stale_instances: 0,
+                    }),
+                }],
+            },
+        ];
+
+        let checks = build_channel_surface_checks(&snapshots);
 
         assert!(
             checks
@@ -1034,57 +1625,56 @@ mod tests {
 
     #[test]
     fn build_channel_surface_checks_warns_when_multi_account_default_uses_fallback() {
-        let surfaces = vec![runtime_channel_surface_from_catalog(
-            "telegram",
-            vec![
-                ChannelStatusSnapshot {
-                    id: "telegram",
-                    configured_account_id: "alerts".to_owned(),
-                    configured_account_label: "alerts".to_owned(),
-                    is_default_account: true,
-                    default_account_source:
-                        mvp::config::ChannelDefaultAccountSelectionSource::Fallback,
-                    label: "Telegram",
-                    aliases: Vec::new(),
-                    transport: "telegram_bot_api_polling",
-                    compiled: true,
-                    enabled: true,
-                    api_base_url: Some("https://api.telegram.org".to_owned()),
-                    notes: vec!["default_account_source=fallback".to_owned()],
-                    operations: vec![runtime_operation_status(
-                        "telegram",
-                        CHANNEL_OPERATION_SERVE_ID,
-                        ChannelOperationHealth::Ready,
-                        "ready",
-                        None,
-                    )],
-                },
-                ChannelStatusSnapshot {
-                    id: "telegram",
-                    configured_account_id: "work".to_owned(),
-                    configured_account_label: "work".to_owned(),
-                    is_default_account: false,
-                    default_account_source:
-                        mvp::config::ChannelDefaultAccountSelectionSource::Fallback,
-                    label: "Telegram",
-                    aliases: Vec::new(),
-                    transport: "telegram_bot_api_polling",
-                    compiled: true,
-                    enabled: true,
-                    api_base_url: Some("https://api.telegram.org".to_owned()),
-                    notes: vec!["default_account_source=fallback".to_owned()],
-                    operations: vec![runtime_operation_status(
-                        "telegram",
-                        CHANNEL_OPERATION_SERVE_ID,
-                        ChannelOperationHealth::Ready,
-                        "ready",
-                        None,
-                    )],
-                },
-            ],
-        )];
+        let snapshots = vec![
+            ChannelStatusSnapshot {
+                id: "telegram",
+                configured_account_id: "alerts".to_owned(),
+                configured_account_label: "alerts".to_owned(),
+                is_default_account: true,
+                default_account_source: mvp::config::ChannelDefaultAccountSelectionSource::Fallback,
+                label: "Telegram",
+                aliases: Vec::new(),
+                transport: "telegram_bot_api_polling",
+                compiled: true,
+                enabled: true,
+                api_base_url: Some("https://api.telegram.org".to_owned()),
+                notes: vec!["default_account_source=fallback".to_owned()],
+                operations: vec![ChannelOperationStatus {
+                    id: "serve",
+                    label: "reply loop",
+                    command: "telegram-serve",
+                    health: ChannelOperationHealth::Ready,
+                    detail: "ready".to_owned(),
+                    issues: Vec::new(),
+                    runtime: None,
+                }],
+            },
+            ChannelStatusSnapshot {
+                id: "telegram",
+                configured_account_id: "work".to_owned(),
+                configured_account_label: "work".to_owned(),
+                is_default_account: false,
+                default_account_source: mvp::config::ChannelDefaultAccountSelectionSource::Fallback,
+                label: "Telegram",
+                aliases: Vec::new(),
+                transport: "telegram_bot_api_polling",
+                compiled: true,
+                enabled: true,
+                api_base_url: Some("https://api.telegram.org".to_owned()),
+                notes: vec!["default_account_source=fallback".to_owned()],
+                operations: vec![ChannelOperationStatus {
+                    id: "serve",
+                    label: "reply loop",
+                    command: "telegram-serve",
+                    health: ChannelOperationHealth::Ready,
+                    detail: "ready".to_owned(),
+                    issues: Vec::new(),
+                    runtime: None,
+                }],
+            },
+        ];
 
-        let checks = build_channel_surface_checks(&surfaces);
+        let checks = build_channel_surface_checks(&snapshots);
 
         assert!(checks.iter().any(|check| {
             check.name == "telegram default account policy"
@@ -1092,19 +1682,5 @@ mod tests {
                 && check.detail.contains("alerts")
                 && check.detail.contains("default_account")
         }));
-    }
-
-    #[test]
-    fn build_channel_surface_checks_ignores_stub_surfaces_without_accounts() {
-        let surfaces = vec![ChannelSurface {
-            catalog: mvp::channel::resolve_channel_catalog_entry("discord")
-                .expect("discord catalog entry"),
-            configured_accounts: Vec::new(),
-            default_configured_account_id: None,
-        }];
-
-        let checks = build_channel_surface_checks(&surfaces);
-
-        assert!(checks.is_empty());
     }
 }

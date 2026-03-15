@@ -13,6 +13,8 @@ use std::{
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
 use async_trait::async_trait;
 use serde::Serialize;
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+use serde_json::Value;
 #[cfg(feature = "channel-telegram")]
 use tokio::time::sleep;
 
@@ -31,8 +33,12 @@ use super::config::{
 };
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
 use super::conversation::{
-    ConversationSessionAddress, ConversationTurnCoordinator, ProviderErrorMode,
+    ConversationIngressChannel, ConversationIngressContext, ConversationIngressDelivery,
+    ConversationIngressDeliveryResource, ConversationIngressFeishuCallbackContext,
+    ConversationIngressPrivateContext, ConversationSessionAddress,
 };
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+use super::conversation::{ConversationTurnCoordinator, ProviderErrorMode};
 
 #[cfg(feature = "channel-feishu")]
 mod feishu;
@@ -69,6 +75,32 @@ pub struct ChannelDelivery {
     pub ack_cursor: Option<String>,
     #[allow(dead_code)]
     pub source_message_id: Option<String>,
+    #[allow(dead_code)]
+    pub sender_principal_key: Option<String>,
+    #[allow(dead_code)]
+    pub thread_root_id: Option<String>,
+    #[allow(dead_code)]
+    pub parent_message_id: Option<String>,
+    #[allow(dead_code)]
+    pub resources: Vec<ChannelDeliveryResource>,
+    #[allow(dead_code)]
+    pub feishu_callback: Option<ChannelDeliveryFeishuCallback>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChannelDeliveryResource {
+    pub resource_type: String,
+    pub file_key: String,
+    pub file_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChannelDeliveryFeishuCallback {
+    pub callback_token: Option<String>,
+    pub open_message_id: Option<String>,
+    pub open_chat_id: Option<String>,
+    pub operator_open_id: Option<String>,
+    pub deferred_context_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,8 +128,10 @@ impl ChannelPlatform {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelSession {
     pub platform: ChannelPlatform,
+    pub configured_account_id: Option<String>,
     pub account_id: Option<String>,
     pub conversation_id: String,
+    pub participant_id: Option<String>,
     pub thread_id: Option<String>,
 }
 
@@ -106,8 +140,10 @@ impl ChannelSession {
     pub fn new(platform: ChannelPlatform, conversation_id: impl Into<String>) -> Self {
         Self {
             platform,
+            configured_account_id: None,
             account_id: None,
             conversation_id: conversation_id.into(),
+            participant_id: None,
             thread_id: None,
         }
     }
@@ -119,8 +155,10 @@ impl ChannelSession {
     ) -> Self {
         Self {
             platform,
+            configured_account_id: None,
             account_id: Some(account_id.into()),
             conversation_id: conversation_id.into(),
+            participant_id: None,
             thread_id: None,
         }
     }
@@ -132,8 +170,10 @@ impl ChannelSession {
     ) -> Self {
         Self {
             platform,
+            configured_account_id: None,
             account_id: None,
             conversation_id: conversation_id.into(),
+            participant_id: None,
             thread_id: Some(thread_id.into()),
         }
     }
@@ -146,37 +186,69 @@ impl ChannelSession {
     ) -> Self {
         Self {
             platform,
+            configured_account_id: None,
             account_id: Some(account_id.into()),
             conversation_id: conversation_id.into(),
+            participant_id: None,
             thread_id: Some(thread_id.into()),
         }
     }
 
+    pub fn with_configured_account_id(mut self, configured_account_id: impl Into<String>) -> Self {
+        self.configured_account_id = Some(configured_account_id.into());
+        self
+    }
+
+    pub fn with_participant_id(mut self, participant_id: impl Into<String>) -> Self {
+        self.participant_id = Some(participant_id.into());
+        self
+    }
+
+    pub fn with_thread_id(mut self, thread_id: impl Into<String>) -> Self {
+        self.thread_id = Some(thread_id.into());
+        self
+    }
+
     pub fn session_key(&self) -> String {
+        let configured_account_id = self
+            .configured_account_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
         let account_id = self
             .account_id
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty());
         let conversation_id = self.conversation_id.trim();
+        let participant_id = self
+            .participant_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
         let thread_id = self
             .thread_id
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty());
-        match (account_id, thread_id) {
-            (Some(account_id), Some(thread_id)) => format!(
-                "{}:{account_id}:{conversation_id}:{thread_id}",
-                self.platform.as_str()
-            ),
-            (Some(account_id), None) => {
-                format!("{}:{account_id}:{conversation_id}", self.platform.as_str())
-            }
-            (None, Some(thread_id)) => {
-                format!("{}:{conversation_id}:{thread_id}", self.platform.as_str())
-            }
-            (None, None) => format!("{}:{conversation_id}", self.platform.as_str()),
+
+        let mut parts = vec![self.platform.as_str().to_owned()];
+        if let Some(configured_account_id) =
+            configured_account_id.filter(|value| Some(*value) != account_id)
+        {
+            parts.push(format!("cfg={configured_account_id}"));
         }
+        if let Some(account_id) = account_id {
+            parts.push(account_id.to_owned());
+        }
+        parts.push(conversation_id.to_owned());
+        if let Some(participant_id) = participant_id {
+            parts.push(participant_id.to_owned());
+        }
+        if let Some(thread_id) = thread_id {
+            parts.push(thread_id.to_owned());
+        }
+        parts.join(":")
     }
 
     pub fn conversation_address(&self) -> ConversationSessionAddress {
@@ -192,7 +264,8 @@ impl ChannelSession {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelOutboundTargetKind {
     Conversation,
@@ -200,6 +273,7 @@ pub enum ChannelOutboundTargetKind {
     ReceiveId,
 }
 
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
 impl ChannelOutboundTargetKind {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -235,11 +309,20 @@ impl FromStr for ChannelOutboundTargetKind {
 pub use self::ChannelOutboundTargetKind as ChannelCatalogTargetKind;
 
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChannelOutboundDeliveryOptions {
+    pub idempotency_key: Option<String>,
+    pub feishu_receive_id_type: Option<String>,
+    pub feishu_reply_in_thread: Option<bool>,
+}
+
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelOutboundTarget {
     pub platform: ChannelPlatform,
     pub kind: ChannelOutboundTargetKind,
     pub id: String,
+    pub options: ChannelOutboundDeliveryOptions,
 }
 
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
@@ -253,6 +336,7 @@ impl ChannelOutboundTarget {
             platform,
             kind,
             id: id.into(),
+            options: ChannelOutboundDeliveryOptions::default(),
         }
     }
 
@@ -261,14 +345,6 @@ impl ChannelOutboundTarget {
             ChannelPlatform::Telegram,
             ChannelOutboundTargetKind::Conversation,
             chat_id.to_string(),
-        )
-    }
-
-    pub fn telegram_chat_thread(chat_id: i64, thread_id: i64) -> Self {
-        Self::new(
-            ChannelPlatform::Telegram,
-            ChannelOutboundTargetKind::Conversation,
-            format!("{chat_id}:topic:{thread_id}"),
         )
     }
 
@@ -299,6 +375,41 @@ impl ChannelOutboundTarget {
         }
         Ok(id)
     }
+
+    pub fn with_feishu_receive_id_type(mut self, receive_id_type: impl Into<String>) -> Self {
+        self.options.feishu_receive_id_type = Some(receive_id_type.into());
+        self
+    }
+
+    pub fn with_idempotency_key(mut self, idempotency_key: impl Into<String>) -> Self {
+        self.options.idempotency_key = Some(idempotency_key.into());
+        self
+    }
+
+    pub fn feishu_receive_id_type(&self) -> Option<&str> {
+        self.options
+            .feishu_receive_id_type
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn with_feishu_reply_in_thread(mut self, reply_in_thread: bool) -> Self {
+        self.options.feishu_reply_in_thread = Some(reply_in_thread);
+        self
+    }
+
+    pub fn idempotency_key(&self) -> Option<&str> {
+        self.options
+            .idempotency_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn feishu_reply_in_thread(&self) -> Option<bool> {
+        self.options.feishu_reply_in_thread
+    }
 }
 
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
@@ -318,17 +429,44 @@ struct ChannelResolvedAcpTurnHints {
 }
 
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChannelOutboundMessage {
+    Text(String),
+    MarkdownCard(String),
+    Post(Value),
+    Image { image_key: String },
+    File { file_key: String },
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FeishuChannelSendRequest {
+    pub receive_id: String,
+    pub receive_id_type: Option<String>,
+    pub text: Option<String>,
+    pub post_json: Option<String>,
+    pub image_key: Option<String>,
+    pub file_key: Option<String>,
+    pub image_path: Option<String>,
+    pub file_path: Option<String>,
+    pub file_type: Option<String>,
+    pub card: bool,
+    pub uuid: Option<String>,
+}
+
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
 #[allow(dead_code)]
 #[async_trait]
 pub trait ChannelAdapter {
     fn name(&self) -> &str;
     async fn receive_batch(&mut self) -> CliResult<Vec<ChannelInboundMessage>>;
-    async fn send_text(&self, target: &ChannelOutboundTarget, text: &str) -> CliResult<()>;
-    async fn start_typing(&self, _target: &ChannelOutboundTarget) -> CliResult<()> {
-        Ok(())
-    }
-    async fn stop_typing(&self, _target: &ChannelOutboundTarget) -> CliResult<()> {
-        Ok(())
+    async fn send_message(
+        &self,
+        target: &ChannelOutboundTarget,
+        message: &ChannelOutboundMessage,
+    ) -> CliResult<()>;
+    async fn send_text(&self, target: &ChannelOutboundTarget, text: &str) -> CliResult<()> {
+        let message = ChannelOutboundMessage::Text(text.to_owned());
+        self.send_message(target, &message).await
     }
     async fn ack_inbound(&mut self, _message: &ChannelInboundMessage) -> CliResult<()> {
         Ok(())
@@ -486,8 +624,6 @@ fn parse_feishu_session_send_target(
         _ => Err(format!("sessions_send_channel_unsupported: `{session_id}`")),
     }
 }
-
-#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
 async fn process_channel_batch<A, F>(
     adapter: &mut A,
     batch: Vec<ChannelInboundMessage>,
@@ -495,7 +631,7 @@ async fn process_channel_batch<A, F>(
     mut process: F,
 ) -> CliResult<bool>
 where
-    A: ChannelAdapter + Send + Sync + ?Sized,
+    A: ChannelAdapter + Send + ?Sized,
     F: FnMut(ChannelInboundMessage) -> ChannelProcessFuture,
 {
     if batch.is_empty() {
@@ -508,17 +644,16 @@ where
             runtime.mark_run_start().await?;
         }
 
-        let _ = adapter.start_typing(&message.reply_target).await;
-
         let result = async {
             let reply = process(message.clone()).await?;
-            adapter.send_text(&message.reply_target, &reply).await?;
+            let outbound = ChannelOutboundMessage::Text(reply);
+            adapter
+                .send_message(&message.reply_target, &outbound)
+                .await?;
             adapter.ack_inbound(message).await?;
             Ok::<(), String>(())
         }
         .await;
-
-        let _ = adapter.stop_typing(&message.reply_target).await;
 
         if let Some(runtime) = runtime {
             runtime.mark_run_end().await?;
@@ -604,7 +739,6 @@ where
     }
     Ok(())
 }
-
 #[cfg(feature = "channel-telegram")]
 fn load_telegram_command_context(
     config_path: Option<&str>,
@@ -653,7 +787,11 @@ fn build_feishu_command_context(
     config: LoongClawConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedFeishuChannelConfig>> {
-    let resolved = config.feishu.resolve_account(account_id)?;
+    let resolved = crate::feishu::resolve_requested_feishu_account(
+        &config.feishu,
+        account_id,
+        "rerun with `--account <configured_account_id>` using one of those configured accounts",
+    )?;
     let route = config
         .feishu
         .resolved_account_route(account_id, resolved.configured_account_id.as_str());
@@ -807,7 +945,6 @@ where
     )
     .await
 }
-
 #[cfg(test)]
 async fn with_channel_serve_runtime_in_dir<T, F, Fut>(
     runtime_dir: &std::path::Path,
@@ -843,6 +980,102 @@ where
 }
 
 #[allow(clippy::print_stdout)] // CLI startup banner
+pub async fn run_telegram_channel(
+    config_path: Option<&str>,
+    once: bool,
+    account_id: Option<&str>,
+) -> CliResult<()> {
+    if !cfg!(feature = "channel-telegram") {
+        return Err("telegram channel is disabled (enable feature `channel-telegram`)".to_owned());
+    }
+
+    #[cfg(not(feature = "channel-telegram"))]
+    {
+        let _ = (config_path, once, account_id);
+        return Err("telegram channel is disabled (enable feature `channel-telegram`)".to_owned());
+    }
+
+    #[cfg(feature = "channel-telegram")]
+    {
+        let context = load_telegram_command_context(config_path, account_id)?;
+        validate_telegram_security_config(&context.resolved)?;
+        crate::runtime_env::initialize_runtime_environment(
+            &context.config,
+            Some(context.resolved_path.as_path()),
+        );
+        let kernel_ctx = bootstrap_kernel_context("channel-telegram", DEFAULT_TOKEN_TTL_S)?;
+        let token = context.resolved.bot_token().ok_or_else(|| {
+            "telegram bot token missing (set telegram.bot_token or env)".to_owned()
+        })?;
+        let route = context.route.clone();
+        let resolved_path = context.resolved_path.clone();
+        let resolved = context.resolved.clone();
+        let batch_config = context.config.clone();
+        let batch_kernel_ctx = Arc::new(crate::KernelContext {
+            kernel: kernel_ctx.kernel.clone(),
+            token: kernel_ctx.token.clone(),
+        });
+        let runtime_account_id = resolved.account.id.clone();
+        let runtime_account_label = resolved.account.label.clone();
+
+        with_channel_serve_runtime(
+            ChannelServeRuntimeSpec {
+                platform: ChannelPlatform::Telegram,
+                operation_id: CHANNEL_OPERATION_SERVE_ID,
+                account_id: runtime_account_id.as_str(),
+                account_label: runtime_account_label.as_str(),
+            },
+            move |runtime| async move {
+                let mut adapter = telegram::TelegramAdapter::new(&resolved, token);
+                context.emit_route_notice(ChannelPlatform::Telegram);
+
+                println!(
+                    "{} channel started (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, timeout={}s)",
+                    adapter.name(),
+                    resolved_path.display(),
+                    resolved.configured_account_id,
+                    resolved.account.label,
+                    route.selected_by_default(),
+                    route.default_account_source.as_str(),
+                    resolved.polling_timeout_s
+                );
+
+                loop {
+                    let batch = adapter.receive_batch().await?;
+                    let config = batch_config.clone();
+                    let kernel_ctx = batch_kernel_ctx.clone();
+                    let had_messages =
+                        process_channel_batch(&mut adapter, batch, Some(runtime.as_ref()), |message| {
+                            let config = config.clone();
+                            let kernel_ctx = kernel_ctx.clone();
+                            let resolved_path = resolved_path.clone();
+                            Box::pin(async move {
+                                process_inbound_with_provider(
+                                    &config,
+                                    Some(resolved_path.as_path()),
+                                    &message,
+                                    Some(kernel_ctx.as_ref()),
+                                )
+                                .await
+                            })
+                        })
+                        .await?;
+                    if !had_messages && once {
+                        break;
+                    }
+                    if once {
+                        break;
+                    }
+                    sleep(Duration::from_millis(250)).await;
+                }
+                Ok(())
+            }
+        )
+        .await
+    }
+}
+
+#[allow(clippy::print_stdout)] // CLI output
 pub async fn run_telegram_send(
     config_path: Option<&str>,
     account_id: Option<&str>,
@@ -901,101 +1134,11 @@ pub async fn run_telegram_send(
     }
 }
 
-#[allow(clippy::print_stdout)] // CLI startup banner
-pub async fn run_telegram_channel(
-    config_path: Option<&str>,
-    once: bool,
-    account_id: Option<&str>,
-) -> CliResult<()> {
-    if !cfg!(feature = "channel-telegram") {
-        return Err("telegram channel is disabled (enable feature `channel-telegram`)".to_owned());
-    }
-
-    #[cfg(not(feature = "channel-telegram"))]
-    {
-        let _ = (config_path, once, account_id);
-        return Err("telegram channel is disabled (enable feature `channel-telegram`)".to_owned());
-    }
-
-    #[cfg(feature = "channel-telegram")]
-    {
-        let context = load_telegram_command_context(config_path, account_id)?;
-        let token = context.resolved.bot_token().ok_or_else(|| {
-            "telegram bot token missing (set telegram.bot_token or env)".to_owned()
-        })?;
-        run_channel_serve_command(
-            context,
-            ChannelServeCommandSpec {
-                family: TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
-            },
-            validate_telegram_security_config,
-            move |context, kernel_ctx, runtime| {
-                Box::pin(async move {
-                    let route = context.route.clone();
-                    let resolved_path = context.resolved_path.clone();
-                    let resolved = context.resolved.clone();
-                    let batch_config = context.config.clone();
-                    let batch_kernel_ctx = Arc::new(crate::KernelContext {
-                        kernel: kernel_ctx.kernel.clone(),
-                        token: kernel_ctx.token.clone(),
-                    });
-                    let mut adapter = telegram::TelegramAdapter::new(&resolved, token);
-
-                    println!(
-                        "{} channel started (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, timeout={}s)",
-                        adapter.name(),
-                        resolved_path.display(),
-                        resolved.configured_account_id,
-                        resolved.account.label,
-                        route.selected_by_default(),
-                        route.default_account_source.as_str(),
-                        resolved.polling_timeout_s
-                    );
-
-                    loop {
-                        let batch = adapter.receive_batch().await?;
-                        let config = batch_config.clone();
-                        let kernel_ctx = batch_kernel_ctx.clone();
-                        let had_messages =
-                            process_channel_batch(&mut adapter, batch, Some(runtime.as_ref()), |message| {
-                                let config = config.clone();
-                                let kernel_ctx = kernel_ctx.clone();
-                                let resolved_path = resolved_path.clone();
-                                Box::pin(async move {
-                                    process_inbound_with_provider(
-                                        &config,
-                                        Some(resolved_path.as_path()),
-                                        &message,
-                                        Some(kernel_ctx.as_ref()),
-                                    )
-                                    .await
-                                })
-                            })
-                            .await?;
-                        if !had_messages && once {
-                            break;
-                        }
-                        if once {
-                            break;
-                        }
-                        sleep(Duration::from_millis(250)).await;
-                    }
-                    Ok(())
-                })
-            },
-        )
-        .await
-    }
-}
-
 #[allow(clippy::print_stdout)] // CLI output
 pub async fn run_feishu_send(
     config_path: Option<&str>,
     account_id: Option<&str>,
-    target: &str,
-    target_kind: ChannelOutboundTargetKind,
-    text: &str,
-    as_card: bool,
+    request: &FeishuChannelSendRequest,
 ) -> CliResult<()> {
     if !cfg!(feature = "channel-feishu") {
         return Err("feishu channel is disabled (enable feature `channel-feishu`)".to_owned());
@@ -1003,42 +1146,41 @@ pub async fn run_feishu_send(
 
     #[cfg(not(feature = "channel-feishu"))]
     {
-        let _ = (config_path, account_id, target, target_kind, text, as_card);
+        let _ = (config_path, account_id, request);
         return Err("feishu channel is disabled (enable feature `channel-feishu`)".to_owned());
     }
 
     #[cfg(feature = "channel-feishu")]
     {
         let context = load_feishu_command_context(config_path, account_id)?;
-        let target = target.to_owned();
-        let text = text.to_owned();
+        let request = request.clone();
+        let success_receive_id_type = request
+            .receive_id_type
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
         run_channel_send_command(
             context,
             ChannelSendCommandSpec {
                 family: FEISHU_COMMAND_FAMILY_DESCRIPTOR,
             },
             |context| {
-                Box::pin(async move {
-                    feishu::run_feishu_send(
-                        &context.resolved,
-                        target_kind,
-                        target.as_str(),
-                        text.as_str(),
-                        as_card,
-                    )
-                    .await
-                })
+                Box::pin(async move { feishu::run_feishu_send(&context.resolved, &request).await })
             },
             |context| {
                 format!(
-                    "feishu message sent (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, target_kind={}, receive_id_type={})",
+                    "feishu message sent (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, receive_id_type={})",
                     context.resolved_path.display(),
                     context.resolved.configured_account_id,
                     context.resolved.account.label,
                     context.route.selected_by_default(),
                     context.route.default_account_source.as_str(),
-                    target_kind,
-                    context.resolved.receive_id_type
+                    success_receive_id_type
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or(context.resolved.receive_id_type.as_str())
                 )
             },
         )
@@ -1191,8 +1333,25 @@ pub(crate) async fn send_text_to_known_session(
                     Some(message_id) => (ChannelOutboundTargetKind::MessageReply, message_id),
                     None => (ChannelOutboundTargetKind::ReceiveId, conversation_id),
                 };
-                feishu::run_feishu_send(&resolved, target_kind, target.as_str(), text, false)
-                    .await?;
+                let request = match target_kind {
+                    ChannelOutboundTargetKind::MessageReply => FeishuChannelSendRequest {
+                        receive_id: target.clone(),
+                        text: Some(text.to_owned()),
+                        ..FeishuChannelSendRequest::default()
+                    },
+                    ChannelOutboundTargetKind::ReceiveId => FeishuChannelSendRequest {
+                        receive_id: target.clone(),
+                        receive_id_type: Some("chat_id".to_owned()),
+                        text: Some(text.to_owned()),
+                        ..FeishuChannelSendRequest::default()
+                    },
+                    ChannelOutboundTargetKind::Conversation => FeishuChannelSendRequest {
+                        receive_id: target.clone(),
+                        text: Some(text.to_owned()),
+                        ..FeishuChannelSendRequest::default()
+                    },
+                };
+                feishu::run_feishu_send(&resolved, &request).await?;
                 Ok(ChannelSendReceipt {
                     channel: "feishu",
                     target,
@@ -1225,14 +1384,16 @@ pub(super) async fn process_inbound_with_provider(
         .with_additional_bootstrap_mcp_servers(&acp_turn_hints.bootstrap_mcp_servers)
         .with_working_directory(acp_turn_hints.working_directory.as_deref())
         .with_provenance(channel_message_acp_turn_provenance(message));
+    let ingress = channel_message_ingress_context(message);
     ConversationTurnCoordinator::new()
-        .handle_turn_with_address_and_acp_options(
+        .handle_turn_with_address_and_acp_options_and_ingress(
             &turn_config,
             &address,
             &message.text,
             ProviderErrorMode::Propagate,
             &acp_options,
             kernel_ctx,
+            ingress.as_ref(),
         )
         .await
 }
@@ -1286,6 +1447,105 @@ fn channel_message_acp_turn_provenance(message: &ChannelInboundMessage) -> AcpTu
         source_message_id: message.delivery.source_message_id.as_deref(),
         ack_cursor: message.delivery.ack_cursor.as_deref(),
     }
+}
+
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+fn channel_message_ingress_context(
+    message: &ChannelInboundMessage,
+) -> Option<ConversationIngressContext> {
+    let participant_id = trimmed_non_empty(message.session.participant_id.as_deref());
+    let thread_id = trimmed_non_empty(message.session.thread_id.as_deref());
+    let resources = message
+        .delivery
+        .resources
+        .iter()
+        .filter_map(normalized_channel_delivery_resource)
+        .collect::<Vec<_>>();
+    let delivery = ConversationIngressDelivery {
+        source_message_id: trimmed_non_empty(message.delivery.source_message_id.as_deref()),
+        sender_identity_key: trimmed_non_empty(message.delivery.sender_principal_key.as_deref()),
+        thread_root_id: trimmed_non_empty(message.delivery.thread_root_id.as_deref()),
+        parent_message_id: trimmed_non_empty(message.delivery.parent_message_id.as_deref()),
+        resources,
+    };
+    let has_contextual_hints = participant_id.is_some()
+        || thread_id.is_some()
+        || delivery != ConversationIngressDelivery::default();
+    if !has_contextual_hints {
+        return None;
+    }
+
+    let conversation_id = message.session.conversation_id.trim();
+    if conversation_id.is_empty() {
+        return None;
+    }
+
+    Some(ConversationIngressContext {
+        channel: ConversationIngressChannel {
+            platform: message.session.platform.as_str().to_owned(),
+            configured_account_id: trimmed_non_empty(
+                message.session.configured_account_id.as_deref(),
+            ),
+            account_id: trimmed_non_empty(message.session.account_id.as_deref()),
+            conversation_id: conversation_id.to_owned(),
+            participant_id,
+            thread_id,
+        },
+        delivery,
+        private: ConversationIngressPrivateContext {
+            feishu_callback: normalized_feishu_callback_context(
+                message.delivery.feishu_callback.as_ref(),
+            ),
+        },
+    })
+}
+
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+fn normalized_channel_delivery_resource(
+    resource: &ChannelDeliveryResource,
+) -> Option<ConversationIngressDeliveryResource> {
+    let resource_type = resource.resource_type.trim();
+    let file_key = resource.file_key.trim();
+    if resource_type.is_empty() || file_key.is_empty() {
+        return None;
+    }
+
+    Some(ConversationIngressDeliveryResource {
+        resource_type: resource_type.to_owned(),
+        file_key: file_key.to_owned(),
+        file_name: trimmed_non_empty(resource.file_name.as_deref()),
+    })
+}
+
+#[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+fn normalized_feishu_callback_context(
+    callback: Option<&ChannelDeliveryFeishuCallback>,
+) -> Option<ConversationIngressFeishuCallbackContext> {
+    let callback = callback?;
+    let normalized = ConversationIngressFeishuCallbackContext {
+        callback_token: trimmed_non_empty(callback.callback_token.as_deref()),
+        open_message_id: trimmed_non_empty(callback.open_message_id.as_deref()),
+        open_chat_id: trimmed_non_empty(callback.open_chat_id.as_deref()),
+        operator_open_id: trimmed_non_empty(callback.operator_open_id.as_deref()),
+        deferred_context_id: trimmed_non_empty(callback.deferred_context_id.as_deref()),
+    };
+    if normalized.callback_token.is_none()
+        && normalized.open_message_id.is_none()
+        && normalized.open_chat_id.is_none()
+        && normalized.operator_open_id.is_none()
+        && normalized.deferred_context_id.is_none()
+    {
+        return None;
+    }
+    Some(normalized)
 }
 
 fn render_channel_route_notice(
@@ -1378,11 +1638,9 @@ mod tests {
     #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
     #[derive(Default)]
     struct RecordingAdapter {
-        sent: Arc<Mutex<Vec<(ChannelOutboundTarget, String)>>>,
+        sent: Arc<Mutex<Vec<(ChannelOutboundTarget, ChannelOutboundMessage)>>>,
         acked: Arc<Mutex<Vec<Option<String>>>>,
         completed_batches: Arc<Mutex<usize>>,
-        typing_events: Arc<Mutex<Vec<String>>>,
-        fail_send: Arc<Mutex<bool>>,
     }
 
     #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
@@ -1396,30 +1654,15 @@ mod tests {
             Ok(Vec::new())
         }
 
-        async fn send_text(&self, target: &ChannelOutboundTarget, text: &str) -> CliResult<()> {
-            if *self.fail_send.lock().expect("fail send flag") {
-                return Err("send failed".to_owned());
-            }
+        async fn send_message(
+            &self,
+            target: &ChannelOutboundTarget,
+            message: &ChannelOutboundMessage,
+        ) -> CliResult<()> {
             self.sent
                 .lock()
                 .expect("sent log")
-                .push((target.clone(), text.to_owned()));
-            Ok(())
-        }
-
-        async fn start_typing(&self, target: &ChannelOutboundTarget) -> CliResult<()> {
-            self.typing_events
-                .lock()
-                .expect("typing log")
-                .push(format!("start:{}", target.id));
-            Ok(())
-        }
-
-        async fn stop_typing(&self, target: &ChannelOutboundTarget) -> CliResult<()> {
-            self.typing_events
-                .lock()
-                .expect("typing log")
-                .push(format!("stop:{}", target.id));
+                .push((target.clone(), message.clone()));
             Ok(())
         }
 
@@ -1456,10 +1699,10 @@ mod tests {
                 Ok(Vec::new())
             }
 
-            async fn send_text(
+            async fn send_message(
                 &self,
                 _target: &ChannelOutboundTarget,
-                _text: &str,
+                _message: &ChannelOutboundMessage,
             ) -> CliResult<()> {
                 Ok(())
             }
@@ -1473,6 +1716,11 @@ mod tests {
             delivery: ChannelDelivery {
                 ack_cursor: Some("2".to_owned()),
                 source_message_id: Some("42".to_owned()),
+                sender_principal_key: None,
+                thread_root_id: None,
+                parent_message_id: None,
+                resources: Vec::new(),
+                feishu_callback: None,
             },
         };
 
@@ -1480,14 +1728,6 @@ mod tests {
             .ack_inbound(&message)
             .await
             .expect("default ack hook should succeed");
-        adapter
-            .start_typing(&message.reply_target)
-            .await
-            .expect("default typing start hook should succeed");
-        adapter
-            .stop_typing(&message.reply_target)
-            .await
-            .expect("default typing stop hook should succeed");
         adapter
             .complete_batch()
             .await
@@ -1505,6 +1745,11 @@ mod tests {
             delivery: ChannelDelivery {
                 ack_cursor: Some("101".to_owned()),
                 source_message_id: Some("55".to_owned()),
+                sender_principal_key: None,
+                thread_root_id: None,
+                parent_message_id: None,
+                resources: Vec::new(),
+                feishu_callback: None,
             },
         }];
 
@@ -1524,83 +1769,47 @@ mod tests {
             adapter.sent.lock().expect("sent log").as_slice(),
             &[(
                 ChannelOutboundTarget::telegram_chat(1),
-                "reply: hello".to_owned(),
+                ChannelOutboundMessage::Text("reply: hello".to_owned()),
             )]
         );
         assert_eq!(
             adapter.acked.lock().expect("ack log").as_slice(),
             &[Some("101".to_owned())]
         );
-        assert_eq!(
-            adapter.typing_events.lock().expect("typing log").as_slice(),
-            &["start:1".to_owned(), "stop:1".to_owned()]
-        );
         assert_eq!(*adapter.completed_batches.lock().expect("completed"), 1);
     }
 
     #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
     #[tokio::test]
-    async fn process_channel_batch_stops_typing_when_processing_fails() {
-        let mut adapter = RecordingAdapter::default();
-        let batch = vec![ChannelInboundMessage {
-            session: ChannelSession::new(ChannelPlatform::Telegram, "1"),
-            reply_target: ChannelOutboundTarget::telegram_chat(1),
-            text: "hello".to_owned(),
-            delivery: ChannelDelivery {
-                ack_cursor: Some("101".to_owned()),
-                source_message_id: Some("55".to_owned()),
-            },
-        }];
+    async fn channel_adapter_send_text_defaults_to_text_outbound_message() {
+        let adapter = RecordingAdapter::default();
+        let target = ChannelOutboundTarget::telegram_chat(1);
 
-        let error = process_channel_batch(&mut adapter, batch, None, |_message| {
-            Box::pin(async move { Err("process failed".to_owned()) })
-        })
-        .await
-        .expect_err("batch should fail");
+        adapter
+            .send_text(&target, "hello default wrapper")
+            .await
+            .expect("default send_text wrapper should succeed");
 
-        assert_eq!(error, "process failed");
-        assert!(adapter.sent.lock().expect("sent log").is_empty());
-        assert!(adapter.acked.lock().expect("ack log").is_empty());
         assert_eq!(
-            adapter.typing_events.lock().expect("typing log").as_slice(),
-            &["start:1".to_owned(), "stop:1".to_owned()]
+            adapter.sent.lock().expect("sent log").as_slice(),
+            &[(
+                ChannelOutboundTarget::telegram_chat(1),
+                ChannelOutboundMessage::Text("hello default wrapper".to_owned()),
+            )]
         );
-        assert_eq!(*adapter.completed_batches.lock().expect("completed"), 0);
     }
 
     #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
-    #[tokio::test]
-    async fn process_channel_batch_stops_typing_when_send_fails() {
-        let mut adapter = RecordingAdapter::default();
-        *adapter.fail_send.lock().expect("fail send flag") = true;
-        let batch = vec![ChannelInboundMessage {
-            session: ChannelSession::new(ChannelPlatform::Telegram, "1"),
-            reply_target: ChannelOutboundTarget::telegram_chat(1),
-            text: "hello".to_owned(),
-            delivery: ChannelDelivery {
-                ack_cursor: Some("101".to_owned()),
-                source_message_id: Some("55".to_owned()),
-            },
-        }];
+    #[test]
+    fn channel_outbound_target_tracks_delivery_options() {
+        let target = ChannelOutboundTarget::feishu_receive_id("ou_demo")
+            .with_feishu_receive_id_type("open_id")
+            .with_idempotency_key("send-uuid-1")
+            .with_feishu_reply_in_thread(true);
 
-        let error = process_channel_batch(
-            &mut adapter,
-            batch,
-            None,
-            |message: ChannelInboundMessage| {
-                Box::pin(async move { Ok(format!("reply: {}", message.text)) })
-            },
-        )
-        .await
-        .expect_err("batch should fail");
-
-        assert_eq!(error, "send failed");
-        assert!(adapter.acked.lock().expect("ack log").is_empty());
-        assert_eq!(
-            adapter.typing_events.lock().expect("typing log").as_slice(),
-            &["start:1".to_owned(), "stop:1".to_owned()]
-        );
-        assert_eq!(*adapter.completed_batches.lock().expect("completed"), 0);
+        assert_eq!(target.feishu_receive_id_type(), Some("open_id"));
+        assert_eq!(target.idempotency_key(), Some("send-uuid-1"));
+        assert_eq!(target.feishu_reply_in_thread(), Some(true));
     }
 
     #[test]
@@ -1677,6 +1886,30 @@ mod tests {
 
     #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
     #[test]
+    fn channel_session_key_includes_configured_account_identity_when_present() {
+        let session =
+            ChannelSession::with_account(ChannelPlatform::Feishu, "feishu_shared", "oc_123")
+                .with_configured_account_id("work");
+        assert_eq!(
+            session.session_key(),
+            "feishu:cfg=work:feishu_shared:oc_123"
+        );
+    }
+
+    #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+    #[test]
+    fn channel_session_key_includes_participant_id_when_present() {
+        let session =
+            ChannelSession::with_account(ChannelPlatform::Feishu, "lark_cli_a1b2c3", "oc_123")
+                .with_participant_id("ou_sender_1");
+        assert_eq!(
+            session.session_key(),
+            "feishu:lark_cli_a1b2c3:oc_123:ou_sender_1"
+        );
+    }
+
+    #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+    #[test]
     fn channel_session_key_includes_account_identity_and_thread_when_present() {
         let session = ChannelSession::with_account_and_thread(
             ChannelPlatform::Feishu,
@@ -1692,108 +1925,159 @@ mod tests {
 
     #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
     #[test]
-    fn channel_session_exposes_structured_conversation_address() {
-        let session = ChannelSession::with_account_and_thread(
-            ChannelPlatform::Feishu,
-            "lark_cli_a1b2c3",
-            "oc_123",
-            "om_thread_1",
-        );
-
-        let address = session.conversation_address();
-
-        assert_eq!(
-            address.session_id,
-            "feishu:lark_cli_a1b2c3:oc_123:om_thread_1"
-        );
-        assert_eq!(address.channel_id.as_deref(), Some("feishu"));
-        assert_eq!(address.account_id.as_deref(), Some("lark_cli_a1b2c3"));
-        assert_eq!(address.conversation_id.as_deref(), Some("oc_123"));
-        assert_eq!(address.thread_id.as_deref(), Some("om_thread_1"));
-    }
-
-    #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
-    #[test]
-    fn resolve_channel_acp_turn_hints_uses_telegram_runtime_account_identity() {
-        let config: crate::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
-            "telegram": {
-                "default_account": "Work Bot",
-                "accounts": {
-                    "Work Bot": {
-                        "account_id": "Ops-Bot",
-                        "bot_token_env": "WORK_TELEGRAM_TOKEN",
-                        "allowed_chat_ids": [1001],
-                        "acp": {
-                            "bootstrap_mcp_servers": ["search"],
-                            "working_directory": " /workspace/ops "
-                        }
-                    }
-                }
-            }
-        }))
-        .expect("deserialize config");
-        let session = ChannelSession::with_account(ChannelPlatform::Telegram, "ops-bot", "1001");
-
-        let hints = resolve_channel_acp_turn_hints(&config, &session)
-            .expect("resolve telegram ACP turn hints");
-        assert_eq!(hints.bootstrap_mcp_servers, vec!["search".to_owned()]);
-        assert_eq!(
-            hints.working_directory,
-            Some(PathBuf::from("/workspace/ops"))
-        );
-    }
-
-    #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
-    #[test]
-    fn resolve_channel_acp_turn_hints_uses_feishu_runtime_account_identity() {
-        let config: crate::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
-            "feishu": {
-                "default_account": "Lark Prod",
-                "accounts": {
-                    "Lark Prod": {
-                        "domain": "lark",
-                        "app_id": "cli_lark_123",
-                        "app_secret": "secret",
-                        "allowed_chat_ids": ["oc_123"],
-                        "acp": {
-                            "bootstrap_mcp_servers": ["search"],
-                            "working_directory": "/workspace/lark"
-                        }
-                    }
-                }
-            }
-        }))
-        .expect("deserialize config");
+    fn channel_session_key_includes_account_participant_and_thread_when_present() {
         let session =
-            ChannelSession::with_account(ChannelPlatform::Feishu, "lark_cli_lark_123", "oc_123");
-
-        let hints = resolve_channel_acp_turn_hints(&config, &session)
-            .expect("resolve feishu ACP turn hints");
-        assert_eq!(hints.bootstrap_mcp_servers, vec!["search".to_owned()]);
+            ChannelSession::with_account(ChannelPlatform::Feishu, "lark_cli_a1b2c3", "oc_123")
+                .with_participant_id("ou_sender_1")
+                .with_thread_id("om_root_1");
         assert_eq!(
-            hints.working_directory,
-            Some(PathBuf::from("/workspace/lark"))
+            session.session_key(),
+            "feishu:lark_cli_a1b2c3:oc_123:ou_sender_1:om_root_1"
         );
     }
 
     #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
     #[test]
-    fn channel_message_acp_turn_provenance_uses_delivery_identifiers() {
+    fn channel_message_ingress_context_preserves_sender_and_thread_metadata() {
         let message = ChannelInboundMessage {
-            session: ChannelSession::with_account(ChannelPlatform::Telegram, "ops-bot", "1001"),
-            reply_target: ChannelOutboundTarget::telegram_chat(1001),
+            session: ChannelSession::with_account(
+                ChannelPlatform::Feishu,
+                "lark_cli_a1b2c3",
+                "oc_123",
+            )
+            .with_configured_account_id("work")
+            .with_participant_id("ou_sender_1")
+            .with_thread_id("om_root_1"),
+            reply_target: ChannelOutboundTarget::feishu_message_reply("om_message_9"),
             text: "hello".to_owned(),
             delivery: ChannelDelivery {
-                ack_cursor: Some("cursor-55".to_owned()),
-                source_message_id: Some("message-42".to_owned()),
+                ack_cursor: None,
+                source_message_id: Some("om_message_9".to_owned()),
+                sender_principal_key: Some("feishu:user:ou_sender_1".to_owned()),
+                thread_root_id: Some("om_root_1".to_owned()),
+                parent_message_id: Some("om_parent_1".to_owned()),
+                resources: vec![
+                    ChannelDeliveryResource {
+                        resource_type: "image".to_owned(),
+                        file_key: "img_v2_123".to_owned(),
+                        file_name: None,
+                    },
+                    ChannelDeliveryResource {
+                        resource_type: "file".to_owned(),
+                        file_key: "file_v2_456".to_owned(),
+                        file_name: Some("report.pdf".to_owned()),
+                    },
+                ],
+                feishu_callback: None,
             },
         };
 
-        let provenance = channel_message_acp_turn_provenance(&message);
+        let ingress = channel_message_ingress_context(&message).expect("ingress context");
+        assert_eq!(ingress.channel.platform, "feishu");
+        assert_eq!(
+            ingress.channel.account_id.as_deref(),
+            Some("lark_cli_a1b2c3")
+        );
+        assert_eq!(
+            ingress.channel.configured_account_id.as_deref(),
+            Some("work")
+        );
+        assert_eq!(ingress.channel.conversation_id, "oc_123");
+        assert_eq!(
+            ingress.channel.participant_id.as_deref(),
+            Some("ou_sender_1")
+        );
+        assert_eq!(ingress.channel.thread_id.as_deref(), Some("om_root_1"));
+        assert_eq!(
+            ingress.delivery.sender_identity_key.as_deref(),
+            Some("feishu:user:ou_sender_1")
+        );
+        assert_eq!(
+            ingress.delivery.thread_root_id.as_deref(),
+            Some("om_root_1")
+        );
+        assert_eq!(
+            ingress.delivery.parent_message_id.as_deref(),
+            Some("om_parent_1")
+        );
+        assert_eq!(ingress.delivery.resources.len(), 2);
+        assert_eq!(ingress.delivery.resources[0].resource_type, "image");
+        assert_eq!(ingress.delivery.resources[0].file_key, "img_v2_123");
+        assert_eq!(ingress.delivery.resources[1].resource_type, "file");
+        assert_eq!(ingress.delivery.resources[1].file_key, "file_v2_456");
+        assert_eq!(
+            ingress.delivery.resources[1].file_name.as_deref(),
+            Some("report.pdf")
+        );
+        assert_eq!(
+            ingress.private,
+            ConversationIngressPrivateContext::default()
+        );
+    }
 
-        assert_eq!(provenance.trace_id, None);
-        assert_eq!(provenance.source_message_id, Some("message-42"));
-        assert_eq!(provenance.ack_cursor, Some("cursor-55"));
+    #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+    #[test]
+    fn channel_message_ingress_context_preserves_private_feishu_callback_metadata() {
+        let message = ChannelInboundMessage {
+            session: ChannelSession::with_account(
+                ChannelPlatform::Feishu,
+                "feishu_main",
+                "oc_demo",
+            )
+            .with_configured_account_id("work")
+            .with_participant_id("ou_operator_1")
+            .with_thread_id("om_callback_1"),
+            reply_target: ChannelOutboundTarget::feishu_message_reply("om_callback_1"),
+            text: "[feishu_card_callback]".to_owned(),
+            delivery: ChannelDelivery {
+                ack_cursor: None,
+                source_message_id: Some("om_callback_1".to_owned()),
+                sender_principal_key: Some("feishu:user:ou_operator_1".to_owned()),
+                thread_root_id: Some("om_callback_1".to_owned()),
+                parent_message_id: None,
+                resources: Vec::new(),
+                feishu_callback: Some(ChannelDeliveryFeishuCallback {
+                    callback_token: Some("callback-secret-2".to_owned()),
+                    open_message_id: Some("om_callback_1".to_owned()),
+                    open_chat_id: Some("oc_demo".to_owned()),
+                    operator_open_id: Some("ou_operator_1".to_owned()),
+                    deferred_context_id: Some("evt_callback_2".to_owned()),
+                }),
+            },
+        };
+
+        let ingress = channel_message_ingress_context(&message).expect("ingress context");
+
+        assert_eq!(
+            ingress
+                .private
+                .feishu_callback
+                .as_ref()
+                .and_then(|value| value.callback_token.as_deref()),
+            Some("callback-secret-2")
+        );
+        assert_eq!(
+            ingress
+                .private
+                .feishu_callback
+                .as_ref()
+                .and_then(|value| value.operator_open_id.as_deref()),
+            Some("ou_operator_1")
+        );
+        assert_eq!(
+            ingress
+                .private
+                .feishu_callback
+                .as_ref()
+                .and_then(|value| value.deferred_context_id.as_deref()),
+            Some("evt_callback_2")
+        );
+        assert!(
+            !ingress
+                .as_event_payload()
+                .to_string()
+                .contains("callback-secret-2")
+        );
     }
 
     #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
@@ -1807,16 +2091,6 @@ mod tests {
         assert_eq!(target.platform, ChannelPlatform::Feishu);
         assert_eq!(target.kind, ChannelOutboundTargetKind::MessageReply);
         assert_eq!(target.id, "om_123");
-    }
-
-    #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
-    #[test]
-    fn channel_outbound_target_encodes_telegram_forum_topics() {
-        let target = ChannelOutboundTarget::telegram_chat_thread(123, 7);
-
-        assert_eq!(target.platform, ChannelPlatform::Telegram);
-        assert_eq!(target.kind, ChannelOutboundTargetKind::Conversation);
-        assert_eq!(target.id, "123:topic:7");
     }
 
     #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
@@ -1909,6 +2183,76 @@ mod tests {
         assert!(error.contains("primary"));
     }
 
+    #[cfg(feature = "channel-feishu")]
+    #[test]
+    fn feishu_command_context_accepts_unique_runtime_account_alias() {
+        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "feishu": {
+                "enabled": true,
+                "accounts": {
+                    "Work": {
+                        "account_id": "feishu_shared",
+                        "app_id": "cli_work",
+                        "app_secret": "secret"
+                    }
+                }
+            }
+        }))
+        .expect("deserialize feishu context config");
+
+        let context = build_feishu_command_context(
+            PathBuf::from("/tmp/loongclaw.toml"),
+            config,
+            Some("feishu_shared"),
+        )
+        .expect("unique runtime account alias should resolve");
+
+        assert_eq!(context.resolved.configured_account_id, "work");
+        assert_eq!(context.resolved.account.id, "feishu_shared");
+        assert_eq!(
+            context.route.requested_account_id.as_deref(),
+            Some("feishu_shared")
+        );
+        assert!(!context.route.selected_by_default());
+    }
+
+    #[cfg(feature = "channel-feishu")]
+    #[test]
+    fn feishu_command_context_reports_ambiguous_runtime_account_alias() {
+        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "feishu": {
+                "enabled": true,
+                "accounts": {
+                    "Work": {
+                        "account_id": "feishu_shared",
+                        "app_id": "cli_work",
+                        "app_secret": "secret-work"
+                    },
+                    "Alerts": {
+                        "account_id": "feishu_shared",
+                        "app_id": "cli_alerts",
+                        "app_secret": "secret-alerts"
+                    }
+                }
+            }
+        }))
+        .expect("deserialize feishu context config");
+
+        let error = build_feishu_command_context(
+            PathBuf::from("/tmp/loongclaw.toml"),
+            config,
+            Some("feishu_shared"),
+        )
+        .expect_err("ambiguous runtime account alias should fail");
+
+        let error = error.to_ascii_lowercase();
+        assert!(error.contains("requested feishu runtime account `feishu_shared` is ambiguous"));
+        assert!(error.contains("work"));
+        assert!(error.contains("alerts"));
+        assert!(error.contains("use configured_account_id `alerts` or `work` to disambiguate"));
+        assert!(error.contains("--account"));
+    }
+
     #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
     #[tokio::test]
     async fn with_channel_serve_runtime_tracks_running_state_and_shutdown() {
@@ -1929,7 +2273,7 @@ mod tests {
                 let live = runtime_state::load_channel_operation_runtime_for_account_from_dir(
                     runtime_dir_for_body.as_path(),
                     ChannelPlatform::Telegram,
-                    CHANNEL_OPERATION_SERVE_ID,
+                    "serve",
                     "bot_123456",
                     0,
                 )
@@ -1953,7 +2297,7 @@ mod tests {
         let finished = runtime_state::load_channel_operation_runtime_for_account_from_dir(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
-            CHANNEL_OPERATION_SERVE_ID,
+            "serve",
             "bot_123456",
             0,
         )
@@ -1970,7 +2314,7 @@ mod tests {
         runtime_state::write_runtime_state_for_test_with_account_and_pid(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
-            CHANNEL_OPERATION_SERVE_ID,
+            "serve",
             "bot_123456",
             7001,
             true,
@@ -2009,7 +2353,7 @@ mod tests {
         runtime_state::write_runtime_state_for_test_with_account_and_pid(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
-            CHANNEL_OPERATION_SERVE_ID,
+            "serve",
             "bot_123456",
             7001,
             true,
@@ -2040,7 +2384,7 @@ mod tests {
         let runtime = runtime_state::load_channel_operation_runtime_for_account_from_dir(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
-            CHANNEL_OPERATION_SERVE_ID,
+            "serve",
             "bot_123456",
             now_ms_for_test(),
         )

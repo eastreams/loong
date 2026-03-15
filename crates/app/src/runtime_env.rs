@@ -83,41 +83,10 @@ pub fn initialize_runtime_environment(
         bool_env(config.external_skills.auto_expose_installed),
     );
 
-    let tool_rt = crate::tools::runtime_config::ToolRuntimeConfig {
-        shell_allow: config
-            .tools
-            .shell_allow
-            .iter()
-            .map(|value| value.to_ascii_lowercase())
-            .collect(),
-        shell_deny: config
-            .tools
-            .shell_deny
-            .iter()
-            .map(|value| value.to_ascii_lowercase())
-            .collect(),
-        file_root: Some(config.tools.resolved_file_root()),
-        config_path: resolved_config_path.map(Path::to_path_buf),
-        shell_default_mode: crate::tools::shell_policy_ext::ShellPolicyDefault::parse(
-            &config.tools.shell_default_mode,
-        ),
-        external_skills: crate::tools::runtime_config::ExternalSkillsRuntimePolicy {
-            enabled: config.external_skills.enabled,
-            require_download_approval: config.external_skills.require_download_approval,
-            allowed_domains: config
-                .external_skills
-                .normalized_allowed_domains()
-                .into_iter()
-                .collect(),
-            blocked_domains: config
-                .external_skills
-                .normalized_blocked_domains()
-                .into_iter()
-                .collect(),
-            install_root: config.external_skills.resolved_install_root(),
-            auto_expose_installed: config.external_skills.auto_expose_installed,
-        },
-    };
+    let tool_rt = crate::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+        config,
+        resolved_config_path,
+    );
     let _ = crate::tools::runtime_config::init_tool_runtime_config(tool_rt);
 
     let memory_rt =

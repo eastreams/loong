@@ -1,12 +1,9 @@
-use std::collections::BTreeSet;
 use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use loongclaw_contracts::{
-    Capability, KernelError, ToolCoreOutcome, ToolCoreRequest, ToolPlaneError,
-};
+use loongclaw_contracts::{KernelError, ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -25,6 +22,8 @@ use crate::tools::{
 };
 
 use super::runtime::SessionContext;
+
+use super::ingress::{ConversationIngressContext, inject_internal_tool_ingress};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderTurn {
@@ -595,23 +594,11 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
 }
 
 pub(crate) async fn execute_tool_intent_via_kernel(
-    intent: &ToolIntent,
+    request: ToolCoreRequest,
     kernel_ctx: &KernelContext,
+    trusted_internal_context: bool,
 ) -> Result<ToolCoreOutcome, TurnFailure> {
-    let request = ToolCoreRequest {
-        tool_name: crate::tools::canonical_tool_name(intent.tool_name.as_str()).to_owned(),
-        payload: intent.args_json.clone(),
-    };
-    let caps = BTreeSet::from([Capability::InvokeTool]);
-    kernel_ctx
-        .kernel
-        .execute_tool_core(
-            kernel_ctx.pack_id(),
-            &kernel_ctx.token,
-            &caps,
-            None,
-            request,
-        )
+    crate::tools::execute_kernel_tool_request(kernel_ctx, request, trusted_internal_context)
         .await
         .map_err(|error| {
             let reason = format!("{error}");
@@ -793,13 +780,16 @@ impl TurnEngine {
             ));
         }
 
-        let catalog = tool_catalog();
         for intent in &turn.tool_intents {
-            let Some(descriptor) = catalog.resolve(&intent.tool_name) else {
+            let Some(resolved_tool) = crate::tools::resolve_tool_execution(&intent.tool_name)
+            else {
                 let reason = format!("tool_not_found: {}", intent.tool_name);
                 return Err(TurnFailure::policy_denied("tool_not_found", reason));
             };
-            if !session_context.tool_view.contains(descriptor.name) {
+            if !session_context
+                .tool_view
+                .contains(resolved_tool.canonical_name)
+            {
                 let reason = format!("tool_not_visible: {}", intent.tool_name);
                 return Err(TurnFailure::policy_denied("tool_not_visible", reason));
             }
@@ -836,6 +826,23 @@ impl TurnEngine {
             &session_context_from_turn(turn, tool_view.clone()),
             &DefaultAppToolDispatcher::runtime(),
             kernel_ctx,
+            None,
+        )
+        .await
+    }
+
+    pub async fn execute_turn_with_ingress(
+        &self,
+        turn: &ProviderTurn,
+        kernel_ctx: Option<&KernelContext>,
+        ingress: Option<&ConversationIngressContext>,
+    ) -> TurnResult {
+        self.execute_turn_in_context(
+            turn,
+            &session_context_from_turn(turn, runtime_tool_view()),
+            &DefaultAppToolDispatcher::runtime(),
+            kernel_ctx,
+            ingress,
         )
         .await
     }
@@ -846,6 +853,7 @@ impl TurnEngine {
         session_context: &SessionContext,
         app_dispatcher: &D,
         kernel_ctx: Option<&KernelContext>,
+        ingress: Option<&ConversationIngressContext>,
     ) -> TurnResult {
         match self.validate_turn_in_context(turn, session_context) {
             Ok(TurnValidation::FinalText(text)) => return TurnResult::FinalText(text),
@@ -853,23 +861,34 @@ impl TurnEngine {
             Ok(TurnValidation::ToolExecutionRequired) => {}
         }
 
-        let catalog = tool_catalog();
         let mut outputs = Vec::new();
         for intent in &turn.tool_intents {
-            let Some(descriptor) = catalog.resolve(&intent.tool_name) else {
+            let Some(resolved_tool) = crate::tools::resolve_tool_execution(&intent.tool_name)
+            else {
                 let reason = format!("tool_not_found: {}", intent.tool_name);
                 return TurnResult::policy_denied("tool_not_found", reason);
             };
+            let injected = inject_internal_tool_ingress(
+                resolved_tool.canonical_name,
+                intent.args_json.clone(),
+                ingress,
+            );
             let request = ToolCoreRequest {
-                tool_name: descriptor.name.to_owned(),
-                payload: intent.args_json.clone(),
+                tool_name: resolved_tool.canonical_name.to_owned(),
+                payload: injected.payload,
             };
-            let outcome = match descriptor.execution_kind {
+            let outcome = match resolved_tool.execution_kind {
                 ToolExecutionKind::Core => {
                     let Some(kernel_ctx) = kernel_ctx else {
                         return TurnResult::policy_denied("no_kernel_context", "no_kernel_context");
                     };
-                    match execute_tool_intent_via_kernel(intent, kernel_ctx).await {
+                    match execute_tool_intent_via_kernel(
+                        request,
+                        kernel_ctx,
+                        injected.trusted_internal_context,
+                    )
+                    .await
+                    {
                         Ok(outcome) => outcome,
                         Err(failure) => return turn_result_from_tool_execution_failure(failure),
                     }

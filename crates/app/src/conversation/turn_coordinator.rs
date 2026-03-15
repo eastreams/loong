@@ -37,6 +37,7 @@ use super::analytics::{
     TurnCheckpointSessionState, build_turn_checkpoint_repair_plan, summarize_safe_lane_history,
 };
 use super::context_engine::AssembledConversationContext;
+use super::ingress::ConversationIngressContext;
 use super::lane_arbiter::{ExecutionLane, LaneArbiterPolicy, LaneDecision};
 use super::persistence::{
     format_provider_error_reply, persist_acp_runtime_events, persist_conversation_event,
@@ -686,8 +687,12 @@ impl ProviderTurnSessionState {
     fn from_assembled_context(
         assembled_context: AssembledConversationContext,
         user_input: &str,
+        ingress: Option<&ConversationIngressContext>,
     ) -> Self {
         let mut messages = assembled_context.messages;
+        if let Some(ingress) = ingress.filter(|value| value.has_contextual_hints()) {
+            messages.push(ingress.as_system_message());
+        }
         messages.push(json!({
             "role": "user",
             "content": user_input,
@@ -749,11 +754,13 @@ impl ProviderTurnPreparation {
         config: &LoongClawConfig,
         assembled_context: AssembledConversationContext,
         user_input: &str,
+        ingress: Option<&ConversationIngressContext>,
     ) -> Self {
         Self {
             session: ProviderTurnSessionState::from_assembled_context(
                 assembled_context,
                 user_input,
+                ingress,
             ),
             lane_plan: ProviderTurnLanePlan::from_user_input(config, user_input),
             raw_tool_output_requested: user_requested_raw_tool_output(user_input),
@@ -1345,6 +1352,31 @@ impl ConversationTurnCoordinator {
         .await
     }
 
+    pub async fn handle_turn_with_ingress(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        kernel_ctx: Option<&KernelContext>,
+        ingress: Option<&ConversationIngressContext>,
+    ) -> CliResult<String> {
+        let acp_options = AcpConversationTurnOptions::automatic();
+        let address = ConversationSessionAddress::from_session_id(session_id);
+        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
+            config,
+            &address,
+            user_input,
+            error_mode,
+            &runtime,
+            &acp_options,
+            kernel_ctx,
+            ingress,
+        )
+        .await
+    }
+
     pub async fn handle_turn_with_acp_options(
         &self,
         config: &LoongClawConfig,
@@ -1501,6 +1533,30 @@ impl ConversationTurnCoordinator {
         .await
     }
 
+    pub async fn handle_turn_with_address_and_acp_options_and_ingress(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        kernel_ctx: Option<&KernelContext>,
+        ingress: Option<&ConversationIngressContext>,
+    ) -> CliResult<String> {
+        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
+            config,
+            address,
+            user_input,
+            error_mode,
+            &runtime,
+            acp_options,
+            kernel_ctx,
+            ingress,
+        )
+        .await
+    }
+
     pub async fn handle_turn_with_address_and_acp_options(
         &self,
         config: &LoongClawConfig,
@@ -1511,7 +1567,7 @@ impl ConversationTurnCoordinator {
         kernel_ctx: Option<&KernelContext>,
     ) -> CliResult<String> {
         let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
-        self.handle_turn_with_runtime_and_address_and_acp_options(
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
             config,
             address,
             user_input,
@@ -1519,6 +1575,7 @@ impl ConversationTurnCoordinator {
             &runtime,
             acp_options,
             kernel_ctx,
+            None,
         )
         .await
     }
@@ -1541,6 +1598,31 @@ impl ConversationTurnCoordinator {
             runtime,
             &acp_options,
             kernel_ctx,
+        )
+        .await
+    }
+
+    pub async fn handle_turn_with_runtime_and_ingress<R: ConversationRuntime + ?Sized>(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        runtime: &R,
+        kernel_ctx: Option<&KernelContext>,
+        ingress: Option<&ConversationIngressContext>,
+    ) -> CliResult<String> {
+        let acp_options = AcpConversationTurnOptions::automatic();
+        let address = ConversationSessionAddress::from_session_id(session_id);
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
+            config,
+            &address,
+            user_input,
+            error_mode,
+            runtime,
+            &acp_options,
+            kernel_ctx,
+            ingress,
         )
         .await
     }
@@ -1690,7 +1772,7 @@ impl ConversationTurnCoordinator {
         kernel_ctx: Option<&KernelContext>,
     ) -> CliResult<String> {
         let address = ConversationSessionAddress::from_session_id(session_id);
-        self.handle_turn_with_runtime_and_address_and_acp_options(
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
             config,
             &address,
             user_input,
@@ -1698,6 +1780,7 @@ impl ConversationTurnCoordinator {
             runtime,
             acp_options,
             kernel_ctx,
+            None,
         )
         .await
     }
@@ -1735,7 +1818,7 @@ impl ConversationTurnCoordinator {
         kernel_ctx: Option<&KernelContext>,
     ) -> CliResult<String> {
         let acp_options = AcpConversationTurnOptions::automatic();
-        self.handle_turn_with_runtime_and_address_and_acp_options(
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
             config,
             address,
             user_input,
@@ -1743,6 +1826,7 @@ impl ConversationTurnCoordinator {
             runtime,
             &acp_options,
             kernel_ctx,
+            None,
         )
         .await
     }
@@ -1758,6 +1842,32 @@ impl ConversationTurnCoordinator {
         runtime: &R,
         acp_options: &AcpConversationTurnOptions<'_>,
         kernel_ctx: Option<&KernelContext>,
+    ) -> CliResult<String> {
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
+            config,
+            address,
+            user_input,
+            error_mode,
+            runtime,
+            acp_options,
+            kernel_ctx,
+            None,
+        )
+        .await
+    }
+
+    async fn handle_turn_with_runtime_and_address_and_acp_options_and_ingress<
+        R: ConversationRuntime + ?Sized,
+    >(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        runtime: &R,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        kernel_ctx: Option<&KernelContext>,
+        ingress: Option<&ConversationIngressContext>,
     ) -> CliResult<String> {
         let session_id = address.session_id.as_str();
         match evaluate_acp_conversation_turn_entry_for_address(config, address, acp_options)? {
@@ -1801,12 +1911,15 @@ impl ConversationTurnCoordinator {
         }
         let session_context = runtime.session_context(config, session_id, kernel_ctx)?;
         let tool_view = session_context.tool_view.clone();
+        let visible_ingress = ingress.filter(|value| value.has_contextual_hints());
+        emit_turn_ingress_event(runtime, session_id, visible_ingress, kernel_ctx).await;
         let preparation = ProviderTurnPreparation::from_assembled_context(
             config,
             runtime
                 .build_context(config, session_id, true, kernel_ctx)
                 .await?,
             user_input,
+            visible_ingress,
         );
         let resolved_turn = resolve_provider_turn(
             config,
@@ -1824,6 +1937,7 @@ impl ConversationTurnCoordinator {
                 .await,
             error_mode,
             kernel_ctx,
+            ingress,
         )
         .await;
 
@@ -1881,7 +1995,7 @@ impl ConversationTurnCoordinator {
         kernel_ctx: Option<&KernelContext>,
     ) -> CliResult<String> {
         let acp_options = AcpConversationTurnOptions::from_event_sink(acp_event_sink);
-        self.handle_turn_with_runtime_and_address_and_acp_options(
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
             config,
             address,
             user_input,
@@ -1889,6 +2003,7 @@ impl ConversationTurnCoordinator {
             runtime,
             &acp_options,
             kernel_ctx,
+            None,
         )
         .await
     }
@@ -2056,6 +2171,7 @@ async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
     result: CliResult<ProviderTurn>,
     error_mode: ProviderErrorMode,
     kernel_ctx: Option<&KernelContext>,
+    ingress: Option<&ConversationIngressContext>,
 ) -> ResolvedProviderTurn {
     match decide_provider_turn_request_action(result, error_mode) {
         ProviderTurnRequestAction::Continue { turn } => {
@@ -2066,6 +2182,7 @@ async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
                 preparation,
                 turn,
                 kernel_ctx,
+                ingress,
             )
             .await;
             let reply = continue_phase
@@ -2091,11 +2208,19 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
     preparation: &ProviderTurnPreparation,
     turn: ProviderTurn,
     kernel_ctx: Option<&KernelContext>,
+    ingress: Option<&ConversationIngressContext>,
 ) -> ProviderTurnContinuePhase {
     let tool_intents = turn.tool_intents.len();
-    let lane_execution =
-        execute_provider_turn_lane(config, runtime, session_id, preparation, &turn, kernel_ctx)
-            .await;
+    let lane_execution = execute_provider_turn_lane(
+        config,
+        runtime,
+        session_id,
+        preparation,
+        &turn,
+        kernel_ctx,
+        ingress,
+    )
+    .await;
     let followup_config =
         ConversationTurnCoordinator::reload_followup_provider_config_after_tool_turn(config, &turn);
     ProviderTurnContinuePhase::new(tool_intents, lane_execution, followup_config)
@@ -3764,6 +3889,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     preparation: &ProviderTurnPreparation,
     turn: &ProviderTurn,
     kernel_ctx: Option<&KernelContext>,
+    ingress: Option<&ConversationIngressContext>,
 ) -> ProviderTurnLaneExecution {
     let had_tool_intents = !turn.tool_intents.is_empty();
     let assistant_preface = turn.assistant_text.clone();
@@ -3819,13 +3945,20 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
                 &session_context,
                 &app_dispatcher,
                 kernel_ctx,
+                ingress,
             )
             .await;
             (outcome.result, outcome.terminal_route)
         }
         Ok(TurnValidation::ToolExecutionRequired) => (
             engine
-                .execute_turn_in_context(turn, &session_context, &app_dispatcher, kernel_ctx)
+                .execute_turn_in_context(
+                    turn,
+                    &session_context,
+                    &app_dispatcher,
+                    kernel_ctx,
+                    ingress,
+                )
                 .await,
             None,
         ),
@@ -3850,6 +3983,7 @@ async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?Sized>(
     session_context: &SessionContext,
     app_dispatcher: &dyn AppToolDispatcher,
     kernel_ctx: Option<&KernelContext>,
+    ingress: Option<&ConversationIngressContext>,
 ) -> SafeLaneTurnOutcome {
     let governor_history_signals =
         load_safe_lane_history_signals_for_governor(config, session_id, kernel_ctx).await;
@@ -3923,6 +4057,7 @@ async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?Sized>(
             session_context,
             app_dispatcher,
             kernel_ctx,
+            ingress,
             &state,
         )
         .await;
@@ -4249,6 +4384,7 @@ async fn evaluate_safe_lane_round(
     session_context: &SessionContext,
     app_dispatcher: &dyn AppToolDispatcher,
     kernel_ctx: Option<&KernelContext>,
+    ingress: Option<&ConversationIngressContext>,
     state: &SafeLanePlanLoopState,
 ) -> SafeLaneRoundExecution {
     let plan = build_safe_lane_plan_graph(
@@ -4263,6 +4399,7 @@ async fn evaluate_safe_lane_round(
         session_context,
         app_dispatcher,
         kernel_ctx,
+        ingress,
         config.conversation.safe_lane_verify_output_non_empty,
         state.seed_tool_outputs.clone(),
         config
@@ -4306,6 +4443,25 @@ async fn emit_safe_lane_event<R: ConversationRuntime + ?Sized>(
             },
         );
     }
+}
+
+async fn emit_turn_ingress_event<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    session_id: &str,
+    ingress: Option<&ConversationIngressContext>,
+    kernel_ctx: Option<&KernelContext>,
+) {
+    let Some(ingress) = ingress else {
+        return;
+    };
+    let _ = persist_conversation_event(
+        runtime,
+        session_id,
+        "turn_ingress",
+        ingress.as_event_payload(),
+        kernel_ctx,
+    )
+    .await;
 }
 
 fn should_emit_safe_lane_event(
@@ -5383,7 +5539,8 @@ struct SafeLanePlanNodeExecutor<'a> {
     tool_intents: &'a [ToolIntent],
     session_context: &'a SessionContext,
     app_dispatcher: &'a dyn AppToolDispatcher,
-    kernel_ctx: Option<&'a KernelContext>,
+    kernel_ctx: &'a KernelContext,
+    ingress: Option<&'a ConversationIngressContext>,
     verify_output_non_empty: bool,
     tool_outputs: Mutex<Vec<String>>,
     tool_result_payload_summary_limit_chars: usize,
@@ -5394,7 +5551,8 @@ impl<'a> SafeLanePlanNodeExecutor<'a> {
         tool_intents: &'a [ToolIntent],
         session_context: &'a SessionContext,
         app_dispatcher: &'a dyn AppToolDispatcher,
-        kernel_ctx: Option<&'a KernelContext>,
+        kernel_ctx: &'a KernelContext,
+        ingress: Option<&'a ConversationIngressContext>,
         verify_output_non_empty: bool,
         seed_tool_outputs: Vec<String>,
         tool_result_payload_summary_limit_chars: usize,
@@ -5404,6 +5562,7 @@ impl<'a> SafeLanePlanNodeExecutor<'a> {
             session_context,
             app_dispatcher,
             kernel_ctx,
+            ingress,
             verify_output_non_empty,
             tool_outputs: Mutex::new(seed_tool_outputs),
             tool_result_payload_summary_limit_chars,
@@ -5432,6 +5591,7 @@ impl PlanNodeExecutor for SafeLanePlanNodeExecutor<'_> {
                     self.session_context,
                     self.app_dispatcher,
                     self.kernel_ctx,
+                    self.ingress,
                     self.tool_result_payload_summary_limit_chars,
                 )
                 .await?;
@@ -5474,7 +5634,8 @@ async fn execute_single_tool_intent(
     intent: &ToolIntent,
     session_context: &SessionContext,
     app_dispatcher: &dyn AppToolDispatcher,
-    kernel_ctx: Option<&KernelContext>,
+    kernel_ctx: &KernelContext,
+    ingress: Option<&ConversationIngressContext>,
     payload_summary_limit_chars: usize,
 ) -> Result<String, PlanNodeError> {
     let engine = TurnEngine::with_tool_result_payload_summary_limit(1, payload_summary_limit_chars);
@@ -5485,7 +5646,13 @@ async fn execute_single_tool_intent(
     };
 
     match engine
-        .execute_turn_in_context(&turn, session_context, app_dispatcher, kernel_ctx)
+        .execute_turn_in_context(
+            &turn,
+            session_context,
+            app_dispatcher,
+            Some(kernel_ctx),
+            ingress,
+        )
         .await
     {
         TurnResult::FinalText(output) => Ok(output),
@@ -5899,6 +6066,7 @@ mod tests {
                 system_prompt_addition: None,
             },
             "hello world",
+            None,
         );
 
         assert_eq!(session.estimated_tokens, Some(42));
@@ -5915,6 +6083,7 @@ mod tests {
                 "content": "sys"
             })]),
             "hello world",
+            None,
         );
 
         let messages = session.after_turn_messages("done");
@@ -5935,6 +6104,7 @@ mod tests {
                 system_prompt_addition: None,
             },
             "hello world",
+            None,
         );
 
         let phase = ProviderTurnReplyTailPhase::from_session(&session, "done");
@@ -5978,6 +6148,7 @@ mod tests {
                 "content": "sys"
             })]),
             "deploy to production and show raw tool output",
+            None,
         );
 
         assert_eq!(preparation.session.messages.len(), 2);
@@ -6039,6 +6210,7 @@ mod tests {
                 "content": "sys"
             })]),
             "deploy to production",
+            None,
         );
         let phase = ProviderTurnContinuePhase::new(
             2,
@@ -6126,6 +6298,7 @@ mod tests {
                 "content": "sys"
             })]),
             "say hello",
+            None,
         );
         let phase = ProviderTurnContinuePhase::new(
             0,
@@ -6198,6 +6371,7 @@ mod tests {
                         "content": "sys"
                     })]),
                     "deploy to production",
+                    None,
                 )
                 .checkpoint(),
                 request: TurnCheckpointRequest::Continue { tool_intents: 1 },
@@ -6303,6 +6477,7 @@ mod tests {
                         "content": "sys"
                     })]),
                     "say hello",
+                    None,
                 )
                 .checkpoint(),
                 request: TurnCheckpointRequest::FinalizeInlineProviderError,
@@ -6348,6 +6523,7 @@ mod tests {
                         "content": "sys"
                     })]),
                     "say hello",
+                    None,
                 )
                 .checkpoint(),
                 request: TurnCheckpointRequest::ReturnError,
@@ -6381,6 +6557,7 @@ mod tests {
                 system_prompt_addition: None,
             },
             "say hello",
+            None,
         );
         let resolved = ResolvedProviderTurn::PersistReply(ResolvedProviderReply {
             reply: "done".to_owned(),
@@ -6393,6 +6570,7 @@ mod tests {
                         "content": "sys"
                     })]),
                     "say hello",
+                    None,
                 )
                 .checkpoint(),
                 request: TurnCheckpointRequest::Continue { tool_intents: 0 },
@@ -6440,6 +6618,7 @@ mod tests {
                 "content": "sys"
             })]),
             "say hello",
+            None,
         );
         let resolved = ResolvedProviderTurn::ReturnError(ResolvedProviderError {
             error: "provider unavailable".to_owned(),
@@ -6452,6 +6631,7 @@ mod tests {
                         "content": "sys"
                     })]),
                     "say hello",
+                    None,
                 )
                 .checkpoint(),
                 request: TurnCheckpointRequest::ReturnError,
@@ -6483,6 +6663,7 @@ mod tests {
                 "content": "sys"
             })]),
             "say hello",
+            None,
         );
 
         let resolved = ProviderTurnRequestTerminalPhase::persist_inline_provider_error(
@@ -6522,6 +6703,7 @@ mod tests {
                 "content": "sys"
             })]),
             "say hello",
+            None,
         );
 
         let resolved =

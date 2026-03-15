@@ -213,7 +213,15 @@ pub async fn request_turn_in_view(
     kernel_ctx: Option<&KernelContext>,
 ) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
     let session = prepare_provider_request_session(config).await?;
-    let tool_definitions = crate::tools::try_provider_tool_definitions_for_view(tool_view)?;
+    let tool_runtime_config =
+        crate::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None);
+    let runtime_tool_view =
+        crate::tools::runtime_tool_view_with_runtime_config(&config.tools, &tool_runtime_config);
+    let tool_definitions = if tool_view == &runtime_tool_view {
+        crate::tools::provider_tool_definitions_with_config(Some(&tool_runtime_config))
+    } else {
+        crate::tools::try_provider_tool_definitions_for_view(tool_view)?
+    };
     request_across_model_candidates(
         &config.provider,
         kernel_ctx,

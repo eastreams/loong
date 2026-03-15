@@ -6194,7 +6194,13 @@ async fn turn_engine_routes_app_tools_through_dispatcher() {
     let (kernel_ctx, _invocations) = build_kernel_context(Arc::new(InMemoryAuditSink::default()));
 
     let result = engine
-        .execute_turn_in_context(&turn, &session_context, &dispatcher, Some(&kernel_ctx))
+        .execute_turn_in_context(
+            &turn,
+            &session_context,
+            &dispatcher,
+            Some(&kernel_ctx),
+            None,
+        )
         .await;
 
     match result {

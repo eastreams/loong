@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use serde_json::{Value, json};
 
 use crate::CliResult;
@@ -22,32 +24,6 @@ pub(in crate::channel::feishu) fn build_feishu_send_payload(
         "msg_type": msg_type,
         "content": encode_feishu_content(&content)?,
     }))
-}
-
-pub(in crate::channel::feishu) fn build_feishu_reply_payload(
-    msg_type: &str,
-    content: Value,
-) -> CliResult<Value> {
-    let msg_type = msg_type.trim();
-    if msg_type.is_empty() {
-        return Err("feishu reply msg_type is empty".to_owned());
-    }
-
-    Ok(json!({
-        "msg_type": msg_type,
-        "content": encode_feishu_content(&content)?,
-    }))
-}
-
-pub(in crate::channel::feishu) fn ensure_feishu_response_ok(
-    action: &str,
-    payload: &Value,
-) -> CliResult<()> {
-    let code = payload.get("code").and_then(Value::as_i64).unwrap_or(-1);
-    if code != 0 {
-        return Err(format!("{action} returned code {code}: {payload}"));
-    }
-    Ok(())
 }
 
 fn encode_feishu_content(content: &Value) -> CliResult<String> {

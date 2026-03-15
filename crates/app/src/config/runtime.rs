@@ -12,6 +12,7 @@ use crate::CliResult;
 use super::{
     channels::{CliChannelConfig, FeishuChannelConfig, TelegramChannelConfig},
     conversation::ConversationConfig,
+    feishu_integration::FeishuIntegrationConfig,
     provider::{ProviderConfig, ProviderKind, ProviderProfileConfig},
     shared::{
         ConfigValidationIssue, ConfigValidationLocale, DEFAULT_CONFIG_FILE,
@@ -73,6 +74,8 @@ pub struct LoongClawConfig {
     pub telegram: TelegramChannelConfig,
     #[serde(default)]
     pub feishu: FeishuChannelConfig,
+    #[serde(default)]
+    pub feishu_integration: FeishuIntegrationConfig,
     #[serde(default)]
     pub conversation: ConversationConfig,
     #[serde(default)]
@@ -949,6 +952,7 @@ impl LoongClawConfig {
             }
         }
         issues.extend(super::channels::collect_channel_validation_issues(self));
+        issues.extend(self.feishu_integration.validate());
         issues.extend(self.memory.validate());
         issues.extend(self.tools.validate());
         issues
