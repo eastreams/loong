@@ -2187,7 +2187,7 @@ api_key = "${DEEPSEEK_API_KEY}"
         assert!(raw.contains("[external_skills]"));
         assert!(raw.contains("enabled = false"));
         assert!(raw.contains("require_download_approval = true"));
-        assert!(raw.contains("auto_expose_installed = true"));
+        assert!(raw.contains("auto_expose_installed = false"));
 
         let (_, loaded) = load(Some(&path_string)).expect("config load should pass");
         assert!(!loaded.external_skills.enabled);
@@ -2195,7 +2195,7 @@ api_key = "${DEEPSEEK_API_KEY}"
         assert!(loaded.external_skills.allowed_domains.is_empty());
         assert!(loaded.external_skills.blocked_domains.is_empty());
         assert!(loaded.external_skills.install_root.is_none());
-        assert!(loaded.external_skills.auto_expose_installed);
+        assert!(!loaded.external_skills.auto_expose_installed);
 
         let _ = fs::remove_file(path);
     }

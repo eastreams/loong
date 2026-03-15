@@ -747,6 +747,7 @@ struct ProviderTurnPreparation {
     session: ProviderTurnSessionState,
     lane_plan: ProviderTurnLanePlan,
     raw_tool_output_requested: bool,
+    turn_id: String,
 }
 
 impl ProviderTurnPreparation {
@@ -756,6 +757,7 @@ impl ProviderTurnPreparation {
         user_input: &str,
         ingress: Option<&ConversationIngressContext>,
     ) -> Self {
+        let turn_id = build_provider_turn_scope_id(&assembled_context.messages, user_input);
         Self {
             session: ProviderTurnSessionState::from_assembled_context(
                 assembled_context,
@@ -764,6 +766,7 @@ impl ProviderTurnPreparation {
             ),
             lane_plan: ProviderTurnLanePlan::from_user_input(config, user_input),
             raw_tool_output_requested: user_requested_raw_tool_output(user_input),
+            turn_id,
         }
     }
 
@@ -779,6 +782,18 @@ impl ProviderTurnPreparation {
             estimated_tokens: self.session.estimated_tokens,
         }
     }
+}
+
+fn build_provider_turn_scope_id(messages: &[Value], user_input: &str) -> String {
+    let mut visible_context = messages.to_vec();
+    visible_context.push(json!({
+        "role": "user",
+        "content": user_input,
+    }));
+    format!(
+        "turn:{}",
+        checkpoint_context_fingerprint_sha256(&visible_context)
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -1958,9 +1973,27 @@ impl ConversationTurnCoordinator {
         turn: &ProviderTurn,
     ) -> LoongClawConfig {
         let config_path_from_tool = turn.tool_intents.iter().rev().find_map(|intent| {
-            (crate::tools::canonical_tool_name(intent.tool_name.as_str()) == "provider.switch")
-                .then_some(intent.args_json.as_object())
-                .flatten()
+            let canonical_tool_name = crate::tools::canonical_tool_name(intent.tool_name.as_str());
+            let payload = if canonical_tool_name == "provider.switch" {
+                intent.args_json.as_object()
+            } else if canonical_tool_name == "tool.invoke" {
+                intent
+                    .args_json
+                    .as_object()
+                    .filter(|payload| {
+                        payload
+                            .get("tool_id")
+                            .and_then(Value::as_str)
+                            .map(crate::tools::canonical_tool_name)
+                            == Some("provider.switch")
+                    })
+                    .and_then(|payload| payload.get("arguments"))
+                    .and_then(Value::as_object)
+            } else {
+                None
+            };
+
+            payload
                 .and_then(|payload| payload.get("config_path"))
                 .and_then(Value::as_str)
                 .map(str::trim)
@@ -2175,6 +2208,8 @@ async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
 ) -> ResolvedProviderTurn {
     match decide_provider_turn_request_action(result, error_mode) {
         ProviderTurnRequestAction::Continue { turn } => {
+            let turn =
+                scope_provider_turn_tool_intents(turn, session_id, preparation.turn_id.as_str());
             let continue_phase = prepare_provider_turn_continue_phase(
                 config,
                 runtime,
@@ -2199,6 +2234,22 @@ async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
             ProviderTurnRequestTerminalPhase::return_error(error).resolve(preparation, user_input)
         }
     }
+}
+
+fn scope_provider_turn_tool_intents(
+    mut turn: ProviderTurn,
+    session_id: &str,
+    turn_id: &str,
+) -> ProviderTurn {
+    for intent in &mut turn.tool_intents {
+        if intent.session_id.trim().is_empty() {
+            intent.session_id = session_id.to_owned();
+        }
+        if intent.turn_id.trim().is_empty() {
+            intent.turn_id = turn_id.to_owned();
+        }
+    }
+    turn
 }
 
 async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
@@ -5493,12 +5544,12 @@ fn terminal_turn_failure_from_verify_failure(
 
 fn turn_result_from_plan_failure(failure: PlanRunFailure) -> TurnResult {
     let failure_meta = turn_failure_from_plan_failure(&failure);
-    match failure_meta.kind {
-        TurnFailureKind::PolicyDenied => TurnResult::ToolDenied(failure_meta),
-        TurnFailureKind::Retryable | TurnFailureKind::NonRetryable => {
-            TurnResult::ToolError(failure_meta)
-        }
-        TurnFailureKind::Provider => TurnResult::ProviderError(failure_meta),
+    if matches!(failure_meta.kind, TurnFailureKind::PolicyDenied) {
+        TurnResult::ToolDenied(failure_meta)
+    } else if matches!(failure_meta.kind, TurnFailureKind::Provider) {
+        TurnResult::ProviderError(failure_meta)
+    } else {
+        TurnResult::ToolError(failure_meta)
     }
 }
 
@@ -6284,6 +6335,99 @@ mod tests {
     }
 
     #[test]
+    fn scope_provider_turn_tool_intents_populates_missing_ids_and_preserves_existing_ids() {
+        let turn = ProviderTurn {
+            assistant_text: String::new(),
+            tool_intents: vec![
+                ToolIntent {
+                    tool_name: "tool.search".to_owned(),
+                    args_json: json!({"query": "read file"}),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: String::new(),
+                    turn_id: String::new(),
+                    tool_call_id: "call-1".to_owned(),
+                },
+                ToolIntent {
+                    tool_name: "tool.invoke".to_owned(),
+                    args_json: json!({"tool_id": "file.read", "lease": "stub", "arguments": {"path": "README.md"}}),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "already-session".to_owned(),
+                    turn_id: "already-turn".to_owned(),
+                    tool_call_id: "call-2".to_owned(),
+                },
+            ],
+            raw_meta: Value::Null,
+        };
+
+        let scoped = scope_provider_turn_tool_intents(turn, "session-a", "turn-a");
+
+        assert_eq!(scoped.tool_intents[0].session_id, "session-a");
+        assert_eq!(scoped.tool_intents[0].turn_id, "turn-a");
+        assert_eq!(scoped.tool_intents[1].session_id, "already-session");
+        assert_eq!(scoped.tool_intents[1].turn_id, "already-turn");
+    }
+
+    #[test]
+    fn reload_followup_provider_config_reads_provider_switch_wrapped_by_tool_invoke() {
+        use std::fs;
+
+        let root = std::env::temp_dir().join(format!(
+            "loongclaw-provider-switch-followup-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create fixture root");
+        let config_path = root.join("loongclaw.toml");
+
+        let mut expected = LoongClawConfig::default();
+        let mut openai =
+            crate::config::ProviderConfig::fresh_for_kind(crate::config::ProviderKind::Openai);
+        openai.model = "gpt-5".to_owned();
+        expected.set_active_provider_profile(
+            "openai-gpt-5",
+            crate::config::ProviderProfileConfig {
+                default_for_kind: true,
+                provider: openai.clone(),
+            },
+        );
+        expected.provider = openai;
+        expected.active_provider = Some("openai-gpt-5".to_owned());
+        fs::write(
+            &config_path,
+            crate::config::render(&expected).expect("render config"),
+        )
+        .expect("write config");
+
+        let turn = ProviderTurn {
+            assistant_text: String::new(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "tool.invoke".to_owned(),
+                args_json: json!({
+                    "tool_id": "provider.switch",
+                    "lease": "ignored",
+                    "arguments": {
+                        "selector": "openai",
+                        "config_path": config_path.to_string_lossy()
+                    }
+                }),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-a".to_owned(),
+                turn_id: "turn-a".to_owned(),
+                tool_call_id: "call-1".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        };
+
+        let reloaded = ConversationTurnCoordinator::reload_followup_provider_config_after_tool_turn(
+            &LoongClawConfig::default(),
+            &turn,
+        );
+
+        assert_eq!(reloaded.active_provider_id(), Some("openai-gpt-5"));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn provider_turn_continue_phase_checkpoint_keeps_direct_reply_without_followup() {
         let preparation = ProviderTurnPreparation::from_assembled_context(
             &LoongClawConfig::default(),
@@ -6860,6 +7004,12 @@ mod tests {
     #[test]
     fn turn_failure_from_plan_failure_node_error_mapping_is_stable() {
         let cases = [
+            (
+                PlanNodeErrorKind::ApprovalRequired,
+                TurnFailureKind::PolicyDenied,
+                "safe_lane_plan_node_policy_denied",
+                false,
+            ),
             (
                 PlanNodeErrorKind::PolicyDenied,
                 TurnFailureKind::PolicyDenied,

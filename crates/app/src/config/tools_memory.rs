@@ -511,7 +511,7 @@ const fn default_true() -> bool {
 }
 
 const fn default_auto_expose_installed() -> bool {
-    true
+    false
 }
 
 fn normalize_domain_entries(entries: &[String]) -> Vec<String> {
@@ -706,7 +706,7 @@ child_tool_allowlist = ["file.read", "shell.exec"]
         assert!(config.allowed_domains.is_empty());
         assert!(config.blocked_domains.is_empty());
         assert!(config.install_root.is_none());
-        assert!(config.auto_expose_installed);
+        assert!(!config.auto_expose_installed);
     }
 
     #[test]

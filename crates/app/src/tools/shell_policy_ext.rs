@@ -58,20 +58,13 @@ impl PolicyExtension for ToolPolicyExtension {
             return Ok(());
         };
 
-        let raw_tool_name = params
-            .get("tool_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-
-        let tool_name = super::canonical_tool_name(raw_tool_name);
-
+        let (tool_name, payload) = effective_shell_request(params);
         if tool_name != "shell.exec" {
             return Ok(());
         }
 
-        let command = params
-            .get("payload")
-            .and_then(|p| p.get("command"))
+        let command = payload
+            .and_then(|payload| payload.get("command"))
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|s| !s.is_empty())
@@ -112,6 +105,26 @@ impl PolicyExtension for ToolPolicyExtension {
             }),
         }
     }
+}
+
+fn effective_shell_request(params: &serde_json::Value) -> (&str, Option<&serde_json::Value>) {
+    let raw_tool_name = params
+        .get("tool_name")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let tool_name = super::canonical_tool_name(raw_tool_name);
+    if tool_name != "tool.invoke" {
+        return (tool_name, params.get("payload"));
+    }
+
+    let payload = params.get("payload");
+    let invoked_tool_name = payload
+        .and_then(|payload| payload.get("tool_id"))
+        .and_then(|value| value.as_str())
+        .map(super::canonical_tool_name)
+        .unwrap_or(tool_name);
+    let invoked_payload = payload.and_then(|payload| payload.get("arguments"));
+    (invoked_tool_name, invoked_payload)
 }
 
 #[cfg(test)]
@@ -216,6 +229,41 @@ mod tests {
             result.unwrap_err(),
             PolicyError::ToolCallDenied { .. }
         ));
+    }
+
+    #[test]
+    fn unwraps_tool_invoke_shell_payloads() {
+        let ext = ToolPolicyExtension::new(
+            BTreeSet::from(["rm".to_owned()]),
+            BTreeSet::from(["ls".to_owned()]),
+            ShellPolicyDefault::Deny,
+        );
+        let pack = test_pack();
+        let token = test_token();
+        let caps = BTreeSet::from([Capability::InvokeTool]);
+
+        let denied = json!({
+            "tool_name": "tool.invoke",
+            "payload": {
+                "tool_id": "shell.exec",
+                "arguments": {"command": "rm"}
+            }
+        });
+        let denied_ctx = make_context(&pack, &token, &caps, Some(&denied));
+        assert!(matches!(
+            ext.authorize_extension(&denied_ctx).unwrap_err(),
+            PolicyError::ToolCallDenied { .. }
+        ));
+
+        let allowed = json!({
+            "tool_name": "tool.invoke",
+            "payload": {
+                "tool_id": "shell_exec",
+                "arguments": {"command": "ls"}
+            }
+        });
+        let allowed_ctx = make_context(&pack, &token, &caps, Some(&allowed));
+        assert!(ext.authorize_extension(&allowed_ctx).is_ok());
     }
 
     #[test]

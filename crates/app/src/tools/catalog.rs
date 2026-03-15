@@ -1,22 +1,23 @@
 use std::collections::BTreeSet;
 
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::config::ToolConfig;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ToolExecutionKind {
     Core,
     App,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ToolAvailability {
     Runtime,
     Planned,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ToolGovernanceScope {
     Routine,
     TopologyMutation,
@@ -31,7 +32,7 @@ impl ToolGovernanceScope {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ToolRiskClass {
     Low,
     Elevated,
@@ -48,7 +49,7 @@ impl ToolRiskClass {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ToolApprovalMode {
     Never,
     PolicyDriven,
@@ -63,7 +64,7 @@ impl ToolApprovalMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ToolGovernanceProfile {
     pub scope: ToolGovernanceScope,
     pub risk_class: ToolRiskClass,
@@ -96,6 +97,12 @@ pub fn governance_profile_for_descriptor(descriptor: &ToolDescriptor) -> ToolGov
     governance_profile_for_tool_name(descriptor.name)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ToolExposureClass {
+    ProviderCore,
+    Discoverable,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ToolDescriptor {
     pub name: &'static str,
@@ -104,6 +111,7 @@ pub struct ToolDescriptor {
     pub description: &'static str,
     pub execution_kind: ToolExecutionKind,
     pub availability: ToolAvailability,
+    pub exposure: ToolExposureClass,
     provider_definition_builder: fn(&ToolDescriptor) -> Value,
 }
 
@@ -114,6 +122,54 @@ impl ToolDescriptor {
 
     pub fn provider_definition(&self) -> Value {
         (self.provider_definition_builder)(self)
+    }
+
+    pub fn argument_hint(&self) -> &'static str {
+        tool_argument_hint(self.name)
+    }
+
+    pub fn parameter_types(&self) -> &'static [(&'static str, &'static str)] {
+        tool_parameter_types(self.name)
+    }
+
+    pub fn required_fields(&self) -> &'static [&'static str] {
+        tool_required_fields(self.name)
+    }
+
+    pub fn tags(&self) -> &'static [&'static str] {
+        tool_tags(self.name)
+    }
+
+    pub fn is_provider_core(&self) -> bool {
+        self.exposure == ToolExposureClass::ProviderCore
+    }
+
+    pub fn is_discoverable(&self) -> bool {
+        self.exposure == ToolExposureClass::Discoverable
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ToolCatalogEntry {
+    pub canonical_name: &'static str,
+    pub provider_function_name: &'static str,
+    pub summary: &'static str,
+    pub argument_hint: &'static str,
+    pub parameter_types: &'static [(&'static str, &'static str)],
+    pub required_fields: &'static [&'static str],
+    pub tags: &'static [&'static str],
+    pub exposure: ToolExposureClass,
+    pub execution_kind: ToolExecutionKind,
+    pub availability: ToolAvailability,
+}
+
+impl ToolCatalogEntry {
+    pub fn is_provider_core(&self) -> bool {
+        self.exposure == ToolExposureClass::ProviderCore
+    }
+
+    pub fn is_discoverable(&self) -> bool {
+        self.exposure == ToolExposureClass::Discoverable
     }
 }
 
@@ -203,12 +259,33 @@ impl ToolCatalog {
 pub fn tool_catalog() -> ToolCatalog {
     let mut descriptors = vec![
         ToolDescriptor {
+            name: "tool.search",
+            provider_name: "tool_search",
+            aliases: &[],
+            description: "Discover non-core tools",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::ProviderCore,
+            provider_definition_builder: tool_search_definition,
+        },
+        ToolDescriptor {
+            name: "tool.invoke",
+            provider_name: "tool_invoke",
+            aliases: &[],
+            description: "Invoke a discovered non-core tool",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::ProviderCore,
+            provider_definition_builder: tool_invoke_definition,
+        },
+        ToolDescriptor {
             name: "claw.import",
             provider_name: "claw_import",
             aliases: &["import_claw"],
             description: "Import legacy Claw configs into native LoongClaw settings",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: claw_import_definition,
         },
         ToolDescriptor {
@@ -218,6 +295,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Download external skills artifacts with domain policy and approval guards",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: external_skills_fetch_definition,
         },
         ToolDescriptor {
@@ -227,6 +305,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Read metadata for an installed external skill",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: external_skills_inspect_definition,
         },
         ToolDescriptor {
@@ -236,6 +315,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Install a managed external skill from a local directory or archive",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: external_skills_install_definition,
         },
         ToolDescriptor {
@@ -245,6 +325,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Load an installed external skill into the conversation loop",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: external_skills_invoke_definition,
         },
         ToolDescriptor {
@@ -254,6 +335,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "List managed external skills available for invocation",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: external_skills_list_definition,
         },
         ToolDescriptor {
@@ -263,6 +345,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Read/update external skills domain allow/block policy at runtime",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: external_skills_policy_definition,
         },
         ToolDescriptor {
@@ -272,6 +355,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Remove an installed external skill from the managed runtime",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: external_skills_remove_definition,
         },
         ToolDescriptor {
@@ -281,6 +365,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Inspect current provider state or switch the default provider profile for subsequent turns",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: provider_switch_definition,
         },
         ToolDescriptor {
@@ -290,6 +375,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Resolve one visible governed tool approval request",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: approval_request_resolve_definition,
         },
         ToolDescriptor {
@@ -299,6 +385,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Inspect full detail for a visible governed tool approval request",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: approval_request_status_definition,
         },
         ToolDescriptor {
@@ -308,6 +395,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "List visible governed tool approval requests across the current session scope",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: approval_requests_list_definition,
         },
         ToolDescriptor {
@@ -317,6 +405,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Delegate a focused subtask into a child session",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: delegate_definition,
         },
         ToolDescriptor {
@@ -326,6 +415,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Delegate a focused subtask into a background child session",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: delegate_async_definition,
         },
         ToolDescriptor {
@@ -335,6 +425,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Archive a visible terminal session from default session listings",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: session_archive_definition,
         },
         ToolDescriptor {
@@ -344,6 +435,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Cancel a visible async delegate child session",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: session_cancel_definition,
         },
         ToolDescriptor {
@@ -353,6 +445,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Fetch session events for a visible session",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: session_events_definition,
         },
         ToolDescriptor {
@@ -362,6 +455,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Recover an overdue queued async delegate child session by marking it failed",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: session_recover_definition,
         },
         ToolDescriptor {
@@ -371,6 +465,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Inspect the current status of a visible session",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: session_status_definition,
         },
         ToolDescriptor {
@@ -380,6 +475,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Wait for a visible session to reach a terminal state",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: session_wait_definition,
         },
         ToolDescriptor {
@@ -389,6 +485,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Fetch transcript history for a visible session",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: sessions_history_definition,
         },
         ToolDescriptor {
@@ -398,6 +495,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "List visible sessions and their high-level state",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: sessions_list_definition,
         },
         ToolDescriptor {
@@ -407,6 +505,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Send an outbound text message to a known channel-backed root session",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_messaging_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: sessions_send_definition,
         },
     ];
@@ -420,6 +519,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Read file contents",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: file_read_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -429,6 +529,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Write file contents",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: file_write_definition,
         });
     }
@@ -442,6 +543,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Execute shell commands",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
             provider_definition_builder: shell_exec_definition,
         });
     }
@@ -535,6 +637,51 @@ pub fn delegate_child_tool_view_for_config_with_delegate(
     ToolView::from_tool_names(names)
 }
 
+pub fn provider_core_tool_catalog() -> Vec<ToolCatalogEntry> {
+    tool_catalog()
+        .descriptors()
+        .iter()
+        .filter(|descriptor| descriptor.is_provider_core())
+        .map(descriptor_to_entry)
+        .collect()
+}
+
+pub fn discoverable_tool_catalog() -> Vec<ToolCatalogEntry> {
+    tool_catalog()
+        .descriptors()
+        .iter()
+        .filter(|descriptor| descriptor.is_discoverable())
+        .map(descriptor_to_entry)
+        .collect()
+}
+
+pub fn all_tool_catalog() -> Vec<ToolCatalogEntry> {
+    tool_catalog()
+        .descriptors()
+        .iter()
+        .map(descriptor_to_entry)
+        .collect()
+}
+
+pub fn find_tool_catalog_entry(name: &str) -> Option<ToolCatalogEntry> {
+    tool_catalog().resolve(name).map(descriptor_to_entry)
+}
+
+fn descriptor_to_entry(descriptor: &ToolDescriptor) -> ToolCatalogEntry {
+    ToolCatalogEntry {
+        canonical_name: descriptor.name,
+        provider_function_name: descriptor.provider_name,
+        summary: descriptor.description,
+        argument_hint: descriptor.argument_hint(),
+        parameter_types: descriptor.parameter_types(),
+        required_fields: descriptor.required_fields(),
+        tags: descriptor.tags(),
+        exposure: descriptor.exposure,
+        execution_kind: descriptor.execution_kind,
+        availability: descriptor.availability,
+    }
+}
+
 fn tool_is_enabled_for_runtime_view(tool_name: &str, config: &ToolConfig) -> bool {
     match tool_name {
         "approval_request_resolve"
@@ -552,6 +699,60 @@ fn tool_is_enabled_for_runtime_view(tool_name: &str, config: &ToolConfig) -> boo
         "delegate" | "delegate_async" => config.delegate.enabled,
         _ => true,
     }
+}
+
+fn tool_search_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": "Discover non-core tools relevant to the current task.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural-language description of the tool capability you need."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Optional maximum number of search results to return."
+                    }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn tool_invoke_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": "Invoke a discovered non-core tool using a valid lease from tool_search.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tool_id": {
+                        "type": "string",
+                        "description": "Canonical id of the discovered tool."
+                    },
+                    "lease": {
+                        "type": "string",
+                        "description": "Short-lived lease returned by tool_search."
+                    },
+                    "arguments": {
+                        "type": "object",
+                        "description": "Arguments for the discovered tool payload."
+                    }
+                },
+                "required": ["tool_id", "lease", "arguments"],
+                "additionalProperties": false
+            }
+        }
+    })
 }
 
 fn claw_import_definition(descriptor: &ToolDescriptor) -> Value {
@@ -1375,4 +1576,130 @@ fn delegate_async_definition(descriptor: &ToolDescriptor) -> Value {
             }
         }
     })
+}
+
+fn tool_argument_hint(name: &str) -> &'static str {
+    match name {
+        "tool.search" => "query:string,limit?:integer",
+        "tool.invoke" => "tool_id:string,lease:string,arguments:object",
+        "claw.import" => "input_path?:string,mode?:string,source?:string",
+        "external_skills.fetch" => {
+            "url:string,approval_granted?:boolean,save_as?:string,max_bytes?:integer"
+        }
+        "external_skills.inspect" => "skill_id:string",
+        "external_skills.install" => "path:string",
+        "external_skills.invoke" => "skill_id:string",
+        "external_skills.list" => "active_only?:boolean",
+        "external_skills.policy" => {
+            "action?:string,enabled?:boolean,allowed_domains?:string[],blocked_domains?:string[]"
+        }
+        "external_skills.remove" => "skill_id:string",
+        "file.read" => "path:string,max_bytes?:integer",
+        "file.write" => "path:string,content:string,create_dirs?:boolean",
+        "shell.exec" => "command:string,args?:string[]",
+        "provider.switch" => "selector?:string",
+        "delegate" | "delegate_async" => "task:string,label?:string,timeout_seconds?:integer",
+        "session_archive" | "session_cancel" | "session_events" | "session_recover"
+        | "session_status" | "session_wait" | "sessions_history" => "session_id:string",
+        "sessions_list" => "limit?:integer,status?:string",
+        "sessions_send" => "session_id:string,text:string",
+        _ => "",
+    }
+}
+
+fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
+    match name {
+        "tool.search" => &[("query", "string"), ("limit", "integer")],
+        "tool.invoke" => &[
+            ("tool_id", "string"),
+            ("lease", "string"),
+            ("arguments", "object"),
+        ],
+        "claw.import" => &[
+            ("input_path", "string"),
+            ("mode", "string"),
+            ("source", "string"),
+        ],
+        "external_skills.fetch" => &[
+            ("url", "string"),
+            ("approval_granted", "boolean"),
+            ("save_as", "string"),
+            ("max_bytes", "integer"),
+        ],
+        "external_skills.inspect" | "external_skills.invoke" | "external_skills.remove" => {
+            &[("skill_id", "string")]
+        }
+        "external_skills.install" => &[("path", "string")],
+        "external_skills.list" => &[("active_only", "boolean")],
+        "external_skills.policy" => &[
+            ("action", "string"),
+            ("enabled", "boolean"),
+            ("allowed_domains", "array"),
+            ("blocked_domains", "array"),
+        ],
+        "file.read" => &[("path", "string"), ("max_bytes", "integer")],
+        "file.write" => &[
+            ("path", "string"),
+            ("content", "string"),
+            ("create_dirs", "boolean"),
+        ],
+        "shell.exec" => &[("command", "string"), ("args", "array")],
+        "provider.switch" => &[("selector", "string")],
+        "delegate" | "delegate_async" => &[
+            ("task", "string"),
+            ("label", "string"),
+            ("timeout_seconds", "integer"),
+        ],
+        "session_archive" | "session_cancel" | "session_events" | "session_recover"
+        | "session_status" | "session_wait" | "sessions_history" => &[("session_id", "string")],
+        "sessions_list" => &[("limit", "integer"), ("status", "string")],
+        "sessions_send" => &[("session_id", "string"), ("text", "string")],
+        _ => &[],
+    }
+}
+
+fn tool_required_fields(name: &str) -> &'static [&'static str] {
+    match name {
+        "tool.search" => &["query"],
+        "tool.invoke" => &["tool_id", "lease", "arguments"],
+        "external_skills.fetch" => &["url"],
+        "external_skills.inspect" | "external_skills.invoke" | "external_skills.remove" => {
+            &["skill_id"]
+        }
+        "external_skills.install" => &["path"],
+        "file.read" => &["path"],
+        "file.write" => &["path", "content"],
+        "shell.exec" => &["command"],
+        "delegate" | "delegate_async" => &["task"],
+        "session_archive" | "session_cancel" | "session_events" | "session_recover"
+        | "session_status" | "session_wait" | "sessions_history" => &["session_id"],
+        "sessions_send" => &["session_id", "text"],
+        _ => &[],
+    }
+}
+
+fn tool_tags(name: &str) -> &'static [&'static str] {
+    match name {
+        "tool.search" => &["core", "discover", "search"],
+        "tool.invoke" => &["core", "dispatch", "invoke"],
+        "claw.import" => &["migration", "import", "config", "legacy"],
+        "external_skills.fetch" => &["skills", "download", "external", "fetch"],
+        "external_skills.inspect" => &["skills", "inspect", "metadata"],
+        "external_skills.install" => &["skills", "install", "package"],
+        "external_skills.invoke" => &["skills", "invoke", "instructions"],
+        "external_skills.list" => &["skills", "list", "discover"],
+        "external_skills.policy" => &["skills", "policy", "security"],
+        "external_skills.remove" => &["skills", "remove", "uninstall"],
+        "file.read" => &["file", "read", "filesystem", "repo"],
+        "file.write" => &["file", "write", "filesystem"],
+        "shell.exec" => &["shell", "command", "process", "exec"],
+        "provider.switch" => &["provider", "switch", "model", "runtime"],
+        "delegate" | "delegate_async" => &["session", "delegate", "child"],
+        "session_archive" | "session_cancel" | "session_events" | "session_recover"
+        | "session_status" | "session_wait" | "sessions_history" | "sessions_list" => {
+            &["session", "history", "runtime"]
+        }
+        "sessions_send" => &["session", "message", "channel"],
+        _ => &[],
+    }
 }

@@ -20,6 +20,7 @@ const DEFAULT_SKILL_FILENAME: &str = "SKILL.md";
 const DEFAULT_INDEX_FILENAME: &str = "index.json";
 const DEFAULT_MAX_DOWNLOAD_BYTES: usize = 5 * 1024 * 1024;
 const HARD_MAX_DOWNLOAD_BYTES: usize = 20 * 1024 * 1024;
+#[cfg(test)]
 const INSTALLED_SKILL_SNAPSHOT_HINT: &str = "installed managed external skill; use external_skills.inspect or external_skills.invoke for details";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1368,6 +1369,7 @@ fn installed_skill_by_id(
         .ok_or_else(|| format!("external skill `{skill_id}` is not installed"))
 }
 
+#[cfg(test)]
 pub(super) fn installed_skill_snapshot_lines_with_config(
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<Vec<String>, String> {

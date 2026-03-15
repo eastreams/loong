@@ -550,7 +550,7 @@ fn ensure_path_within_root(root: &Path, path: &Path) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "migration path {} escapes configured file root {}",
+        "policy_denied: migration path {} escapes configured file root {}",
         path.display(),
         root.display()
     ))
@@ -580,5 +580,43 @@ fn split_existing_ancestor(path: &Path) -> Result<(PathBuf, Vec<OsString>), Stri
             ));
         };
         cursor = parent.to_path_buf();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+    use crate::tools::runtime_config::ToolRuntimeConfig;
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+    }
+
+    #[test]
+    fn resolve_safe_path_rejects_root_escape_with_policy_prefix() {
+        let base = unique_temp_dir("loongclaw-claw-import");
+        let root = base.join("root");
+        fs::create_dir_all(&root).expect("create root");
+
+        let config = ToolRuntimeConfig {
+            shell_allow: Default::default(),
+            shell_deny: Default::default(),
+            shell_default_mode: crate::tools::shell_policy_ext::ShellPolicyDefault::Deny,
+            file_root: Some(root),
+            config_path: None,
+            external_skills: Default::default(),
+        };
+        let error = resolve_safe_path_with_config("../outside.toml", &config)
+            .expect_err("escape should be denied");
+
+        assert!(error.starts_with("policy_denied: "));
+        assert!(error.contains("escapes configured file root"));
+        let _ = fs::remove_dir_all(base);
     }
 }

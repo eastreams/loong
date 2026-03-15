@@ -700,32 +700,13 @@ fn inline_parameter_schema_types()
     SCHEMA_TYPES.get_or_init(|| {
         let mut tools_by_name =
             BTreeMap::<String, BTreeMap<String, InlineParameterSchemaType>>::new();
-        for tool in tools::provider_tool_definitions() {
-            let Some(function) = tool.get("function") else {
-                continue;
-            };
-            let Some(raw_tool_name) = function.get("name").and_then(Value::as_str) else {
-                continue;
-            };
-            let Some(properties) = function
-                .get("parameters")
-                .and_then(|value| value.get("properties"))
-                .and_then(Value::as_object)
-            else {
-                continue;
-            };
-
-            let tool_name = tools::canonical_tool_name(raw_tool_name).to_owned();
+        for (tool_name, properties) in tools::tool_parameter_schema_types() {
             let entry = tools_by_name.entry(tool_name).or_default();
-            for (parameter_name, schema) in properties {
-                let Some(parameter_type) = schema
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .and_then(InlineParameterSchemaType::parse)
-                else {
+            for (parameter_name, schema_type) in properties {
+                let Some(parameter_type) = InlineParameterSchemaType::parse(schema_type) else {
                     continue;
                 };
-                entry.insert(parameter_name.clone(), parameter_type);
+                entry.insert(parameter_name, parameter_type);
             }
         }
         tools_by_name

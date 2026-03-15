@@ -636,21 +636,17 @@ fn build_messages_includes_capability_snapshot_block() {
     assert!(!messages.is_empty());
     let system_content = messages[0]["content"].as_str().expect("system content");
     assert!(
-        system_content.contains("[available_tools]"),
+        system_content.contains("[tool_discovery_runtime]"),
         "system prompt should contain capability snapshot marker, got: {system_content}"
     );
     assert!(
-        system_content.contains("- shell.exec: Execute shell commands"),
-        "system prompt should list shell.exec tool"
+        system_content.contains("- tool.search: Discover non-core tools"),
+        "system prompt should describe tool.search"
     );
-    assert!(
-        system_content.contains("- file.read: Read file contents"),
-        "system prompt should list file.read tool"
-    );
-    assert!(
-        system_content.contains("- file.write: Write file contents"),
-        "system prompt should list file.write tool"
-    );
+    assert!(system_content.contains("- tool.invoke: Invoke a discovered non-core tool"));
+    assert!(!system_content.contains("shell.exec"));
+    assert!(!system_content.contains("file.read"));
+    assert!(!system_content.contains("file.write"));
 }
 
 #[test]
@@ -934,16 +930,7 @@ fn turn_body_includes_tool_schema_and_auto_choice() {
         .filter_map(Value::as_str)
         .collect();
 
-    let mut expected = Vec::new();
-    #[cfg(feature = "tool-file")]
-    {
-        expected.push("file_read");
-        expected.push("file_write");
-    }
-    #[cfg(feature = "tool-shell")]
-    {
-        expected.push("shell_exec");
-    }
+    let expected = vec!["tool_invoke", "tool_search"];
 
     for expected_name in expected {
         assert!(
