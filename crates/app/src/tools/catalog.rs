@@ -284,6 +284,33 @@ pub fn tool_catalog() -> ToolCatalog {
             provider_definition_builder: provider_switch_definition,
         },
         ToolDescriptor {
+            name: "approval_request_resolve",
+            provider_name: "approval_request_resolve",
+            aliases: &[],
+            description: "Resolve one visible governed tool approval request",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            provider_definition_builder: approval_request_resolve_definition,
+        },
+        ToolDescriptor {
+            name: "approval_request_status",
+            provider_name: "approval_request_status",
+            aliases: &[],
+            description: "Inspect full detail for a visible governed tool approval request",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            provider_definition_builder: approval_request_status_definition,
+        },
+        ToolDescriptor {
+            name: "approval_requests_list",
+            provider_name: "approval_requests_list",
+            aliases: &[],
+            description: "List visible governed tool approval requests across the current session scope",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            provider_definition_builder: approval_requests_list_definition,
+        },
+        ToolDescriptor {
             name: "delegate",
             provider_name: "delegate",
             aliases: &[],
@@ -510,10 +537,17 @@ pub fn delegate_child_tool_view_for_config_with_delegate(
 
 fn tool_is_enabled_for_runtime_view(tool_name: &str, config: &ToolConfig) -> bool {
     match tool_name {
-        "sessions_list" | "sessions_history" | "session_status" | "session_events"
-        | "session_archive" | "session_cancel" | "session_recover" | "session_wait" => {
-            config.sessions.enabled
-        }
+        "approval_request_resolve"
+        | "approval_request_status"
+        | "approval_requests_list"
+        | "sessions_list"
+        | "sessions_history"
+        | "session_status"
+        | "session_events"
+        | "session_archive"
+        | "session_cancel"
+        | "session_recover"
+        | "session_wait" => config.sessions.enabled,
         "sessions_send" => config.messages.enabled,
         "delegate" | "delegate_async" => config.delegate.enabled,
         _ => true,
@@ -883,6 +917,84 @@ fn shell_exec_definition(descriptor: &ToolDescriptor) -> Value {
                     }
                 },
                 "required": ["command"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn approval_request_resolve_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "approval_request_id": {
+                        "type": "string",
+                        "description": "Visible approval request identifier to resolve."
+                    },
+                    "decision": {
+                        "type": "string",
+                        "enum": ["approve_once", "approve_always", "deny"],
+                        "description": "Operator decision for the pending approval request."
+                    }
+                },
+                "required": ["approval_request_id", "decision"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn approval_request_status_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "approval_request_id": {
+                        "type": "string",
+                        "description": "Visible approval request identifier to inspect in detail."
+                    }
+                },
+                "required": ["approval_request_id"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn approval_requests_list_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Optional visible session identifier to scope approval requests to one session."
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["pending", "approved", "executing", "executed", "denied", "expired", "cancelled"],
+                        "description": "Optional approval request status filter."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "description": "Maximum visible approval requests to return after filtering."
+                    }
+                },
                 "additionalProperties": false
             }
         }

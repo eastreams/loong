@@ -20,8 +20,8 @@ use crate::session::repository::{
 };
 use crate::tools::{
     ToolApprovalMode, ToolExecutionKind, ToolView, delegate_child_tool_view_for_config,
-    delegate_child_tool_view_for_config_with_delegate, runtime_tool_view,
-    governance_profile_for_descriptor, runtime_tool_view_for_config, tool_catalog,
+    delegate_child_tool_view_for_config_with_delegate, governance_profile_for_descriptor,
+    runtime_tool_view, runtime_tool_view_for_config, tool_catalog,
 };
 
 use super::runtime::SessionContext;
@@ -501,7 +501,10 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
 
             let approval_request_id =
                 governed_approval_request_id(session_context, descriptor.name, intent);
-            let reason = format!("operator approval required before running `{}`", descriptor.name);
+            let reason = format!(
+                "operator approval required before running `{}`",
+                descriptor.name
+            );
             let rule_id = "governed_tool_requires_approval";
             let request_payload_json = json!({
                 "session_id": session_context.session_id,
@@ -524,7 +527,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                 "reason": reason,
             });
             let stored = repo.ensure_approval_request(NewApprovalRequestRecord {
-                approval_request_id: approval_request_id.clone(),
+                approval_request_id,
                 session_id: session_context.session_id.clone(),
                 turn_id: intent.turn_id.clone(),
                 tool_call_id: intent.tool_call_id.clone(),
@@ -992,7 +995,12 @@ mod tests {
                     .approval_request_id
                     .expect("approval request id should be present")
             }
-            other => panic!("expected NeedsApproval, got {other:?}"),
+            other @ TurnResult::FinalText(_)
+            | other @ TurnResult::ToolDenied(_)
+            | other @ TurnResult::ToolError(_)
+            | other @ TurnResult::ProviderError(_) => {
+                panic!("expected NeedsApproval, got {other:?}")
+            }
         };
 
         let stored = repo
@@ -1037,13 +1045,23 @@ mod tests {
             TurnResult::NeedsApproval(requirement) => requirement
                 .approval_request_id
                 .expect("first approval request id"),
-            other => panic!("expected first NeedsApproval, got {other:?}"),
+            other @ TurnResult::FinalText(_)
+            | other @ TurnResult::ToolDenied(_)
+            | other @ TurnResult::ToolError(_)
+            | other @ TurnResult::ProviderError(_) => {
+                panic!("expected first NeedsApproval, got {other:?}")
+            }
         };
         let second_request_id = match second {
             TurnResult::NeedsApproval(requirement) => requirement
                 .approval_request_id
                 .expect("second approval request id"),
-            other => panic!("expected second NeedsApproval, got {other:?}"),
+            other @ TurnResult::FinalText(_)
+            | other @ TurnResult::ToolDenied(_)
+            | other @ TurnResult::ToolError(_)
+            | other @ TurnResult::ProviderError(_) => {
+                panic!("expected second NeedsApproval, got {other:?}")
+            }
         };
 
         assert_eq!(first_request_id, second_request_id);

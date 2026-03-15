@@ -804,6 +804,35 @@ impl SessionRepository {
         Ok(depth)
     }
 
+    pub fn lineage_root_session_id(&self, session_id: &str) -> Result<Option<String>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let mut seen = BTreeSet::new();
+        let mut next_session_id = Some(session_id);
+
+        while let Some(current_session_id) = next_session_id {
+            if !seen.insert(current_session_id.clone()) {
+                return Err(format!(
+                    "session_lineage_cycle_detected: `{current_session_id}` reappeared while computing lineage root"
+                ));
+            }
+            let session = match self.load_session(&current_session_id)? {
+                Some(session) => session,
+                None if seen.len() == 1 => return Ok(None),
+                None => {
+                    return Err(format!(
+                        "session_lineage_broken: missing parent row for `{current_session_id}`"
+                    ));
+                }
+            };
+            match session.parent_session_id {
+                Some(parent_session_id) => next_session_id = Some(parent_session_id),
+                None => return Ok(Some(session.session_id)),
+            }
+        }
+
+        Ok(None)
+    }
+
     pub fn list_recent_events(
         &self,
         session_id: &str,
@@ -2455,6 +2484,52 @@ mod tests {
     }
 
     #[test]
+    fn lineage_root_session_id_returns_root_for_delegate_descendants() {
+        let config = isolated_memory_config("lineage-root");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create child");
+        repo.create_session(NewSessionRecord {
+            session_id: "grandchild-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("child-session".to_owned()),
+            label: Some("Grandchild".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create grandchild");
+
+        assert_eq!(
+            repo.lineage_root_session_id("root-session")
+                .expect("root lineage root"),
+            Some("root-session".to_owned())
+        );
+        assert_eq!(
+            repo.lineage_root_session_id("grandchild-session")
+                .expect("grandchild lineage root"),
+            Some("root-session".to_owned())
+        );
+        assert_eq!(
+            repo.lineage_root_session_id("missing-session")
+                .expect("missing lineage root"),
+            None
+        );
+    }
+
+    #[test]
     fn list_visible_sessions_includes_descendant_delegate_chain() {
         let config = isolated_memory_config("descendant-visibility");
         let repo = SessionRepository::new(&config).expect("repository");
@@ -3082,7 +3157,10 @@ mod tests {
             .expect("transition result");
         assert_eq!(approved.status, ApprovalRequestStatus::Approved);
         assert_eq!(approved.decision, Some(ApprovalDecision::ApproveOnce));
-        assert_eq!(approved.resolved_by_session_id.as_deref(), Some("root-session"));
+        assert_eq!(
+            approved.resolved_by_session_id.as_deref(),
+            Some("root-session")
+        );
         assert!(approved.resolved_at.is_some());
         assert!(approved.executed_at.is_none());
         assert!(approved.last_error.is_none());

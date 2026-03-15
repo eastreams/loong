@@ -9,6 +9,7 @@ use crate::KernelContext;
 use crate::config::ToolConfig;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 
+pub(crate) mod approval;
 mod catalog;
 mod claw_import;
 pub(crate) mod delegate;
@@ -74,6 +75,14 @@ pub fn execute_app_tool_with_config(
     };
 
     match canonical_name {
+        "approval_requests_list" | "approval_request_status" | "approval_request_resolve" => {
+            approval::execute_approval_tool_with_policies(
+                request,
+                current_session_id,
+                memory_config,
+                tool_config,
+            )
+        }
         "sessions_list" | "sessions_history" | "session_status" | "session_events"
         | "session_archive" | "session_cancel" | "session_recover" => {
             session::execute_session_tool_with_policies(
@@ -464,6 +473,15 @@ mod tests {
     #[test]
     fn capability_snapshot_lists_all_tools_when_all_features_enabled() {
         let snapshot = capability_snapshot();
+        assert!(snapshot.contains(
+            "- approval_request_resolve: Resolve one visible governed tool approval request"
+        ));
+        assert!(snapshot.contains(
+            "- approval_request_status: Inspect full detail for a visible governed tool approval request"
+        ));
+        assert!(snapshot.contains(
+            "- approval_requests_list: List visible governed tool approval requests across the current session scope"
+        ));
         assert!(
             snapshot.contains(
                 "- claw.import: Import legacy Claw configs into native LoongClaw settings"
@@ -520,31 +538,42 @@ mod tests {
         );
         assert!(snapshot.contains("- shell.exec: Execute shell commands"));
 
-        // Verify sorted order: claw.import < delegate* < external_skills.* < file.* < provider.switch < session_* < sessions_* < shell.exec
+        // Verify sorted order matches the catalog snapshot emitted to providers.
         let lines: Vec<&str> = snapshot.lines().skip(1).collect();
-        assert_eq!(lines.len(), 22);
-        assert!(lines[0].starts_with("- claw.import"));
-        assert!(lines[1].starts_with("- delegate"));
-        assert!(lines[2].starts_with("- delegate_async"));
-        assert!(lines[3].starts_with("- external_skills.fetch"));
-        assert!(lines[4].starts_with("- external_skills.inspect"));
-        assert!(lines[5].starts_with("- external_skills.install"));
-        assert!(lines[6].starts_with("- external_skills.invoke"));
-        assert!(lines[7].starts_with("- external_skills.list"));
-        assert!(lines[8].starts_with("- external_skills.policy"));
-        assert!(lines[9].starts_with("- external_skills.remove"));
-        assert!(lines[10].starts_with("- file.read"));
-        assert!(lines[11].starts_with("- file.write"));
-        assert!(lines[12].starts_with("- provider.switch"));
-        assert!(lines[13].starts_with("- session_archive"));
-        assert!(lines[14].starts_with("- session_cancel"));
-        assert!(lines[15].starts_with("- session_events"));
-        assert!(lines[16].starts_with("- session_recover"));
-        assert!(lines[17].starts_with("- session_status"));
-        assert!(lines[18].starts_with("- session_wait"));
-        assert!(lines[19].starts_with("- sessions_history"));
-        assert!(lines[20].starts_with("- sessions_list"));
-        assert!(lines[21].starts_with("- shell.exec"));
+        let ordered_prefixes = vec![
+            "- approval_request_resolve",
+            "- approval_request_status",
+            "- approval_requests_list",
+            "- claw.import",
+            "- delegate",
+            "- delegate_async",
+            "- external_skills.fetch",
+            "- external_skills.inspect",
+            "- external_skills.install",
+            "- external_skills.invoke",
+            "- external_skills.list",
+            "- external_skills.policy",
+            "- external_skills.remove",
+            "- file.read",
+            "- file.write",
+            "- provider.switch",
+            "- session_archive",
+            "- session_cancel",
+            "- session_events",
+            "- session_recover",
+            "- session_status",
+            "- session_wait",
+            "- sessions_history",
+            "- sessions_list",
+            "- shell.exec",
+        ];
+        assert_eq!(lines.len(), ordered_prefixes.len());
+        for (line, prefix) in lines.iter().zip(ordered_prefixes) {
+            assert!(
+                line.starts_with(prefix),
+                "expected `{prefix}`, got `{line}`"
+            );
+        }
     }
 
     #[cfg(all(
@@ -555,8 +584,11 @@ mod tests {
     #[test]
     fn tool_registry_returns_all_known_tools() {
         let entries = tool_registry();
-        assert_eq!(entries.len(), 22);
+        assert_eq!(entries.len(), 25);
         let names: Vec<&str> = entries.iter().map(|e| e.name).collect();
+        assert!(names.contains(&"approval_request_resolve"));
+        assert!(names.contains(&"approval_request_status"));
+        assert!(names.contains(&"approval_requests_list"));
         assert!(names.contains(&"claw.import"));
         assert!(names.contains(&"delegate"));
         assert!(names.contains(&"delegate_async"));
@@ -615,7 +647,7 @@ mod tests {
         let defs = try_provider_tool_definitions_for_view(&planned_root_tool_view())
             .expect("all tools should now be advertisable");
 
-        assert_eq!(defs.len(), 23);
+        assert_eq!(defs.len(), 26);
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -624,6 +656,9 @@ mod tests {
         let view = runtime_tool_view_for_config(&crate::config::ToolConfig::default());
 
         for tool_name in [
+            "approval_request_resolve",
+            "approval_request_status",
+            "approval_requests_list",
             "delegate",
             "delegate_async",
             "session_archive",
@@ -711,7 +746,7 @@ mod tests {
     #[test]
     fn provider_tool_definitions_are_stable_and_complete() {
         let defs = provider_tool_definitions();
-        assert_eq!(defs.len(), 22);
+        assert_eq!(defs.len(), 25);
 
         let names: Vec<&str> = defs
             .iter()
@@ -722,6 +757,9 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "approval_request_resolve",
+                "approval_request_status",
+                "approval_requests_list",
                 "claw_import",
                 "delegate",
                 "delegate_async",
@@ -824,6 +862,23 @@ mod tests {
         assert!(properties.contains_key("task"));
         assert!(properties.contains_key("label"));
         assert!(properties.contains_key("timeout_seconds"));
+    }
+
+    #[test]
+    fn provider_tool_definitions_include_approval_request_resolve_when_enabled() {
+        let defs = try_provider_tool_definitions_for_view(&runtime_tool_view_for_config(
+            &crate::config::ToolConfig::default(),
+        ))
+        .expect("runtime-visible tool schemas");
+        let approval_request_resolve = defs
+            .iter()
+            .find(|item| item["function"]["name"] == "approval_request_resolve")
+            .expect("approval_request_resolve definition");
+        let properties = approval_request_resolve["function"]["parameters"]["properties"]
+            .as_object()
+            .expect("approval_request_resolve properties");
+        assert!(properties.contains_key("approval_request_id"));
+        assert!(properties.contains_key("decision"));
     }
 
     #[test]

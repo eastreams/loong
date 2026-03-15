@@ -9604,6 +9604,455 @@ async fn handle_turn_with_runtime_executes_delegate_via_coordinator() {
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
+async fn handle_turn_with_runtime_approval_request_resolve_replays_delegate_for_approve_once() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-approval-resolve", "approve-once")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.ensure_approval_request(crate::session::repository::NewApprovalRequestRecord {
+        approval_request_id: "apr-delegate-1".to_owned(),
+        session_id: "root-session".to_owned(),
+        turn_id: "turn-delegate-parent".to_owned(),
+        tool_call_id: "call-delegate-parent".to_owned(),
+        tool_name: "delegate".to_owned(),
+        approval_key: "tool:delegate".to_owned(),
+        request_payload_json: json!({
+            "session_id": "root-session",
+            "parent_session_id": Value::Null,
+            "turn_id": "turn-delegate-parent",
+            "tool_call_id": "call-delegate-parent",
+            "tool_name": "delegate",
+            "args_json": {
+                "task": "child task",
+                "label": "research-subtask"
+            },
+            "source": "provider_tool_call",
+            "execution_kind": "app"
+        }),
+        governance_snapshot_json: json!({
+            "governance_scope": "topology_mutation",
+            "risk_class": "high",
+            "approval_mode": "policy_driven",
+            "rule_id": "governed_tool_requires_approval",
+            "reason": "operator approval required before running `delegate`"
+        }),
+    })
+    .expect("seed approval request");
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "resolving approval".to_owned(),
+                tool_intents: vec![ToolIntent {
+                    tool_name: "approval_request_resolve".to_owned(),
+                    args_json: json!({
+                        "approval_request_id": "apr-delegate-1",
+                        "decision": "approve_once"
+                    }),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "root-session".to_owned(),
+                    turn_id: "turn-approval-resolve".to_owned(),
+                    tool_call_id: "call-approval-resolve".to_owned(),
+                }],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Child final output".to_owned(),
+                tool_intents: vec![],
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    )
+    .with_durable_memory_config(memory_config.clone());
+    let coordinator = ConversationTurnCoordinator::new();
+
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("approval resolve reply");
+
+    assert!(
+        reply.contains("\"tool\":\"approval_request_resolve\""),
+        "expected raw approval resolve tool output, got: {reply}"
+    );
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 2);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+
+    let request = repo
+        .load_approval_request("apr-delegate-1")
+        .expect("load approval request")
+        .expect("approval request row");
+    assert_eq!(
+        request.status,
+        crate::session::repository::ApprovalRequestStatus::Executed
+    );
+    assert_eq!(
+        request.decision,
+        Some(crate::session::repository::ApprovalDecision::ApproveOnce)
+    );
+    assert_eq!(
+        request.resolved_by_session_id.as_deref(),
+        Some("root-session")
+    );
+    assert!(request.executed_at.is_some());
+    assert!(request.last_error.is_none(), "request={request:?}");
+    assert!(
+        repo.load_approval_grant("root-session", "tool:delegate")
+            .expect("load grant")
+            .is_none()
+    );
+
+    let child = repo
+        .list_visible_sessions("root-session")
+        .expect("list visible sessions")
+        .into_iter()
+        .find(|session| session.parent_session_id.as_deref() == Some("root-session"))
+        .expect("child session summary");
+    assert_eq!(
+        child.state,
+        crate::session::repository::SessionState::Completed
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses_root_grant() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-approval-resolve", "approve-always")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.tools.approval.mode = crate::config::GovernedToolApprovalMode::Strict;
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.ensure_approval_request(crate::session::repository::NewApprovalRequestRecord {
+        approval_request_id: "apr-delegate-always".to_owned(),
+        session_id: "root-session".to_owned(),
+        turn_id: "turn-delegate-parent".to_owned(),
+        tool_call_id: "call-delegate-parent".to_owned(),
+        tool_name: "delegate".to_owned(),
+        approval_key: "tool:delegate".to_owned(),
+        request_payload_json: json!({
+            "session_id": "root-session",
+            "parent_session_id": Value::Null,
+            "turn_id": "turn-delegate-parent",
+            "tool_call_id": "call-delegate-parent",
+            "tool_name": "delegate",
+            "args_json": {
+                "task": "child task",
+                "label": "research-subtask"
+            },
+            "source": "provider_tool_call",
+            "execution_kind": "app"
+        }),
+        governance_snapshot_json: json!({
+            "governance_scope": "topology_mutation",
+            "risk_class": "high",
+            "approval_mode": "policy_driven",
+            "rule_id": "governed_tool_requires_approval",
+            "reason": "operator approval required before running `delegate`"
+        }),
+    })
+    .expect("seed approval request");
+
+    let approval_runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "resolving approval".to_owned(),
+                tool_intents: vec![ToolIntent {
+                    tool_name: "approval_request_resolve".to_owned(),
+                    args_json: json!({
+                        "approval_request_id": "apr-delegate-always",
+                        "decision": "approve_always"
+                    }),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "root-session".to_owned(),
+                    turn_id: "turn-approval-resolve".to_owned(),
+                    tool_call_id: "call-approval-resolve".to_owned(),
+                }],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "approval resolved".to_owned(),
+                tool_intents: vec![],
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    )
+    .with_durable_memory_config(memory_config.clone());
+    let coordinator = ConversationTurnCoordinator::new();
+
+    let approval_reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &approval_runtime,
+            None,
+        )
+        .await
+        .expect("approval resolve reply");
+
+    assert!(
+        approval_reply.contains("\"tool\":\"approval_request_resolve\""),
+        "expected raw approval resolve tool output, got: {approval_reply}"
+    );
+
+    let resolved = repo
+        .load_approval_request("apr-delegate-always")
+        .expect("load approval request")
+        .expect("approval request row");
+    assert_eq!(
+        resolved.status,
+        crate::session::repository::ApprovalRequestStatus::Executed
+    );
+    assert_eq!(
+        resolved.decision,
+        Some(crate::session::repository::ApprovalDecision::ApproveAlways)
+    );
+    assert!(
+        repo.load_approval_grant("root-session", "tool:delegate")
+            .expect("load grant")
+            .is_some()
+    );
+
+    let granted_runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "delegating with grant".to_owned(),
+                tool_intents: vec![ToolIntent {
+                    tool_name: "delegate".to_owned(),
+                    args_json: json!({
+                        "task": "second child task",
+                        "label": "granted-subtask"
+                    }),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "root-session".to_owned(),
+                    turn_id: "turn-after-grant".to_owned(),
+                    tool_call_id: "call-after-grant".to_owned(),
+                }],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "granted child output".to_owned(),
+                tool_intents: vec![],
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    )
+    .with_durable_memory_config(memory_config.clone());
+
+    let granted_reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &granted_runtime,
+            None,
+        )
+        .await
+        .expect("granted delegate reply");
+
+    assert!(
+        granted_reply.contains("\"tool\":\"delegate\""),
+        "expected raw delegate tool output after stored grant, got: {granted_reply}"
+    );
+    assert!(
+        !granted_reply.contains("[tool_approval_required]"),
+        "grant-backed delegate call should not request approval again, got: {granted_reply}"
+    );
+
+    let requests = repo
+        .list_approval_requests_for_session("root-session", None)
+        .expect("list approval requests");
+    assert_eq!(
+        requests.len(),
+        1,
+        "grant-backed delegate call should not create a second approval request"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_approval_request_resolve_deny_does_not_replay_delegate() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-approval-resolve", "deny")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.ensure_approval_request(crate::session::repository::NewApprovalRequestRecord {
+        approval_request_id: "apr-delegate-deny".to_owned(),
+        session_id: "root-session".to_owned(),
+        turn_id: "turn-delegate-parent".to_owned(),
+        tool_call_id: "call-delegate-parent".to_owned(),
+        tool_name: "delegate".to_owned(),
+        approval_key: "tool:delegate".to_owned(),
+        request_payload_json: json!({
+            "session_id": "root-session",
+            "parent_session_id": Value::Null,
+            "turn_id": "turn-delegate-parent",
+            "tool_call_id": "call-delegate-parent",
+            "tool_name": "delegate",
+            "args_json": {
+                "task": "child task",
+                "label": "research-subtask"
+            },
+            "source": "provider_tool_call",
+            "execution_kind": "app"
+        }),
+        governance_snapshot_json: json!({
+            "governance_scope": "topology_mutation",
+            "risk_class": "high",
+            "approval_mode": "policy_driven",
+            "rule_id": "governed_tool_requires_approval",
+            "reason": "operator approval required before running `delegate`"
+        }),
+    })
+    .expect("seed approval request");
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "denying approval".to_owned(),
+                tool_intents: vec![ToolIntent {
+                    tool_name: "approval_request_resolve".to_owned(),
+                    args_json: json!({
+                        "approval_request_id": "apr-delegate-deny",
+                        "decision": "deny"
+                    }),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "root-session".to_owned(),
+                    turn_id: "turn-approval-deny".to_owned(),
+                    tool_call_id: "call-approval-deny".to_owned(),
+                }],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "denied".to_owned(),
+                tool_intents: vec![],
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    )
+    .with_durable_memory_config(memory_config.clone());
+    let coordinator = ConversationTurnCoordinator::new();
+
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            None,
+        )
+        .await
+        .expect("approval deny reply");
+
+    assert!(
+        reply.contains("\"tool\":\"approval_request_resolve\""),
+        "expected raw approval resolve tool output, got: {reply}"
+    );
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 1);
+
+    let request = repo
+        .load_approval_request("apr-delegate-deny")
+        .expect("load approval request")
+        .expect("approval request row");
+    assert_eq!(
+        request.status,
+        crate::session::repository::ApprovalRequestStatus::Denied
+    );
+    assert_eq!(
+        request.decision,
+        Some(crate::session::repository::ApprovalDecision::Deny)
+    );
+    assert_eq!(
+        request.resolved_by_session_id.as_deref(),
+        Some("root-session")
+    );
+    assert!(request.executed_at.is_none(), "request={request:?}");
+    assert!(request.last_error.is_none(), "request={request:?}");
+    assert!(
+        repo.load_approval_grant("root-session", "tool:delegate")
+            .expect("load grant")
+            .is_none()
+    );
+    assert!(
+        repo.list_visible_sessions("root-session")
+            .expect("list visible sessions")
+            .into_iter()
+            .all(|session| session.parent_session_id.as_deref() != Some("root-session")),
+        "deny should not replay the stored delegate call"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
 async fn handle_turn_with_runtime_delegate_async_queue_failure_rolls_back_child_creation() {
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",

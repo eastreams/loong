@@ -925,7 +925,12 @@ mod tests {
 
         assert_eq!(phase.resolution_mode(), ReplyResolutionMode::Direct);
         assert_eq!(phase.followup_kind(), None);
-        assert_eq!(phase.raw_reply(), Some("preface\n[tool_approval_required]\ntool: delegate_async\nrequest_id: apr_direct\napproval_key: tool:delegate_async\nrule_id: governed_tool_requires_approval\nreason: operator approval required for governed tool\nallowed_decisions: approve_once, approve_always, deny"));
+        assert_eq!(
+            phase.raw_reply(),
+            Some(
+                "preface\n[tool_approval_required]\ntool: delegate_async\nrequest_id: apr_direct\napproval_key: tool:delegate_async\nrule_id: governed_tool_requires_approval\nreason: operator approval required for governed tool\nallowed_decisions: approve_once, approve_always, deny"
+            )
+        );
         assert_eq!(
             phase.decision(),
             &ToolDrivenReplyBaseDecision::FinalizeDirect {

@@ -3,6 +3,8 @@ use std::any::Any;
 use std::collections::BTreeSet;
 #[cfg(feature = "memory-sqlite")]
 use std::panic::AssertUnwindSafe;
+#[cfg(feature = "memory-sqlite")]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 #[cfg(feature = "memory-sqlite")]
@@ -86,8 +88,10 @@ use crate::session::recovery::{
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
-    CreateSessionWithEventRequest, FinalizeSessionTerminalRequest, NewSessionRecord, SessionKind,
-    SessionRepository, SessionState, TransitionSessionWithEventIfCurrentRequest,
+    ApprovalDecision, ApprovalRequestRecord, ApprovalRequestStatus, CreateSessionWithEventRequest,
+    FinalizeSessionTerminalRequest, NewApprovalGrantRecord, NewSessionRecord, SessionKind,
+    SessionRepository, SessionState, TransitionApprovalRequestIfCurrentRequest,
+    TransitionSessionWithEventIfCurrentRequest,
 };
 
 #[derive(Default)]
@@ -2763,6 +2767,332 @@ async fn apply_resolved_provider_turn<R: ConversationRuntime + ?Sized>(
         .await
 }
 
+fn effective_tool_config_for_session(
+    tool_config: &crate::config::ToolConfig,
+    session_context: &SessionContext,
+) -> crate::config::ToolConfig {
+    let mut tool_config = tool_config.clone();
+    if session_context.parent_session_id.is_some() {
+        tool_config.sessions.visibility = crate::config::SessionVisibility::SelfOnly;
+    }
+    tool_config
+}
+
+#[cfg(feature = "memory-sqlite")]
+struct CoordinatorApprovalResolutionRuntime<'a, R: ?Sized> {
+    config: &'a LoongClawConfig,
+    runtime: &'a R,
+    fallback: &'a DefaultAppToolDispatcher,
+    kernel_ctx: Option<&'a KernelContext>,
+}
+
+#[cfg(feature = "memory-sqlite")]
+impl<R> CoordinatorApprovalResolutionRuntime<'_, R>
+where
+    R: ConversationRuntime + ?Sized,
+{
+    fn current_epoch_s() -> i64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs() as i64)
+            .unwrap_or(0)
+    }
+
+    fn replay_request(
+        &self,
+        approval_request: &ApprovalRequestRecord,
+    ) -> Result<loongclaw_contracts::ToolCoreRequest, String> {
+        let execution_kind = approval_request
+            .request_payload_json
+            .get("execution_kind")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "approval_request_invalid_payload: missing execution_kind".to_owned())?;
+        if execution_kind != "app" {
+            return Err(format!(
+                "approval_request_invalid_execution_kind: expected `app`, got `{execution_kind}`"
+            ));
+        }
+
+        let tool_name = approval_request
+            .request_payload_json
+            .get("tool_name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "approval_request_invalid_payload: missing tool_name".to_owned())?;
+        let payload = approval_request
+            .request_payload_json
+            .get("args_json")
+            .cloned()
+            .ok_or_else(|| "approval_request_invalid_payload: missing args_json".to_owned())?;
+
+        Ok(loongclaw_contracts::ToolCoreRequest {
+            tool_name: tool_name.to_owned(),
+            payload,
+        })
+    }
+
+    async fn replay_approved_request(
+        &self,
+        approval_request: &ApprovalRequestRecord,
+    ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+        let replay_request = self.replay_request(approval_request)?;
+        let session_context = self
+            .runtime
+            .session_context(self.config, &approval_request.session_id, self.kernel_ctx)
+            .map_err(|error| format!("load approval request session context failed: {error}"))?;
+
+        match crate::tools::canonical_tool_name(replay_request.tool_name.as_str()) {
+            "delegate" => {
+                execute_delegate_tool(
+                    self.config,
+                    self.runtime,
+                    &session_context,
+                    replay_request.payload,
+                    self.kernel_ctx,
+                )
+                .await
+            }
+            "delegate_async" => {
+                execute_delegate_async_tool(
+                    self.config,
+                    self.runtime,
+                    &session_context,
+                    replay_request.payload,
+                )
+                .await
+            }
+            _ => {
+                self.fallback
+                    .execute_app_tool(&session_context, replay_request, self.kernel_ctx)
+                    .await
+            }
+        }
+    }
+
+    async fn execute_approved_request(
+        &self,
+        repo: &SessionRepository,
+        approval_request_id: &str,
+    ) -> Result<crate::tools::approval::ApprovalResolutionOutcome, String> {
+        let executing = repo
+            .transition_approval_request_if_current(
+                approval_request_id,
+                TransitionApprovalRequestIfCurrentRequest {
+                    expected_status: ApprovalRequestStatus::Approved,
+                    next_status: ApprovalRequestStatus::Executing,
+                    decision: None,
+                    resolved_by_session_id: None,
+                    executed_at: None,
+                    last_error: None,
+                },
+            )?
+            .ok_or_else(|| {
+                format!(
+                    "approval_request_not_approved: `{approval_request_id}` is no longer approved"
+                )
+            })?;
+
+        match self.replay_approved_request(&executing).await {
+            Ok(resumed_tool_output) => {
+                let executed = repo
+                    .transition_approval_request_if_current(
+                        approval_request_id,
+                        TransitionApprovalRequestIfCurrentRequest {
+                            expected_status: ApprovalRequestStatus::Executing,
+                            next_status: ApprovalRequestStatus::Executed,
+                            decision: None,
+                            resolved_by_session_id: None,
+                            executed_at: Some(Self::current_epoch_s()),
+                            last_error: None,
+                        },
+                    )?
+                    .ok_or_else(|| {
+                        format!(
+                            "approval_request_not_executing: `{approval_request_id}` is no longer executing"
+                        )
+                    })?;
+                Ok(crate::tools::approval::ApprovalResolutionOutcome {
+                    approval_request: executed,
+                    resumed_tool_output: Some(resumed_tool_output),
+                })
+            }
+            Err(error) => {
+                let _ = repo.transition_approval_request_if_current(
+                    approval_request_id,
+                    TransitionApprovalRequestIfCurrentRequest {
+                        expected_status: ApprovalRequestStatus::Executing,
+                        next_status: ApprovalRequestStatus::Executed,
+                        decision: None,
+                        resolved_by_session_id: None,
+                        executed_at: Some(Self::current_epoch_s()),
+                        last_error: Some(error.clone()),
+                    },
+                )?;
+                Err(error)
+            }
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[async_trait]
+impl<R> crate::tools::approval::ApprovalResolutionRuntime
+    for CoordinatorApprovalResolutionRuntime<'_, R>
+where
+    R: ConversationRuntime + ?Sized,
+{
+    async fn resolve_approval_request(
+        &self,
+        request: crate::tools::approval::ApprovalResolutionRequest,
+    ) -> Result<crate::tools::approval::ApprovalResolutionOutcome, String> {
+        let memory_config = MemoryRuntimeConfig::from_memory_config(&self.config.memory);
+        let repo = SessionRepository::new(&memory_config)?;
+        let approval_request = repo
+            .load_approval_request(&request.approval_request_id)?
+            .ok_or_else(|| {
+                format!(
+                    "approval_request_not_found: `{}`",
+                    request.approval_request_id
+                )
+            })?;
+
+        let is_visible = match request.visibility {
+            crate::config::SessionVisibility::SelfOnly => {
+                request.current_session_id == approval_request.session_id
+            }
+            crate::config::SessionVisibility::Children => {
+                request.current_session_id == approval_request.session_id
+                    || repo.is_session_visible(
+                        &request.current_session_id,
+                        &approval_request.session_id,
+                    )?
+            }
+        };
+        if !is_visible {
+            return Err(format!(
+                "visibility_denied: session `{}` is not visible from `{}`",
+                approval_request.session_id, request.current_session_id
+            ));
+        }
+
+        match request.decision {
+            ApprovalDecision::Deny => {
+                let resolved = match repo.transition_approval_request_if_current(
+                    &request.approval_request_id,
+                    TransitionApprovalRequestIfCurrentRequest {
+                        expected_status: ApprovalRequestStatus::Pending,
+                        next_status: ApprovalRequestStatus::Denied,
+                        decision: Some(ApprovalDecision::Deny),
+                        resolved_by_session_id: Some(request.current_session_id.clone()),
+                        executed_at: None,
+                        last_error: None,
+                    },
+                )? {
+                    Some(resolved) => resolved,
+                    None => {
+                        let latest = repo
+                            .load_approval_request(&request.approval_request_id)?
+                            .ok_or_else(|| {
+                                format!(
+                                    "approval_request_not_found: `{}`",
+                                    request.approval_request_id
+                                )
+                            })?;
+                        return Err(format!(
+                            "approval_request_not_pending: `{}` is already {}",
+                            request.approval_request_id,
+                            latest.status.as_str()
+                        ));
+                    }
+                };
+                Ok(crate::tools::approval::ApprovalResolutionOutcome {
+                    approval_request: resolved,
+                    resumed_tool_output: None,
+                })
+            }
+            ApprovalDecision::ApproveOnce => {
+                let approved = match repo.transition_approval_request_if_current(
+                    &request.approval_request_id,
+                    TransitionApprovalRequestIfCurrentRequest {
+                        expected_status: ApprovalRequestStatus::Pending,
+                        next_status: ApprovalRequestStatus::Approved,
+                        decision: Some(ApprovalDecision::ApproveOnce),
+                        resolved_by_session_id: Some(request.current_session_id.clone()),
+                        executed_at: None,
+                        last_error: None,
+                    },
+                )? {
+                    Some(approved) => approved,
+                    None => {
+                        let latest = repo
+                            .load_approval_request(&request.approval_request_id)?
+                            .ok_or_else(|| {
+                                format!(
+                                    "approval_request_not_found: `{}`",
+                                    request.approval_request_id
+                                )
+                            })?;
+                        return Err(format!(
+                            "approval_request_not_pending: `{}` is already {}",
+                            request.approval_request_id,
+                            latest.status.as_str()
+                        ));
+                    }
+                };
+                let _ = approved;
+                self.execute_approved_request(&repo, &request.approval_request_id)
+                    .await
+            }
+            ApprovalDecision::ApproveAlways => {
+                let approved = match repo.transition_approval_request_if_current(
+                    &request.approval_request_id,
+                    TransitionApprovalRequestIfCurrentRequest {
+                        expected_status: ApprovalRequestStatus::Pending,
+                        next_status: ApprovalRequestStatus::Approved,
+                        decision: Some(ApprovalDecision::ApproveAlways),
+                        resolved_by_session_id: Some(request.current_session_id.clone()),
+                        executed_at: None,
+                        last_error: None,
+                    },
+                )? {
+                    Some(approved) => approved,
+                    None => {
+                        let latest = repo
+                            .load_approval_request(&request.approval_request_id)?
+                            .ok_or_else(|| {
+                                format!(
+                                    "approval_request_not_found: `{}`",
+                                    request.approval_request_id
+                                )
+                            })?;
+                        return Err(format!(
+                            "approval_request_not_pending: `{}` is already {}",
+                            request.approval_request_id,
+                            latest.status.as_str()
+                        ));
+                    }
+                };
+                let grant_scope_session_id = repo
+                    .lineage_root_session_id(&approved.session_id)?
+                    .ok_or_else(|| {
+                        format!(
+                            "approval_request_session_not_found: `{}`",
+                            approved.session_id
+                        )
+                    })?;
+                repo.upsert_approval_grant(NewApprovalGrantRecord {
+                    scope_session_id: grant_scope_session_id,
+                    approval_key: approved.approval_key.clone(),
+                    created_by_session_id: Some(request.current_session_id.clone()),
+                })?;
+                self.execute_approved_request(&repo, &request.approval_request_id)
+                    .await
+            }
+        }
+    }
+}
+
 struct CoordinatorAppToolDispatcher<'a, R: ?Sized> {
     config: &'a LoongClawConfig,
     runtime: &'a R,
@@ -2793,6 +3123,36 @@ where
         kernel_ctx: Option<&KernelContext>,
     ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
         match crate::tools::canonical_tool_name(request.tool_name.as_str()) {
+            "approval_request_resolve" => {
+                #[cfg(not(feature = "memory-sqlite"))]
+                {
+                    let _ = (session_context, kernel_ctx);
+                    Err("approval tools require sqlite memory support (enable feature `memory-sqlite`)"
+                        .to_owned())
+                }
+
+                #[cfg(feature = "memory-sqlite")]
+                {
+                    let memory_config =
+                        MemoryRuntimeConfig::from_memory_config(&self.config.memory);
+                    let effective_tool_config =
+                        effective_tool_config_for_session(&self.config.tools, session_context);
+                    let approval_runtime = CoordinatorApprovalResolutionRuntime {
+                        config: self.config,
+                        runtime: self.runtime,
+                        fallback: self.fallback,
+                        kernel_ctx,
+                    };
+                    crate::tools::approval::execute_approval_tool_with_runtime_support(
+                        request,
+                        &session_context.session_id,
+                        &memory_config,
+                        &effective_tool_config,
+                        Some(&approval_runtime),
+                    )
+                    .await
+                }
+            }
             "delegate" => {
                 execute_delegate_tool(
                     self.config,
