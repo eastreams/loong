@@ -9,10 +9,10 @@ use crate::config::{
     MemorySystemKind,
 };
 
+use super::runtime_config::MemoryRuntimeConfig;
 use super::system::{
     BuiltinMemorySystem, DEFAULT_MEMORY_SYSTEM_ID, MemorySystem, MemorySystemMetadata,
 };
-use super::runtime_config::MemoryRuntimeConfig;
 
 pub const MEMORY_SYSTEM_ENV: &str = "LOONGCLAW_MEMORY_SYSTEM";
 
@@ -253,8 +253,8 @@ pub(crate) fn clear_memory_system_env_override() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::ScopedEnv;
     use crate::memory::{MEMORY_SYSTEM_API_VERSION, MemorySystemCapability};
+    use crate::test_support::ScopedEnv;
 
     struct MatchingRegistrySystem;
 
@@ -387,7 +387,10 @@ mod tests {
         let snapshot =
             collect_memory_system_runtime_snapshot(&config).expect("collect runtime snapshot");
 
-        assert_eq!(snapshot.policy.backend, crate::config::MemoryBackendKind::Sqlite);
+        assert_eq!(
+            snapshot.policy.backend,
+            crate::config::MemoryBackendKind::Sqlite
+        );
         assert_eq!(
             snapshot.policy.profile,
             crate::config::MemoryProfile::WindowPlusSummary
