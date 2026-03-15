@@ -21,8 +21,7 @@ pub(crate) use channels::{
 pub use conversation::{ConversationConfig, ConversationTurnLoopConfig};
 #[allow(unused_imports)]
 pub use provider::{
-    ProviderAuthScheme, ProviderConfig, ProviderFeatureFamily, ProviderKind,
-    ProviderProfileConfig,
+    ProviderAuthScheme, ProviderConfig, ProviderFeatureFamily, ProviderKind, ProviderProfileConfig,
     ProviderProfileHealthModeConfig, ProviderProfileStateBackendKind, ProviderProtocolFamily,
     ProviderReasoningExtraBodyModeConfig, ProviderToolSchemaModeConfig, ProviderTransportFallback,
     ProviderTransportPolicy, ProviderTransportReadiness, ProviderTransportReadinessLevel,

@@ -516,9 +516,9 @@ fn supplement_tool_config(
         target.file_root = source.file_root.clone();
         changed = true;
     }
-    for command in &source.shell_allowlist {
-        if !target.shell_allowlist.contains(command) {
-            target.shell_allowlist.push(command.clone());
+    for command in &source.shell_allow {
+        if !target.shell_allow.contains(command) {
+            target.shell_allow.push(command.clone());
             changed = true;
         }
     }
@@ -556,10 +556,10 @@ fn tool_summary(config: &mvp::config::ToolConfig, supplemented_from: &[String]) 
             config.resolved_file_root().display()
         ));
     }
-    if config.shell_allowlist != default.shell_allowlist {
+    if config.shell_allow != default.shell_allow {
         parts.push(format!(
             "shell permissions {}",
-            config.shell_allowlist.join(", ")
+            config.shell_allow.join(", ")
         ));
     }
     let mut summary = parts.join(" · ");

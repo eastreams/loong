@@ -4059,56 +4059,14 @@ pub(crate) fn parse_provider_kind(raw: &str) -> Option<mvp::config::ProviderKind
     mvp::config::ProviderKind::parse(raw)
 }
 
-pub(crate) fn parse_prompt_personality(raw: &str) -> Option<mvp::prompt::PromptPersonality> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "calm_engineering" | "engineering" | "calm" => {
-            Some(mvp::prompt::PromptPersonality::CalmEngineering)
-        }
-        "friendly_collab" | "friendly" | "collab" => {
-            Some(mvp::prompt::PromptPersonality::FriendlyCollab)
-        }
-        "autonomous_executor" | "autonomous" | "executor" => {
-            Some(mvp::prompt::PromptPersonality::AutonomousExecutor)
-        }
-        _ => None,
-    }
-}
-
-pub(crate) fn parse_memory_profile(raw: &str) -> Option<mvp::config::MemoryProfile> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "window_only" | "window" => Some(mvp::config::MemoryProfile::WindowOnly),
-        "window_plus_summary" | "summary" | "summary_window" => {
-            Some(mvp::config::MemoryProfile::WindowPlusSummary)
-        }
-        "profile_plus_window" | "profile" | "profile_window" => {
-            Some(mvp::config::MemoryProfile::ProfilePlusWindow)
-        }
-        _ => None,
-    }
-}
-
-pub(crate) fn provider_default_api_key_env(kind: mvp::config::ProviderKind) -> Option<&'static str> {
+pub(crate) fn provider_default_api_key_env(
+    kind: mvp::config::ProviderKind,
+) -> Option<&'static str> {
     kind.default_api_key_env()
 }
 
 pub(crate) fn provider_kind_id(kind: mvp::config::ProviderKind) -> &'static str {
     kind.as_str()
-}
-
-pub(crate) fn prompt_personality_id(personality: mvp::prompt::PromptPersonality) -> &'static str {
-    match personality {
-        mvp::prompt::PromptPersonality::CalmEngineering => "calm_engineering",
-        mvp::prompt::PromptPersonality::FriendlyCollab => "friendly_collab",
-        mvp::prompt::PromptPersonality::AutonomousExecutor => "autonomous_executor",
-    }
-}
-
-pub(crate) fn memory_profile_id(profile: mvp::config::MemoryProfile) -> &'static str {
-    match profile {
-        mvp::config::MemoryProfile::WindowOnly => "window_only",
-        mvp::config::MemoryProfile::WindowPlusSummary => "window_plus_summary",
-        mvp::config::MemoryProfile::ProfilePlusWindow => "profile_plus_window",
-    }
 }
 
 pub(crate) fn provider_kind_display_name(kind: mvp::config::ProviderKind) -> &'static str {
@@ -4121,14 +4079,6 @@ pub(crate) fn supported_provider_list() -> String {
         .map(|kind| kind.as_str())
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-fn supported_personality_list() -> &'static str {
-    "calm_engineering, friendly_collab, autonomous_executor"
-}
-
-fn supported_memory_profile_list() -> &'static str {
-    "window_only, window_plus_summary, profile_plus_window"
 }
 
 fn resolve_write_plan(

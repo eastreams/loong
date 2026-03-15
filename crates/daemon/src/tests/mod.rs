@@ -7,7 +7,7 @@ static DAEMON_TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
 fn lock_daemon_test_environment() -> MutexGuard<'static, ()> {
     DAEMON_TEST_ENV_LOCK
         .lock()
-        .expect("daemon test environment lock")
+        .unwrap_or_else(|error| error.into_inner())
 }
 
 fn catalog_entry(raw: &str) -> mvp::channel::ChannelCatalogEntry {

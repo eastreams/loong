@@ -53,7 +53,7 @@ pub(crate) fn classify_current_setup(output_path: &Path) -> CurrentSetupState {
         && config.cli.system_prompt == default_config.cli.system_prompt
         && config.cli.exit_commands == default_config.cli.exit_commands
         && channels::registered_enabled_channel_ids(&config).is_empty()
-        && config.tools.shell_allowlist == default_config.tools.shell_allowlist
+        && config.tools.shell_allow == default_config.tools.shell_allow
         && config.tools.file_root == default_config.tools.file_root
         && config.memory.sqlite_path == default_config.memory.sqlite_path
         && config.memory.sliding_window == default_config.memory.sliding_window;
@@ -362,7 +362,7 @@ fn collect_domain_previews(
     }
 
     let default_tools = mvp::config::ToolConfig::default();
-    if config.tools.shell_allowlist != default_tools.shell_allowlist
+    if config.tools.shell_allow != default_tools.shell_allow
         || config.tools.file_root != default_tools.file_root
     {
         let mut parts = Vec::new();
@@ -372,10 +372,10 @@ fn collect_domain_previews(
                 config.tools.resolved_file_root().display()
             ));
         }
-        if config.tools.shell_allowlist != default_tools.shell_allowlist {
+        if config.tools.shell_allow != default_tools.shell_allow {
             parts.push(format!(
                 "shell permissions {}",
-                config.tools.shell_allowlist.join(", ")
+                config.tools.shell_allow.join(", ")
             ));
         }
         domains.push(DomainPreview {

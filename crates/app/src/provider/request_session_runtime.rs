@@ -19,6 +19,7 @@ use super::provider_validation_runtime::{
 };
 
 pub(super) struct ProviderRequestSession {
+    pub(super) endpoint: String,
     pub(super) headers: reqwest::header::HeaderMap,
     pub(super) request_policy: policy::ProviderRequestPolicy,
     pub(super) client: reqwest::Client,
@@ -106,6 +107,7 @@ pub(super) async fn prepare_provider_request_session(
     };
 
     Ok(ProviderRequestSession {
+        endpoint,
         headers,
         request_policy,
         client,
