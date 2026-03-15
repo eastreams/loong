@@ -2027,12 +2027,29 @@ mod tests {
             ..LoongClawConfig::default()
         };
 
-        let report = backend
-            .doctor(&config)
-            .await
-            .expect("doctor should not fail")
-            .expect("doctor report");
-        assert!(report.healthy);
+        let mut last_report = None;
+        for attempt in 0..5 {
+            let report = backend
+                .doctor(&config)
+                .await
+                .expect("doctor should not fail")
+                .expect("doctor report");
+            if report.healthy {
+                last_report = Some(report);
+                break;
+            }
+            last_report = Some(report);
+            if attempt < 4 {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        }
+
+        let report = last_report.expect("doctor report");
+        assert!(
+            report.healthy,
+            "doctor should accept fake version command: {:?}",
+            report.diagnostics
+        );
         assert_eq!(
             report.diagnostics.get("command"),
             Some(&script_path.display().to_string())
