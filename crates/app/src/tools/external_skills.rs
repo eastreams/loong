@@ -1695,25 +1695,27 @@ fn discover_scoped_skill_candidates(
 fn project_discovery_probe_roots(
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Vec<PathBuf> {
-    let Some(project_root) = config
-        .file_root
-        .clone()
-        .or_else(|| std::env::current_dir().ok())
-    else {
+    let Some(project_root) = project_discovery_root(config) else {
         return Vec::new();
     };
+    let project_root = project_root
+        .canonicalize()
+        .unwrap_or_else(|_| project_root.clone());
 
     let mut roots = Vec::new();
-    if let Ok(current_dir) = std::env::current_dir()
-        && current_dir.starts_with(&project_root)
-    {
-        let mut next = Some(current_dir.as_path());
-        while let Some(path) = next {
-            roots.push(path.to_path_buf());
-            if path == project_root.as_path() {
-                break;
+    if let Ok(current_dir) = std::env::current_dir() {
+        let current_dir = current_dir.canonicalize().unwrap_or(current_dir);
+        if current_dir.starts_with(&project_root) {
+            let mut next = Some(current_dir.as_path());
+            while let Some(path) = next {
+                roots.push(path.to_path_buf());
+                if path == project_root.as_path() {
+                    break;
+                }
+                next = path.parent();
             }
-            next = path.parent();
+        } else {
+            roots.push(project_root);
         }
     } else {
         roots.push(project_root);
@@ -1722,6 +1724,16 @@ fn project_discovery_probe_roots(
     let mut seen = BTreeSet::new();
     roots.retain(|root| seen.insert(root.display().to_string()));
     roots
+}
+
+fn project_discovery_root(config: &super::runtime_config::ToolRuntimeConfig) -> Option<PathBuf> {
+    config
+        .config_path
+        .as_deref()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .or_else(|| config.file_root.clone())
+        .or_else(|| std::env::current_dir().ok())
 }
 
 fn user_home_dir() -> Option<PathBuf> {

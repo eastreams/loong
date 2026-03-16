@@ -81,6 +81,24 @@ impl Drop for SkillsCliEnvironmentGuard {
     }
 }
 
+struct SkillsCliCurrentDirGuard {
+    original: PathBuf,
+}
+
+impl SkillsCliCurrentDirGuard {
+    fn set(path: &Path) -> Self {
+        let original = std::env::current_dir().expect("read current dir");
+        std::env::set_current_dir(path).expect("set current dir");
+        Self { original }
+    }
+}
+
+impl Drop for SkillsCliCurrentDirGuard {
+    fn drop(&mut self) {
+        std::env::set_current_dir(&self.original).expect("restore current dir");
+    }
+}
+
 #[test]
 fn skills_install_cli_parses_global_flags_after_subcommand() {
     let cli = Cli::try_parse_from([
@@ -342,6 +360,129 @@ fn execute_skills_command_list_reports_scopes_and_shadowed_skills() {
     assert!(
         rendered.contains("shadowed skills:"),
         "CLI text should render shadowed entries for operator debugging: {rendered}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&home).ok();
+}
+
+#[test]
+fn execute_skills_command_list_anchors_project_scope_to_config_directory_when_file_root_is_unset() {
+    let root = unique_temp_dir("loongclaw-skills-cli-config-root");
+    let outside = unique_temp_dir("loongclaw-skills-cli-outside-root");
+    let home = unique_temp_dir("loongclaw-skills-cli-config-home");
+    fs::create_dir_all(&root).expect("create project root");
+    fs::create_dir_all(&outside).expect("create outside root");
+    fs::create_dir_all(&home).expect("create home root");
+
+    let config_path = root.join("loongclaw.toml");
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.external_skills.enabled = true;
+    config.external_skills.install_root = Some(root.join("managed-skills").display().to_string());
+    mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
+        .expect("write config fixture");
+
+    write_file(
+        &root,
+        ".agents/skills/project-skill/SKILL.md",
+        "---\nname: project-skill\ndescription: project scoped skill.\n---\n\nproject instructions.\n",
+    );
+    write_file(
+        &outside,
+        ".agents/skills/outside-skill/SKILL.md",
+        "---\nname: outside-skill\ndescription: outside cwd skill.\n---\n\noutside instructions.\n",
+    );
+
+    let _env = SkillsCliEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
+    let _cwd = SkillsCliCurrentDirGuard::set(&outside);
+
+    let list = crate::skills_cli::execute_skills_command(crate::skills_cli::SkillsCommandOptions {
+        config: Some(config_path.display().to_string()),
+        json: false,
+        command: crate::skills_cli::SkillsCommands::List,
+    })
+    .expect("skills list should succeed");
+    let skills = list.outcome.payload["skills"]
+        .as_array()
+        .expect("skills should be an array");
+    assert!(
+        skills
+            .iter()
+            .any(|skill| skill["skill_id"] == "project-skill" && skill["scope"] == "project"),
+        "project scope should anchor to the config directory, not the caller cwd: {skills:?}"
+    );
+    assert!(
+        skills
+            .iter()
+            .all(|skill| skill["skill_id"] != "outside-skill"),
+        "project discovery should not scan unrelated cwd roots when --config targets a project: {skills:?}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&outside).ok();
+    fs::remove_dir_all(&home).ok();
+}
+
+#[test]
+fn execute_skills_command_list_prefers_nearest_project_ancestor_for_duplicate_skill_ids() {
+    let root = unique_temp_dir("loongclaw-skills-cli-ancestor-root");
+    let home = unique_temp_dir("loongclaw-skills-cli-ancestor-home");
+    fs::create_dir_all(&root).expect("create project root");
+    fs::create_dir_all(&home).expect("create home root");
+
+    let config_path = root.join("loongclaw.toml");
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.external_skills.enabled = true;
+    config.external_skills.install_root = Some(root.join("managed-skills").display().to_string());
+    mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
+        .expect("write config fixture");
+
+    write_file(
+        &root,
+        ".agents/skills/demo-skill/SKILL.md",
+        "---\nname: demo-skill\ndescription: root project skill.\n---\n\nroot instructions.\n",
+    );
+    write_file(
+        &root,
+        "workspace/.agents/skills/demo-skill/SKILL.md",
+        "---\nname: demo-skill\ndescription: nested workspace skill.\n---\n\nnested instructions.\n",
+    );
+    fs::create_dir_all(root.join("workspace/subdir")).expect("create nested cwd");
+
+    let _env = SkillsCliEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
+    let _cwd = SkillsCliCurrentDirGuard::set(&root.join("workspace/subdir"));
+
+    let list = crate::skills_cli::execute_skills_command(crate::skills_cli::SkillsCommandOptions {
+        config: Some(config_path.display().to_string()),
+        json: false,
+        command: crate::skills_cli::SkillsCommands::List,
+    })
+    .expect("skills list should succeed");
+    assert_eq!(list.outcome.payload["skills"][0]["skill_id"], "demo-skill");
+    assert_eq!(list.outcome.payload["skills"][0]["scope"], "project");
+    assert!(
+        list.outcome.payload["skills"][0]["source_path"]
+            .as_str()
+            .expect("source path should be text")
+            .contains("workspace/.agents/skills/demo-skill"),
+        "nearest project ancestor should win within the project scope: {}",
+        list.outcome.payload["skills"][0]
+    );
+    assert!(
+        list.outcome.payload["shadowed_skills"]
+            .as_array()
+            .expect("shadowed skills should be an array")
+            .iter()
+            .any(|skill| {
+                skill["skill_id"] == "demo-skill"
+                    && skill["source_path"]
+                        .as_str()
+                        .is_some_and(|path| path.ends_with(".agents/skills/demo-skill"))
+                    && !skill["source_path"]
+                        .as_str()
+                        .is_some_and(|path| path.contains("workspace/.agents/skills/demo-skill"))
+            }),
+        "project ancestor duplicates should remain inspectable as shadowed skills"
     );
 
     fs::remove_dir_all(&root).ok();

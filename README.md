@@ -436,8 +436,11 @@ Recommended runtime flow:
 2. Install with `external_skills.install` or `loongclaw skills install`
 3. Discover with `external_skills.list` or `loongclaw skills list`
    - Resolution order is `managed > user > project`
+   - If a config path is loaded, project discovery anchors to that config directory; otherwise it falls back to the configured tool file root or the current working directory
+   - Within the active project root, project discovery probes the current working directory and each ancestor up to the project root
    - Project discovery probes `.agents/skills`, `.codex/skills`, `.claude/skills`, and `skills/`
    - User discovery probes `~/.agents/skills`, `~/.codex/skills`, and `~/.claude/skills`
+   - User and project discovery follow directory symlinks inside those skill roots; managed installs still reject symlinked sources
 4. Inspect with `external_skills.inspect` or `loongclaw skills info`
 5. Load instructions with `external_skills.invoke`
 
