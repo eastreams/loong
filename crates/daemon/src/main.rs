@@ -109,6 +109,8 @@ async fn main() {
             provider,
             model,
             api_key_env,
+            personality,
+            memory_profile,
             system_prompt,
             skip_model_probe,
         } => {
@@ -120,6 +122,8 @@ async fn main() {
                 provider,
                 model,
                 api_key_env,
+                personality,
+                memory_profile,
                 system_prompt,
                 skip_model_probe,
             })

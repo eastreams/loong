@@ -50,11 +50,16 @@ pub fn classify_current_setup(output_path: &Path) -> CurrentSetupState {
 
     let default_config = mvp::config::LoongClawConfig::default();
     let has_only_provider_selection_changes = config.provider.has_only_selection_changes()
+        && config.cli.enabled == default_config.cli.enabled
         && config.cli.system_prompt == default_config.cli.system_prompt
+        && config.cli.prompt_pack_id == default_config.cli.prompt_pack_id
+        && config.cli.personality == default_config.cli.personality
+        && config.cli.system_prompt_addendum == default_config.cli.system_prompt_addendum
         && config.cli.exit_commands == default_config.cli.exit_commands
         && channels::registered_enabled_channel_ids(&config).is_empty()
         && config.tools.shell_allow == default_config.tools.shell_allow
         && config.tools.file_root == default_config.tools.file_root
+        && config.memory.profile == default_config.memory.profile
         && config.memory.sqlite_path == default_config.memory.sqlite_path
         && config.memory.sliding_window == default_config.memory.sliding_window;
 
@@ -342,7 +347,8 @@ fn collect_domain_previews(
     }
 
     let default_memory = mvp::config::MemoryConfig::default();
-    if config.memory.sqlite_path != default_memory.sqlite_path
+    if config.memory.profile != default_memory.profile
+        || config.memory.sqlite_path != default_memory.sqlite_path
         || config.memory.sliding_window != default_memory.sliding_window
     {
         domains.push(DomainPreview {
@@ -350,11 +356,7 @@ fn collect_domain_previews(
             status: PreviewStatus::Ready,
             decision: source_kind.default_domain_decision(),
             source: source.to_owned(),
-            summary: format!(
-                "{} · window {}",
-                config.memory.resolved_sqlite_path().display(),
-                config.memory.sliding_window
-            ),
+            summary: memory_behavior_summary(&config.memory),
         });
     }
 
@@ -592,6 +594,9 @@ fn cli_import_surface(config: &mvp::config::LoongClawConfig) -> Option<ImportSur
     let default_cli = mvp::config::CliChannelConfig::default();
     if config.cli.enabled == default_cli.enabled
         && config.cli.system_prompt == default_cli.system_prompt
+        && config.cli.prompt_pack_id == default_cli.prompt_pack_id
+        && config.cli.personality == default_cli.personality
+        && config.cli.system_prompt_addendum == default_cli.system_prompt_addendum
         && config.cli.exit_commands == default_cli.exit_commands
     {
         return None;
@@ -600,6 +605,65 @@ fn cli_import_surface(config: &mvp::config::LoongClawConfig) -> Option<ImportSur
         name: "cli channel",
         domain: SetupDomainKind::Cli,
         level: ImportSurfaceLevel::Ready,
-        detail: "custom CLI behavior detected".to_owned(),
+        detail: cli_behavior_summary(&config.cli),
     })
+}
+
+fn cli_behavior_summary(config: &mvp::config::CliChannelConfig) -> String {
+    let default_cli = mvp::config::CliChannelConfig::default();
+    let mut parts = Vec::new();
+    if config.uses_native_prompt_pack() {
+        parts.push("native prompt pack".to_owned());
+        parts.push(format!(
+            "personality {}",
+            crate::onboard_cli::prompt_personality_id(config.resolved_personality())
+        ));
+        if config
+            .system_prompt_addendum
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        {
+            parts.push("prompt addendum configured".to_owned());
+        }
+    } else if !config.system_prompt.trim().is_empty() {
+        parts.push("inline system prompt override".to_owned());
+    }
+    if config.exit_commands != default_cli.exit_commands {
+        parts.push(format!("exit commands {}", config.exit_commands.join(", ")));
+    }
+    if parts.is_empty() {
+        "custom CLI behavior detected".to_owned()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+fn memory_behavior_summary(config: &mvp::config::MemoryConfig) -> String {
+    format!(
+        "profile {} · {} · window {}",
+        config.profile.as_str(),
+        config.resolved_sqlite_path().display(),
+        config.sliding_window
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_import_surface_detects_prompt_pack_metadata_changes() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.cli.personality = Some(mvp::prompt::PromptPersonality::FriendlyCollab);
+
+        let surfaces = collect_import_surfaces(&config);
+
+        assert!(
+            surfaces
+                .iter()
+                .any(|surface| surface.domain == SetupDomainKind::Cli),
+            "changing prompt-pack personality metadata should mark the CLI domain as imported: {surfaces:#?}"
+        );
+    }
 }

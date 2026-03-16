@@ -92,6 +92,46 @@ fn onboard_cli_keeps_legacy_api_key_env_alias() {
 }
 
 #[test]
+fn onboard_cli_accepts_personality_flag() {
+    let cli = Cli::try_parse_from([
+        "loongclaw",
+        "onboard",
+        "--non-interactive",
+        "--accept-risk",
+        "--personality",
+        "friendly_collab",
+    ])
+    .expect("`--personality` should parse");
+
+    match cli.command {
+        Some(Commands::Onboard { personality, .. }) => {
+            assert_eq!(personality.as_deref(), Some("friendly_collab"));
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn onboard_cli_accepts_memory_profile_flag() {
+    let cli = Cli::try_parse_from([
+        "loongclaw",
+        "onboard",
+        "--non-interactive",
+        "--accept-risk",
+        "--memory-profile",
+        "profile_plus_window",
+    ])
+    .expect("`--memory-profile` should parse");
+
+    match cli.command {
+        Some(Commands::Onboard { memory_profile, .. }) => {
+            assert_eq!(memory_profile.as_deref(), Some("profile_plus_window"));
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
 fn benchmark_memory_context_cli_parses_custom_knobs() {
     let cli = Cli::try_parse_from([
         "loongclaw",

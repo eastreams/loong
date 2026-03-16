@@ -279,6 +279,12 @@ pub enum Commands {
         /// Provider credential environment variable name, for example OPENAI_API_KEY
         #[arg(long = "api-key", alias = "api-key-env")]
         api_key_env: Option<String>,
+        /// Select a native prompt personality in non-interactive mode
+        #[arg(long)]
+        personality: Option<String>,
+        /// Select a memory profile in non-interactive mode
+        #[arg(long)]
+        memory_profile: Option<String>,
         /// Preseed the CLI system prompt instead of editing it interactively
         #[arg(long)]
         system_prompt: Option<String>,

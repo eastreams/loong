@@ -245,6 +245,11 @@ cargo install --path crates/daemon
    loongclaw onboard
    ```
 
+   Guided onboarding now walks through provider setup, native prompt
+   personality, optional prompt addendum, and memory profile selection. Use
+   `--system-prompt` only when you want to replace the native prompt pack with a
+   full inline override.
+
 2. Set your provider credential in the env that onboarding selected:
 
    ```bash
@@ -292,7 +297,9 @@ tone, initiative, confirmation style, and response density.
 - `autonomous_executor`: decisive, high-initiative, and execution-oriented
 
 Interactive onboarding now defaults to personality selection, while advanced
-operators can still pass `--system-prompt` for a full inline override.
+operators can still pass `--system-prompt` for a full inline override. The same
+flow also keeps an optional native prompt addendum for lightweight operator
+tuning without abandoning the built-in prompt pack.
 
 ## Memory Profiles
 
