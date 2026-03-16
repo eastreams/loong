@@ -220,15 +220,6 @@ pub async fn run_cli_chat(
             continue;
         }
         if is_turn_checkpoint_repair_command(input)? {
-            #[cfg(feature = "memory-sqlite")]
-            print_turn_checkpoint_repair(
-                &runtime.turn_coordinator,
-                &runtime.config,
-                &runtime.session_id,
-                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-            )
-            .await?;
-            #[cfg(not(feature = "memory-sqlite"))]
             print_turn_checkpoint_repair(
                 &runtime.turn_coordinator,
                 &runtime.config,
@@ -572,6 +563,12 @@ async fn load_history_lines(
             .execute_memory_core(ctx.pack_id(), &ctx.token, &caps, None, request)
             .await
             .map_err(|error| format!("load history via kernel failed: {error}"))?;
+        if outcome.status != "ok" {
+            return Err(format!(
+                "load history via kernel returned non-ok status: {}",
+                outcome.status
+            ));
+        }
         let turns = memory::decode_window_turns(&outcome.payload);
         return Ok(format_window_history_lines(&turns));
     }
@@ -1438,6 +1435,7 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     struct SharedTestMemoryAdapter {
         invocations: Arc<Mutex<Vec<MemoryCoreRequest>>>,
+        status: String,
         window_turns: Value,
     }
 
@@ -1464,7 +1462,7 @@ mod tests {
                 .expect("invocations lock")
                 .push(request);
             Ok(MemoryCoreOutcome {
-                status: "ok".to_owned(),
+                status: self.status.clone(),
                 payload,
             })
         }
@@ -1472,6 +1470,14 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     fn build_kernel_context_with_window_turns(
+        window_turns: Value,
+    ) -> (crate::KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
+        build_kernel_context_with_window_outcome("ok", window_turns)
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn build_kernel_context_with_window_outcome(
+        status: &str,
         window_turns: Value,
     ) -> (crate::KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
         let audit = Arc::new(InMemoryAuditSink::default());
@@ -1495,6 +1501,7 @@ mod tests {
         let invocations = Arc::new(Mutex::new(Vec::new()));
         kernel.register_core_memory_adapter(SharedTestMemoryAdapter {
             invocations: invocations.clone(),
+            status: status.to_owned(),
             window_turns,
         });
         kernel
@@ -1700,6 +1707,54 @@ mod tests {
         assert_eq!(
             captured[0].payload["session_id"],
             "chat-binding-history-kernel"
+        );
+        assert_eq!(captured[0].payload["limit"], json!(16));
+
+        let _ = std::fs::remove_file(sqlite_path);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn print_history_rejects_non_ok_kernel_memory_outcome() {
+        let sqlite_path = unique_chat_sqlite_path("diagnostics-non-ok");
+        let _ = std::fs::remove_file(&sqlite_path);
+
+        let mut config = LoongClawConfig::default();
+        config.memory.sqlite_path = sqlite_path.display().to_string();
+        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        crate::memory::ensure_memory_db_ready(
+            Some(config.memory.resolved_sqlite_path()),
+            &memory_config,
+        )
+        .expect("initialize sqlite memory");
+
+        let (kernel_ctx, invocations) = build_kernel_context_with_window_outcome(
+            "error",
+            json!([
+                {
+                    "role": "user",
+                    "content": "kernel hello",
+                    "ts": 7
+                }
+            ]),
+        );
+        let error = load_history_lines(
+            "chat-binding-history-kernel-non-ok",
+            16,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            &memory_config,
+        )
+        .await
+        .expect_err("non-ok kernel memory outcome should fail closed");
+        assert!(error.contains("non-ok status"), "unexpected error: {error}");
+        assert!(error.contains("error"), "unexpected error: {error}");
+
+        let captured = invocations.lock().expect("invocations lock");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].operation, crate::memory::MEMORY_OP_WINDOW);
+        assert_eq!(
+            captured[0].payload["session_id"],
+            "chat-binding-history-kernel-non-ok"
         );
         assert_eq!(captured[0].payload["limit"], json!(16));
 

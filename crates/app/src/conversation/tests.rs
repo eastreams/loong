@@ -8517,6 +8517,45 @@ fn build_kernel_context_with_raw_window_payload(
     (ctx, invocations)
 }
 
+#[cfg(feature = "memory-sqlite")]
+fn prepare_discovery_first_summary_test(
+    db_scope: &str,
+    direct_session_id: &str,
+    payloads: &[String],
+) -> (PathBuf, MemoryRuntimeConfig) {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id(db_scope, "binding")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+
+    for payload in payloads {
+        crate::memory::append_turn_direct(direct_session_id, "assistant", payload, &mem_config)
+            .expect("persist discovery-first payload");
+    }
+
+    (db_path, mem_config)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn discovery_first_window_turns(payloads: &[String]) -> Value {
+    json!(
+        payloads
+            .iter()
+            .enumerate()
+            .map(|(index, payload)| json!({
+                "role": "assistant",
+                "content": payload,
+                "ts": index + 1
+            }))
+            .collect::<Vec<_>>()
+    )
+}
+
 struct SharedTestMemoryAdapter {
     invocations: Arc<Mutex<Vec<MemoryCoreRequest>>>,
     window_turns: Value,
@@ -9018,25 +9057,11 @@ async fn load_discovery_first_event_summary_accepts_explicit_runtime_binding() {
         .to_string(),
     ];
 
-    let db_path = std::env::temp_dir().join(format!(
-        "{}.sqlite3",
-        unique_acp_test_id("conversation-discovery-first", "binding")
-    ));
-    let _ = std::fs::remove_file(&db_path);
-
-    let mut config = test_config();
-    config.memory.sqlite_path = db_path.display().to_string();
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-
-    for payload in &payloads {
-        crate::memory::append_turn_direct(
-            "session-discovery-first-direct",
-            "assistant",
-            payload,
-            &mem_config,
-        )
-        .expect("persist discovery-first payload");
-    }
+    let (db_path, mem_config) = prepare_discovery_first_summary_test(
+        "conversation-discovery-first",
+        "session-discovery-first-direct",
+        &payloads,
+    );
 
     let direct_summary = super::session_history::load_discovery_first_event_summary_with_binding(
         "session-discovery-first-direct",
@@ -9054,19 +9079,9 @@ async fn load_discovery_first_event_summary_accepts_explicit_runtime_binding() {
         Some("file.read")
     );
 
-    let kernel_turns = json!(
-        payloads
-            .iter()
-            .enumerate()
-            .map(|(index, payload)| json!({
-                "role": "assistant",
-                "content": payload,
-                "ts": index + 1
-            }))
-            .collect::<Vec<_>>()
-    );
     let audit = Arc::new(InMemoryAuditSink::default());
-    let (kernel_ctx, invocations) = build_kernel_context_with_window_turns(audit, kernel_turns);
+    let (kernel_ctx, invocations) =
+        build_kernel_context_with_window_turns(audit, discovery_first_window_turns(&payloads));
 
     let kernel_summary = super::session_history::load_discovery_first_event_summary_with_binding(
         "session-discovery-first-kernel",
@@ -9126,25 +9141,11 @@ async fn load_discovery_first_event_summary_preserves_public_kernel_context_sign
         .to_string(),
     ];
 
-    let db_path = std::env::temp_dir().join(format!(
-        "{}.sqlite3",
-        unique_acp_test_id("conversation-discovery-first-compat", "binding")
-    ));
-    let _ = std::fs::remove_file(&db_path);
-
-    let mut config = test_config();
-    config.memory.sqlite_path = db_path.display().to_string();
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-
-    for payload in &payloads {
-        crate::memory::append_turn_direct(
-            "session-discovery-first-compat-direct",
-            "assistant",
-            payload,
-            &mem_config,
-        )
-        .expect("persist discovery-first payload");
-    }
+    let (db_path, mem_config) = prepare_discovery_first_summary_test(
+        "conversation-discovery-first-compat",
+        "session-discovery-first-compat-direct",
+        &payloads,
+    );
 
     let direct_summary = load_discovery_first_event_summary(
         "session-discovery-first-compat-direct",
@@ -9161,19 +9162,9 @@ async fn load_discovery_first_event_summary_preserves_public_kernel_context_sign
         Some("file.read")
     );
 
-    let kernel_turns = json!(
-        payloads
-            .iter()
-            .enumerate()
-            .map(|(index, payload)| json!({
-                "role": "assistant",
-                "content": payload,
-                "ts": index + 1
-            }))
-            .collect::<Vec<_>>()
-    );
     let audit = Arc::new(InMemoryAuditSink::default());
-    let (kernel_ctx, invocations) = build_kernel_context_with_window_turns(audit, kernel_turns);
+    let (kernel_ctx, invocations) =
+        build_kernel_context_with_window_turns(audit, discovery_first_window_turns(&payloads));
 
     let kernel_summary = load_discovery_first_event_summary(
         "session-discovery-first-compat-kernel",
