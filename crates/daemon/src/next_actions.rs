@@ -104,8 +104,8 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
             Some(SetupNextAction {
                 kind: SetupNextActionKind::BrowserPreview,
                 browser_preview_phase: Some(BrowserPreviewActionPhase::InstallRuntime),
-                label: "agent-browser check".to_owned(),
-                command: "agent-browser --help".to_owned(),
+                label: format!("{} check", mvp::tools::BROWSER_COMPANION_COMMAND),
+                command: format!("{} --help", mvp::tools::BROWSER_COMPANION_COMMAND),
             })
         } else {
             None
@@ -268,6 +268,34 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
+    #[test]
+    fn collect_setup_next_actions_guides_browser_preview_enable_when_not_configured() {
+        let root = unique_temp_dir("loongclaw-next-actions-browser-companion-enable");
+        let bin_dir = root.join("bin");
+        write_fake_agent_browser(&bin_dir);
+
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.tools.file_root = Some(root.display().to_string());
+
+        let actions = collect_setup_next_actions_with_path_env(
+            &config,
+            "/tmp/loongclaw.toml",
+            Some(bin_dir.as_os_str()),
+        );
+
+        assert_eq!(actions[2].kind, SetupNextActionKind::BrowserPreview);
+        assert_eq!(
+            actions[2].browser_preview_phase,
+            Some(BrowserPreviewActionPhase::Enable)
+        );
+        assert!(
+            actions[2].command.contains("enable-browser-preview"),
+            "browser preview enable action should point operators at the preview bootstrap command: {actions:#?}"
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
     #[cfg(unix)]
     #[test]
     fn collect_setup_next_actions_requires_an_executable_agent_browser_binary() {
@@ -299,8 +327,14 @@ mod tests {
             actions[2].browser_preview_phase,
             Some(BrowserPreviewActionPhase::InstallRuntime)
         );
-        assert_eq!(actions[2].label, "agent-browser check");
-        assert_eq!(actions[2].command, "agent-browser --help");
+        assert_eq!(
+            actions[2].label,
+            format!("{} check", mvp::tools::BROWSER_COMPANION_COMMAND)
+        );
+        assert_eq!(
+            actions[2].command,
+            format!("{} --help", mvp::tools::BROWSER_COMPANION_COMMAND)
+        );
 
         fs::remove_dir_all(&root).ok();
     }

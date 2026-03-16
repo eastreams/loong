@@ -435,6 +435,7 @@ Operator-facing CLI:
   - Installs a first-party bundled skill such as `browser-companion-preview` without requiring a local archive path.
 - `loongclaw skills enable-browser-preview [--replace] [--config PATH] [--json]`
   - Globally enables the external-skills runtime for this config, turns on installed-skill auto exposure, allows `agent-browser` through shell policy when needed, and installs the bundled `browser-companion-preview` skill.
+  - Refuses explicit `[tools].shell_deny` conflicts for `agent-browser`; remove that entry or adjust policy before running the command.
 - `loongclaw skills remove <skill-id> [--config PATH] [--json]`
   - Removes one managed installed skill from the local index.
 - `loongclaw skills policy get|set|reset [--config PATH] [--json]`
@@ -457,23 +458,24 @@ Recommended runtime flow:
 
 Browser preview fast path:
 
+This preview keeps the shipped safe browser lane (`browser.open`,
+`browser.extract`, `browser.click`) as the default. Today it is still a managed
+`external_skills.invoke` lane that uses `shell.exec` against `agent-browser`, so
+it does not yet provide the same bounded, profile-isolated browser safety model
+as the built-in browser tools.
+
 ```bash
 loongclaw skills enable-browser-preview --config ~/.loongclaw/config.toml
 agent-browser --help
 loongclaw doctor --config ~/.loongclaw/config.toml
 ```
 
-This preview keeps the shipped safe browser lane (`browser.open`,
-`browser.extract`, `browser.click`) as the default. It adds a first-party
-managed helper skill that can route richer multi-step page work through
-`agent-browser` when the runtime, shell policy, and local binary are all ready.
-It does not install or manage the `agent-browser` runtime for you; bring that
-binary yourself, then use `doctor` to confirm it is available on `PATH`.
-
-Today this preview is still a managed `external_skills.invoke` lane that uses
-`shell.exec` against `agent-browser`. It does not yet provide the same bounded,
-profile-isolated browser safety model as the built-in `browser.open`,
-`browser.extract`, and `browser.click` tools.
+It adds a first-party managed helper skill that can route richer multi-step page
+work through `agent-browser` when the runtime, shell policy, and local binary
+are all ready. It does not install or manage the `agent-browser` runtime for
+you; bring that binary yourself, then use `doctor` to confirm it is available
+on `PATH`. A healthy `doctor` run should report `agent-browser` as available and
+avoid browser preview follow-up errors.
 
 ## Key Features
 

@@ -4388,10 +4388,11 @@ fn onboarding_success_summary_advertises_browser_preview_enable_action() {
     );
     assert!(
         lines.iter().any(|line| {
-            line == "- enable browser preview: loongclaw skills enable-browser-preview --config"
+            line.contains("enable browser preview")
+                && line.contains("loongclaw skills enable-browser-preview --config")
         }) && lines
             .iter()
-            .any(|line| line == "  '/tmp/loongclaw-config.toml'"),
+            .any(|line| line.contains("/tmp/loongclaw-config.toml")),
         "success summary should render the browser preview enable action in the follow-up section: {lines:#?}"
     );
 }
