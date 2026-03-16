@@ -23,23 +23,53 @@ pub(super) fn execute_web_fetch_tool_with_config(
 
 /// Bridge sync-to-async: reuses the current tokio runtime when available
 /// (production path via `block_in_place`), otherwise creates a temporary
-/// single-threaded runtime (test path or `current_thread` runtime).
+/// single-threaded runtime on a dedicated thread.
 ///
-/// `block_in_place` panics under `current_thread` runtimes, so we detect
-/// the runtime flavor and fall back to a fresh runtime when necessary.
+/// Three cases:
+/// - **Multi-thread runtime** (production): use `block_in_place` + `block_on`.
+/// - **No runtime** (sync tests): create a temporary runtime and `block_on`.
+/// - **Current-thread runtime** (`#[tokio::test]`): spawn a dedicated thread
+///   with its own runtime, because both `block_in_place` and nested `block_on`
+///   panic under a `current_thread` runtime.
 #[cfg(feature = "tool-webfetch")]
-fn run_async<F: std::future::Future>(fut: F) -> Result<F::Output, String> {
-    if let Ok(handle) = tokio::runtime::Handle::try_current()
-        && handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
-    {
-        return Ok(tokio::task::block_in_place(|| handle.block_on(fut)));
+fn run_async<F>(fut: F) -> Result<F::Output, String>
+where
+    F: std::future::Future + Send,
+    F::Output: Send,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            Ok(tokio::task::block_in_place(|| handle.block_on(fut)))
+        }
+        Ok(_) => {
+            // current_thread runtime: neither block_in_place nor nested
+            // block_on is safe. Run on a dedicated thread with its own runtime.
+            std::thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        let rt = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .map_err(|error| {
+                                format!("failed to create tokio runtime for web.fetch: {error}")
+                            })?;
+                        Ok(rt.block_on(fut))
+                    })
+                    .join()
+                    .map_err(|_panic| "web.fetch async worker thread panicked".to_owned())?
+            })
+        }
+        Err(_) => {
+            // No runtime (sync tests): create a temporary runtime directly.
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| {
+                    format!("failed to create tokio runtime for web.fetch: {error}")
+                })?;
+            Ok(rt.block_on(fut))
+        }
     }
-
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| format!("failed to create tokio runtime for web.fetch: {error}"))?;
-    Ok(rt.block_on(fut))
 }
 
 /// Custom DNS resolver that rejects private/special-use IP addresses at
