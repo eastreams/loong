@@ -1578,7 +1578,11 @@ fn normalize_runtime_snapshot_restore_provider_profile(
         .headers
         .iter()
         .filter(|(header_name, header_value)| {
-            !runtime_snapshot_provider_header_is_safe_to_persist(header_name, header_value)
+            !runtime_snapshot_provider_header_is_safe_to_persist(
+                profile.provider.kind,
+                header_name,
+                header_value,
+            )
         })
         .map(|(header_name, _)| header_name.clone())
         .collect::<Vec<_>>();
@@ -1609,6 +1613,7 @@ fn runtime_snapshot_redact_provider_secret_field(
 }
 
 fn runtime_snapshot_provider_header_is_safe_to_persist(
+    provider_kind: mvp::config::ProviderKind,
     header_name: &str,
     header_value: &str,
 ) -> bool {
@@ -1623,13 +1628,18 @@ fn runtime_snapshot_provider_header_is_safe_to_persist(
             | "accept-charset"
             | "accept-encoding"
             | "accept-language"
+            | "anthropic-version"
             | "cache-control"
             | "content-language"
             | "content-type"
             | "pragma"
             | "user-agent"
-    ) || normalized.ends_with("-version")
-        || normalized.ends_with("-beta")
+            | "anthropic-beta"
+            | "openai-beta"
+    ) || provider_kind
+        .default_headers()
+        .iter()
+        .any(|(default_name, _)| default_name.eq_ignore_ascii_case(&normalized))
 }
 
 fn runtime_snapshot_canonical_env_reference(env_name: Option<&str>) -> Option<String> {
@@ -1714,8 +1724,14 @@ fn build_runtime_snapshot_restore_managed_skills_spec(
         .filter(|skill| skill.get("scope").and_then(Value::as_str) == Some("managed"))
         .filter_map(|skill| {
             let skill_id = skill.get("skill_id").and_then(Value::as_str)?;
-            let display_name = skill.get("display_name").and_then(Value::as_str)?;
-            let summary = skill.get("summary").and_then(Value::as_str)?;
+            let display_name = skill
+                .get("display_name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let summary = skill
+                .get("summary")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let source_kind = skill.get("source_kind").and_then(Value::as_str)?;
             let source_path = skill.get("source_path").and_then(Value::as_str)?;
             let sha256 = skill.get("sha256").and_then(Value::as_str)?;
@@ -1732,6 +1748,82 @@ fn build_runtime_snapshot_restore_managed_skills_spec(
     managed_skills.sort_by(|left, right| left.skill_id.cmp(&right.skill_id));
     RuntimeSnapshotRestoreManagedSkillsSpec {
         skills: managed_skills,
+    }
+}
+
+#[cfg(test)]
+mod runtime_snapshot_restore_spec_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn runtime_snapshot_restore_managed_skills_keeps_entries_without_display_metadata() {
+        let mut warnings = Vec::new();
+        let spec = build_runtime_snapshot_restore_managed_skills_spec(
+            &RuntimeSnapshotExternalSkillsState {
+                policy: mvp::tools::runtime_config::ExternalSkillsRuntimePolicy::default(),
+                override_active: false,
+                inventory_status: RuntimeSnapshotInventoryStatus::Ok,
+                inventory_error: None,
+                inventory: json!({
+                    "skills": [{
+                        "scope": "managed",
+                        "skill_id": "demo-skill",
+                        "source_kind": "directory",
+                        "source_path": "/tmp/demo-skill",
+                        "sha256": "deadbeef"
+                    }]
+                }),
+                resolved_skill_count: 1,
+                shadowed_skill_count: 0,
+            },
+            &mut warnings,
+        );
+
+        assert!(warnings.is_empty());
+        assert_eq!(spec.skills.len(), 1);
+        assert_eq!(spec.skills[0].skill_id, "demo-skill");
+        assert!(spec.skills[0].display_name.is_empty());
+        assert!(spec.skills[0].summary.is_empty());
+    }
+
+    #[test]
+    fn runtime_snapshot_provider_header_safety_uses_explicit_safe_names_only() {
+        assert!(runtime_snapshot_provider_header_is_safe_to_persist(
+            mvp::config::ProviderKind::Anthropic,
+            "anthropic-version",
+            "2023-06-01",
+        ));
+        assert!(runtime_snapshot_provider_header_is_safe_to_persist(
+            mvp::config::ProviderKind::Deepseek,
+            "anthropic-version",
+            "2023-06-01",
+        ));
+        assert!(runtime_snapshot_provider_header_is_safe_to_persist(
+            mvp::config::ProviderKind::Anthropic,
+            "anthropic-beta",
+            "prompt-caching-2024-07-31",
+        ));
+        assert!(runtime_snapshot_provider_header_is_safe_to_persist(
+            mvp::config::ProviderKind::Openai,
+            "openai-beta",
+            "assistants=v2",
+        ));
+        assert!(runtime_snapshot_provider_header_is_safe_to_persist(
+            mvp::config::ProviderKind::Deepseek,
+            "x-goog-api-key",
+            "${GOOGLE_API_KEY}",
+        ));
+        assert!(!runtime_snapshot_provider_header_is_safe_to_persist(
+            mvp::config::ProviderKind::Deepseek,
+            "x-secret-beta",
+            "literal-secret",
+        ));
+        assert!(!runtime_snapshot_provider_header_is_safe_to_persist(
+            mvp::config::ProviderKind::Deepseek,
+            "x-secret-version",
+            "literal-secret",
+        ));
     }
 }
 

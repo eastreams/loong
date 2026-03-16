@@ -328,6 +328,7 @@ fn runtime_snapshot_artifact_json_redacts_inline_provider_secrets_from_restore_s
                         "literal-header-secret".to_owned(),
                     ),
                     ("anthropic-version".to_owned(), "2023-06-01".to_owned()),
+                    ("x-secret-beta".to_owned(), "literal-beta-secret".to_owned()),
                     ("x-goog-api-key".to_owned(), "${GOOGLE_API_KEY}".to_owned()),
                     ("user-agent".to_owned(), "loongclaw-test-suite".to_owned()),
                 ]),
@@ -345,18 +346,24 @@ fn runtime_snapshot_artifact_json_redacts_inline_provider_secrets_from_restore_s
     assert!(profile["oauth_access_token"].is_null());
     assert!(profile["headers"]["anthropic-api-key"].is_null());
     assert_eq!(profile["headers"]["anthropic-version"], "2023-06-01");
+    assert!(profile["headers"]["x-secret-beta"].is_null());
     assert_eq!(profile["headers"]["x-goog-api-key"], "${GOOGLE_API_KEY}");
     assert_eq!(profile["headers"]["user-agent"], "loongclaw-test-suite");
+    let warnings = payload["restore_spec"]["warnings"]
+        .as_array()
+        .expect("warnings should be an array");
     assert!(
-        payload["restore_spec"]["warnings"]
-            .as_array()
-            .expect("warnings should be an array")
+        warnings.iter().filter_map(Value::as_str).any(
+            |warning| warning.contains("deepseek-lab") && warning.contains("anthropic-api-key")
+        ),
+        "restore spec should surface a warning for the redacted anthropic api key header"
+    );
+    assert!(
+        warnings
             .iter()
             .filter_map(Value::as_str)
-            .any(|warning| {
-                warning.contains("deepseek-lab") && warning.contains("anthropic-api-key")
-            }),
-        "restore spec should surface a warning for redacted inline provider headers"
+            .any(|warning| warning.contains("deepseek-lab") && warning.contains("x-secret-beta")),
+        "restore spec should surface a warning for the redacted beta-style secret header"
     );
 }
 
