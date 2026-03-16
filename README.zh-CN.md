@@ -135,6 +135,10 @@ cargo install --path crates/daemon
    loongclaw onboard
    ```
 
+   当前引导流程会依次带你完成 provider、原生 prompt personality、可选 prompt
+   addendum，以及 memory profile 的选择。只有在你明确想放弃原生 prompt pack
+   时，才建议改用 `--system-prompt` 做完整的 inline override。
+
 2. 按 onboarding 选中的环境变量名设置 provider 凭据：
 
    ```bash
@@ -167,6 +171,32 @@ cargo install --path crates/daemon
 ```bash
 cargo test --workspace --all-features
 ```
+
+## Prompt 与 Personality
+
+LoongClaw 内置了一个原生 prompt pack，并提供三个默认 personality。它们共享同一
+套安全优先边界，只会调整语气、主动性、确认阈值和回答密度：
+
+- `calm_engineering`：严谨、直接、技术导向
+- `friendly_collab`：更友好、更协作，在有帮助时会多解释一点
+- `autonomous_executor`：更果断、主动性更高、偏执行导向
+
+交互式 onboarding 默认会先走 personality 选择；如果你确实需要完全改写 system
+prompt，可以显式传 `--system-prompt` 进入 inline override 路径。保留原生 prompt
+pack 时，还可以在 onboarding 里填写一个可选的 prompt addendum，做轻量定制而不
+必放弃内置 prompt。
+
+## Memory Profiles
+
+LoongClaw 把记忆行为和存储后端解耦。当前后端仍然是 SQLite，但 operator 已经可以
+在 onboarding 中选择三种 context injection 模式：
+
+- `window_only`：只加载最近的 sliding window
+- `window_plus_summary`：在最近窗口前加入更早轮次的摘要块
+- `profile_plus_window`：在最近窗口前注入 durable `profile_note`
+
+`profile_note` 是当前 alpha-test 中最适合迁移旧 claw 身份、长期偏好和稳定操作习惯
+的持久记忆通道，不需要再把所有长期设定都硬塞进 system prompt。
 
 ## 记忆配置与记忆系统
 

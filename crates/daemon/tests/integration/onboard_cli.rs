@@ -313,6 +313,8 @@ fn default_non_interactive_onboard_options(
         provider: None,
         model: None,
         api_key_env: None,
+        personality: None,
+        memory_profile: None,
         system_prompt: None,
         skip_model_probe: false,
     }
@@ -449,6 +451,43 @@ fn provider_kind_id_mapping_includes_kimi_coding() {
 }
 
 #[test]
+fn parse_prompt_personality_accepts_supported_ids() {
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("calm_engineering"),
+        Some(mvp::prompt::PromptPersonality::CalmEngineering)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("friendly_collab"),
+        Some(mvp::prompt::PromptPersonality::FriendlyCollab)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("autonomous_executor"),
+        Some(mvp::prompt::PromptPersonality::AutonomousExecutor)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("unknown"),
+        None
+    );
+}
+
+#[test]
+fn parse_memory_profile_accepts_supported_ids() {
+    assert_eq!(
+        crate::onboard_cli::parse_memory_profile("window_only"),
+        Some(mvp::config::MemoryProfile::WindowOnly)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_memory_profile("window_plus_summary"),
+        Some(mvp::config::MemoryProfile::WindowPlusSummary)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_memory_profile("profile_plus_window"),
+        Some(mvp::config::MemoryProfile::ProfilePlusWindow)
+    );
+    assert_eq!(crate::onboard_cli::parse_memory_profile("unknown"), None);
+}
+
+#[test]
 fn supported_provider_list_matches_canonical_provider_catalog() {
     let expected = mvp::config::ProviderKind::all_sorted()
         .iter()
@@ -472,6 +511,104 @@ fn non_interactive_requires_explicit_risk_acknowledgement() {
         .expect("risk gate should pass after acknowledgement");
     loongclaw_daemon::onboard_cli::validate_non_interactive_risk_gate(false, false)
         .expect("interactive mode should not require explicit flag");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn non_interactive_personality_and_memory_profile_are_persisted() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    unsafe {
+        std::env::set_var("OPENAI_API_KEY", "openai-test-token");
+    }
+
+    let output_path = unique_temp_path("non-interactive-personality-memory-config.toml");
+    let transcript = run_scripted_onboard_flow(
+        crate::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: true,
+            accept_risk: true,
+            provider: Some("openai".to_owned()),
+            model: Some("openai/gpt-5.1".to_owned()),
+            api_key_env: Some("OPENAI_API_KEY".to_owned()),
+            personality: Some("friendly_collab".to_owned()),
+            memory_profile: Some("profile_plus_window".to_owned()),
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        std::iter::empty::<String>(),
+        None,
+        None,
+    )
+    .await
+    .expect("run non-interactive onboarding with personality and memory profile");
+
+    assert!(
+        transcript
+            .iter()
+            .any(|line| line.contains("onboarding complete")),
+        "non-interactive personality/memory path should still complete successfully: {transcript:#?}"
+    );
+
+    let (_, config) = mvp::config::load(output_path.to_str())
+        .expect("load non-interactive personality/memory config");
+    assert_eq!(
+        config.cli.personality,
+        Some(mvp::prompt::PromptPersonality::FriendlyCollab)
+    );
+    assert_eq!(
+        config.memory.profile,
+        mvp::config::MemoryProfile::ProfilePlusWindow
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn non_interactive_system_prompt_override_disables_prompt_pack() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    unsafe {
+        std::env::set_var("OPENAI_API_KEY", "openai-test-token");
+    }
+
+    let output_path = unique_temp_path("non-interactive-inline-prompt-config.toml");
+    let transcript = run_scripted_onboard_flow(
+        crate::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: true,
+            accept_risk: true,
+            provider: Some("openai".to_owned()),
+            model: Some("openai/gpt-5.1".to_owned()),
+            api_key_env: Some("OPENAI_API_KEY".to_owned()),
+            personality: None,
+            memory_profile: None,
+            system_prompt: Some("Stay concise and technical.".to_owned()),
+            skip_model_probe: true,
+        },
+        std::iter::empty::<String>(),
+        None,
+        None,
+    )
+    .await
+    .expect("run non-interactive onboarding with an inline system prompt override");
+
+    assert!(
+        transcript
+            .iter()
+            .any(|line| line.contains("onboarding complete")),
+        "non-interactive inline override path should still complete successfully: {transcript:#?}"
+    );
+
+    let (_, config) =
+        mvp::config::load(output_path.to_str()).expect("load inline override config");
+
+    assert!(
+        !config.cli.uses_native_prompt_pack(),
+        "explicit inline prompt override should disable the native prompt pack metadata"
+    );
+    assert_eq!(
+        config.cli.system_prompt_addendum, None,
+        "inline override should not keep a native prompt addendum behind"
+    );
+    assert_eq!(config.cli.system_prompt, "Stay concise and technical.");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -848,6 +985,8 @@ async fn interactive_onboard_clear_token_keeps_inline_provider_credential() {
             provider: None,
             model: None,
             api_key_env: None,
+            personality: None,
+            memory_profile: None,
             system_prompt: None,
             skip_model_probe: true,
         },
@@ -893,6 +1032,8 @@ async fn interactive_onboard_clear_token_restores_builtin_system_prompt() {
             provider: None,
             model: None,
             api_key_env: None,
+            personality: None,
+            memory_profile: None,
             system_prompt: None,
             skip_model_probe: true,
         },
@@ -977,6 +1118,8 @@ requires_openai_auth = true
             provider: None,
             model: None,
             api_key_env: None,
+            personality: None,
+            memory_profile: None,
             system_prompt: None,
             skip_model_probe: false,
         },
@@ -1016,6 +1159,8 @@ requires_openai_auth = true
             provider: None,
             model: None,
             api_key_env: None,
+            personality: None,
+            memory_profile: None,
             system_prompt: None,
             skip_model_probe: false,
         },
@@ -1747,7 +1892,7 @@ fn onboard_presentation_review_and_shortcut_copy_stays_canonical() {
     let guided = loongclaw_daemon::onboard_presentation::review_flow_copy(
         loongclaw_daemon::onboard_presentation::ReviewFlowKind::Guided,
     );
-    assert_eq!(guided.progress_line, "step 5 of 5 · review");
+    assert_eq!(guided.progress_line, "step 7 of 7 · review");
     assert_eq!(guided.header_subtitle, "review setup");
 
     let quick_current = loongclaw_daemon::onboard_presentation::review_flow_copy(
@@ -2474,7 +2619,7 @@ fn onboard_provider_selection_screen_includes_focus_title_and_choices() {
         "provider choice screen should use a focused decision title: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line == "step 1 of 5 · provider"),
+        lines.iter().any(|line| line == "step 1 of 7 · provider"),
         "provider choice screen should keep the guided-flow progress context inside the screen: {lines:#?}"
     );
     assert!(
@@ -2903,6 +3048,8 @@ fn onboard_current_setup_shortcut_is_limited_to_healthy_interactive_keep_flow() 
         provider: None,
         model: None,
         api_key_env: None,
+        personality: None,
+        memory_profile: None,
         system_prompt: None,
         skip_model_probe: false,
     };
@@ -3022,6 +3169,8 @@ fn onboard_detected_setup_shortcut_is_limited_to_interactive_import_flow_with_de
         provider: None,
         model: None,
         api_key_env: None,
+        personality: None,
+        memory_profile: None,
         system_prompt: None,
         skip_model_probe: false,
     };
@@ -3701,7 +3850,7 @@ fn onboard_model_selection_screen_keeps_provider_context() {
         "model screen should use a focused title: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line == "step 2 of 5 · model"),
+        lines.iter().any(|line| line == "step 2 of 7 · model"),
         "model screen should include guided progress context without relying on an external step header: {lines:#?}"
     );
     assert!(
@@ -3779,7 +3928,7 @@ fn onboard_model_selection_screen_wraps_compact_header_and_progress_on_narrow_wi
         "narrow model screen should split the compact header instead of forcing brand and version onto one line: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line == "step 2 of 5 · model"),
+        lines.iter().any(|line| line == "step 2 of 7 · model"),
         "narrow model screen should still keep the step context visible: {lines:#?}"
     );
 }
@@ -3808,7 +3957,7 @@ fn onboard_api_key_env_screen_explains_suggested_env_and_blank_behavior() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "step 3 of 5 · credential source"),
+            .any(|line| line == "step 3 of 7 · credential source"),
         "credential-env screen should include guided progress context inside the screen: {lines:#?}"
     );
     assert!(
@@ -3903,7 +4052,7 @@ fn onboard_api_key_env_screen_wraps_progress_line_on_narrow_width() {
         "credential-env screen should keep the progress line within narrow terminal widths: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line == "step 3 of 5 ·"),
+        lines.iter().any(|line| line == "step 3 of 7 ·"),
         "narrow credential-env screen should keep the step label on the first wrapped line: {lines:#?}"
     );
     assert!(
@@ -3931,7 +4080,7 @@ fn onboard_system_prompt_screen_explains_blank_behavior() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "step 4 of 5 · system prompt"),
+            .any(|line| line == "step 4 of 6 · system prompt"),
         "system-prompt screen should include guided progress context inside the screen: {lines:#?}"
     );
     assert!(
@@ -4000,6 +4149,83 @@ fn onboard_system_prompt_screen_wraps_long_current_prompt() {
             .iter()
             .any(|line| line == "  code-focused when reviewing repo state"),
         "system-prompt screen should continue wrapped prompt text on an indented line: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_personality_selection_screen_shows_native_personality_choices() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.cli.personality = Some(mvp::prompt::PromptPersonality::FriendlyCollab);
+
+    let lines = crate::onboard_cli::render_personality_selection_screen_lines(&config, 80);
+
+    assert!(
+        lines.iter().any(|line| line == "choose personality"),
+        "personality screen should use a focused title: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "step 4 of 7 · personality"),
+        "personality screen should surface the native prompt-pack progress step: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("[friendly_collab]")),
+        "personality screen should show the canonical friendly_collab selector: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_prompt_addendum_screen_explains_keep_and_clear_behavior() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.cli.system_prompt_addendum = Some("Keep answers direct.".to_owned());
+
+    let lines = crate::onboard_cli::render_prompt_addendum_selection_screen_lines(&config, 80);
+
+    assert!(
+        lines.iter().any(|line| line == "adjust prompt addendum"),
+        "prompt-addendum screen should use a focused title: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "step 5 of 7 · prompt addendum"),
+        "prompt-addendum screen should surface the native prompt-pack progress step: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("blank keeps the current addendum")),
+        "prompt-addendum screen should explain how to preserve the current addendum: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("type '-' to clear it")),
+        "prompt-addendum screen should explain how to clear the current addendum: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_memory_profile_screen_shows_supported_profiles() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.memory.profile = mvp::config::MemoryProfile::ProfilePlusWindow;
+
+    let lines = crate::onboard_cli::render_memory_profile_selection_screen_lines(&config, 80);
+
+    assert!(
+        lines.iter().any(|line| line == "choose memory profile"),
+        "memory-profile screen should use a focused title: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "step 6 of 7 · memory profile"),
+        "memory-profile screen should surface the native prompt-pack progress step: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("[profile_plus_window]")),
+        "memory-profile screen should show the canonical profile_plus_window selector: {lines:#?}"
     );
 }
 
@@ -4211,7 +4437,7 @@ fn onboard_preflight_screen_summarizes_status_counts_and_guidance() {
         "preflight screen should use a focused title: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line == "step 5 of 5 · review"),
+        lines.iter().any(|line| line == "step 7 of 7 · review"),
         "preflight screen should stay anchored to the review step: {lines:#?}"
     );
     assert!(
@@ -4328,7 +4554,7 @@ fn current_setup_preflight_screen_uses_quick_review_progress_copy() {
         "current-setup preflight should use quick-review progress copy: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| line != "step 5 of 5 · review"),
+        lines.iter().all(|line| line != "step 7 of 7 · review"),
         "current-setup preflight should not reuse the guided step progress copy: {lines:#?}"
     );
 }
@@ -4354,7 +4580,7 @@ fn detected_setup_preflight_screen_uses_quick_review_progress_copy() {
         "detected-setup preflight should use quick-review progress copy: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| line != "step 5 of 5 · review"),
+        lines.iter().all(|line| line != "step 7 of 7 · review"),
         "detected-setup preflight should not reuse the guided step progress copy: {lines:#?}"
     );
 }
@@ -4444,7 +4670,7 @@ fn current_setup_write_confirmation_screen_uses_quick_review_progress_copy() {
         "current-setup write-confirm should use quick-review progress copy: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| line != "step 5 of 5 · review"),
+        lines.iter().all(|line| line != "step 7 of 7 · review"),
         "current-setup write-confirm should not reuse the guided step progress copy: {lines:#?}"
     );
 }
@@ -4465,7 +4691,7 @@ fn detected_setup_write_confirmation_screen_uses_quick_review_progress_copy() {
         "detected-setup write-confirm should use quick-review progress copy: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| line != "step 5 of 5 · review"),
+        lines.iter().all(|line| line != "step 7 of 7 · review"),
         "detected-setup write-confirm should not reuse the guided step progress copy: {lines:#?}"
     );
 }
@@ -4494,6 +4720,8 @@ async fn onboard_current_setup_shortcut_flow_skips_detailed_edit_screens() {
             provider: None,
             model: None,
             api_key_env: None,
+            personality: None,
+            memory_profile: None,
             system_prompt: None,
             skip_model_probe: true,
         },
@@ -4574,6 +4802,8 @@ requires_openai_auth = true
             provider: None,
             model: None,
             api_key_env: None,
+            personality: None,
+            memory_profile: None,
             system_prompt: None,
             skip_model_probe: true,
         },
@@ -4669,6 +4899,8 @@ requires_openai_auth = true
             provider: None,
             model: None,
             api_key_env: None,
+            personality: None,
+            memory_profile: None,
             system_prompt: None,
             skip_model_probe: true,
         },
@@ -4722,6 +4954,8 @@ requires_openai_auth = true
             provider: None,
             model: None,
             api_key_env: None,
+            personality: None,
+            memory_profile: None,
             system_prompt: None,
             skip_model_probe: true,
         },
@@ -4772,6 +5006,8 @@ async fn onboard_current_setup_adjustments_preserve_unchanged_domain_actions_in_
             provider: None,
             model: None,
             api_key_env: None,
+            personality: None,
+            memory_profile: None,
             system_prompt: None,
             skip_model_probe: true,
         },
@@ -4792,7 +5028,7 @@ async fn onboard_current_setup_adjustments_preserve_unchanged_domain_actions_in_
     .await
     .expect("run scripted current-setup onboarding with adjustments");
 
-    let review_lines = extract_review_section_lines(&transcript, "step 5 of 5 · review");
+    let review_lines = extract_review_section_lines(&transcript, "step 7 of 7 · review");
     let has_domain_action = |domain_label: &str, action_label: &str| {
         review_lines.iter().enumerate().any(|(index, line)| {
             line.contains(&format!("- {domain_label} ["))
@@ -4845,6 +5081,110 @@ async fn onboard_current_setup_adjustments_preserve_unchanged_domain_actions_in_
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn onboard_current_setup_adjustments_capture_personality_and_memory_profile() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let workspace_root = unique_temp_path("current-adjusted-personality-memory-workspace");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
+        .expect("write workspace guidance");
+
+    let output_path = unique_temp_path("current-adjusted-personality-memory-config.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key = Some("inline-secret".to_owned());
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        crate::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        [
+            "1",
+            "2",
+            "openai",
+            "gpt-4.1",
+            "OPENAI_API_KEY",
+            "friendly_collab",
+            "",
+            "profile_plus_window",
+            "y",
+            "y",
+            "o",
+        ],
+        Some(workspace_root),
+        None,
+    )
+    .await
+    .expect("run scripted current-setup onboarding with personality and memory profile changes");
+
+    let joined = transcript.join("\n");
+    assert!(
+        joined.contains("step 4 of 7 · personality"),
+        "guided current-setup adjustments should expose a dedicated personality step: {transcript:#?}"
+    );
+    assert!(
+        joined.contains("step 5 of 7 · prompt addendum"),
+        "guided current-setup adjustments should expose a dedicated prompt-addendum step: {transcript:#?}"
+    );
+    assert!(
+        joined.contains("step 6 of 7 · memory profile"),
+        "guided current-setup adjustments should expose a dedicated memory-profile step: {transcript:#?}"
+    );
+
+    let (_, config) = mvp::config::load(output_path.to_str())
+        .expect("load current-setup personality/memory config");
+    assert_eq!(
+        config.cli.personality,
+        Some(mvp::prompt::PromptPersonality::FriendlyCollab)
+    );
+    assert_eq!(
+        config.memory.profile,
+        mvp::config::MemoryProfile::ProfilePlusWindow
+    );
+}
+
+#[test]
+fn onboard_interactive_flow_defaults_back_to_native_prompt_pack_even_from_inline_override() {
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.cli.prompt_pack_id = Some(String::new());
+    existing.cli.personality = None;
+    existing.cli.system_prompt_addendum = None;
+    existing.cli.system_prompt = "Stay terse and imperative.".to_owned();
+
+    let path = crate::onboard_cli::resolve_guided_prompt_path_label_for_test(
+        &crate::onboard_cli::OnboardCommandOptions {
+            output: None,
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        &existing,
+    );
+
+    assert_eq!(
+        path, "native",
+        "interactive onboarding should default back to the native prompt-pack path even when the current config uses an inline override"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn onboard_detected_setup_adjustments_preserve_unchanged_detected_actions_in_review() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let workspace_root = unique_temp_path("detected-adjusted-review-workspace");
@@ -4876,6 +5216,8 @@ requires_openai_auth = true
             provider: None,
             model: None,
             api_key_env: None,
+            personality: None,
+            memory_profile: None,
             system_prompt: None,
             skip_model_probe: true,
         },
@@ -4896,7 +5238,7 @@ requires_openai_auth = true
     .await
     .expect("run scripted detected-setup onboarding with adjustments");
 
-    let review_lines = extract_review_section_lines(&transcript, "step 5 of 5 · review");
+    let review_lines = extract_review_section_lines(&transcript, "step 7 of 7 · review");
     let has_domain_action = |domain_label: &str, action_label: &str| {
         review_lines.iter().enumerate().any(|(index, line)| {
             line.contains(&format!("- {domain_label} ["))
@@ -4998,7 +5340,7 @@ fn onboard_review_lines_include_brand_header() {
         "review screen should retain a clear review heading under the brand block: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line == "step 5 of 5 · review"),
+        lines.iter().any(|line| line == "step 7 of 7 · review"),
         "review screen should include guided progress context inside the screen: {lines:#?}"
     );
 }
@@ -5025,6 +5367,24 @@ fn onboard_review_lines_include_core_setup_summary_for_fresh_setup() {
             .iter()
             .any(|line| line.contains("- credential source: ${OPENAI_API_KEY}")),
         "review should keep the suggested credential env visible for fresh setup flows: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- prompt mode: native prompt pack")),
+        "review should surface the active prompt mode for fresh setup flows: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- personality: calm_engineering")),
+        "review should surface the active native personality during onboarding: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- memory profile: window_only")),
+        "review should surface the selected memory profile during onboarding: {lines:#?}"
     );
 }
 
@@ -5111,7 +5471,7 @@ fn current_setup_review_lines_use_quick_review_progress_copy() {
         "current-setup review should use quick-review progress copy: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| line != "step 5 of 5 · review"),
+        lines.iter().all(|line| line != "step 7 of 7 · review"),
         "current-setup review should not reuse the guided step progress copy: {lines:#?}"
     );
 }
@@ -5132,7 +5492,7 @@ fn detected_setup_review_lines_use_quick_review_progress_copy() {
         "detected-setup review should use quick-review progress copy: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| line != "step 5 of 5 · review"),
+        lines.iter().all(|line| line != "step 7 of 7 · review"),
         "detected-setup review should not reuse the guided step progress copy: {lines:#?}"
     );
 }
@@ -5306,8 +5666,6 @@ fn onboarding_success_summary_includes_brand_header() {
 
     let lines =
         loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
-    let rendered = lines.join(" ");
-
     assert!(
         lines[0].starts_with("██╗"),
         "success summary should start with the shared LOONGCLAW brand block: {lines:#?}"
@@ -5321,10 +5679,30 @@ fn onboarding_success_summary_includes_brand_header() {
         "success summary should retain a clear completion heading: {lines:#?}"
     );
     assert!(
-        rendered
+        lines.join(" ")
             .contains("start here: loongclaw ask --config '/tmp/loongclaw-config.toml' --message")
-            && rendered.contains("Summarize this repository and suggest the best next step."),
+            && lines
+                .join(" ")
+                .contains("Summarize this repository and suggest the best next step."),
         "success summary should elevate ask as the primary handoff command even when wrapping is needed: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- prompt mode: native prompt pack")),
+        "success summary should include the prompt mode that onboarding persisted: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- personality: calm_engineering")),
+        "success summary should include the selected native personality: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- memory profile: window_only")),
+        "success summary should include the selected memory profile: {lines:#?}"
     );
 }
 
@@ -5367,6 +5745,10 @@ fn onboarding_success_summary_reports_existing_config_kept() {
             label: "credential source",
             value: "${OPENAI_API_KEY}".to_owned(),
         }),
+        prompt_mode: "native prompt pack".to_owned(),
+        personality: Some("calm_engineering".to_owned()),
+        prompt_addendum: None,
+        memory_profile: "window_only".to_owned(),
         memory_path: None,
         channels: vec!["cli".to_owned()],
         domain_outcomes: Vec::new(),
@@ -5440,6 +5822,10 @@ fn onboarding_success_summary_groups_domain_outcomes_by_decision() {
             label: "credential source",
             value: "${OPENAI_API_KEY}".to_owned(),
         }),
+        prompt_mode: "native prompt pack".to_owned(),
+        personality: Some("friendly_collab".to_owned()),
+        prompt_addendum: Some("Keep answers direct.".to_owned()),
+        memory_profile: "profile_plus_window".to_owned(),
         memory_path: None,
         channels: vec!["cli".to_owned()],
         domain_outcomes: vec![
@@ -5500,6 +5886,10 @@ fn onboarding_success_summary_wraps_domain_outcomes_for_narrow_width() {
             label: "credential source",
             value: "${OPENAI_API_KEY}".to_owned(),
         }),
+        prompt_mode: "native prompt pack".to_owned(),
+        personality: Some("friendly_collab".to_owned()),
+        prompt_addendum: Some("Keep answers direct.".to_owned()),
+        memory_profile: "profile_plus_window".to_owned(),
         memory_path: None,
         channels: vec!["cli".to_owned()],
         domain_outcomes: vec![

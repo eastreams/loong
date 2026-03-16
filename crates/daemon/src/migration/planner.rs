@@ -473,10 +473,22 @@ fn supplement_cli_config(
         target.enabled = true;
         changed = true;
     }
-    if target.system_prompt == default.system_prompt
-        && source.system_prompt != default.system_prompt
-    {
+    let target_prompt_defaults = target.prompt_pack_id == default.prompt_pack_id
+        && target.personality == default.personality
+        && target.system_prompt_addendum == default.system_prompt_addendum
+        && target.system_prompt == default.system_prompt;
+    let source_prompt_changed = source.prompt_pack_id != default.prompt_pack_id
+        || source.personality != default.personality
+        || source.system_prompt_addendum != default.system_prompt_addendum
+        || source.system_prompt != default.system_prompt;
+    if target_prompt_defaults && source_prompt_changed {
+        target.prompt_pack_id = source.prompt_pack_id.clone();
+        target.personality = source.personality;
+        target.system_prompt_addendum = source.system_prompt_addendum.clone();
         target.system_prompt = source.system_prompt.clone();
+        if target.uses_native_prompt_pack() {
+            target.refresh_native_system_prompt();
+        }
         changed = true;
     }
     for command in &source.exit_commands {
@@ -494,6 +506,10 @@ fn supplement_memory_config(
 ) -> bool {
     let default = mvp::config::MemoryConfig::default();
     let mut changed = false;
+    if target.profile == default.profile && source.profile != default.profile {
+        target.profile = source.profile;
+        changed = true;
+    }
     if target.sqlite_path == default.sqlite_path && source.sqlite_path != default.sqlite_path {
         target.sqlite_path = source.sqlite_path.clone();
         changed = true;
@@ -525,8 +541,33 @@ fn supplement_tool_config(
     changed
 }
 
-fn cli_summary(_config: &mvp::config::CliChannelConfig, supplemented_from: &[String]) -> String {
-    let mut summary = "custom CLI behavior detected".to_owned();
+fn cli_summary(config: &mvp::config::CliChannelConfig, supplemented_from: &[String]) -> String {
+    let mut parts = Vec::new();
+    if config.uses_native_prompt_pack() {
+        parts.push("native prompt pack".to_owned());
+        parts.push(format!(
+            "personality {}",
+            crate::onboard_cli::prompt_personality_id(config.resolved_personality())
+        ));
+        if config
+            .system_prompt_addendum
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        {
+            parts.push("prompt addendum configured".to_owned());
+        }
+    } else if !config.system_prompt.trim().is_empty() {
+        parts.push("inline system prompt override".to_owned());
+    }
+    if config.exit_commands != mvp::config::CliChannelConfig::default().exit_commands {
+        parts.push(format!("exit commands {}", config.exit_commands.join(", ")));
+    }
+    let mut summary = if parts.is_empty() {
+        "custom CLI behavior detected".to_owned()
+    } else {
+        parts.join(" · ")
+    };
     if !supplemented_from.is_empty() {
         summary.push_str(" · supplemented from ");
         summary.push_str(&supplemented_from.join(", "));
@@ -536,7 +577,8 @@ fn cli_summary(_config: &mvp::config::CliChannelConfig, supplemented_from: &[Str
 
 fn memory_summary(config: &mvp::config::MemoryConfig, supplemented_from: &[String]) -> String {
     let mut summary = format!(
-        "{} · window {}",
+        "profile {} · {} · window {}",
+        config.profile.as_str(),
         config.resolved_sqlite_path().display(),
         config.sliding_window
     );

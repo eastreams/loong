@@ -560,6 +560,29 @@ fn migration_classify_current_setup_treats_provider_tuning_changes_as_repairable
 }
 
 #[test]
+fn migration_classify_current_setup_treats_prompt_and_memory_metadata_as_repairable() {
+    let path = unique_temp_dir("prompt-memory-metadata").join("config.toml");
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.kind = mvp::config::ProviderKind::Ollama;
+    let profile = config.provider.kind.profile();
+    config.provider.base_url = profile.base_url.to_owned();
+    config.provider.chat_completions_path = profile.chat_completions_path.to_owned();
+    config.provider.api_key_env = None;
+    config.provider.oauth_access_token_env = None;
+    config.cli.personality = Some(mvp::prompt::PromptPersonality::FriendlyCollab);
+    config.cli.refresh_native_system_prompt();
+    config.memory.profile = mvp::config::MemoryProfile::ProfilePlusWindow;
+    mvp::config::write(Some(path.to_string_lossy().as_ref()), &config, true)
+        .expect("write config with prompt and memory metadata");
+
+    assert_eq!(
+        crate::migration::discovery::classify_current_setup(&path),
+        crate::migration::types::CurrentSetupState::Repairable,
+        "prompt-pack or memory-profile metadata changes should not be collapsed into the legacy selection-only bucket"
+    );
+}
+
+#[test]
 fn migration_build_import_candidate_detects_provider_env_pointer_only_changes() {
     let mut config = mvp::config::LoongClawConfig::default();
     config.provider.api_key_env = Some("LOONGCLAW_CUSTOM_OPENAI_KEY".to_owned());
@@ -580,6 +603,56 @@ fn migration_build_import_candidate_detects_provider_env_pointer_only_changes() 
             .any(|domain| domain.kind
                 == loongclaw_daemon::migration::types::SetupDomainKind::Provider),
         "provider env-pointer-only changes should still surface as a provider import domain: {candidate:#?}"
+    );
+}
+
+#[test]
+fn migration_recommended_plan_supplements_cli_prompt_metadata_and_memory_profile() {
+    let mut current_config = mvp::config::LoongClawConfig::default();
+    current_config.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
+    let current = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::ExistingLoongClawConfig,
+        "existing config at ~/.config/loongclaw/config.toml".to_owned(),
+        current_config,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("current config candidate");
+
+    let mut detected_config = mvp::config::LoongClawConfig::default();
+    detected_config.cli.personality = Some(mvp::prompt::PromptPersonality::FriendlyCollab);
+    detected_config.cli.system_prompt_addendum = Some("Keep answers direct.".to_owned());
+    detected_config.cli.refresh_native_system_prompt();
+    detected_config.memory.profile = mvp::config::MemoryProfile::ProfilePlusWindow;
+
+    let detected = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::Environment,
+        "your current environment".to_owned(),
+        detected_config,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("detected prompt and memory metadata should build as a candidate");
+
+    let recommended =
+        crate::migration::planner::compose_recommended_import_candidate(&[current, detected])
+            .expect("recommended import plan");
+
+    assert_eq!(
+        recommended.config.cli.personality,
+        Some(mvp::prompt::PromptPersonality::FriendlyCollab)
+    );
+    assert_eq!(
+        recommended.config.cli.system_prompt_addendum.as_deref(),
+        Some("Keep answers direct.")
+    );
+    assert!(
+        recommended.config.cli.uses_native_prompt_pack(),
+        "supplemented CLI config should stay on the native prompt-pack path"
+    );
+    assert_eq!(
+        recommended.config.memory.profile,
+        mvp::config::MemoryProfile::ProfilePlusWindow
     );
 }
 

@@ -16,7 +16,7 @@ pub struct ReviewFlowCopy {
 pub const fn review_flow_copy(kind: ReviewFlowKind) -> ReviewFlowCopy {
     match kind {
         ReviewFlowKind::Guided => ReviewFlowCopy {
-            progress_line: "step 5 of 5 · review",
+            progress_line: "step 7 of 7 · review",
             header_subtitle: "review setup",
         },
         ReviewFlowKind::QuickCurrentSetup => ReviewFlowCopy {
@@ -183,7 +183,7 @@ pub const fn shortcut_continue_detail() -> &'static str {
 }
 
 pub const fn shortcut_adjust_detail() -> &'static str {
-    "review provider, model, credentials, and cli behavior"
+    "review provider, model, credentials, prompt behavior, and memory"
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
