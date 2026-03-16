@@ -348,7 +348,7 @@ fn collect_domain_previews(
 
     let default_memory = mvp::config::MemoryConfig::default();
     if config.memory.profile != default_memory.profile
-        || config.memory.sqlite_path != default_memory.sqlite_path
+        || !memory_sqlite_path_looks_default(&config.memory.sqlite_path, &default_memory)
         || config.memory.sliding_window != default_memory.sliding_window
     {
         domains.push(DomainPreview {
@@ -407,6 +407,23 @@ fn collect_domain_previews(
     }
 
     domains
+}
+
+fn memory_sqlite_path_looks_default(
+    sqlite_path: &str,
+    default_memory: &mvp::config::MemoryConfig,
+) -> bool {
+    if sqlite_path == default_memory.sqlite_path {
+        return true;
+    }
+
+    let current_default_path = Path::new(default_memory.sqlite_path.as_str());
+    let candidate_path = Path::new(sqlite_path);
+    candidate_path.file_name() == current_default_path.file_name()
+        && candidate_path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|component| component == ".loongclaw")
 }
 
 fn map_surface_level(level: ImportSurfaceLevel) -> PreviewStatus {

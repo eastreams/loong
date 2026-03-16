@@ -1678,6 +1678,61 @@ fn migration_compose_recommended_candidate_avoids_provider_auto_pick_on_cross_so
 }
 
 #[test]
+fn migration_compose_recommended_candidate_ignores_home_drift_for_default_memory_path() {
+    let home_a = unique_temp_dir("home-drift-a");
+    let home_b = unique_temp_dir("home-drift-b");
+    std::fs::create_dir_all(&home_a).expect("create first home");
+    std::fs::create_dir_all(&home_b).expect("create second home");
+
+    let (codex, env) = {
+        let _guard =
+            MigrationEnvironmentGuard::set(&[("HOME", Some(home_a.to_string_lossy().as_ref()))]);
+
+        let mut codex = mvp::config::LoongClawConfig::default();
+        codex.provider.model = "openai/gpt-5.1-codex".to_owned();
+        codex.provider.api_key = Some("openai-secret".to_owned());
+
+        let mut env = mvp::config::LoongClawConfig::default();
+        env.provider.kind = mvp::config::ProviderKind::Deepseek;
+        let profile = env.provider.kind.profile();
+        env.provider.base_url = profile.base_url.to_owned();
+        env.provider.chat_completions_path = profile.chat_completions_path.to_owned();
+        env.provider.model = "deepseek-chat".to_owned();
+        env.provider.api_key = Some("deepseek-secret".to_owned());
+        (codex, env)
+    };
+
+    let _guard =
+        MigrationEnvironmentGuard::set(&[("HOME", Some(home_b.to_string_lossy().as_ref()))]);
+
+    let codex_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml".to_owned(),
+        codex,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("codex candidate");
+    let env_candidate = crate::migration::discovery::build_import_candidate(
+        crate::migration::types::ImportSourceKind::Environment,
+        "your current environment".to_owned(),
+        env,
+        crate::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("env candidate");
+
+    let composed = crate::migration::planner::compose_recommended_import_candidate(&[
+        codex_candidate,
+        env_candidate,
+    ]);
+    assert!(
+        composed.is_none(),
+        "default memory sqlite paths should not create a fake recommended plan after HOME changes"
+    );
+}
+
+#[test]
 fn migration_compose_recommended_candidate_keeps_non_provider_domains_when_cross_source_provider_conflict_requires_manual_choice()
  {
     let mut codex = mvp::config::LoongClawConfig::default();
