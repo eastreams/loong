@@ -16,7 +16,7 @@ configured `preferred_models`.
 
 ---
 
-### Task 1: Add failing provider-config tests
+## Task 1: Add failing provider-config tests
 
 **Files:**
 - Modify: `crates/app/src/config/provider.rs`
@@ -43,7 +43,7 @@ cargo test -p loongclaw-app minimax_provider_exposes_onboarding_recommended_mode
 
 Expected: FAIL before implementation.
 
-### Task 2: Add failing onboarding tests
+## Task 2: Add failing onboarding tests
 
 **Files:**
 - Modify: `crates/daemon/src/onboard_cli.rs`
@@ -70,7 +70,7 @@ cargo test -p loongclaw-daemon provider_model_probe_failure_check
 
 Expected: FAIL before implementation.
 
-### Task 3: Add failing runtime messaging tests
+## Task 3: Add failing runtime messaging tests
 
 **Files:**
 - Modify: `crates/daemon/src/doctor_cli.rs`
@@ -95,7 +95,7 @@ cargo test -p loongclaw-daemon doctor_cli::tests::
 
 Expected: FAIL before implementation.
 
-### Task 4: Implement onboarding-only default model metadata
+## Task 4: Implement onboarding-only default model metadata
 
 **Files:**
 - Modify: `crates/app/src/config/provider.rs`
@@ -114,7 +114,7 @@ switch the default/prefill to the onboarding recommended model.
 
 Do not use this metadata in runtime model resolution.
 
-### Task 5: Remove hidden provider fallback seeding
+## Task 5: Remove hidden provider fallback seeding
 
 **Files:**
 - Modify: `crates/app/src/config/provider.rs`
@@ -136,7 +136,7 @@ Remove provider-kind built-in default preferred model lists.
 Update onboarding/doctor wording from "preferred model fallback(s)" to
 "configured preferred model fallback(s)" where applicable.
 
-### Task 6: Update docs
+## Task 6: Update docs
 
 **Files:**
 - Modify: `README.md`
@@ -151,7 +151,7 @@ Document that onboarding may prefill a provider-recommended explicit model.
 
 Keep the `Esc` cancellation guidance and WSL note from the earlier fix.
 
-### Task 7: Verification
+## Task 7: Verification
 
 Run:
 
@@ -167,7 +167,7 @@ cargo test --workspace --all-features
 
 Expected: PASS
 
-### Task 8: GitHub follow-through
+## Task 8: GitHub follow-through
 
 **Files:**
 - No code changes required if verification passes

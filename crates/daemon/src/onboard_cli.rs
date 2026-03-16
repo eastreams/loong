@@ -5163,11 +5163,8 @@ mod tests {
         }
 
         fn prompt_with_default(&mut self, _label: &str, default: &str) -> CliResult<String> {
-            let value = ensure_onboard_input_not_cancelled(
-                self.inputs
-                    .pop_front()
-                    .unwrap_or_else(|| default.to_owned()),
-            )?;
+            let value =
+                ensure_onboard_input_not_cancelled(self.inputs.pop_front().unwrap_or_default())?;
             let trimmed = value.trim();
             if trimmed.is_empty() {
                 return Ok(default.to_owned());
@@ -5180,7 +5177,7 @@ mod tests {
                 .inputs
                 .pop_front()
                 .ok_or_else(|| "missing required test input".to_owned())?;
-            ensure_onboard_input_not_cancelled(value)
+            Ok(ensure_onboard_input_not_cancelled(value)?.trim().to_owned())
         }
 
         fn prompt_confirm(&mut self, _message: &str, default: bool) -> CliResult<bool> {
@@ -5814,6 +5811,28 @@ mod tests {
             error.contains("cancelled"),
             "escape cancellation should produce a user-facing cancel error: {error}"
         );
+    }
+
+    #[test]
+    fn test_onboard_ui_prompt_with_default_only_checks_user_input_for_cancel() {
+        let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
+
+        let value = ui
+            .prompt_with_default("Provider", "\u{1b}")
+            .expect("missing input should keep the configured default");
+
+        assert_eq!(value, "\u{1b}");
+    }
+
+    #[test]
+    fn test_onboard_ui_prompt_required_trims_input_like_stdio() {
+        let mut ui = TestOnboardUi::with_inputs(["  minimax  "]);
+
+        let value = ui
+            .prompt_required("Provider")
+            .expect("required prompt should preserve stdio trimming semantics");
+
+        assert_eq!(value, "minimax");
     }
 
     #[test]
