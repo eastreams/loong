@@ -81,19 +81,23 @@ impl Drop for SkillsCliEnvironmentGuard {
     }
 }
 
-struct SkillsCliCurrentDirGuard {
+struct SkillsCliCurrentDirGuard<'a> {
+    _env: &'a SkillsCliEnvironmentGuard,
     original: PathBuf,
 }
 
-impl SkillsCliCurrentDirGuard {
-    fn set(path: &Path) -> Self {
+impl<'a> SkillsCliCurrentDirGuard<'a> {
+    fn set(env: &'a SkillsCliEnvironmentGuard, path: &Path) -> Self {
         let original = std::env::current_dir().expect("read current dir");
         std::env::set_current_dir(path).expect("set current dir");
-        Self { original }
+        Self {
+            _env: env,
+            original,
+        }
     }
 }
 
-impl Drop for SkillsCliCurrentDirGuard {
+impl Drop for SkillsCliCurrentDirGuard<'_> {
     fn drop(&mut self) {
         std::env::set_current_dir(&self.original).expect("restore current dir");
     }
@@ -393,8 +397,8 @@ fn execute_skills_command_list_anchors_project_scope_to_config_directory_when_fi
         "---\nname: outside-skill\ndescription: outside cwd skill.\n---\n\noutside instructions.\n",
     );
 
-    let _env = SkillsCliEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
-    let _cwd = SkillsCliCurrentDirGuard::set(&outside);
+    let env = SkillsCliEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
+    let _cwd = SkillsCliCurrentDirGuard::set(&env, &outside);
 
     let list = crate::skills_cli::execute_skills_command(crate::skills_cli::SkillsCommandOptions {
         config: Some(config_path.display().to_string()),
@@ -449,8 +453,8 @@ fn execute_skills_command_list_prefers_nearest_project_ancestor_for_duplicate_sk
     );
     fs::create_dir_all(root.join("workspace/subdir")).expect("create nested cwd");
 
-    let _env = SkillsCliEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
-    let _cwd = SkillsCliCurrentDirGuard::set(&root.join("workspace/subdir"));
+    let env = SkillsCliEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
+    let _cwd = SkillsCliCurrentDirGuard::set(&env, &root.join("workspace/subdir"));
 
     let list = crate::skills_cli::execute_skills_command(crate::skills_cli::SkillsCommandOptions {
         config: Some(config_path.display().to_string()),

@@ -1273,6 +1273,8 @@ fn normalize_skill_id(raw: &str) -> Result<String, String> {
 
 fn derive_skill_display_name(skill_markdown: &str, fallback: &str) -> String {
     let frontmatter = parse_skill_frontmatter(skill_markdown);
+    // Prefer the visible document title when present so operator-facing listings match
+    // the heading the skill author chose to present in SKILL.md.
     for line in skill_content_lines(skill_markdown) {
         let trimmed = line.trim();
         if let Some(title) = trimmed.strip_prefix("# ") {
@@ -1787,6 +1789,19 @@ fn load_directory_skill_markdown(skill_root: &Path) -> Result<String, String> {
             skill_root.display()
         ));
     }
+    let skill_md_metadata = fs::metadata(&skill_md_path).map_err(|error| {
+        format!(
+            "failed to inspect external skill source {}: {error}",
+            skill_md_path.display()
+        )
+    })?;
+    if skill_md_metadata.len() > DEFAULT_MAX_DOWNLOAD_BYTES as u64 {
+        return Err(format!(
+            "external skill source {} exceeds the {} byte size limit",
+            skill_md_path.display(),
+            DEFAULT_MAX_DOWNLOAD_BYTES
+        ));
+    }
     fs::read_to_string(&skill_md_path).map_err(|error| {
         format!(
             "failed to read external skill source {}: {error}",
@@ -1818,7 +1833,7 @@ fn visit_discoverable_skill_roots(
     let Ok(metadata) = fs::metadata(&canonical) else {
         return;
     };
-    if metadata.is_file() || !metadata.is_dir() {
+    if !metadata.is_dir() {
         return;
     }
 
@@ -1831,7 +1846,10 @@ fn visit_discoverable_skill_roots(
     let Ok(entries) = fs::read_dir(&canonical) else {
         return;
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let Ok(entry) = entry else {
+            continue;
+        };
         visit_discoverable_skill_roots(&entry.path(), roots, visited);
     }
 }
@@ -3481,5 +3499,24 @@ mod tests {
 
             fs::remove_dir_all(&root).ok();
         });
+    }
+
+    #[test]
+    fn load_directory_skill_markdown_rejects_oversized_skill_files() {
+        let root = unique_temp_dir("loongclaw-ext-skill-oversized");
+        fs::create_dir_all(&root).expect("create fixture root");
+        fs::write(
+            root.join(DEFAULT_SKILL_FILENAME),
+            vec![b'a'; DEFAULT_MAX_DOWNLOAD_BYTES + 1],
+        )
+        .expect("write oversized skill markdown");
+
+        let error = load_directory_skill_markdown(&root).expect_err("oversized skill should fail");
+        assert!(
+            error.contains("exceeds the"),
+            "unexpected oversized skill error: {error}"
+        );
+
+        fs::remove_dir_all(&root).ok();
     }
 }
