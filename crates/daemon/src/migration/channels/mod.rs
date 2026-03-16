@@ -194,11 +194,9 @@ pub(crate) fn collect_channel_next_actions(
                     .map(|subcommand| ChannelNextAction {
                         id: adapter.id,
                         label: descriptor.label,
-                        command: format!(
-                            "{} {} --config '{}'",
-                            mvp::config::CLI_COMMAND_NAME,
+                        command: crate::cli_handoff::format_subcommand_with_config(
                             subcommand,
-                            config_path
+                            config_path,
                         ),
                     })
             })

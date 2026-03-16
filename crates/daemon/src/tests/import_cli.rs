@@ -550,7 +550,7 @@ fn import_cli_apply_summary_wraps_long_path_and_domains_for_narrow_width() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "  \"say hello and verify this setup\""),
+            .any(|line| line == "  'say hello and verify this setup'"),
         "apply summary should keep the one-shot verification message visible on a wrapped continuation line: {lines:#?}"
     );
 }

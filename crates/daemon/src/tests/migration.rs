@@ -773,6 +773,23 @@ fn channel_registry_collects_serve_actions_for_enabled_channels() {
 }
 
 #[test]
+fn channel_registry_shell_quotes_config_paths_with_single_quotes() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = true;
+
+    let actions = crate::migration::channels::collect_channel_next_actions(
+        &config,
+        "/tmp/o'hara/loongclaw-config.toml",
+    );
+
+    assert_eq!(actions.len(), 1);
+    assert_eq!(
+        actions[0].command,
+        "loongclaw telegram-serve --config '/tmp/o'\"'\"'hara/loongclaw-config.toml'"
+    );
+}
+
+#[test]
 fn migration_render_preview_compacts_for_narrow_width() {
     let candidate = crate::migration::types::ImportCandidate {
         source_kind: crate::migration::types::ImportSourceKind::CodexConfig,

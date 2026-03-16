@@ -833,6 +833,51 @@ async fn non_interactive_system_prompt_clear_restores_builtin_prompt() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn non_interactive_onboard_preserves_existing_inline_prompt_without_explicit_override() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let root = unique_temp_path("non-interactive-inline-prompt-preserve-root");
+    std::fs::create_dir_all(&root).expect("create test root");
+    let output = root.join("loongclaw.toml");
+
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "openai/gpt-5.1-codex".to_owned();
+    existing.provider.api_key = Some("inline-secret".to_owned());
+    existing.cli.prompt_pack_id = None;
+    existing.cli.personality = None;
+    existing.cli.system_prompt = "keep the current advanced prompt".to_owned();
+    existing.cli.system_prompt_addendum = Some("retain the existing repo context".to_owned());
+    mvp::config::write(Some(output.to_string_lossy().as_ref()), &existing, true)
+        .expect("write existing config with inline prompt override");
+
+    let mut options = default_non_interactive_onboard_options(&output);
+    options.force = true;
+    options.skip_model_probe = true;
+    options.model = Some("openai/gpt-5.1-codex".to_owned());
+
+    let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
+    let context = crate::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    crate::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+        .await
+        .expect("rerunning onboarding should preserve existing inline prompt overrides");
+
+    let (_, config) = mvp::config::load(Some(output.to_string_lossy().as_ref()))
+        .expect("load written onboarding config");
+    assert_eq!(
+        config.cli.prompt_pack_id, None,
+        "rerunning onboarding without an explicit prompt-mode change should not silently re-enable the native prompt pack"
+    );
+    assert_eq!(
+        config.cli.system_prompt, "keep the current advanced prompt",
+        "rerunning onboarding should preserve the existing inline system prompt unless the operator explicitly overrides it"
+    );
+    assert_eq!(
+        config.cli.system_prompt_addendum.as_deref(),
+        Some("retain the existing repo context"),
+        "rerunning onboarding should preserve any existing advanced prompt addendum when no prompt-mode change was requested"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn interactive_onboard_clear_token_keeps_inline_provider_credential() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let output_path = unique_temp_path("interactive-clear-inline-credential.toml");
@@ -915,6 +960,30 @@ async fn interactive_onboard_clear_token_restores_builtin_system_prompt() {
     assert!(
         !joined.contains("choose assistant personality"),
         "explicit system-prompt overrides should keep the happy path out of raw prompt/personality editing: {transcript:#?}"
+    );
+    assert!(
+        joined.contains("step 1 of 5 · provider"),
+        "provider progress should reflect the skipped personality screen when explicit --system-prompt is supplied: {transcript:#?}"
+    );
+    assert!(
+        joined.contains("step 2 of 5 · model"),
+        "model progress should reflect the skipped personality screen when explicit --system-prompt is supplied: {transcript:#?}"
+    );
+    assert!(
+        joined.contains("step 3 of 5 · credential env var"),
+        "credential progress should reflect the skipped personality screen when explicit --system-prompt is supplied: {transcript:#?}"
+    );
+    assert!(
+        joined.contains("step 4 of 5 · memory profile"),
+        "guided progress should collapse to five steps when explicit --system-prompt skips the personality screen: {transcript:#?}"
+    );
+    assert!(
+        joined.contains("step 5 of 5 · review"),
+        "review progress should reflect the skipped personality screen when explicit --system-prompt is supplied: {transcript:#?}"
+    );
+    assert!(
+        !joined.contains("step 6 of 6 · review"),
+        "guided review progress should not claim a hidden sixth step after explicit --system-prompt skips personality selection: {transcript:#?}"
     );
 
     let (_, config) =
@@ -5380,7 +5449,7 @@ fn onboarding_success_summary_reports_existing_config_kept() {
         next_actions: vec![crate::onboard_cli::OnboardingAction {
             kind: crate::onboard_cli::OnboardingActionKind::Ask,
             label: "ask".to_owned(),
-            command: "loongclaw ask --config '/tmp/loongclaw-config.toml' --message \"say hello and verify this setup\"".to_owned(),
+            command: "loongclaw ask --config '/tmp/loongclaw-config.toml' --message 'say hello and verify this setup'".to_owned(),
             detail: "run one quick message to verify provider, personality, and memory".to_owned(),
         }],
     };
@@ -5467,7 +5536,7 @@ fn onboarding_success_summary_groups_domain_outcomes_by_decision() {
         next_actions: vec![crate::onboard_cli::OnboardingAction {
             kind: crate::onboard_cli::OnboardingActionKind::Ask,
             label: "ask".to_owned(),
-            command: "loongclaw ask --config '/tmp/loongclaw-config.toml' --message \"say hello and verify this setup\"".to_owned(),
+            command: "loongclaw ask --config '/tmp/loongclaw-config.toml' --message 'say hello and verify this setup'".to_owned(),
             detail: "run one quick message to verify provider, personality, and memory".to_owned(),
         }],
     };
@@ -5530,7 +5599,7 @@ fn onboarding_success_summary_wraps_domain_outcomes_for_narrow_width() {
         next_actions: vec![crate::onboard_cli::OnboardingAction {
             kind: crate::onboard_cli::OnboardingActionKind::Ask,
             label: "ask".to_owned(),
-            command: "loongclaw ask --config '/tmp/loongclaw-config.toml' --message \"say hello and verify this setup\"".to_owned(),
+            command: "loongclaw ask --config '/tmp/loongclaw-config.toml' --message 'say hello and verify this setup'".to_owned(),
             detail: "run one quick message to verify provider, personality, and memory".to_owned(),
         }],
     };

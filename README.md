@@ -293,9 +293,9 @@ tone, initiative, confirmation style, and response density.
 - `autonomous_executor`: decisive, high-initiative, and execution-oriented
 
 Interactive onboarding now walks through provider, model, credential env var,
-personality, and memory profile without dumping the raw prompt text onto the
-screen. Advanced operators can still pass `--system-prompt` for a full inline
-override.
+personality, memory profile, and a final review step without dumping the raw
+prompt text onto the screen. Advanced operators can still pass
+`--system-prompt` for a full inline override.
 
 ## Memory Profiles
 

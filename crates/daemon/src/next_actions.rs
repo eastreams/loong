@@ -20,27 +20,21 @@ pub(crate) fn collect_setup_next_actions(
     config: &mvp::config::LoongClawConfig,
     config_path: &str,
 ) -> Vec<SetupNextAction> {
-    let quoted_config_path = shell_quote(config_path);
     let mut actions = Vec::new();
     if config.cli.enabled {
         actions.push(SetupNextAction {
             kind: SetupNextActionKind::Ask,
             label: "ask".to_owned(),
-            command: format!(
-                "{} ask --config {} --message \"say hello and verify this setup\"",
-                mvp::config::CLI_COMMAND_NAME,
-                quoted_config_path
+            command: crate::cli_handoff::format_ask_with_config(
+                config_path,
+                crate::cli_handoff::DEFAULT_SETUP_SMOKE_TEST_MESSAGE,
             ),
             detail: "run one quick message to verify provider, personality, and memory".to_owned(),
         });
         actions.push(SetupNextAction {
             kind: SetupNextActionKind::Chat,
             label: "chat".to_owned(),
-            command: format!(
-                "{} chat --config {}",
-                mvp::config::CLI_COMMAND_NAME,
-                quoted_config_path
-            ),
+            command: crate::cli_handoff::format_subcommand_with_config("chat", config_path),
             detail: "open the interactive CLI session after the one-shot smoke test".to_owned(),
         });
     }
@@ -61,18 +55,10 @@ pub(crate) fn collect_setup_next_actions(
         actions.push(SetupNextAction {
             kind: SetupNextActionKind::Doctor,
             label: "doctor".to_owned(),
-            command: format!(
-                "{} doctor --config {}",
-                mvp::config::CLI_COMMAND_NAME,
-                quoted_config_path
-            ),
+            command: crate::cli_handoff::format_subcommand_with_config("doctor", config_path),
             detail: "inspect and repair the config when no direct runtime handoff is ready"
                 .to_owned(),
         });
     }
     actions
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }

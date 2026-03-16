@@ -37,6 +37,7 @@ use loongclaw_bench::{
     run_memory_context_benchmark_cli, run_programmatic_pressure_baseline_lint_cli,
     run_programmatic_pressure_benchmark_cli, run_wasm_cache_benchmark_cli,
 };
+mod cli_handoff;
 mod doctor_cli;
 mod feishu_cli;
 mod feishu_support;
@@ -278,7 +279,7 @@ enum Commands {
         /// Select a memory profile such as window_plus_summary
         #[arg(long = "memory-profile")]
         memory_profile: Option<String>,
-        /// Provide a full inline CLI system prompt override instead of using personality presets
+        /// Provide a full inline CLI system prompt override instead of using personality presets; if both are set, --system-prompt takes precedence over --personality
         #[arg(long)]
         system_prompt: Option<String>,
         /// Skip probing the resolved provider model list during onboarding

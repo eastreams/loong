@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 
 use crate::CliResult;
 use crate::prompt::{
@@ -160,9 +160,17 @@ pub struct CliChannelConfig {
     pub enabled: bool,
     #[serde(default = "default_system_prompt")]
     pub system_prompt: String,
-    #[serde(default = "default_prompt_pack_id")]
+    #[serde(
+        default = "default_prompt_pack_id",
+        serialize_with = "serialize_prompt_pack_id",
+        deserialize_with = "deserialize_prompt_pack_id"
+    )]
     pub prompt_pack_id: Option<String>,
-    #[serde(default = "default_prompt_personality")]
+    #[serde(
+        default = "default_prompt_personality",
+        serialize_with = "serialize_prompt_personality",
+        deserialize_with = "deserialize_prompt_personality"
+    )]
     pub personality: Option<PromptPersonality>,
     #[serde(default)]
     pub system_prompt_addendum: Option<String>,
@@ -1042,6 +1050,65 @@ fn default_feishu_webhook_path() -> String {
 
 fn default_system_prompt() -> String {
     render_default_system_prompt()
+}
+
+fn serialize_prompt_pack_id<S>(
+    prompt_pack_id: &Option<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(prompt_pack_id.as_deref().unwrap_or(""))
+}
+
+fn deserialize_prompt_pack_id<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(trimmed.to_owned()))
+}
+
+fn serialize_prompt_personality<S>(
+    personality: &Option<PromptPersonality>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(match personality {
+        Some(PromptPersonality::CalmEngineering) => "calm_engineering",
+        Some(PromptPersonality::FriendlyCollab) => "friendly_collab",
+        Some(PromptPersonality::AutonomousExecutor) => "autonomous_executor",
+        None => "",
+    })
+}
+
+fn deserialize_prompt_personality<'de, D>(
+    deserializer: D,
+) -> Result<Option<PromptPersonality>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    match trimmed {
+        "calm_engineering" => Ok(Some(PromptPersonality::CalmEngineering)),
+        "friendly_collab" => Ok(Some(PromptPersonality::FriendlyCollab)),
+        "autonomous_executor" => Ok(Some(PromptPersonality::AutonomousExecutor)),
+        other => Err(D::Error::custom(format!(
+            "unsupported prompt personality `{other}`"
+        ))),
+    }
 }
 
 fn default_prompt_pack_id() -> Option<String> {

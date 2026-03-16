@@ -1087,11 +1087,8 @@ fn build_doctor_next_steps(
 ) -> Vec<String> {
     let mut steps = Vec::new();
     let config_path_display = config_path.display().to_string();
-    let rerun_command = format!(
-        "{} doctor --config '{}'",
-        mvp::config::CLI_COMMAND_NAME,
-        config_path_display
-    );
+    let rerun_command =
+        crate::cli_handoff::format_subcommand_with_config("doctor", &config_path_display);
 
     if !fix_requested
         && checks.iter().any(|check| {
@@ -1927,6 +1924,35 @@ mod tests {
     }
 
     #[test]
+    fn build_doctor_next_steps_shell_quotes_config_paths_with_single_quotes() {
+        let checks = vec![DoctorCheck {
+            name: "memory path".to_owned(),
+            level: DoctorCheckLevel::Fail,
+            detail: "/tmp/o'hara/memory is missing".to_owned(),
+        }];
+
+        let next_steps = build_doctor_next_steps(
+            &checks,
+            Path::new("/tmp/o'hara/loongclaw.toml"),
+            &mvp::config::LoongClawConfig::default(),
+            false,
+        );
+
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Apply safe local repairs: loongclaw doctor --config '/tmp/o'\"'\"'hara/loongclaw.toml' --fix"
+            }),
+            "doctor repair guidance should shell-quote config paths with single quotes safely: {next_steps:#?}"
+        );
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Re-run diagnostics: loongclaw doctor --config '/tmp/o'\"'\"'hara/loongclaw.toml'"
+            }),
+            "doctor rerun guidance should shell-quote config paths with single quotes safely: {next_steps:#?}"
+        );
+    }
+
+    #[test]
     fn build_doctor_next_steps_promotes_ask_and_chat_when_green() {
         let checks = vec![
             DoctorCheck {
@@ -1949,7 +1975,7 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Try a one-shot task: loongclaw ask --config '/tmp/loongclaw.toml' --message \"say hello and verify this setup\""
+                step == "Try a one-shot task: loongclaw ask --config '/tmp/loongclaw.toml' --message 'say hello and verify this setup'"
             }),
             "green doctor runs should hand the user into ask immediately: {next_steps:#?}"
         );

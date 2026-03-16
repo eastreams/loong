@@ -135,6 +135,37 @@ fn is_explicit_onboard_clear_input(raw: &str) -> bool {
     raw.trim().eq_ignore_ascii_case(ONBOARD_CLEAR_INPUT_TOKEN)
 }
 
+fn explicit_system_prompt_override(options: &OnboardCommandOptions) -> Option<&str> {
+    options
+        .system_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn should_preserve_existing_inline_prompt_override(
+    options: &OnboardCommandOptions,
+    config: &mvp::config::LoongClawConfig,
+) -> bool {
+    explicit_system_prompt_override(options).is_none()
+        && options
+            .personality
+            .as_deref()
+            .map(str::trim)
+            .is_none_or(str::is_empty)
+        && !config.cli.uses_native_prompt_pack()
+}
+
+fn guided_flow_progress(
+    options: &OnboardCommandOptions,
+    config: &mvp::config::LoongClawConfig,
+) -> GuidedFlowProgress {
+    GuidedFlowProgress::with_personality_step(
+        explicit_system_prompt_override(options).is_none()
+            && !should_preserve_existing_inline_prompt_override(options, config),
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OnboardCheckLevel {
     Pass,
@@ -225,17 +256,6 @@ enum GuidedOnboardStep {
 impl GuidedOnboardStep {
     const TOTAL: usize = 6;
 
-    const fn index(self) -> usize {
-        match self {
-            GuidedOnboardStep::Provider => 1,
-            GuidedOnboardStep::Model => 2,
-            GuidedOnboardStep::CredentialEnvVar => 3,
-            GuidedOnboardStep::Personality => 4,
-            GuidedOnboardStep::MemoryProfile => 5,
-            GuidedOnboardStep::Review => 6,
-        }
-    }
-
     const fn label(self) -> &'static str {
         match self {
             GuidedOnboardStep::Provider => "provider",
@@ -248,11 +268,67 @@ impl GuidedOnboardStep {
     }
 
     fn progress_line(self) -> String {
+        GuidedFlowProgress::default().progress_line(self)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GuidedFlowProgress {
+    personality_step_enabled: bool,
+}
+
+impl Default for GuidedFlowProgress {
+    fn default() -> Self {
+        Self {
+            personality_step_enabled: true,
+        }
+    }
+}
+
+impl GuidedFlowProgress {
+    const fn with_personality_step(personality_step_enabled: bool) -> Self {
+        Self {
+            personality_step_enabled,
+        }
+    }
+
+    const fn total(self) -> usize {
+        if self.personality_step_enabled {
+            GuidedOnboardStep::TOTAL
+        } else {
+            GuidedOnboardStep::TOTAL - 1
+        }
+    }
+
+    const fn index(self, step: GuidedOnboardStep) -> usize {
+        match step {
+            GuidedOnboardStep::Provider => 1,
+            GuidedOnboardStep::Model => 2,
+            GuidedOnboardStep::CredentialEnvVar => 3,
+            GuidedOnboardStep::Personality => 4,
+            GuidedOnboardStep::MemoryProfile => {
+                if self.personality_step_enabled {
+                    5
+                } else {
+                    4
+                }
+            }
+            GuidedOnboardStep::Review => {
+                if self.personality_step_enabled {
+                    6
+                } else {
+                    5
+                }
+            }
+        }
+    }
+
+    fn progress_line(self, step: GuidedOnboardStep) -> String {
         format!(
             "step {} of {} · {}",
-            self.index(),
-            Self::TOTAL,
-            self.label()
+            self.index(step),
+            self.total(),
+            step.label()
         )
     }
 }
@@ -277,9 +353,9 @@ impl ReviewFlowStyle {
         }
     }
 
-    fn progress_line(self) -> String {
+    fn progress_line(self, guided_flow: GuidedFlowProgress) -> String {
         match self {
-            ReviewFlowStyle::Guided => GuidedOnboardStep::Review.progress_line(),
+            ReviewFlowStyle::Guided => guided_flow.progress_line(GuidedOnboardStep::Review),
             ReviewFlowStyle::QuickCurrentSetup | ReviewFlowStyle::QuickDetectedSetup => {
                 crate::onboard_presentation::review_flow_copy(self.presentation_kind())
                     .progress_line
@@ -485,6 +561,7 @@ pub(crate) async fn run_onboard_cli_with_ui(
     } else {
         false
     };
+    let guided_flow = guided_flow_progress(&options, &config);
     let review_flow_style = if skip_detailed_setup {
         shortcut_kind
             .map(OnboardShortcutKind::review_flow_style)
@@ -498,17 +575,24 @@ pub(crate) async fn run_onboard_cli_with_ui(
             &options,
             &config,
             &starting_selection.provider_selection,
+            guided_flow,
             ui,
             context,
         )?;
         config.provider = selected_provider;
 
-        let selected_model = resolve_model_selection(&options, &config, ui, context)?;
+        let selected_model = resolve_model_selection(&options, &config, guided_flow, ui, context)?;
         config.provider.model = selected_model;
 
         let default_api_key_env = preferred_api_key_env_default(&config);
-        let selected_api_key_env =
-            resolve_api_key_env_selection(&options, &config, default_api_key_env, ui, context)?;
+        let selected_api_key_env = resolve_api_key_env_selection(
+            &options,
+            &config,
+            default_api_key_env,
+            guided_flow,
+            ui,
+            context,
+        )?;
         config.provider.api_key_env = if selected_api_key_env.trim().is_empty() {
             None
         } else {
@@ -520,19 +604,19 @@ pub(crate) async fn run_onboard_cli_with_ui(
             config.provider.oauth_access_token_env = None;
         }
 
-        if let Some(system_prompt) = options
-            .system_prompt
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
+        if let Some(system_prompt) = explicit_system_prompt_override(&options) {
             apply_explicit_system_prompt_override(&options, &mut config, system_prompt)?;
+        } else if should_preserve_existing_inline_prompt_override(&options, &config) {
+            // Preserve existing advanced prompt overrides unless the operator explicitly asks
+            // to switch prompt mode via --system-prompt or --personality.
         } else {
-            let personality = resolve_personality_selection(&options, &config, ui, context)?;
+            let personality =
+                resolve_personality_selection(&options, &config, guided_flow, ui, context)?;
             apply_native_prompt_personality(&mut config, personality);
         }
 
-        config.memory.profile = resolve_memory_profile_selection(&options, &config, ui, context)?;
+        config.memory.profile =
+            resolve_memory_profile_selection(&options, &config, ui, context, guided_flow)?;
     }
 
     let workspace_guidance = context
@@ -555,6 +639,7 @@ pub(crate) async fn run_onboard_cli_with_ui(
                 starting_selection.review_candidate.as_ref(),
                 context.render_width,
                 review_flow_style,
+                guided_flow,
                 true,
             ),
         )?;
@@ -608,6 +693,7 @@ pub(crate) async fn run_onboard_cli_with_ui(
                 &checks,
                 context.render_width,
                 review_flow_style,
+                guided_flow,
                 true,
             ),
         )?;
@@ -628,6 +714,7 @@ pub(crate) async fn run_onboard_cli_with_ui(
                 has_failures || has_warnings,
                 context.render_width,
                 review_flow_style,
+                guided_flow,
                 true,
             ),
         )?;
@@ -742,6 +829,7 @@ fn resolve_provider_selection(
     options: &OnboardCommandOptions,
     config: &mvp::config::LoongClawConfig,
     provider_selection: &crate::migration::ProviderSelectionPlan,
+    guided_flow: GuidedFlowProgress,
     ui: &mut impl OnboardUi,
     context: &OnboardRuntimeContext,
 ) -> CliResult<mvp::config::ProviderConfig> {
@@ -786,6 +874,7 @@ fn resolve_provider_selection(
         render_provider_selection_screen_lines_with_style(
             provider_selection,
             context.render_width,
+            guided_flow,
             true,
         ),
     )?;
@@ -906,6 +995,7 @@ pub(crate) fn resolve_provider_config_from_selection(
 fn resolve_model_selection(
     options: &OnboardCommandOptions,
     config: &mvp::config::LoongClawConfig,
+    guided_flow: GuidedFlowProgress,
     ui: &mut impl OnboardUi,
     context: &OnboardRuntimeContext,
 ) -> CliResult<String> {
@@ -932,6 +1022,7 @@ fn resolve_model_selection(
             config,
             default_model,
             context.render_width,
+            guided_flow,
             true,
         ),
     )?;
@@ -947,6 +1038,7 @@ fn resolve_api_key_env_selection(
     options: &OnboardCommandOptions,
     config: &mvp::config::LoongClawConfig,
     default_api_key_env: String,
+    guided_flow: GuidedFlowProgress,
     ui: &mut impl OnboardUi,
     context: &OnboardRuntimeContext,
 ) -> CliResult<String> {
@@ -962,21 +1054,23 @@ fn resolve_api_key_env_selection(
     let initial = options
         .api_key_env
         .as_deref()
-        .map(str::trim)
+        .map(|value| normalize_provider_credential_env_selection(config, value))
+        .transpose()?
         .filter(|value| !value.is_empty())
-        .unwrap_or(default_api_key_env.as_str());
+        .unwrap_or_else(|| default_api_key_env.clone());
     print_lines(
         ui,
         render_api_key_env_selection_screen_lines_with_style(
             config,
             default_api_key_env.as_str(),
-            initial,
+            initial.as_str(),
             context.render_width,
+            guided_flow,
             true,
         ),
     )?;
     loop {
-        let value = ui.prompt_with_default("Credential env var", initial)?;
+        let value = ui.prompt_with_default("Credential env var", initial.as_str())?;
         match normalize_provider_credential_env_selection(config, &value) {
             Ok(normalized) => return Ok(normalized),
             Err(error) => print_message(ui, error)?,
@@ -987,6 +1081,7 @@ fn resolve_api_key_env_selection(
 fn resolve_personality_selection(
     options: &OnboardCommandOptions,
     config: &mvp::config::LoongClawConfig,
+    guided_flow: GuidedFlowProgress,
     ui: &mut impl OnboardUi,
     context: &OnboardRuntimeContext,
 ) -> CliResult<mvp::prompt::PromptPersonality> {
@@ -1012,6 +1107,7 @@ fn resolve_personality_selection(
         render_personality_selection_screen_lines_with_style(
             default_personality,
             context.render_width,
+            guided_flow,
             true,
         ),
     )?;
@@ -1037,6 +1133,7 @@ fn resolve_memory_profile_selection(
     config: &mvp::config::LoongClawConfig,
     ui: &mut impl OnboardUi,
     context: &OnboardRuntimeContext,
+    guided_flow: GuidedFlowProgress,
 ) -> CliResult<mvp::config::MemoryProfile> {
     if options.non_interactive {
         if let Some(profile_raw) = options.memory_profile.as_deref() {
@@ -1060,6 +1157,7 @@ fn resolve_memory_profile_selection(
         render_memory_profile_selection_screen_lines_with_style(
             default_profile,
             context.render_width,
+            guided_flow,
             true,
         ),
     )?;
@@ -1119,7 +1217,6 @@ fn apply_native_prompt_personality(
 ) {
     config.cli.prompt_pack_id = Some(mvp::prompt::DEFAULT_PROMPT_PACK_ID.to_owned());
     config.cli.personality = Some(personality);
-    config.cli.system_prompt_addendum = None;
     config.cli.refresh_native_system_prompt();
 }
 
@@ -2516,6 +2613,7 @@ pub(crate) fn render_onboard_review_lines_with_guidance(
         None,
         width,
         ReviewFlowStyle::Guided,
+        GuidedFlowProgress::default(),
         false,
     )
 }
@@ -2534,6 +2632,7 @@ pub(crate) fn render_current_setup_review_lines_with_guidance(
         None,
         width,
         ReviewFlowStyle::QuickCurrentSetup,
+        GuidedFlowProgress::default(),
         false,
     )
 }
@@ -2552,6 +2651,7 @@ pub(crate) fn render_detected_setup_review_lines_with_guidance(
         None,
         width,
         ReviewFlowStyle::QuickDetectedSetup,
+        GuidedFlowProgress::default(),
         false,
     )
 }
@@ -2670,12 +2770,13 @@ fn render_onboard_review_lines_with_guidance_and_style(
     selected_candidate: Option<&ImportCandidate>,
     width: usize,
     flow_style: ReviewFlowStyle,
+    guided_flow: GuidedFlowProgress,
     color_enabled: bool,
 ) -> Vec<String> {
     let mut lines = render_onboard_brand_header(width, flow_style.header_subtitle(), color_enabled);
     lines.push(String::new());
     lines.push("review setup".to_owned());
-    lines.push(flow_style.progress_line());
+    lines.push(flow_style.progress_line(guided_flow));
     if let Some(source) = import_source {
         lines.extend(mvp::presentation::render_wrapped_text_line(
             "- starting point: ",
@@ -3121,14 +3222,35 @@ fn render_onboard_choice_screen(
     footer_lines: Vec<String>,
     color_enabled: bool,
 ) -> Vec<String> {
+    render_onboard_choice_screen_with_progress_line(
+        header_style,
+        width,
+        subtitle,
+        title,
+        step.map(GuidedOnboardStep::progress_line),
+        intro_lines,
+        options,
+        footer_lines,
+        color_enabled,
+    )
+}
+
+fn render_onboard_choice_screen_with_progress_line(
+    header_style: OnboardHeaderStyle,
+    width: usize,
+    subtitle: &str,
+    title: &str,
+    progress_line: Option<String>,
+    intro_lines: Vec<String>,
+    options: Vec<OnboardScreenOption>,
+    footer_lines: Vec<String>,
+    color_enabled: bool,
+) -> Vec<String> {
     let mut lines = render_onboard_header(header_style, width, subtitle, color_enabled);
     lines.push(String::new());
     lines.extend(render_onboard_wrapped_display_lines([title], width));
-    if let Some(step) = step {
-        lines.extend(render_onboard_wrapped_display_lines(
-            [step.progress_line()],
-            width,
-        ));
+    if let Some(progress_line) = progress_line {
+        lines.extend(render_onboard_wrapped_display_lines([progress_line], width));
     }
     if !intro_lines.is_empty() {
         lines.push(render_onboard_section_heading("current context"));
@@ -3146,10 +3268,10 @@ fn render_onboard_choice_screen(
     lines
 }
 
-fn render_onboard_input_screen(
+fn render_onboard_input_screen_with_progress_line(
     width: usize,
     title: &str,
-    step: GuidedOnboardStep,
+    progress_line: String,
     context_lines: Vec<String>,
     hint_lines: Vec<String>,
     color_enabled: bool,
@@ -3157,10 +3279,7 @@ fn render_onboard_input_screen(
     let mut lines = render_onboard_header(OnboardHeaderStyle::Compact, width, "", color_enabled);
     lines.push(String::new());
     lines.extend(render_onboard_wrapped_display_lines([title], width));
-    lines.extend(render_onboard_wrapped_display_lines(
-        [step.progress_line()],
-        width,
-    ));
+    lines.extend(render_onboard_wrapped_display_lines([progress_line], width));
     if !context_lines.is_empty() {
         lines.push(render_onboard_section_heading("current context"));
         lines.extend(render_onboard_wrapped_display_lines(context_lines, width));
@@ -3301,7 +3420,13 @@ pub(crate) fn render_preflight_summary_screen_lines(
     checks: &[OnboardCheck],
     width: usize,
 ) -> Vec<String> {
-    render_preflight_summary_screen_lines_with_style(checks, width, ReviewFlowStyle::Guided, false)
+    render_preflight_summary_screen_lines_with_style(
+        checks,
+        width,
+        ReviewFlowStyle::Guided,
+        GuidedFlowProgress::default(),
+        false,
+    )
 }
 
 #[cfg(test)]
@@ -3313,6 +3438,7 @@ pub(crate) fn render_current_setup_preflight_summary_screen_lines(
         checks,
         width,
         ReviewFlowStyle::QuickCurrentSetup,
+        GuidedFlowProgress::default(),
         false,
     )
 }
@@ -3326,6 +3452,7 @@ pub(crate) fn render_detected_setup_preflight_summary_screen_lines(
         checks,
         width,
         ReviewFlowStyle::QuickDetectedSetup,
+        GuidedFlowProgress::default(),
         false,
     )
 }
@@ -3334,6 +3461,7 @@ fn render_preflight_summary_screen_lines_with_style(
     checks: &[OnboardCheck],
     width: usize,
     flow_style: ReviewFlowStyle,
+    guided_flow: GuidedFlowProgress,
     color_enabled: bool,
 ) -> Vec<String> {
     let counts = summarize_onboard_checks(checks);
@@ -3363,7 +3491,7 @@ fn render_preflight_summary_screen_lines_with_style(
         width,
     ));
     lines.extend(render_onboard_wrapped_display_lines(
-        [flow_style.progress_line()],
+        [flow_style.progress_line(guided_flow)],
         width,
     ));
     lines.extend(render_onboard_wrapped_display_lines(summary_lines, width));
@@ -3415,6 +3543,7 @@ pub(crate) fn render_write_confirmation_screen_lines(
         warnings_kept,
         width,
         ReviewFlowStyle::Guided,
+        GuidedFlowProgress::default(),
         false,
     )
 }
@@ -3430,6 +3559,7 @@ pub(crate) fn render_current_setup_write_confirmation_screen_lines(
         warnings_kept,
         width,
         ReviewFlowStyle::QuickCurrentSetup,
+        GuidedFlowProgress::default(),
         false,
     )
 }
@@ -3445,6 +3575,7 @@ pub(crate) fn render_detected_setup_write_confirmation_screen_lines(
         warnings_kept,
         width,
         ReviewFlowStyle::QuickDetectedSetup,
+        GuidedFlowProgress::default(),
         false,
     )
 }
@@ -3454,6 +3585,7 @@ fn render_write_confirmation_screen_lines_with_style(
     warnings_kept: bool,
     width: usize,
     flow_style: ReviewFlowStyle,
+    guided_flow: GuidedFlowProgress,
     color_enabled: bool,
 ) -> Vec<String> {
     let mut context_lines = vec![format!("- config: {config_path}")];
@@ -3483,7 +3615,7 @@ fn render_write_confirmation_screen_lines_with_style(
         width,
     ));
     lines.extend(render_onboard_wrapped_display_lines(
-        [flow_style.progress_line()],
+        [flow_style.progress_line(guided_flow)],
         width,
     ));
     lines.extend(render_onboard_wrapped_display_lines(context_lines, width));
@@ -3844,12 +3976,18 @@ pub(crate) fn render_provider_selection_screen_lines(
     plan: &crate::migration::ProviderSelectionPlan,
     width: usize,
 ) -> Vec<String> {
-    render_provider_selection_screen_lines_with_style(plan, width, false)
+    render_provider_selection_screen_lines_with_style(
+        plan,
+        width,
+        GuidedFlowProgress::default(),
+        false,
+    )
 }
 
 fn render_provider_selection_screen_lines_with_style(
     plan: &crate::migration::ProviderSelectionPlan,
     width: usize,
+    guided_flow: GuidedFlowProgress,
     color_enabled: bool,
 ) -> Vec<String> {
     let intro = if plan.imported_choices.is_empty() {
@@ -3887,12 +4025,12 @@ fn render_provider_selection_screen_lines_with_style(
             recommended: Some(choice.profile_id.as_str()) == plan.default_profile_id.as_deref(),
         })
         .collect::<Vec<_>>();
-    render_onboard_choice_screen(
+    render_onboard_choice_screen_with_progress_line(
         OnboardHeaderStyle::Brand,
         width,
         "choose the current provider",
         "choose active provider",
-        Some(GuidedOnboardStep::Provider),
+        Some(guided_flow.progress_line(GuidedOnboardStep::Provider)),
         intro,
         options,
         with_default_choice_footer(
@@ -3931,6 +4069,7 @@ pub(crate) fn render_model_selection_screen_lines(
         config,
         config.provider.model.as_str(),
         width,
+        GuidedFlowProgress::default(),
         false,
     )
 }
@@ -3941,13 +4080,20 @@ pub(crate) fn render_model_selection_screen_lines_with_default(
     prompt_default: &str,
     width: usize,
 ) -> Vec<String> {
-    render_model_selection_screen_lines_with_style(config, prompt_default, width, false)
+    render_model_selection_screen_lines_with_style(
+        config,
+        prompt_default,
+        width,
+        GuidedFlowProgress::default(),
+        false,
+    )
 }
 
 fn render_model_selection_screen_lines_with_style(
     config: &mvp::config::LoongClawConfig,
     prompt_default: &str,
     width: usize,
+    guided_flow: GuidedFlowProgress,
     color_enabled: bool,
 ) -> Vec<String> {
     let mut context_lines = vec![
@@ -3966,10 +4112,10 @@ fn render_model_selection_screen_lines_with_style(
         context_lines.push(format!("- provider default: {default_model}"));
     }
 
-    render_onboard_input_screen(
+    render_onboard_input_screen_with_progress_line(
         width,
         "choose model",
-        GuidedOnboardStep::Model,
+        guided_flow.progress_line(GuidedOnboardStep::Model),
         context_lines,
         vec![
             render_model_selection_default_hint_line(config, prompt_default),
@@ -3990,6 +4136,7 @@ pub(crate) fn render_api_key_env_selection_screen_lines(
         default_api_key_env,
         default_api_key_env,
         width,
+        GuidedFlowProgress::default(),
         false,
     )
 }
@@ -4006,6 +4153,7 @@ pub(crate) fn render_api_key_env_selection_screen_lines_with_default(
         default_api_key_env,
         prompt_default,
         width,
+        GuidedFlowProgress::default(),
         false,
     )
 }
@@ -4015,6 +4163,7 @@ fn render_api_key_env_selection_screen_lines_with_style(
     default_api_key_env: &str,
     prompt_default: &str,
     width: usize,
+    guided_flow: GuidedFlowProgress,
     color_enabled: bool,
 ) -> Vec<String> {
     let mut context_lines = vec![format!(
@@ -4052,10 +4201,10 @@ fn render_api_key_env_selection_screen_lines_with_style(
         }
     }
 
-    render_onboard_input_screen(
+    render_onboard_input_screen_with_progress_line(
         width,
         "choose credential env var",
-        GuidedOnboardStep::CredentialEnvVar,
+        guided_flow.progress_line(GuidedOnboardStep::CredentialEnvVar),
         context_lines,
         hint_lines,
         color_enabled,
@@ -4067,20 +4216,26 @@ pub(crate) fn render_personality_selection_screen_lines(
     default_personality: mvp::prompt::PromptPersonality,
     width: usize,
 ) -> Vec<String> {
-    render_personality_selection_screen_lines_with_style(default_personality, width, false)
+    render_personality_selection_screen_lines_with_style(
+        default_personality,
+        width,
+        GuidedFlowProgress::default(),
+        false,
+    )
 }
 
 fn render_personality_selection_screen_lines_with_style(
     default_personality: mvp::prompt::PromptPersonality,
     width: usize,
+    guided_flow: GuidedFlowProgress,
     color_enabled: bool,
 ) -> Vec<String> {
-    render_onboard_choice_screen(
+    render_onboard_choice_screen_with_progress_line(
         OnboardHeaderStyle::Compact,
         width,
         "assistant behavior preset",
         "choose assistant personality",
-        Some(GuidedOnboardStep::Personality),
+        Some(guided_flow.progress_line(GuidedOnboardStep::Personality)),
         vec![
             "- presets keep the native LoongClaw prompt pack active".to_owned(),
             "- advanced prompt editing comes later via --system-prompt or config".to_owned(),
@@ -4128,20 +4283,26 @@ pub(crate) fn render_memory_profile_selection_screen_lines(
     default_profile: mvp::config::MemoryProfile,
     width: usize,
 ) -> Vec<String> {
-    render_memory_profile_selection_screen_lines_with_style(default_profile, width, false)
+    render_memory_profile_selection_screen_lines_with_style(
+        default_profile,
+        width,
+        GuidedFlowProgress::default(),
+        false,
+    )
 }
 
 fn render_memory_profile_selection_screen_lines_with_style(
     default_profile: mvp::config::MemoryProfile,
     width: usize,
+    guided_flow: GuidedFlowProgress,
     color_enabled: bool,
 ) -> Vec<String> {
-    render_onboard_choice_screen(
+    render_onboard_choice_screen_with_progress_line(
         OnboardHeaderStyle::Compact,
         width,
         "memory preset",
         "choose memory profile",
-        Some(GuidedOnboardStep::MemoryProfile),
+        Some(guided_flow.progress_line(GuidedOnboardStep::MemoryProfile)),
         vec!["pick how much previous context LoongClaw keeps handy".to_owned()],
         vec![
             OnboardScreenOption {
@@ -4945,40 +5106,71 @@ mod tests {
 
     struct TestOnboardUi {
         inputs: VecDeque<String>,
+        outputs: Vec<String>,
+        strict_missing_inputs: bool,
     }
 
     impl TestOnboardUi {
         fn with_inputs(inputs: impl IntoIterator<Item = impl Into<String>>) -> Self {
             Self {
                 inputs: inputs.into_iter().map(Into::into).collect(),
+                outputs: Vec::new(),
+                strict_missing_inputs: false,
             }
+        }
+
+        fn strict_with_inputs(inputs: impl IntoIterator<Item = impl Into<String>>) -> Self {
+            Self {
+                inputs: inputs.into_iter().map(Into::into).collect(),
+                outputs: Vec::new(),
+                strict_missing_inputs: true,
+            }
+        }
+
+        fn transcript(&self) -> &[String] {
+            &self.outputs
         }
     }
 
     impl OnboardUi for TestOnboardUi {
-        fn print_line(&mut self, _line: &str) -> CliResult<()> {
+        fn print_line(&mut self, line: &str) -> CliResult<()> {
+            self.outputs.push(line.to_owned());
             Ok(())
         }
 
-        fn prompt_with_default(&mut self, _label: &str, default: &str) -> CliResult<String> {
-            Ok(self
-                .inputs
-                .pop_front()
-                .unwrap_or_else(|| default.to_owned()))
+        fn prompt_with_default(&mut self, label: &str, default: &str) -> CliResult<String> {
+            self.outputs.push(format!("PROMPT {label} [{default}]"));
+            match self.inputs.pop_front() {
+                Some(value) => Ok(value),
+                None if self.strict_missing_inputs => {
+                    Err(format!("missing prompt input for {label}"))
+                }
+                None => Ok(default.to_owned()),
+            }
         }
 
-        fn prompt_required(&mut self, _label: &str) -> CliResult<String> {
+        fn prompt_required(&mut self, label: &str) -> CliResult<String> {
+            self.outputs.push(format!("PROMPT {label}"));
             self.inputs
                 .pop_front()
-                .ok_or_else(|| "missing required test input".to_owned())
+                .ok_or_else(|| format!("missing required test input for {label}"))
         }
 
-        fn prompt_confirm(&mut self, _message: &str, default: bool) -> CliResult<bool> {
-            Ok(self
-                .inputs
-                .pop_front()
-                .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
-                .unwrap_or(default))
+        fn prompt_confirm(&mut self, message: &str, default: bool) -> CliResult<bool> {
+            self.outputs.push(format!(
+                "PROMPT {message} {}",
+                if default { "[Y/n]" } else { "[y/N]" }
+            ));
+            match self.inputs.pop_front() {
+                Some(value) => Ok(matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "y" | "yes"
+                )),
+                None if self.strict_missing_inputs => {
+                    Err(format!("missing confirm input for {message}"))
+                }
+                None => Ok(default),
+            }
         }
     }
 
@@ -5103,6 +5295,8 @@ mod tests {
             provider: None,
             model: None,
             api_key_env: None,
+            personality: None,
+            memory_profile: None,
             system_prompt: None,
             skip_model_probe: false,
         };
@@ -5137,6 +5331,7 @@ mod tests {
             },
             &config,
             "OPENAI_API_KEY".to_owned(),
+            GuidedFlowProgress::default(),
             &mut ui,
             &context,
         )
@@ -5145,6 +5340,48 @@ mod tests {
         assert!(
             selected.is_empty(),
             "typing :clear should explicitly clear the api-key env selection instead of persisting the literal token: {selected:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_api_key_env_selection_rejects_invalid_prefilled_secret_before_rendering() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Openai;
+        let mut ui = TestOnboardUi::strict_with_inputs(std::iter::empty::<String>());
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let error = resolve_api_key_env_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: false,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: Some("sk-live-secret".to_owned()),
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            "OPENAI_API_KEY".to_owned(),
+            GuidedFlowProgress::default(),
+            &mut ui,
+            &context,
+        )
+        .expect_err("invalid env-like secrets should be rejected before prompting");
+
+        assert!(
+            error.contains("environment variable name"),
+            "interactive credential selection should reject pasted secrets with the same validation used in non-interactive mode: {error}"
+        );
+        assert!(
+            ui.transcript()
+                .iter()
+                .all(|line| !line.contains("sk-live-secret")),
+            "interactive credential selection should not render invalid prefilled secrets back to the terminal: {:#?}",
+            ui.transcript()
         );
     }
 

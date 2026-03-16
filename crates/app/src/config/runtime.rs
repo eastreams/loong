@@ -1492,27 +1492,27 @@ fn recover_active_provider_from_legacy_config(
 }
 
 #[cfg(feature = "config-toml")]
-fn inspect_raw_provider_selection_intent(raw: &str) -> CliResult<RawProviderSelectionIntent> {
-    let value = toml::from_str::<toml::Value>(raw)
-        .map_err(|error| format!("failed to parse TOML config: {error}"))?;
-    let table = value.as_table();
-    Ok(RawProviderSelectionIntent {
+fn provider_selection_intent_from_table(table: Option<&toml::Table>) -> RawProviderSelectionIntent {
+    RawProviderSelectionIntent {
         legacy_provider_explicit: table.is_some_and(|root| root.contains_key("provider")),
         active_provider_explicit: table.is_some_and(|root| root.contains_key("active_provider")),
         raw_active_provider: table
             .and_then(|root| root.get("active_provider"))
             .and_then(toml::Value::as_str)
             .map(str::to_owned),
-    })
+    }
 }
 
 #[cfg(feature = "config-toml")]
 fn parse_toml_config_components(
     raw: &str,
 ) -> CliResult<(LoongClawConfig, ProviderSelectionNormalizationReport)> {
+    let raw_toml = toml::from_str::<toml::Table>(raw)
+        .map_err(|error| format!("failed to parse TOML config: {error}"))?;
     let mut config = toml::from_str::<LoongClawConfig>(raw)
         .map_err(|error| format!("failed to parse TOML config: {error}"))?;
-    let selection_intent = inspect_raw_provider_selection_intent(raw)?;
+    let selection_intent = provider_selection_intent_from_table(Some(&raw_toml));
+    recover_legacy_inline_prompt_override(&raw_toml, &mut config);
     let had_saved_provider_profiles = !config.providers.is_empty();
     let legacy_provider_before_normalization = config.provider.clone();
     let mut selection_report =
@@ -1670,6 +1670,34 @@ fn encode_toml_config(config: &LoongClawConfig) -> CliResult<String> {
     let encoded = config.clone_for_encoding();
     toml::to_string_pretty(&encoded)
         .map_err(|error| format!("failed to encode TOML config: {error}"))
+}
+
+#[cfg(feature = "config-toml")]
+fn recover_legacy_inline_prompt_override(raw_toml: &toml::Table, config: &mut LoongClawConfig) {
+    let Some(cli_table) = raw_toml.get("cli").and_then(toml::Value::as_table) else {
+        return;
+    };
+    if cli_table.contains_key("prompt_pack_id") {
+        return;
+    }
+
+    let Some(system_prompt) = cli_table
+        .get("system_prompt")
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+
+    if system_prompt == config.cli.rendered_native_system_prompt() {
+        return;
+    }
+
+    config.cli.prompt_pack_id = None;
+    if !cli_table.contains_key("personality") {
+        config.cli.personality = None;
+    }
 }
 
 #[cfg(not(feature = "config-toml"))]
@@ -2039,6 +2067,61 @@ api_key_env = "{secret}"
         assert_eq!(
             loaded.cli.personality,
             Some(crate::prompt::PromptPersonality::AutonomousExecutor)
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_preserves_disabled_prompt_pack_for_inline_prompt_override() {
+        let path = unique_config_path("loongclaw-inline-prompt-config");
+        let path_string = path.display().to_string();
+        let mut config = LoongClawConfig::default();
+        config.cli.prompt_pack_id = None;
+        config.cli.personality = None;
+        config.cli.system_prompt = "keep the current advanced prompt".to_owned();
+        config.cli.system_prompt_addendum = Some("retain imported repo context".to_owned());
+
+        write(Some(&path_string), &config, true).expect("config write should pass");
+        let (_, loaded) = load(Some(&path_string)).expect("config load should pass");
+
+        assert_eq!(loaded.cli.prompt_pack_id, None);
+        assert_eq!(loaded.cli.personality, None);
+        assert_eq!(loaded.cli.system_prompt, "keep the current advanced prompt");
+        assert_eq!(
+            loaded.cli.system_prompt_addendum.as_deref(),
+            Some("retain imported repo context")
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn load_recovers_legacy_inline_prompt_override_without_prompt_pack_metadata() {
+        let path = unique_config_path("loongclaw-legacy-inline-prompt-config");
+        let path_string = path.display().to_string();
+        let mut config = LoongClawConfig::default();
+        config.cli.prompt_pack_id = None;
+        config.cli.personality = None;
+        config.cli.system_prompt = "keep the current advanced prompt".to_owned();
+        config.cli.system_prompt_addendum = Some("retain imported repo context".to_owned());
+
+        let raw = render(&config)
+            .expect("render config")
+            .replace("prompt_pack_id = \"\"\n", "")
+            .replace("personality = \"\"\n", "");
+        fs::write(&path, raw).expect("write legacy-style config");
+
+        let (_, loaded) = load(Some(&path_string)).expect("config load should pass");
+
+        assert_eq!(loaded.cli.prompt_pack_id, None);
+        assert_eq!(loaded.cli.personality, None);
+        assert_eq!(loaded.cli.system_prompt, "keep the current advanced prompt");
+        assert_eq!(
+            loaded.cli.system_prompt_addendum.as_deref(),
+            Some("retain imported repo context")
         );
 
         let _ = fs::remove_file(path);
