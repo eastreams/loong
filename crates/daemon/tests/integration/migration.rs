@@ -6,9 +6,7 @@
 )]
 
 use super::*;
-use std::ffi::OsString;
 use std::path::PathBuf;
-use std::sync::MutexGuard;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -23,45 +21,6 @@ fn unique_temp_dir(label: &str) -> PathBuf {
         "loongclaw-migration-{label}-{}-{nanos}-{counter}",
         std::process::id(),
     ))
-}
-
-struct MigrationEnvironmentGuard {
-    _lock: MutexGuard<'static, ()>,
-    saved: Vec<(String, Option<OsString>)>,
-}
-
-impl MigrationEnvironmentGuard {
-    fn set(pairs: &[(&str, Option<&str>)]) -> Self {
-        let lock = super::lock_daemon_test_environment();
-        let mut saved = Vec::new();
-        for (key, value) in pairs {
-            saved.push(((*key).to_owned(), std::env::var_os(key)));
-            match value {
-                Some(value) => unsafe {
-                    std::env::set_var(key, value);
-                },
-                None => unsafe {
-                    std::env::remove_var(key);
-                },
-            }
-        }
-        Self { _lock: lock, saved }
-    }
-}
-
-impl Drop for MigrationEnvironmentGuard {
-    fn drop(&mut self) {
-        for (key, value) in self.saved.drain(..).rev() {
-            match value {
-                Some(value) => unsafe {
-                    std::env::set_var(&key, value);
-                },
-                None => unsafe {
-                    std::env::remove_var(&key);
-                },
-            }
-        }
-    }
 }
 
 #[test]

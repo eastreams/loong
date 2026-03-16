@@ -6,13 +6,17 @@
     clippy::unwrap_used,
     unused_imports,
     dead_code,
-    unsafe_code
+    unsafe_code,
+    clippy::disallowed_methods,
+    clippy::undocumented_unsafe_blocks
 )]
 use std::time::Duration;
 use std::{
     collections::{BTreeMap, BTreeSet},
+    ffi::OsString,
     fs,
     path::Path,
+    sync::MutexGuard,
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -27,27 +31,32 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::time::sleep;
 
-struct ScopedEnv {
-    saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+pub struct MigrationEnvironmentGuard {
+    _lock: MutexGuard<'static, ()>,
+    saved: Vec<(String, Option<OsString>)>,
 }
 
-impl ScopedEnv {
-    fn new() -> Self {
-        Self { saved: Vec::new() }
-    }
-
-    fn remove(&mut self, key: &'static str) {
-        self.saved.push((key, std::env::var_os(key)));
-        unsafe { std::env::remove_var(key) };
-    }
-}
-
-impl Drop for ScopedEnv {
-    fn drop(&mut self) {
-        for (key, value) in self.saved.drain(..).rev() {
+impl MigrationEnvironmentGuard {
+    pub fn set(pairs: &[(&str, Option<&str>)]) -> Self {
+        let lock = lock_daemon_test_environment();
+        let mut saved = Vec::new();
+        for (key, value) in pairs {
+            saved.push(((*key).to_owned(), std::env::var_os(key)));
             match value {
                 Some(value) => unsafe { std::env::set_var(key, value) },
                 None => unsafe { std::env::remove_var(key) },
+            }
+        }
+        Self { _lock: lock, saved }
+    }
+}
+
+impl Drop for MigrationEnvironmentGuard {
+    fn drop(&mut self) {
+        for (key, value) in self.saved.drain(..).rev() {
+            match value {
+                Some(value) => unsafe { std::env::set_var(&key, value) },
+                None => unsafe { std::env::remove_var(&key) },
             }
         }
     }

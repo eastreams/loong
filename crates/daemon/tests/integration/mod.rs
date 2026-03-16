@@ -727,8 +727,7 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
 
 #[test]
 fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
-    let mut env = super::ScopedEnv::new();
-    env.remove("TELEGRAM_BOT_TOKEN");
+    let _env = super::MigrationEnvironmentGuard::set(&[("TELEGRAM_BOT_TOKEN", None)]);
 
     let config = mvp::config::LoongClawConfig::default();
     let inventory = mvp::channel::channel_inventory(&config);
