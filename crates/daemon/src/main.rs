@@ -1105,6 +1105,7 @@ fn run_validate_config_cli(
     let (resolved_path, diagnostics) =
         mvp::config::validate_file_with_locale(config_path, &normalized_locale)?;
     let diagnostics_count = diagnostics.len();
+    let diagnostics_summary = summarize_validation_diagnostics(&diagnostics);
 
     match output {
         ValidateConfigOutput::Text => {
@@ -1112,9 +1113,12 @@ fn run_validate_config_cli(
                 println!("config={} valid=true", resolved_path.display());
             } else {
                 println!(
-                    "config={} valid=false diagnostics={}",
+                    "config={} valid={} diagnostics={} errors={} warnings={}",
                     resolved_path.display(),
-                    diagnostics_count
+                    diagnostics_summary.valid,
+                    diagnostics_count,
+                    diagnostics_summary.error_count,
+                    diagnostics_summary.warning_count,
                 );
                 for diagnostic in &diagnostics {
                     println!("{}", diagnostic.message);
@@ -1125,7 +1129,9 @@ fn run_validate_config_cli(
             let payload = json!({
                 "diagnostics_schema_version": 1,
                 "config": resolved_path.display().to_string(),
-                "valid": diagnostics.is_empty(),
+                "valid": diagnostics_summary.valid,
+                "error_count": diagnostics_summary.error_count,
+                "warning_count": diagnostics_summary.warning_count,
                 "locale": normalized_locale,
                 "supported_locales": supported_locales.clone(),
                 "diagnostics": diagnostics,
@@ -1141,6 +1147,9 @@ fn run_validate_config_cli(
                     "title": "Configuration Valid",
                     "detail": "No configuration diagnostics were reported.",
                     "instance": resolved_path.display().to_string(),
+                    "valid": true,
+                    "error_count": 0,
+                    "warning_count": 0,
                     "locale": normalized_locale,
                     "supported_locales": supported_locales.clone(),
                     "diagnostics_schema_version": 1,
@@ -1148,10 +1157,21 @@ fn run_validate_config_cli(
                 })
             } else {
                 json!({
-                    "type": "urn:loongclaw:problem:config.validation_failed",
-                    "title": "Configuration Validation Failed",
+                    "type": if diagnostics_summary.valid {
+                        "urn:loongclaw:problem:config.validation_warning"
+                    } else {
+                        "urn:loongclaw:problem:config.validation_failed"
+                    },
+                    "title": if diagnostics_summary.valid {
+                        "Configuration Warnings Reported"
+                    } else {
+                        "Configuration Validation Failed"
+                    },
                     "detail": format!("{} configuration diagnostic(s) were reported.", diagnostics_count),
                     "instance": resolved_path.display().to_string(),
+                    "valid": diagnostics_summary.valid,
+                    "error_count": diagnostics_summary.error_count,
+                    "warning_count": diagnostics_summary.warning_count,
                     "locale": normalized_locale,
                     "supported_locales": supported_locales.clone(),
                     "diagnostics_schema_version": 1,
@@ -1172,6 +1192,31 @@ fn run_validate_config_cli(
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ValidationDiagnosticSummary {
+    valid: bool,
+    error_count: usize,
+    warning_count: usize,
+}
+
+fn summarize_validation_diagnostics(
+    diagnostics: &[mvp::config::ConfigValidationDiagnostic],
+) -> ValidationDiagnosticSummary {
+    let error_count = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == "error")
+        .count();
+    let warning_count = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == "warn")
+        .count();
+    ValidationDiagnosticSummary {
+        valid: error_count == 0,
+        error_count,
+        warning_count,
+    }
 }
 
 fn resolve_validate_output(

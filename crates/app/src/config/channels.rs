@@ -1204,6 +1204,7 @@ fn validate_channel_account_integrity<'a, I>(
         );
         extra_message_variables.insert("raw_account_labels".to_owned(), labels.join(", "));
         issues.push(ConfigValidationIssue {
+            severity: super::shared::ConfigValidationSeverity::Error,
             code: ConfigValidationCode::DuplicateChannelAccountId,
             field_path: format!("{channel_key}.accounts"),
             inline_field_path: format!("{channel_key}.accounts.{normalized_account_id}"),
@@ -1242,6 +1243,7 @@ fn validate_channel_account_integrity<'a, I>(
             .join(", "),
     );
     issues.push(ConfigValidationIssue {
+        severity: super::shared::ConfigValidationSeverity::Error,
         code: ConfigValidationCode::UnknownChannelDefaultAccount,
         field_path: format!("{channel_key}.default_account"),
         inline_field_path: format!("{channel_key}.accounts"),

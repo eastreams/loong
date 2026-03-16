@@ -20,6 +20,25 @@ pub(super) enum ConfigValidationLocale {
     En,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ConfigValidationSeverity {
+    Error,
+    Warn,
+}
+
+impl ConfigValidationSeverity {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warn => "warn",
+        }
+    }
+
+    pub const fn is_error(self) -> bool {
+        matches!(self, Self::Error)
+    }
+}
+
 impl ConfigValidationLocale {
     pub fn from_tag(raw: &str) -> Self {
         let normalized = raw.trim().to_ascii_lowercase();
@@ -51,6 +70,8 @@ pub(super) enum ConfigValidationCode {
     NumericRange,
     DuplicateChannelAccountId,
     UnknownChannelDefaultAccount,
+    ImplicitActiveProvider,
+    UnknownActiveProvider,
 }
 
 impl ConfigValidationCode {
@@ -67,6 +88,12 @@ impl ConfigValidationCode {
             }
             ConfigValidationCode::UnknownChannelDefaultAccount => {
                 "config.channel_account.unknown_default"
+            }
+            ConfigValidationCode::ImplicitActiveProvider => {
+                "config.provider_selection.implicit_active"
+            }
+            ConfigValidationCode::UnknownActiveProvider => {
+                "config.provider_selection.unknown_active"
             }
         }
     }
@@ -95,6 +122,12 @@ impl ConfigValidationCode {
             ConfigValidationCode::UnknownChannelDefaultAccount => {
                 "urn:loongclaw:problem:config.channel_account.unknown_default"
             }
+            ConfigValidationCode::ImplicitActiveProvider => {
+                "urn:loongclaw:problem:config.provider_selection.implicit_active"
+            }
+            ConfigValidationCode::UnknownActiveProvider => {
+                "urn:loongclaw:problem:config.provider_selection.unknown_active"
+            }
         }
     }
 
@@ -111,6 +144,12 @@ impl ConfigValidationCode {
             }
             ConfigValidationCode::UnknownChannelDefaultAccount => {
                 "config.channel_account.unknown_default.title"
+            }
+            ConfigValidationCode::ImplicitActiveProvider => {
+                "config.provider_selection.implicit_active.title"
+            }
+            ConfigValidationCode::UnknownActiveProvider => {
+                "config.provider_selection.unknown_active.title"
             }
         }
     }
@@ -137,6 +176,8 @@ impl ConfigValidationCode {
                 "Duplicate Normalized Channel Account ID"
             }
             ConfigValidationCode::UnknownChannelDefaultAccount => "Unknown Channel Default Account",
+            ConfigValidationCode::ImplicitActiveProvider => "Implicit Active Provider Selection",
+            ConfigValidationCode::UnknownActiveProvider => "Unknown Active Provider Selection",
         }
     }
 
@@ -166,12 +207,19 @@ impl ConfigValidationCode {
             ConfigValidationCode::UnknownChannelDefaultAccount => {
                 "[{code}] {field_path} points to `{requested_account_id}`, but configured accounts are: {configured_account_ids}. set `{field_path}` to one of the configured account ids"
             }
+            ConfigValidationCode::ImplicitActiveProvider => {
+                "[{code}] {field_path} is not set explicitly. LoongClaw selected `{selected_profile_id}` using {selection_basis}. set `{field_path} = \"{selected_profile_id}\"` to make the active provider explicit"
+            }
+            ConfigValidationCode::UnknownActiveProvider => {
+                "[{code}] {field_path} points to `{requested_profile_id}`, but configured provider profiles are: {configured_profile_ids}. LoongClaw recovered to `{selected_profile_id}` using {selection_basis}. update `{field_path}` to an available profile id"
+            }
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ConfigValidationIssue {
+    pub severity: ConfigValidationSeverity,
     pub code: ConfigValidationCode,
     pub field_path: String,
     pub inline_field_path: String,
@@ -189,12 +237,21 @@ impl ConfigValidationIssue {
         self.code.title_key()
     }
 
+    pub(super) const fn severity_str(&self) -> &'static str {
+        self.severity.as_str()
+    }
+
+    pub(super) const fn is_error(&self) -> bool {
+        self.severity.is_error()
+    }
+
     pub(super) fn title(&self, locale: ConfigValidationLocale) -> String {
         self.code.localized_title(locale).to_owned()
     }
 
     pub(super) fn message_variables(&self) -> BTreeMap<String, String> {
         let mut variables = BTreeMap::new();
+        variables.insert("severity".to_owned(), self.severity.as_str().to_owned());
         variables.insert("code".to_owned(), self.code.as_str().to_owned());
         variables.insert("field_path".to_owned(), self.field_path.clone());
         variables.insert(
@@ -269,6 +326,14 @@ const EN_VALIDATION_MESSAGE_CATALOG: &[ConfigValidationCatalogEntry] = &[
         "Unknown Channel Default Account",
     ),
     ConfigValidationCatalogEntry::new(
+        "config.provider_selection.implicit_active.title",
+        "Implicit Active Provider Selection",
+    ),
+    ConfigValidationCatalogEntry::new(
+        "config.provider_selection.unknown_active.title",
+        "Unknown Active Provider Selection",
+    ),
+    ConfigValidationCatalogEntry::new(
         "config.env_pointer.assignment",
         "[{code}] {field_path} expects an environment variable name, not `KEY=VALUE`. use `{field_path} = \"{suggested_env_name}\"` and place the secret value in that env var",
     ),
@@ -299,6 +364,14 @@ const EN_VALIDATION_MESSAGE_CATALOG: &[ConfigValidationCatalogEntry] = &[
     ConfigValidationCatalogEntry::new(
         "config.channel_account.unknown_default",
         "[{code}] {field_path} points to `{requested_account_id}`, but configured accounts are: {configured_account_ids}. set `{field_path}` to one of the configured account ids",
+    ),
+    ConfigValidationCatalogEntry::new(
+        "config.provider_selection.implicit_active",
+        "[{code}] {field_path} is not set explicitly. LoongClaw selected `{selected_profile_id}` using {selection_basis}. set `{field_path} = \"{selected_profile_id}\"` to make the active provider explicit",
+    ),
+    ConfigValidationCatalogEntry::new(
+        "config.provider_selection.unknown_active",
+        "[{code}] {field_path} points to `{requested_profile_id}`, but configured provider profiles are: {configured_profile_ids}. LoongClaw recovered to `{selected_profile_id}` using {selection_basis}. update `{field_path}` to an available profile id",
     ),
 ];
 
@@ -392,6 +465,7 @@ pub(super) fn validate_env_pointer_field(
 
     if let Some((name, _value)) = parse_env_assignment(trimmed) {
         return Err(Box::new(ConfigValidationIssue {
+            severity: ConfigValidationSeverity::Error,
             code: ConfigValidationCode::Assignment,
             field_path: field_path.to_owned(),
             inline_field_path: hint.inline_field_path.to_owned(),
@@ -404,6 +478,7 @@ pub(super) fn validate_env_pointer_field(
     if let Some(raw_name) = trimmed.strip_prefix('$') {
         let suggested = normalize_dollar_prefixed_env_name(raw_name, hint.example_env_name);
         return Err(Box::new(ConfigValidationIssue {
+            severity: ConfigValidationSeverity::Error,
             code: ConfigValidationCode::DollarPrefix,
             field_path: field_path.to_owned(),
             inline_field_path: hint.inline_field_path.to_owned(),
@@ -420,6 +495,7 @@ pub(super) fn validate_env_pointer_field(
             raw_name.to_owned()
         };
         return Err(Box::new(ConfigValidationIssue {
+            severity: ConfigValidationSeverity::Error,
             code: ConfigValidationCode::PercentWrapped,
             field_path: field_path.to_owned(),
             inline_field_path: hint.inline_field_path.to_owned(),
@@ -431,6 +507,7 @@ pub(super) fn validate_env_pointer_field(
 
     if looks_like_secret_literal(trimmed, hint.detect_telegram_token_shape) {
         return Err(Box::new(ConfigValidationIssue {
+            severity: ConfigValidationSeverity::Error,
             code: ConfigValidationCode::SecretLiteral,
             field_path: field_path.to_owned(),
             inline_field_path: hint.inline_field_path.to_owned(),
@@ -442,6 +519,7 @@ pub(super) fn validate_env_pointer_field(
 
     if !looks_like_compatible_env_name(trimmed) {
         return Err(Box::new(ConfigValidationIssue {
+            severity: ConfigValidationSeverity::Error,
             code: ConfigValidationCode::InvalidName,
             field_path: field_path.to_owned(),
             inline_field_path: hint.inline_field_path.to_owned(),
@@ -470,6 +548,7 @@ pub(super) fn validate_numeric_range(
     extra_message_variables.insert("max".to_owned(), max.to_string());
 
     Err(Box::new(ConfigValidationIssue {
+        severity: ConfigValidationSeverity::Error,
         code: ConfigValidationCode::NumericRange,
         field_path: field_path.to_owned(),
         inline_field_path: field_path.to_owned(),
@@ -685,6 +764,7 @@ mod tests {
     #[test]
     fn env_pointer_issue_render_uses_catalog_title_and_template() {
         let issue = ConfigValidationIssue {
+            severity: ConfigValidationSeverity::Error,
             code: ConfigValidationCode::DollarPrefix,
             field_path: "provider.api_key_env".to_owned(),
             inline_field_path: "provider.api_key".to_owned(),

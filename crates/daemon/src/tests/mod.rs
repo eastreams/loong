@@ -43,6 +43,27 @@ fn channel_supported_target_kinds(raw: &str) -> Vec<&'static str> {
         .collect()
 }
 
+fn validation_diagnostic_with_severity(
+    severity: &str,
+    code: &str,
+) -> mvp::config::ConfigValidationDiagnostic {
+    mvp::config::ConfigValidationDiagnostic {
+        severity: severity.to_owned(),
+        code: code.to_owned(),
+        problem_type: format!("urn:loongclaw:problem:{code}"),
+        title_key: format!("{code}.title"),
+        title: code.to_owned(),
+        message_key: code.to_owned(),
+        message_locale: "en".to_owned(),
+        message_variables: BTreeMap::new(),
+        field_path: "active_provider".to_owned(),
+        inline_field_path: "providers".to_owned(),
+        example_env_name: String::new(),
+        suggested_env_name: None,
+        message: code.to_owned(),
+    }
+}
+
 fn approval_test_operation(tool_name: &str, payload: Value) -> OperationSpec {
     OperationSpec::ToolCore {
         tool_name: tool_name.to_owned(),
@@ -184,6 +205,30 @@ fn resolve_validate_output_rejects_conflicting_json_and_output_flags() {
     let error = resolve_validate_output(true, Some(ValidateConfigOutput::Json))
         .expect_err("conflicting flags should fail");
     assert!(error.contains("conflicts"));
+}
+
+#[test]
+fn validation_summary_treats_warning_only_diagnostics_as_valid() {
+    let summary = summarize_validation_diagnostics(&[validation_diagnostic_with_severity(
+        "warn",
+        "config.provider_selection.implicit_active",
+    )]);
+
+    assert!(summary.valid);
+    assert_eq!(summary.error_count, 0);
+    assert_eq!(summary.warning_count, 1);
+}
+
+#[test]
+fn validation_summary_counts_error_and_warning_diagnostics_separately() {
+    let summary = summarize_validation_diagnostics(&[
+        validation_diagnostic_with_severity("error", "config.env_pointer.dollar_prefix"),
+        validation_diagnostic_with_severity("warn", "config.provider_selection.implicit_active"),
+    ]);
+
+    assert!(!summary.valid);
+    assert_eq!(summary.error_count, 1);
+    assert_eq!(summary.warning_count, 1);
 }
 
 #[test]

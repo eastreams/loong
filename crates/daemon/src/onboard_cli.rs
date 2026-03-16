@@ -145,6 +145,7 @@ pub(crate) enum OnboardNonInteractiveWarningPolicy {
     #[default]
     Block,
     AcceptedBySkipModelProbe,
+    AcceptedByExplicitModel,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1074,12 +1075,7 @@ async fn run_preflight_checks(
                 detail: format!("{} model(s) available", models.len()),
                 non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
             }),
-            Err(error) => checks.push(OnboardCheck {
-                name: "provider model probe",
-                level: OnboardCheckLevel::Fail,
-                detail: error,
-                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-            }),
+            Err(error) => checks.push(provider_model_probe_failure_check(config, error)),
         }
     }
 
@@ -1095,8 +1091,38 @@ async fn run_preflight_checks(
     checks
 }
 
+fn provider_check_detail_prefix(config: &mvp::config::LoongClawConfig) -> String {
+    crate::provider_presentation::active_provider_detail_label(config)
+}
+
+fn provider_model_probe_failure_check(
+    config: &mvp::config::LoongClawConfig,
+    error: String,
+) -> OnboardCheck {
+    if let Some(model) = config.provider.explicit_model() {
+        return OnboardCheck {
+            name: "provider model probe",
+            level: OnboardCheckLevel::Warn,
+            detail: format!(
+                "{}: model catalog probe failed ({error}); chat may still work because model `{model}` is explicitly configured",
+                provider_check_detail_prefix(config)
+            ),
+            non_interactive_warning_policy:
+                OnboardNonInteractiveWarningPolicy::AcceptedByExplicitModel,
+        };
+    }
+
+    OnboardCheck {
+        name: "provider model probe",
+        level: OnboardCheckLevel::Fail,
+        detail: format!("{}: {error}", provider_check_detail_prefix(config)),
+        non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+    }
+}
+
 pub(crate) fn provider_credential_check(config: &mvp::config::LoongClawConfig) -> OnboardCheck {
     let provider = &config.provider;
+    let provider_prefix = provider_check_detail_prefix(config);
     let inline_oauth = provider
         .oauth_access_token
         .as_deref()
@@ -1106,7 +1132,7 @@ pub(crate) fn provider_credential_check(config: &mvp::config::LoongClawConfig) -
         return OnboardCheck {
             name: "provider credentials",
             level: OnboardCheckLevel::Pass,
-            detail: "inline oauth access token configured".to_owned(),
+            detail: format!("{provider_prefix}: inline oauth access token configured"),
             non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
         };
     }
@@ -1120,7 +1146,7 @@ pub(crate) fn provider_credential_check(config: &mvp::config::LoongClawConfig) -
         return OnboardCheck {
             name: "provider credentials",
             level: OnboardCheckLevel::Pass,
-            detail: "inline api key configured".to_owned(),
+            detail: format!("{provider_prefix}: inline api key configured"),
             non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
         };
     }
@@ -1132,7 +1158,7 @@ pub(crate) fn provider_credential_check(config: &mvp::config::LoongClawConfig) -
         return OnboardCheck {
             name: "provider credentials",
             level: OnboardCheckLevel::Pass,
-            detail,
+            detail: format!("{provider_prefix}: {detail}"),
             non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
         };
     }
@@ -1143,7 +1169,7 @@ pub(crate) fn provider_credential_check(config: &mvp::config::LoongClawConfig) -
     OnboardCheck {
         name: "provider credentials",
         level: OnboardCheckLevel::Warn,
-        detail,
+        detail: format!("{provider_prefix}: {detail}"),
         non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
     }
 }
@@ -1166,10 +1192,14 @@ fn is_explicitly_accepted_non_interactive_warning(
     check: &OnboardCheck,
     options: &OnboardCommandOptions,
 ) -> bool {
-    options.skip_model_probe
+    (options.skip_model_probe
         && matches!(
             check.non_interactive_warning_policy,
             OnboardNonInteractiveWarningPolicy::AcceptedBySkipModelProbe
+        ))
+        || matches!(
+            check.non_interactive_warning_policy,
+            OnboardNonInteractiveWarningPolicy::AcceptedByExplicitModel
         )
 }
 
@@ -4547,6 +4577,68 @@ mod tests {
                         .contains("retry chat_completions automatically")
             }),
             "preflight should surface transport review before writing a Responses-compatible config: {checks:#?}"
+        );
+    }
+
+    #[test]
+    fn provider_model_probe_failure_warns_for_explicit_model() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.model = "openai/gpt-5.1-codex".to_owned();
+
+        let check = provider_model_probe_failure_check(
+            &config,
+            "provider rejected the model list".to_owned(),
+        );
+
+        assert_eq!(check.name, "provider model probe");
+        assert_eq!(check.level, OnboardCheckLevel::Warn);
+        assert!(
+            check.detail.contains("explicitly configured"),
+            "explicit-model probe failures should explain that catalog discovery is advisory: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn provider_model_probe_failure_fails_for_auto_model() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.model = "auto".to_owned();
+
+        let check = provider_model_probe_failure_check(
+            &config,
+            "provider rejected the model list".to_owned(),
+        );
+
+        assert_eq!(check.name, "provider model probe");
+        assert_eq!(check.level, OnboardCheckLevel::Fail);
+        assert!(
+            check.detail.contains("OpenAI [openai]"),
+            "onboard failures should still identify the active provider context: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn explicit_model_probe_warning_is_accepted_non_interactively() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.model = "openai/gpt-5.1-codex".to_owned();
+        let check = provider_model_probe_failure_check(
+            &config,
+            "provider rejected the model list".to_owned(),
+        );
+        let options = OnboardCommandOptions {
+            output: None,
+            force: false,
+            non_interactive: true,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            system_prompt: None,
+            skip_model_probe: false,
+        };
+
+        assert!(
+            is_explicitly_accepted_non_interactive_warning(&check, &options),
+            "explicit-model probe warnings should not block non-interactive onboarding because model discovery is advisory: {check:#?}"
         );
     }
 

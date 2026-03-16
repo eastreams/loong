@@ -20,6 +20,18 @@ pub(crate) fn active_provider_label(config: &mvp::config::LoongClawConfig) -> St
         .unwrap_or_else(|| guided_provider_label(config.provider.kind).to_owned())
 }
 
+pub(crate) fn active_provider_detail_label(config: &mvp::config::LoongClawConfig) -> String {
+    let profile_id = config
+        .active_provider_id()
+        .unwrap_or(config.provider.kind.profile().id);
+    let kind = config
+        .providers
+        .get(profile_id)
+        .map(|profile| profile.provider.kind)
+        .unwrap_or(config.provider.kind);
+    format!("{} [{profile_id}]", guided_provider_label(kind))
+}
+
 pub(crate) fn saved_provider_profile_ids(config: &mvp::config::LoongClawConfig) -> Vec<String> {
     if config.providers.is_empty() {
         return vec![

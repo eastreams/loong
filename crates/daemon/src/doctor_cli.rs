@@ -52,28 +52,10 @@ pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<(
     config_mutated |= maybe_apply_channel_env_fix(&mut config, options.fix, &mut fixes);
 
     let has_provider_credentials = mvp::provider::provider_auth_ready(&config).await;
-    if has_provider_credentials {
-        checks.push(DoctorCheck {
-            name: "provider credentials".to_owned(),
-            level: DoctorCheckLevel::Pass,
-            detail: "provider credentials are available".to_owned(),
-        });
-    } else {
-        let hints = crate::onboard_cli::provider_credential_env_hints(&config.provider);
-        let detail = if hints.is_empty() {
-            "provider credentials are missing".to_owned()
-        } else {
-            format!(
-                "provider credentials are missing (try env: {})",
-                hints.join(", ")
-            )
-        };
-        checks.push(DoctorCheck {
-            name: "provider credentials".to_owned(),
-            level: DoctorCheckLevel::Warn,
-            detail,
-        });
-    }
+    checks.push(provider_credentials_doctor_check(
+        &config,
+        has_provider_credentials,
+    ));
 
     checks.push(provider_transport_doctor_check(&config.provider));
 
@@ -96,11 +78,7 @@ pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<(
                 level: DoctorCheckLevel::Pass,
                 detail: format!("{} model(s) available", models.len()),
             }),
-            Err(error) => checks.push(DoctorCheck {
-                name: "provider model probe".to_owned(),
-                level: DoctorCheckLevel::Fail,
-                detail: error,
-            }),
+            Err(error) => checks.push(provider_model_probe_failure_check(&config, error)),
         }
     }
 
@@ -962,6 +940,60 @@ fn provider_transport_doctor_check(provider: &mvp::config::ProviderConfig) -> Do
     }
 }
 
+fn provider_credentials_doctor_check(
+    config: &mvp::config::LoongClawConfig,
+    has_provider_credentials: bool,
+) -> DoctorCheck {
+    let provider_label = crate::provider_presentation::active_provider_detail_label(config);
+    if has_provider_credentials {
+        return DoctorCheck {
+            name: "provider credentials".to_owned(),
+            level: DoctorCheckLevel::Pass,
+            detail: format!("{provider_label}: provider credentials are available"),
+        };
+    }
+
+    let hints = crate::onboard_cli::provider_credential_env_hints(&config.provider);
+    let detail = if hints.is_empty() {
+        "provider credentials are missing".to_owned()
+    } else {
+        format!(
+            "provider credentials are missing (try env: {})",
+            hints.join(", ")
+        )
+    };
+    DoctorCheck {
+        name: "provider credentials".to_owned(),
+        level: DoctorCheckLevel::Warn,
+        detail: format!("{provider_label}: {detail}"),
+    }
+}
+
+fn provider_model_probe_failure_check(
+    config: &mvp::config::LoongClawConfig,
+    error: String,
+) -> DoctorCheck {
+    if let Some(model) = config.provider.explicit_model() {
+        return DoctorCheck {
+            name: "provider model probe".to_owned(),
+            level: DoctorCheckLevel::Warn,
+            detail: format!(
+                "{}: model catalog probe failed ({error}); chat may still work because model `{model}` is explicitly configured",
+                crate::provider_presentation::active_provider_detail_label(config)
+            ),
+        };
+    }
+
+    DoctorCheck {
+        name: "provider model probe".to_owned(),
+        level: DoctorCheckLevel::Fail,
+        detail: format!(
+            "{}: {error}",
+            crate::provider_presentation::active_provider_detail_label(config)
+        ),
+    }
+}
+
 #[cfg(test)]
 fn collect_channel_doctor_checks(config: &mvp::config::LoongClawConfig) -> Vec<DoctorCheck> {
     crate::migration::channels::collect_channel_doctor_checks(config)
@@ -1203,6 +1235,42 @@ mod tests {
                 .detail
                 .contains("retry chat_completions automatically"),
             "doctor should surface the automatic transport fallback in review mode: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn provider_model_probe_failure_warns_for_explicit_model() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.model = "openai/gpt-5.1-codex".to_owned();
+
+        let check = provider_model_probe_failure_check(
+            &config,
+            "provider rejected the model list".to_owned(),
+        );
+
+        assert_eq!(check.name, "provider model probe");
+        assert_eq!(check.level, DoctorCheckLevel::Warn);
+        assert!(
+            check.detail.contains("explicitly configured"),
+            "doctor should explain that explicit-model runtime may still work when catalog probing fails: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn provider_model_probe_failure_fails_for_auto_model() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.model = "auto".to_owned();
+
+        let check = provider_model_probe_failure_check(
+            &config,
+            "provider rejected the model list".to_owned(),
+        );
+
+        assert_eq!(check.name, "provider model probe");
+        assert_eq!(check.level, DoctorCheckLevel::Fail);
+        assert!(
+            check.detail.contains("OpenAI [openai]"),
+            "doctor failures should still identify the active provider context: {check:#?}"
         );
     }
 

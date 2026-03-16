@@ -245,8 +245,22 @@ fn extract_success_section_lines(transcript: &[String]) -> Vec<String> {
 fn start_local_model_probe_server(
     expected_requests: usize,
 ) -> (SocketAddr, std::thread::JoinHandle<Vec<String>>) {
+    start_local_model_probe_server_with_models_response(
+        expected_requests,
+        "HTTP/1.1 200 OK",
+        r#"{"data":[{"id":"openai/gpt-5.1-codex"}]}"#,
+    )
+}
+
+fn start_local_model_probe_server_with_models_response(
+    expected_requests: usize,
+    models_status_line: &str,
+    models_body: &str,
+) -> (SocketAddr, std::thread::JoinHandle<Vec<String>>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind local provider test listener");
     let addr = listener.local_addr().expect("local addr");
+    let models_status_line = models_status_line.to_owned();
+    let models_body = models_body.to_owned();
     let server = std::thread::spawn(move || {
         let mut requests = Vec::new();
         for _ in 0..expected_requests {
@@ -257,10 +271,7 @@ fn start_local_model_probe_server(
             requests.push(request.clone());
 
             let (status_line, body) = if request.starts_with("GET /v1/models ") {
-                (
-                    "HTTP/1.1 200 OK",
-                    r#"{"data":[{"id":"openai/gpt-5.1-codex"}]}"#.to_owned(),
-                )
+                (models_status_line.as_str(), models_body.clone())
             } else {
                 (
                     "HTTP/1.1 404 Not Found",
@@ -449,7 +460,6 @@ async fn non_interactive_onboard_rejects_unresolved_preflight_warnings() {
 
     let mut options = default_non_interactive_onboard_options(&output);
     options.system_prompt = Some("force a pending write".to_owned());
-
     let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
     let context = crate::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
     let error = crate::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
@@ -563,6 +573,47 @@ async fn non_interactive_onboard_allows_explicit_skip_model_probe_warning() {
         config.provider.api_key(),
         Some("test-openai-key".to_owned()),
         "loaded config should still resolve the canonical env reference at runtime"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn non_interactive_onboard_allows_explicit_model_probe_warning() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let root = unique_temp_path("non-interactive-explicit-model-warning-root");
+    std::fs::create_dir_all(&root).expect("create test root");
+    let output = root.join("loongclaw.toml");
+
+    let (addr, server) = start_local_model_probe_server_with_models_response(
+        1,
+        "HTTP/1.1 401 Unauthorized",
+        r#"{"error":{"message":"No cookie auth credentials found"}}"#,
+    );
+
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.base_url = format!("http://{addr}");
+    config.provider.model = "openai/gpt-5.1-codex".to_owned();
+    config.provider.api_key = Some("test-openai-key".to_owned());
+    mvp::config::write(Some(output.to_string_lossy().as_ref()), &config, true)
+        .expect("write existing config");
+
+    let mut options = default_non_interactive_onboard_options(&output);
+    options.system_prompt = Some("force a pending write".to_owned());
+    options.force = true;
+
+    let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
+    let context = crate::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    crate::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+        .await
+        .expect("explicit-model probe warnings should not block non-interactive onboarding");
+
+    let requests = server.join().expect("join local provider server");
+    assert!(
+        requests.iter().any(|request| {
+            let normalized = request.to_ascii_lowercase();
+            request.starts_with("GET /v1/models ")
+                && normalized.contains("authorization: bearer test-openai-key")
+        }),
+        "explicit-model warning path should still perform the model probe with resolved auth before allowing onboarding to continue: {requests:#?}"
     );
 }
 
@@ -1018,6 +1069,44 @@ fn provider_credential_check_accepts_inline_api_key() {
     assert!(
         check.detail.contains("inline api key"),
         "inline provider credentials should pass preflight without forcing an env var: {check:#?}"
+    );
+}
+
+#[test]
+fn provider_credential_check_mentions_active_profile_id_when_saved_profiles_exist() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.set_active_provider_profile(
+        "volcengine-coding",
+        mvp::config::ProviderProfileConfig {
+            default_for_kind: true,
+            provider: mvp::config::ProviderConfig {
+                kind: mvp::config::ProviderKind::VolcengineCoding,
+                model: "ark-code-latest".to_owned(),
+                api_key: Some("inline-secret".to_owned()),
+                base_url: "https://ark.cn-beijing.volces.com/api/coding/v3".to_owned(),
+                wire_api: mvp::config::ProviderWireApi::ChatCompletions,
+                chat_completions_path: "/chat/completions".to_owned(),
+                ..mvp::config::ProviderConfig::default()
+            },
+        },
+    );
+    config.providers.insert(
+        "openrouter".to_owned(),
+        mvp::config::ProviderProfileConfig {
+            default_for_kind: true,
+            provider: mvp::config::ProviderConfig {
+                kind: mvp::config::ProviderKind::Openrouter,
+                model: "z-ai/glm-4.5-air:free".to_owned(),
+                ..mvp::config::ProviderConfig::default()
+            },
+        },
+    );
+
+    let check = crate::onboard_cli::provider_credential_check(&config);
+
+    assert!(
+        check.detail.contains("volcengine-coding"),
+        "provider credential diagnostics should identify the active saved profile, not just the provider kind: {check:#?}"
     );
 }
 

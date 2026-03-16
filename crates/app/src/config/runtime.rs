@@ -15,8 +15,8 @@ use super::{
     feishu_integration::FeishuIntegrationConfig,
     provider::{ProviderConfig, ProviderKind, ProviderProfileConfig},
     shared::{
-        ConfigValidationIssue, ConfigValidationLocale, DEFAULT_CONFIG_FILE,
-        default_loongclaw_home as shared_default_loongclaw_home, expand_path,
+        ConfigValidationIssue, ConfigValidationLocale, ConfigValidationSeverity,
+        DEFAULT_CONFIG_FILE, default_loongclaw_home as shared_default_loongclaw_home, expand_path,
         format_config_validation_issues,
     },
     tools_memory::{ExternalSkillsConfig, MemoryConfig, ToolConfig},
@@ -24,6 +24,7 @@ use super::{
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConfigValidationDiagnostic {
+    pub severity: String,
     pub code: String,
     pub problem_type: String,
     pub title_key: String,
@@ -42,6 +43,7 @@ impl ConfigValidationDiagnostic {
     fn from_issue(issue: &ConfigValidationIssue, locale: ConfigValidationLocale) -> Self {
         let message_variables = issue.message_variables();
         Self {
+            severity: issue.severity_str().to_owned(),
             code: issue.code.as_str().to_owned(),
             problem_type: issue.code.problem_type_uri().to_owned(),
             title_key: issue.title_key().to_owned(),
@@ -515,6 +517,116 @@ fn normalize_provider_profile_id(raw: &str) -> Option<String> {
     normalize_dispatch_channel_id(raw)
 }
 
+#[derive(Debug, Clone, Default)]
+struct RawProviderSelectionIntent {
+    legacy_provider_explicit: bool,
+    active_provider_explicit: bool,
+    raw_active_provider: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActiveProviderSelectionBasis {
+    ExplicitActiveProvider,
+    ExplicitLegacyProvider,
+    FirstSavedProfile,
+    LegacyOnly,
+}
+
+impl ActiveProviderSelectionBasis {
+    const fn diagnostic_summary(self) -> &'static str {
+        match self {
+            Self::ExplicitActiveProvider => "the explicit active_provider value",
+            Self::ExplicitLegacyProvider => "the explicit legacy [provider] table",
+            Self::FirstSavedProfile => "the first saved provider profile in sorted order",
+            Self::LegacyOnly => "the legacy [provider] table",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct ProviderSelectionNormalizationReport {
+    legacy_provider_explicit: bool,
+    active_provider_explicit: bool,
+    requested_active_provider: Option<String>,
+    selected_active_provider: Option<String>,
+    configured_profile_ids: Vec<String>,
+    selection_basis: Option<ActiveProviderSelectionBasis>,
+    warn_implicit_active_provider: bool,
+    warn_unknown_active_provider: bool,
+    recovered_legacy_profile_id: Option<String>,
+    legacy_profile_inserted: bool,
+    legacy_provider_validation_issues: Vec<ConfigValidationIssue>,
+}
+
+impl ProviderSelectionNormalizationReport {
+    fn validation_issues(&self) -> Vec<ConfigValidationIssue> {
+        let mut issues = self.legacy_provider_validation_issues.clone();
+        let configured_profile_ids = self.configured_profile_ids.join(", ");
+        let selected_profile_id = self
+            .selected_active_provider
+            .as_deref()
+            .unwrap_or("unknown")
+            .to_owned();
+        let selection_basis = self
+            .selection_basis
+            .map(ActiveProviderSelectionBasis::diagnostic_summary)
+            .unwrap_or("provider profile normalization")
+            .to_owned();
+
+        if self.warn_implicit_active_provider {
+            let mut extra_message_variables = BTreeMap::new();
+            extra_message_variables.insert("selected_profile_id".to_owned(), selected_profile_id);
+            extra_message_variables.insert("selection_basis".to_owned(), selection_basis.clone());
+            extra_message_variables.insert(
+                "configured_profile_ids".to_owned(),
+                configured_profile_ids.clone(),
+            );
+            issues.push(ConfigValidationIssue {
+                severity: ConfigValidationSeverity::Warn,
+                code: super::shared::ConfigValidationCode::ImplicitActiveProvider,
+                field_path: "active_provider".to_owned(),
+                inline_field_path: "providers".to_owned(),
+                example_env_name: String::new(),
+                suggested_env_name: self.selected_active_provider.clone(),
+                extra_message_variables,
+            });
+        }
+
+        if self.warn_unknown_active_provider {
+            let mut extra_message_variables = BTreeMap::new();
+            extra_message_variables.insert(
+                "requested_profile_id".to_owned(),
+                self.requested_active_provider
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("(blank)")
+                    .to_owned(),
+            );
+            extra_message_variables.insert(
+                "selected_profile_id".to_owned(),
+                self.selected_active_provider
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_owned()),
+            );
+            extra_message_variables.insert("selection_basis".to_owned(), selection_basis);
+            extra_message_variables
+                .insert("configured_profile_ids".to_owned(), configured_profile_ids);
+            issues.push(ConfigValidationIssue {
+                severity: ConfigValidationSeverity::Warn,
+                code: super::shared::ConfigValidationCode::UnknownActiveProvider,
+                field_path: "active_provider".to_owned(),
+                inline_field_path: "providers".to_owned(),
+                example_env_name: String::new(),
+                suggested_env_name: self.selected_active_provider.clone(),
+                extra_message_variables,
+            });
+        }
+
+        issues
+    }
+}
+
 pub const PROVIDER_SELECTOR_PLACEHOLDER: &str = "<profile|model|kind>";
 pub const PROVIDER_SELECTOR_HUMAN_SUMMARY: &str =
     "profile id, unique model name or suffix, or provider kind";
@@ -938,18 +1050,31 @@ pub(crate) fn normalize_dispatch_account_id(raw: &str) -> Option<String> {
 }
 
 impl LoongClawConfig {
-    fn collect_validation_issues(&self) -> Vec<ConfigValidationIssue> {
+    fn collect_validation_issues_with_report(
+        &self,
+        selection_report: Option<&ProviderSelectionNormalizationReport>,
+    ) -> Vec<ConfigValidationIssue> {
         let mut issues = Vec::new();
         if self.providers.is_empty() {
             issues.extend(self.provider.validate());
         } else {
             for (profile_id, profile) in &self.providers {
+                if selection_report.is_some_and(|report| {
+                    report.legacy_profile_inserted
+                        && report.recovered_legacy_profile_id.as_deref()
+                            == Some(profile_id.as_str())
+                }) {
+                    continue;
+                }
                 issues.extend(
                     profile
                         .provider
                         .validate_with_field_prefix(format!("providers.{profile_id}").as_str()),
                 );
             }
+        }
+        if let Some(report) = selection_report {
+            issues.extend(report.validation_issues());
         }
         issues.extend(super::channels::collect_channel_validation_issues(self));
         issues.extend(self.feishu_integration.validate());
@@ -959,11 +1084,22 @@ impl LoongClawConfig {
     }
 
     pub fn validate(&self) -> CliResult<()> {
-        let issues = self.collect_validation_issues();
-        if issues.is_empty() {
+        self.validate_with_report(None)
+    }
+
+    fn validate_with_report(
+        &self,
+        selection_report: Option<&ProviderSelectionNormalizationReport>,
+    ) -> CliResult<()> {
+        let issues = self.collect_validation_issues_with_report(selection_report);
+        let errors = issues
+            .into_iter()
+            .filter(ConfigValidationIssue::is_error)
+            .collect::<Vec<_>>();
+        if errors.is_empty() {
             return Ok(());
         }
-        Err(format_config_validation_issues(&issues))
+        Err(format_config_validation_issues(&errors))
     }
 
     pub fn validation_diagnostics(&self) -> Vec<ConfigValidationDiagnostic> {
@@ -974,7 +1110,15 @@ impl LoongClawConfig {
         &self,
         locale: ConfigValidationLocale,
     ) -> Vec<ConfigValidationDiagnostic> {
-        self.collect_validation_issues()
+        self.validation_diagnostics_with_locale_and_report(locale, None)
+    }
+
+    fn validation_diagnostics_with_locale_and_report(
+        &self,
+        locale: ConfigValidationLocale,
+        selection_report: Option<&ProviderSelectionNormalizationReport>,
+    ) -> Vec<ConfigValidationDiagnostic> {
+        self.collect_validation_issues_with_report(selection_report)
             .iter()
             .map(|issue| ConfigValidationDiagnostic::from_issue(issue, locale))
             .collect()
@@ -1106,10 +1250,26 @@ impl LoongClawConfig {
     }
 
     fn normalize_provider_profiles(&mut self) {
+        let _ = self.normalize_provider_profiles_with_intent(None);
+    }
+
+    fn normalize_provider_profiles_with_intent(
+        &mut self,
+        intent: Option<&RawProviderSelectionIntent>,
+    ) -> ProviderSelectionNormalizationReport {
         let normalized_last_provider = self
             .last_provider
             .as_deref()
             .and_then(normalize_provider_profile_id);
+        let mut report = ProviderSelectionNormalizationReport {
+            legacy_provider_explicit: intent
+                .is_some_and(|selection| selection.legacy_provider_explicit),
+            active_provider_explicit: intent
+                .is_some_and(|selection| selection.active_provider_explicit),
+            requested_active_provider: intent
+                .and_then(|selection| selection.raw_active_provider.clone()),
+            ..ProviderSelectionNormalizationReport::default()
+        };
 
         if self.providers.is_empty() {
             let active_provider = self
@@ -1123,7 +1283,10 @@ impl LoongClawConfig {
                 .insert(active_provider.clone(), active_profile);
             self.active_provider = Some(active_provider);
             self.last_provider = normalized_last_provider;
-            return;
+            report.selected_active_provider = self.active_provider.clone();
+            report.configured_profile_ids = self.providers.keys().cloned().collect();
+            report.selection_basis = Some(ActiveProviderSelectionBasis::LegacyOnly);
+            return report;
         }
 
         let mut normalized_profiles = BTreeMap::new();
@@ -1133,21 +1296,41 @@ impl LoongClawConfig {
             normalized_profiles.insert(normalized_profile_id, profile.clone());
         }
         self.providers = normalized_profiles;
+        report.configured_profile_ids = self.providers.keys().cloned().collect();
 
-        let Some(active_provider) = self
+        let explicit_active_provider = self
             .active_provider
             .as_deref()
             .and_then(normalize_provider_profile_id)
             .filter(|profile_id| self.providers.contains_key(profile_id))
+            .inspect(|_| {
+                report.selection_basis = Some(ActiveProviderSelectionBasis::ExplicitActiveProvider);
+            });
+        if report.active_provider_explicit && explicit_active_provider.is_none() {
+            report.warn_unknown_active_provider = true;
+        }
+        let active_provider = explicit_active_provider
             .or_else(|| {
-                let legacy_profile_id = self.provider.inferred_profile_id();
-                self.providers
-                    .contains_key(&legacy_profile_id)
-                    .then_some(legacy_profile_id)
+                if !report.legacy_provider_explicit {
+                    return None;
+                }
+                let (legacy_profile_id, inserted) =
+                    recover_active_provider_from_legacy_config(&self.provider, &mut self.providers);
+                report.configured_profile_ids = self.providers.keys().cloned().collect();
+                report.selection_basis = Some(ActiveProviderSelectionBasis::ExplicitLegacyProvider);
+                report.recovered_legacy_profile_id = Some(legacy_profile_id.clone());
+                report.legacy_profile_inserted = inserted;
+                Some(legacy_profile_id)
             })
-            .or_else(|| self.providers.keys().next().cloned())
-        else {
-            return;
+            .or_else(|| {
+                let first_profile_id = self.providers.keys().next().cloned();
+                if first_profile_id.is_some() {
+                    report.selection_basis = Some(ActiveProviderSelectionBasis::FirstSavedProfile);
+                }
+                first_profile_id
+            });
+        let Some(active_provider) = active_provider else {
+            return report;
         };
         self.active_provider = Some(active_provider.clone());
         self.last_provider =
@@ -1155,6 +1338,10 @@ impl LoongClawConfig {
         if let Some(active_profile) = self.providers.get(&active_provider) {
             self.provider = active_profile.provider.clone();
         }
+        report.selected_active_provider = Some(active_provider);
+        report.warn_implicit_active_provider =
+            !report.active_provider_explicit && report.configured_profile_ids.len() > 1;
+        report
     }
 
     fn resolve_provider_switch_target_from_normalized(&self, selector: &str) -> CliResult<String> {
@@ -1238,6 +1425,110 @@ impl LoongClawConfig {
     }
 }
 
+fn normalized_inferred_profile_id(provider: &ProviderConfig) -> String {
+    normalize_provider_profile_id(provider.inferred_profile_id().as_str())
+        .unwrap_or_else(|| provider.inferred_profile_id())
+}
+
+fn matching_legacy_provider_profile_id(
+    providers: &BTreeMap<String, ProviderProfileConfig>,
+    legacy_provider: &ProviderConfig,
+) -> Option<String> {
+    let inferred_profile_id = normalized_inferred_profile_id(legacy_provider);
+    if providers
+        .get(&inferred_profile_id)
+        .is_some_and(|profile| profile.provider == *legacy_provider)
+    {
+        return Some(inferred_profile_id);
+    }
+
+    let exact_matches = providers
+        .iter()
+        .filter(|(_profile_id, profile)| profile.provider == *legacy_provider)
+        .map(|(profile_id, _profile)| profile_id.clone())
+        .collect::<Vec<_>>();
+    if exact_matches.len() == 1 {
+        return exact_matches.into_iter().next();
+    }
+    exact_matches.into_iter().next()
+}
+
+fn next_available_provider_profile_id(
+    providers: &BTreeMap<String, ProviderProfileConfig>,
+    base_profile_id: &str,
+) -> String {
+    if !providers.contains_key(base_profile_id) {
+        return base_profile_id.to_owned();
+    }
+    for suffix in 2.. {
+        let candidate = format!("{base_profile_id}-{suffix}");
+        if !providers.contains_key(&candidate) {
+            return candidate;
+        }
+    }
+    unreachable!("provider profile id suffix search should always terminate")
+}
+
+fn recover_active_provider_from_legacy_config(
+    legacy_provider: &ProviderConfig,
+    providers: &mut BTreeMap<String, ProviderProfileConfig>,
+) -> (String, bool) {
+    if let Some(profile_id) = matching_legacy_provider_profile_id(providers, legacy_provider) {
+        return (profile_id, false);
+    }
+
+    let profile_id = next_available_provider_profile_id(
+        providers,
+        normalized_inferred_profile_id(legacy_provider).as_str(),
+    );
+    let mut recovered_profile = ProviderProfileConfig::from_provider(legacy_provider.clone());
+    recovered_profile.default_for_kind = !providers
+        .values()
+        .any(|profile| profile.provider.kind == recovered_profile.provider.kind);
+    providers.insert(profile_id.clone(), recovered_profile);
+    (profile_id, true)
+}
+
+#[cfg(feature = "config-toml")]
+fn inspect_raw_provider_selection_intent(raw: &str) -> CliResult<RawProviderSelectionIntent> {
+    let value = toml::from_str::<toml::Value>(raw)
+        .map_err(|error| format!("failed to parse TOML config: {error}"))?;
+    let table = value.as_table();
+    Ok(RawProviderSelectionIntent {
+        legacy_provider_explicit: table.is_some_and(|root| root.contains_key("provider")),
+        active_provider_explicit: table.is_some_and(|root| root.contains_key("active_provider")),
+        raw_active_provider: table
+            .and_then(|root| root.get("active_provider"))
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned),
+    })
+}
+
+#[cfg(feature = "config-toml")]
+fn parse_toml_config_components(
+    raw: &str,
+) -> CliResult<(LoongClawConfig, ProviderSelectionNormalizationReport)> {
+    let mut config = toml::from_str::<LoongClawConfig>(raw)
+        .map_err(|error| format!("failed to parse TOML config: {error}"))?;
+    let selection_intent = inspect_raw_provider_selection_intent(raw)?;
+    let had_saved_provider_profiles = !config.providers.is_empty();
+    let legacy_provider_before_normalization = config.provider.clone();
+    let mut selection_report =
+        config.normalize_provider_profiles_with_intent(Some(&selection_intent));
+    if selection_intent.legacy_provider_explicit && had_saved_provider_profiles {
+        selection_report.legacy_provider_validation_issues =
+            legacy_provider_before_normalization.validate();
+    }
+    Ok((config, selection_report))
+}
+
+#[cfg(not(feature = "config-toml"))]
+fn parse_toml_config_components(
+    _raw: &str,
+) -> CliResult<(LoongClawConfig, ProviderSelectionNormalizationReport)> {
+    Err("config-toml feature is disabled for this build".to_owned())
+}
+
 pub fn load(path: Option<&str>) -> CliResult<(PathBuf, LoongClawConfig)> {
     let config_path = path.map(expand_path).unwrap_or_else(default_config_path);
     let raw = fs::read_to_string(&config_path).map_err(|error| {
@@ -1274,11 +1565,11 @@ pub fn validate_file_with_locale(
             config_path.display()
         )
     })?;
-    let config = parse_toml_config_without_validation(&raw)?;
+    let (config, selection_report) = parse_toml_config_components(&raw)?;
     let locale = ConfigValidationLocale::from_tag(locale_tag);
     Ok((
         config_path,
-        config.validation_diagnostics_with_locale(locale),
+        config.validation_diagnostics_with_locale_and_report(locale, Some(&selection_report)),
     ))
 }
 
@@ -1352,17 +1643,14 @@ pub fn default_loongclaw_home() -> PathBuf {
 
 #[cfg(feature = "config-toml")]
 fn parse_toml_config(raw: &str) -> CliResult<LoongClawConfig> {
-    let config = parse_toml_config_without_validation(raw)?;
-    config.validate()?;
+    let (config, selection_report) = parse_toml_config_components(raw)?;
+    config.validate_with_report(Some(&selection_report))?;
     Ok(config)
 }
 
 #[cfg(feature = "config-toml")]
 fn parse_toml_config_without_validation(raw: &str) -> CliResult<LoongClawConfig> {
-    let mut config = toml::from_str::<LoongClawConfig>(raw)
-        .map_err(|error| format!("failed to parse TOML config: {error}"))?;
-    config.normalize_provider_profiles();
-    Ok(config)
+    parse_toml_config_components(raw).map(|(config, _selection_report)| config)
 }
 
 #[cfg(not(feature = "config-toml"))]
@@ -1527,6 +1815,7 @@ api_key_env = "$OPENAI_API_KEY"
         let (_, diagnostics) = validate_file(Some(config_path.to_string_lossy().as_ref()))
             .expect("validate_file should parse and return diagnostics");
         assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].severity, "error");
         assert_eq!(diagnostics[0].code, "config.env_pointer.dollar_prefix");
         assert_eq!(
             diagnostics[0].problem_type,
@@ -1580,6 +1869,7 @@ bot_token_env = "WORK_TELEGRAM_TOKEN_DUP"
         let (_, diagnostics) = validate_file(Some(config_path.to_string_lossy().as_ref()))
             .expect("validate_file should parse and return diagnostics");
         assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].severity, "error");
         assert_eq!(diagnostics[0].code, "config.channel_account.duplicate_id");
         assert_eq!(
             diagnostics[0].problem_type,
@@ -1802,6 +2092,227 @@ api_key = "${DEEPSEEK_API_KEY}"
         assert_eq!(loaded.provider.kind, ProviderKind::Deepseek);
 
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn mixed_legacy_and_profile_config_preserves_explicit_legacy_provider_when_active_provider_missing()
+     {
+        let raw = r#"
+[provider]
+kind = "volcengine_coding"
+model = "ark-code-latest"
+base_url = "https://ark.cn-beijing.volces.com/api/coding/v3"
+wire_api = "chat_completions"
+chat_completions_path = "/chat/completions"
+
+[providers.openrouter]
+default_for_kind = true
+kind = "openrouter"
+model = "z-ai/glm-4.5-air:free"
+base_url = "https://openrouter.ai"
+wire_api = "chat_completions"
+chat_completions_path = "/api/v1/chat/completions"
+"#;
+
+        let config = parse_toml_config_without_validation(raw).expect("config should parse");
+
+        assert_eq!(config.active_provider_id(), Some("volcengine_coding"));
+        assert_eq!(config.provider.kind, ProviderKind::VolcengineCoding);
+        assert_eq!(config.provider.model, "ark-code-latest");
+        assert!(
+            config.providers.contains_key("volcengine_coding"),
+            "legacy provider intent should be preserved as a normalized saved profile: {config:#?}"
+        );
+        assert!(
+            config.providers.contains_key("openrouter"),
+            "existing saved profiles should be retained during normalization: {config:#?}"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn validate_file_reports_warning_for_implicit_active_provider_recovery_in_mixed_config() {
+        let path = unique_config_path("loongclaw-config-provider-selection-warning");
+        let raw = r#"
+[provider]
+kind = "volcengine_coding"
+model = "ark-code-latest"
+base_url = "https://ark.cn-beijing.volces.com/api/coding/v3"
+wire_api = "chat_completions"
+chat_completions_path = "/chat/completions"
+
+[providers.openrouter]
+default_for_kind = true
+kind = "openrouter"
+model = "z-ai/glm-4.5-air:free"
+base_url = "https://openrouter.ai"
+wire_api = "chat_completions"
+chat_completions_path = "/api/v1/chat/completions"
+"#;
+        fs::write(&path, raw).expect("write mixed provider config");
+
+        let (_, diagnostics) = validate_file(Some(path.to_string_lossy().as_ref()))
+            .expect("validate_file should parse and return diagnostics");
+
+        assert!(
+            diagnostics.iter().any(|diagnostic| diagnostic.code
+                == "config.provider_selection.implicit_active"
+                && diagnostic.severity == "warn"
+                && diagnostic.field_path == "active_provider"),
+            "mixed configs without an explicit active_provider should surface a warning-level provider-selection diagnostic: {diagnostics:#?}"
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn mixed_config_recovers_invalid_explicit_active_provider_from_legacy_provider() {
+        let raw = r#"
+active_provider = "missing-profile"
+
+[provider]
+kind = "volcengine_coding"
+model = "ark-code-latest"
+base_url = "https://ark.cn-beijing.volces.com/api/coding/v3"
+wire_api = "chat_completions"
+chat_completions_path = "/chat/completions"
+
+[providers.openrouter]
+default_for_kind = true
+kind = "openrouter"
+model = "z-ai/glm-4.5-air:free"
+base_url = "https://openrouter.ai"
+wire_api = "chat_completions"
+chat_completions_path = "/api/v1/chat/completions"
+"#;
+
+        let config = parse_toml_config_without_validation(raw).expect("config should parse");
+
+        assert_eq!(config.active_provider_id(), Some("volcengine_coding"));
+        assert_eq!(config.provider.kind, ProviderKind::VolcengineCoding);
+        assert_eq!(config.provider.model, "ark-code-latest");
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn validate_file_reports_warning_for_unknown_active_provider_recovery_in_mixed_config() {
+        let path = unique_config_path("loongclaw-config-provider-selection-unknown-active");
+        let raw = r#"
+active_provider = "missing-profile"
+
+[provider]
+kind = "volcengine_coding"
+model = "ark-code-latest"
+base_url = "https://ark.cn-beijing.volces.com/api/coding/v3"
+wire_api = "chat_completions"
+chat_completions_path = "/chat/completions"
+
+[providers.openrouter]
+default_for_kind = true
+kind = "openrouter"
+model = "z-ai/glm-4.5-air:free"
+base_url = "https://openrouter.ai"
+wire_api = "chat_completions"
+chat_completions_path = "/api/v1/chat/completions"
+"#;
+        fs::write(&path, raw).expect("write mixed provider config");
+
+        let (_, diagnostics) = validate_file(Some(path.to_string_lossy().as_ref()))
+            .expect("validate_file should parse and return diagnostics");
+
+        assert!(
+            diagnostics.iter().any(|diagnostic| diagnostic.code
+                == "config.provider_selection.unknown_active"
+                && diagnostic.severity == "warn"
+                && diagnostic.field_path == "active_provider"),
+            "mixed configs with an invalid explicit active_provider should surface a warning-level recovery diagnostic: {diagnostics:#?}"
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn validate_file_reports_legacy_provider_field_errors_even_when_provider_profiles_exist() {
+        let path = unique_config_path("loongclaw-config-legacy-provider-validation");
+        let raw = r#"
+active_provider = "openrouter"
+
+[provider]
+kind = "volcengine_coding"
+model = "ark-code-latest"
+api_key_env = "$VOLCENGINE_CODING_API_KEY"
+base_url = "https://ark.cn-beijing.volces.com/api/coding/v3"
+wire_api = "chat_completions"
+chat_completions_path = "/chat/completions"
+
+[providers.openrouter]
+default_for_kind = true
+kind = "openrouter"
+model = "z-ai/glm-4.5-air:free"
+base_url = "https://openrouter.ai"
+wire_api = "chat_completions"
+chat_completions_path = "/api/v1/chat/completions"
+"#;
+        fs::write(&path, raw).expect("write mixed provider config");
+
+        let (_, diagnostics) = validate_file(Some(path.to_string_lossy().as_ref()))
+            .expect("validate_file should parse and return diagnostics");
+
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "config.env_pointer.dollar_prefix"
+                    && diagnostic.field_path == "provider.api_key_env"
+                    && diagnostic.severity == "error"
+            }),
+            "explicit legacy provider fields should still be validated when saved provider profiles also exist: {diagnostics:#?}"
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn mixed_config_recovers_explicit_legacy_provider_without_overwriting_conflicting_profile_id() {
+        let raw = r#"
+[provider]
+kind = "openrouter"
+model = "z-ai/glm-4.5-air:free"
+base_url = "https://openrouter.ai"
+wire_api = "chat_completions"
+chat_completions_path = "/api/v1/chat/completions"
+
+[providers.openrouter]
+default_for_kind = true
+kind = "openai"
+model = "gpt-5"
+"#;
+
+        let config = parse_toml_config_without_validation(raw).expect("config should parse");
+
+        assert_eq!(config.provider.kind, ProviderKind::Openrouter);
+        assert_eq!(config.provider.model, "z-ai/glm-4.5-air:free");
+        assert_eq!(config.active_provider_id(), Some("openrouter-2"));
+        assert_eq!(
+            config
+                .providers
+                .get("openrouter")
+                .expect("conflicting saved profile should be retained")
+                .provider
+                .kind,
+            ProviderKind::Openai
+        );
+        assert_eq!(
+            config
+                .providers
+                .get("openrouter-2")
+                .expect("legacy provider should be recovered into a fresh profile id")
+                .provider
+                .kind,
+            ProviderKind::Openrouter
+        );
     }
 
     #[test]
