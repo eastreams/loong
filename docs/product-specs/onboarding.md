@@ -28,11 +28,19 @@ next.
       surfaces that the runtime uses after setup.
 - [ ] When preflight checks fail, onboarding points users to `loongclaw doctor`
       or `loongclaw doctor --fix` as the repair path.
+<<<<<<< HEAD
 - [ ] Onboarding preflight reuses the same browser companion diagnostics as
       `loongclaw doctor`, surfacing optional managed-lane blockers before write
       without redefining runtime truth inside onboarding.
 - [ ] Providers that can run with explicit or curated fallback models are not
       blocked solely because model catalog discovery is unavailable during setup.
+=======
+- [ ] Providers with a reviewed onboarding default model can complete setup with
+      an explicit model even when model catalog discovery is unavailable during
+      setup.
+- [ ] `preferred_models` remains an explicit operator-configured fallback path
+      rather than a hidden provider-owned runtime default.
+>>>>>>> 71f604a (fix(onboard): prefer explicit provider defaults over hidden fallback)
 
 ## Out of Scope
 

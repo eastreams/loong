@@ -203,4 +203,18 @@ mod tests {
             "explicit models should not rely on preferred-model auto fallback"
         );
     }
+
+    #[test]
+    fn preferred_model_fallback_candidates_do_not_infer_provider_defaults() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Minimax,
+            model: "auto".to_owned(),
+            ..ProviderConfig::default()
+        };
+
+        assert!(
+            preferred_model_fallback_candidates(&provider).is_empty(),
+            "runtime should not infer provider-owned fallback models when the operator did not configure preferred_models"
+        );
+    }
 }

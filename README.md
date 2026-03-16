@@ -256,6 +256,9 @@ cargo install --path crates/daemon
    personality, optional prompt addendum, and memory profile selection. Use
    `--system-prompt` only when you want to replace the native prompt pack with a
    full inline override.
+   For providers with a reviewed onboarding default model, such as MiniMax,
+   onboarding now prefills an explicit recommended model instead of relying on a
+   hidden runtime fallback.
    Press `Esc`, then `Enter`, at any onboarding prompt to cancel before writing config.
 
    WSL note: CLI onboarding works in WSL. If you want service-style workflows or Linux daemons

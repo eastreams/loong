@@ -1005,7 +1005,7 @@ fn provider_model_probe_failure_check(
             name: "provider model probe".to_owned(),
             level: DoctorCheckLevel::Warn,
             detail: format!(
-                "{}: model catalog probe failed ({error}); runtime will try preferred model fallback(s): {}",
+                "{}: model catalog probe failed ({error}); runtime will try configured preferred model fallback(s): {}",
                 crate::provider_presentation::active_provider_detail_label(config),
                 fallback_models
                     .iter()
@@ -1707,8 +1707,8 @@ mod tests {
         assert_eq!(check.name, "provider model probe");
         assert_eq!(check.level, DoctorCheckLevel::Warn);
         assert!(
-            check.detail.contains("preferred model"),
-            "doctor should explain when runtime can continue with preferred auto-model fallbacks: {check:#?}"
+            check.detail.contains("configured preferred"),
+            "doctor should only advertise fallback continuation for explicitly configured preferred models: {check:#?}"
         );
         assert!(
             check.detail.contains("MiniMax-M1"),

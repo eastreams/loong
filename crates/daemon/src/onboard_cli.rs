@@ -1036,39 +1036,53 @@ fn resolve_model_selection(
     ui: &mut impl OnboardUi,
     context: &OnboardRuntimeContext,
 ) -> CliResult<String> {
+    let default_model = resolve_onboarding_model_prompt_default(options, config);
     if options.non_interactive {
-        if let Some(model) = options.model.as_deref() {
-            let trimmed = model.trim();
-            if trimmed.is_empty() {
-                return Err("--model cannot be empty".to_owned());
-            }
-            return Ok(trimmed.to_owned());
-        }
-        return Ok(config.provider.model.clone());
+        return Ok(default_model);
     }
 
-    let default_model = options
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(config.provider.model.as_str());
     print_lines(
         ui,
         render_model_selection_screen_lines_with_style(
             config,
-            default_model,
+            default_model.as_str(),
             guided_prompt_path,
             context.render_width,
             true,
         ),
     )?;
-    let value = ui.prompt_with_default("Model", default_model)?;
+    let value = ui.prompt_with_default("Model", default_model.as_str())?;
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err("model cannot be empty".to_owned());
     }
     Ok(trimmed.to_owned())
+}
+
+fn resolve_onboarding_model_prompt_default(
+    options: &OnboardCommandOptions,
+    config: &mvp::config::LoongClawConfig,
+) -> String {
+    if let Some(model) = options
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return model.to_owned();
+    }
+
+    if let Some(model) = config.provider.explicit_model() {
+        return model;
+    }
+
+    if config.provider.configured_model_value() == "auto"
+        && let Some(model) = config.provider.kind.recommended_onboarding_model()
+    {
+        return model.to_owned();
+    }
+
+    config.provider.configured_model_value()
 }
 
 fn resolve_api_key_env_selection(
@@ -1402,7 +1416,7 @@ fn provider_model_probe_failure_check(
             name: "provider model probe",
             level: OnboardCheckLevel::Warn,
             detail: format!(
-                "{}: model catalog probe failed ({error}); runtime will try preferred model fallback(s): {}",
+                "{}: model catalog probe failed ({error}); runtime will try configured preferred model fallback(s): {}",
                 provider_check_detail_prefix(config),
                 render_onboard_model_candidate_list(&fallback_models)
             ),
@@ -4067,14 +4081,14 @@ fn render_model_selection_screen_lines_with_style(
     if let Some(default_model) = config
         .provider
         .kind
-        .default_model()
+        .recommended_onboarding_model()
         .filter(|default_model| *default_model != config.provider.model)
     {
-        context_lines.push(format!("- provider default: {default_model}"));
+        context_lines.push(format!("- recommended model: {default_model}"));
     }
     if !preferred_fallback_models.is_empty() {
         context_lines.push(format!(
-            "- preferred fallback: {}",
+            "- configured preferred fallback: {}",
             preferred_fallback_models.join(", ")
         ));
     }
@@ -4085,7 +4099,7 @@ fn render_model_selection_screen_lines_with_style(
     ];
     if !preferred_fallback_models.is_empty() && config.provider.explicit_model().is_none() {
         hint_lines.push(format!(
-            "- leave `auto` to let runtime try preferred fallbacks first: {}",
+            "- leave `auto` to let runtime try configured preferred fallbacks first: {}",
             preferred_fallback_models.join(", ")
         ));
     }
@@ -5470,8 +5484,8 @@ mod tests {
         assert_eq!(check.name, "provider model probe");
         assert_eq!(check.level, OnboardCheckLevel::Warn);
         assert!(
-            check.detail.contains("preferred model"),
-            "preferred-model fallback should be explained when catalog discovery is unavailable: {check:#?}"
+            check.detail.contains("configured preferred"),
+            "onboarding should only advertise fallback continuation for explicitly configured preferred models: {check:#?}"
         );
         assert!(
             check.detail.contains("MiniMax-M1"),
@@ -5508,7 +5522,7 @@ mod tests {
     }
 
     #[test]
-    fn preferred_model_probe_warning_is_accepted_non_interactively() {
+    fn configured_preferred_model_probe_warning_is_accepted_non_interactively() {
         let mut config = mvp::config::LoongClawConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
         config.provider.model = "auto".to_owned();
@@ -5533,7 +5547,7 @@ mod tests {
 
         assert!(
             is_explicitly_accepted_non_interactive_warning(&check, &options),
-            "preferred-model fallback warnings should not block non-interactive onboarding because runtime can still try the seeded models: {check:#?}"
+            "configured preferred-model fallback warnings should not block non-interactive onboarding because runtime can still try the operator-configured models: {check:#?}"
         );
     }
 
@@ -5720,20 +5734,72 @@ mod tests {
     }
 
     #[test]
-    fn render_model_selection_screen_surfaces_preferred_fallback_models() {
+    fn resolve_model_selection_prefills_minimax_recommended_model_interactively() {
         let mut config = mvp::config::LoongClawConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
         config.provider.model = "auto".to_owned();
-        config.provider.preferred_models =
-            vec!["MiniMax-M1".to_owned(), "MiniMax-Text-01".to_owned()];
+        let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
 
-        let lines = render_model_selection_screen_lines_with_default(&config, "auto", 80);
+        let selected = resolve_model_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: false,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            GuidedPromptPath::NativePromptPack,
+            &mut ui,
+            &context,
+        )
+        .expect("resolve model selection");
 
         assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("MiniMax-M1") && line.contains("preferred")),
-            "model selection should surface runtime fallback hints when auto-model setup depends on curated preferred models: {lines:#?}"
+            selected == "MiniMax-M2.5",
+            "interactive onboarding should prefill the provider-recommended explicit model for MiniMax instead of leaving the operator on hidden runtime fallbacks: {selected:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_model_selection_prefills_minimax_recommended_model_non_interactively() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Minimax;
+        config.provider.model = "auto".to_owned();
+        let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let selected = resolve_model_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: true,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            GuidedPromptPath::NativePromptPack,
+            &mut ui,
+            &context,
+        )
+        .expect("resolve model selection");
+
+        assert!(
+            selected == "MiniMax-M2.5",
+            "non-interactive onboarding should pick the provider-recommended explicit model for MiniMax instead of preserving auto: {selected:?}"
         );
     }
 

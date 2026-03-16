@@ -146,8 +146,6 @@ const ARK_REASONING_EFFORTS: &[ReasoningEffort] = &[
     ReasoningEffort::Medium,
     ReasoningEffort::High,
 ];
-const MINIMAX_DEFAULT_PREFERRED_MODELS: &[&str] = &["MiniMax-M1"];
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
@@ -672,11 +670,6 @@ impl ProviderConfig {
         let mut provider = Self::default();
         provider.set_kind(kind);
         provider.model = kind.default_model().unwrap_or("auto").to_owned();
-        provider.preferred_models = kind
-            .default_preferred_models()
-            .iter()
-            .map(|model| (*model).to_owned())
-            .collect();
         provider.selection_baseline()
     }
 
@@ -1002,16 +995,7 @@ impl ProviderConfig {
         }
 
         let mut models = Vec::new();
-        let preferred_models = if self.preferred_models.is_empty() {
-            self.kind
-                .default_preferred_models()
-                .iter()
-                .map(|model| (*model).to_owned())
-                .collect::<Vec<_>>()
-        } else {
-            self.preferred_models.clone()
-        };
-        for raw in &preferred_models {
+        for raw in &self.preferred_models {
             let trimmed = raw.trim();
             if trimmed.is_empty() || models.iter().any(|existing| existing == trimmed) {
                 continue;
@@ -1937,11 +1921,11 @@ impl ProviderKind {
         }
     }
 
-    pub const fn default_preferred_models(self) -> &'static [&'static str] {
+    pub const fn recommended_onboarding_model(self) -> Option<&'static str> {
         if matches!(self, ProviderKind::Minimax) {
-            MINIMAX_DEFAULT_PREFERRED_MODELS
+            Some("MiniMax-M2.5")
         } else {
-            &[]
+            self.default_model()
         }
     }
 }
@@ -3056,10 +3040,27 @@ mod tests {
     }
 
     #[test]
-    fn fresh_minimax_provider_seeds_preferred_models_for_auto_fallback() {
+    fn fresh_minimax_provider_does_not_seed_hidden_preferred_models() {
         let config = ProviderConfig::fresh_for_kind(ProviderKind::Minimax);
 
         assert_eq!(config.model, "auto");
-        assert_eq!(config.preferred_models, vec!["MiniMax-M1".to_owned()]);
+        assert!(
+            config.preferred_models.is_empty(),
+            "provider defaults should not inject hidden runtime fallback models: {config:#?}"
+        );
+    }
+
+    #[test]
+    fn configured_auto_model_candidates_require_explicit_preferred_models() {
+        let config = ProviderConfig {
+            kind: ProviderKind::Minimax,
+            model: "auto".to_owned(),
+            ..ProviderConfig::default()
+        };
+
+        assert!(
+            config.configured_auto_model_candidates().is_empty(),
+            "auto-model fallback candidates should only exist when the operator configured preferred_models explicitly"
+        );
     }
 }
