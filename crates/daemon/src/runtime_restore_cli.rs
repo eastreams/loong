@@ -69,6 +69,7 @@ pub struct RuntimeRestoreVerification {
     pub verified_surfaces: Vec<String>,
     pub mismatches: Vec<String>,
     pub capability_snapshot_sha256: String,
+    pub verification_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -458,6 +459,7 @@ fn runtime_restore_has_blocking_warnings(warnings: &[String]) -> bool {
     warnings.iter().any(|warning| {
         warning.contains("redacted inline provider credential")
             || warning.contains("redacted inline provider header")
+            || warning.contains("restore spec could not enumerate managed external skills")
     })
 }
 
@@ -520,8 +522,18 @@ fn apply_runtime_restore(
         ));
     }
 
-    let post_snapshot = collect_runtime_snapshot_cli_state(Some(path_string.as_ref()))?;
-    Ok(verify_runtime_restore(plan, artifact, &post_snapshot))
+    match collect_runtime_snapshot_cli_state(Some(path_string.as_ref())) {
+        Ok(post_snapshot) => Ok(verify_runtime_restore(plan, artifact, &post_snapshot)),
+        Err(error) => Ok(RuntimeRestoreVerification {
+            restored_exactly: false,
+            verified_surfaces: Vec::new(),
+            mismatches: vec!["verification_unavailable".to_owned()],
+            capability_snapshot_sha256: String::new(),
+            verification_error: Some(format!(
+                "post-apply runtime snapshot verification failed: {error}"
+            )),
+        }),
+    }
 }
 
 fn apply_managed_skill_actions(
@@ -750,6 +762,7 @@ fn verify_runtime_restore(
         verified_surfaces,
         mismatches,
         capability_snapshot_sha256: post_snapshot.capability_snapshot_sha256.clone(),
+        verification_error: None,
     }
 }
 
@@ -801,6 +814,9 @@ fn render_runtime_restore_text(execution: &RuntimeRestoreExecution) -> String {
                 "mismatches={}",
                 render_string_list(verification.mismatches.iter().map(String::as_str))
             ));
+        }
+        if let Some(error) = verification.verification_error.as_deref() {
+            lines.push(format!("verification_error={error}"));
         }
     }
 

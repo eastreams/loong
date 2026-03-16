@@ -389,6 +389,9 @@ pub enum Commands {
         #[arg(long)]
         parent_snapshot_id: Option<String>,
     },
+    #[command(
+        long_about = "Restore a persisted runtime snapshot artifact into the current config and managed skill state.\n\nDry-run by default; pass --apply to mutate config or managed skills."
+    )]
     /// Restore a persisted runtime snapshot artifact into the current config and managed skill state
     RuntimeRestore {
         #[arg(long)]

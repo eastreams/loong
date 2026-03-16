@@ -486,6 +486,51 @@ fn runtime_restore_dry_run_blocks_apply_when_provider_credentials_were_redacted(
 }
 
 #[test]
+fn runtime_restore_dry_run_blocks_apply_when_managed_skill_inventory_was_not_captured() {
+    let root = unique_temp_dir("loongclaw-runtime-restore-missing-managed-inventory");
+    let _env = RuntimeRestoreEnvGuard::set(&[
+        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("OPENAI_API_KEY", None),
+        ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
+    ]);
+    let (config_path, mut config) = write_runtime_restore_config(&root);
+    config.external_skills.enabled = false;
+    mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
+        .expect("write disabled inventory restore config");
+
+    let (artifact_path, _snapshot, payload) = write_snapshot_artifact(&root, &config_path);
+    assert!(
+        payload["restore_spec"]["warnings"]
+            .as_array()
+            .expect("warnings should be an array")
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|warning| warning.contains("could not enumerate managed external skills")),
+        "fixture should capture the managed-skill inventory warning"
+    );
+
+    let dry_run = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+            config: Some(config_path.display().to_string()),
+            snapshot: artifact_path.display().to_string(),
+            json: false,
+            apply: false,
+        },
+    )
+    .expect("runtime restore dry-run should still load the artifact");
+
+    assert!(!dry_run.plan.can_apply);
+    assert!(
+        dry_run
+            .plan
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("could not enumerate managed external skills")),
+        "dry-run should keep the managed-skill inventory warning visible"
+    );
+}
+
+#[test]
 fn runtime_restore_dry_run_collects_current_inventory_when_target_snapshot_disables_external_skills()
  {
     let root = unique_temp_dir("loongclaw-runtime-restore-target-disabled");
@@ -633,6 +678,65 @@ fn runtime_restore_apply_replays_snapshot_state_and_verifies_post_apply_match() 
             .expect("skills should be an array")
             .iter()
             .any(|skill| skill["skill_id"] == "demo-skill")
+    );
+}
+
+#[test]
+fn runtime_restore_apply_reports_verification_failure_without_reverting_applied_state() {
+    let root = unique_temp_dir("loongclaw-runtime-restore-verification-failure");
+    let _env = RuntimeRestoreEnvGuard::set(&[
+        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("OPENAI_API_KEY", None),
+        ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
+    ]);
+    let (config_path, config) = write_runtime_restore_config(&root);
+    install_demo_skill(&root, &config, &config_path);
+    let (_artifact_path, _snapshot, mut payload) = write_snapshot_artifact(&root, &config_path);
+
+    mutate_runtime_restore_config(&config_path, &root);
+
+    payload["restore_spec"]["conversation"]["context_engine"] =
+        Value::String("missing-engine".to_owned());
+    let artifact_path = write_snapshot_artifact_payload(
+        &root,
+        "artifacts/runtime-snapshot-invalid-verification.json",
+        &payload,
+    );
+
+    let execution = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+            config: Some(config_path.display().to_string()),
+            snapshot: artifact_path.display().to_string(),
+            json: false,
+            apply: true,
+        },
+    )
+    .expect("apply should surface verification failure instead of returning an error");
+
+    let verification = execution
+        .verification
+        .as_ref()
+        .expect("apply should still emit verification metadata");
+    assert!(!verification.restored_exactly);
+    assert!(
+        verification
+            .mismatches
+            .iter()
+            .any(|mismatch| mismatch == "verification_unavailable"),
+        "verification failure should be explicit in the mismatch list"
+    );
+    assert!(
+        verification
+            .verification_error
+            .as_deref()
+            .is_some_and(|error| error.contains("post-apply runtime snapshot verification failed")),
+        "verification error should preserve the post-apply failure context"
+    );
+
+    let raw_config = fs::read_to_string(&config_path).expect("read mutated config");
+    assert!(
+        raw_config.contains("context_engine = \"missing-engine\""),
+        "apply should have already persisted the requested restore state"
     );
 }
 

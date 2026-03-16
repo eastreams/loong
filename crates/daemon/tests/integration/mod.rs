@@ -139,6 +139,28 @@ fn cli_ask_help_mentions_one_shot_assistant_usage() {
 }
 
 #[test]
+fn cli_runtime_restore_help_mentions_dry_run_default() {
+    let mut command = Cli::command();
+    let runtime_restore = command
+        .find_subcommand_mut("runtime-restore")
+        .expect("runtime-restore subcommand should exist");
+    let mut help = Vec::new();
+    runtime_restore
+        .write_long_help(&mut help)
+        .expect("render runtime-restore help");
+    let help = String::from_utf8(help).expect("help should be utf8");
+
+    assert!(
+        help.contains("Dry-run by default"),
+        "runtime-restore help should explain the default dry-run behavior: {help}"
+    );
+    assert!(
+        help.contains("--apply"),
+        "runtime-restore help should explain how to perform mutations: {help}"
+    );
+}
+
+#[test]
 fn ask_cli_accepts_message_session_and_acp_flags() {
     let cli = Cli::try_parse_from([
         "loongclaw",
