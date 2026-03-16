@@ -152,7 +152,9 @@ pub(crate) async fn collect_browser_companion_diagnostics(
     match probe_browser_companion_version(&command).await {
         Ok(observed_version) => {
             let install_status = match expected_version.as_deref() {
-                Some(expected_version) if !observed_version.contains(expected_version) => {
+                Some(expected_version)
+                    if !observed_version_matches_expected(&observed_version, expected_version) =>
+                {
                     BrowserCompanionInstallStatus::VersionMismatch {
                         command: command.clone(),
                         expected_version: expected_version.to_owned(),
@@ -245,5 +247,154 @@ fn observed_output(stdout: &[u8], stderr: &[u8]) -> String {
         (true, false) => stderr,
         (false, false) => format!("{stdout} | {stderr}"),
         (true, true) => "(empty)".to_owned(),
+    }
+}
+
+fn observed_version_matches_expected(observed_version: &str, expected_version: &str) -> bool {
+    observed_version
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '-' && c != '_')
+        .filter(|token| !token.is_empty())
+        .any(|token| token == expected_version)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::io::Write;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::path::{Path, PathBuf};
+    #[cfg(unix)]
+    use std::sync::MutexGuard;
+    #[cfg(unix)]
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[cfg(unix)]
+    fn browser_companion_temp_dir(label: &str) -> PathBuf {
+        static NEXT_TEMP_DIR_SEED: AtomicU64 = AtomicU64::new(1);
+        let seed = NEXT_TEMP_DIR_SEED.fetch_add(1, Ordering::Relaxed);
+        let temp_dir = std::env::temp_dir().join(format!(
+            "loongclaw-browser-companion-diagnostics-{label}-{}-{seed}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("create browser companion diagnostics temp dir");
+        temp_dir
+    }
+
+    #[cfg(unix)]
+    fn write_browser_companion_script(script_path: &Path, body: &str) {
+        let mut file = std::fs::File::create(script_path).expect("create browser companion script");
+        file.write_all(body.as_bytes())
+            .expect("write browser companion script");
+        let mut permissions = file.metadata().expect("script metadata").permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(script_path, permissions).expect("chmod browser companion script");
+    }
+
+    #[cfg(unix)]
+    fn set_browser_companion_env_var(key: &str, value: &str) {
+        // SAFETY: daemon tests serialize process env mutations behind
+        // `lock_daemon_test_environment`, so no concurrent env readers/writers
+        // observe racy updates while these tests run.
+        #[allow(unsafe_code, clippy::disallowed_methods)]
+        unsafe {
+            std::env::set_var(key, value);
+        }
+    }
+
+    #[cfg(unix)]
+    fn remove_browser_companion_env_var(key: &str) {
+        // SAFETY: daemon tests serialize process env mutations behind
+        // `lock_daemon_test_environment`, so removing the variable here is
+        // coordinated with all other env-mutating daemon tests.
+        #[allow(unsafe_code, clippy::disallowed_methods)]
+        unsafe {
+            std::env::remove_var(key);
+        }
+    }
+
+    #[cfg(unix)]
+    struct BrowserCompanionEnvGuard {
+        _lock: MutexGuard<'static, ()>,
+        saved_ready: Option<OsString>,
+    }
+
+    #[cfg(unix)]
+    impl BrowserCompanionEnvGuard {
+        fn runtime_gate_closed() -> Self {
+            let lock = crate::test_support::lock_daemon_test_environment();
+            let key = "LOONGCLAW_BROWSER_COMPANION_READY";
+            let saved_ready = std::env::var_os(key);
+            remove_browser_companion_env_var(key);
+            Self {
+                _lock: lock,
+                saved_ready,
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for BrowserCompanionEnvGuard {
+        fn drop(&mut self) {
+            let key = "LOONGCLAW_BROWSER_COMPANION_READY";
+            match self.saved_ready.take() {
+                Some(value) => set_browser_companion_env_var(key, &value.to_string_lossy()),
+                None => remove_browser_companion_env_var(key),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn collect_browser_companion_diagnostics_rejects_partial_expected_version_matches() {
+        let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
+        let temp_dir = browser_companion_temp_dir("partial-version-match");
+        let script_path = temp_dir.join("browser-companion");
+        write_browser_companion_script(
+            &script_path,
+            "#!/bin/sh\necho 'loongclaw-browser-companion 11.5.0'\n",
+        );
+
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.tools.browser_companion.enabled = true;
+        config.tools.browser_companion.command = Some(script_path.display().to_string());
+        config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
+
+        let diagnostics = collect_browser_companion_diagnostics(&config)
+            .await
+            .expect("diagnostics should be collected");
+
+        assert!(
+            matches!(
+                diagnostics.install_status,
+                BrowserCompanionInstallStatus::VersionMismatch {
+                    ref expected_version,
+                    ref observed_version,
+                    ..
+                } if expected_version == "1.5.0"
+                    && observed_version == "loongclaw-browser-companion 11.5.0"
+            ),
+            "partial version matches should still warn as mismatches: {diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn observed_version_matches_expected_accepts_exact_tokens() {
+        assert!(observed_version_matches_expected(
+            "loongclaw-browser-companion 1.5.0",
+            "1.5.0"
+        ));
+    }
+
+    #[test]
+    fn observed_version_matches_expected_rejects_suffix_variants() {
+        assert!(!observed_version_matches_expected(
+            "loongclaw-browser-companion 1.5.0-beta",
+            "1.5.0"
+        ));
     }
 }
