@@ -1114,6 +1114,7 @@ fn apply_selected_api_key_env(
     provider.set_api_key_env(Some(selected_api_key_env.to_owned()));
 }
 
+#[cfg(test)]
 fn apply_selected_system_prompt(
     config: &mut mvp::config::LoongClawConfig,
     selection: SystemPromptSelection,

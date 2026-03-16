@@ -176,7 +176,11 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
         default: &str,
     ) -> loongclaw_daemon::CliResult<String> {
         self.outputs.push(format!("PROMPT {label} [{default}]"));
-        self.next_input(label)
+        let value = self.next_input(label)?;
+        if value.trim().is_empty() {
+            return Ok(default.to_owned());
+        }
+        Ok(value)
     }
 
     fn prompt_required(&mut self, label: &str) -> loongclaw_daemon::CliResult<String> {
@@ -597,8 +601,7 @@ async fn non_interactive_system_prompt_override_disables_prompt_pack() {
         "non-interactive inline override path should still complete successfully: {transcript:#?}"
     );
 
-    let (_, config) =
-        mvp::config::load(output_path.to_str()).expect("load inline override config");
+    let (_, config) = mvp::config::load(output_path.to_str()).expect("load inline override config");
 
     assert!(
         !config.cli.uses_native_prompt_pack(),
@@ -990,7 +993,9 @@ async fn interactive_onboard_clear_token_keeps_inline_provider_credential() {
             system_prompt: None,
             skip_model_probe: true,
         },
-        ["1", "2", "openai", "gpt-4.1", ":clear", "", "y", "y", "o"],
+        [
+            "1", "2", "openai", "gpt-4.1", ":clear", "", "", "", "y", "y", "o",
+        ],
         None,
         None,
     )
@@ -1034,10 +1039,12 @@ async fn interactive_onboard_clear_token_restores_builtin_system_prompt() {
             api_key_env: None,
             personality: None,
             memory_profile: None,
-            system_prompt: None,
+            system_prompt: Some(existing.cli.system_prompt.clone()),
             skip_model_probe: true,
         },
-        ["1", "2", "openai", "gpt-4.1", "", ":clear", "y", "y", "o"],
+        [
+            "1", "2", "openai", "gpt-4.1", "", ":clear", "", "y", "y", "o",
+        ],
         None,
         None,
     )
@@ -5017,7 +5024,9 @@ async fn onboard_current_setup_adjustments_preserve_unchanged_domain_actions_in_
             "openai",
             "gpt-4.1",
             "OPENAI_API_KEY",
+            "",
             "custom review prompt",
+            "",
             "y",
             "y",
             "o",
@@ -5185,37 +5194,6 @@ fn onboard_interactive_flow_defaults_back_to_native_prompt_pack_even_from_inline
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn onboard_interactive_flow_defaults_back_to_native_prompt_pack_even_from_inline_override() {
-    let mut existing = mvp::config::LoongClawConfig::default();
-    existing.cli.prompt_pack_id = Some(String::new());
-    existing.cli.personality = None;
-    existing.cli.system_prompt_addendum = None;
-    existing.cli.system_prompt = "Stay terse and imperative.".to_owned();
-
-    let path = crate::onboard_cli::resolve_guided_prompt_path_label_for_test(
-        &crate::onboard_cli::OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: true,
-        },
-        &existing,
-    );
-
-    assert_eq!(
-        path, "native",
-        "interactive onboarding should default back to the native prompt-pack path even when the current config currently uses an inline override"
-    );
-}
-
-#[tokio::test(flavor = "current_thread")]
 async fn onboard_detected_setup_adjustments_preserve_unchanged_detected_actions_in_review() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let workspace_root = unique_temp_path("detected-adjusted-review-workspace");
@@ -5259,6 +5237,8 @@ requires_openai_auth = true
             "openai",
             "openai/gpt-5.1-codex-preview",
             "OPENAI_API_KEY",
+            "",
+            "",
             "",
             "y",
             "y",
@@ -5710,7 +5690,8 @@ fn onboarding_success_summary_includes_brand_header() {
         "success summary should retain a clear completion heading: {lines:#?}"
     );
     assert!(
-        lines.join(" ")
+        lines
+            .join(" ")
             .contains("start here: loongclaw ask --config '/tmp/loongclaw-config.toml' --message")
             && lines
                 .join(" ")
