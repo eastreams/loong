@@ -31,14 +31,22 @@ runtime into a heavyweight browser platform.
 The currently shipped preview scope is narrower than the final managed browser
 automation companion:
 
-- a first-party bundled `browser-companion-preview` managed skill
-- `loongclaw skills enable-browser-preview` as the operator-facing fast path
-- `onboard` and `doctor` next actions that surface the preview truthfully
 - continued default shipping of only `browser.open`, `browser.extract`, and
   `browser.click` as built-in browser tools
+- a partial governed adapter skeleton behind companion runtime readiness:
+  - runtime-visible `browser.companion.session.start`,
+    `browser.companion.navigate`, `browser.companion.snapshot`,
+    `browser.companion.wait`, and `browser.companion.session.stop`
+  - governed write actions `browser.companion.click` and
+    `browser.companion.type` routed through the App-tool approval path
+  - a structured command protocol, LoongClaw-issued companion session IDs, and
+    session-scoped companion state instead of raw shell text passthrough
+- a first-party bundled `browser-companion-preview` managed skill as guidance
+  on top of the runtime surface
 
-The fully governed companion runtime, richer tool catalog, isolated browser
-profile lifecycle, and stronger approval/audit semantics remain planned work.
+The install/release lifecycle, `onboard` and `doctor` readiness integration,
+isolated browser profile management, stronger approval evidence UX, and broader
+runtime packaging still remain planned work.
 
 ## Out of Scope
 

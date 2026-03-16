@@ -335,28 +335,43 @@ impl DefaultAppToolDispatcher {
                         )
                     })?;
                 let allow_nested_delegate = depth < self.tool_config.delegate.max_depth;
-                return Ok(delegate_child_tool_view_for_config_with_delegate(
-                    &self.tool_config,
-                    allow_nested_delegate,
+                return Ok(with_runtime_ready_browser_companion_tools(
+                    delegate_child_tool_view_for_config_with_delegate(
+                        &self.tool_config,
+                        allow_nested_delegate,
+                    ),
+                    &session_context.tool_view,
                 ));
             }
-            return Ok(runtime_tool_view_for_config(&self.tool_config));
+            return Ok(with_runtime_ready_browser_companion_tools(
+                runtime_tool_view_for_config(&self.tool_config),
+                &session_context.tool_view,
+            ));
         }
         if repo
             .load_session_summary_with_legacy_fallback(&session_context.session_id)?
             .is_some_and(|session| session.kind == SessionKind::DelegateChild)
         {
-            return Ok(delegate_child_tool_view_for_config(&self.tool_config));
+            return Ok(with_runtime_ready_browser_companion_tools(
+                delegate_child_tool_view_for_config(&self.tool_config),
+                &session_context.tool_view,
+            ));
         }
-        Ok(runtime_tool_view_for_config(&self.tool_config))
+        Ok(with_runtime_ready_browser_companion_tools(
+            runtime_tool_view_for_config(&self.tool_config),
+            &session_context.tool_view,
+        ))
     }
 
     #[cfg(not(feature = "memory-sqlite"))]
     fn effective_tool_view_for_session(
         &self,
-        _session_context: &SessionContext,
+        session_context: &SessionContext,
     ) -> Result<ToolView, String> {
-        Ok(runtime_tool_view_for_config(&self.tool_config))
+        Ok(with_runtime_ready_browser_companion_tools(
+            runtime_tool_view_for_config(&self.tool_config),
+            &session_context.tool_view,
+        ))
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -603,6 +618,20 @@ fn classify_tool_execution_reason(reason: &str) -> KernelFailureClass {
     }
 }
 
+fn with_runtime_ready_browser_companion_tools(
+    base_view: ToolView,
+    session_tool_view: &ToolView,
+) -> ToolView {
+    let mut names: BTreeSet<String> = base_view.tool_names().map(str::to_owned).collect();
+    names.extend(
+        session_tool_view
+            .tool_names()
+            .filter(|name| name.starts_with("browser.companion."))
+            .map(str::to_owned),
+    );
+    ToolView::from_tool_names(names)
+}
+
 pub(crate) fn render_kernel_error_reason(error: &KernelError) -> String {
     #[allow(clippy::wildcard_enum_match_arm)]
     match error {
@@ -620,10 +649,7 @@ fn augment_tool_payload_for_kernel(
     session_id: &str,
 ) -> serde_json::Value {
     // Direct browser tool calls: inject scope at the top level.
-    if matches!(
-        canonical_tool_name,
-        "browser.open" | "browser.extract" | "browser.click"
-    ) {
+    if browser_scope_injection_required(canonical_tool_name) {
         return inject_browser_scope_field(payload, session_id);
     }
 
@@ -633,9 +659,7 @@ fn augment_tool_payload_for_kernel(
             .get("tool_id")
             .and_then(serde_json::Value::as_str)
             .map(crate::tools::canonical_tool_name)
-            .is_some_and(|inner| {
-                matches!(inner, "browser.open" | "browser.extract" | "browser.click")
-            });
+            .is_some_and(browser_scope_injection_required);
     if is_browser_invoke && let serde_json::Value::Object(mut outer) = payload {
         if let Some(arguments) = outer.remove("arguments") {
             outer.insert(
@@ -647,6 +671,22 @@ fn augment_tool_payload_for_kernel(
     }
 
     payload
+}
+
+fn browser_scope_injection_required(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "browser.open"
+            | "browser.extract"
+            | "browser.click"
+            | "browser.companion.session.start"
+            | "browser.companion.navigate"
+            | "browser.companion.snapshot"
+            | "browser.companion.wait"
+            | "browser.companion.session.stop"
+            | "browser.companion.click"
+            | "browser.companion.type"
+    )
 }
 
 fn inject_browser_scope_field(payload: serde_json::Value, session_id: &str) -> serde_json::Value {
@@ -1211,6 +1251,8 @@ fn session_context_from_turn(turn: &ProviderTurn, tool_view: ToolView) -> Sessio
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use serde_json::json;
 
@@ -1263,6 +1305,82 @@ mod tests {
         tool_call_id: &str,
     ) -> ProviderTurn {
         delegate_async_turn(session_id, turn_id, tool_call_id)
+    }
+
+    fn browser_companion_click_turn(
+        session_id: &str,
+        turn_id: &str,
+        tool_call_id: &str,
+        companion_session_id: &str,
+    ) -> ProviderTurn {
+        let (tool_name, args_json) = crate::tools::synthesize_test_provider_tool_call_with_scope(
+            "browser.companion.click",
+            json!({
+                "session_id": companion_session_id,
+                "selector": "#submit"
+            }),
+            Some(session_id),
+            Some(turn_id),
+        );
+        ProviderTurn {
+            assistant_text: "clicking through browser companion".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name,
+                args_json,
+                source: "assistant".to_owned(),
+                session_id: session_id.to_owned(),
+                turn_id: turn_id.to_owned(),
+                tool_call_id: tool_call_id.to_owned(),
+            }],
+            raw_meta: json!({}),
+        }
+    }
+
+    fn unique_browser_companion_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+    }
+
+    #[cfg(unix)]
+    fn write_browser_companion_script(
+        root: &Path,
+        name: &str,
+        stdout_body: &str,
+        log_path: &Path,
+    ) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = root.join(name);
+        let script = format!(
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf '1.2.3\\n'\n  exit 0\nfi\nBODY=\"$(cat)\"\nprintf '%s' \"$BODY\" > \"{}\"\nprintf '%s' '{}'\n",
+            log_path.display(),
+            stdout_body.replace('\'', "'\"'\"'")
+        );
+        fs::write(&path, script).expect("write browser companion script");
+        let mut perms = fs::metadata(&path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).expect("chmod script");
+        path
+    }
+
+    #[cfg(windows)]
+    fn write_browser_companion_script(
+        root: &Path,
+        name: &str,
+        stdout_body: &str,
+        log_path: &Path,
+    ) -> PathBuf {
+        let path = root.join(format!("{name}.cmd"));
+        let script = format!(
+            "@echo off\r\nif \"%~1\"==\"--version\" (\r\n  echo 1.2.3\r\n  exit /b 0\r\n)\r\nsetlocal enableextensions\r\nset /p BODY=\r\n> \"{}\" <nul set /p =%BODY%\r\necho {}\r\n",
+            log_path.display(),
+            stdout_body
+        );
+        fs::write(&path, script).expect("write browser companion script");
+        path
     }
 
     #[tokio::test]
@@ -1467,5 +1585,198 @@ mod tests {
             .expect("list approval requests");
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].approval_request_id, first_request_id);
+    }
+
+    #[tokio::test]
+    async fn governed_tool_approval_request_is_persisted_for_browser_companion_click() {
+        let memory_config = isolated_memory_config("browser-companion-click-approval");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+
+        let mut tool_config = ToolConfig::default();
+        tool_config.approval.mode = GovernedToolApprovalMode::Strict;
+        tool_config.browser_companion.enabled = true;
+        tool_config.browser_companion.command = Some("browser-companion".to_owned());
+
+        let mut runtime_config = crate::tools::runtime_config::ToolRuntimeConfig::default();
+        runtime_config.browser_companion.enabled = true;
+        runtime_config.browser_companion.ready = true;
+        runtime_config.browser_companion.command = Some("browser-companion".to_owned());
+
+        let tool_view = crate::tools::runtime_tool_view_for_runtime_config(&runtime_config);
+        let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+        let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
+
+        let result = TurnEngine::new(4)
+            .execute_turn_in_context(
+                &browser_companion_click_turn(
+                    "root-session",
+                    "turn-browser-companion",
+                    "call-browser-companion",
+                    "browser-companion-123",
+                ),
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::direct(),
+                None,
+            )
+            .await;
+
+        let approval_request_id = match result {
+            TurnResult::NeedsApproval(requirement) => {
+                assert_eq!(
+                    requirement.tool_name.as_deref(),
+                    Some("browser.companion.click")
+                );
+                assert_eq!(
+                    requirement.approval_key.as_deref(),
+                    Some("tool:browser.companion.click")
+                );
+                requirement
+                    .approval_request_id
+                    .expect("approval request id should exist")
+            }
+            other @ TurnResult::FinalText(_)
+            | other @ TurnResult::ToolDenied(_)
+            | other @ TurnResult::ToolError(_)
+            | other @ TurnResult::ProviderError(_) => {
+                panic!("expected NeedsApproval, got {other:?}")
+            }
+        };
+
+        let stored = repo
+            .load_approval_request(&approval_request_id)
+            .expect("load approval request")
+            .expect("approval request row");
+        assert_eq!(stored.status, ApprovalRequestStatus::Pending);
+        assert_eq!(stored.tool_name, "browser.companion.click");
+        assert_eq!(
+            stored.request_payload_json["args_json"]["selector"],
+            "#submit"
+        );
+    }
+
+    #[tokio::test]
+    async fn browser_companion_click_turn_executes_when_approval_is_disabled() {
+        let memory_config = isolated_memory_config("browser-companion-click-exec");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+
+        let root = unique_browser_companion_temp_dir("loongclaw-turn-engine-browser-companion");
+        fs::create_dir_all(&root).expect("create fixture root");
+        let log_path = root.join("request.json");
+        let script_path = write_browser_companion_script(
+            &root,
+            "browser-companion-click",
+            r#"{"ok":true,"result":{"clicked":true}}"#,
+            &log_path,
+        );
+
+        let mut runtime_config = crate::tools::runtime_config::ToolRuntimeConfig::default();
+        runtime_config.browser_companion.enabled = true;
+        runtime_config.browser_companion.ready = true;
+        runtime_config.browser_companion.command = Some(script_path.display().to_string());
+
+        let start = crate::tools::execute_tool_core_with_config(
+            loongclaw_contracts::ToolCoreRequest {
+                tool_name: "browser.companion.session.start".to_owned(),
+                payload: json!({
+                    "url": "https://example.com",
+                    crate::tools::BROWSER_SESSION_SCOPE_FIELD: "root-session"
+                }),
+            },
+            &runtime_config,
+        )
+        .expect("browser companion start should succeed");
+        let companion_session_id = start.payload["session_id"]
+            .as_str()
+            .expect("session id should exist")
+            .to_owned();
+
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("LOONGCLAW_BROWSER_COMPANION_READY", "true");
+
+        let mut tool_config = ToolConfig::default();
+        tool_config.browser_companion.enabled = true;
+        tool_config.browser_companion.command = Some(script_path.display().to_string());
+
+        let tool_view = crate::tools::runtime_tool_view_for_runtime_config(&runtime_config);
+        let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+        let dispatcher = DefaultAppToolDispatcher::new(memory_config, tool_config);
+
+        let result = TurnEngine::new(4)
+            .execute_turn_in_context(
+                &browser_companion_click_turn(
+                    "root-session",
+                    "turn-browser-companion-exec",
+                    "call-browser-companion-exec",
+                    &companion_session_id,
+                ),
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::direct(),
+                None,
+            )
+            .await;
+
+        let reply = match result {
+            TurnResult::FinalText(reply) => reply,
+            other @ TurnResult::NeedsApproval(_)
+            | other @ TurnResult::ToolDenied(_)
+            | other @ TurnResult::ToolError(_)
+            | other @ TurnResult::ProviderError(_) => {
+                panic!("expected FinalText, got {other:?}")
+            }
+        };
+        assert!(
+            reply.contains("\"tool\":\"browser.companion.click\""),
+            "reply should include the executed companion tool: {reply}"
+        );
+        assert!(
+            reply.contains("\"status\":\"ok\""),
+            "reply should show a successful tool outcome: {reply}"
+        );
+
+        let request: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&log_path).expect("request log should exist"))
+                .expect("request log should be valid json");
+        assert_eq!(request["session_scope"], "root-session");
+        assert_eq!(request["operation"], "click");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn augment_tool_payload_injects_browser_scope_for_companion_tool_invoke() {
+        let (tool_name, payload) = crate::tools::synthesize_test_provider_tool_call_with_scope(
+            "browser.companion.session.start",
+            json!({
+                "url": "https://example.com"
+            }),
+            Some("root-session"),
+            Some("turn-browser-companion-start"),
+        );
+
+        let augmented = augment_tool_payload_for_kernel(&tool_name, payload, "root-session");
+
+        assert_eq!(augmented["tool_id"], "browser.companion.session.start");
+        assert_eq!(
+            augmented["arguments"][crate::tools::BROWSER_SESSION_SCOPE_FIELD],
+            "root-session"
+        );
     }
 }

@@ -339,6 +339,19 @@ impl ToolRuntimeConfig {
     }
 }
 
+pub(crate) fn browser_companion_runtime_policy_from_tool_config(
+    config: &crate::config::ToolConfig,
+) -> BrowserCompanionRuntimePolicy {
+    BrowserCompanionRuntimePolicy {
+        enabled: config.browser_companion.enabled,
+        ready: parse_env_bool("LOONGCLAW_BROWSER_COMPANION_READY").unwrap_or(false),
+        command: normalize_optional_string(config.browser_companion.command.as_deref()),
+        expected_version: normalize_optional_string(
+            config.browser_companion.expected_version.as_deref(),
+        ),
+    }
+}
+
 fn parse_env_bool(key: &str) -> Option<bool> {
     std::env::var(key).ok().and_then(|raw| {
         let value = raw.trim().to_ascii_lowercase();

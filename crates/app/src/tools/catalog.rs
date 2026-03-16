@@ -79,6 +79,11 @@ pub fn governance_profile_for_tool_name(tool_name: &str) -> ToolGovernanceProfil
             risk_class: ToolRiskClass::High,
             approval_mode: ToolApprovalMode::PolicyDriven,
         },
+        "browser.companion.click" | "browser.companion.type" => ToolGovernanceProfile {
+            scope: ToolGovernanceScope::Routine,
+            risk_class: ToolRiskClass::High,
+            approval_mode: ToolApprovalMode::PolicyDriven,
+        },
         "session_archive" | "session_cancel" | "session_recover" | "sessions_send" => {
             ToolGovernanceProfile {
                 scope: ToolGovernanceScope::Routine,
@@ -619,6 +624,83 @@ pub fn tool_catalog() -> ToolCatalog {
             provider_definition_builder: browser_click_definition,
         });
         descriptors.push(ToolDescriptor {
+            name: "browser.companion.click",
+            provider_name: "browser_companion_click",
+            aliases: &["browser_companion_click"],
+            description: "Click a page element inside a governed browser companion session after policy review",
+            execution_kind: ToolExecutionKind::App,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            provider_definition_builder: browser_companion_click_definition,
+        });
+        descriptors.push(ToolDescriptor {
+            name: "browser.companion.navigate",
+            provider_name: "browser_companion_navigate",
+            aliases: &["browser_companion_navigate"],
+            description: "Navigate a governed browser companion session to a target URL",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            provider_definition_builder: browser_companion_navigate_definition,
+        });
+        descriptors.push(ToolDescriptor {
+            name: "browser.companion.session.start",
+            provider_name: "browser_companion_session_start",
+            aliases: &["browser_companion_session_start"],
+            description: "Start a governed browser companion session at a target URL",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            provider_definition_builder: browser_companion_session_start_definition,
+        });
+        descriptors.push(ToolDescriptor {
+            name: "browser.companion.session.stop",
+            provider_name: "browser_companion_session_stop",
+            aliases: &["browser_companion_session_stop"],
+            description: "Stop a governed browser companion session and release companion-side state",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            provider_definition_builder: browser_companion_session_stop_definition,
+        });
+        descriptors.push(ToolDescriptor {
+            name: "browser.companion.snapshot",
+            provider_name: "browser_companion_snapshot",
+            aliases: &["browser_companion_snapshot"],
+            description: "Capture a readable snapshot of the current browser companion page",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            provider_definition_builder: browser_companion_snapshot_definition,
+        });
+        descriptors.push(ToolDescriptor {
+            name: "browser.companion.type",
+            provider_name: "browser_companion_type",
+            aliases: &["browser_companion_type"],
+            description: "Type text into a page element inside a governed browser companion session after policy review",
+            execution_kind: ToolExecutionKind::App,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            provider_definition_builder: browser_companion_type_definition,
+        });
+        descriptors.push(ToolDescriptor {
+            name: "browser.companion.wait",
+            provider_name: "browser_companion_wait",
+            aliases: &["browser_companion_wait"],
+            description: "Wait inside a governed browser companion session for a condition or timeout window",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            provider_definition_builder: browser_companion_wait_definition,
+        });
+        descriptors.push(ToolDescriptor {
             name: "browser.extract",
             provider_name: "browser_extract",
             aliases: &["browser_extract"],
@@ -969,6 +1051,184 @@ fn browser_click_definition(descriptor: &ToolDescriptor) -> Value {
                     }
                 },
                 "required": ["session_id", "link_id"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn browser_companion_session_start_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "HTTP or HTTPS URL to open in the managed browser companion session."
+                    }
+                },
+                "required": ["url"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn browser_companion_navigate_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Browser companion session identifier returned by browser.companion.session.start."
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "HTTP or HTTPS URL to load next."
+                    }
+                },
+                "required": ["session_id", "url"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn browser_companion_snapshot_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Browser companion session identifier returned by browser.companion.session.start."
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["summary", "html", "links"],
+                        "description": "Optional snapshot mode. Defaults to `summary`."
+                    }
+                },
+                "required": ["session_id"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn browser_companion_wait_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Browser companion session identifier returned by browser.companion.session.start."
+                    },
+                    "condition": {
+                        "type": "string",
+                        "description": "Optional companion-side wait condition."
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 30000,
+                        "description": "Optional maximum wait in milliseconds."
+                    }
+                },
+                "required": ["session_id"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn browser_companion_session_stop_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Browser companion session identifier returned by browser.companion.session.start."
+                    }
+                },
+                "required": ["session_id"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn browser_companion_click_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Browser companion session identifier returned by browser.companion.session.start."
+                    },
+                    "selector": {
+                        "type": "string",
+                        "description": "Selector for the element to click."
+                    }
+                },
+                "required": ["session_id", "selector"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn browser_companion_type_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Browser companion session identifier returned by browser.companion.session.start."
+                    },
+                    "selector": {
+                        "type": "string",
+                        "description": "Selector for the element to type into."
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Text to enter."
+                    }
+                },
+                "required": ["session_id", "selector", "text"],
                 "additionalProperties": false
             }
         }
@@ -1884,6 +2144,13 @@ fn tool_argument_hint(name: &str) -> &'static str {
             "action?:string,enabled?:boolean,allowed_domains?:string[],blocked_domains?:string[]"
         }
         "external_skills.remove" => "skill_id:string",
+        "browser.companion.session.start" => "url:string",
+        "browser.companion.navigate" => "session_id:string,url:string",
+        "browser.companion.snapshot" => "session_id:string,mode?:string",
+        "browser.companion.wait" => "session_id:string,condition?:string,timeout_ms?:integer",
+        "browser.companion.session.stop" => "session_id:string",
+        "browser.companion.click" => "session_id:string,selector:string",
+        "browser.companion.type" => "session_id:string,selector:string,text:string",
         "file.read" => "path:string,max_bytes?:integer",
         "file.write" => "path:string,content:string,create_dirs?:boolean",
         "shell.exec" => "command:string,args?:string[]",
@@ -1926,6 +2193,21 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("replace", "boolean"),
         ],
         "external_skills.list" => &[],
+        "browser.companion.session.start" => &[("url", "string")],
+        "browser.companion.navigate" => &[("session_id", "string"), ("url", "string")],
+        "browser.companion.snapshot" => &[("session_id", "string"), ("mode", "string")],
+        "browser.companion.wait" => &[
+            ("session_id", "string"),
+            ("condition", "string"),
+            ("timeout_ms", "integer"),
+        ],
+        "browser.companion.session.stop" => &[("session_id", "string")],
+        "browser.companion.click" => &[("session_id", "string"), ("selector", "string")],
+        "browser.companion.type" => &[
+            ("session_id", "string"),
+            ("selector", "string"),
+            ("text", "string"),
+        ],
         "external_skills.policy" => &[
             ("action", "string"),
             ("enabled", "boolean"),
@@ -1967,6 +2249,13 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         }
         // Grouped requirements are the source of truth for this tool's anyOf shape.
         "external_skills.install" => &[],
+        "browser.companion.session.start" => &["url"],
+        "browser.companion.navigate" => &["session_id", "url"],
+        "browser.companion.snapshot"
+        | "browser.companion.wait"
+        | "browser.companion.session.stop" => &["session_id"],
+        "browser.companion.click" => &["session_id", "selector"],
+        "browser.companion.type" => &["session_id", "selector", "text"],
         "file.read" => &["path"],
         "file.write" => &["path", "content"],
         "shell.exec" => &["command"],
@@ -1997,6 +2286,14 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
         "external_skills.list" => &["skills", "list", "discover"],
         "external_skills.policy" => &["skills", "policy", "security"],
         "external_skills.remove" => &["skills", "remove", "uninstall"],
+        "browser.companion.session.start"
+        | "browser.companion.navigate"
+        | "browser.companion.snapshot"
+        | "browser.companion.wait"
+        | "browser.companion.session.stop" => &["browser", "companion", "session", "read"],
+        "browser.companion.click" | "browser.companion.type" => {
+            &["browser", "companion", "write", "approval"]
+        }
         "file.read" => &["file", "read", "filesystem", "repo"],
         "file.write" => &["file", "write", "filesystem"],
         "shell.exec" => &["shell", "command", "process", "exec"],
@@ -2014,6 +2311,49 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_companion_visibility_surface_requires_runtime_readiness_for_all_companion_tools() {
+        let catalog = tool_catalog();
+        let expected = [
+            ("browser.companion.session.start", ToolExecutionKind::Core),
+            ("browser.companion.navigate", ToolExecutionKind::Core),
+            ("browser.companion.snapshot", ToolExecutionKind::Core),
+            ("browser.companion.wait", ToolExecutionKind::Core),
+            ("browser.companion.session.stop", ToolExecutionKind::Core),
+            ("browser.companion.click", ToolExecutionKind::App),
+            ("browser.companion.type", ToolExecutionKind::App),
+        ];
+
+        let mut hidden = ToolRuntimeConfig::default();
+        hidden.browser_companion.enabled = true;
+        hidden.browser_companion.ready = false;
+        let hidden_view = runtime_tool_view_for_runtime_config(&hidden);
+
+        let mut visible = ToolRuntimeConfig::default();
+        visible.browser_companion.enabled = true;
+        visible.browser_companion.ready = true;
+        let visible_view = runtime_tool_view_for_runtime_config(&visible);
+
+        for (tool_name, execution_kind) in expected {
+            let descriptor = catalog
+                .resolve(tool_name)
+                .unwrap_or_else(|| panic!("missing browser companion descriptor `{tool_name}`"));
+            assert_eq!(
+                descriptor.visibility_gate,
+                ToolVisibilityGate::BrowserCompanion
+            );
+            assert_eq!(descriptor.execution_kind, execution_kind);
+            assert!(
+                !hidden_view.contains(tool_name),
+                "tool should stay hidden until runtime-ready: {tool_name}"
+            );
+            assert!(
+                visible_view.contains(tool_name),
+                "tool should appear once runtime-ready: {tool_name}"
+            );
+        }
+    }
 
     #[test]
     fn browser_companion_visibility_gate_requires_runtime_readiness() {

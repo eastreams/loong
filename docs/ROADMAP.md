@@ -308,9 +308,11 @@ Remaining deliverables:
   - use that record layer as the prerequisite for later evaluator pipelines and automated skill-optimization loops
 - managed browser automation companion:
   - keep `browser.open`, `browser.extract`, and `browser.click` as the shipped safe browser lane
-  - add an optional first-party managed browser companion for richer page actions
-  - wire install, `onboard`, and `doctor` into companion presence, version, and isolated profile health
-  - expose richer browser automation only through truthful runtime-visible tool advertising and governed tool contracts
+  - partial governed adapter skeleton now exists for richer page actions:
+    `browser.companion.*` becomes runtime-visible only when the companion is ready, read actions stay in the Core lane, and write actions stay in the governed App lane
+  - still wire install, `onboard`, and `doctor` into companion presence, version, and isolated profile health
+  - still add isolated browser profile lifecycle and release packaging around the companion runtime
+  - keep richer browser automation exposed only through truthful runtime-visible tool advertising and governed tool contracts
 - browser-facing assistant surface:
   - WebChat implementation as a thin shell over existing ask/chat and browser semantics, not a separate assistant runtime
 
