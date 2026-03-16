@@ -365,6 +365,30 @@ pub(crate) fn browser_companion_runtime_policy_from_tool_config(
     )
 }
 
+pub(crate) fn browser_companion_runtime_policy_with_env_fallback(
+    config: &crate::config::ToolConfig,
+) -> BrowserCompanionRuntimePolicy {
+    let env_command = parse_env_string("LOONGCLAW_BROWSER_COMPANION_COMMAND");
+    let env_expected_version = parse_env_string("LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION");
+    browser_companion_runtime_policy(
+        config.browser_companion.enabled
+            || parse_env_bool("LOONGCLAW_BROWSER_COMPANION_ENABLED").unwrap_or(false),
+        parse_env_bool("LOONGCLAW_BROWSER_COMPANION_READY").unwrap_or(false),
+        config
+            .browser_companion
+            .command
+            .as_deref()
+            .or(env_command.as_deref()),
+        config
+            .browser_companion
+            .expected_version
+            .as_deref()
+            .or(env_expected_version.as_deref()),
+        parse_env_u64("LOONGCLAW_BROWSER_COMPANION_TIMEOUT_SECONDS")
+            .unwrap_or(config.browser_companion.timeout_seconds),
+    )
+}
+
 fn browser_companion_runtime_policy(
     enabled: bool,
     ready: bool,
@@ -937,6 +961,33 @@ mod tests {
         let policy = browser_companion_runtime_policy_from_tool_config(&config);
 
         assert_eq!(policy.timeout_seconds, 1);
+    }
+
+    #[test]
+    fn browser_companion_policy_with_env_fallback_uses_runtime_exports_for_default_config() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set("LOONGCLAW_BROWSER_COMPANION_ENABLED", "true");
+        env.set("LOONGCLAW_BROWSER_COMPANION_READY", "false");
+        env.set(
+            "LOONGCLAW_BROWSER_COMPANION_COMMAND",
+            "loongclaw-browser-companion",
+        );
+        env.set("LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION", "1.2.3");
+        env.set("LOONGCLAW_BROWSER_COMPANION_TIMEOUT_SECONDS", "11");
+
+        let policy = browser_companion_runtime_policy_with_env_fallback(
+            &crate::config::ToolConfig::default(),
+        );
+
+        assert!(policy.enabled);
+        assert!(!policy.ready);
+        assert_eq!(
+            policy.command.as_deref(),
+            Some("loongclaw-browser-companion")
+        );
+        assert_eq!(policy.expected_version.as_deref(), Some("1.2.3"));
+        assert_eq!(policy.timeout_seconds, 11);
     }
 
     #[test]

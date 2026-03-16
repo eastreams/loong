@@ -49,6 +49,7 @@ rusqlite = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 aes = { version = "0.8", optional = true }
 cbc = { version = "0.1", optional = true }
+wait-timeout = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

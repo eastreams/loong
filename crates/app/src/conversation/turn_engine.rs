@@ -1858,6 +1858,106 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
+    #[tokio::test]
+    async fn browser_companion_click_turn_uses_runtime_visible_policy_when_app_config_is_default() {
+        let memory_config = isolated_memory_config("browser-companion-click-runtime-policy");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+
+        let root = unique_browser_companion_temp_dir(
+            "loongclaw-turn-engine-browser-companion-runtime-policy",
+        );
+        fs::create_dir_all(&root).expect("create fixture root");
+        let log_path = root.join("request.json");
+        let script_path = write_browser_companion_script(
+            &root,
+            "browser-companion-click-runtime-policy",
+            r#"{"ok":true,"result":{"clicked":true}}"#,
+            &log_path,
+        );
+
+        let mut runtime_config = crate::tools::runtime_config::ToolRuntimeConfig::default();
+        runtime_config.browser_companion.enabled = true;
+        runtime_config.browser_companion.ready = true;
+        runtime_config.browser_companion.command = Some(script_path.display().to_string());
+
+        let start = crate::tools::execute_tool_core_with_config(
+            loongclaw_contracts::ToolCoreRequest {
+                tool_name: "browser.companion.session.start".to_owned(),
+                payload: json!({
+                    "url": "https://example.com",
+                    crate::tools::BROWSER_SESSION_SCOPE_FIELD: "root-session"
+                }),
+            },
+            &runtime_config,
+        )
+        .expect("browser companion start should succeed");
+        let companion_session_id = start.payload["session_id"]
+            .as_str()
+            .expect("session id should exist")
+            .to_owned();
+
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("LOONGCLAW_BROWSER_COMPANION_ENABLED", "true");
+        env.set("LOONGCLAW_BROWSER_COMPANION_READY", "false");
+        env.set(
+            "LOONGCLAW_BROWSER_COMPANION_COMMAND",
+            script_path.display().to_string(),
+        );
+
+        let tool_view = crate::tools::runtime_tool_view_for_runtime_config(&runtime_config);
+        let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+        let dispatcher = DefaultAppToolDispatcher::new(memory_config, ToolConfig::default());
+
+        let result = TurnEngine::new(4)
+            .execute_turn_in_context(
+                &browser_companion_click_turn(
+                    "root-session",
+                    "turn-browser-companion-runtime-policy",
+                    "call-browser-companion-runtime-policy",
+                    &companion_session_id,
+                ),
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::direct(),
+                None,
+            )
+            .await;
+
+        let reply = match result {
+            TurnResult::FinalText(reply) => reply,
+            other @ TurnResult::NeedsApproval(_)
+            | other @ TurnResult::ToolDenied(_)
+            | other @ TurnResult::ToolError(_)
+            | other @ TurnResult::ProviderError(_) => {
+                panic!("expected FinalText, got {other:?}")
+            }
+        };
+        assert!(
+            reply.contains("\"tool\":\"browser.companion.click\""),
+            "reply should include the executed companion tool: {reply}"
+        );
+        assert!(
+            reply.contains("\"status\":\"ok\""),
+            "reply should show a successful tool outcome: {reply}"
+        );
+
+        let request: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&log_path).expect("request log should exist"))
+                .expect("request log should be valid json");
+        assert_eq!(request["session_scope"], "root-session");
+        assert_eq!(request["operation"], "click");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn augment_tool_payload_injects_browser_scope_for_companion_tool_invoke() {
         let (tool_name, payload) = crate::tools::synthesize_test_provider_tool_call_with_scope(

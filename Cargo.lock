@@ -1961,6 +1961,7 @@ dependencies = [
  "time",
  "tokio",
  "toml",
+ "wait-timeout",
 ]
 
 [[package]]

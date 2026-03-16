@@ -3,11 +3,12 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use wait_timeout::ChildExt;
 
 const DEFAULT_BROWSER_COMPANION_SCOPE_ID: &str = "__global";
 const BROWSER_COMPANION_PROTOCOL: &str = "loongclaw.browser_companion.v1";
@@ -165,36 +166,26 @@ fn wait_for_browser_companion_output(
     timeout_seconds: u64,
 ) -> Result<std::process::Output, String> {
     let timeout = Duration::from_secs(timeout_seconds.max(1));
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => {
-                return child
-                    .wait_with_output()
-                    .map_err(|error| format!("browser_companion_wait_failed: {error}"));
-            }
-            Ok(None) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Ok(None) => {
-                let _ = child.kill();
-                let output = child
-                    .wait_with_output()
-                    .map_err(|error| format!("browser_companion_wait_failed: {error}"))?;
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-                let stderr_suffix = if stderr.is_empty() {
-                    String::new()
-                } else {
-                    format!(" stderr={stderr}")
-                };
-                return Err(format!(
-                    "browser_companion_timeout: command exceeded {timeout_seconds}s{stderr_suffix}"
-                ));
-            }
-            Err(error) => {
-                return Err(format!("browser_companion_wait_failed: {error}"));
-            }
+    match child.wait_timeout(timeout) {
+        Ok(Some(_status)) => child
+            .wait_with_output()
+            .map_err(|error| format!("browser_companion_wait_failed: {error}")),
+        Ok(None) => {
+            let _ = child.kill();
+            let output = child
+                .wait_with_output()
+                .map_err(|error| format!("browser_companion_wait_failed: {error}"))?;
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            let stderr_suffix = if stderr.is_empty() {
+                String::new()
+            } else {
+                format!(" stderr={stderr}")
+            };
+            Err(format!(
+                "browser_companion_timeout: command exceeded {timeout_seconds}s{stderr_suffix}"
+            ))
         }
+        Err(error) => Err(format!("browser_companion_wait_failed: {error}")),
     }
 }
 
@@ -273,8 +264,11 @@ fn execute_browser_companion_app_tool_with_readiness_override(
             return Err(format!("{tool_name} payload must be an object"));
         }
     };
-    let mut policy =
-        super::runtime_config::browser_companion_runtime_policy_from_tool_config(tool_config);
+    let mut policy = if assume_runtime_ready {
+        super::runtime_config::browser_companion_runtime_policy_with_env_fallback(tool_config)
+    } else {
+        super::runtime_config::browser_companion_runtime_policy_from_tool_config(tool_config)
+    };
     if assume_runtime_ready {
         policy.ready = true;
     }
