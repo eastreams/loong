@@ -182,6 +182,37 @@ pub fn execute_app_tool_with_config(
     memory_config: &MemoryRuntimeConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
+    execute_app_tool_with_browser_companion_readiness(
+        request,
+        current_session_id,
+        memory_config,
+        tool_config,
+        false,
+    )
+}
+
+pub(crate) fn execute_app_tool_with_visibility_checked_config(
+    request: ToolCoreRequest,
+    current_session_id: &str,
+    memory_config: &MemoryRuntimeConfig,
+    tool_config: &ToolConfig,
+) -> Result<ToolCoreOutcome, String> {
+    execute_app_tool_with_browser_companion_readiness(
+        request,
+        current_session_id,
+        memory_config,
+        tool_config,
+        true,
+    )
+}
+
+fn execute_app_tool_with_browser_companion_readiness(
+    request: ToolCoreRequest,
+    current_session_id: &str,
+    memory_config: &MemoryRuntimeConfig,
+    tool_config: &ToolConfig,
+    assume_browser_companion_ready: bool,
+) -> Result<ToolCoreOutcome, String> {
     let canonical_name = canonical_tool_name(request.tool_name.as_str());
     let request = ToolCoreRequest {
         tool_name: canonical_name.to_owned(),
@@ -208,11 +239,19 @@ pub fn execute_app_tool_with_config(
         }
         #[cfg(feature = "tool-browser")]
         "browser.companion.click" | "browser.companion.type" => {
-            browser_companion::execute_browser_companion_app_tool_with_config(
-                request,
-                current_session_id,
-                tool_config,
-            )
+            if assume_browser_companion_ready {
+                browser_companion::execute_browser_companion_visible_app_tool_with_config(
+                    request,
+                    current_session_id,
+                    tool_config,
+                )
+            } else {
+                browser_companion::execute_browser_companion_app_tool_with_config(
+                    request,
+                    current_session_id,
+                    tool_config,
+                )
+            }
         }
         _ => Err(format!(
             "app_tool_not_found: unknown app tool `{}`",
@@ -1537,6 +1576,40 @@ mod tests {
         path
     }
 
+    #[cfg(unix)]
+    fn write_browser_companion_sleep_script(
+        root: &Path,
+        name: &str,
+        sleep_seconds: u64,
+    ) -> PathBuf {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = root.join(name);
+        let script = format!(
+            "#!/bin/sh\nsleep {sleep_seconds}\nprintf '%s' '{{\"ok\":true,\"result\":{{\"delayed\":true}}}}'\n"
+        );
+        fs::write(&path, script).expect("write browser companion sleep script");
+        let mut perms = fs::metadata(&path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).expect("chmod script");
+        path
+    }
+
+    #[cfg(windows)]
+    fn write_browser_companion_sleep_script(
+        root: &Path,
+        name: &str,
+        _sleep_seconds: u64,
+    ) -> PathBuf {
+        use std::fs;
+
+        let path = root.join(format!("{name}.cmd"));
+        let script = "@echo off\r\nping -n 3 127.0.0.1 > nul\r\necho {\"ok\":true,\"result\":{\"delayed\":true}}\r\n";
+        fs::write(&path, script).expect("write browser companion sleep script");
+        path
+    }
+
     #[test]
     fn capability_snapshot_is_deterministic() {
         let snapshot = capability_snapshot();
@@ -2344,10 +2417,14 @@ mod tests {
             std::process::id()
         ));
         std::fs::create_dir_all(&root).expect("create fixture root");
-
-        let mut config = test_tool_runtime_config(root.clone());
-        config.browser_companion.enabled = true;
-        config.browser_companion.ready = true;
+        let log_path = root.join("request.json");
+        let script_path = write_browser_companion_script(
+            &root,
+            "browser-companion-search",
+            r#"{"ok":true,"result":{"ready":true}}"#,
+            &log_path,
+        );
+        let config = browser_companion_runtime_config(&root, script_path.display().to_string());
 
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {
@@ -2511,6 +2588,32 @@ mod tests {
             error.contains("browser_companion_protocol_invalid_json"),
             "error={error}"
         );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-browser")]
+    #[test]
+    fn browser_companion_protocol_times_out_stalled_command() {
+        let root = unique_tool_temp_dir("loongclaw-browser-companion-timeout");
+        std::fs::create_dir_all(&root).expect("create fixture root");
+        let script_path =
+            write_browser_companion_sleep_script(&root, "browser-companion-timeout", 2);
+        let mut config = browser_companion_runtime_config(&root, script_path.display().to_string());
+        config.browser_companion.timeout_seconds = 1;
+
+        let error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "browser.companion.session.start".to_owned(),
+                payload: json!({
+                    "url": "https://example.com"
+                }),
+            },
+            &config,
+        )
+        .expect_err("hung command should time out");
+
+        assert!(error.contains("browser_companion_timeout"), "error={error}");
 
         std::fs::remove_dir_all(&root).ok();
     }

@@ -50,18 +50,31 @@ impl Default for BrowserRuntimePolicy {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserCompanionRuntimePolicy {
     pub enabled: bool,
     pub ready: bool,
     pub command: Option<String>,
     pub expected_version: Option<String>,
+    pub timeout_seconds: u64,
+}
+
+impl Default for BrowserCompanionRuntimePolicy {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ready: false,
+            command: None,
+            expected_version: None,
+            timeout_seconds: crate::config::DEFAULT_BROWSER_COMPANION_TIMEOUT_SECONDS,
+        }
+    }
 }
 
 impl BrowserCompanionRuntimePolicy {
     #[must_use]
     pub fn is_runtime_ready(&self) -> bool {
-        self.enabled && self.ready
+        self.enabled && self.ready && self.command.is_some()
     }
 }
 
@@ -190,16 +203,13 @@ impl ToolRuntimeConfig {
                 max_links: config.tools.browser.max_links,
                 max_text_chars: config.tools.browser.max_text_chars,
             },
-            browser_companion: BrowserCompanionRuntimePolicy {
-                enabled: config.tools.browser_companion.enabled,
-                ready: parse_env_bool("LOONGCLAW_BROWSER_COMPANION_READY").unwrap_or(false),
-                command: normalize_optional_string(
-                    config.tools.browser_companion.command.as_deref(),
-                ),
-                expected_version: normalize_optional_string(
-                    config.tools.browser_companion.expected_version.as_deref(),
-                ),
-            },
+            browser_companion: browser_companion_runtime_policy(
+                config.tools.browser_companion.enabled,
+                parse_env_bool("LOONGCLAW_BROWSER_COMPANION_READY").unwrap_or(false),
+                config.tools.browser_companion.command.as_deref(),
+                config.tools.browser_companion.expected_version.as_deref(),
+                config.tools.browser_companion.timeout_seconds,
+            ),
             web_fetch: WebFetchRuntimePolicy {
                 enabled: config.tools.web.enabled,
                 allow_private_hosts: config.tools.web.allow_private_hosts,
@@ -266,6 +276,9 @@ impl ToolRuntimeConfig {
         let browser_companion_command = parse_env_string("LOONGCLAW_BROWSER_COMPANION_COMMAND");
         let browser_companion_expected_version =
             parse_env_string("LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION");
+        let browser_companion_timeout_seconds =
+            parse_env_u64("LOONGCLAW_BROWSER_COMPANION_TIMEOUT_SECONDS")
+                .unwrap_or(crate::config::DEFAULT_BROWSER_COMPANION_TIMEOUT_SECONDS);
         let web_fetch_enabled = parse_env_bool("LOONGCLAW_WEB_FETCH_ENABLED").unwrap_or(true);
         let web_fetch_allow_private_hosts =
             parse_env_bool("LOONGCLAW_WEB_FETCH_ALLOW_PRIVATE_HOSTS").unwrap_or(false);
@@ -302,12 +315,13 @@ impl ToolRuntimeConfig {
                 max_links: browser_max_links,
                 max_text_chars: browser_max_text_chars,
             },
-            browser_companion: BrowserCompanionRuntimePolicy {
-                enabled: browser_companion_enabled,
-                ready: browser_companion_ready,
-                command: browser_companion_command,
-                expected_version: browser_companion_expected_version,
-            },
+            browser_companion: browser_companion_runtime_policy(
+                browser_companion_enabled,
+                browser_companion_ready,
+                browser_companion_command.as_deref(),
+                browser_companion_expected_version.as_deref(),
+                browser_companion_timeout_seconds,
+            ),
             web_fetch: WebFetchRuntimePolicy {
                 enabled: web_fetch_enabled,
                 allow_private_hosts: web_fetch_allow_private_hosts,
@@ -342,13 +356,28 @@ impl ToolRuntimeConfig {
 pub(crate) fn browser_companion_runtime_policy_from_tool_config(
     config: &crate::config::ToolConfig,
 ) -> BrowserCompanionRuntimePolicy {
+    browser_companion_runtime_policy(
+        config.browser_companion.enabled,
+        parse_env_bool("LOONGCLAW_BROWSER_COMPANION_READY").unwrap_or(false),
+        config.browser_companion.command.as_deref(),
+        config.browser_companion.expected_version.as_deref(),
+        config.browser_companion.timeout_seconds,
+    )
+}
+
+fn browser_companion_runtime_policy(
+    enabled: bool,
+    ready: bool,
+    command: Option<&str>,
+    expected_version: Option<&str>,
+    timeout_seconds: u64,
+) -> BrowserCompanionRuntimePolicy {
     BrowserCompanionRuntimePolicy {
-        enabled: config.browser_companion.enabled,
-        ready: parse_env_bool("LOONGCLAW_BROWSER_COMPANION_READY").unwrap_or(false),
-        command: normalize_optional_string(config.browser_companion.command.as_deref()),
-        expected_version: normalize_optional_string(
-            config.browser_companion.expected_version.as_deref(),
-        ),
+        enabled,
+        ready,
+        command: normalize_optional_string(command),
+        expected_version: normalize_optional_string(expected_version),
+        timeout_seconds: timeout_seconds.max(1),
     }
 }
 
@@ -497,6 +526,7 @@ mod tests {
             "LOONGCLAW_BROWSER_MAX_TEXT_CHARS",
             "LOONGCLAW_BROWSER_COMPANION_ENABLED",
             "LOONGCLAW_BROWSER_COMPANION_READY",
+            "LOONGCLAW_BROWSER_COMPANION_TIMEOUT_SECONDS",
             "LOONGCLAW_BROWSER_COMPANION_COMMAND",
             "LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION",
             "LOONGCLAW_WEB_FETCH_ENABLED",
@@ -584,6 +614,7 @@ mod tests {
                 ready: true,
                 command: Some("loongclaw-browser-companion".to_owned()),
                 expected_version: Some("1.2.3".to_owned()),
+                timeout_seconds: 9,
             },
             web_fetch: WebFetchRuntimePolicy {
                 enabled: false,
@@ -683,6 +714,7 @@ mod tests {
         env.set("LOONGCLAW_BROWSER_COMPANION_READY", "true");
         let mut config = crate::config::LoongClawConfig::default();
         config.tools.browser_companion.enabled = true;
+        config.tools.browser_companion.timeout_seconds = 7;
         config.tools.browser_companion.command = Some("loongclaw-browser-companion".to_owned());
         config.tools.browser_companion.expected_version = Some("1.2.3".to_owned());
 
@@ -697,6 +729,7 @@ mod tests {
             runtime.browser_companion.expected_version.as_deref(),
             Some("1.2.3")
         );
+        assert_eq!(runtime.browser_companion.timeout_seconds, 7);
     }
 
     #[cfg(feature = "tool-shell")]
@@ -740,6 +773,7 @@ mod tests {
         env.set("LOONGCLAW_BROWSER_MAX_TEXT_CHARS", "2048");
         env.set("LOONGCLAW_BROWSER_COMPANION_ENABLED", "true");
         env.set("LOONGCLAW_BROWSER_COMPANION_READY", "true");
+        env.set("LOONGCLAW_BROWSER_COMPANION_TIMEOUT_SECONDS", "11");
         env.set(
             "LOONGCLAW_BROWSER_COMPANION_COMMAND",
             "loongclaw-browser-companion",
@@ -792,6 +826,7 @@ mod tests {
             config.browser_companion.expected_version.as_deref(),
             Some("1.2.3")
         );
+        assert_eq!(config.browser_companion.timeout_seconds, 11);
         assert!(!config.web_fetch.enabled);
         assert!(config.web_fetch.allow_private_hosts);
         assert!(
@@ -877,6 +912,7 @@ mod tests {
             ready: false,
             command: Some("loongclaw-browser-companion".to_owned()),
             expected_version: Some("1.2.3".to_owned()),
+            timeout_seconds: 9,
         };
 
         assert!(policy.enabled);
@@ -887,6 +923,20 @@ mod tests {
             Some("loongclaw-browser-companion")
         );
         assert_eq!(policy.expected_version.as_deref(), Some("1.2.3"));
+        assert_eq!(policy.timeout_seconds, 9);
+    }
+
+    #[test]
+    fn browser_companion_policy_from_tool_config_clamps_zero_timeout() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        let mut config = crate::config::ToolConfig::default();
+        config.browser_companion.enabled = true;
+        config.browser_companion.timeout_seconds = 0;
+
+        let policy = browser_companion_runtime_policy_from_tool_config(&config);
+
+        assert_eq!(policy.timeout_seconds, 1);
     }
 
     #[test]

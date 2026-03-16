@@ -53,9 +53,9 @@ pub(crate) use runtime::{normalize_dispatch_account_id, normalize_dispatch_chann
 pub use shared::{CLI_COMMAND_NAME, expand_path};
 #[allow(unused_imports)]
 pub use tools::{
-    BrowserCompanionToolConfig, BrowserToolConfig, DEFAULT_BROWSER_MAX_LINKS,
-    DEFAULT_BROWSER_MAX_SESSIONS, DEFAULT_BROWSER_MAX_TEXT_CHARS, DEFAULT_SHELL_ALLOW,
-    DEFAULT_WEB_FETCH_MAX_BYTES, DEFAULT_WEB_FETCH_MAX_REDIRECTS,
+    BrowserCompanionToolConfig, BrowserToolConfig, DEFAULT_BROWSER_COMPANION_TIMEOUT_SECONDS,
+    DEFAULT_BROWSER_MAX_LINKS, DEFAULT_BROWSER_MAX_SESSIONS, DEFAULT_BROWSER_MAX_TEXT_CHARS,
+    DEFAULT_SHELL_ALLOW, DEFAULT_WEB_FETCH_MAX_BYTES, DEFAULT_WEB_FETCH_MAX_REDIRECTS,
     DEFAULT_WEB_FETCH_TIMEOUT_SECONDS, ExternalSkillsConfig, GovernedToolApprovalConfig,
     GovernedToolApprovalMode, MAX_BROWSER_MAX_LINKS, MAX_BROWSER_MAX_SESSIONS,
     MAX_BROWSER_MAX_TEXT_CHARS, MAX_WEB_FETCH_MAX_BYTES, SessionVisibility, ToolConfig,

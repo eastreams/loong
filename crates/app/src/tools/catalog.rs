@@ -2312,6 +2312,7 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "tool-browser")]
     #[test]
     fn browser_companion_visibility_surface_requires_runtime_readiness_for_all_companion_tools() {
         let catalog = tool_catalog();
@@ -2328,11 +2329,13 @@ mod tests {
         let mut hidden = ToolRuntimeConfig::default();
         hidden.browser_companion.enabled = true;
         hidden.browser_companion.ready = false;
+        hidden.browser_companion.command = Some("browser-companion".to_owned());
         let hidden_view = runtime_tool_view_for_runtime_config(&hidden);
 
         let mut visible = ToolRuntimeConfig::default();
         visible.browser_companion.enabled = true;
         visible.browser_companion.ready = true;
+        visible.browser_companion.command = Some("browser-companion".to_owned());
         let visible_view = runtime_tool_view_for_runtime_config(&visible);
 
         for (tool_name, execution_kind) in expected {
@@ -2360,6 +2363,7 @@ mod tests {
         let mut config = ToolRuntimeConfig::default();
         config.browser_companion.enabled = true;
         config.browser_companion.ready = false;
+        config.browser_companion.command = Some("browser-companion".to_owned());
 
         assert!(!tool_visibility_gate_enabled_for_runtime_policy(
             ToolVisibilityGate::BrowserCompanion,

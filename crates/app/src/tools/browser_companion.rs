@@ -3,6 +3,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde::{Deserialize, Serialize};
@@ -103,6 +104,7 @@ trait BrowserCompanionRunner {
     fn invoke(
         &self,
         command: &str,
+        timeout_seconds: u64,
         request: &BrowserCompanionProtocolRequest,
     ) -> Result<Value, String>;
 }
@@ -113,6 +115,7 @@ impl BrowserCompanionRunner for CommandBrowserCompanionRunner {
     fn invoke(
         &self,
         command: &str,
+        timeout_seconds: u64,
         request: &BrowserCompanionProtocolRequest,
     ) -> Result<Value, String> {
         let encoded = serde_json::to_vec(request)
@@ -130,9 +133,7 @@ impl BrowserCompanionRunner for CommandBrowserCompanionRunner {
                 .map_err(|error| format!("browser_companion_stdin_write_failed: {error}"))?;
         }
 
-        let output = child
-            .wait_with_output()
-            .map_err(|error| format!("browser_companion_wait_failed: {error}"))?;
+        let output = wait_for_browser_companion_output(child, timeout_seconds)?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
             return Err(format!(
@@ -156,6 +157,44 @@ impl BrowserCompanionRunner for CommandBrowserCompanionRunner {
                 .message
                 .unwrap_or_else(|| "companion reported failure".to_owned())
         ))
+    }
+}
+
+fn wait_for_browser_companion_output(
+    mut child: std::process::Child,
+    timeout_seconds: u64,
+) -> Result<std::process::Output, String> {
+    let timeout = Duration::from_secs(timeout_seconds.max(1));
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                return child
+                    .wait_with_output()
+                    .map_err(|error| format!("browser_companion_wait_failed: {error}"));
+            }
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let output = child
+                    .wait_with_output()
+                    .map_err(|error| format!("browser_companion_wait_failed: {error}"))?;
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+                let stderr_suffix = if stderr.is_empty() {
+                    String::new()
+                } else {
+                    format!(" stderr={stderr}")
+                };
+                return Err(format!(
+                    "browser_companion_timeout: command exceeded {timeout_seconds}s{stderr_suffix}"
+                ));
+            }
+            Err(error) => {
+                return Err(format!("browser_companion_wait_failed: {error}"));
+            }
+        }
     }
 }
 
@@ -200,6 +239,33 @@ pub(super) fn execute_browser_companion_app_tool_with_config(
     current_session_id: &str,
     tool_config: &crate::config::ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
+    execute_browser_companion_app_tool_with_readiness_override(
+        request,
+        current_session_id,
+        tool_config,
+        false,
+    )
+}
+
+pub(super) fn execute_browser_companion_visible_app_tool_with_config(
+    request: ToolCoreRequest,
+    current_session_id: &str,
+    tool_config: &crate::config::ToolConfig,
+) -> Result<ToolCoreOutcome, String> {
+    execute_browser_companion_app_tool_with_readiness_override(
+        request,
+        current_session_id,
+        tool_config,
+        true,
+    )
+}
+
+fn execute_browser_companion_app_tool_with_readiness_override(
+    request: ToolCoreRequest,
+    current_session_id: &str,
+    tool_config: &crate::config::ToolConfig,
+    assume_runtime_ready: bool,
+) -> Result<ToolCoreOutcome, String> {
     let tool_name = request.tool_name.clone();
     let payload = match &request.payload {
         Value::Object(object) => object.clone(),
@@ -207,8 +273,11 @@ pub(super) fn execute_browser_companion_app_tool_with_config(
             return Err(format!("{tool_name} payload must be an object"));
         }
     };
-    let policy =
+    let mut policy =
         super::runtime_config::browser_companion_runtime_policy_from_tool_config(tool_config);
+    if assume_runtime_ready {
+        policy.ready = true;
+    }
     execute_browser_companion_request(
         request,
         &payload,
@@ -259,6 +328,7 @@ fn execute_browser_companion_request(
 
     let result = runner.invoke(
         command,
+        policy.timeout_seconds,
         &BrowserCompanionProtocolRequest {
             protocol: BROWSER_COMPANION_PROTOCOL,
             tool_name: request.tool_name.clone(),

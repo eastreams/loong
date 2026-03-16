@@ -81,6 +81,10 @@ pub fn initialize_runtime_environment(
         "LOONGCLAW_BROWSER_COMPANION_ENABLED",
         bool_env(config.tools.browser_companion.enabled),
     );
+    set_env_var(
+        "LOONGCLAW_BROWSER_COMPANION_TIMEOUT_SECONDS",
+        config.tools.browser_companion.timeout_seconds.to_string(),
+    );
     match normalized_optional_str(config.tools.browser_companion.command.as_deref()) {
         Some(command) => set_env_var("LOONGCLAW_BROWSER_COMPANION_COMMAND", command),
         None => remove_env_var("LOONGCLAW_BROWSER_COMPANION_COMMAND"),
@@ -214,6 +218,7 @@ mod tests {
             "LOONGCLAW_BROWSER_MAX_LINKS",
             "LOONGCLAW_BROWSER_MAX_TEXT_CHARS",
             "LOONGCLAW_BROWSER_COMPANION_ENABLED",
+            "LOONGCLAW_BROWSER_COMPANION_TIMEOUT_SECONDS",
             "LOONGCLAW_BROWSER_COMPANION_COMMAND",
             "LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION",
             "LOONGCLAW_WEB_FETCH_ENABLED",
@@ -320,6 +325,12 @@ mod tests {
             Some("true")
         );
         assert_eq!(
+            std::env::var("LOONGCLAW_BROWSER_COMPANION_TIMEOUT_SECONDS")
+                .ok()
+                .as_deref(),
+            Some("30")
+        );
+        assert_eq!(
             std::env::var("LOONGCLAW_BROWSER_COMPANION_COMMAND")
                 .ok()
                 .as_deref(),
@@ -379,11 +390,18 @@ mod tests {
         clear_runtime_environment_exports(&mut env);
         let mut config = LoongClawConfig::default();
         config.tools.browser_companion.enabled = true;
+        config.tools.browser_companion.timeout_seconds = 7;
         config.tools.browser_companion.command = Some("   ".to_owned());
         config.tools.browser_companion.expected_version = Some("\n\t".to_owned());
 
         initialize_runtime_environment(&config, None);
 
+        assert_eq!(
+            std::env::var("LOONGCLAW_BROWSER_COMPANION_TIMEOUT_SECONDS")
+                .ok()
+                .as_deref(),
+            Some("7")
+        );
         assert_eq!(
             std::env::var("LOONGCLAW_BROWSER_COMPANION_COMMAND").ok(),
             None

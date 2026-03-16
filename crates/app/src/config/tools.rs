@@ -10,6 +10,7 @@ pub const DEFAULT_WEB_FETCH_MAX_REDIRECTS: usize = 3;
 pub const DEFAULT_BROWSER_MAX_SESSIONS: usize = 8;
 pub const DEFAULT_BROWSER_MAX_LINKS: usize = 40;
 pub const DEFAULT_BROWSER_MAX_TEXT_CHARS: usize = 6000;
+pub const DEFAULT_BROWSER_COMPANION_TIMEOUT_SECONDS: u64 = 30;
 pub(crate) const MIN_WEB_FETCH_MAX_BYTES: usize = 1024;
 pub const MAX_WEB_FETCH_MAX_BYTES: usize = 5 * 1024 * 1024;
 pub(crate) const MIN_WEB_FETCH_TIMEOUT_SECONDS: usize = 1;
@@ -124,7 +125,7 @@ pub struct BrowserToolConfig {
     pub max_text_chars: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BrowserCompanionToolConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -132,6 +133,8 @@ pub struct BrowserCompanionToolConfig {
     pub command: Option<String>,
     #[serde(default)]
     pub expected_version: Option<String>,
+    #[serde(default = "default_browser_companion_timeout_seconds")]
+    pub timeout_seconds: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -154,6 +157,10 @@ pub struct WebToolConfig {
 
 fn default_shell_default_mode() -> String {
     "deny".to_owned()
+}
+
+const fn default_browser_companion_timeout_seconds() -> u64 {
+    DEFAULT_BROWSER_COMPANION_TIMEOUT_SECONDS
 }
 
 /// Default allow list used when the config file omits `shell_allow`.
@@ -206,6 +213,17 @@ impl Default for ToolConfig {
             browser: BrowserToolConfig::default(),
             browser_companion: BrowserCompanionToolConfig::default(),
             web: WebToolConfig::default(),
+        }
+    }
+}
+
+impl Default for BrowserCompanionToolConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            command: None,
+            expected_version: None,
+            timeout_seconds: default_browser_companion_timeout_seconds(),
         }
     }
 }
@@ -467,6 +485,10 @@ mod tests {
         assert!(!config.browser_companion.enabled);
         assert!(config.browser_companion.command.is_none());
         assert!(config.browser_companion.expected_version.is_none());
+        assert_eq!(
+            config.browser_companion.timeout_seconds,
+            DEFAULT_BROWSER_COMPANION_TIMEOUT_SECONDS
+        );
         assert!(config.web.enabled);
         assert!(!config.web.allow_private_hosts);
         assert!(config.web.allowed_domains.is_empty());
@@ -587,6 +609,7 @@ max_text_chars = 2048
 enabled = true
 command = "loongclaw-browser-companion"
 expected_version = "1.2.3"
+timeout_seconds = 7
 "#;
         let parsed =
             toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
@@ -600,6 +623,7 @@ expected_version = "1.2.3"
             parsed.tools.browser_companion.expected_version.as_deref(),
             Some("1.2.3")
         );
+        assert_eq!(parsed.tools.browser_companion.timeout_seconds, 7);
     }
 
     /// When `shell_deny` is absent, it must default to empty — users start

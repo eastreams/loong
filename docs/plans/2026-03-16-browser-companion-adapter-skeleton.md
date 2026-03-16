@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Add failing browser companion tool-surface tests
+## Task 1: Add failing browser companion tool-surface tests
 
 **Files:**
 - Modify: `crates/app/src/tools/catalog.rs`
@@ -50,7 +50,7 @@ Run: `cargo test -p loongclaw-app browser_companion_tool_search -- --nocapture`
 
 Expected: FAIL because catalog/search metadata does not yet include the companion family.
 
-### Task 2: Add failing browser companion protocol tests
+## Task 2: Add failing browser companion protocol tests
 
 **Files:**
 - Create: `crates/app/src/tools/browser_companion.rs`
@@ -84,7 +84,7 @@ Run: `cargo test -p loongclaw-app browser_companion_protocol -- --nocapture`
 
 Expected: PASS
 
-### Task 3: Add failing governed write-action tests
+## Task 3: Add failing governed write-action tests
 
 **Files:**
 - Modify: `crates/app/src/conversation/turn_engine.rs`
@@ -119,7 +119,7 @@ Run: `cargo test -p loongclaw-app browser_companion_approval -- --nocapture`
 
 Expected: PASS
 
-### Task 4: Sync product docs with the shipped partial adapter surface
+## Task 4: Sync product docs with the shipped partial adapter surface
 
 **Files:**
 - Modify: `docs/product-specs/browser-automation-companion.md`
@@ -135,7 +135,7 @@ Run: `rg -n "adapter skeleton|browser.companion|partial governed" docs/product-s
 
 Expected: PASS with the updated wording.
 
-### Task 5: Verify, commit, and prepare PR delivery
+## Task 5: Verify, commit, and prepare PR delivery
 
 **Files:**
 - Modify only files in this task scope

@@ -41,6 +41,8 @@ automation companion:
     `browser.companion.type` routed through the App-tool approval path
   - a structured command protocol, LoongClaw-issued companion session IDs, and
     session-scoped companion state instead of raw shell text passthrough
+  - bounded companion command execution so hung adapter processes fail closed
+    instead of wedging the turn
 - a first-party bundled `browser-companion-preview` managed skill as guidance
   on top of the runtime surface
 
