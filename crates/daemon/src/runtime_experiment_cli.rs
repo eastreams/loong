@@ -744,6 +744,9 @@ fn snapshot_context_engine_selected_id(
 fn snapshot_context_engine_compaction_summary(
     snapshot: &RuntimeSnapshotArtifactDocument,
 ) -> Option<String> {
+    json_value_path(&snapshot.context_engine, &["compaction"])
+        .and_then(Value::as_object)
+        .filter(|compaction| !compaction.is_empty())?;
     let enabled = render_optional_bool(json_bool_path(
         &snapshot.context_engine,
         &["compaction", "enabled"],
@@ -770,6 +773,9 @@ fn snapshot_memory_selected_id(snapshot: &RuntimeSnapshotArtifactDocument) -> Op
 }
 
 fn snapshot_memory_policy_summary(snapshot: &RuntimeSnapshotArtifactDocument) -> Option<String> {
+    json_value_path(&snapshot.memory_system, &["policy"])
+        .and_then(Value::as_object)
+        .filter(|policy| !policy.is_empty())?;
     Some(format!(
         "backend:{} profile:{} mode:{} ingest_mode:{} fail_open:{} strict_mode_requested:{} strict_mode_active:{} effective_fail_open:{}",
         json_string_path(&snapshot.memory_system, &["policy", "backend"])
@@ -804,6 +810,7 @@ fn snapshot_acp_selected_id(snapshot: &RuntimeSnapshotArtifactDocument) -> Optio
 }
 
 fn snapshot_acp_policy_summary(snapshot: &RuntimeSnapshotArtifactDocument) -> Option<String> {
+    snapshot.acp.as_object().filter(|acp| !acp.is_empty())?;
     Some(format!(
         "enabled:{} dispatch_enabled:{} conversation_routing:{} thread_routing:{} default_agent:{} allowed_agents:{}",
         render_optional_bool(json_bool_path(&snapshot.acp, &["enabled"])),
