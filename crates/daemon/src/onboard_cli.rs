@@ -1345,6 +1345,7 @@ async fn run_preflight_checks(
     let file_root = config.tools.resolved_file_root();
     checks.push(directory_preflight_check("tool file root", &file_root));
 
+    checks.extend(collect_browser_companion_preflight_checks(config).await);
     checks.extend(collect_channel_preflight_checks(config));
 
     checks
@@ -1377,6 +1378,36 @@ fn provider_model_probe_failure_check(
         detail: format!("{}: {error}", provider_check_detail_prefix(config)),
         non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
     }
+}
+
+async fn collect_browser_companion_preflight_checks(
+    config: &mvp::config::LoongClawConfig,
+) -> Vec<OnboardCheck> {
+    let Some(diagnostics) =
+        crate::browser_companion_diagnostics::collect_browser_companion_diagnostics(config).await
+    else {
+        return Vec::new();
+    };
+
+    let level = if diagnostics.install_ready() && diagnostics.runtime_ready {
+        OnboardCheckLevel::Pass
+    } else {
+        OnboardCheckLevel::Warn
+    };
+    let detail = if diagnostics.install_ready() {
+        diagnostics
+            .runtime_gate_detail()
+            .unwrap_or_else(|| diagnostics.install_detail())
+    } else {
+        diagnostics.install_detail()
+    };
+
+    vec![OnboardCheck {
+        name: crate::browser_companion_diagnostics::BROWSER_COMPANION_INSTALL_CHECK_NAME,
+        level,
+        detail,
+        non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+    }]
 }
 
 pub fn provider_credential_check(config: &mvp::config::LoongClawConfig) -> OnboardCheck {
@@ -5032,6 +5063,8 @@ fn format_backup_timestamp_at(timestamp: OffsetDateTime) -> CliResult<String> {
 mod tests {
     use super::*;
     use std::collections::VecDeque;
+    use std::ffi::OsString;
+    use std::sync::MutexGuard;
 
     struct TestOnboardUi {
         inputs: VecDeque<String>,
@@ -5069,6 +5102,65 @@ mod tests {
                 .pop_front()
                 .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
                 .unwrap_or(default))
+        }
+    }
+
+    struct BrowserCompanionEnvGuard {
+        _lock: MutexGuard<'static, ()>,
+        saved_ready: Option<OsString>,
+    }
+
+    fn set_browser_companion_env_var(key: &str, value: &str) {
+        // SAFETY: daemon tests serialize process env mutations behind
+        // `lock_daemon_test_environment`, so no concurrent env readers/writers
+        // observe racy updates while these tests run.
+        #[allow(unsafe_code, clippy::disallowed_methods)]
+        unsafe {
+            std::env::set_var(key, value);
+        }
+    }
+
+    fn remove_browser_companion_env_var(key: &str) {
+        // SAFETY: daemon tests serialize process env mutations behind
+        // `lock_daemon_test_environment`, so removing the variable here is
+        // coordinated with all other env-mutating daemon tests.
+        #[allow(unsafe_code, clippy::disallowed_methods)]
+        unsafe {
+            std::env::remove_var(key);
+        }
+    }
+
+    impl BrowserCompanionEnvGuard {
+        fn runtime_gate_closed() -> Self {
+            Self::set_ready(None)
+        }
+
+        fn runtime_gate_open() -> Self {
+            Self::set_ready(Some("true"))
+        }
+
+        fn set_ready(value: Option<&str>) -> Self {
+            let lock = crate::test_support::lock_daemon_test_environment();
+            let key = "LOONGCLAW_BROWSER_COMPANION_READY";
+            let saved_ready = std::env::var_os(key);
+            match value {
+                Some(value) => set_browser_companion_env_var(key, value),
+                None => remove_browser_companion_env_var(key),
+            }
+            Self {
+                _lock: lock,
+                saved_ready,
+            }
+        }
+    }
+
+    impl Drop for BrowserCompanionEnvGuard {
+        fn drop(&mut self) {
+            let key = "LOONGCLAW_BROWSER_COMPANION_READY";
+            match self.saved_ready.take() {
+                Some(value) => set_browser_companion_env_var(key, &value.to_string_lossy()),
+                None => remove_browser_companion_env_var(key),
+            }
         }
     }
 
@@ -5138,6 +5230,111 @@ mod tests {
                         .contains("retry chat_completions automatically")
             }),
             "preflight should surface transport review before writing a Responses-compatible config: {checks:#?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn browser_companion_onboard_preflight_warns_when_enabled_without_command() {
+        let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.api_key = Some("inline-openai-key".to_owned());
+        config.tools.browser_companion.enabled = true;
+
+        let checks = run_preflight_checks(&config, true).await;
+
+        assert!(
+            checks.iter().any(|check| {
+                check.name == "browser companion install"
+                    && check.level == OnboardCheckLevel::Warn
+                    && check.detail.contains("no command is configured")
+            }),
+            "onboard preflight should flag companion configs that cannot be executed yet: {checks:#?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn browser_companion_onboard_preflight_warns_when_runtime_gate_is_closed() {
+        let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "loongclaw-browser-companion-onboard-runtime-gate-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("create browser companion onboard temp dir");
+        let script_path = temp_dir.join("browser-companion");
+        std::fs::write(
+            &script_path,
+            "#!/bin/sh\necho 'loongclaw-browser-companion 1.5.0'\n",
+        )
+        .expect("write browser companion onboard script");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&script_path)
+                .expect("script metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&script_path, permissions)
+                .expect("chmod browser companion onboard script");
+        }
+
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.api_key = Some("inline-openai-key".to_owned());
+        config.tools.browser_companion.enabled = true;
+        config.tools.browser_companion.command = Some(script_path.display().to_string());
+        config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
+
+        let checks = run_preflight_checks(&config, true).await;
+
+        assert!(
+            checks.iter().any(|check| {
+                check.name == "browser companion install"
+                    && check.level == OnboardCheckLevel::Warn
+                    && check.detail.contains("runtime gate is still closed")
+            }),
+            "onboard preflight should surface that a healthy install still is not runtime-ready: {checks:#?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn browser_companion_onboard_preflight_passes_when_runtime_gate_is_open() {
+        let _env_guard = BrowserCompanionEnvGuard::runtime_gate_open();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "loongclaw-browser-companion-onboard-runtime-ready-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("create browser companion onboard temp dir");
+        let script_path = temp_dir.join("browser-companion");
+        std::fs::write(
+            &script_path,
+            "#!/bin/sh\necho 'loongclaw-browser-companion 1.5.0'\n",
+        )
+        .expect("write browser companion onboard script");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&script_path)
+                .expect("script metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&script_path, permissions)
+                .expect("chmod browser companion onboard script");
+        }
+
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.api_key = Some("inline-openai-key".to_owned());
+        config.tools.browser_companion.enabled = true;
+        config.tools.browser_companion.command = Some(script_path.display().to_string());
+        config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
+
+        let checks = run_preflight_checks(&config, true).await;
+
+        assert!(
+            checks.iter().any(|check| {
+                check.name == "browser companion install"
+                    && check.level == OnboardCheckLevel::Pass
+                    && check.detail.contains("runtime is ready")
+            }),
+            "onboard preflight should mark the companion lane healthy when the runtime gate is open: {checks:#?}"
         );
     }
 

@@ -130,6 +130,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
         &mut fixes,
         "create tool file root",
     ));
+    checks.extend(collect_browser_companion_doctor_checks(&config).await);
 
     checks.extend(check_feishu_integration(&config, options.fix, &mut fixes));
     checks.extend(check_channel_surfaces(&config));
@@ -1023,6 +1024,42 @@ fn collect_channel_doctor_checks(config: &mvp::config::LoongClawConfig) -> Vec<D
         .collect()
 }
 
+async fn collect_browser_companion_doctor_checks(
+    config: &mvp::config::LoongClawConfig,
+) -> Vec<DoctorCheck> {
+    let Some(diagnostics) =
+        crate::browser_companion_diagnostics::collect_browser_companion_diagnostics(config).await
+    else {
+        return Vec::new();
+    };
+
+    let install_level = if diagnostics.install_ready() {
+        DoctorCheckLevel::Pass
+    } else {
+        DoctorCheckLevel::Warn
+    };
+    let mut checks = vec![DoctorCheck {
+        name: crate::browser_companion_diagnostics::BROWSER_COMPANION_INSTALL_CHECK_NAME.to_owned(),
+        level: install_level,
+        detail: diagnostics.install_detail(),
+    }];
+
+    if let Some(detail) = diagnostics.runtime_gate_detail() {
+        checks.push(DoctorCheck {
+            name: crate::browser_companion_diagnostics::BROWSER_COMPANION_RUNTIME_GATE_CHECK_NAME
+                .to_owned(),
+            level: if diagnostics.runtime_ready {
+                DoctorCheckLevel::Pass
+            } else {
+                DoctorCheckLevel::Warn
+            },
+            detail,
+        });
+    }
+
+    checks
+}
+
 pub fn resolve_secret_value(inline: Option<&str>, env_key: Option<&str>) -> Option<String> {
     if let Some(value) = inline.map(str::trim).filter(|value| !value.is_empty()) {
         return Some(value.to_owned());
@@ -1155,6 +1192,41 @@ fn build_doctor_next_steps_with_path_env(
             &mut steps,
             format!(
                 "If your provider blocks model listing during setup, retry with: {rerun_command} --skip-model-probe"
+            ),
+        );
+    }
+
+    if checks.iter().any(|check| {
+        check.name == crate::browser_companion_diagnostics::BROWSER_COMPANION_INSTALL_CHECK_NAME
+            && check.level != DoctorCheckLevel::Pass
+    }) {
+        push_unique_step(
+            &mut steps,
+            format!(
+                "Install or expose the browser companion command on PATH, then re-run: {rerun_command}"
+            ),
+        );
+        if checks.iter().any(|check| {
+            check.name == crate::browser_companion_diagnostics::BROWSER_COMPANION_INSTALL_CHECK_NAME
+                && check.detail.contains("expected_version=")
+        }) {
+            push_unique_step(
+                &mut steps,
+                "Align `tools.browser_companion.expected_version` with the installed companion build before retrying."
+                    .to_owned(),
+            );
+        }
+    }
+
+    if checks.iter().any(|check| {
+        check.name
+            == crate::browser_companion_diagnostics::BROWSER_COMPANION_RUNTIME_GATE_CHECK_NAME
+            && check.level != DoctorCheckLevel::Pass
+    }) {
+        push_unique_step(
+            &mut steps,
+            format!(
+                "Keep using the built-in browser lane, or disable `tools.browser_companion.enabled` until the managed companion runtime is ready, then re-run: {rerun_command}"
             ),
         );
     }
@@ -1302,6 +1374,16 @@ fn push_unique_step(steps: &mut Vec<String>, step: String) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::io::Write;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::path::{Path, PathBuf};
+    #[cfg(unix)]
+    use std::sync::MutexGuard;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1312,6 +1394,92 @@ mod tests {
         ChannelOperationHealth, ChannelOperationRuntime, ChannelOperationStatus,
         ChannelStatusSnapshot,
     };
+
+    #[cfg(unix)]
+    fn browser_companion_temp_dir(label: &str) -> PathBuf {
+        static NEXT_TEMP_DIR_SEED: AtomicU64 = AtomicU64::new(1);
+        let seed = NEXT_TEMP_DIR_SEED.fetch_add(1, Ordering::Relaxed);
+        let temp_dir = std::env::temp_dir().join(format!(
+            "loongclaw-browser-companion-doctor-{label}-{}-{seed}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("create browser companion temp dir");
+        temp_dir
+    }
+
+    #[cfg(unix)]
+    fn write_browser_companion_script(script_path: &Path, body: &str) {
+        let mut file = std::fs::File::create(script_path).expect("create browser companion script");
+        file.write_all(body.as_bytes())
+            .expect("write browser companion script");
+        let mut permissions = file.metadata().expect("script metadata").permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(script_path, permissions).expect("chmod browser companion script");
+    }
+
+    #[cfg(unix)]
+    struct BrowserCompanionEnvGuard {
+        _lock: MutexGuard<'static, ()>,
+        saved_ready: Option<OsString>,
+    }
+
+    #[cfg(unix)]
+    fn set_browser_companion_env_var(key: &str, value: &str) {
+        // SAFETY: daemon tests serialize process env mutations behind
+        // `lock_daemon_test_environment`, so no concurrent env readers/writers
+        // observe racy updates while these tests run.
+        #[allow(unsafe_code, clippy::disallowed_methods)]
+        unsafe {
+            std::env::set_var(key, value);
+        }
+    }
+
+    #[cfg(unix)]
+    fn remove_browser_companion_env_var(key: &str) {
+        // SAFETY: daemon tests serialize process env mutations behind
+        // `lock_daemon_test_environment`, so removing the variable here is
+        // coordinated with all other env-mutating daemon tests.
+        #[allow(unsafe_code, clippy::disallowed_methods)]
+        unsafe {
+            std::env::remove_var(key);
+        }
+    }
+
+    #[cfg(unix)]
+    impl BrowserCompanionEnvGuard {
+        fn runtime_gate_closed() -> Self {
+            Self::set_ready(None)
+        }
+
+        fn runtime_gate_open() -> Self {
+            Self::set_ready(Some("true"))
+        }
+
+        fn set_ready(value: Option<&str>) -> Self {
+            let lock = crate::test_support::lock_daemon_test_environment();
+            let key = "LOONGCLAW_BROWSER_COMPANION_READY";
+            let saved_ready = std::env::var_os(key);
+            match value {
+                Some(value) => set_browser_companion_env_var(key, value),
+                None => remove_browser_companion_env_var(key),
+            }
+            Self {
+                _lock: lock,
+                saved_ready,
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for BrowserCompanionEnvGuard {
+        fn drop(&mut self) {
+            let key = "LOONGCLAW_BROWSER_COMPANION_READY";
+            match self.saved_ready.take() {
+                Some(value) => set_browser_companion_env_var(key, &value.to_string_lossy()),
+                None => remove_browser_companion_env_var(key),
+            }
+        }
+    }
 
     #[test]
     fn resolve_secret_prefers_inline_value() {
@@ -2054,6 +2222,142 @@ mod tests {
                 step == "Re-run diagnostics: loongclaw doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"
             }),
             "doctor should shell-quote config paths with single quotes in rerun commands: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn build_doctor_next_steps_guides_browser_companion_repair() {
+        let checks = vec![DoctorCheck {
+            name: "browser companion install".to_owned(),
+            level: DoctorCheckLevel::Warn,
+            detail: "command `loongclaw-browser-companion` was not found on PATH".to_owned(),
+        }];
+        let next_steps = build_doctor_next_steps(
+            &checks,
+            Path::new("/tmp/loongclaw.toml"),
+            &mvp::config::LoongClawConfig::default(),
+            false,
+        );
+
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Install or expose the browser companion command on PATH, then re-run: loongclaw doctor --config '/tmp/loongclaw.toml'"
+            }),
+            "doctor should turn browser companion warnings into a concrete repair path: {next_steps:#?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn browser_companion_doctor_checks_warn_when_command_is_missing() {
+        let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.tools.browser_companion.enabled = true;
+
+        let checks = collect_browser_companion_doctor_checks(&config).await;
+
+        assert!(
+            checks.iter().any(|check| {
+                check.name == "browser companion install"
+                    && check.level == DoctorCheckLevel::Warn
+                    && check.detail.contains("no command is configured")
+            }),
+            "doctor should warn when browser companion is enabled without a command: {checks:#?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn browser_companion_doctor_checks_warn_when_expected_version_mismatches() {
+        let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
+        let temp_dir = browser_companion_temp_dir("version-mismatch");
+        let script_path = temp_dir.join("browser-companion");
+        write_browser_companion_script(
+            &script_path,
+            "#!/bin/sh\necho 'loongclaw-browser-companion 1.4.0'\n",
+        );
+
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.tools.browser_companion.enabled = true;
+        config.tools.browser_companion.command = Some(script_path.display().to_string());
+        config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
+
+        let checks = collect_browser_companion_doctor_checks(&config).await;
+
+        assert!(
+            checks.iter().any(|check| {
+                check.name == "browser companion install"
+                    && check.level == DoctorCheckLevel::Warn
+                    && check.detail.contains("expected_version=1.5.0")
+                    && check
+                        .detail
+                        .contains("observed_version=loongclaw-browser-companion 1.4.0")
+            }),
+            "doctor should surface version mismatches for the managed companion lane: {checks:#?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn browser_companion_doctor_checks_warn_when_runtime_gate_is_closed() {
+        let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
+        let temp_dir = browser_companion_temp_dir("runtime-gate");
+        let script_path = temp_dir.join("browser-companion");
+        write_browser_companion_script(
+            &script_path,
+            "#!/bin/sh\necho 'loongclaw-browser-companion 1.5.0'\n",
+        );
+
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.tools.browser_companion.enabled = true;
+        config.tools.browser_companion.command = Some(script_path.display().to_string());
+        config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
+
+        let checks = collect_browser_companion_doctor_checks(&config).await;
+
+        assert!(
+            checks.iter().any(|check| {
+                check.name == "browser companion runtime gate"
+                    && check.level == DoctorCheckLevel::Warn
+                    && check.detail.contains("install looks healthy")
+            }),
+            "doctor should distinguish healthy companion installs from a still-closed runtime gate: {checks:#?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn browser_companion_doctor_checks_pass_when_runtime_gate_is_open() {
+        let _env_guard = BrowserCompanionEnvGuard::runtime_gate_open();
+        let temp_dir = browser_companion_temp_dir("runtime-ready");
+        let script_path = temp_dir.join("browser-companion");
+        write_browser_companion_script(
+            &script_path,
+            "#!/bin/sh\necho 'loongclaw-browser-companion 1.5.0'\n",
+        );
+
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.tools.browser_companion.enabled = true;
+        config.tools.browser_companion.command = Some(script_path.display().to_string());
+        config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
+
+        let checks = collect_browser_companion_doctor_checks(&config).await;
+
+        assert!(
+            checks.iter().any(|check| {
+                check.name == "browser companion install"
+                    && check.level == DoctorCheckLevel::Pass
+                    && check.detail.contains("responded with")
+            }),
+            "doctor should mark the companion install healthy when the version probe matches: {checks:#?}"
+        );
+        assert!(
+            checks.iter().any(|check| {
+                check.name == "browser companion runtime gate"
+                    && check.level == DoctorCheckLevel::Pass
+                    && check.detail.contains("runtime is ready")
+            }),
+            "doctor should mark the runtime gate healthy when the companion lane is opened: {checks:#?}"
         );
     }
 

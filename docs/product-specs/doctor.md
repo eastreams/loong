@@ -20,6 +20,9 @@ can recover a broken setup without reverse-engineering runtime internals.
       failure, the CLI points users toward `doctor`.
 - [ ] Doctor checks cover the current MVP path: config presence, provider
       readiness, SQLite memory readiness, and shipped channel prerequisites.
+- [ ] When `tools.browser_companion.enabled=true`, doctor surfaces companion
+      install/runtime readiness as warnings with concrete repair steps instead
+      of turning the optional managed lane into a hard core-runtime failure.
 
 ## Out of Scope
 

@@ -21,6 +21,9 @@ next.
       surfaces that the runtime uses after setup.
 - [ ] When preflight checks fail, onboarding points users to `loongclaw doctor`
       or `loongclaw doctor --fix` as the repair path.
+- [ ] Onboarding preflight reuses the same browser companion diagnostics as
+      `loongclaw doctor`, surfacing optional managed-lane blockers before write
+      without redefining runtime truth inside onboarding.
 
 ## Out of Scope
 
