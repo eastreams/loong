@@ -738,7 +738,15 @@ pub fn delegate_child_tool_view_for_config_with_delegate(
                     names.push(descriptor.name);
                 }
             }
-            name if allowlist.contains(name) => names.push(name),
+            name if allowlist.contains(name)
+                && tool_visibility_gate_enabled_for_runtime_view(
+                    descriptor.visibility_gate,
+                    config,
+                    false,
+                ) =>
+            {
+                names.push(name);
+            }
             _ => {}
         }
     }
@@ -2012,5 +2020,16 @@ mod tests {
             ToolVisibilityGate::Browser,
             &config
         ));
+    }
+
+    #[test]
+    fn delegate_child_tool_view_respects_visibility_gates() {
+        let mut config = ToolConfig::default();
+        config.web.enabled = false;
+        config.delegate.child_tool_allowlist = vec!["web.fetch".to_owned()];
+
+        let child_view = delegate_child_tool_view_for_config(&config);
+
+        assert!(!child_view.contains("web.fetch"));
     }
 }
