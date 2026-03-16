@@ -81,11 +81,11 @@ pub fn initialize_runtime_environment(
         "LOONGCLAW_BROWSER_COMPANION_ENABLED",
         bool_env(config.tools.browser_companion.enabled),
     );
-    match config.tools.browser_companion.command.as_deref() {
+    match normalized_optional_str(config.tools.browser_companion.command.as_deref()) {
         Some(command) => set_env_var("LOONGCLAW_BROWSER_COMPANION_COMMAND", command),
         None => remove_env_var("LOONGCLAW_BROWSER_COMPANION_COMMAND"),
     }
-    match config.tools.browser_companion.expected_version.as_deref() {
+    match normalized_optional_str(config.tools.browser_companion.expected_version.as_deref()) {
         Some(expected_version) => set_env_var(
             "LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION",
             expected_version,
@@ -167,6 +167,10 @@ pub fn initialize_runtime_environment(
 
 fn bool_env(value: bool) -> &'static str {
     if value { "true" } else { "false" }
+}
+
+fn normalized_optional_str(raw: Option<&str>) -> Option<&str> {
+    raw.map(str::trim).filter(|value| !value.is_empty())
 }
 
 fn set_env_var(key: &str, value: impl AsRef<std::ffi::OsStr>) {
@@ -366,6 +370,27 @@ mod tests {
                 .ok()
                 .as_deref(),
             Some("1")
+        );
+    }
+
+    #[test]
+    fn initialize_runtime_environment_drops_blank_browser_companion_metadata() {
+        let mut env = ScopedEnv::new();
+        clear_runtime_environment_exports(&mut env);
+        let mut config = LoongClawConfig::default();
+        config.tools.browser_companion.enabled = true;
+        config.tools.browser_companion.command = Some("   ".to_owned());
+        config.tools.browser_companion.expected_version = Some("\n\t".to_owned());
+
+        initialize_runtime_environment(&config, None);
+
+        assert_eq!(
+            std::env::var("LOONGCLAW_BROWSER_COMPANION_COMMAND").ok(),
+            None
+        );
+        assert_eq!(
+            std::env::var("LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION").ok(),
+            None
         );
     }
 }

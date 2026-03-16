@@ -467,11 +467,11 @@ pub(crate) fn runtime_tool_view_from_loongclaw_config(
 }
 
 pub(crate) fn runtime_tool_view_with_runtime_config(
-    tool_config: &crate::config::ToolConfig,
+    _tool_config: &crate::config::ToolConfig,
     runtime_config: &runtime_config::ToolRuntimeConfig,
 ) -> ToolView {
     let catalog = tool_catalog();
-    let mut names = runtime_tool_view_for_config(tool_config)
+    let mut names = runtime_tool_view_for_runtime_config(runtime_config)
         .iter(&catalog)
         .map(|descriptor| descriptor.name)
         .collect::<Vec<_>>();
@@ -1605,6 +1605,23 @@ mod tests {
         assert!(enabled_view.contains("external_skills.fetch"));
         assert!(enabled_view.contains("external_skills.invoke"));
         assert!(enabled_view.contains("external_skills.list"));
+    }
+
+    #[test]
+    fn runtime_tool_view_with_runtime_config_uses_runtime_external_skills_policy() {
+        let runtime_config = runtime_config::ToolRuntimeConfig {
+            external_skills: runtime_config::ExternalSkillsRuntimePolicy {
+                enabled: true,
+                ..runtime_config::ExternalSkillsRuntimePolicy::default()
+            },
+            ..runtime_config::ToolRuntimeConfig::default()
+        };
+
+        let view = runtime_tool_view_with_runtime_config(&ToolConfig::default(), &runtime_config);
+
+        assert!(view.contains("external_skills.fetch"));
+        assert!(view.contains("external_skills.invoke"));
+        assert!(view.contains("external_skills.list"));
     }
 
     #[test]
