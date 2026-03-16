@@ -494,7 +494,7 @@ mod tests {
     }
 
     #[test]
-    fn presentation_current_build_embeds_git_trace_metadata_for_non_release_builds() {
+    fn presentation_current_build_surfaces_embedded_git_trace_metadata_when_available() {
         let release_build = option_env!("LOONGCLAW_RELEASE_BUILD")
             .map(str::trim)
             .is_some_and(is_truthy_env_value);
@@ -502,16 +502,17 @@ mod tests {
             return;
         }
 
-        let short_sha = option_env!("LOONGCLAW_GIT_SHA")
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .expect("non-release builds should embed a short git sha");
         let version_line = BuildVersionInfo::current().render_version_line();
 
-        assert!(
-            version_line.contains(short_sha),
-            "current build version line should expose the embedded short git sha: {version_line}"
-        );
+        if let Some(short_sha) = option_env!("LOONGCLAW_GIT_SHA")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            assert!(
+                version_line.contains(short_sha),
+                "current build version line should expose the embedded short git sha when build metadata provides it: {version_line}"
+            );
+        }
 
         if let Some(channel) = option_env!("LOONGCLAW_BUILD_CHANNEL")
             .map(str::trim)

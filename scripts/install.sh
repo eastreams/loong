@@ -246,7 +246,8 @@ install_from_source() {
   printf '==> Building loongclaw from source (release)\n'
   (
     cd "${repo_root}"
-    cargo build -p loongclaw-daemon --bin "${bin_name}" --release --locked
+    LOONGCLAW_RELEASE_BUILD=1 \
+      cargo build -p loongclaw-daemon --bin "${bin_name}" --release --locked
   )
 
   source_binary="${repo_root}/target/release/${bin_name}"

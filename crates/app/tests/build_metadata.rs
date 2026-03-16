@@ -84,3 +84,17 @@ fn release_build_clears_non_release_trace_metadata() {
         }
     );
 }
+
+#[test]
+fn non_release_build_allows_missing_git_metadata_when_detection_is_unavailable() {
+    let metadata = version_metadata::resolve_build_metadata(None, None, None, None, None);
+
+    assert_eq!(
+        metadata,
+        BuildMetadata {
+            release_build: false,
+            channel: None,
+            short_sha: None,
+        }
+    );
+}

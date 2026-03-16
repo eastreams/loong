@@ -96,6 +96,8 @@ jobs:
         uses: Swatinem/rust-cache@c676846f29d98ff6b0106d3608c7ffd4048af17b
 
       - name: Build release binary
+        env:
+          LOONGCLAW_RELEASE_BUILD: "1"
         run: cargo build --release --locked -p loongclaw-daemon --bin ${{ env.BIN_NAME }} --target ${{ matrix.target }}
 
       - name: Package archive (Unix)

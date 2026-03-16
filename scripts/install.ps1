@@ -87,9 +87,17 @@ function Install-FromSource {
 
     Write-Host "==> Building loongclaw from source (release)"
     Push-Location $repoRoot
+    $hadReleaseBuild = Test-Path Env:LOONGCLAW_RELEASE_BUILD
+    $previousReleaseBuild = $env:LOONGCLAW_RELEASE_BUILD
     try {
+        $env:LOONGCLAW_RELEASE_BUILD = "1"
         cargo build -p loongclaw-daemon --bin loongclaw --release --locked | Out-Host
     } finally {
+        if ($hadReleaseBuild) {
+            $env:LOONGCLAW_RELEASE_BUILD = $previousReleaseBuild
+        } elseif (Test-Path Env:LOONGCLAW_RELEASE_BUILD) {
+            Remove-Item Env:LOONGCLAW_RELEASE_BUILD
+        }
         Pop-Location
     }
 
