@@ -108,6 +108,7 @@ jobs:
           mkdir -p dist
           archive="${PACKAGE_NAME}-${RELEASE_TAG}-${{ matrix.target }}.tar.gz"
           tar -C "target/${{ matrix.target }}/release" -czf "dist/${archive}" "${BIN_NAME}${{ matrix.ext }}"
+          cd dist && shasum -a 256 "${archive}" > "${archive}.sha256"
 
       - name: Package archive (Windows)
         if: matrix.archive == 'zip'
@@ -118,6 +119,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           $archive = "${env:PACKAGE_NAME}-${env:RELEASE_TAG}-${{ matrix.target }}.zip"
           Compress-Archive -Path "target/${{ matrix.target }}/release/${env:BIN_NAME}${{ matrix.ext }}" -DestinationPath "dist/$archive" -Force
+          $hash = (Get-FileHash -Algorithm SHA256 "dist/$archive").Hash.ToLowerInvariant()
+          Set-Content -Path "dist/$archive.sha256" -Value "$hash  $archive"
 
       - name: Upload packaged artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
@@ -133,11 +136,21 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
       - name: Download packaged artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           path: dist
           merge-multiple: true
+
+      - name: Stage installer scripts
+        run: |
+          cp scripts/install.sh dist/install.sh
+          cp scripts/install.ps1 dist/install.ps1
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b

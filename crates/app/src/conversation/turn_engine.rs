@@ -4,7 +4,6 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use loongclaw_contracts::Capability;
 use loongclaw_contracts::{KernelError, ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -24,6 +23,7 @@ use crate::tools::{
 };
 
 use super::runtime::SessionContext;
+use super::runtime_binding::ConversationRuntimeBinding;
 
 use super::ingress::{ConversationIngressContext, inject_internal_tool_ingress};
 
@@ -262,7 +262,7 @@ pub trait AppToolDispatcher: Send + Sync {
         &self,
         session_context: &SessionContext,
         request: ToolCoreRequest,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolCoreOutcome, String>;
 }
 
@@ -274,7 +274,7 @@ impl AppToolDispatcher for NoopAppToolDispatcher {
         &self,
         _session_context: &SessionContext,
         request: ToolCoreRequest,
-        _kernel_ctx: Option<&KernelContext>,
+        _binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolCoreOutcome, String> {
         Err(format!("app_tool_not_implemented: {}", request.tool_name))
     }
@@ -558,7 +558,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
         &self,
         session_context: &SessionContext,
         request: ToolCoreRequest,
-        _kernel_ctx: Option<&KernelContext>,
+        _binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolCoreOutcome, String> {
         let canonical_tool_name = crate::tools::canonical_tool_name(request.tool_name.as_str());
         let effective_tool_view = self.effective_tool_view_for_session(session_context)?;
@@ -611,6 +611,68 @@ pub(crate) fn render_kernel_error_reason(error: &KernelError) -> String {
             reason.strip_prefix("policy_denied: ").unwrap_or(reason)
         ),
         _ => format!("{error}"),
+    }
+}
+
+fn augment_tool_payload_for_kernel(
+    canonical_tool_name: &str,
+    payload: serde_json::Value,
+    session_id: &str,
+) -> serde_json::Value {
+    // Direct browser tool calls: inject scope at the top level.
+    if matches!(
+        canonical_tool_name,
+        "browser.open" | "browser.extract" | "browser.click"
+    ) {
+        return inject_browser_scope_field(payload, session_id);
+    }
+
+    // tool.invoke wrapping a browser tool: inject scope into the nested arguments.
+    let is_browser_invoke = canonical_tool_name == "tool.invoke"
+        && payload
+            .get("tool_id")
+            .and_then(serde_json::Value::as_str)
+            .map(crate::tools::canonical_tool_name)
+            .is_some_and(|inner| {
+                matches!(inner, "browser.open" | "browser.extract" | "browser.click")
+            });
+    if is_browser_invoke && let serde_json::Value::Object(mut outer) = payload {
+        if let Some(arguments) = outer.remove("arguments") {
+            outer.insert(
+                "arguments".to_owned(),
+                inject_browser_scope_field(arguments, session_id),
+            );
+        }
+        return serde_json::Value::Object(outer);
+    }
+
+    payload
+}
+
+fn inject_browser_scope_field(payload: serde_json::Value, session_id: &str) -> serde_json::Value {
+    match payload {
+        serde_json::Value::Object(mut object) => {
+            object.insert(
+                crate::tools::BROWSER_SESSION_SCOPE_FIELD.to_owned(),
+                json!(session_id),
+            );
+            serde_json::Value::Object(object)
+        }
+        other @ (serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_)
+        | serde_json::Value::Array(_)) => other,
+    }
+}
+
+fn turn_result_from_tool_execution_failure(failure: TurnFailure) -> TurnResult {
+    match failure.kind {
+        TurnFailureKind::PolicyDenied => TurnResult::ToolDenied(failure),
+        TurnFailureKind::Retryable | TurnFailureKind::NonRetryable => {
+            TurnResult::ToolError(failure)
+        }
+        TurnFailureKind::Provider => TurnResult::ProviderError(failure),
     }
 }
 
@@ -766,180 +828,27 @@ fn tool_intent_is_visible(
     session_context.tool_view.contains(descriptor.name)
 }
 
-fn map_app_tool_error(reason: String) -> TurnResult {
-    if reason.starts_with("tool_not_visible:") {
-        TurnResult::policy_denied("tool_not_visible", reason)
-    } else if reason.starts_with("tool_not_found:") || reason.starts_with("app_tool_not_found:") {
-        TurnResult::policy_denied("tool_not_found", reason)
-    } else if reason.starts_with("app_tool_disabled:") {
-        TurnResult::policy_denied("app_tool_disabled", reason)
-    } else {
-        TurnResult::non_retryable_tool_error("app_tool_execution_failed", reason)
-    }
-}
-
-async fn preflight_app_tool_request<D: AppToolDispatcher + ?Sized>(
-    app_dispatcher: &D,
-    session_context: &SessionContext,
-    intent: &ToolIntent,
-    descriptor: &crate::tools::ToolDescriptor,
-    request: &ToolCoreRequest,
-    kernel_ctx: Option<&KernelContext>,
-) -> Result<(), TurnResult> {
-    let approval_intent = ToolIntent {
-        tool_name: request.tool_name.clone(),
-        args_json: request.payload.clone(),
-        source: intent.source.clone(),
-        session_id: intent.session_id.clone(),
-        turn_id: intent.turn_id.clone(),
-        tool_call_id: intent.tool_call_id.clone(),
-    };
-
-    match app_dispatcher
-        .maybe_require_approval(session_context, &approval_intent, descriptor, kernel_ctx)
-        .await
-    {
-        Ok(Some(requirement)) => Err(TurnResult::NeedsApproval(requirement)),
-        Ok(None) => Ok(()),
-        Err(reason) if reason.starts_with("app_tool_denied:") => {
-            Err(TurnResult::policy_denied("app_tool_denied", reason))
-        }
-        Err(reason) => Err(TurnResult::non_retryable_tool_error(
-            "app_tool_preflight_failed",
-            reason,
-        )),
-    }
-}
-
-async fn execute_app_tool_request<D: AppToolDispatcher + ?Sized>(
-    app_dispatcher: &D,
-    session_context: &SessionContext,
+async fn execute_tool_intent_via_kernel(
     request: ToolCoreRequest,
-    kernel_ctx: Option<&KernelContext>,
-) -> Result<ToolCoreOutcome, TurnResult> {
-    app_dispatcher
-        .execute_app_tool(session_context, request, kernel_ctx)
+    kernel_ctx: &KernelContext,
+    trusted_internal_context: bool,
+) -> Result<ToolCoreOutcome, TurnFailure> {
+    crate::tools::execute_kernel_tool_request(kernel_ctx, request, trusted_internal_context)
         .await
-        .map_err(map_app_tool_error)
-}
-
-async fn execute_tool_intent_via_kernel<D: AppToolDispatcher + ?Sized>(
-    intent: &ToolIntent,
-    descriptor: &crate::tools::ToolDescriptor,
-    session_context: &SessionContext,
-    app_dispatcher: &D,
-    kernel_ctx: Option<&KernelContext>,
-    ingress: Option<&ConversationIngressContext>,
-) -> Result<ToolCoreOutcome, TurnResult> {
-    let prepared_request = match kernel_ctx {
-        Some(ctx) => crate::tools::prepare_kernel_tool_request(
-            ToolCoreRequest {
-                tool_name: descriptor.name.to_owned(),
-                payload: intent.args_json.clone(),
-            },
-            &ctx.token.allowed_capabilities,
-            Some(ctx.token.token_id.as_str()),
-            Some(intent.session_id.as_str()),
-            Some(intent.turn_id.as_str()),
-        ),
-        None => crate::tools::prepare_kernel_tool_request(
-            ToolCoreRequest {
-                tool_name: descriptor.name.to_owned(),
-                payload: intent.args_json.clone(),
-            },
-            &BTreeSet::from([Capability::InvokeTool]),
-            None,
-            Some(intent.session_id.as_str()),
-            Some(intent.turn_id.as_str()),
-        ),
-    };
-
-    let mut kernel_request = prepared_request;
-    let mut trusted_internal_payload = false;
-
-    if descriptor.name == "tool.invoke"
-        && let Ok((effective_descriptor, effective_request)) =
-            crate::tools::resolve_tool_invoke_request(&kernel_request)
-    {
-        if effective_descriptor.execution_kind == ToolExecutionKind::App {
-            let Some(effective_descriptor) = tool_catalog()
-                .descriptor(effective_descriptor.canonical_name)
-                .copied()
-            else {
-                return Err(TurnResult::non_retryable_tool_error(
-                    "tool_catalog_drift",
-                    format!(
-                        "tool_catalog_drift: missing descriptor for resolved tool.invoke target `{}`",
-                        effective_descriptor.canonical_name
-                    ),
-                ));
-            };
-            preflight_app_tool_request(
-                app_dispatcher,
-                session_context,
-                intent,
-                &effective_descriptor,
-                &effective_request,
-                kernel_ctx,
-            )
-            .await?;
-            return execute_app_tool_request(
-                app_dispatcher,
-                session_context,
-                effective_request,
-                kernel_ctx,
-            )
-            .await;
-        }
-
-        let injected = inject_internal_tool_ingress(
-            effective_descriptor.canonical_name,
-            effective_request.payload,
-            ingress,
-        );
-        trusted_internal_payload |= injected.trusted_internal_context;
-        kernel_request = ToolCoreRequest {
-            tool_name: effective_request.tool_name,
-            payload: injected.payload,
-        };
-    }
-
-    let Some(kernel_ctx) = kernel_ctx else {
-        return Err(TurnResult::policy_denied(
-            "no_kernel_context",
-            "no_kernel_context",
-        ));
-    };
-    let injected = crate::tools::inject_internal_tool_search_context(
-        kernel_request.tool_name.as_str(),
-        kernel_request.payload,
-        Some(&session_context.tool_view),
-    );
-    trusted_internal_payload |= injected.trusted_internal_context;
-    let prepared_request = ToolCoreRequest {
-        tool_name: kernel_request.tool_name,
-        payload: injected.payload,
-    };
-    crate::tools::execute_kernel_tool_request(
-        kernel_ctx,
-        prepared_request,
-        trusted_internal_payload,
-    )
-    .await
-    .map_err(|error| {
-        let reason = render_kernel_error_reason(&error);
-        match classify_kernel_error(&error) {
-            KernelFailureClass::PolicyDenied => {
-                TurnResult::policy_denied("kernel_policy_denied", reason)
+        .map_err(|error| {
+            let reason = render_kernel_error_reason(&error);
+            match classify_kernel_error(&error) {
+                KernelFailureClass::PolicyDenied => {
+                    TurnFailure::policy_denied("kernel_policy_denied", reason)
+                }
+                KernelFailureClass::RetryableExecution => {
+                    TurnFailure::retryable("tool_execution_failed", reason)
+                }
+                KernelFailureClass::NonRetryable => {
+                    TurnFailure::non_retryable("kernel_execution_failed", reason)
+                }
             }
-            KernelFailureClass::RetryableExecution => {
-                TurnResult::retryable_tool_error("tool_execution_failed", reason)
-            }
-            KernelFailureClass::NonRetryable => {
-                TurnResult::non_retryable_tool_error("kernel_execution_failed", reason)
-            }
-        }
-    })
+        })
 }
 
 /// Single orchestration boundary for tool-call evaluation and execution.
@@ -1050,21 +959,15 @@ impl TurnEngine {
                 if provider_tool_denial_should_conceal_name(intent, descriptor, true) {
                     return Err(concealed_provider_tool_denial());
                 }
-                // For tool.invoke, validate that the inner tool_id is also visible.
+                // For tool.invoke, the inner tool_id is validated by lease during
+                // execution.  We do not check inner visibility here because discoverable
+                // tools are intentionally hidden from the tool_view and accessed only
+                // through a valid lease obtained from tool.search.
                 // For all other provider-sourced intents, verify they are provider-exposed
                 // (this gate catches non-bridge paths where a discoverable tool name
                 // arrives without being rewritten to tool.invoke).
                 if descriptor.name == "tool.invoke" {
-                    let inner_name = effective_visible_tool_name(intent, descriptor);
-                    if inner_name != descriptor.name
-                        && !session_context.tool_view.contains(inner_name.as_str())
-                    {
-                        if intent.source.starts_with("provider_") {
-                            return Err(concealed_provider_tool_denial());
-                        }
-                        let reason = format!("tool_not_visible: {inner_name}");
-                        return Err(TurnFailure::policy_denied("tool_not_visible", reason));
-                    }
+                    // Lease validation happens in resolve_tool_invoke_request during execution.
                 } else if !crate::tools::is_provider_exposed_tool_name(&intent.tool_name) {
                     let reason = format!("tool_not_provider_exposed: {}", intent.tool_name);
                     return Err(TurnFailure::policy_denied(
@@ -1102,21 +1005,25 @@ impl TurnEngine {
         turn: &ProviderTurn,
         kernel_ctx: &KernelContext,
     ) -> TurnResult {
-        self.execute_turn_in_view(turn, &runtime_tool_view(), Some(kernel_ctx))
-            .await
+        self.execute_turn_in_view(
+            turn,
+            &runtime_tool_view(),
+            ConversationRuntimeBinding::kernel(kernel_ctx),
+        )
+        .await
     }
 
     pub async fn execute_turn_in_view(
         &self,
         turn: &ProviderTurn,
         tool_view: &ToolView,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> TurnResult {
         self.execute_turn_in_context(
             turn,
             &session_context_from_turn(turn, tool_view.clone()),
             &DefaultAppToolDispatcher::runtime(),
-            kernel_ctx,
+            binding,
             None,
         )
         .await
@@ -1125,14 +1032,14 @@ impl TurnEngine {
     pub async fn execute_turn_with_ingress(
         &self,
         turn: &ProviderTurn,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
         ingress: Option<&ConversationIngressContext>,
     ) -> TurnResult {
         self.execute_turn_in_context(
             turn,
             &session_context_from_turn(turn, runtime_tool_view()),
             &DefaultAppToolDispatcher::runtime(),
-            kernel_ctx,
+            binding,
             ingress,
         )
         .await
@@ -1143,7 +1050,7 @@ impl TurnEngine {
         turn: &ProviderTurn,
         session_context: &SessionContext,
         app_dispatcher: &D,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
         ingress: Option<&ConversationIngressContext>,
     ) -> TurnResult {
         match self.validate_turn_in_context(turn, session_context) {
@@ -1152,7 +1059,6 @@ impl TurnEngine {
             Ok(TurnValidation::ToolExecutionRequired) => {}
         }
 
-        let catalog = tool_catalog();
         let mut outputs = Vec::new();
         for intent in &turn.tool_intents {
             let Some(resolved_tool) = crate::tools::resolve_tool_execution(&intent.tool_name)
@@ -1160,90 +1066,124 @@ impl TurnEngine {
                 let reason = format!("tool_not_found: {}", intent.tool_name);
                 return TurnResult::policy_denied("tool_not_found", reason);
             };
-            let outcome = if let Some(descriptor) = catalog.resolve(&intent.tool_name) {
-                match descriptor.execution_kind {
-                    ToolExecutionKind::Core => {
-                        match execute_tool_intent_via_kernel(
-                            intent,
-                            descriptor,
-                            session_context,
-                            app_dispatcher,
-                            kernel_ctx,
-                            ingress,
-                        )
-                        .await
+            let injected = inject_internal_tool_ingress(
+                resolved_tool.canonical_name,
+                intent.args_json.clone(),
+                ingress,
+            );
+            let augmented_payload = augment_tool_payload_for_kernel(
+                resolved_tool.canonical_name,
+                injected.payload,
+                &session_context.session_id,
+            );
+            let request = ToolCoreRequest {
+                tool_name: resolved_tool.canonical_name.to_owned(),
+                payload: augmented_payload,
+            };
+            // When the provider wraps a discoverable App tool inside `tool.invoke`,
+            // the outer resolution yields ToolExecutionKind::Core (because `tool.invoke`
+            // itself is a core tool).  Rather than sending the wrapper through the kernel
+            // (which would reject App-typed inner tools), we unwrap the envelope here and
+            // route the inner tool through the App dispatcher path.
+            let (effective_execution_kind, effective_request, effective_intent) =
+                if resolved_tool.canonical_name == "tool.invoke" {
+                    match crate::tools::resolve_tool_invoke_request(&request) {
+                        Ok((inner_resolved, inner_request))
+                            if inner_resolved.execution_kind == ToolExecutionKind::App =>
                         {
-                            Ok(outcome) => outcome,
-                            Err(result) => return result,
+                            // Build a synthetic intent that carries the inner tool name
+                            // so that approval preflight sees the real tool identity.
+                            let inner_intent = ToolIntent {
+                                tool_name: inner_resolved.canonical_name.to_owned(),
+                                args_json: inner_request.payload.clone(),
+                                source: intent.source.clone(),
+                                session_id: intent.session_id.clone(),
+                                turn_id: intent.turn_id.clone(),
+                                tool_call_id: intent.tool_call_id.clone(),
+                            };
+                            (ToolExecutionKind::App, inner_request, inner_intent)
                         }
+                        _ => (resolved_tool.execution_kind, request, intent.clone()),
                     }
-                    ToolExecutionKind::App => {
-                        let request = ToolCoreRequest {
-                            tool_name: descriptor.name.to_owned(),
-                            payload: intent.args_json.clone(),
-                        };
-                        if let Err(result) = preflight_app_tool_request(
-                            app_dispatcher,
-                            session_context,
-                            intent,
-                            descriptor,
-                            &request,
-                            kernel_ctx,
-                        )
-                        .await
-                        {
-                            return result;
-                        }
-                        match execute_app_tool_request(
-                            app_dispatcher,
-                            session_context,
-                            request,
-                            kernel_ctx,
-                        )
-                        .await
-                        {
-                            Ok(outcome) => outcome,
-                            Err(result) => return result,
-                        }
+                } else {
+                    (resolved_tool.execution_kind, request, intent.clone())
+                };
+
+            let outcome = match effective_execution_kind {
+                ToolExecutionKind::Core => {
+                    let Some(kernel_ctx) = binding.kernel_context() else {
+                        return TurnResult::policy_denied("no_kernel_context", "no_kernel_context");
+                    };
+                    match execute_tool_intent_via_kernel(
+                        effective_request,
+                        kernel_ctx,
+                        injected.trusted_internal_context,
+                    )
+                    .await
+                    {
+                        Ok(outcome) => outcome,
+                        Err(failure) => return turn_result_from_tool_execution_failure(failure),
                     }
                 }
-            } else {
-                let injected = inject_internal_tool_ingress(
-                    resolved_tool.canonical_name,
-                    intent.args_json.clone(),
-                    ingress,
-                );
-                let request = ToolCoreRequest {
-                    tool_name: resolved_tool.canonical_name.to_owned(),
-                    payload: injected.payload,
-                };
-                let Some(kernel_ctx) = kernel_ctx else {
-                    return TurnResult::policy_denied("no_kernel_context", "no_kernel_context");
-                };
-                match crate::tools::execute_kernel_tool_request(
-                    kernel_ctx,
-                    request,
-                    injected.trusted_internal_context,
-                )
-                .await
-                {
-                    Ok(outcome) => outcome,
-                    Err(error) => {
-                        let reason = render_kernel_error_reason(&error);
-                        return match classify_kernel_error(&error) {
-                            KernelFailureClass::PolicyDenied => {
-                                TurnResult::policy_denied("kernel_policy_denied", reason)
-                            }
-                            KernelFailureClass::RetryableExecution => {
-                                TurnResult::retryable_tool_error("tool_execution_failed", reason)
-                            }
-                            KernelFailureClass::NonRetryable => {
-                                TurnResult::non_retryable_tool_error(
-                                    "kernel_execution_failed",
-                                    reason,
-                                )
-                            }
-                        };
+                ToolExecutionKind::App => {
+                    let effective_tool_name = effective_request.tool_name.as_str();
+                    let catalog = crate::tools::tool_catalog();
+                    let Some(descriptor) = catalog.resolve(effective_tool_name) else {
+                        let reason = format!("tool_descriptor_missing: {}", effective_tool_name);
+                        return TurnResult::non_retryable_tool_error(
+                            "tool_descriptor_missing",
+                            reason,
+                        );
+                    };
+                    let kernel_ctx = binding.kernel_context();
+                    match app_dispatcher
+                        .maybe_require_approval(
+                            session_context,
+                            &effective_intent,
+                            descriptor,
+                            kernel_ctx,
+                        )
+                        .await
+                    {
+                        Ok(Some(requirement)) => return TurnResult::NeedsApproval(requirement),
+                        Ok(None) => {}
+                        Err(reason) if reason.starts_with("app_tool_denied:") => {
+                            return TurnResult::policy_denied("app_tool_denied", reason);
+                        }
+                        Err(reason) => {
+                            return TurnResult::non_retryable_tool_error(
+                                "app_tool_preflight_failed",
+                                reason,
+                            );
+                        }
+                    }
+
+                    match app_dispatcher
+                        .execute_app_tool(session_context, effective_request, binding)
+                        .await
+                    {
+                        Ok(outcome) => outcome,
+                        Err(reason) if reason.starts_with("tool_not_visible:") => {
+                            return TurnResult::policy_denied("tool_not_visible", reason);
+                        }
+                        Err(reason)
+                            if reason.starts_with("tool_not_found:")
+                                || reason.starts_with("app_tool_not_found:") =>
+                        {
+                            return TurnResult::policy_denied("tool_not_found", reason);
+                        }
+                        Err(reason) if reason.starts_with("app_tool_disabled:") => {
+                            return TurnResult::policy_denied("app_tool_disabled", reason);
+                        }
+                        Err(reason) if reason.starts_with("app_tool_denied:") => {
+                            return TurnResult::policy_denied("app_tool_denied", reason);
+                        }
+                        Err(reason) => {
+                            return TurnResult::non_retryable_tool_error(
+                                "app_tool_execution_failed",
+                                reason,
+                            );
+                        }
                     }
                 }
             };
@@ -1349,7 +1289,7 @@ mod tests {
                 &delegate_async_turn("root-session", "turn-1", "call-1"),
                 &session_context,
                 &dispatcher,
-                None,
+                ConversationRuntimeBinding::direct(),
                 None,
             )
             .await;
@@ -1416,7 +1356,7 @@ mod tests {
                 ),
                 &session_context,
                 &dispatcher,
-                None,
+                ConversationRuntimeBinding::direct(),
                 None,
             )
             .await;
@@ -1479,10 +1419,22 @@ mod tests {
         let turn = delegate_async_turn("root-session", "turn-reuse", "call-reuse");
 
         let first = TurnEngine::new(4)
-            .execute_turn_in_context(&turn, &session_context, &dispatcher, None, None)
+            .execute_turn_in_context(
+                &turn,
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::direct(),
+                None,
+            )
             .await;
         let second = TurnEngine::new(4)
-            .execute_turn_in_context(&turn, &session_context, &dispatcher, None, None)
+            .execute_turn_in_context(
+                &turn,
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::direct(),
+                None,
+            )
             .await;
 
         let first_request_id = match first {

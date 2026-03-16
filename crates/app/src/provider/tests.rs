@@ -1,4 +1,5 @@
 use super::*;
+use crate::KernelContext;
 use crate::config::{LoongClawConfig, ProviderConfig, ReasoningEffort};
 use crate::test_support::ScopedEnv;
 use loongclaw_contracts::{Capability, ExecutionRoute, HarnessKind};
@@ -1847,7 +1848,7 @@ async fn responses_completion_falls_back_to_chat_completions_for_compatible_endp
             "role": "user",
             "content": "ping"
         })],
-        None,
+        ProviderRuntimeBinding::direct(),
     )
     .await
     .expect("compatible responses transport should retry chat-completions automatically");
@@ -1932,7 +1933,7 @@ async fn responses_turn_falls_back_to_chat_completions_for_compatible_endpoints(
             "role": "user",
             "content": "turn ping"
         })],
-        None,
+        ProviderRuntimeBinding::direct(),
     )
     .await
     .expect("turn requests should retry chat-completions when Responses is rejected");
@@ -2028,7 +2029,7 @@ fn provider_failover_audit_event_records_structured_payload() {
     };
 
     record_provider_failover_audit_event(
-        Some(&kernel_ctx),
+        ProviderRuntimeBinding::kernel(&kernel_ctx),
         &provider,
         &snapshot,
         true,
@@ -2105,7 +2106,16 @@ fn provider_failover_audit_event_is_noop_without_kernel_context() {
     let provider = ProviderConfig::default();
     let before = audit.snapshot().len();
 
-    record_provider_failover_audit_event(None, &provider, &snapshot, false, false, 0, 1, true);
+    record_provider_failover_audit_event(
+        ProviderRuntimeBinding::direct(),
+        &provider,
+        &snapshot,
+        false,
+        false,
+        0,
+        1,
+        true,
+    );
 
     let after = audit.snapshot().len();
     assert_eq!(after, before);
@@ -2124,7 +2134,16 @@ fn provider_failover_metrics_record_even_without_kernel_context() {
     };
     let provider = ProviderConfig::default();
 
-    record_provider_failover_audit_event(None, &provider, &snapshot, false, false, 0, 1, true);
+    record_provider_failover_audit_event(
+        ProviderRuntimeBinding::direct(),
+        &provider,
+        &snapshot,
+        false,
+        false,
+        0,
+        1,
+        true,
+    );
 
     let after = provider_failover_metrics_snapshot();
     let reason_before = before
@@ -2173,7 +2192,16 @@ fn provider_failover_metrics_track_continue_path() {
         ..ProviderConfig::default()
     };
 
-    record_provider_failover_audit_event(None, &provider, &snapshot, true, true, 1, 4, false);
+    record_provider_failover_audit_event(
+        ProviderRuntimeBinding::direct(),
+        &provider,
+        &snapshot,
+        true,
+        true,
+        1,
+        4,
+        false,
+    );
 
     let after = provider_failover_metrics_snapshot();
     let reason_before = before.by_reason.get("rate_limited").copied().unwrap_or(0);

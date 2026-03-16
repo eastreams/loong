@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use crate::{CliResult, KernelContext, config::ProviderConfig};
+use crate::{CliResult, config::ProviderConfig};
 
 use super::auth_profile_runtime::ProviderAuthProfile;
 use super::failover::ModelRequestError;
@@ -12,10 +12,11 @@ use super::profile_health_runtime::{
     ProviderProfileStatePolicy, mark_provider_profile_failure, mark_provider_profile_success,
     prioritize_provider_auth_profiles_by_health,
 };
+use super::runtime_binding::ProviderRuntimeBinding;
 
 pub(super) async fn request_across_model_candidates<T, F, Fut>(
     provider: &ProviderConfig,
-    kernel_ctx: Option<&KernelContext>,
+    binding: ProviderRuntimeBinding<'_>,
     auth_profiles: &[ProviderAuthProfile],
     profile_state_policy: Option<&ProviderProfileStatePolicy>,
     model_candidates: &[String],
@@ -54,7 +55,7 @@ where
                         ..
                     } = model_error;
                     record_provider_failover_audit_event(
-                        kernel_ctx,
+                        binding,
                         provider,
                         &snapshot,
                         try_next_model,

@@ -11,6 +11,83 @@ release_tag_from_version() {
   printf 'v%s\n' "$version"
 }
 
+release_archive_extension_for_target() {
+  local target="${1:?target is required}"
+  case "$target" in
+    *-pc-windows-*) printf 'zip\n' ;;
+    *) printf 'tar.gz\n' ;;
+  esac
+}
+
+release_archive_name() {
+  local package_name="${1:?package_name is required}"
+  local tag="${2:?tag is required}"
+  local target="${3:?target is required}"
+  local archive_ext
+  archive_ext="$(release_archive_extension_for_target "$target")"
+  printf '%s-%s-%s.%s\n' "$package_name" "$tag" "$target" "$archive_ext"
+}
+
+release_archive_checksum_name() {
+  local package_name="${1:?package_name is required}"
+  local tag="${2:?tag is required}"
+  local target="${3:?target is required}"
+  printf '%s.sha256\n' "$(release_archive_name "$package_name" "$tag" "$target")"
+}
+
+release_binary_name_for_target() {
+  local bin_name="${1:?bin_name is required}"
+  local target="${2:?target is required}"
+  case "$target" in
+    *-pc-windows-*) printf '%s.exe\n' "$bin_name" ;;
+    *) printf '%s\n' "$bin_name" ;;
+  esac
+}
+
+release_target_for_platform() {
+  local platform="${1:?platform is required}"
+  local arch="${2:?arch is required}"
+  local normalized_platform normalized_arch
+
+  normalized_platform="$(printf '%s' "$platform" | tr '[:lower:]' '[:upper:]')"
+  normalized_arch="$(printf '%s' "$arch" | tr '[:upper:]' '[:lower:]')"
+
+  case "$normalized_platform" in
+    LINUX)
+      case "$normalized_arch" in
+        x86_64|amd64) printf 'x86_64-unknown-linux-gnu\n' ;;
+        *)
+          echo "unsupported Linux architecture: ${arch}" >&2
+          return 1
+          ;;
+      esac
+      ;;
+    DARWIN)
+      case "$normalized_arch" in
+        x86_64|amd64) printf 'x86_64-apple-darwin\n' ;;
+        arm64|aarch64) printf 'aarch64-apple-darwin\n' ;;
+        *)
+          echo "unsupported macOS architecture: ${arch}" >&2
+          return 1
+          ;;
+      esac
+      ;;
+    WINDOWS_NT|MINGW*|MSYS*|CYGWIN*)
+      case "$normalized_arch" in
+        x86_64|amd64) printf 'x86_64-pc-windows-msvc\n' ;;
+        *)
+          echo "unsupported Windows architecture: ${arch}" >&2
+          return 1
+          ;;
+      esac
+      ;;
+    *)
+      echo "unsupported platform: ${platform}" >&2
+      return 1
+      ;;
+  esac
+}
+
 release_doc_backticked_field() {
   local doc_path="${1:?doc_path is required}"
   local field_label="${2:?field_label is required}"

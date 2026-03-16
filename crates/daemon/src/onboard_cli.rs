@@ -11,6 +11,7 @@ use time::macros::format_description;
 
 const BACKUP_TIMESTAMP_FORMAT: &[FormatItem<'static>] =
     format_description!("[year][month][day]-[hour][minute][second]");
+const ONBOARD_CLEAR_INPUT_TOKEN: &str = ":clear";
 
 #[derive(Debug, Clone)]
 pub(crate) struct OnboardCommandOptions {
@@ -128,11 +129,22 @@ fn print_message(ui: &mut impl OnboardUi, line: impl Into<String>) -> CliResult<
     ui.print_line(&line.into())
 }
 
+fn is_explicit_onboard_clear_input(raw: &str) -> bool {
+    raw.trim().eq_ignore_ascii_case(ONBOARD_CLEAR_INPUT_TOKEN)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OnboardCheckLevel {
     Pass,
     Warn,
     Fail,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum OnboardNonInteractiveWarningPolicy {
+    #[default]
+    Block,
+    AcceptedBySkipModelProbe,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -147,6 +159,7 @@ pub(crate) struct OnboardCheck {
     pub(crate) name: &'static str,
     pub(crate) level: OnboardCheckLevel,
     pub(crate) detail: String,
+    pub(crate) non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,6 +288,13 @@ impl ReviewFlowStyle {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum SystemPromptSelection {
+    KeepCurrent,
+    RestoreBuiltIn,
+    Set(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct OnboardScreenOption {
     key: String,
     label: String,
@@ -303,6 +323,13 @@ struct StartingConfigSelection {
 struct ConfigWritePlan {
     force: bool,
     backup_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+struct OnboardWriteRecovery {
+    output_preexisted: bool,
+    backup_path: Option<PathBuf>,
+    keep_backup_on_success: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -388,6 +415,7 @@ pub(crate) struct OnboardingDomainOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OnboardingActionKind {
+    Ask,
     Chat,
     Channel,
     Doctor,
@@ -478,17 +506,11 @@ pub(crate) async fn run_onboard_cli_with_ui(
         let default_api_key_env = preferred_api_key_env_default(&config);
         let selected_api_key_env =
             resolve_api_key_env_selection(&options, &config, default_api_key_env, ui, context)?;
-        config.provider.api_key_env = if selected_api_key_env.trim().is_empty() {
-            None
-        } else {
-            Some(selected_api_key_env)
-        };
+        apply_selected_api_key_env(&mut config.provider, selected_api_key_env);
 
-        if let Some(system_prompt) =
-            resolve_system_prompt_selection(&options, &config, ui, context)?
-        {
-            config.cli.system_prompt = system_prompt;
-        }
+        let system_prompt_selection =
+            resolve_system_prompt_selection(&options, &config, ui, context)?;
+        apply_selected_system_prompt(&mut config, system_prompt_selection);
     }
 
     let workspace_guidance = context
@@ -530,6 +552,11 @@ pub(crate) async fn run_onboard_cli_with_ui(
         .any(|check| check.level == OnboardCheckLevel::Warn);
     let existing_output_config = load_existing_output_config(&output_path);
     let skip_config_write = should_skip_config_write(existing_output_config.as_ref(), &config);
+    let has_blocking_non_interactive_warnings = !skip_config_write
+        && checks.iter().any(|check| {
+            check.level == OnboardCheckLevel::Warn
+                && !is_explicitly_accepted_non_interactive_warning(check, &options)
+        });
 
     if options.non_interactive {
         if !credential_ok {
@@ -543,6 +570,12 @@ pub(crate) async fn run_onboard_cli_with_ui(
         if has_failures {
             return Err(
                 "onboard preflight failed. rerun with --skip-model-probe if your provider blocks model listing during setup"
+                    .to_owned(),
+            );
+        }
+        if has_blocking_non_interactive_warnings {
+            return Err(
+                "onboard preflight failed: unresolved warnings require interactive review; rerun without --non-interactive to inspect and confirm them"
                     .to_owned(),
             );
         }
@@ -584,28 +617,57 @@ pub(crate) async fn run_onboard_cli_with_ui(
         }
     }
 
-    let (path, config_status) = if skip_config_write {
+    let (path, config_status, write_recovery) = if skip_config_write {
         (
             output_path.clone(),
             Some("existing config kept; no changes were needed".to_owned()),
+            None,
         )
     } else {
         let write_plan = resolve_write_plan(&output_path, &options, ui, context)?;
-        prepare_output_path_for_write(&output_path, &write_plan, ui)?;
-        let path = mvp::config::write(options.output.as_deref(), &config, write_plan.force)?;
-        (path, None)
+        let write_recovery = prepare_output_path_for_write(&output_path, &write_plan, ui)?;
+        let path = match mvp::config::write(options.output.as_deref(), &config, write_plan.force) {
+            Ok(path) => path,
+            Err(error) => {
+                return Err(rollback_onboard_write_failure(
+                    &output_path,
+                    &write_recovery,
+                    error,
+                ));
+            }
+        };
+        (path, None, Some(write_recovery))
     };
     #[cfg(feature = "memory-sqlite")]
     let memory_path = {
         let mem_config =
             mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-        mvp::memory::ensure_memory_db_ready(Some(config.memory.resolved_sqlite_path()), &mem_config)
-            .map_err(|error| format!("failed to bootstrap sqlite memory: {error}"))?
+        match mvp::memory::ensure_memory_db_ready(
+            Some(config.memory.resolved_sqlite_path()),
+            &mem_config,
+        ) {
+            Ok(path) => path,
+            Err(error) => {
+                let failure = format!("failed to bootstrap sqlite memory: {error}");
+                if let Some(write_recovery) = write_recovery.as_ref() {
+                    return Err(rollback_onboard_write_failure(
+                        &output_path,
+                        write_recovery,
+                        failure,
+                    ));
+                }
+                return Err(failure);
+            }
+        }
     };
 
     let memory_path_display = Some(memory_path.display().to_string());
     #[cfg(not(feature = "memory-sqlite"))]
     let memory_path_display: Option<String> = None;
+
+    if let Some(write_recovery) = write_recovery.as_ref() {
+        write_recovery.finish_success();
+    }
 
     let success_summary = build_onboarding_success_summary_with_memory(
         &path,
@@ -867,13 +929,16 @@ fn resolve_api_key_env_selection(
     context: &OnboardRuntimeContext,
 ) -> CliResult<String> {
     if options.non_interactive {
-        return Ok(options
-            .api_key_env
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(default_api_key_env.as_str())
-            .to_owned());
+        if let Some(api_key_env) = options.api_key_env.as_deref() {
+            if is_explicit_onboard_clear_input(api_key_env) {
+                return Ok(String::new());
+            }
+            let trimmed = api_key_env.trim();
+            if !trimmed.is_empty() {
+                return Ok(trimmed.to_owned());
+            }
+        }
+        return Ok(default_api_key_env);
     }
     let initial = options
         .api_key_env
@@ -892,7 +957,45 @@ fn resolve_api_key_env_selection(
         ),
     )?;
     let value = ui.prompt_with_default("API key env var", initial)?;
+    if is_explicit_onboard_clear_input(&value) {
+        return Ok(String::new());
+    }
     Ok(value.trim().to_owned())
+}
+
+fn apply_selected_api_key_env(
+    provider: &mut mvp::config::ProviderConfig,
+    selected_api_key_env: String,
+) {
+    let selected_api_key_env = selected_api_key_env.trim();
+    if selected_api_key_env.is_empty() {
+        provider.set_api_key_env(None);
+        return;
+    }
+
+    provider.api_key = None;
+    provider.oauth_access_token = None;
+    provider.set_oauth_access_token_env(None);
+    provider.set_api_key_env(Some(selected_api_key_env.to_owned()));
+}
+
+fn apply_selected_system_prompt(
+    config: &mut mvp::config::LoongClawConfig,
+    selection: SystemPromptSelection,
+) {
+    match selection {
+        SystemPromptSelection::KeepCurrent => {}
+        SystemPromptSelection::RestoreBuiltIn => {
+            config.cli.system_prompt = if config.cli.uses_native_prompt_pack() {
+                config.cli.rendered_native_system_prompt()
+            } else {
+                mvp::config::CliChannelConfig::default().system_prompt
+            };
+        }
+        SystemPromptSelection::Set(system_prompt) => {
+            config.cli.system_prompt = system_prompt;
+        }
+    }
 }
 
 fn resolve_system_prompt_selection(
@@ -900,14 +1003,18 @@ fn resolve_system_prompt_selection(
     config: &mvp::config::LoongClawConfig,
     ui: &mut impl OnboardUi,
     context: &OnboardRuntimeContext,
-) -> CliResult<Option<String>> {
+) -> CliResult<SystemPromptSelection> {
     if options.non_interactive {
-        return Ok(options
-            .system_prompt
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned));
+        if let Some(system_prompt) = options.system_prompt.as_deref() {
+            if is_explicit_onboard_clear_input(system_prompt) {
+                return Ok(SystemPromptSelection::RestoreBuiltIn);
+            }
+            let trimmed = system_prompt.trim();
+            if !trimmed.is_empty() {
+                return Ok(SystemPromptSelection::Set(trimmed.to_owned()));
+            }
+        }
+        return Ok(SystemPromptSelection::KeepCurrent);
     }
     let initial = options
         .system_prompt
@@ -925,11 +1032,14 @@ fn resolve_system_prompt_selection(
         ),
     )?;
     let value = ui.prompt_with_default("CLI system prompt", initial)?;
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
+    if is_explicit_onboard_clear_input(&value) {
+        return Ok(SystemPromptSelection::RestoreBuiltIn);
     }
-    Ok(Some(trimmed.to_owned()))
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed == config.cli.system_prompt.trim() {
+        return Ok(SystemPromptSelection::KeepCurrent);
+    }
+    Ok(SystemPromptSelection::Set(trimmed.to_owned()))
 }
 
 async fn run_preflight_checks(
@@ -947,12 +1057,15 @@ async fn run_preflight_checks(
             name: "provider model probe",
             level: OnboardCheckLevel::Warn,
             detail: "skipped by --skip-model-probe".to_owned(),
+            non_interactive_warning_policy:
+                OnboardNonInteractiveWarningPolicy::AcceptedBySkipModelProbe,
         });
     } else if !has_credentials {
         checks.push(OnboardCheck {
             name: "provider model probe",
             level: OnboardCheckLevel::Warn,
             detail: "skipped because credentials are missing".to_owned(),
+            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
         });
     } else {
         match mvp::provider::fetch_available_models(config).await {
@@ -960,11 +1073,13 @@ async fn run_preflight_checks(
                 name: "provider model probe",
                 level: OnboardCheckLevel::Pass,
                 detail: format!("{} model(s) available", models.len()),
+                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
             }),
             Err(error) => checks.push(OnboardCheck {
                 name: "provider model probe",
                 level: OnboardCheckLevel::Fail,
                 detail: error,
+                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
             }),
         }
     }
@@ -993,6 +1108,7 @@ pub(crate) fn provider_credential_check(config: &mvp::config::LoongClawConfig) -
             name: "provider credentials",
             level: OnboardCheckLevel::Pass,
             detail: "inline oauth access token configured".to_owned(),
+            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
         };
     }
 
@@ -1006,6 +1122,7 @@ pub(crate) fn provider_credential_check(config: &mvp::config::LoongClawConfig) -
             name: "provider credentials",
             level: OnboardCheckLevel::Pass,
             detail: "inline api key configured".to_owned(),
+            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
         };
     }
 
@@ -1017,6 +1134,7 @@ pub(crate) fn provider_credential_check(config: &mvp::config::LoongClawConfig) -
             name: "provider credentials",
             level: OnboardCheckLevel::Pass,
             detail,
+            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
         };
     }
 
@@ -1027,6 +1145,7 @@ pub(crate) fn provider_credential_check(config: &mvp::config::LoongClawConfig) -
         name: "provider credentials",
         level: OnboardCheckLevel::Warn,
         detail,
+        non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
     }
 }
 
@@ -1040,7 +1159,19 @@ fn provider_transport_check(config: &mvp::config::LoongClawConfig) -> OnboardChe
             mvp::config::ProviderTransportReadinessLevel::Unsupported => OnboardCheckLevel::Fail,
         },
         detail: readiness.detail,
+        non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
     }
+}
+
+fn is_explicitly_accepted_non_interactive_warning(
+    check: &OnboardCheck,
+    options: &OnboardCommandOptions,
+) -> bool {
+    options.skip_model_probe
+        && matches!(
+            check.non_interactive_warning_policy,
+            OnboardNonInteractiveWarningPolicy::AcceptedBySkipModelProbe
+        )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1179,16 +1310,19 @@ pub(crate) fn directory_preflight_check(name: &'static str, target: &Path) -> On
                 name,
                 level: OnboardCheckLevel::Pass,
                 detail: target.display().to_string(),
+                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
             },
             Ok(_) => OnboardCheck {
                 name,
                 level: OnboardCheckLevel::Fail,
                 detail: format!("{} exists but is not a directory", target.display()),
+                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
             },
             Err(error) => OnboardCheck {
                 name,
                 level: OnboardCheckLevel::Fail,
                 detail: format!("failed to inspect {}: {error}", target.display()),
+                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
             },
         };
     }
@@ -1200,6 +1334,7 @@ pub(crate) fn directory_preflight_check(name: &'static str, target: &Path) -> On
                 name,
                 level: OnboardCheckLevel::Fail,
                 detail: format!("no existing parent found for {}", target.display()),
+                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
             };
         };
         ancestor = parent;
@@ -1210,16 +1345,19 @@ pub(crate) fn directory_preflight_check(name: &'static str, target: &Path) -> On
             name,
             level: OnboardCheckLevel::Pass,
             detail: format!("would create under {}", ancestor.display()),
+            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
         },
         Ok(_) => OnboardCheck {
             name,
             level: OnboardCheckLevel::Fail,
             detail: format!("{} exists but is not a directory", ancestor.display()),
+            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
         },
         Err(error) => OnboardCheck {
             name,
             level: OnboardCheckLevel::Fail,
             detail: format!("failed to inspect {}: {error}", ancestor.display()),
+            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
         },
     }
 }
@@ -1238,6 +1376,7 @@ pub(crate) fn collect_channel_preflight_checks(
                 crate::migration::channels::ChannelCheckLevel::Fail => OnboardCheckLevel::Fail,
             },
             detail: check.detail,
+            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
         })
         .collect()
 }
@@ -1500,17 +1639,19 @@ fn select_non_interactive_starting_config(
                 starting_config_selection_from_current_candidate(candidate, current_setup_state)
             })
             .unwrap_or_else(default_starting_config_selection),
-        OnboardEntryChoice::ImportDetectedSetup => import_candidates
-            .into_iter()
-            .next()
-            .map(|candidate| {
-                starting_config_selection_from_import_candidate(
-                    candidate,
-                    all_candidates,
-                    current_setup_state,
-                )
-            })
-            .unwrap_or_else(default_starting_config_selection),
+        OnboardEntryChoice::ImportDetectedSetup => {
+            sort_starting_point_candidates(import_candidates)
+                .into_iter()
+                .map(|candidate| {
+                    starting_config_selection_from_import_candidate(
+                        candidate,
+                        all_candidates,
+                        current_setup_state,
+                    )
+                })
+                .next()
+                .unwrap_or_else(default_starting_config_selection)
+        }
         OnboardEntryChoice::StartFresh => default_starting_config_selection(),
     }
 }
@@ -2317,6 +2458,7 @@ fn build_onboarding_success_summary_with_memory(
         .into_iter()
         .map(|action| OnboardingAction {
             kind: match action.kind {
+                crate::next_actions::SetupNextActionKind::Ask => OnboardingActionKind::Ask,
                 crate::next_actions::SetupNextActionKind::Chat => OnboardingActionKind::Chat,
                 crate::next_actions::SetupNextActionKind::Channel => OnboardingActionKind::Channel,
                 crate::next_actions::SetupNextActionKind::Doctor => OnboardingActionKind::Doctor,
@@ -2583,6 +2725,13 @@ fn render_default_choice_footer_line(key: &str, description: &str) -> String {
 
 fn render_default_input_hint_line(description: impl AsRef<str>) -> String {
     format!("- press Enter to {}", description.as_ref())
+}
+
+fn render_clear_input_hint_line(description: impl AsRef<str>) -> String {
+    format!(
+        "- type {ONBOARD_CLEAR_INPUT_TOKEN} to {}",
+        description.as_ref()
+    )
 }
 
 fn render_model_selection_default_hint_line(
@@ -3586,7 +3735,13 @@ fn render_api_key_env_selection_screen_lines_with_style(
         prompt_default,
     )];
     if provider_supports_blank_api_key_env(config) {
-        hint_lines.push("- blank keeps inline or oauth credentials".to_owned());
+        if prompt_default.trim().is_empty() {
+            hint_lines.push("- leave this blank to keep inline or oauth credentials".to_owned());
+        } else {
+            hint_lines.push(render_clear_input_hint_line(
+                "keep inline or oauth credentials",
+            ));
+        }
     }
 
     render_onboard_input_screen(
@@ -3641,7 +3796,11 @@ fn render_system_prompt_selection_screen_lines_with_style(
         vec![format!("- current prompt: {current_prompt_display}")],
         vec![
             render_system_prompt_selection_default_hint_line(config, prompt_default),
-            "- blank keeps the built-in behavior".to_owned(),
+            if prompt_default.trim().is_empty() {
+                "- leave this blank to use the built-in behavior".to_owned()
+            } else {
+                render_clear_input_hint_line("use the built-in behavior")
+            },
         ],
         color_enabled,
     )
@@ -4148,21 +4307,93 @@ fn prepare_output_path_for_write(
     output_path: &Path,
     plan: &ConfigWritePlan,
     ui: &mut impl OnboardUi,
-) -> CliResult<()> {
-    if let Some(backup_path) = plan.backup_path.as_deref() {
+) -> CliResult<OnboardWriteRecovery> {
+    let output_preexisted = output_path.exists();
+    let keep_backup_on_success = plan.backup_path.is_some();
+    let backup_path = if output_preexisted {
+        Some(
+            plan.backup_path
+                .clone()
+                .unwrap_or(resolve_rollback_backup_path(output_path)?),
+        )
+    } else {
+        None
+    };
+
+    if let Some(backup_path) = backup_path.as_deref() {
         backup_existing_config(output_path, backup_path)?;
+    }
+    if let Some(backup_path) = plan.backup_path.as_deref() {
         print_message(
             ui,
             format!("Backed up existing config to: {}", backup_path.display()),
         )?;
     }
-    Ok(())
+    Ok(OnboardWriteRecovery {
+        output_preexisted,
+        backup_path,
+        keep_backup_on_success,
+    })
 }
 
 pub(crate) fn backup_existing_config(output_path: &Path, backup_path: &Path) -> CliResult<()> {
     fs::copy(output_path, backup_path)
         .map_err(|error| format!("failed to backup config: {error}"))?;
     Ok(())
+}
+
+impl OnboardWriteRecovery {
+    fn rollback(&self, output_path: &Path) -> CliResult<()> {
+        if self.output_preexisted {
+            let backup_path = self
+                .backup_path
+                .as_deref()
+                .ok_or_else(|| "missing rollback backup for existing config".to_owned())?;
+            fs::copy(backup_path, output_path).map_err(|error| {
+                format!(
+                    "failed to restore original config {} from backup {}: {error}",
+                    output_path.display(),
+                    backup_path.display(),
+                )
+            })?;
+            self.finish_success();
+            return Ok(());
+        }
+
+        if output_path.exists() {
+            fs::remove_file(output_path).map_err(|error| {
+                format!(
+                    "failed to remove partial config {} after onboarding failure: {error}",
+                    output_path.display()
+                )
+            })?;
+        }
+        self.finish_success();
+        Ok(())
+    }
+
+    fn finish_success(&self) {
+        if self.keep_backup_on_success {
+            return;
+        }
+        if let Some(backup_path) = self.backup_path.as_deref() {
+            let _ = fs::remove_file(backup_path);
+        }
+    }
+}
+
+fn rollback_onboard_write_failure(
+    output_path: &Path,
+    write_recovery: &OnboardWriteRecovery,
+    failure: impl Into<String>,
+) -> String {
+    let failure = failure.into();
+    match write_recovery.rollback(output_path) {
+        Ok(()) => failure,
+        Err(rollback_error) => {
+            format!("{failure}; additionally failed to restore original config: {rollback_error}")
+        }
+    }
 }
 
 fn resolve_backup_path(original: &Path) -> CliResult<PathBuf> {
@@ -4181,6 +4412,27 @@ fn resolve_backup_path_at(original: &Path, timestamp: OffsetDateTime) -> CliResu
     Ok(parent.join(format!("{}.toml.bak-{}", file_stem, formatted_timestamp)))
 }
 
+fn resolve_rollback_backup_path(original: &Path) -> CliResult<PathBuf> {
+    let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+    resolve_rollback_backup_path_at(original, now)
+}
+
+fn resolve_rollback_backup_path_at(
+    original: &Path,
+    timestamp: OffsetDateTime,
+) -> CliResult<PathBuf> {
+    let parent = original.parent().unwrap_or(Path::new("."));
+    let file_name = original
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "config.toml".to_owned());
+
+    let formatted_timestamp = format_backup_timestamp_at(timestamp)?;
+    Ok(parent.join(format!(
+        ".{file_name}.onboard-rollback-{formatted_timestamp}"
+    )))
+}
+
 fn format_backup_timestamp_at(timestamp: OffsetDateTime) -> CliResult<String> {
     timestamp
         .format(BACKUP_TIMESTAMP_FORMAT)
@@ -4190,6 +4442,93 @@ fn format_backup_timestamp_at(timestamp: OffsetDateTime) -> CliResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+
+    struct TestOnboardUi {
+        inputs: VecDeque<String>,
+    }
+
+    impl TestOnboardUi {
+        fn with_inputs(inputs: impl IntoIterator<Item = impl Into<String>>) -> Self {
+            Self {
+                inputs: inputs.into_iter().map(Into::into).collect(),
+            }
+        }
+    }
+
+    impl OnboardUi for TestOnboardUi {
+        fn print_line(&mut self, _line: &str) -> CliResult<()> {
+            Ok(())
+        }
+
+        fn prompt_with_default(&mut self, _label: &str, default: &str) -> CliResult<String> {
+            Ok(self
+                .inputs
+                .pop_front()
+                .unwrap_or_else(|| default.to_owned()))
+        }
+
+        fn prompt_required(&mut self, _label: &str) -> CliResult<String> {
+            self.inputs
+                .pop_front()
+                .ok_or_else(|| "missing required test input".to_owned())
+        }
+
+        fn prompt_confirm(&mut self, _message: &str, default: bool) -> CliResult<bool> {
+            Ok(self
+                .inputs
+                .pop_front()
+                .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+                .unwrap_or(default))
+        }
+    }
+
+    fn import_candidate_with_domain_status(
+        source_kind: crate::migration::ImportSourceKind,
+        source: &str,
+        domains: impl IntoIterator<
+            Item = (
+                crate::migration::SetupDomainKind,
+                crate::migration::PreviewStatus,
+            ),
+        >,
+    ) -> ImportCandidate {
+        ImportCandidate {
+            source_kind,
+            source: source.to_owned(),
+            config: mvp::config::LoongClawConfig::default(),
+            surfaces: Vec::new(),
+            domains: domains
+                .into_iter()
+                .map(|(kind, status)| crate::migration::DomainPreview {
+                    kind,
+                    status,
+                    decision: Some(crate::migration::types::PreviewDecision::UseDetected),
+                    source: source.to_owned(),
+                    summary: format!("{} {}", kind.label(), status.label()),
+                })
+                .collect(),
+            channel_candidates: Vec::new(),
+            workspace_guidance: Vec::new(),
+        }
+    }
+
+    fn recommended_import_entry_options() -> Vec<OnboardEntryOption> {
+        vec![
+            OnboardEntryOption {
+                choice: OnboardEntryChoice::ImportDetectedSetup,
+                label: "Use detected starting point",
+                detail: "detected setup is recommended".to_owned(),
+                recommended: true,
+            },
+            OnboardEntryOption {
+                choice: OnboardEntryChoice::StartFresh,
+                label: "Start fresh",
+                detail: "configure from scratch".to_owned(),
+                recommended: false,
+            },
+        ]
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn run_preflight_checks_includes_provider_transport_review_for_responses_compatibility_mode()
@@ -4210,6 +4549,225 @@ mod tests {
                         .contains("retry chat_completions automatically")
             }),
             "preflight should surface transport review before writing a Responses-compatible config: {checks:#?}"
+        );
+    }
+
+    #[test]
+    fn resolve_api_key_env_selection_accepts_explicit_clear_token_in_interactive_mode() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Openai;
+        config.provider.api_key = Some("inline-secret".to_owned());
+        let mut ui = TestOnboardUi::with_inputs([":clear"]);
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let selected = resolve_api_key_env_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: false,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            "OPENAI_API_KEY".to_owned(),
+            &mut ui,
+            &context,
+        )
+        .expect("resolve api key env selection");
+
+        assert!(
+            selected.is_empty(),
+            "typing :clear should explicitly clear the api-key env selection instead of persisting the literal token: {selected:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_system_prompt_selection_accepts_explicit_clear_token_in_interactive_mode() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.cli.system_prompt = "be terse and code-focused".to_owned();
+        let mut ui = TestOnboardUi::with_inputs([":clear"]);
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let selected = resolve_system_prompt_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: false,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            &mut ui,
+            &context,
+        )
+        .expect("resolve system prompt selection");
+
+        assert_eq!(
+            selected,
+            SystemPromptSelection::RestoreBuiltIn,
+            "typing :clear should restore the built-in system prompt instead of keeping the literal token"
+        );
+    }
+
+    #[test]
+    fn resolve_system_prompt_selection_keeps_current_prompt_when_interactive_default_is_used() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.cli.system_prompt = "be terse and code-focused".to_owned();
+        let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let selected = resolve_system_prompt_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: false,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            &mut ui,
+            &context,
+        )
+        .expect("resolve system prompt selection");
+
+        assert_eq!(
+            selected,
+            SystemPromptSelection::KeepCurrent,
+            "using the prompt default should keep the current system prompt when no override is prefilled"
+        );
+    }
+
+    #[test]
+    fn resolve_system_prompt_selection_keeps_prefilled_override_when_interactive_default_is_used() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.cli.system_prompt = "be terse and code-focused".to_owned();
+        let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let selected = resolve_system_prompt_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: false,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                system_prompt: Some("prefer concise code reviews".to_owned()),
+                skip_model_probe: false,
+            },
+            &config,
+            &mut ui,
+            &context,
+        )
+        .expect("resolve system prompt selection");
+
+        assert_eq!(
+            selected,
+            SystemPromptSelection::Set("prefer concise code reviews".to_owned()),
+            "using the prompt default should still apply a prefilled system prompt override"
+        );
+    }
+
+    #[test]
+    fn apply_selected_system_prompt_restore_uses_rendered_native_prompt() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.cli.system_prompt = "custom review prompt".to_owned();
+        config.cli.system_prompt_addendum = Some("Prefer concrete remediation steps.".to_owned());
+        let expected = config.cli.rendered_native_system_prompt();
+
+        apply_selected_system_prompt(&mut config, SystemPromptSelection::RestoreBuiltIn);
+
+        assert_eq!(
+            config.cli.system_prompt, expected,
+            "restoring the built-in prompt should respect the active native prompt rendering inputs"
+        );
+    }
+
+    #[test]
+    fn accepted_non_interactive_warnings_do_not_depend_on_display_text() {
+        let check = OnboardCheck {
+            name: "provider model probe",
+            level: OnboardCheckLevel::Warn,
+            detail: "display text changed".to_owned(),
+            non_interactive_warning_policy:
+                OnboardNonInteractiveWarningPolicy::AcceptedBySkipModelProbe,
+        };
+        let options = OnboardCommandOptions {
+            output: None,
+            force: false,
+            non_interactive: true,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        };
+
+        assert!(
+            is_explicitly_accepted_non_interactive_warning(&check, &options),
+            "non-interactive warning acceptance should follow structured policy rather than fragile display strings"
+        );
+    }
+
+    #[test]
+    fn select_non_interactive_starting_config_uses_sorted_detected_candidate_priority() {
+        let codex_candidate = import_candidate_with_domain_status(
+            crate::migration::ImportSourceKind::CodexConfig,
+            "Codex config at ~/.codex/config.toml",
+            [(
+                crate::migration::SetupDomainKind::Provider,
+                crate::migration::PreviewStatus::Ready,
+            )],
+        );
+        let environment_candidate = import_candidate_with_domain_status(
+            crate::migration::ImportSourceKind::Environment,
+            "your current environment",
+            [
+                (
+                    crate::migration::SetupDomainKind::Provider,
+                    crate::migration::PreviewStatus::Ready,
+                ),
+                (
+                    crate::migration::SetupDomainKind::Channels,
+                    crate::migration::PreviewStatus::Ready,
+                ),
+                (
+                    crate::migration::SetupDomainKind::WorkspaceGuidance,
+                    crate::migration::PreviewStatus::Ready,
+                ),
+            ],
+        );
+        let all_candidates = vec![codex_candidate, environment_candidate];
+
+        let selection = select_non_interactive_starting_config(
+            crate::migration::CurrentSetupState::Absent,
+            &recommended_import_entry_options(),
+            None,
+            all_candidates.clone(),
+            &all_candidates,
+        );
+
+        assert_eq!(
+            selection
+                .review_candidate
+                .as_ref()
+                .map(|candidate| candidate.source_kind),
+            Some(crate::migration::ImportSourceKind::Environment),
+            "non-interactive onboarding should reuse the same sorted detected-candidate priority as the interactive chooser: {selection:#?}"
         );
     }
 
@@ -4238,6 +4796,30 @@ mod tests {
         assert_eq!(
             path,
             PathBuf::from("/tmp/loongclaw.toml.bak-20260314-012345")
+        );
+    }
+
+    #[test]
+    fn rollback_removes_partial_first_write_config() {
+        let output_path = std::env::temp_dir().join(format!(
+            "loongclaw-first-write-rollback-{}.toml",
+            std::process::id()
+        ));
+        fs::write(&output_path, "partial = true\n").expect("write partial config");
+
+        let recovery = OnboardWriteRecovery {
+            output_preexisted: false,
+            backup_path: None,
+            keep_backup_on_success: false,
+        };
+
+        recovery
+            .rollback(&output_path)
+            .expect("first-write rollback should succeed");
+
+        assert!(
+            !output_path.exists(),
+            "first-write rollback should remove the partially written config"
         );
     }
 }

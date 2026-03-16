@@ -824,7 +824,7 @@ mod tests {
     use crate::channel::ChannelPlatform;
     use crate::config::{LoongClawConfig, ProviderConfig};
     use crate::context::{DEFAULT_TOKEN_TTL_S, KernelContext, bootstrap_kernel_context};
-    use crate::tools::runtime_config::{ExternalSkillsRuntimePolicy, ToolRuntimeConfig};
+    use crate::tools::runtime_config::ToolRuntimeConfig;
     use axum::{
         Json, Router,
         body::to_bytes,
@@ -867,45 +867,7 @@ mod tests {
     }
 
     fn webhook_tool_runtime_config(config: &LoongClawConfig) -> ToolRuntimeConfig {
-        ToolRuntimeConfig {
-            shell_allow: config
-                .tools
-                .shell_allow
-                .iter()
-                .map(|value| value.to_ascii_lowercase())
-                .collect(),
-            shell_deny: config
-                .tools
-                .shell_deny
-                .iter()
-                .map(|value| value.to_ascii_lowercase())
-                .collect(),
-            file_root: Some(config.tools.resolved_file_root()),
-            config_path: None,
-            shell_default_mode: crate::tools::shell_policy_ext::ShellPolicyDefault::parse(
-                &config.tools.shell_default_mode,
-            ),
-            external_skills: ExternalSkillsRuntimePolicy {
-                enabled: config.external_skills.enabled,
-                require_download_approval: config.external_skills.require_download_approval,
-                allowed_domains: config
-                    .external_skills
-                    .normalized_allowed_domains()
-                    .into_iter()
-                    .collect(),
-                blocked_domains: config
-                    .external_skills
-                    .normalized_blocked_domains()
-                    .into_iter()
-                    .collect(),
-                install_root: config.external_skills.resolved_install_root(),
-                auto_expose_installed: config.external_skills.auto_expose_installed,
-            },
-            #[cfg(feature = "feishu-integration")]
-            feishu: crate::tools::runtime_config::FeishuToolRuntimeConfig::from_loongclaw_config(
-                config,
-            ),
-        }
+        ToolRuntimeConfig::from_loongclaw_config(config, None)
     }
 
     fn bootstrap_webhook_kernel_context(
@@ -1088,11 +1050,26 @@ mod tests {
             post({
                 let state = state.clone();
                 let turn_index = turn_index.clone();
-                move |request| {
+                move |request: Request| {
                     let state = state.clone();
                     let turn_index = turn_index.clone();
                     async move {
-                        record_request(State(state), request).await;
+                        let (parts, body) = request.into_parts();
+                        let body_bytes = to_bytes(body, usize::MAX)
+                            .await
+                            .expect("read mock request body");
+                        let body_text = String::from_utf8(body_bytes.to_vec())
+                            .expect("mock request body utf8");
+                        state.requests.lock().await.push(MockRequest {
+                            path: parts.uri.path().to_owned(),
+                            query: parts.uri.query().map(ToOwned::to_owned),
+                            authorization: parts
+                                .headers
+                                .get(axum::http::header::AUTHORIZATION)
+                                .and_then(|value: &axum::http::HeaderValue| value.to_str().ok())
+                                .map(ToOwned::to_owned),
+                            body: body_text.clone(),
+                        });
                         let mut turn_index = turn_index.lock().await;
                         *turn_index += 1;
                         if *turn_index == 1 {
@@ -1112,6 +1089,24 @@ mod tests {
                                 }]
                             }))
                         } else if *turn_index == 2 {
+                            // In the discovery-first model, the provider must call
+                            // tool_invoke with the lease obtained from tool_search.
+                            // Extract the lease from the tool_search result in the
+                            // request body.
+                            let lease = extract_lease_from_provider_request_body(
+                                &body_text,
+                                "feishu.card.update",
+                            );
+                            let arguments = json!({
+                                "tool_id": "feishu.card.update",
+                                "lease": lease,
+                                "arguments": {
+                                    "card": {
+                                        "config": {"wide_screen_mode": true},
+                                        "elements": [{"tag": "markdown", "content": "callback updated"}]
+                                    }
+                                }
+                            });
                             Json(json!({
                                 "choices": [{
                                     "message": {
@@ -1120,8 +1115,8 @@ mod tests {
                                             "id": "call_feishu_card_update_1",
                                             "type": "function",
                                             "function": {
-                                                "name": "feishu_card_update",
-                                                "arguments": "{\"card\":{\"config\":{\"wide_screen_mode\":true},\"elements\":[{\"tag\":\"markdown\",\"content\":\"callback updated\"}]}}"
+                                                "name": "tool_invoke",
+                                                "arguments": serde_json::to_string(&arguments).expect("serialize tool_invoke arguments")
                                             }
                                         }]
                                     }
@@ -1141,6 +1136,42 @@ mod tests {
             }),
         );
         spawn_mock_server(router).await
+    }
+
+    /// Extract a tool lease for the given tool_id from a provider request body
+    /// that contains a previous tool_search result in the conversation messages.
+    fn extract_lease_from_provider_request_body(body: &str, tool_id: &str) -> String {
+        let body_json: Value = serde_json::from_str(body).expect("parse provider request body");
+        let messages = body_json["messages"]
+            .as_array()
+            .expect("messages array in provider request body");
+        for message in messages {
+            let content = message["content"].as_str().unwrap_or("");
+            if !content.contains("tool.search") || !content.contains(tool_id) {
+                continue;
+            }
+            let Some(payload_start) = content.find("{\"status\":") else {
+                continue;
+            };
+            let Ok(envelope) = serde_json::from_str::<Value>(&content[payload_start..]) else {
+                continue;
+            };
+            let summary_str = envelope["payload_summary"].as_str().unwrap_or("");
+            let Ok(summary) = serde_json::from_str::<Value>(summary_str) else {
+                continue;
+            };
+            let Some(results) = summary["results"].as_array() else {
+                continue;
+            };
+            for result in results {
+                if result["tool_id"].as_str() == Some(tool_id)
+                    && let Some(lease) = result["lease"].as_str()
+                {
+                    return lease.to_owned();
+                }
+            }
+        }
+        panic!("could not extract lease for {tool_id} from provider request body");
     }
 
     async fn spawn_mock_feishu_api_server(

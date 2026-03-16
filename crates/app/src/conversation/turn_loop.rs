@@ -4,13 +4,13 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use serde_json::{Value, json};
 
 use crate::CliResult;
-use crate::KernelContext;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 
 use super::super::config::LoongClawConfig;
 use super::ProviderErrorMode;
 use super::persistence::persist_reply_turns_with_mode;
 use super::runtime::{ConversationRuntime, DefaultConversationRuntime};
+use super::runtime_binding::ConversationRuntimeBinding;
 use super::turn_budget::{TurnRoundBudget, TurnRoundBudgetDecision};
 use super::turn_engine::{
     DefaultAppToolDispatcher, ProviderTurn, ToolIntent, TurnEngine, TurnResult, TurnValidation,
@@ -90,11 +90,11 @@ impl ConversationTurnLoop {
         session_id: &str,
         user_input: &str,
         error_mode: ProviderErrorMode,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
         let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
         self.handle_turn_with_runtime(
-            config, session_id, user_input, error_mode, &runtime, kernel_ctx,
+            config, session_id, user_input, error_mode, &runtime, binding,
         )
         .await
     }
@@ -106,10 +106,10 @@ impl ConversationTurnLoop {
         user_input: &str,
         error_mode: ProviderErrorMode,
         runtime: &R,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
         let policy = TurnLoopPolicy::from_config(config);
-        let session_context = runtime.session_context(config, session_id, kernel_ctx)?;
+        let session_context = runtime.session_context(config, session_id, binding)?;
         let tool_view = session_context.tool_view.clone();
         let app_dispatcher = DefaultAppToolDispatcher::with_config(
             MemoryRuntimeConfig::from_memory_config(&config.memory),
@@ -118,7 +118,7 @@ impl ConversationTurnLoop {
         let turn_id = super::turn_shared::next_conversation_turn_id();
         let mut session = initialize_turn_loop_session(
             runtime
-                .build_messages(config, session_id, true, &tool_view, kernel_ctx)
+                .build_messages(config, session_id, true, &tool_view, binding)
                 .await?,
             user_input,
             &policy,
@@ -133,7 +133,7 @@ impl ConversationTurnLoop {
                         turn_id.as_str(),
                         &session.messages,
                         &tool_view,
-                        kernel_ctx,
+                        binding,
                     )
                     .await,
                 error_mode,
@@ -148,7 +148,7 @@ impl ConversationTurnLoop {
                             reply,
                             persistence_mode: ReplyPersistenceMode::InlineProviderError,
                         },
-                        kernel_ctx,
+                        binding,
                     )
                     .await;
                 }
@@ -158,7 +158,7 @@ impl ConversationTurnLoop {
                         session_id,
                         user_input,
                         TurnLoopTerminalAction::ReturnError { error },
-                        kernel_ctx,
+                        binding,
                     )
                     .await;
                 }
@@ -170,7 +170,7 @@ impl ConversationTurnLoop {
                 &turn,
                 &session_context,
                 &app_dispatcher,
-                kernel_ctx,
+                binding,
                 &mut session.loop_supervisor,
             )
             .await;
@@ -190,12 +190,12 @@ impl ConversationTurnLoop {
                 &mut session,
                 user_input,
                 decision,
-                kernel_ctx,
+                binding,
             )
             .await?
             {
                 return apply_turn_loop_terminal_action(
-                    runtime, session_id, user_input, action, kernel_ctx,
+                    runtime, session_id, user_input, action, binding,
                 )
                 .await;
             }
@@ -206,7 +206,7 @@ impl ConversationTurnLoop {
             session_id,
             user_input,
             build_round_limit_terminal_action(session.last_raw_reply.as_str()),
-            kernel_ctx,
+            binding,
         )
         .await
     }
@@ -229,7 +229,7 @@ async fn resolve_round_kernel_terminal_action<R: ConversationRuntime + ?Sized>(
     session: &mut TurnLoopSessionState,
     user_input: &str,
     decision: RoundKernelDecision,
-    kernel_ctx: Option<&KernelContext>,
+    binding: ConversationRuntimeBinding<'_>,
 ) -> CliResult<Option<TurnLoopTerminalAction>> {
     match decision {
         RoundKernelDecision::ContinueWithFollowup(followup) => {
@@ -251,7 +251,7 @@ async fn resolve_round_kernel_terminal_action<R: ConversationRuntime + ?Sized>(
                 runtime,
                 config,
                 &session.messages,
-                kernel_ctx,
+                binding,
                 raw_reply.as_str(),
             )
             .await;
@@ -268,7 +268,7 @@ async fn apply_turn_loop_terminal_action<R: ConversationRuntime + ?Sized>(
     session_id: &str,
     user_input: &str,
     action: TurnLoopTerminalAction,
-    kernel_ctx: Option<&KernelContext>,
+    binding: ConversationRuntimeBinding<'_>,
 ) -> CliResult<String> {
     match action {
         TurnLoopTerminalAction::PersistReply {
@@ -281,7 +281,7 @@ async fn apply_turn_loop_terminal_action<R: ConversationRuntime + ?Sized>(
                 user_input,
                 &reply,
                 persistence_mode,
-                kernel_ctx,
+                binding,
             )
             .await?;
             Ok(reply)
@@ -317,7 +317,7 @@ async fn evaluate_round_kernel(
     turn: &ProviderTurn,
     session_context: &super::runtime::SessionContext,
     app_dispatcher: &DefaultAppToolDispatcher,
-    kernel_ctx: Option<&KernelContext>,
+    binding: ConversationRuntimeBinding<'_>,
     loop_supervisor: &mut ToolLoopSupervisor,
 ) -> RoundKernelEvaluation {
     let had_tool_intents = !turn.tool_intents.is_empty();
@@ -336,7 +336,7 @@ async fn evaluate_round_kernel(
         Err(failure) => TurnResult::ToolDenied(failure),
         Ok(TurnValidation::ToolExecutionRequired) => {
             engine
-                .execute_turn_in_context(turn, session_context, app_dispatcher, kernel_ctx, None)
+                .execute_turn_in_context(turn, session_context, app_dispatcher, binding, None)
                 .await
         }
     };

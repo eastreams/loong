@@ -6,7 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [features]
-default = ["channel-cli", "channel-telegram", "channel-feishu", "config-toml", "memory-sqlite", "feishu-integration", "tool-shell", "tool-file", "provider-openai", "provider-anthropic", "provider-bedrock", "provider-volcengine"]
+default = ["channel-cli", "channel-telegram", "channel-feishu", "config-toml", "memory-sqlite", "feishu-integration", "tool-shell", "tool-file", "tool-browser", "tool-webfetch", "provider-openai", "provider-anthropic", "provider-bedrock", "provider-volcengine"]
 channel-cli = []
 channel-telegram = []
 channel-feishu = ["dep:axum", "dep:aes", "dep:cbc", "feishu-integration"]
@@ -19,6 +19,8 @@ memory-sqlite = ["dep:rusqlite"]
 feishu-integration = ["dep:rusqlite"]
 tool-shell = []
 tool-file = []
+tool-browser = ["dep:scraper"]
+tool-webfetch = []
 
 [dependencies]
 loongclaw-contracts = { path = "../contracts" }
@@ -29,6 +31,7 @@ serde.workspace = true
 serde_json.workspace = true
 toml = { workspace = true, optional = true }
 reqwest.workspace = true
+scraper = { version = "0.24", optional = true }
 sha2.workspace = true
 flate2.workspace = true
 tar.workspace = true

@@ -20,6 +20,8 @@ use crate::config::ToolConfig;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 
 pub(crate) mod approval;
+#[cfg(feature = "tool-browser")]
+mod browser;
 mod catalog;
 mod claw_import;
 pub(crate) mod delegate;
@@ -35,6 +37,8 @@ pub mod runtime_config;
 mod session;
 mod shell;
 pub mod shell_policy_ext;
+#[cfg(feature = "tool-webfetch")]
+mod web_fetch;
 
 pub use catalog::{
     ToolApprovalMode, ToolAvailability, ToolCatalog, ToolDescriptor, ToolExecutionKind,
@@ -42,15 +46,22 @@ pub use catalog::{
     delegate_child_tool_view_for_config, delegate_child_tool_view_for_config_with_delegate,
     governance_profile_for_descriptor, governance_profile_for_tool_name,
     planned_delegate_child_tool_view, planned_root_tool_view, runtime_tool_view,
-    runtime_tool_view_for_config, tool_catalog,
+    runtime_tool_view_for_config, runtime_tool_view_for_config_with_external_skills,
+    runtime_tool_view_for_runtime_config, tool_catalog,
 };
 #[cfg(feature = "feishu-integration")]
 pub(crate) use feishu::{DeferredFeishuCardUpdate, drain_deferred_feishu_card_updates};
 pub use kernel_adapter::MvpToolAdapter;
 
+pub(crate) const BROWSER_SESSION_SCOPE_FIELD: &str = "__loongclaw_browser_scope";
+
 pub(crate) const LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY: &str = "_loongclaw";
 const LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY: &str = "tool_search";
 const LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY: &str = "visible_tool_ids";
+
+pub fn normalize_external_skills_domain_rule(raw: &str) -> Result<String, String> {
+    external_skills::normalize_domain_rule(raw)
+}
 
 tokio::task_local! {
     static TRUSTED_INTERNAL_TOOL_PAYLOAD_TASK: bool;
@@ -106,51 +117,6 @@ fn payload_uses_reserved_internal_tool_context(payload: &Value) -> bool {
     payload
         .as_object()
         .is_some_and(|body| body.contains_key(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY))
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct InjectedToolPayload {
-    pub payload: Value,
-    pub trusted_internal_context: bool,
-}
-
-pub(crate) fn inject_internal_tool_search_context(
-    tool_name: &str,
-    payload: Value,
-    visible_tool_view: Option<&ToolView>,
-) -> InjectedToolPayload {
-    let Some(visible_tool_view) = visible_tool_view else {
-        return InjectedToolPayload {
-            payload,
-            trusted_internal_context: false,
-        };
-    };
-    if canonical_tool_name(tool_name) != "tool.search" {
-        return InjectedToolPayload {
-            payload,
-            trusted_internal_context: false,
-        };
-    }
-
-    let Value::Object(mut body) = payload else {
-        return InjectedToolPayload {
-            payload,
-            trusted_internal_context: false,
-        };
-    };
-
-    body.insert(
-        LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
-        json!({
-            LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY: {
-                LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY: visible_tool_view.tool_names().collect::<Vec<_>>(),
-            }
-        }),
-    );
-    InjectedToolPayload {
-        payload: Value::Object(body),
-        trusted_internal_context: true,
-    }
 }
 
 /// Execute a tool request, routing through the kernel for
@@ -464,6 +430,9 @@ fn claw_import_mode_requires_write(payload: &Value) -> bool {
 }
 
 pub fn is_known_tool_name(raw: &str) -> bool {
+    if tool_catalog().resolve(raw).is_some() {
+        return true;
+    }
     if is_known_tool_name_in_view(raw, &runtime_tool_view()) {
         return true;
     }
@@ -589,6 +558,10 @@ fn execute_discoverable_tool_core_with_config(
         "external_skills.remove" => {
             external_skills::execute_external_skills_remove_tool_with_config(request, config)
         }
+        #[cfg(feature = "tool-browser")]
+        "browser.open" | "browser.extract" | "browser.click" => {
+            browser::execute_browser_tool_with_config(request, config)
+        }
         #[cfg(feature = "feishu-integration")]
         other if feishu::is_known_feishu_tool_name(other) => {
             feishu::execute_feishu_tool_with_config(request, config)
@@ -599,6 +572,8 @@ fn execute_discoverable_tool_core_with_config(
         "provider.switch" => {
             provider_switch::execute_provider_switch_tool_with_config(request, config)
         }
+        #[cfg(feature = "tool-webfetch")]
+        "web.fetch" => web_fetch::execute_web_fetch_tool_with_config(request, config),
         _ => Err(format!(
             "tool_not_found: unknown tool `{}`",
             request.tool_name
@@ -668,7 +643,7 @@ pub fn capability_snapshot() -> String {
 }
 
 pub fn capability_snapshot_with_config(config: &runtime_config::ToolRuntimeConfig) -> String {
-    capability_snapshot_for_view_with_config(&runtime_tool_view(), config)
+    capability_snapshot_for_view_with_config(&runtime_tool_view_for_runtime_config(config), config)
 }
 
 pub fn capability_snapshot_for_view(view: &ToolView) -> String {
@@ -1146,14 +1121,15 @@ pub(crate) fn bridge_provider_tool_call_with_scope(
     }
     let mut lease_payload = serde_json::Map::new();
     inject_tool_lease_binding(&mut lease_payload, None, session_id, turn_id);
-    (
-        "tool.invoke".to_owned(),
-        json!({
-            "tool_id": entry.canonical_name,
-            "lease": issue_tool_lease(entry.canonical_name, &lease_payload),
-            "arguments": args_json,
-        }),
-    )
+    let lease = issue_tool_lease(entry.canonical_name, &lease_payload);
+    let mut outer_payload = serde_json::Map::new();
+    outer_payload.insert("tool_id".to_owned(), json!(entry.canonical_name));
+    outer_payload.insert("lease".to_owned(), json!(lease));
+    outer_payload.insert("arguments".to_owned(), args_json);
+    for (key, value) in lease_payload {
+        outer_payload.insert(key, value);
+    }
+    ("tool.invoke".to_owned(), Value::Object(outer_payload))
 }
 
 #[cfg(test)]
@@ -1339,6 +1315,13 @@ fn _shape_examples() -> BTreeMap<&'static str, Value> {
                 "create_dirs": true
             }),
         ),
+        (
+            "web.fetch",
+            json!({
+                "url": "https://docs.example.com/page",
+                "mode": "readable_text"
+            }),
+        ),
     ]);
     #[cfg(feature = "feishu-integration")]
     {
@@ -1359,6 +1342,11 @@ mod tests {
             shell_default_mode: crate::tools::shell_policy_ext::ShellPolicyDefault::Deny,
             file_root: Some(root),
             config_path: None,
+            sessions_enabled: true,
+            messages_enabled: true,
+            delegate_enabled: true,
+            browser: Default::default(),
+            web_fetch: Default::default(),
             external_skills: runtime_config::ExternalSkillsRuntimePolicy {
                 enabled: true,
                 require_download_approval: true,
@@ -1482,11 +1470,14 @@ mod tests {
     #[test]
     fn tool_registry_returns_runtime_discoverable_tools_for_default_config() {
         let entries = tool_registry();
-        assert_eq!(entries.len(), 18);
+        assert_eq!(entries.len(), 22);
         let names: Vec<&str> = entries.iter().map(|e| e.name).collect();
         assert!(names.contains(&"approval_request_resolve"));
         assert!(names.contains(&"approval_request_status"));
         assert!(names.contains(&"approval_requests_list"));
+        assert!(names.contains(&"browser.click"));
+        assert!(names.contains(&"browser.extract"));
+        assert!(names.contains(&"browser.open"));
         assert!(names.contains(&"claw.import"));
         assert!(names.contains(&"delegate"));
         assert!(names.contains(&"delegate_async"));
@@ -1559,6 +1550,9 @@ mod tests {
             "session_wait",
             "sessions_history",
             "sessions_list",
+            "browser.click",
+            "browser.extract",
+            "browser.open",
         ] {
             assert!(
                 view.contains(tool_name),
@@ -1571,6 +1565,72 @@ mod tests {
             !view.contains(tool_name),
             "expected runtime view to keep `{tool_name}` hidden"
         );
+        assert!(view.contains("web.fetch"));
+    }
+
+    #[test]
+    fn runtime_tool_view_hides_web_fetch_when_disabled() {
+        let mut config = crate::config::ToolConfig::default();
+        config.web.enabled = false;
+
+        let root_view = runtime_tool_view_for_config(&config);
+        assert!(!root_view.contains("web.fetch"));
+    }
+
+    #[test]
+    fn runtime_tool_view_hides_browser_when_disabled() {
+        let mut config = crate::config::ToolConfig::default();
+        config.browser.enabled = false;
+
+        let root_view = runtime_tool_view_for_config(&config);
+        assert!(!root_view.contains("browser.open"));
+        assert!(!root_view.contains("browser.extract"));
+        assert!(!root_view.contains("browser.click"));
+    }
+
+    #[test]
+    fn runtime_tool_view_respects_explicit_external_skills_toggle() {
+        let config = crate::config::ToolConfig::default();
+
+        let disabled_view = runtime_tool_view_for_config(&config);
+        assert!(!disabled_view.contains("external_skills.fetch"));
+        assert!(!disabled_view.contains("external_skills.invoke"));
+        assert!(!disabled_view.contains("external_skills.list"));
+
+        let enabled_view = runtime_tool_view_for_config_with_external_skills(&config, true);
+        assert!(enabled_view.contains("external_skills.fetch"));
+        assert!(enabled_view.contains("external_skills.invoke"));
+        assert!(enabled_view.contains("external_skills.list"));
+    }
+
+    #[test]
+    fn capability_snapshot_with_config_uses_runtime_enabled_tool_view() {
+        let config = runtime_config::ToolRuntimeConfig {
+            sessions_enabled: false,
+            messages_enabled: false,
+            delegate_enabled: false,
+            browser: runtime_config::BrowserRuntimePolicy {
+                enabled: false,
+                max_sessions: 8,
+                max_links: 40,
+                max_text_chars: 6000,
+            },
+            web_fetch: runtime_config::WebFetchRuntimePolicy {
+                enabled: false,
+                ..runtime_config::WebFetchRuntimePolicy::default()
+            },
+            external_skills: runtime_config::ExternalSkillsRuntimePolicy {
+                enabled: false,
+                ..runtime_config::ExternalSkillsRuntimePolicy::default()
+            },
+            ..runtime_config::ToolRuntimeConfig::default()
+        };
+
+        let snapshot = capability_snapshot_with_config(&config);
+        assert!(!snapshot.contains("- browser.open:"));
+        assert!(!snapshot.contains("- web.fetch:"));
+        assert!(!snapshot.contains("- delegate:"));
+        assert!(!snapshot.contains("- external_skills.fetch:"));
     }
 
     #[test]
@@ -1677,6 +1737,41 @@ mod tests {
     }
 
     #[test]
+    fn provider_tool_definitions_include_web_fetch_when_enabled() {
+        let catalog = tool_catalog();
+        let web_fetch_descriptor = catalog
+            .descriptor("web.fetch")
+            .expect("web.fetch should be in the catalog");
+        let def = web_fetch_descriptor.provider_definition();
+        let properties = def["function"]["parameters"]["properties"]
+            .as_object()
+            .expect("web_fetch properties");
+        assert!(properties.contains_key("url"));
+        assert!(properties.contains_key("mode"));
+        assert!(properties.contains_key("max_bytes"));
+        assert_eq!(
+            properties["max_bytes"]["maximum"],
+            json!(5 * 1024 * 1024),
+            "web.fetch schema should advertise the compile-time hard cap instead of the default runtime limit"
+        );
+    }
+
+    #[test]
+    fn provider_tool_definitions_include_browser_open_when_enabled() {
+        let catalog = tool_catalog();
+        let browser_open_descriptor = catalog
+            .descriptor("browser.open")
+            .expect("browser.open should be in the catalog");
+        let def = browser_open_descriptor.provider_definition();
+        let properties = def["function"]["parameters"]["properties"]
+            .as_object()
+            .expect("browser_open properties");
+        assert!(properties.contains_key("url"));
+        assert!(!properties.contains_key("session_id"));
+        assert!(properties.contains_key("max_bytes"));
+    }
+
+    #[test]
     fn canonical_tool_name_maps_known_aliases() {
         assert_eq!(canonical_tool_name("tool_search"), "tool.search");
         assert_eq!(canonical_tool_name("tool_invoke"), "tool.invoke");
@@ -1692,8 +1787,12 @@ mod tests {
         assert_eq!(canonical_tool_name("file_read"), "file.read");
         assert_eq!(canonical_tool_name("file_write"), "file.write");
         assert_eq!(canonical_tool_name("provider_switch"), "provider.switch");
+        assert_eq!(canonical_tool_name("browser_open"), "browser.open");
+        assert_eq!(canonical_tool_name("browser_extract"), "browser.extract");
+        assert_eq!(canonical_tool_name("browser_click"), "browser.click");
         assert_eq!(canonical_tool_name("shell_exec"), "shell.exec");
         assert_eq!(canonical_tool_name("shell"), "shell.exec");
+        assert_eq!(canonical_tool_name("web_fetch"), "web.fetch");
         assert_eq!(canonical_tool_name("feishu_whoami"), "feishu.whoami");
         assert_eq!(
             canonical_tool_name("feishu_doc_create"),
@@ -1910,6 +2009,11 @@ mod tests {
             shell_default_mode: crate::tools::shell_policy_ext::ShellPolicyDefault::Deny,
             file_root: Some(root.clone()),
             config_path: None,
+            sessions_enabled: true,
+            messages_enabled: true,
+            delegate_enabled: true,
+            browser: Default::default(),
+            web_fetch: Default::default(),
             external_skills: runtime_config::ExternalSkillsRuntimePolicy::default(),
             #[cfg(feature = "feishu-integration")]
             feishu: None,
@@ -2309,9 +2413,17 @@ mod tests {
         assert!(is_known_tool_name("file_write"));
         assert!(is_known_tool_name("provider.switch"));
         assert!(is_known_tool_name("provider_switch"));
+        assert!(is_known_tool_name("browser.open"));
+        assert!(is_known_tool_name("browser_open"));
+        assert!(is_known_tool_name("browser.extract"));
+        assert!(is_known_tool_name("browser_extract"));
+        assert!(is_known_tool_name("browser.click"));
+        assert!(is_known_tool_name("browser_click"));
         assert!(is_known_tool_name("shell.exec"));
         assert!(is_known_tool_name("shell_exec"));
         assert!(is_known_tool_name("shell"));
+        assert!(is_known_tool_name("web.fetch"));
+        assert!(is_known_tool_name("web_fetch"));
         assert!(is_known_tool_name("feishu.whoami"));
         assert!(is_known_tool_name("feishu_whoami"));
         assert!(is_known_tool_name("feishu.doc.create"));

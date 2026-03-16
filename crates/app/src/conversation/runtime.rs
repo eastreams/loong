@@ -22,6 +22,7 @@ use super::context_engine_registry::{
     DEFAULT_CONTEXT_ENGINE_ID, context_engine_id_from_env, describe_context_engine,
     list_context_engine_metadata, resolve_context_engine,
 };
+use super::runtime_binding::ConversationRuntimeBinding;
 use super::turn_engine::ProviderTurn;
 
 #[cfg(feature = "memory-sqlite")]
@@ -136,7 +137,7 @@ impl AsyncDelegateSpawner for DefaultAsyncDelegateSpawner {
             request.label,
             &request.task,
             request.timeout_seconds,
-            None,
+            ConversationRuntimeBinding::direct(),
         )
         .await;
         Ok(())
@@ -275,11 +276,11 @@ pub trait ConversationRuntime: Send + Sync {
         &self,
         config: &LoongClawConfig,
         session_id: &str,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<SessionContext> {
         Ok(SessionContext::root_with_tool_view(
             session_id,
-            self.tool_view(config, session_id, kernel_ctx)?,
+            self.tool_view(config, session_id, binding)?,
         ))
     }
 
@@ -287,9 +288,9 @@ pub trait ConversationRuntime: Send + Sync {
         &self,
         config: &LoongClawConfig,
         session_id: &str,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ToolView> {
-        let _ = (session_id, kernel_ctx);
+        let _ = (session_id, binding);
         Ok(crate::tools::runtime_tool_view_from_loongclaw_config(
             config,
         ))
@@ -326,15 +327,15 @@ pub trait ConversationRuntime: Send + Sync {
         config: &LoongClawConfig,
         session_id: &str,
         include_system_prompt: bool,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<AssembledConversationContext> {
-        let session_context = self.session_context(config, session_id, kernel_ctx)?;
+        let session_context = self.session_context(config, session_id, binding)?;
         self.build_messages(
             config,
             session_id,
             include_system_prompt,
             &session_context.tool_view,
-            kernel_ctx,
+            binding,
         )
         .await
         .map(AssembledConversationContext::from_messages)
@@ -345,14 +346,14 @@ pub trait ConversationRuntime: Send + Sync {
         session_id: &str,
         include_system_prompt: bool,
         tool_view: &ToolView,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>>;
 
     async fn request_completion(
         &self,
         config: &LoongClawConfig,
         messages: &[Value],
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String>;
 
     async fn request_turn(
@@ -362,7 +363,7 @@ pub trait ConversationRuntime: Send + Sync {
         turn_id: &str,
         messages: &[Value],
         tool_view: &ToolView,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ProviderTurn>;
 
     async fn persist_turn(
@@ -370,7 +371,7 @@ pub trait ConversationRuntime: Send + Sync {
         session_id: &str,
         role: &str,
         content: &str,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<()>;
 
     async fn after_turn(
@@ -422,9 +423,9 @@ where
         &self,
         config: &LoongClawConfig,
         session_id: &str,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<SessionContext> {
-        let tool_view = self.tool_view(config, session_id, kernel_ctx)?;
+        let tool_view = self.tool_view(config, session_id, binding)?;
 
         #[cfg(feature = "memory-sqlite")]
         {
@@ -462,7 +463,7 @@ where
         &self,
         config: &LoongClawConfig,
         session_id: &str,
-        _kernel_ctx: Option<&KernelContext>,
+        _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ToolView> {
         #[cfg(feature = "memory-sqlite")]
         {
@@ -540,12 +541,12 @@ where
         config: &LoongClawConfig,
         session_id: &str,
         include_system_prompt: bool,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<AssembledConversationContext> {
-        let session_context = self.session_context(config, session_id, kernel_ctx)?;
+        let session_context = self.session_context(config, session_id, binding)?;
         let mut assembled = self
             .context_engine
-            .assemble_context(config, session_id, include_system_prompt, kernel_ctx)
+            .assemble_context(config, session_id, include_system_prompt, binding)
             .await?;
         apply_system_prompt_addition(
             &mut assembled.messages,
@@ -567,9 +568,9 @@ where
         session_id: &str,
         include_system_prompt: bool,
         tool_view: &ToolView,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>> {
-        self.build_context(config, session_id, include_system_prompt, kernel_ctx)
+        self.build_context(config, session_id, include_system_prompt, binding)
             .await
             .map(|mut assembled| {
                 apply_tool_view_to_system_prompt_if_needed(
@@ -585,9 +586,16 @@ where
         &self,
         config: &LoongClawConfig,
         messages: &[Value],
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
-        provider::request_completion(config, messages, kernel_ctx).await
+        provider::request_completion(
+            config,
+            messages,
+            provider::ProviderRuntimeBinding::from_optional_kernel_context(
+                binding.kernel_context(),
+            ),
+        )
+        .await
     }
 
     async fn request_turn(
@@ -597,10 +605,19 @@ where
         turn_id: &str,
         messages: &[Value],
         tool_view: &ToolView,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ProviderTurn> {
-        provider::request_turn_in_view(config, session_id, turn_id, messages, tool_view, kernel_ctx)
-            .await
+        provider::request_turn_in_view(
+            config,
+            session_id,
+            turn_id,
+            messages,
+            tool_view,
+            provider::ProviderRuntimeBinding::from_optional_kernel_context(
+                binding.kernel_context(),
+            ),
+        )
+        .await
     }
 
     async fn persist_turn(
@@ -608,9 +625,9 @@ where
         session_id: &str,
         role: &str,
         content: &str,
-        kernel_ctx: Option<&KernelContext>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<()> {
-        if let Some(ctx) = kernel_ctx {
+        if let Some(ctx) = binding.kernel_context() {
             let request = memory::build_append_turn_request(session_id, role, content);
             let caps = BTreeSet::from([Capability::MemoryWrite]);
             ctx.kernel

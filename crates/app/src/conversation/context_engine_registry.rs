@@ -137,7 +137,8 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::Value;
 
-    use crate::{KernelContext, config::LoongClawConfig};
+    use super::super::runtime_binding::ConversationRuntimeBinding;
+    use crate::config::LoongClawConfig;
 
     use super::super::context_engine::ContextEngineCapability;
     use super::*;
@@ -155,7 +156,7 @@ mod tests {
             _config: &LoongClawConfig,
             _session_id: &str,
             _include_system_prompt: bool,
-            _kernel_ctx: Option<&KernelContext>,
+            _binding: ConversationRuntimeBinding<'_>,
         ) -> CliResult<Vec<Value>> {
             Ok(Vec::new())
         }

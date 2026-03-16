@@ -1,7 +1,10 @@
 use loongclaw_app as mvp;
 
+pub(crate) use mvp::chat::DEFAULT_FIRST_PROMPT as DEFAULT_FIRST_ASK_MESSAGE;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SetupNextActionKind {
+    Ask,
     Chat,
     Channel,
     Doctor,
@@ -21,10 +24,20 @@ pub(crate) fn collect_setup_next_actions(
     let mut actions = Vec::new();
     if config.cli.enabled {
         actions.push(SetupNextAction {
+            kind: SetupNextActionKind::Ask,
+            label: "ask example".to_owned(),
+            command: format!(
+                "{} ask --config '{}' --message \"{}\"",
+                mvp::config::CLI_COMMAND_NAME,
+                config_path,
+                DEFAULT_FIRST_ASK_MESSAGE
+            ),
+        });
+        actions.push(SetupNextAction {
             kind: SetupNextActionKind::Chat,
             label: "chat".to_owned(),
             command: format!(
-                "{} chat --config {}",
+                "{} chat --config '{}'",
                 mvp::config::CLI_COMMAND_NAME,
                 config_path
             ),

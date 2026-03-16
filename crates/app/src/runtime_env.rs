@@ -50,6 +50,62 @@ pub fn initialize_runtime_environment(
         config.tools.resolved_file_root().display().to_string(),
     );
     set_env_var(
+        "LOONGCLAW_TOOL_SESSIONS_ENABLED",
+        bool_env(config.tools.sessions.enabled),
+    );
+    set_env_var(
+        "LOONGCLAW_TOOL_MESSAGES_ENABLED",
+        bool_env(config.tools.messages.enabled),
+    );
+    set_env_var(
+        "LOONGCLAW_TOOL_DELEGATE_ENABLED",
+        bool_env(config.tools.delegate.enabled),
+    );
+    set_env_var(
+        "LOONGCLAW_BROWSER_ENABLED",
+        bool_env(config.tools.browser.enabled),
+    );
+    set_env_var(
+        "LOONGCLAW_BROWSER_MAX_SESSIONS",
+        config.tools.browser.max_sessions.to_string(),
+    );
+    set_env_var(
+        "LOONGCLAW_BROWSER_MAX_LINKS",
+        config.tools.browser.max_links.to_string(),
+    );
+    set_env_var(
+        "LOONGCLAW_BROWSER_MAX_TEXT_CHARS",
+        config.tools.browser.max_text_chars.to_string(),
+    );
+    set_env_var(
+        "LOONGCLAW_WEB_FETCH_ENABLED",
+        bool_env(config.tools.web.enabled),
+    );
+    set_env_var(
+        "LOONGCLAW_WEB_FETCH_ALLOW_PRIVATE_HOSTS",
+        bool_env(config.tools.web.allow_private_hosts),
+    );
+    set_env_var(
+        "LOONGCLAW_WEB_FETCH_ALLOWED_DOMAINS",
+        config.tools.web.normalized_allowed_domains().join(","),
+    );
+    set_env_var(
+        "LOONGCLAW_WEB_FETCH_BLOCKED_DOMAINS",
+        config.tools.web.normalized_blocked_domains().join(","),
+    );
+    set_env_var(
+        "LOONGCLAW_WEB_FETCH_TIMEOUT_SECONDS",
+        config.tools.web.timeout_seconds.to_string(),
+    );
+    set_env_var(
+        "LOONGCLAW_WEB_FETCH_MAX_BYTES",
+        config.tools.web.max_bytes.to_string(),
+    );
+    set_env_var(
+        "LOONGCLAW_WEB_FETCH_MAX_REDIRECTS",
+        config.tools.web.max_redirects.to_string(),
+    );
+    set_env_var(
         "LOONGCLAW_EXTERNAL_SKILLS_ENABLED",
         bool_env(config.external_skills.enabled),
     );
@@ -127,6 +183,17 @@ mod tests {
         config.memory.summary_max_chars = 900;
         config.memory.profile_note = Some("Imported NanoBot preferences".to_owned());
         config.tools.file_root = Some("/tmp/loongclaw-runtime-file-root".to_owned());
+        config.tools.browser.enabled = false;
+        config.tools.browser.max_sessions = 4;
+        config.tools.browser.max_links = 12;
+        config.tools.browser.max_text_chars = 2048;
+        config.tools.web.enabled = false;
+        config.tools.web.allow_private_hosts = true;
+        config.tools.web.allowed_domains = vec!["docs.example.com".to_owned()];
+        config.tools.web.blocked_domains = vec!["internal.example".to_owned()];
+        config.tools.web.timeout_seconds = 9;
+        config.tools.web.max_bytes = 262_144;
+        config.tools.web.max_redirects = 1;
         config.external_skills.enabled = true;
         config.external_skills.allowed_domains = vec!["skills.sh".to_owned()];
         let config_path = PathBuf::from("/tmp/loongclaw-runtime-env.toml");
@@ -169,6 +236,66 @@ mod tests {
                 .as_deref(),
             Some("skills.sh")
         );
+        assert_eq!(
+            std::env::var("LOONGCLAW_BROWSER_ENABLED").ok().as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            std::env::var("LOONGCLAW_BROWSER_MAX_SESSIONS")
+                .ok()
+                .as_deref(),
+            Some("4")
+        );
+        assert_eq!(
+            std::env::var("LOONGCLAW_BROWSER_MAX_LINKS").ok().as_deref(),
+            Some("12")
+        );
+        assert_eq!(
+            std::env::var("LOONGCLAW_BROWSER_MAX_TEXT_CHARS")
+                .ok()
+                .as_deref(),
+            Some("2048")
+        );
+        assert_eq!(
+            std::env::var("LOONGCLAW_WEB_FETCH_ENABLED").ok().as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            std::env::var("LOONGCLAW_WEB_FETCH_ALLOW_PRIVATE_HOSTS")
+                .ok()
+                .as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            std::env::var("LOONGCLAW_WEB_FETCH_ALLOWED_DOMAINS")
+                .ok()
+                .as_deref(),
+            Some("docs.example.com")
+        );
+        assert_eq!(
+            std::env::var("LOONGCLAW_WEB_FETCH_BLOCKED_DOMAINS")
+                .ok()
+                .as_deref(),
+            Some("internal.example")
+        );
+        assert_eq!(
+            std::env::var("LOONGCLAW_WEB_FETCH_TIMEOUT_SECONDS")
+                .ok()
+                .as_deref(),
+            Some("9")
+        );
+        assert_eq!(
+            std::env::var("LOONGCLAW_WEB_FETCH_MAX_BYTES")
+                .ok()
+                .as_deref(),
+            Some("262144")
+        );
+        assert_eq!(
+            std::env::var("LOONGCLAW_WEB_FETCH_MAX_REDIRECTS")
+                .ok()
+                .as_deref(),
+            Some("1")
+        );
 
         crate::process_env::remove_var("LOONGCLAW_CONFIG_PATH");
         crate::process_env::remove_var("LOONGCLAW_MEMORY_BACKEND");
@@ -187,5 +314,16 @@ mod tests {
         crate::process_env::remove_var("LOONGCLAW_EXTERNAL_SKILLS_BLOCKED_DOMAINS");
         crate::process_env::remove_var("LOONGCLAW_EXTERNAL_SKILLS_INSTALL_ROOT");
         crate::process_env::remove_var("LOONGCLAW_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED");
+        crate::process_env::remove_var("LOONGCLAW_BROWSER_ENABLED");
+        crate::process_env::remove_var("LOONGCLAW_BROWSER_MAX_SESSIONS");
+        crate::process_env::remove_var("LOONGCLAW_BROWSER_MAX_LINKS");
+        crate::process_env::remove_var("LOONGCLAW_BROWSER_MAX_TEXT_CHARS");
+        crate::process_env::remove_var("LOONGCLAW_WEB_FETCH_ENABLED");
+        crate::process_env::remove_var("LOONGCLAW_WEB_FETCH_ALLOW_PRIVATE_HOSTS");
+        crate::process_env::remove_var("LOONGCLAW_WEB_FETCH_ALLOWED_DOMAINS");
+        crate::process_env::remove_var("LOONGCLAW_WEB_FETCH_BLOCKED_DOMAINS");
+        crate::process_env::remove_var("LOONGCLAW_WEB_FETCH_TIMEOUT_SECONDS");
+        crate::process_env::remove_var("LOONGCLAW_WEB_FETCH_MAX_BYTES");
+        crate::process_env::remove_var("LOONGCLAW_WEB_FETCH_MAX_REDIRECTS");
     }
 }

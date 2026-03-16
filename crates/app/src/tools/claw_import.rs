@@ -610,6 +610,11 @@ mod tests {
             shell_default_mode: crate::tools::shell_policy_ext::ShellPolicyDefault::Deny,
             file_root: Some(root),
             config_path: None,
+            sessions_enabled: true,
+            messages_enabled: true,
+            delegate_enabled: true,
+            browser: Default::default(),
+            web_fetch: Default::default(),
             external_skills: Default::default(),
             #[cfg(feature = "feishu-integration")]
             feishu: None,

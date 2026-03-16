@@ -8,6 +8,7 @@ pub mod plan_executor;
 pub mod plan_ir;
 pub mod plan_verifier;
 mod runtime;
+mod runtime_binding;
 mod safe_lane_failure;
 mod session_address;
 mod session_history;
@@ -49,6 +50,7 @@ pub use runtime::{
     ConversationRuntime, DefaultConversationRuntime, SessionContext,
     collect_context_engine_runtime_snapshot, resolve_context_engine_selection,
 };
+pub use runtime_binding::ConversationRuntimeBinding;
 pub use safe_lane_failure::{
     SafeLaneFailureCode, SafeLaneFailureRouteDecision, SafeLaneFailureRouteSource,
     SafeLaneTerminalRouteSnapshot, classify_safe_lane_plan_failure,

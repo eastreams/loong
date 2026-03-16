@@ -425,8 +425,8 @@ pub(super) fn execute_external_skills_install_tool_with_config(
     index.skills.retain(|entry| entry.skill_id != skill_id);
     index.skills.push(InstalledSkillEntry {
         skill_id: skill_id.clone(),
-        display_name,
-        summary,
+        display_name: display_name.clone(),
+        summary: summary.clone(),
         source_kind: source_kind.to_owned(),
         source_path: source_path.display().to_string(),
         install_path: destination_root.display().to_string(),
@@ -448,6 +448,7 @@ pub(super) fn execute_external_skills_install_tool_with_config(
     } else {
         None
     };
+    let replaced = backup_root.is_some();
     if let Some(backup_root) = backup_root.as_ref() {
         fs::rename(&destination_root, backup_root).map_err(|error| {
             format!(
@@ -517,12 +518,14 @@ pub(super) fn execute_external_skills_install_tool_with_config(
             "adapter": "core-tools",
             "tool_name": request.tool_name,
             "skill_id": skill_id,
+            "display_name": display_name,
+            "summary": summary,
             "source_kind": source_kind,
             "source_path": source_path.display().to_string(),
             "install_path": destination_root.display().to_string(),
             "skill_md_path": destination_root.join(DEFAULT_SKILL_FILENAME).display().to_string(),
             "sha256": digest,
-            "replaced": replace,
+            "replaced": replaced,
         }),
     })
 }
@@ -798,7 +801,7 @@ fn parse_optional_domain_list(
     Ok(Some(normalized))
 }
 
-fn normalize_domain_rule(raw: &str) -> Result<String, String> {
+pub(crate) fn normalize_domain_rule(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err("domain rule cannot be empty".to_owned());
@@ -1845,6 +1848,8 @@ mod tests {
 
             assert_eq!(outcome.status, "ok");
             assert_eq!(outcome.payload["skill_id"], "demo-skill");
+            assert_eq!(outcome.payload["display_name"], "Demo Skill");
+            assert_eq!(outcome.payload["replaced"], false);
             assert!(
                 root.join("external-skills-installed")
                     .join("index.json")
@@ -1858,6 +1863,56 @@ mod tests {
                     .exists(),
                 "managed external skill copy should exist"
             );
+
+            fs::remove_dir_all(&root).ok();
+        });
+    }
+
+    #[test]
+    fn install_replace_reports_actual_replacement_state() {
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-install-replace");
+            fs::create_dir_all(&root).expect("create fixture root");
+            write_file(
+                &root,
+                "source/demo-skill/SKILL.md",
+                "# Demo Skill\n\nFirst install.\n",
+            );
+            write_file(
+                &root,
+                "source/demo-skill-v2/SKILL.md",
+                "# Demo Skill\n\nReplacement install.\n",
+            );
+            let config = managed_runtime_config(&root);
+
+            let first_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "source/demo-skill",
+                        "replace": true
+                    }),
+                },
+                &config,
+            )
+            .expect("first install with replace flag should succeed");
+            assert_eq!(first_outcome.payload["display_name"], "Demo Skill");
+            assert_eq!(first_outcome.payload["replaced"], false);
+
+            let replace_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "source/demo-skill-v2",
+                        "skill_id": "demo-skill",
+                        "replace": true
+                    }),
+                },
+                &config,
+            )
+            .expect("second install should report a real replacement");
+            assert_eq!(replace_outcome.payload["display_name"], "Demo Skill");
+            assert_eq!(replace_outcome.payload["replaced"], true);
 
             fs::remove_dir_all(&root).ok();
         });
