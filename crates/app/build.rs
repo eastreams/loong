@@ -59,7 +59,8 @@ fn emit_git_rerun_hints(repo_root: &Path) {
 
     for target in version_metadata::git_rerun_hint_targets(symbolic_head_ref.as_deref()) {
         if let Some(path) = git_output(repo_root, &["rev-parse", "--git-path", target.as_str()]) {
-            println!("cargo:rerun-if-changed={path}");
+            let rerun_path = version_metadata::resolve_git_rerun_hint_path(repo_root, &path);
+            println!("cargo:rerun-if-changed={}", rerun_path.display());
         }
     }
 }

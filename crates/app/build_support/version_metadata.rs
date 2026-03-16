@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildMetadata {
     pub release_build: bool,
@@ -41,6 +43,15 @@ pub fn git_rerun_hint_targets(symbolic_head_ref: Option<&str>) -> Vec<String> {
     }
     targets.push("packed-refs".to_owned());
     targets
+}
+
+pub fn resolve_git_rerun_hint_path(repo_root: &Path, git_path: impl AsRef<Path>) -> PathBuf {
+    let git_path = git_path.as_ref();
+    if git_path.is_absolute() {
+        git_path.to_path_buf()
+    } else {
+        repo_root.join(git_path)
+    }
 }
 
 fn normalize_metadata_value(raw: Option<&str>) -> Option<String> {
