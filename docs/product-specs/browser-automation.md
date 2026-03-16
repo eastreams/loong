@@ -27,5 +27,7 @@ safe links without needing a full desktop browser runtime.
 ## Out of Scope
 
 - A full Chromium or Playwright runtime
+- A managed browser automation companion with richer login, typing, screenshot,
+  or form-completion actions
 - Arbitrary JavaScript execution or login automation
 - Form filling, uploads, or unrestricted browser macros

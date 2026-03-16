@@ -1,6 +1,6 @@
 # LoongClaw Roadmap
 
-Last updated: 2026-03-14
+Last updated: 2026-03-16
 
 This roadmap is execution-focused. Every stage has:
 
@@ -302,8 +302,13 @@ Remaining deliverables:
 - beginner installation hardening:
   - sustain tagged release publishing across macOS/Linux/Windows
   - expand beyond installer scripts into package-manager distribution only after release adoption is stable
+- managed browser automation companion:
+  - keep `browser.open`, `browser.extract`, and `browser.click` as the shipped safe browser lane
+  - add an optional first-party managed browser companion for richer page actions
+  - wire install, `onboard`, and `doctor` into companion presence, version, and isolated profile health
+  - expose richer browser automation only through truthful runtime-visible tool advertising and governed tool contracts
 - browser-facing assistant surface:
-  - WebChat implementation
+  - WebChat implementation as a thin shell over existing ask/chat and browser semantics, not a separate assistant runtime
 
 Acceptance criteria:
 
