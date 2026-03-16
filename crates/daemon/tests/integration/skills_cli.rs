@@ -140,7 +140,9 @@ fn skills_install_cli_parses_global_flags_after_subcommand() {
                 other @ loongclaw_daemon::skills_cli::SkillsCommands::List
                 | other @ loongclaw_daemon::skills_cli::SkillsCommands::Info { .. }
                 | other @ loongclaw_daemon::skills_cli::SkillsCommands::InstallBundled { .. }
-                | other @ loongclaw_daemon::skills_cli::SkillsCommands::EnableBrowserPreview { .. }
+                | other @ loongclaw_daemon::skills_cli::SkillsCommands::EnableBrowserPreview {
+                    ..
+                }
                 | other @ loongclaw_daemon::skills_cli::SkillsCommands::Remove { .. }
                 | other @ loongclaw_daemon::skills_cli::SkillsCommands::Policy { .. } => {
                     panic!("unexpected skills subcommand parsed: {other:?}")
@@ -184,7 +186,9 @@ fn skills_install_bundled_cli_parses_global_flags_after_subcommand() {
                 other @ loongclaw_daemon::skills_cli::SkillsCommands::List
                 | other @ loongclaw_daemon::skills_cli::SkillsCommands::Info { .. }
                 | other @ loongclaw_daemon::skills_cli::SkillsCommands::Install { .. }
-                | other @ loongclaw_daemon::skills_cli::SkillsCommands::EnableBrowserPreview { .. }
+                | other @ loongclaw_daemon::skills_cli::SkillsCommands::EnableBrowserPreview {
+                    ..
+                }
                 | other @ loongclaw_daemon::skills_cli::SkillsCommands::Remove { .. }
                 | other @ loongclaw_daemon::skills_cli::SkillsCommands::Policy { .. } => {
                     panic!("unexpected skills subcommand parsed: {other:?}")
@@ -218,9 +222,7 @@ fn skills_enable_browser_preview_cli_parses_global_flags_after_subcommand() {
             assert_eq!(config.as_deref(), Some("/tmp/loongclaw.toml"));
             assert!(json);
             match command {
-                loongclaw_daemon::skills_cli::SkillsCommands::EnableBrowserPreview {
-                    replace,
-                } => {
+                loongclaw_daemon::skills_cli::SkillsCommands::EnableBrowserPreview { replace } => {
                     assert!(replace);
                 }
                 other @ loongclaw_daemon::skills_cli::SkillsCommands::List
@@ -292,7 +294,9 @@ fn skills_policy_set_cli_parses_domain_and_approval_flags() {
             | other @ loongclaw_daemon::skills_cli::SkillsCommands::Info { .. }
             | other @ loongclaw_daemon::skills_cli::SkillsCommands::Install { .. }
             | other @ loongclaw_daemon::skills_cli::SkillsCommands::InstallBundled { .. }
-            | other @ loongclaw_daemon::skills_cli::SkillsCommands::EnableBrowserPreview { .. }
+            | other @ loongclaw_daemon::skills_cli::SkillsCommands::EnableBrowserPreview {
+                ..
+            }
             | other @ loongclaw_daemon::skills_cli::SkillsCommands::Remove { .. } => {
                 panic!("unexpected skills subcommand parsed: {other:?}")
             }
@@ -348,10 +352,10 @@ fn execute_skills_command_enable_browser_preview_persists_runtime_and_installs_h
 
     let list = loongclaw_daemon::skills_cli::execute_skills_command(
         loongclaw_daemon::skills_cli::SkillsCommandOptions {
-        config: Some(config_path.display().to_string()),
-        json: false,
-        command: loongclaw_daemon::skills_cli::SkillsCommands::List,
-    },
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::List,
+        },
     )
     .expect("skills list should succeed after browser preview enable");
     assert!(
@@ -373,12 +377,12 @@ fn execute_skills_command_enable_browser_preview_is_idempotent_after_first_insta
 
     loongclaw_daemon::skills_cli::execute_skills_command(
         loongclaw_daemon::skills_cli::SkillsCommandOptions {
-        config: Some(config_path.display().to_string()),
-        json: false,
-        command: loongclaw_daemon::skills_cli::SkillsCommands::EnableBrowserPreview {
-            replace: false,
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::EnableBrowserPreview {
+                replace: false,
+            },
         },
-    },
     )
     .expect("initial enable browser preview should succeed");
 
@@ -655,23 +659,23 @@ fn execute_skills_command_list_reports_scopes_and_shadowed_skills() {
 
     loongclaw_daemon::skills_cli::execute_skills_command(
         loongclaw_daemon::skills_cli::SkillsCommandOptions {
-        config: Some(config_path.display().to_string()),
-        json: false,
-        command: loongclaw_daemon::skills_cli::SkillsCommands::Install {
-            path: "source/demo-skill".to_owned(),
-            skill_id: None,
-            replace: false,
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::Install {
+                path: "source/demo-skill".to_owned(),
+                skill_id: None,
+                replace: false,
+            },
         },
-    },
     )
     .expect("skills install should succeed");
 
     let list = loongclaw_daemon::skills_cli::execute_skills_command(
         loongclaw_daemon::skills_cli::SkillsCommandOptions {
-        config: Some(config_path.display().to_string()),
-        json: false,
-        command: loongclaw_daemon::skills_cli::SkillsCommands::List,
-    },
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::List,
+        },
     )
     .expect("skills list should succeed");
     assert_eq!(list.outcome.payload["skills"][0]["skill_id"], "demo-skill");
@@ -727,10 +731,10 @@ fn execute_skills_command_list_anchors_project_scope_to_config_directory_when_fi
 
     let list = loongclaw_daemon::skills_cli::execute_skills_command(
         loongclaw_daemon::skills_cli::SkillsCommandOptions {
-        config: Some(config_path.display().to_string()),
-        json: false,
-        command: loongclaw_daemon::skills_cli::SkillsCommands::List,
-    },
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::List,
+        },
     )
     .expect("skills list should succeed");
     let skills = list.outcome.payload["skills"]
@@ -785,10 +789,10 @@ fn execute_skills_command_list_prefers_nearest_project_ancestor_for_duplicate_sk
 
     let list = loongclaw_daemon::skills_cli::execute_skills_command(
         loongclaw_daemon::skills_cli::SkillsCommandOptions {
-        config: Some(config_path.display().to_string()),
-        json: false,
-        command: loongclaw_daemon::skills_cli::SkillsCommands::List,
-    },
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::List,
+        },
     )
     .expect("skills list should succeed");
     assert_eq!(list.outcome.payload["skills"][0]["skill_id"], "demo-skill");
@@ -854,12 +858,12 @@ fn execute_skills_command_installs_bundled_browser_companion_preview() {
 
     let info = loongclaw_daemon::skills_cli::execute_skills_command(
         loongclaw_daemon::skills_cli::SkillsCommandOptions {
-        config: Some(config_path.display().to_string()),
-        json: false,
-        command: loongclaw_daemon::skills_cli::SkillsCommands::Info {
-            skill_id: "browser-companion-preview".to_owned(),
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::Info {
+                skill_id: "browser-companion-preview".to_owned(),
+            },
         },
-    },
     )
     .expect("bundled skills info should succeed");
     assert!(
