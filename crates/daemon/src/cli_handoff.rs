@@ -15,10 +15,10 @@ pub(crate) fn format_subcommand_with_config(subcommand: &str, config_path: &str)
 
 pub(crate) fn format_ask_with_config(config_path: &str, message: &str) -> String {
     format!(
-        "{} ask --config {} --message \"{}\"",
+        "{} ask --config {} --message {}",
         mvp::config::CLI_COMMAND_NAME,
         shell_quote_argument(config_path),
-        message
+        shell_quote_argument(message)
     )
 }
 
@@ -46,7 +46,15 @@ mod tests {
     fn format_ask_with_config_shell_quotes_the_config_path() {
         assert_eq!(
             format_ask_with_config("/tmp/loongclaw's config.toml", "say it's ready"),
-            "loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message \"say it's ready\""
+            "loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'say it'\"'\"'s ready'"
+        );
+    }
+
+    #[test]
+    fn format_ask_with_config_shell_quotes_message_content() {
+        assert_eq!(
+            format_ask_with_config("/tmp/loongclaw.toml", "say \"hi\" and print $HOME"),
+            "loongclaw ask --config '/tmp/loongclaw.toml' --message 'say \"hi\" and print $HOME'"
         );
     }
 }
