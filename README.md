@@ -262,8 +262,8 @@ cargo install --path crates/daemon
    loongclaw ask --message "Summarize this repository and suggest the best next step."
    ```
 
-   On a healthy setup, onboarding and `doctor` now print this style of ask example directly so the
-   first success path is visible without reading docs first.
+   On a healthy setup, onboarding and `doctor` now print this style of first-answer handoff
+   directly, so the first success path is visible before secondary setup details.
 
 4. Continue with interactive chat when you want to stay in session:
 
@@ -274,11 +274,11 @@ cargo install --path crates/daemon
    Use `loongclaw chat --acp` when you want this chat session to route turns through ACP
    explicitly. Without `--acp` or other ACP-specific chat flags, normal chat stays on the default
    provider/context-engine path. The chat banner now starts with a concrete first prompt and keeps
-   the ACP/runtime context in a compact operator-readable block.
+   session/runtime context in secondary detail sections.
 
 Run `loongclaw doctor --fix` if anything goes wrong, or when onboarding / ask / chat reports a
 local health issue. `doctor` now prints next actions such as credential env hints, safe repair
-commands, and ask/chat follow-ups instead of only raw status lines.
+commands, and clear first-answer/chat follow-ups instead of only raw status lines.
 
 ### Run Tests
 

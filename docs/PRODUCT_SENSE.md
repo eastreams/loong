@@ -15,7 +15,7 @@ LoongClaw is not only a runtime for developers. The current MVP is aimed at:
 1. **First value fast** — a new user should get to a useful assistant answer quickly, not after reading implementation docs.
 2. **Safe by default** — visible capabilities must still honor policy, approval, and audit boundaries.
 3. **Assistant-first surfaces** — user-facing capability should feel like “my assistant can do this”, not only “the platform exposes an adapter”.
-4. **Progressive disclosure** — `onboard`, `ask`, `chat`, and `doctor` carry the common path; advanced config stays available without taking over the story.
+4. **Progressive disclosure** — `onboard`, `ask`, `chat`, and `doctor` carry the common path; each surface should lead with the next user action before exposing runtime detail.
 5. **One runtime, many surfaces** — CLI ask, interactive chat, and future surfaces should share the same conversation, memory, tool, and provider semantics.
 6. **Fail loud with a repair path** — when setup or runtime health breaks, LoongClaw must point users toward `doctor` instead of leaving them in silent failure.
 
@@ -35,6 +35,9 @@ The current product contract is:
 6. Enable Telegram or Feishu only after the base CLI flow is healthy.
 
 This keeps the first-run journey legible while preserving the existing runtime architecture.
+
+For the current MVP, that also means first-run surfaces should feel assistant-first in their copy:
+show the runnable handoff first, then keep config, memory, and runtime facts in secondary detail blocks.
 
 ## Product Specifications
 

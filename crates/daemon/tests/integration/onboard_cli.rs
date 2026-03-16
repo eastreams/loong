@@ -4370,7 +4370,7 @@ fn onboarding_success_summary_derives_structured_actions() {
         summary.next_actions[4].kind,
         crate::onboard_cli::OnboardingActionKind::BrowserPreview
     );
-    assert_eq!(summary.next_actions[0].label, "ask example");
+    assert_eq!(summary.next_actions[0].label, "first answer");
     assert_eq!(summary.next_actions[1].label, "chat");
     assert_eq!(summary.next_actions[2].label, "telegram");
     assert_eq!(summary.next_actions[3].label, "feishu");
@@ -5658,7 +5658,7 @@ fn render_onboarding_success_summary_compacts_for_narrow_width() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "- ask example: loongclaw ask --config")
+            .any(|line| line == "- first answer: loongclaw ask --config")
             && lines
                 .iter()
                 .any(|line| line == "  '/tmp/loongclaw-config.toml' --message")
@@ -5666,7 +5666,7 @@ fn render_onboarding_success_summary_compacts_for_narrow_width() {
                 .iter()
                 .any(|line| line == "  'Summarize this repository and suggest the")
             && lines.iter().any(|line| line == "  best next step.'"),
-        "narrow renderer should keep the primary ask example readable even when the command wraps: {lines:#?}"
+        "narrow renderer should keep the primary first-answer handoff readable even when the command wraps: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "also available"),
@@ -5680,6 +5680,32 @@ fn render_onboarding_success_summary_compacts_for_narrow_width() {
                 .iter()
                 .any(|line| line == "- telegram: loongclaw telegram-serve --config"),
         "narrow renderer should keep secondary chat and channel actions visible after the primary ask example: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_surfaces_primary_handoff_before_saved_setup_details() {
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary = loongclaw_daemon::onboard_cli::build_onboarding_success_summary(
+        &path,
+        &mvp::config::LoongClawConfig::default(),
+        None,
+    );
+
+    let lines =
+        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+    let start_here_index = lines
+        .iter()
+        .position(|line| line.starts_with("start here:"))
+        .expect("start here line should exist");
+    let saved_setup_index = lines
+        .iter()
+        .position(|line| line == "saved setup")
+        .expect("saved setup heading should exist");
+
+    assert!(
+        start_here_index < saved_setup_index,
+        "onboarding should show the first runnable handoff before the saved setup inventory: {lines:#?}"
     );
 }
 

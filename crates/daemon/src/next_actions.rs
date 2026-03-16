@@ -49,7 +49,7 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
         actions.push(SetupNextAction {
             kind: SetupNextActionKind::Ask,
             browser_preview_phase: None,
-            label: "ask example".to_owned(),
+            label: "first answer".to_owned(),
             command: crate::cli_handoff::format_ask_with_config(
                 config_path,
                 DEFAULT_FIRST_ASK_MESSAGE,

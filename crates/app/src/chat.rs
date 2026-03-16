@@ -380,12 +380,14 @@ fn build_cli_chat_startup_summary(
 fn render_cli_chat_startup_lines(summary: &CliChatStartupSummary) -> Vec<String> {
     let mut lines = vec![
         "loongclaw chat ready".to_owned(),
+        "start here".to_owned(),
+        format!("- first prompt: {DEFAULT_FIRST_PROMPT}"),
+        "- type your request, or use /help for commands".to_owned(),
+        "session details".to_owned(),
         format!("- session: {}", summary.session_id),
         format!("- config: {}", summary.config_path),
         format!("- memory: {}", summary.memory_label),
-        "- start typing a request, or use /help for commands".to_owned(),
-        format!("- try this first: {DEFAULT_FIRST_PROMPT}"),
-        "assistant runtime".to_owned(),
+        "runtime details".to_owned(),
     ];
 
     let allowed_channels = if summary.allowed_channels.is_empty() {
@@ -1903,22 +1905,33 @@ mod tests {
         });
 
         assert_eq!(lines[0], "loongclaw chat ready");
-        assert!(lines.iter().any(|line| line == "- session: default"));
         assert!(
-            lines
-                .iter()
-                .any(|line| line == "- start typing a request, or use /help for commands"),
-            "chat startup should read like a product entry point instead of a raw runtime dump: {lines:#?}"
+            lines.iter().any(|line| line == "start here"),
+            "chat startup should lead with a dedicated first-action heading: {lines:#?}"
         );
         assert!(
             lines.iter().any(|line| {
-                line == "- try this first: Summarize this repository and suggest the best next step."
+                line == "- first prompt: Summarize this repository and suggest the best next step."
             }),
             "chat startup should suggest a concrete first prompt: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "assistant runtime"),
-            "chat startup should still preserve a compact runtime section for operator context: {lines:#?}"
+            lines
+                .iter()
+                .any(|line| line == "- type your request, or use /help for commands"),
+            "chat startup should keep the usage hint, but under the assistant-first opening block: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line == "session details"),
+            "chat startup should tuck session/config facts into a secondary section: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line == "runtime details"),
+            "chat startup should still preserve runtime context in a compact secondary section: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line == "- session: default"),
+            "chat startup should continue to show session identity after the handoff block: {lines:#?}"
         );
     }
 

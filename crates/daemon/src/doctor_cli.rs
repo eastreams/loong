@@ -1258,8 +1258,8 @@ fn build_doctor_next_steps_with_path_env(
             ),
         ) {
             let prefix = match action.kind {
-                crate::next_actions::SetupNextActionKind::Ask => "Try a one-shot task",
-                crate::next_actions::SetupNextActionKind::Chat => "Open interactive chat",
+                crate::next_actions::SetupNextActionKind::Ask => "Get a first answer",
+                crate::next_actions::SetupNextActionKind::Chat => "Continue in chat",
                 crate::next_actions::SetupNextActionKind::Channel => "Open a channel",
                 crate::next_actions::SetupNextActionKind::BrowserPreview => {
                     match action.browser_preview_phase {
@@ -2384,13 +2384,13 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Try a one-shot task: loongclaw ask --config '/tmp/loongclaw.toml' --message 'Summarize this repository and suggest the best next step.'"
+                step == "Get a first answer: loongclaw ask --config '/tmp/loongclaw.toml' --message 'Summarize this repository and suggest the best next step.'"
             }),
             "green doctor runs should hand the user into ask immediately: {next_steps:#?}"
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "Open interactive chat: loongclaw chat --config '/tmp/loongclaw.toml'"
+                step == "Continue in chat: loongclaw chat --config '/tmp/loongclaw.toml'"
             }),
             "green doctor runs should still advertise chat as the follow-up path: {next_steps:#?}"
         );

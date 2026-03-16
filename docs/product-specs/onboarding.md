@@ -13,6 +13,8 @@ next.
       available and explains what it found before writing config.
 - [ ] The happy path ends with explicit next-step guidance for:
       a concrete `loongclaw ask --message "..."` example and `loongclaw chat`.
+- [ ] The success summary leads with a runnable `start here` handoff before the
+      saved provider, prompt, memory, and channel inventory.
 - [ ] The primary post-onboard handoff prefers a one-shot `ask` example before
       interactive `chat`, so first success does not require learning the REPL.
 - [ ] Rerunning onboarding does not silently overwrite an existing config unless

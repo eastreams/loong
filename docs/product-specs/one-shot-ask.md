@@ -16,6 +16,9 @@ that I can get an answer immediately without entering an interactive shell.
       slash-command behavior.
 - [ ] Onboarding and `doctor` can both promote a concrete `ask` example as the
       first visible success path for a healthy local setup.
+- [ ] When surfaced outside `ask` itself, the one-shot handoff is labeled in
+      product-facing language such as "first answer" rather than only as a
+      technical example.
 - [ ] `ask` help text points users toward `loongclaw chat` for interactive
       follow-up.
 
