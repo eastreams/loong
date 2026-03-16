@@ -708,12 +708,8 @@ fn search_argument_hint_from_provider_definition(parameters: &Value) -> String {
     let Some(properties) = parameters.get("properties").and_then(Value::as_object) else {
         return String::new();
     };
-    let required = parameters
-        .get("required")
-        .and_then(Value::as_array)
+    let required = schema_required_fields(parameters)
         .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
         .collect::<BTreeSet<_>>();
     let mut fields = properties
         .iter()
@@ -734,13 +730,60 @@ fn search_argument_hint_from_provider_definition(parameters: &Value) -> String {
     fields.join(",")
 }
 
+fn schema_required_fields(parameters: &Value) -> Vec<String> {
+    parameters
+        .get("required")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn schema_required_field_groups(parameters: &Value) -> Vec<Vec<String>> {
+    ["anyOf", "oneOf"]
+        .into_iter()
+        .filter_map(|key| parameters.get(key).and_then(Value::as_array))
+        .flatten()
+        .filter_map(|schema| {
+            let required = schema
+                .get("required")
+                .and_then(Value::as_array)?
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            if required.is_empty() {
+                None
+            } else {
+                Some(required)
+            }
+        })
+        .collect()
+}
+
+fn default_required_field_groups(
+    required_fields: &[String],
+    mut required_field_groups: Vec<Vec<String>>,
+) -> Vec<Vec<String>> {
+    if required_field_groups.is_empty() && !required_fields.is_empty() {
+        required_field_groups.push(required_fields.to_vec());
+    }
+    required_field_groups
+}
+
 fn searchable_entry_from_catalog(entry: catalog::ToolCatalogEntry) -> SearchableToolEntry {
     let required_fields = entry
         .required_fields
         .iter()
         .map(|field| (*field).to_owned())
         .collect::<Vec<_>>();
-    let mut required_field_groups = catalog::tool_required_field_groups(entry.canonical_name)
+    let required_field_groups = catalog::tool_required_field_groups(entry.canonical_name)
         .iter()
         .map(|group| {
             group
@@ -749,9 +792,8 @@ fn searchable_entry_from_catalog(entry: catalog::ToolCatalogEntry) -> Searchable
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    if required_field_groups.is_empty() && !required_fields.is_empty() {
-        required_field_groups.push(required_fields.clone());
-    }
+    let required_field_groups =
+        default_required_field_groups(&required_fields, required_field_groups);
 
     SearchableToolEntry {
         canonical_name: entry.canonical_name.to_owned(),
@@ -774,14 +816,11 @@ fn feishu_searchable_entries() -> Vec<SearchableToolEntry> {
                 .get("parameters")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let required_fields = parameters
-                .get("required")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect::<Vec<_>>();
+            let required_fields = schema_required_fields(&parameters);
+            let required_field_groups = default_required_field_groups(
+                &required_fields,
+                schema_required_field_groups(&parameters),
+            );
             Some(SearchableToolEntry {
                 canonical_name: canonical_tool_name(provider_name).to_owned(),
                 summary: function
@@ -790,11 +829,7 @@ fn feishu_searchable_entries() -> Vec<SearchableToolEntry> {
                     .unwrap_or_default()
                     .to_owned(),
                 argument_hint: search_argument_hint_from_provider_definition(&parameters),
-                required_field_groups: if required_fields.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![required_fields.clone()]
-                },
+                required_field_groups,
                 required_fields,
                 tags: vec!["feishu".to_owned()],
             })
@@ -2096,11 +2131,19 @@ mod tests {
     fn tool_search_reports_alternative_required_fields_for_bundled_skill_install() {
         let entry = catalog::find_tool_catalog_entry("external_skills.install")
             .expect("external_skills.install should exist in the catalog");
+        let searchable = searchable_entry_from_catalog(entry);
 
-        assert_eq!(entry.required_fields, &["path", "bundled_skill_id"]);
+        assert!(
+            entry.required_fields.is_empty(),
+            "catalog required_fields should only list unconditional requirements"
+        );
+        assert!(
+            searchable.required_fields.is_empty(),
+            "search should not flatten grouped alternatives into required_fields"
+        );
         assert_eq!(
-            catalog::tool_required_field_groups("external_skills.install"),
-            &[&["path"][..], &["bundled_skill_id"][..]]
+            searchable.required_field_groups,
+            vec![vec!["path".to_owned()], vec!["bundled_skill_id".to_owned()]]
         );
     }
 
@@ -2210,6 +2253,21 @@ mod tests {
                 .iter()
                 .any(|entry| entry["tool_id"] == "feishu.messages.send"),
             "feishu send should be discoverable through tool.search: {results:?}"
+        );
+    }
+
+    #[cfg(feature = "feishu-integration")]
+    #[test]
+    fn feishu_searchable_entries_report_anyof_required_groups() {
+        let entry = feishu_searchable_entries()
+            .into_iter()
+            .find(|entry| entry.canonical_name == "feishu.doc.append")
+            .expect("feishu.doc.append should be discoverable");
+
+        assert_eq!(entry.required_fields, vec!["url".to_owned()]);
+        assert_eq!(
+            entry.required_field_groups,
+            vec![vec!["content".to_owned()], vec!["content_path".to_owned()]]
         );
     }
 

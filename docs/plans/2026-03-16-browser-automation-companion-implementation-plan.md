@@ -1,6 +1,6 @@
 # Browser Automation Companion Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> Execution note: implement this plan task-by-task using the standard plan-execution workflow.
 
 **Goal:** Add a managed browser automation companion lane to LoongClaw without replacing the shipped lightweight browser tools or increasing default install friction.
 
@@ -9,6 +9,8 @@
 **Tech Stack:** Rust, existing tool/runtime policy infrastructure, install scripts, Markdown docs, optional companion packaging, GitHub release artifacts.
 
 ---
+
+## Execution Tasks
 
 ### Task 1: Land the design, spec, and roadmap contract
 
