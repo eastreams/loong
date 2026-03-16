@@ -775,7 +775,7 @@ async fn run_provider_shape_tool_search_followup(
     second_body: Value,
     completion: Result<String, String>,
 ) -> (String, FakeRuntime) {
-    use super::integration_tests::TurnTestHarness;
+    use crate::test_support::TurnTestHarness;
 
     let harness = TurnTestHarness::new();
     std::fs::write(harness.temp_dir.join("note.md"), note_contents).expect("seed test note");
@@ -3999,7 +3999,7 @@ async fn handle_turn_with_runtime_tool_turn_uses_natural_language_completion_by_
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_tool_search_requests_a_followup_provider_turn() {
-    use super::integration_tests::TurnTestHarness;
+    use crate::test_support::TurnTestHarness;
 
     let harness = TurnTestHarness::new();
     std::fs::write(
@@ -4085,7 +4085,7 @@ async fn handle_turn_with_runtime_tool_search_requests_a_followup_provider_turn(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_tool_search_raw_request_still_uses_followup_provider_turn() {
-    use super::integration_tests::TurnTestHarness;
+    use crate::test_support::TurnTestHarness;
 
     let harness = TurnTestHarness::new();
     std::fs::write(
@@ -4530,7 +4530,7 @@ async fn handle_turn_with_runtime_tool_turn_raw_request_skips_second_pass_comple
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_tool_search_followup_checkpoint_uses_visible_context() {
-    use super::integration_tests::TurnTestHarness;
+    use crate::test_support::TurnTestHarness;
 
     let harness = TurnTestHarness::new();
     std::fs::write(
@@ -13350,7 +13350,7 @@ async fn durable_turn_checkpoint_repair_persists_finalized_checkpoint_and_repeat
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn repair_turn_checkpoint_tail_with_runtime_recovers_discovery_followup_checkpoint() {
-    use super::integration_tests::TurnTestHarness;
+    use crate::test_support::TurnTestHarness;
 
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
