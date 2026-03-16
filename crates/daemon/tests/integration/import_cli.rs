@@ -619,6 +619,33 @@ fn import_cli_apply_summary_includes_registry_channel_actions() {
 }
 
 #[test]
+fn import_cli_apply_summary_shell_quotes_config_paths_with_single_quotes() {
+    let candidate = sample_import_candidate();
+    let lines = loongclaw_daemon::import_cli::render_import_apply_summary_lines_for_width(
+        std::path::Path::new("/tmp/loongclaw's config.toml"),
+        &candidate,
+        &[loongclaw_daemon::migration::types::SetupDomainKind::Channels],
+        &candidate.config,
+        false,
+        160,
+    );
+    let rendered = lines.join(" ");
+
+    assert!(
+        rendered.contains(
+            "next step: loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message"
+        ),
+        "apply summary should shell-quote single quotes in the primary ask command: {lines:#?}"
+    );
+    assert!(
+        rendered.contains(
+            "also available: chat · loongclaw chat --config '/tmp/loongclaw'\"'\"'s config.toml'"
+        ),
+        "apply summary should shell-quote single quotes in the secondary chat command: {lines:#?}"
+    );
+}
+
+#[test]
 fn import_cli_apply_summary_uses_channel_handoff_when_cli_is_disabled() {
     let mut candidate = sample_import_candidate();
     candidate.config.cli.enabled = false;

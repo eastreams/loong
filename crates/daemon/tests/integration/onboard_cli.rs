@@ -5754,6 +5754,30 @@ fn onboarding_success_summary_includes_brand_header() {
 }
 
 #[test]
+fn onboarding_success_summary_shell_quotes_config_paths_with_single_quotes() {
+    let path = PathBuf::from("/tmp/loongclaw's config.toml");
+    let summary = loongclaw_daemon::onboard_cli::build_onboarding_success_summary(
+        &path,
+        &mvp::config::LoongClawConfig::default(),
+        None,
+    );
+    let lines =
+        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 160);
+    let rendered = lines.join(" ");
+
+    assert!(
+        rendered.contains(
+            "start here: loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message"
+        ),
+        "success summary should shell-quote single quotes in the primary ask handoff: {lines:#?}"
+    );
+    assert!(
+        rendered.contains("- chat: loongclaw chat --config '/tmp/loongclaw'\"'\"'s config.toml'"),
+        "success summary should shell-quote single quotes in the secondary chat handoff: {lines:#?}"
+    );
+}
+
+#[test]
 fn onboarding_success_summary_prefers_oauth_env_over_api_key_env_when_both_are_configured() {
     let path = PathBuf::from("/tmp/loongclaw-config.toml");
     let mut config = mvp::config::LoongClawConfig::default();

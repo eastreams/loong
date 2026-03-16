@@ -76,30 +76,18 @@ pub(crate) fn inspect_browser_preview_state_with_path_env(
 }
 
 pub(crate) fn browser_preview_enable_command(config_path: &str) -> String {
-    let config_path = shell_quote_argument(config_path);
-    format!(
-        "{} skills enable-browser-preview --config {}",
-        mvp::config::CLI_COMMAND_NAME,
-        config_path
-    )
+    crate::cli_handoff::format_subcommand_with_config("skills enable-browser-preview", config_path)
 }
 
 pub(crate) fn browser_preview_unblock_command(config_path: &str) -> String {
-    let config_path = shell_quote_argument(config_path);
     format!(
         "edit {} and remove `agent-browser` from [tools].shell_deny",
-        config_path
+        crate::cli_handoff::shell_quote_argument(config_path)
     )
 }
 
 pub(crate) fn browser_preview_ready_command(config_path: &str) -> String {
-    let config_path = shell_quote_argument(config_path);
-    format!(
-        "{} ask --config {} --message \"{}\"",
-        mvp::config::CLI_COMMAND_NAME,
-        config_path,
-        DEFAULT_BROWSER_PREVIEW_ASK_MESSAGE
-    )
+    crate::cli_handoff::format_ask_with_config(config_path, DEFAULT_BROWSER_PREVIEW_ASK_MESSAGE)
 }
 
 pub(crate) fn ensure_browser_preview_config(config: &mut mvp::config::LoongClawConfig) -> bool {
@@ -265,10 +253,6 @@ fn command_candidates(command: &str) -> Vec<String> {
     {
         vec![command.to_owned()]
     }
-}
-
-fn shell_quote_argument(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 #[cfg(unix)]

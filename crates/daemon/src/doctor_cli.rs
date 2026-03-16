@@ -1109,11 +1109,8 @@ fn build_doctor_next_steps_with_path_env(
 ) -> Vec<String> {
     let mut steps = Vec::new();
     let config_path_display = config_path.display().to_string();
-    let rerun_command = format!(
-        "{} doctor --config '{}'",
-        mvp::config::CLI_COMMAND_NAME,
-        config_path_display
-    );
+    let rerun_command =
+        crate::cli_handoff::format_subcommand_with_config("doctor", &config_path_display);
     let browser_preview =
         crate::browser_preview::inspect_browser_preview_state_with_path_env(config, path_env);
 
@@ -2029,6 +2026,34 @@ mod tests {
             next_steps.iter().any(|step| step
                 == "Re-run diagnostics: loongclaw doctor --config '/tmp/loongclaw.toml'"),
             "doctor should tell the operator how to confirm the repair path: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn build_doctor_next_steps_shell_quotes_config_paths_with_single_quotes() {
+        let checks = vec![DoctorCheck {
+            name: "memory path".to_owned(),
+            level: DoctorCheckLevel::Fail,
+            detail: "/tmp/loongclaw-memory is missing".to_owned(),
+        }];
+        let next_steps = build_doctor_next_steps(
+            &checks,
+            Path::new("/tmp/loongclaw's config.toml"),
+            &mvp::config::LoongClawConfig::default(),
+            false,
+        );
+
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Apply safe local repairs: loongclaw doctor --config '/tmp/loongclaw'\"'\"'s config.toml' --fix"
+            }),
+            "doctor should shell-quote config paths with single quotes in fix commands: {next_steps:#?}"
+        );
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Re-run diagnostics: loongclaw doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"
+            }),
+            "doctor should shell-quote config paths with single quotes in rerun commands: {next_steps:#?}"
         );
     }
 

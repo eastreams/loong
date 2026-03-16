@@ -50,22 +50,16 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
             kind: SetupNextActionKind::Ask,
             browser_preview_phase: None,
             label: "ask example".to_owned(),
-            command: format!(
-                "{} ask --config '{}' --message \"{}\"",
-                mvp::config::CLI_COMMAND_NAME,
+            command: crate::cli_handoff::format_ask_with_config(
                 config_path,
-                DEFAULT_FIRST_ASK_MESSAGE
+                DEFAULT_FIRST_ASK_MESSAGE,
             ),
         });
         actions.push(SetupNextAction {
             kind: SetupNextActionKind::Chat,
             browser_preview_phase: None,
             label: "chat".to_owned(),
-            command: format!(
-                "{} chat --config '{}'",
-                mvp::config::CLI_COMMAND_NAME,
-                config_path
-            ),
+            command: crate::cli_handoff::format_subcommand_with_config("chat", config_path),
         });
     }
     actions.extend(
@@ -119,11 +113,7 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
             kind: SetupNextActionKind::Doctor,
             browser_preview_phase: None,
             label: "doctor".to_owned(),
-            command: format!(
-                "{} doctor --config {}",
-                mvp::config::CLI_COMMAND_NAME,
-                config_path
-            ),
+            command: crate::cli_handoff::format_subcommand_with_config("doctor", config_path),
         });
     }
     actions
