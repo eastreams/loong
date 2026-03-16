@@ -16,6 +16,23 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static IMPORT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn assert_compact_loongclaw_header(lines: &[String], context: &str) {
+    assert!(
+        lines
+            .first()
+            .is_some_and(|line| line.starts_with("LOONGCLAW")),
+        "{context} should start with the compact LOONGCLAW header: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .take_while(|line| !line.is_empty())
+            .any(|line| line.contains(concat!("v", env!("CARGO_PKG_VERSION")))),
+        "{context} should keep the current build version visible even when the branch name wraps: {lines:#?}"
+    );
+}
+
 fn unique_temp_dir(label: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -517,10 +534,7 @@ fn import_cli_apply_summary_wraps_long_path_and_domains_for_narrow_width() {
         46,
     );
 
-    assert!(
-        lines[0].starts_with("LOONGCLAW  v"),
-        "apply summary should use the compact LOONGCLAW header: {lines:#?}"
-    );
+    assert_compact_loongclaw_header(&lines, "apply summary");
     assert!(
         lines.iter().any(|line| line == "import applied"),
         "apply summary should keep a focused title: {lines:#?}"
