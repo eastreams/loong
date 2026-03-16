@@ -234,6 +234,26 @@ fn memory_systems_cli_parses() {
 }
 
 #[test]
+fn runtime_snapshot_cli_parses() {
+    let cli = Cli::try_parse_from([
+        "loongclaw",
+        "runtime-snapshot",
+        "--config",
+        "/tmp/loongclaw.toml",
+        "--json",
+    ])
+    .expect("`runtime-snapshot` should parse");
+
+    match cli.command {
+        Some(Commands::RuntimeSnapshot { config, json }) => {
+            assert_eq!(config.as_deref(), Some("/tmp/loongclaw.toml"));
+            assert!(json);
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
 fn acp_event_summary_cli_rejects_zero_limit() {
     let error = run_acp_event_summary_cli(None, Some("session-a"), 0, false)
         .expect_err("zero limit must be rejected");
