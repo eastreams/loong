@@ -20,6 +20,8 @@ next.
 - [ ] The shared post-onboard next-step model can also surface optional browser
       preview enable, runtime install, or first-recipe guidance when that lane
       is available for the current config.
+- [ ] Interactive onboarding explains how to exit cleanly, including an
+      explicit `Esc` cancellation hint before any config write.
 - [ ] Rerunning onboarding does not silently overwrite an existing config unless
       the user explicitly opts into a destructive path such as `--force`.
 - [ ] Onboarding uses the same provider, memory, and channel configuration
@@ -29,6 +31,8 @@ next.
 - [ ] Onboarding preflight reuses the same browser companion diagnostics as
       `loongclaw doctor`, surfacing optional managed-lane blockers before write
       without redefining runtime truth inside onboarding.
+- [ ] Providers that can run with explicit or curated fallback models are not
+      blocked solely because model catalog discovery is unavailable during setup.
 
 ## Out of Scope
 

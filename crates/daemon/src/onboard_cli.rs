@@ -12,6 +12,7 @@ use time::macros::format_description;
 const BACKUP_TIMESTAMP_FORMAT: &[FormatItem<'static>] =
     format_description!("[year][month][day]-[hour][minute][second]");
 const ONBOARD_CLEAR_INPUT_TOKEN: &str = ":clear";
+const ONBOARD_ESCAPE_CANCEL_HINT: &str = "- press Esc then Enter to cancel onboarding";
 
 #[derive(Debug, Clone)]
 pub struct OnboardCommandOptions {
@@ -82,6 +83,7 @@ impl OnboardUi for StdioOnboardUi {
         io::stdin()
             .read_line(&mut line)
             .map_err(|error| format!("read stdin failed: {error}"))?;
+        let line = ensure_onboard_input_not_cancelled(line)?;
         let trimmed = line.trim();
         if trimmed.is_empty() {
             return Ok(default.to_owned());
@@ -98,6 +100,7 @@ impl OnboardUi for StdioOnboardUi {
         io::stdin()
             .read_line(&mut line)
             .map_err(|error| format!("read stdin failed: {error}"))?;
+        let line = ensure_onboard_input_not_cancelled(line)?;
         Ok(line.trim().to_owned())
     }
 
@@ -111,6 +114,7 @@ impl OnboardUi for StdioOnboardUi {
         io::stdin()
             .read_line(&mut line)
             .map_err(|error| format!("read stdin failed: {error}"))?;
+        let line = ensure_onboard_input_not_cancelled(line)?;
         let value = line.trim().to_ascii_lowercase();
         if value.is_empty() {
             return Ok(default);
@@ -132,6 +136,17 @@ fn print_message(ui: &mut impl OnboardUi, line: impl Into<String>) -> CliResult<
 
 fn is_explicit_onboard_clear_input(raw: &str) -> bool {
     raw.trim().eq_ignore_ascii_case(ONBOARD_CLEAR_INPUT_TOKEN)
+}
+
+fn is_explicit_onboard_cancel_input(raw: &str) -> bool {
+    matches!(raw.trim(), "\u{1b}") || raw.trim().eq_ignore_ascii_case("esc")
+}
+
+fn ensure_onboard_input_not_cancelled(raw: String) -> CliResult<String> {
+    if is_explicit_onboard_cancel_input(raw.as_str()) {
+        return Err("onboarding cancelled: escape input received".to_owned());
+    }
+    Ok(raw)
 }
 
 fn prompt_optional(
@@ -166,6 +181,7 @@ pub enum OnboardNonInteractiveWarningPolicy {
     Block,
     AcceptedBySkipModelProbe,
     AcceptedByExplicitModel,
+    AcceptedByPreferredModels,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1355,6 +1371,14 @@ fn provider_check_detail_prefix(config: &mvp::config::LoongClawConfig) -> String
     crate::provider_presentation::active_provider_detail_label(config)
 }
 
+fn render_onboard_model_candidate_list(models: &[String]) -> String {
+    models
+        .iter()
+        .map(|model| format!("`{model}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn provider_model_probe_failure_check(
     config: &mvp::config::LoongClawConfig,
     error: String,
@@ -1369,6 +1393,21 @@ fn provider_model_probe_failure_check(
             ),
             non_interactive_warning_policy:
                 OnboardNonInteractiveWarningPolicy::AcceptedByExplicitModel,
+        };
+    }
+
+    let fallback_models = config.provider.configured_auto_model_candidates();
+    if !fallback_models.is_empty() {
+        return OnboardCheck {
+            name: "provider model probe",
+            level: OnboardCheckLevel::Warn,
+            detail: format!(
+                "{}: model catalog probe failed ({error}); runtime will try preferred model fallback(s): {}",
+                provider_check_detail_prefix(config),
+                render_onboard_model_candidate_list(&fallback_models)
+            ),
+            non_interactive_warning_policy:
+                OnboardNonInteractiveWarningPolicy::AcceptedByPreferredModels,
         };
     }
 
@@ -1490,6 +1529,7 @@ fn is_explicitly_accepted_non_interactive_warning(
         || matches!(
             check.non_interactive_warning_policy,
             OnboardNonInteractiveWarningPolicy::AcceptedByExplicitModel
+                | OnboardNonInteractiveWarningPolicy::AcceptedByPreferredModels
         )
 }
 
@@ -3176,9 +3216,15 @@ fn render_onboard_choice_screen(
     step: Option<(GuidedOnboardStep, GuidedPromptPath)>,
     intro_lines: Vec<String>,
     options: Vec<OnboardScreenOption>,
-    footer_lines: Vec<String>,
+    mut footer_lines: Vec<String>,
     color_enabled: bool,
 ) -> Vec<String> {
+    if !footer_lines
+        .iter()
+        .any(|line| line.contains("Esc") && line.contains("cancel"))
+    {
+        footer_lines.push(ONBOARD_ESCAPE_CANCEL_HINT.to_owned());
+    }
     let mut lines = render_onboard_header(header_style, width, subtitle, color_enabled);
     lines.push(String::new());
     lines.extend(render_onboard_wrapped_display_lines([title], width));
@@ -3206,9 +3252,15 @@ fn render_onboard_input_screen(
     step: GuidedOnboardStep,
     guided_prompt_path: GuidedPromptPath,
     context_lines: Vec<String>,
-    hint_lines: Vec<String>,
+    mut hint_lines: Vec<String>,
     color_enabled: bool,
 ) -> Vec<String> {
+    if !hint_lines
+        .iter()
+        .any(|line| line.contains("Esc") && line.contains("cancel"))
+    {
+        hint_lines.push(ONBOARD_ESCAPE_CANCEL_HINT.to_owned());
+    }
     let mut lines = render_onboard_header(OnboardHeaderStyle::Compact, width, "", color_enabled);
     lines.push(String::new());
     lines.extend(render_onboard_wrapped_display_lines([title], width));
@@ -4004,6 +4056,7 @@ fn render_model_selection_screen_lines_with_style(
     width: usize,
     color_enabled: bool,
 ) -> Vec<String> {
+    let preferred_fallback_models = config.provider.configured_auto_model_candidates();
     let mut context_lines = vec![
         format!(
             "- provider: {}",
@@ -4019,6 +4072,23 @@ fn render_model_selection_screen_lines_with_style(
     {
         context_lines.push(format!("- provider default: {default_model}"));
     }
+    if !preferred_fallback_models.is_empty() {
+        context_lines.push(format!(
+            "- preferred fallback: {}",
+            preferred_fallback_models.join(", ")
+        ));
+    }
+
+    let mut hint_lines = vec![
+        render_model_selection_default_hint_line(config, prompt_default),
+        "- type any provider model id to override it".to_owned(),
+    ];
+    if !preferred_fallback_models.is_empty() && config.provider.explicit_model().is_none() {
+        hint_lines.push(format!(
+            "- leave `auto` to let runtime try preferred fallbacks first: {}",
+            preferred_fallback_models.join(", ")
+        ));
+    }
 
     render_onboard_input_screen(
         width,
@@ -4026,10 +4096,7 @@ fn render_model_selection_screen_lines_with_style(
         GuidedOnboardStep::Model,
         guided_prompt_path,
         context_lines,
-        vec![
-            render_model_selection_default_hint_line(config, prompt_default),
-            "- type any provider model id to override it".to_owned(),
-        ],
+        hint_lines,
         color_enabled,
     )
 }
@@ -5082,24 +5149,36 @@ mod tests {
         }
 
         fn prompt_with_default(&mut self, _label: &str, default: &str) -> CliResult<String> {
-            Ok(self
-                .inputs
-                .pop_front()
-                .unwrap_or_else(|| default.to_owned()))
+            let value = ensure_onboard_input_not_cancelled(
+                self.inputs
+                    .pop_front()
+                    .unwrap_or_else(|| default.to_owned()),
+            )?;
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Ok(default.to_owned());
+            }
+            Ok(trimmed.to_owned())
         }
 
         fn prompt_required(&mut self, _label: &str) -> CliResult<String> {
-            self.inputs
+            let value = self
+                .inputs
                 .pop_front()
-                .ok_or_else(|| "missing required test input".to_owned())
+                .ok_or_else(|| "missing required test input".to_owned())?;
+            ensure_onboard_input_not_cancelled(value)
         }
 
         fn prompt_confirm(&mut self, _message: &str, default: bool) -> CliResult<bool> {
-            Ok(self
-                .inputs
-                .pop_front()
-                .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
-                .unwrap_or(default))
+            let Some(value) = self.inputs.pop_front() else {
+                return Ok(default);
+            };
+            let value = ensure_onboard_input_not_cancelled(value)?;
+            let value = value.trim().to_ascii_lowercase();
+            if value.is_empty() {
+                return Ok(default);
+            }
+            Ok(matches!(value.as_str(), "y" | "yes"))
         }
     }
 
@@ -5373,6 +5452,34 @@ mod tests {
     }
 
     #[test]
+    fn provider_model_probe_failure_warns_for_preferred_model_fallbacks() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Minimax;
+        config.provider.model = "auto".to_owned();
+        config.provider.preferred_models = vec![
+            "MiniMax-M1".to_owned(),
+            "MiniMax-M1".to_owned(),
+            "MiniMax-Text-01".to_owned(),
+        ];
+
+        let check = provider_model_probe_failure_check(
+            &config,
+            "provider rejected the model list".to_owned(),
+        );
+
+        assert_eq!(check.name, "provider model probe");
+        assert_eq!(check.level, OnboardCheckLevel::Warn);
+        assert!(
+            check.detail.contains("preferred model"),
+            "preferred-model fallback should be explained when catalog discovery is unavailable: {check:#?}"
+        );
+        assert!(
+            check.detail.contains("MiniMax-M1"),
+            "onboard warning should surface the first fallback model to keep the first-run path actionable: {check:#?}"
+        );
+    }
+
+    #[test]
     fn explicit_model_probe_warning_is_accepted_non_interactively() {
         let mut config = mvp::config::LoongClawConfig::default();
         config.provider.model = "openai/gpt-5.1-codex".to_owned();
@@ -5397,6 +5504,36 @@ mod tests {
         assert!(
             is_explicitly_accepted_non_interactive_warning(&check, &options),
             "explicit-model probe warnings should not block non-interactive onboarding because model discovery is advisory: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn preferred_model_probe_warning_is_accepted_non_interactively() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Minimax;
+        config.provider.model = "auto".to_owned();
+        config.provider.preferred_models = vec!["MiniMax-M1".to_owned()];
+        let check = provider_model_probe_failure_check(
+            &config,
+            "provider rejected the model list".to_owned(),
+        );
+        let options = OnboardCommandOptions {
+            output: None,
+            force: false,
+            non_interactive: true,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: false,
+        };
+
+        assert!(
+            is_explicitly_accepted_non_interactive_warning(&check, &options),
+            "preferred-model fallback warnings should not block non-interactive onboarding because runtime can still try the seeded models: {check:#?}"
         );
     }
 
@@ -5579,6 +5716,52 @@ mod tests {
         assert!(
             is_explicitly_accepted_non_interactive_warning(&check, &options),
             "non-interactive warning acceptance should follow structured policy rather than fragile display strings"
+        );
+    }
+
+    #[test]
+    fn render_model_selection_screen_surfaces_preferred_fallback_models() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Minimax;
+        config.provider.model = "auto".to_owned();
+        config.provider.preferred_models =
+            vec!["MiniMax-M1".to_owned(), "MiniMax-Text-01".to_owned()];
+
+        let lines = render_model_selection_screen_lines_with_default(&config, "auto", 80);
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("MiniMax-M1") && line.contains("preferred")),
+            "model selection should surface runtime fallback hints when auto-model setup depends on curated preferred models: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn prompt_onboard_shortcut_choice_cancels_on_escape_input() {
+        let mut ui = TestOnboardUi::with_inputs(["\u{1b}"]);
+
+        let error = prompt_onboard_shortcut_choice(&mut ui)
+            .expect_err("escape input should cancel instead of silently falling through");
+
+        assert!(
+            error.contains("cancelled"),
+            "escape cancellation should produce a user-facing cancel error: {error}"
+        );
+    }
+
+    #[test]
+    fn shortcut_screen_footer_mentions_escape_cancel() {
+        let lines = render_continue_current_setup_screen_lines(
+            &mvp::config::LoongClawConfig::default(),
+            80,
+        );
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Esc") && line.contains("cancel")),
+            "choice screens should teach the exit gesture explicitly: {lines:#?}"
         );
     }
 

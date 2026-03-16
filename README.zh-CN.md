@@ -138,6 +138,12 @@ cargo install --path crates/daemon
    当前引导流程会依次带你完成 provider、原生 prompt personality、可选 prompt
    addendum，以及 memory profile 的选择。只有在你明确想放弃原生 prompt pack
    时，才建议改用 `--system-prompt` 做完整的 inline override。
+   在任意 onboarding 提示处按 `Esc` 再按 `Enter`，即可在落盘前退出。
+
+   WSL 说明：CLI onboarding 可以直接在 WSL 中运行。如果你还需要依赖 `systemd`
+   的服务型流程或 Linux daemon，请使用 `0.67.6+` 的 WSL；通过 `wsl --install`
+   安装的 Ubuntu 现在默认启用 `systemd`，其他发行版则可能仍需要在
+   `/etc/wsl.conf` 中设置 `[boot] systemd=true`。
 
 2. 按 onboarding 选中的环境变量名设置 provider 凭据：
 

@@ -146,6 +146,7 @@ const ARK_REASONING_EFFORTS: &[ReasoningEffort] = &[
     ReasoningEffort::Medium,
     ReasoningEffort::High,
 ];
+const MINIMAX_DEFAULT_PREFERRED_MODELS: &[&str] = &["MiniMax-M1"];
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -671,6 +672,11 @@ impl ProviderConfig {
         let mut provider = Self::default();
         provider.set_kind(kind);
         provider.model = kind.default_model().unwrap_or("auto").to_owned();
+        provider.preferred_models = kind
+            .default_preferred_models()
+            .iter()
+            .map(|model| (*model).to_owned())
+            .collect();
         provider.selection_baseline()
     }
 
@@ -996,7 +1002,16 @@ impl ProviderConfig {
         }
 
         let mut models = Vec::new();
-        for raw in &self.preferred_models {
+        let preferred_models = if self.preferred_models.is_empty() {
+            self.kind
+                .default_preferred_models()
+                .iter()
+                .map(|model| (*model).to_owned())
+                .collect::<Vec<_>>()
+        } else {
+            self.preferred_models.clone()
+        };
+        for raw in &preferred_models {
             let trimmed = raw.trim();
             if trimmed.is_empty() || models.iter().any(|existing| existing == trimmed) {
                 continue;
@@ -1105,6 +1120,7 @@ impl ProviderConfig {
         Self {
             kind: self.kind,
             model: self.model.clone(),
+            preferred_models: self.preferred_models.clone(),
             base_url: profile.base_url.to_owned(),
             wire_api: self.wire_api,
             chat_completions_path: profile.chat_completions_path.to_owned(),
@@ -1918,6 +1934,13 @@ impl ProviderKind {
             Some("kimi-for-coding")
         } else {
             None
+        }
+    }
+
+    pub const fn default_preferred_models(self) -> &'static [&'static str] {
+        match self {
+            ProviderKind::Minimax => MINIMAX_DEFAULT_PREFERRED_MODELS,
+            _ => &[],
         }
     }
 }
@@ -3029,5 +3052,13 @@ mod tests {
             config.authorization_header().as_deref(),
             Some("Bearer api-key-wins")
         );
+    }
+
+    #[test]
+    fn fresh_minimax_provider_seeds_preferred_models_for_auto_fallback() {
+        let config = ProviderConfig::fresh_for_kind(ProviderKind::Minimax);
+
+        assert_eq!(config.model, "auto");
+        assert_eq!(config.preferred_models, vec!["MiniMax-M1".to_owned()]);
     }
 }

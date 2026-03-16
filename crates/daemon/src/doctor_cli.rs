@@ -999,6 +999,23 @@ fn provider_model_probe_failure_check(
         };
     }
 
+    let fallback_models = config.provider.configured_auto_model_candidates();
+    if !fallback_models.is_empty() {
+        return DoctorCheck {
+            name: "provider model probe".to_owned(),
+            level: DoctorCheckLevel::Warn,
+            detail: format!(
+                "{}: model catalog probe failed ({error}); runtime will try preferred model fallback(s): {}",
+                crate::provider_presentation::active_provider_detail_label(config),
+                fallback_models
+                    .iter()
+                    .map(|model| format!("`{model}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+    }
+
     DoctorCheck {
         name: "provider model probe".to_owned(),
         level: DoctorCheckLevel::Fail,
@@ -1672,6 +1689,30 @@ mod tests {
         assert!(
             check.detail.contains("OpenAI [openai]"),
             "doctor failures should still identify the active provider context: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn provider_model_probe_failure_warns_for_preferred_model_fallbacks() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Minimax;
+        config.provider.model = "auto".to_owned();
+        config.provider.preferred_models = vec!["MiniMax-M1".to_owned()];
+
+        let check = provider_model_probe_failure_check(
+            &config,
+            "provider rejected the model list".to_owned(),
+        );
+
+        assert_eq!(check.name, "provider model probe");
+        assert_eq!(check.level, DoctorCheckLevel::Warn);
+        assert!(
+            check.detail.contains("preferred model"),
+            "doctor should explain when runtime can continue with preferred auto-model fallbacks: {check:#?}"
+        );
+        assert!(
+            check.detail.contains("MiniMax-M1"),
+            "doctor warning should surface the fallback candidate to keep remediation concrete: {check:#?}"
         );
     }
 

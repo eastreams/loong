@@ -256,6 +256,11 @@ cargo install --path crates/daemon
    personality, optional prompt addendum, and memory profile selection. Use
    `--system-prompt` only when you want to replace the native prompt pack with a
    full inline override.
+   Press `Esc`, then `Enter`, at any onboarding prompt to cancel before writing config.
+
+   WSL note: CLI onboarding works in WSL. If you want service-style workflows or Linux daemons
+   that depend on `systemd`, use WSL `0.67.6+`; Ubuntu installed via `wsl --install` now defaults
+   to `systemd`, while other distros may still need `[boot] systemd=true` in `/etc/wsl.conf`.
 
 2. Set your provider credential in the env that onboarding selected:
 
