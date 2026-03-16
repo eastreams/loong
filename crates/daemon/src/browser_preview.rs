@@ -76,23 +76,26 @@ pub(crate) fn inspect_browser_preview_state_with_path_env(
 }
 
 pub(crate) fn browser_preview_enable_command(config_path: &str) -> String {
+    let config_path = shell_quote_argument(config_path);
     format!(
-        "{} skills enable-browser-preview --config '{}'",
+        "{} skills enable-browser-preview --config {}",
         mvp::config::CLI_COMMAND_NAME,
         config_path
     )
 }
 
 pub(crate) fn browser_preview_unblock_command(config_path: &str) -> String {
+    let config_path = shell_quote_argument(config_path);
     format!(
-        "edit '{}' and remove `agent-browser` from [tools].shell_deny",
+        "edit {} and remove `agent-browser` from [tools].shell_deny",
         config_path
     )
 }
 
 pub(crate) fn browser_preview_ready_command(config_path: &str) -> String {
+    let config_path = shell_quote_argument(config_path);
     format!(
-        "{} ask --config '{}' --message \"{}\"",
+        "{} ask --config {} --message \"{}\"",
         mvp::config::CLI_COMMAND_NAME,
         config_path,
         DEFAULT_BROWSER_PREVIEW_ASK_MESSAGE
@@ -146,6 +149,7 @@ pub(crate) fn ensure_browser_preview_config(config: &mut mvp::config::LoongClawC
 
     updated
 }
+
 pub(crate) fn bundled_skill_install_path(config: &mvp::config::LoongClawConfig) -> PathBuf {
     let install_root = config
         .external_skills
@@ -241,26 +245,30 @@ fn command_on_path(command: &str, path_env: Option<&OsStr>) -> bool {
     env::split_paths(path_env).any(|dir| {
         command_candidates(command)
             .into_iter()
-            .map(|candidate| dir.join(candidate))
+            .map(|candidate| dir.join(&candidate))
             .any(|candidate| command_candidate_is_available(&candidate))
     })
 }
 
-fn command_candidates(command: &str) -> Vec<&str> {
+fn command_candidates(command: &str) -> Vec<String> {
     #[cfg(windows)]
     {
         vec![
-            command,
-            "agent-browser.exe",
-            "agent-browser.cmd",
-            "agent-browser.bat",
-            "agent-browser.com",
+            command.to_owned(),
+            format!("{command}.exe"),
+            format!("{command}.cmd"),
+            format!("{command}.bat"),
+            format!("{command}.com"),
         ]
     }
     #[cfg(not(windows))]
     {
-        vec![command]
+        vec![command.to_owned()]
     }
+}
+
+fn shell_quote_argument(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 #[cfg(unix)]
@@ -275,4 +283,32 @@ fn command_candidate_is_available(path: &std::path::Path) -> bool {
 #[cfg(windows)]
 fn command_candidate_is_available(path: &std::path::Path) -> bool {
     path.is_file()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        browser_preview_enable_command, browser_preview_ready_command,
+        browser_preview_unblock_command,
+    };
+
+    #[test]
+    fn browser_preview_commands_shell_escape_config_paths() {
+        let config_path = "/tmp/loongclaw's config.toml";
+
+        assert_eq!(
+            browser_preview_enable_command(config_path),
+            "loongclaw skills enable-browser-preview --config '/tmp/loongclaw'\"'\"'s config.toml'"
+        );
+        assert_eq!(
+            browser_preview_unblock_command(config_path),
+            "edit '/tmp/loongclaw'\"'\"'s config.toml' and remove `agent-browser` from [tools].shell_deny"
+        );
+        assert!(
+            browser_preview_ready_command(config_path).starts_with(
+                "loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message "
+            ),
+            "ready command should quote the config path for copy-paste safety"
+        );
+    }
 }

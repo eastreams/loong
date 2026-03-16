@@ -359,18 +359,28 @@ fn execute_enable_browser_preview_command(
         );
     }
 
-    let mut outcome = execute_install_bundled_skill_command(
+    if config_updated {
+        persist_config_update(resolved_path, &updated_config)?;
+    }
+    let install_result = execute_install_bundled_skill_command(
         resolved_path,
         &updated_config,
         crate::browser_preview::BROWSER_PREVIEW_SKILL_ID,
         replace
             || crate::browser_preview::inspect_browser_preview_state(&updated_config)
                 .skill_installed,
-    )?;
-
-    if config_updated {
-        persist_config_update(resolved_path, &updated_config)?;
-    }
+    );
+    let mut outcome = match install_result {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            if config_updated {
+                persist_config_update(resolved_path, config).map_err(|rollback_error| {
+                    format!("{error}; browser preview config rollback failed: {rollback_error}")
+                })?;
+            }
+            return Err(error);
+        }
+    };
     *config = updated_config;
 
     if let Some(payload) = outcome.payload.as_object_mut() {

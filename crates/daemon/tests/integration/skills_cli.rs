@@ -523,6 +523,54 @@ fn execute_skills_command_enable_browser_preview_rolls_back_config_on_install_fa
     fs::remove_dir_all(&root).ok();
 }
 
+#[cfg(unix)]
+#[test]
+fn execute_skills_command_enable_browser_preview_rolls_back_skill_on_config_persist_failure() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = unique_temp_dir("loongclaw-skills-cli-browser-preview-config-failure");
+    let install_root = root.join("managed-skills");
+    let config_path = root.join("loongclaw.toml");
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.tools.file_root = Some(root.display().to_string());
+    config.external_skills.install_root = Some(install_root.display().to_string());
+    mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
+        .expect("write config fixture");
+
+    let mut permissions = fs::metadata(&config_path)
+        .expect("read config file metadata")
+        .permissions();
+    permissions.set_mode(0o444);
+    fs::set_permissions(&config_path, permissions).expect("lock config file");
+
+    let error = loongclaw_daemon::skills_cli::execute_skills_command(
+        loongclaw_daemon::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::EnableBrowserPreview {
+                replace: false,
+            },
+        },
+    )
+    .expect_err("enable browser preview should fail when config persistence fails");
+
+    assert!(
+        error.contains("Permission denied") || error.contains("permission denied"),
+        "error should surface the config write failure: {error}"
+    );
+    assert!(
+        !install_root.join("browser-companion-preview").exists(),
+        "failed config persistence should not leave the helper skill installed"
+    );
+
+    let mut cleanup_permissions = fs::metadata(&config_path)
+        .expect("read config file metadata for cleanup")
+        .permissions();
+    cleanup_permissions.set_mode(0o644);
+    fs::set_permissions(&config_path, cleanup_permissions).expect("unlock config file");
+    fs::remove_dir_all(&root).ok();
+}
+
 #[test]
 fn execute_skills_command_installs_lists_inspects_and_removes_skill() {
     let root = unique_temp_dir("loongclaw-skills-cli-install");

@@ -37,7 +37,7 @@ automation companion:
 - continued default shipping of only `browser.open`, `browser.extract`, and
   `browser.click` as built-in browser tools
 
-The full governed companion runtime, richer tool catalog, isolated browser
+The fully governed companion runtime, richer tool catalog, isolated browser
 profile lifecycle, and stronger approval/audit semantics remain planned work.
 
 ## Out of Scope

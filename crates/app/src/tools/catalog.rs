@@ -1954,7 +1954,8 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "external_skills.inspect" | "external_skills.invoke" | "external_skills.remove" => {
             &["skill_id"]
         }
-        "external_skills.install" => &["path", "bundled_skill_id"],
+        // Grouped requirements are the source of truth for this tool's anyOf shape.
+        "external_skills.install" => &[],
         "file.read" => &["path"],
         "file.write" => &["path", "content"],
         "shell.exec" => &["command"],
