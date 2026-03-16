@@ -308,6 +308,7 @@ fn skills_policy_set_cli_parses_domain_and_approval_flags() {
 #[test]
 fn execute_skills_command_enable_browser_preview_persists_runtime_and_installs_helper_skill() {
     let root = unique_temp_dir("loongclaw-skills-cli-browser-preview");
+    let _env = SkillsCliEnvironmentGuard::set(&[]);
     let config_path = write_external_skills_config(&root, false);
 
     let enable = loongclaw_daemon::skills_cli::execute_skills_command(
@@ -373,6 +374,7 @@ fn execute_skills_command_enable_browser_preview_persists_runtime_and_installs_h
 #[test]
 fn execute_skills_command_enable_browser_preview_is_idempotent_after_first_install() {
     let root = unique_temp_dir("loongclaw-skills-cli-browser-preview-idempotent");
+    let _env = SkillsCliEnvironmentGuard::set(&[]);
     let config_path = write_external_skills_config(&root, false);
 
     loongclaw_daemon::skills_cli::execute_skills_command(
@@ -409,6 +411,7 @@ fn execute_skills_command_enable_browser_preview_is_idempotent_after_first_insta
 #[test]
 fn execute_skills_command_enable_browser_preview_rejects_explicit_shell_deny_without_mutation() {
     let root = unique_temp_dir("loongclaw-skills-cli-browser-preview-shell-deny");
+    let _env = SkillsCliEnvironmentGuard::set(&[]);
     let config_path = write_external_skills_config(&root, false);
     let config_string = config_path.display().to_string();
     let (resolved_path, mut config) =
@@ -477,6 +480,7 @@ fn execute_skills_command_enable_browser_preview_rejects_explicit_shell_deny_wit
 #[test]
 fn execute_skills_command_enable_browser_preview_rolls_back_config_on_install_failure() {
     let root = unique_temp_dir("loongclaw-skills-cli-browser-preview-install-failure");
+    let _env = SkillsCliEnvironmentGuard::set(&[]);
     let config_path = write_external_skills_config(&root, false);
     let config_string = config_path.display().to_string();
     fs::write(
@@ -877,6 +881,7 @@ fn execute_skills_command_list_prefers_nearest_project_ancestor_for_duplicate_sk
 #[test]
 fn execute_skills_command_installs_bundled_browser_companion_preview() {
     let root = unique_temp_dir("loongclaw-skills-cli-bundled-install");
+    let _env = SkillsCliEnvironmentGuard::set(&[]);
     let config_path = write_external_skills_config(&root, true);
 
     let install = loongclaw_daemon::skills_cli::execute_skills_command(

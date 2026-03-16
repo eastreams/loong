@@ -1050,15 +1050,16 @@ pub fn collect_runtime_snapshot_cli_state(
         &config,
         Some(resolved_path.as_path()),
     );
-    let tool_view = mvp::tools::runtime_tool_view_from_loongclaw_config(&config);
+    let (external_skills, snapshot_tool_runtime) =
+        collect_runtime_snapshot_external_skills_state(&tool_runtime);
+    let tool_view = mvp::tools::runtime_tool_view_for_runtime_config(&snapshot_tool_runtime);
     let visible_tool_names = tool_view
         .tool_names()
         .map(str::to_owned)
         .collect::<Vec<_>>();
-    let capability_snapshot = mvp::tools::capability_snapshot_with_config(&tool_runtime);
+    let capability_snapshot = mvp::tools::capability_snapshot_with_config(&snapshot_tool_runtime);
     let capability_snapshot_sha256 =
         runtime_snapshot_tool_digest(&visible_tool_names, &capability_snapshot)?;
-    let external_skills = collect_runtime_snapshot_external_skills_state(&tool_runtime);
 
     Ok(RuntimeSnapshotCliState {
         config: config_display,
@@ -1138,7 +1139,7 @@ fn build_runtime_snapshot_provider_profile_state(
         endpoint: provider.endpoint(),
         models_endpoint: provider.models_endpoint(),
         protocol_family: provider.kind.profile().protocol_family.as_str(),
-        credential_resolved: provider.authorization_header().is_some(),
+        credential_resolved: runtime_snapshot_provider_credentials_resolved(provider),
         auth_env: provider.resolved_auth_env_name(),
         reasoning_effort: provider
             .reasoning_effort
@@ -1152,9 +1153,24 @@ fn build_runtime_snapshot_provider_profile_state(
     }
 }
 
+fn runtime_snapshot_provider_credentials_resolved(provider: &mvp::config::ProviderConfig) -> bool {
+    if provider.resolved_auth_secret().is_some() {
+        return true;
+    }
+
+    ["authorization", "x-api-key"].iter().any(|header_name| {
+        provider
+            .header_value(header_name)
+            .is_some_and(|value| !value.trim().is_empty())
+    })
+}
+
 fn collect_runtime_snapshot_external_skills_state(
     tool_runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
-) -> RuntimeSnapshotExternalSkillsState {
+) -> (
+    RuntimeSnapshotExternalSkillsState,
+    mvp::tools::runtime_config::ToolRuntimeConfig,
+) {
     let empty_inventory = json!({
         "skills": [],
         "shadowed_skills": [],
@@ -1164,32 +1180,41 @@ fn collect_runtime_snapshot_external_skills_state(
         match runtime_snapshot_effective_external_skills_policy(tool_runtime) {
             Ok(policy_state) => policy_state,
             Err(error) => {
-                return RuntimeSnapshotExternalSkillsState {
-                    policy: tool_runtime.external_skills.clone(),
-                    override_active: false,
-                    inventory_status: RuntimeSnapshotInventoryStatus::Error,
-                    inventory_error: Some(error.clone()),
-                    inventory: json!({
-                        "skills": [],
-                        "shadowed_skills": [],
-                        "error": error,
-                    }),
-                    resolved_skill_count: 0,
-                    shadowed_skill_count: 0,
-                };
+                return (
+                    RuntimeSnapshotExternalSkillsState {
+                        policy: tool_runtime.external_skills.clone(),
+                        override_active: false,
+                        inventory_status: RuntimeSnapshotInventoryStatus::Error,
+                        inventory_error: Some(error.clone()),
+                        inventory: json!({
+                            "skills": [],
+                            "shadowed_skills": [],
+                            "error": error,
+                        }),
+                        resolved_skill_count: 0,
+                        shadowed_skill_count: 0,
+                    },
+                    tool_runtime.clone(),
+                );
             }
         };
 
+    let mut effective_tool_runtime = tool_runtime.clone();
+    effective_tool_runtime.external_skills = effective_policy.clone();
+
     if !effective_policy.enabled {
-        return RuntimeSnapshotExternalSkillsState {
-            policy: effective_policy,
-            override_active,
-            inventory_status: RuntimeSnapshotInventoryStatus::Disabled,
-            inventory_error: None,
-            inventory: empty_inventory,
-            resolved_skill_count: 0,
-            shadowed_skill_count: 0,
-        };
+        return (
+            RuntimeSnapshotExternalSkillsState {
+                policy: effective_policy,
+                override_active,
+                inventory_status: RuntimeSnapshotInventoryStatus::Disabled,
+                inventory_error: None,
+                inventory: empty_inventory,
+                resolved_skill_count: 0,
+                shadowed_skill_count: 0,
+            },
+            effective_tool_runtime,
+        );
     }
 
     match mvp::tools::execute_tool_core_with_config(
@@ -1197,30 +1222,36 @@ fn collect_runtime_snapshot_external_skills_state(
             tool_name: "external_skills.list".to_owned(),
             payload: json!({}),
         },
-        tool_runtime,
+        &effective_tool_runtime,
     ) {
-        Ok(outcome) => RuntimeSnapshotExternalSkillsState {
-            policy: effective_policy,
-            override_active,
-            inventory_status: RuntimeSnapshotInventoryStatus::Ok,
-            inventory_error: None,
-            resolved_skill_count: json_array_len(&outcome.payload["skills"]),
-            shadowed_skill_count: json_array_len(&outcome.payload["shadowed_skills"]),
-            inventory: outcome.payload,
-        },
-        Err(error) => RuntimeSnapshotExternalSkillsState {
-            policy: effective_policy,
-            override_active,
-            inventory_status: RuntimeSnapshotInventoryStatus::Error,
-            inventory_error: Some(error.clone()),
-            inventory: json!({
-                "skills": [],
-                "shadowed_skills": [],
-                "error": error,
-            }),
-            resolved_skill_count: 0,
-            shadowed_skill_count: 0,
-        },
+        Ok(outcome) => (
+            RuntimeSnapshotExternalSkillsState {
+                policy: effective_policy,
+                override_active,
+                inventory_status: RuntimeSnapshotInventoryStatus::Ok,
+                inventory_error: None,
+                resolved_skill_count: json_array_len(outcome.payload.get("skills")),
+                shadowed_skill_count: json_array_len(outcome.payload.get("shadowed_skills")),
+                inventory: outcome.payload,
+            },
+            effective_tool_runtime,
+        ),
+        Err(error) => (
+            RuntimeSnapshotExternalSkillsState {
+                policy: effective_policy,
+                override_active,
+                inventory_status: RuntimeSnapshotInventoryStatus::Error,
+                inventory_error: Some(error.clone()),
+                inventory: json!({
+                    "skills": [],
+                    "shadowed_skills": [],
+                    "error": error,
+                }),
+                resolved_skill_count: 0,
+                shadowed_skill_count: 0,
+            },
+            effective_tool_runtime,
+        ),
     }
 }
 
@@ -1311,8 +1342,8 @@ fn runtime_snapshot_tool_digest(
     Ok(format!("{:x}", Sha256::digest(serialized)))
 }
 
-fn json_array_len(value: &Value) -> usize {
-    value.as_array().map_or(0, Vec::len)
+fn json_array_len(value: Option<&Value>) -> usize {
+    value.and_then(Value::as_array).map_or(0, Vec::len)
 }
 
 fn json_string_array_to_set(

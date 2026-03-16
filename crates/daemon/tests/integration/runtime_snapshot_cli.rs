@@ -192,6 +192,18 @@ fn array_contains_object_field(array: &Value, field: &str, needle: &str) -> bool
     })
 }
 
+fn array_object_with_string_field<'a>(
+    array: &'a Value,
+    field: &str,
+    needle: &str,
+) -> Option<&'a Value> {
+    array.as_array()?.iter().find(|item| {
+        item.get(field)
+            .and_then(Value::as_str)
+            .is_some_and(|value| value == needle)
+    })
+}
+
 #[test]
 fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inventory() {
     let root = unique_temp_dir("loongclaw-runtime-snapshot-json");
@@ -214,10 +226,13 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
         &payload["provider"]["saved_profile_ids"],
         "deepseek-lab"
     ));
-    assert_eq!(
-        payload["provider"]["profiles"][0]["credential_resolved"],
-        true
-    );
+    let active_profile = array_object_with_string_field(
+        &payload["provider"]["profiles"],
+        "profile_id",
+        "deepseek-lab",
+    )
+    .expect("active provider profile should be present");
+    assert_eq!(active_profile["credential_resolved"], true);
     assert!(array_contains_string(
         &payload["tools"]["visible_tool_names"],
         "external_skills.list"
@@ -239,6 +254,50 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
 }
 
 #[test]
+fn runtime_snapshot_json_payload_marks_x_api_key_profiles_as_credential_resolved() {
+    let root = unique_temp_dir("loongclaw-runtime-snapshot-x-api-key");
+    let _env = RuntimeSnapshotEnvGuard::set(&[
+        ("RUNTIME_SNAPSHOT_DEEPSEEK_KEY", Some("demo-token")),
+        (
+            "RUNTIME_SNAPSHOT_ANTHROPIC_KEY",
+            Some("anthropic-demo-token"),
+        ),
+        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+    ]);
+    let (config_path, mut config) = write_runtime_snapshot_config(&root);
+    config.providers.insert(
+        "anthropic-lab".to_owned(),
+        mvp::config::ProviderProfileConfig {
+            default_for_kind: false,
+            provider: mvp::config::ProviderConfig {
+                kind: mvp::config::ProviderKind::Anthropic,
+                model: "claude-3-7-sonnet".to_owned(),
+                api_key: Some("${RUNTIME_SNAPSHOT_ANTHROPIC_KEY}".to_owned()),
+                ..Default::default()
+            },
+        },
+    );
+    mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
+        .expect("rewrite config fixture");
+
+    let snapshot = collect_runtime_snapshot_cli_state(Some(
+        config_path.to_str().expect("config path should be utf-8"),
+    ))
+    .expect("collect runtime snapshot");
+    let payload = build_runtime_snapshot_cli_json_payload(&snapshot);
+
+    let anthropic_profile = array_object_with_string_field(
+        &payload["provider"]["profiles"],
+        "profile_id",
+        "anthropic-lab",
+    )
+    .expect("anthropic provider profile should be present");
+    assert_eq!(anthropic_profile["credential_resolved"], true);
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn runtime_snapshot_json_payload_reflects_effective_external_skills_policy_override() {
     let root = unique_temp_dir("loongclaw-runtime-snapshot-policy-override");
     let _env = RuntimeSnapshotEnvGuard::set(&[
@@ -247,6 +306,17 @@ fn runtime_snapshot_json_payload_reflects_effective_external_skills_policy_overr
     ]);
     let (config_path, config) = write_runtime_snapshot_config(&root);
     install_demo_skill(&root, &config, &config_path);
+
+    let enabled_snapshot = collect_runtime_snapshot_cli_state(Some(
+        config_path.to_str().expect("config path should be utf-8"),
+    ))
+    .expect("collect enabled runtime snapshot");
+    let enabled_payload = build_runtime_snapshot_cli_json_payload(&enabled_snapshot);
+    let enabled_digest = enabled_payload["tools"]["capability_snapshot_sha256"].clone();
+    assert!(array_contains_string(
+        &enabled_payload["tools"]["visible_tool_names"],
+        "external_skills.list"
+    ));
 
     let runtime_config = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
         &config,
@@ -291,6 +361,18 @@ fn runtime_snapshot_json_payload_reflects_effective_external_skills_policy_overr
     assert_eq!(payload["external_skills"]["override_active"], true);
     assert_eq!(payload["external_skills"]["inventory_status"], "disabled");
     assert_eq!(payload["external_skills"]["resolved_skill_count"], 0);
+    assert!(!array_contains_string(
+        &payload["tools"]["visible_tool_names"],
+        "external_skills.list"
+    ));
+    assert!(array_contains_string(
+        &payload["tools"]["visible_tool_names"],
+        "external_skills.policy"
+    ));
+    assert_ne!(
+        payload["tools"]["capability_snapshot_sha256"],
+        enabled_digest
+    );
 
     fs::remove_dir_all(&root).ok();
 }
