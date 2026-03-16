@@ -1433,6 +1433,30 @@ mod tests {
     }
 
     #[cfg(feature = "memory-sqlite")]
+    fn cleanup_chat_test_memory(sqlite_path: &Path) {
+        let _ = std::fs::remove_file(sqlite_path);
+        let _ = std::fs::remove_file(format!("{}-wal", sqlite_path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", sqlite_path.display()));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn init_chat_test_memory(label: &str) -> (LoongClawConfig, MemoryRuntimeConfig, PathBuf) {
+        let sqlite_path = unique_chat_sqlite_path(label);
+        cleanup_chat_test_memory(&sqlite_path);
+
+        let mut config = LoongClawConfig::default();
+        config.memory.sqlite_path = sqlite_path.display().to_string();
+        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        crate::memory::ensure_memory_db_ready(
+            Some(config.memory.resolved_sqlite_path()),
+            &memory_config,
+        )
+        .expect("initialize sqlite memory");
+
+        (config, memory_config, sqlite_path)
+    }
+
+    #[cfg(feature = "memory-sqlite")]
     struct SharedTestMemoryAdapter {
         invocations: Arc<Mutex<Vec<MemoryCoreRequest>>>,
         status: String,
@@ -1642,17 +1666,7 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[tokio::test]
     async fn print_history_accepts_explicit_runtime_binding() {
-        let sqlite_path = unique_chat_sqlite_path("diagnostics");
-        let _ = std::fs::remove_file(&sqlite_path);
-
-        let mut config = LoongClawConfig::default();
-        config.memory.sqlite_path = sqlite_path.display().to_string();
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-        crate::memory::ensure_memory_db_ready(
-            Some(config.memory.resolved_sqlite_path()),
-            &memory_config,
-        )
-        .expect("initialize sqlite memory");
+        let (config, memory_config, sqlite_path) = init_chat_test_memory("diagnostics");
 
         let session_id = "chat-binding-history-direct";
         crate::memory::append_turn_direct(session_id, "user", "hello", &memory_config)
@@ -1710,23 +1724,13 @@ mod tests {
         );
         assert_eq!(captured[0].payload["limit"], json!(16));
 
-        let _ = std::fs::remove_file(sqlite_path);
+        cleanup_chat_test_memory(&sqlite_path);
     }
 
     #[cfg(feature = "memory-sqlite")]
     #[tokio::test]
     async fn print_history_rejects_non_ok_kernel_memory_outcome() {
-        let sqlite_path = unique_chat_sqlite_path("diagnostics-non-ok");
-        let _ = std::fs::remove_file(&sqlite_path);
-
-        let mut config = LoongClawConfig::default();
-        config.memory.sqlite_path = sqlite_path.display().to_string();
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-        crate::memory::ensure_memory_db_ready(
-            Some(config.memory.resolved_sqlite_path()),
-            &memory_config,
-        )
-        .expect("initialize sqlite memory");
+        let (_config, memory_config, sqlite_path) = init_chat_test_memory("diagnostics-non-ok");
 
         let (kernel_ctx, invocations) = build_kernel_context_with_window_outcome(
             "error",
@@ -1758,23 +1762,13 @@ mod tests {
         );
         assert_eq!(captured[0].payload["limit"], json!(16));
 
-        let _ = std::fs::remove_file(sqlite_path);
+        cleanup_chat_test_memory(&sqlite_path);
     }
 
     #[cfg(feature = "memory-sqlite")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn safe_lane_summary_output_accepts_explicit_runtime_binding() {
-        let sqlite_path = unique_chat_sqlite_path("safe-lane-output");
-        let _ = std::fs::remove_file(&sqlite_path);
-
-        let mut config = LoongClawConfig::default();
-        config.memory.sqlite_path = sqlite_path.display().to_string();
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-        crate::memory::ensure_memory_db_ready(
-            Some(config.memory.resolved_sqlite_path()),
-            &memory_config,
-        )
-        .expect("initialize sqlite memory");
+        let (config, memory_config, sqlite_path) = init_chat_test_memory("safe-lane-output");
 
         let direct_payloads = safe_lane_event_payloads();
         append_assistant_payloads(
@@ -1829,23 +1823,13 @@ mod tests {
         assert_eq!(captured[0].payload["limit"], json!(80));
         assert_eq!(captured[0].payload["allow_extended_limit"], json!(true));
 
-        let _ = std::fs::remove_file(sqlite_path);
+        cleanup_chat_test_memory(&sqlite_path);
     }
 
     #[cfg(feature = "memory-sqlite")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn turn_checkpoint_summary_output_accepts_explicit_runtime_binding() {
-        let sqlite_path = unique_chat_sqlite_path("turn-checkpoint-output");
-        let _ = std::fs::remove_file(&sqlite_path);
-
-        let mut config = LoongClawConfig::default();
-        config.memory.sqlite_path = sqlite_path.display().to_string();
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-        crate::memory::ensure_memory_db_ready(
-            Some(config.memory.resolved_sqlite_path()),
-            &memory_config,
-        )
-        .expect("initialize sqlite memory");
+        let (config, memory_config, sqlite_path) = init_chat_test_memory("turn-checkpoint-output");
 
         let direct_payloads = turn_checkpoint_event_payloads();
         append_assistant_payloads(
@@ -1895,7 +1879,7 @@ mod tests {
         assert_eq!(captured[0].payload["limit"], json!(112));
         assert_eq!(captured[0].payload["allow_extended_limit"], json!(true));
 
-        let _ = std::fs::remove_file(sqlite_path);
+        cleanup_chat_test_memory(&sqlite_path);
     }
 
     #[test]
