@@ -467,8 +467,48 @@ pub fn get_tool_runtime_config() -> &'static ToolRuntimeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::ScopedEnv;
     #[cfg(feature = "feishu-integration")]
     use std::collections::BTreeMap;
+
+    fn clear_tool_runtime_env(env: &mut ScopedEnv) {
+        for key in [
+            "LOONGCLAW_CONFIG_PATH",
+            "LOONGCLAW_FILE_ROOT",
+            "LOONGCLAW_TOOL_SESSIONS_ENABLED",
+            "LOONGCLAW_TOOL_MESSAGES_ENABLED",
+            "LOONGCLAW_TOOL_DELEGATE_ENABLED",
+            "LOONGCLAW_BROWSER_ENABLED",
+            "LOONGCLAW_BROWSER_MAX_SESSIONS",
+            "LOONGCLAW_BROWSER_MAX_LINKS",
+            "LOONGCLAW_BROWSER_MAX_TEXT_CHARS",
+            "LOONGCLAW_BROWSER_COMPANION_ENABLED",
+            "LOONGCLAW_BROWSER_COMPANION_READY",
+            "LOONGCLAW_BROWSER_COMPANION_COMMAND",
+            "LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION",
+            "LOONGCLAW_WEB_FETCH_ENABLED",
+            "LOONGCLAW_WEB_FETCH_ALLOW_PRIVATE_HOSTS",
+            "LOONGCLAW_WEB_FETCH_ALLOWED_DOMAINS",
+            "LOONGCLAW_WEB_FETCH_BLOCKED_DOMAINS",
+            "LOONGCLAW_WEB_FETCH_TIMEOUT_SECONDS",
+            "LOONGCLAW_WEB_FETCH_MAX_BYTES",
+            "LOONGCLAW_WEB_FETCH_MAX_REDIRECTS",
+            "LOONGCLAW_EXTERNAL_SKILLS_ENABLED",
+            "LOONGCLAW_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL",
+            "LOONGCLAW_EXTERNAL_SKILLS_ALLOWED_DOMAINS",
+            "LOONGCLAW_EXTERNAL_SKILLS_BLOCKED_DOMAINS",
+            "LOONGCLAW_EXTERNAL_SKILLS_INSTALL_ROOT",
+            "LOONGCLAW_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED",
+        ] {
+            env.remove(key);
+        }
+    }
+
+    #[cfg(feature = "feishu-integration")]
+    fn clear_feishu_runtime_env(env: &mut ScopedEnv) {
+        env.remove("FEISHU_APP_ID");
+        env.remove("FEISHU_APP_SECRET");
+    }
 
     #[test]
     fn tool_runtime_config_from_env_defaults() {
@@ -614,13 +654,20 @@ mod tests {
 
     #[test]
     fn from_env_defaults_to_empty_allowlist() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        #[cfg(feature = "feishu-integration")]
+        clear_feishu_runtime_env(&mut env);
+
         let config = ToolRuntimeConfig::from_env();
         assert!(config.shell_allow.is_empty());
     }
 
     #[test]
     fn from_loongclaw_config_projects_browser_companion_policy() {
-        crate::process_env::set_var("LOONGCLAW_BROWSER_COMPANION_READY", "true");
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set("LOONGCLAW_BROWSER_COMPANION_READY", "true");
         let mut config = crate::config::LoongClawConfig::default();
         config.tools.browser_companion.enabled = true;
         config.tools.browser_companion.command = Some("loongclaw-browser-companion".to_owned());
@@ -637,8 +684,6 @@ mod tests {
             runtime.browser_companion.expected_version.as_deref(),
             Some("1.2.3")
         );
-
-        crate::process_env::remove_var("LOONGCLAW_BROWSER_COMPANION_READY");
     }
 
     #[cfg(feature = "tool-shell")]
@@ -669,48 +714,53 @@ mod tests {
 
     #[test]
     fn from_env_parses_external_skills_policy() {
-        crate::process_env::set_var("LOONGCLAW_TOOL_SESSIONS_ENABLED", "false");
-        crate::process_env::set_var("LOONGCLAW_TOOL_MESSAGES_ENABLED", "true");
-        crate::process_env::set_var("LOONGCLAW_TOOL_DELEGATE_ENABLED", "false");
-        crate::process_env::set_var("LOONGCLAW_BROWSER_ENABLED", "false");
-        crate::process_env::set_var("LOONGCLAW_BROWSER_MAX_SESSIONS", "4");
-        crate::process_env::set_var("LOONGCLAW_BROWSER_MAX_LINKS", "12");
-        crate::process_env::set_var("LOONGCLAW_BROWSER_MAX_TEXT_CHARS", "2048");
-        crate::process_env::set_var("LOONGCLAW_BROWSER_COMPANION_ENABLED", "true");
-        crate::process_env::set_var("LOONGCLAW_BROWSER_COMPANION_READY", "true");
-        crate::process_env::set_var(
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        #[cfg(feature = "feishu-integration")]
+        clear_feishu_runtime_env(&mut env);
+
+        env.set("LOONGCLAW_TOOL_SESSIONS_ENABLED", "false");
+        env.set("LOONGCLAW_TOOL_MESSAGES_ENABLED", "true");
+        env.set("LOONGCLAW_TOOL_DELEGATE_ENABLED", "false");
+        env.set("LOONGCLAW_BROWSER_ENABLED", "false");
+        env.set("LOONGCLAW_BROWSER_MAX_SESSIONS", "4");
+        env.set("LOONGCLAW_BROWSER_MAX_LINKS", "12");
+        env.set("LOONGCLAW_BROWSER_MAX_TEXT_CHARS", "2048");
+        env.set("LOONGCLAW_BROWSER_COMPANION_ENABLED", "true");
+        env.set("LOONGCLAW_BROWSER_COMPANION_READY", "true");
+        env.set(
             "LOONGCLAW_BROWSER_COMPANION_COMMAND",
             "loongclaw-browser-companion",
         );
-        crate::process_env::set_var("LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION", "1.2.3");
-        crate::process_env::set_var("LOONGCLAW_WEB_FETCH_ENABLED", "false");
-        crate::process_env::set_var("LOONGCLAW_WEB_FETCH_ALLOW_PRIVATE_HOSTS", "true");
-        crate::process_env::set_var(
+        env.set("LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION", "1.2.3");
+        env.set("LOONGCLAW_WEB_FETCH_ENABLED", "false");
+        env.set("LOONGCLAW_WEB_FETCH_ALLOW_PRIVATE_HOSTS", "true");
+        env.set(
             "LOONGCLAW_WEB_FETCH_ALLOWED_DOMAINS",
             "docs.example.com,api.example.com",
         );
-        crate::process_env::set_var("LOONGCLAW_WEB_FETCH_BLOCKED_DOMAINS", "internal.example");
-        crate::process_env::set_var("LOONGCLAW_WEB_FETCH_TIMEOUT_SECONDS", "9");
-        crate::process_env::set_var("LOONGCLAW_WEB_FETCH_MAX_BYTES", "262144");
-        crate::process_env::set_var("LOONGCLAW_WEB_FETCH_MAX_REDIRECTS", "1");
-        crate::process_env::set_var("LOONGCLAW_EXTERNAL_SKILLS_ENABLED", "true");
-        crate::process_env::set_var(
+        env.set("LOONGCLAW_WEB_FETCH_BLOCKED_DOMAINS", "internal.example");
+        env.set("LOONGCLAW_WEB_FETCH_TIMEOUT_SECONDS", "9");
+        env.set("LOONGCLAW_WEB_FETCH_MAX_BYTES", "262144");
+        env.set("LOONGCLAW_WEB_FETCH_MAX_REDIRECTS", "1");
+        env.set("LOONGCLAW_EXTERNAL_SKILLS_ENABLED", "true");
+        env.set(
             "LOONGCLAW_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL",
             "false",
         );
-        crate::process_env::set_var(
+        env.set(
             "LOONGCLAW_EXTERNAL_SKILLS_ALLOWED_DOMAINS",
             "skills.sh,clawhub.io",
         );
-        crate::process_env::set_var(
+        env.set(
             "LOONGCLAW_EXTERNAL_SKILLS_BLOCKED_DOMAINS",
             "malicious.example",
         );
-        crate::process_env::set_var(
+        env.set(
             "LOONGCLAW_EXTERNAL_SKILLS_INSTALL_ROOT",
             "/tmp/managed-skills",
         );
-        crate::process_env::set_var("LOONGCLAW_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED", "false");
+        env.set("LOONGCLAW_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED", "false");
 
         let config = ToolRuntimeConfig::from_env();
         assert!(!config.sessions_enabled);
@@ -768,31 +818,6 @@ mod tests {
             Some(PathBuf::from("/tmp/managed-skills"))
         );
         assert!(!config.external_skills.auto_expose_installed);
-
-        crate::process_env::remove_var("LOONGCLAW_TOOL_SESSIONS_ENABLED");
-        crate::process_env::remove_var("LOONGCLAW_TOOL_MESSAGES_ENABLED");
-        crate::process_env::remove_var("LOONGCLAW_TOOL_DELEGATE_ENABLED");
-        crate::process_env::remove_var("LOONGCLAW_BROWSER_ENABLED");
-        crate::process_env::remove_var("LOONGCLAW_BROWSER_MAX_SESSIONS");
-        crate::process_env::remove_var("LOONGCLAW_BROWSER_MAX_LINKS");
-        crate::process_env::remove_var("LOONGCLAW_BROWSER_MAX_TEXT_CHARS");
-        crate::process_env::remove_var("LOONGCLAW_BROWSER_COMPANION_ENABLED");
-        crate::process_env::remove_var("LOONGCLAW_BROWSER_COMPANION_READY");
-        crate::process_env::remove_var("LOONGCLAW_BROWSER_COMPANION_COMMAND");
-        crate::process_env::remove_var("LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION");
-        crate::process_env::remove_var("LOONGCLAW_WEB_FETCH_ENABLED");
-        crate::process_env::remove_var("LOONGCLAW_WEB_FETCH_ALLOW_PRIVATE_HOSTS");
-        crate::process_env::remove_var("LOONGCLAW_WEB_FETCH_ALLOWED_DOMAINS");
-        crate::process_env::remove_var("LOONGCLAW_WEB_FETCH_BLOCKED_DOMAINS");
-        crate::process_env::remove_var("LOONGCLAW_WEB_FETCH_TIMEOUT_SECONDS");
-        crate::process_env::remove_var("LOONGCLAW_WEB_FETCH_MAX_BYTES");
-        crate::process_env::remove_var("LOONGCLAW_WEB_FETCH_MAX_REDIRECTS");
-        crate::process_env::remove_var("LOONGCLAW_EXTERNAL_SKILLS_ENABLED");
-        crate::process_env::remove_var("LOONGCLAW_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL");
-        crate::process_env::remove_var("LOONGCLAW_EXTERNAL_SKILLS_ALLOWED_DOMAINS");
-        crate::process_env::remove_var("LOONGCLAW_EXTERNAL_SKILLS_BLOCKED_DOMAINS");
-        crate::process_env::remove_var("LOONGCLAW_EXTERNAL_SKILLS_INSTALL_ROOT");
-        crate::process_env::remove_var("LOONGCLAW_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED");
     }
 
     #[test]
@@ -875,8 +900,11 @@ mod tests {
     #[cfg(feature = "feishu-integration")]
     #[test]
     fn from_env_enables_feishu_runtime_when_credentials_exist() {
-        crate::process_env::set_var("FEISHU_APP_ID", "cli_env_a1b2c3");
-        crate::process_env::set_var("FEISHU_APP_SECRET", "env-secret");
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        clear_feishu_runtime_env(&mut env);
+        env.set("FEISHU_APP_ID", "cli_env_a1b2c3");
+        env.set("FEISHU_APP_SECRET", "env-secret");
 
         let config = ToolRuntimeConfig::from_env();
         let feishu = config
@@ -894,9 +922,6 @@ mod tests {
             feishu.integration.resolved_sqlite_path(),
             crate::config::default_loongclaw_home().join("feishu.sqlite3")
         );
-
-        crate::process_env::remove_var("FEISHU_APP_ID");
-        crate::process_env::remove_var("FEISHU_APP_SECRET");
     }
 
     #[cfg(feature = "feishu-integration")]
