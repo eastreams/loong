@@ -119,7 +119,6 @@ fn write_runtime_snapshot_config(root: &Path) -> (PathBuf, mvp::config::LoongCla
     config.acp.dispatch.enabled = true;
     config.acp.default_agent = Some("codex".to_owned());
     config.acp.allowed_agents = vec!["codex".to_owned(), "planner".to_owned()];
-    config.active_provider = Some("deepseek-lab".to_owned());
     config.providers.insert(
         "openai-main".to_owned(),
         mvp::config::ProviderProfileConfig {
@@ -131,8 +130,8 @@ fn write_runtime_snapshot_config(root: &Path) -> (PathBuf, mvp::config::LoongCla
             },
         },
     );
-    config.providers.insert(
-        "deepseek-lab".to_owned(),
+    config.set_active_provider_profile(
+        "deepseek-lab",
         mvp::config::ProviderProfileConfig {
             default_for_kind: true,
             provider: mvp::config::ProviderConfig {
@@ -208,8 +207,9 @@ fn array_object_with_string_field<'a>(
 fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inventory() {
     let root = unique_temp_dir("loongclaw-runtime-snapshot-json");
     let _env = RuntimeSnapshotEnvGuard::set(&[
-        ("RUNTIME_SNAPSHOT_DEEPSEEK_KEY", Some("demo-token")),
+        ("DEEPSEEK_API_KEY", None),
         ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("OPENAI_API_KEY", None),
     ]);
     let (config_path, config) = write_runtime_snapshot_config(&root);
     install_demo_skill(&root, &config, &config_path);
