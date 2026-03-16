@@ -180,7 +180,7 @@ fn ensure_path_within_root(root: &Path, path: &Path) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "file path {} escapes configured file root {}",
+        "policy_denied: file path {} escapes configured file root {}",
         path.display(),
         root.display()
     ))
@@ -279,6 +279,7 @@ mod tests {
         let error =
             resolve_safe_file_path_with_config("secret-link", &config).expect_err("escape denied");
 
+        assert!(error.starts_with("policy_denied: "));
         assert!(error.contains("escapes configured file root"));
         let _ = fs::remove_dir_all(base);
     }
@@ -310,6 +311,7 @@ mod tests {
         let error =
             execute_file_write_tool_with_config(request, &config).expect_err("escape denied");
 
+        assert!(error.starts_with("policy_denied: "));
         assert!(error.contains("escapes configured file root"));
         let _ = fs::remove_dir_all(base);
     }

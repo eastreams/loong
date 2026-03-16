@@ -325,7 +325,7 @@ fn execute_skills_command_policy_round_trips_persisted_config() {
         reloaded.external_skills.install_root.as_deref(),
         Some(install_root.as_str())
     );
-    assert!(reloaded.external_skills.auto_expose_installed);
+    assert!(!reloaded.external_skills.auto_expose_installed);
 
     let reset =
         crate::skills_cli::execute_skills_command(crate::skills_cli::SkillsCommandOptions {
@@ -401,7 +401,7 @@ fn execute_skills_command_policy_round_trips_persisted_config() {
         reloaded_after_reset.external_skills.install_root.as_deref(),
         Some(install_root.as_str())
     );
-    assert!(reloaded_after_reset.external_skills.auto_expose_installed);
+    assert!(!reloaded_after_reset.external_skills.auto_expose_installed);
 
     fs::remove_dir_all(&root).ok();
 }

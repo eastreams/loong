@@ -188,7 +188,7 @@ mod tests {
         let system = build_system_message(&config, true).expect("system message");
         let content = system["content"].as_str().expect("system content");
         assert!(content.starts_with("Stay concise and technical."));
-        assert!(content.contains("[available_tools]"));
+        assert!(content.contains("[tool_discovery_runtime]"));
     }
 
     #[test]
@@ -241,7 +241,7 @@ mod tests {
         let system_content = messages[0]["content"].as_str().expect("system content");
 
         assert!(system_content.contains("## Personality Overlay: Friendly Collaboration"));
-        assert!(system_content.contains("[available_tools]"));
+        assert!(system_content.contains("[tool_discovery_runtime]"));
 
         let _ = std::fs::remove_file(config.memory.sqlite_path.as_str());
     }

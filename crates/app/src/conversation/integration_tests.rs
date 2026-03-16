@@ -41,17 +41,28 @@ impl FakeProviderBuilder {
     }
 
     pub fn build(self) -> ProviderTurn {
+        let session_id = "test-session";
+        let turn_id = "test-turn";
         let tool_intents = self
             .tool_calls
             .into_iter()
             .enumerate()
-            .map(|(i, (name, args))| ToolIntent {
-                tool_name: name,
-                args_json: args,
-                source: "fake_provider".to_owned(),
-                session_id: "test-session".to_owned(),
-                turn_id: "test-turn".to_owned(),
-                tool_call_id: format!("call-{i}"),
+            .map(|(i, (name, args))| {
+                let (tool_name, args_json) =
+                    crate::tools::synthesize_test_provider_tool_call_with_scope(
+                        &name,
+                        args,
+                        Some(session_id),
+                        Some(turn_id),
+                    );
+                ToolIntent {
+                    tool_name,
+                    args_json,
+                    source: "fake_provider".to_owned(),
+                    session_id: session_id.to_owned(),
+                    turn_id: turn_id.to_owned(),
+                    tool_call_id: format!("call-{i}"),
+                }
             })
             .collect();
 
@@ -80,36 +91,25 @@ pub(crate) struct TurnTestHarness {
 
 impl TurnTestHarness {
     pub fn new() -> Self {
-        Self::with_capabilities(BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-            Capability::FilesystemWrite,
-        ]))
+        Self::with_capabilities(default_tool_capabilities())
     }
 
     pub fn with_capabilities(capabilities: BTreeSet<Capability>) -> Self {
-        Self::with_tool_config(capabilities, ToolRuntimeConfig::default())
+        let temp_dir = next_temp_dir();
+
+        Self::with_capabilities_and_tool_config(
+            capabilities,
+            temp_dir.clone(),
+            default_tool_runtime_config(temp_dir),
+        )
     }
 
-    /// Construct a harness with a caller-supplied `ToolRuntimeConfig`.
-    /// Use this when a test needs specific allow/deny/approval lists rather
-    /// than the generic defaults.
-    pub fn with_tool_config(
+    pub fn with_capabilities_and_tool_config(
         capabilities: BTreeSet<Capability>,
-        tool_config_override: ToolRuntimeConfig,
+        temp_dir: PathBuf,
+        tool_config: ToolRuntimeConfig,
     ) -> Self {
-        let id = HARNESS_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let temp_dir =
-            std::env::temp_dir().join(format!("loongclaw-integ-{}-{id}", std::process::id()));
         std::fs::create_dir_all(&temp_dir).expect("create temp dir");
-
-        // Merge the caller's overrides with the unique temp dir as file_root.
-        let tool_config = ToolRuntimeConfig {
-            file_root: Some(temp_dir.clone()),
-            config_path: Some(temp_dir.join("loongclaw.toml")),
-            ..tool_config_override
-        };
-
         let audit = Arc::new(InMemoryAuditSink::default());
         let clock = Arc::new(FixedClock::new(1_700_000_000));
         let mut kernel =
@@ -180,6 +180,55 @@ impl TurnTestHarness {
     pub async fn execute(&self, turn: &ProviderTurn) -> TurnResult {
         self.engine.execute_turn(turn, &self.kernel_ctx).await
     }
+
+    /// Construct a harness with a caller-supplied `ToolRuntimeConfig`.
+    /// Use this when a test needs specific allow/deny settings rather than the
+    /// generic defaults.
+    pub fn with_tool_config(
+        capabilities: BTreeSet<Capability>,
+        tool_config_override: ToolRuntimeConfig,
+    ) -> Self {
+        let temp_dir = next_temp_dir();
+        let tool_config = ToolRuntimeConfig {
+            file_root: Some(temp_dir.clone()),
+            ..tool_config_override
+        };
+        Self::with_capabilities_and_tool_config(capabilities, temp_dir, tool_config)
+    }
+}
+
+fn default_tool_capabilities() -> BTreeSet<Capability> {
+    BTreeSet::from([
+        Capability::InvokeTool,
+        Capability::FilesystemRead,
+        Capability::FilesystemWrite,
+    ])
+}
+
+fn next_temp_dir() -> PathBuf {
+    let id = HARNESS_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let temp_dir =
+        std::env::temp_dir().join(format!("loongclaw-integ-{}-{id}", std::process::id()));
+    std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+    temp_dir
+}
+
+fn default_tool_runtime_config(temp_dir: PathBuf) -> ToolRuntimeConfig {
+    ToolRuntimeConfig {
+        shell_allow: BTreeSet::from(["echo".to_owned(), "cat".to_owned(), "ls".to_owned()]),
+        shell_deny: BTreeSet::new(),
+        shell_default_mode: crate::tools::shell_policy_ext::ShellPolicyDefault::Deny,
+        file_root: Some(temp_dir),
+        config_path: None,
+        sessions_enabled: true,
+        messages_enabled: true,
+        delegate_enabled: true,
+        browser: Default::default(),
+        web_fetch: Default::default(),
+        external_skills: Default::default(),
+        #[cfg(feature = "feishu-integration")]
+        feishu: None,
+    }
 }
 
 impl Drop for TurnTestHarness {
@@ -209,8 +258,17 @@ mod tests {
             .build();
         assert_eq!(turn.assistant_text, "checking file");
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "file.read");
-        assert_eq!(turn.tool_intents[0].args_json, json!({"path": "test.txt"}));
+        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
+        assert_eq!(turn.tool_intents[0].args_json["tool_id"], "file.read");
+        assert_eq!(
+            turn.tool_intents[0].args_json["arguments"],
+            json!({"path": "test.txt"})
+        );
+        assert!(
+            turn.tool_intents[0].args_json["lease"]
+                .as_str()
+                .is_some_and(|lease| !lease.is_empty())
+        );
         assert!(!turn.tool_intents[0].tool_call_id.is_empty());
     }
 
@@ -221,6 +279,8 @@ mod tests {
             .with_tool_call("file.read", json!({"path": "b.txt"}))
             .build();
         assert_eq!(turn.tool_intents.len(), 2);
+        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
+        assert_eq!(turn.tool_intents[1].tool_name, "tool.invoke");
         assert_ne!(
             turn.tool_intents[0].tool_call_id,
             turn.tool_intents[1].tool_call_id
@@ -236,6 +296,20 @@ mod tests {
                 .token
                 .allowed_capabilities
                 .contains(&Capability::InvokeTool)
+        );
+        assert!(
+            harness
+                .kernel_ctx
+                .token
+                .allowed_capabilities
+                .contains(&Capability::FilesystemRead)
+        );
+        assert!(
+            harness
+                .kernel_ctx
+                .token
+                .allowed_capabilities
+                .contains(&Capability::FilesystemWrite)
         );
         assert!(harness.temp_dir.exists());
     }
@@ -417,6 +491,178 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn integ_missing_filesystem_read_capability_denies_file_read() {
+        let harness = TurnTestHarness::with_capabilities(BTreeSet::from([Capability::InvokeTool]));
+
+        let turn = FakeProviderBuilder::new()
+            .with_tool_call("file.read", json!({"path": "anything.txt"}))
+            .build();
+        let result = harness.execute(&turn).await;
+
+        #[allow(clippy::wildcard_enum_match_arm)]
+        match result {
+            TurnResult::ToolDenied(reason) => {
+                assert!(
+                    reason.contains("FilesystemRead"),
+                    "expected FilesystemRead denial, got: {reason}"
+                );
+            }
+            other => panic!("expected ToolDenied, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn integ_missing_filesystem_write_capability_denies_file_write() {
+        let harness = TurnTestHarness::with_capabilities(BTreeSet::from([
+            Capability::InvokeTool,
+            Capability::FilesystemRead,
+        ]));
+
+        let turn = FakeProviderBuilder::new()
+            .with_tool_call(
+                "file.write",
+                json!({"path": "note.txt", "content": "hello"}),
+            )
+            .build();
+        let result = harness.execute(&turn).await;
+
+        #[allow(clippy::wildcard_enum_match_arm)]
+        match result {
+            TurnResult::ToolDenied(reason) => {
+                assert!(
+                    reason.contains("FilesystemWrite"),
+                    "expected FilesystemWrite denial, got: {reason}"
+                );
+            }
+            other => panic!("expected ToolDenied, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn integ_missing_filesystem_write_capability_denies_writeful_claw_import() {
+        let harness = TurnTestHarness::with_capabilities(BTreeSet::from([
+            Capability::InvokeTool,
+            Capability::FilesystemRead,
+        ]));
+
+        let turn = FakeProviderBuilder::new()
+            .with_tool_call(
+                "claw.import",
+                json!({
+                    "mode": "apply",
+                    "input_path": "imports/nanobot",
+                    "output_path": "loongclaw.toml"
+                }),
+            )
+            .build();
+        let result = harness.execute(&turn).await;
+
+        #[allow(clippy::wildcard_enum_match_arm)]
+        match result {
+            TurnResult::ToolDenied(reason) => {
+                assert!(
+                    reason.contains("FilesystemWrite"),
+                    "expected FilesystemWrite denial, got: {reason}"
+                );
+            }
+            other => panic!("expected ToolDenied, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn integ_tool_search_filters_results_to_current_capabilities() {
+        let harness = TurnTestHarness::with_capabilities(BTreeSet::from([Capability::InvokeTool]));
+
+        let turn = FakeProviderBuilder::new()
+            .with_tool_call("tool.search", json!({"query": "read file import config"}))
+            .build();
+        let result = harness.execute(&turn).await;
+
+        #[allow(clippy::wildcard_enum_match_arm)]
+        match result {
+            TurnResult::FinalText(text) => {
+                assert!(
+                    !text.contains("\"tool_id\":\"file.read\""),
+                    "file.read should be hidden without FilesystemRead: {text}"
+                );
+                assert!(
+                    !text.contains("\"tool_id\":\"file.write\""),
+                    "file.write should be hidden without FilesystemWrite: {text}"
+                );
+                assert!(
+                    !text.contains("\"tool_id\":\"claw.import\""),
+                    "claw.import should be hidden without filesystem access: {text}"
+                );
+            }
+            other => panic!("expected FinalText, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn integ_shell_exec_wrapped_policy_respects_default_deny() {
+        let harness = TurnTestHarness::new();
+
+        let turn = FakeProviderBuilder::new()
+            .with_tool_call("shell.exec", json!({"command": "pwd"}))
+            .build();
+        let result = harness.execute(&turn).await;
+
+        #[allow(clippy::wildcard_enum_match_arm)]
+        match result {
+            TurnResult::ToolDenied(reason) => {
+                assert!(
+                    reason.contains("not in the allow list"),
+                    "expected default-deny reason, got: {reason}"
+                );
+            }
+            other => panic!("expected ToolDenied, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn integ_shell_exec_wrapped_policy_denies_hard_blocked_commands_even_if_allowlisted() {
+        let temp_dir = next_temp_dir();
+        let harness = TurnTestHarness::with_capabilities_and_tool_config(
+            default_tool_capabilities(),
+            temp_dir.clone(),
+            ToolRuntimeConfig {
+                shell_allow: BTreeSet::from(["rm".to_owned()]),
+                shell_deny: BTreeSet::from(["rm".to_owned()]),
+                shell_default_mode: crate::tools::shell_policy_ext::ShellPolicyDefault::Deny,
+                file_root: Some(temp_dir),
+                config_path: None,
+                sessions_enabled: true,
+                messages_enabled: true,
+                delegate_enabled: true,
+                browser: Default::default(),
+                web_fetch: Default::default(),
+                external_skills: Default::default(),
+                #[cfg(feature = "feishu-integration")]
+                feishu: None,
+            },
+        );
+
+        let turn = FakeProviderBuilder::new()
+            .with_tool_call(
+                "shell.exec",
+                json!({"command": "rm", "args": ["-rf", "/tmp/nope"]}),
+            )
+            .build();
+        let result = harness.execute(&turn).await;
+
+        #[allow(clippy::wildcard_enum_match_arm)]
+        match result {
+            TurnResult::ToolDenied(reason) => {
+                assert!(
+                    reason.contains("blocked by shell policy"),
+                    "expected shell policy hard deny, got: {reason}"
+                );
+            }
+            other => panic!("expected ToolDenied, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn integ_audit_captures_tool_plane_invocation() {
         let harness = TurnTestHarness::with_tool_config(
             BTreeSet::from([
@@ -472,12 +718,12 @@ mod tests {
         match result {
             TurnResult::ToolError(err) => {
                 assert!(
-                    err.contains("payload must be an object"),
-                    "expected 'payload must be an object' in error, got: {err}"
+                    err.contains("must be an object"),
+                    "expected object-shape error in response, got: {err}"
                 );
             }
             other => {
-                panic!("expected ToolError with 'payload must be an object', got: {other:?}");
+                panic!("expected ToolError with object-shape reason, got: {other:?}");
             }
         }
     }

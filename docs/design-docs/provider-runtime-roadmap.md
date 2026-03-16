@@ -8,6 +8,14 @@
 
 This document captures architecture comparison, implemented hardening, and a durable roadmap for provider runtime evolution.
 
+## Related Runtime Contracts
+
+- Discovery-first tool routing contract:
+  [`discovery-first-tool-runtime-contract.md`](discovery-first-tool-runtime-contract.md)
+  fixes the provider-core tool surface, lease expectations, compatibility
+  rewrites, and follow-up provider-turn behavior for the discovery-first tool
+  path.
+
 ## Comparative Architecture Snapshot
 
 | Dimension | OpenClaw (`main`) | LoongClaw (`alpha-test`) | Current branch (`feat/provider-runtime-abstraction`) |

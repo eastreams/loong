@@ -407,7 +407,7 @@ const fn default_require_download_approval() -> bool {
 }
 
 const fn default_auto_expose_installed() -> bool {
-    true
+    false
 }
 
 fn normalize_domain_entries(entries: &[String]) -> Vec<String> {
@@ -598,7 +598,7 @@ max_text_chars = 2048
         assert!(config.allowed_domains.is_empty());
         assert!(config.blocked_domains.is_empty());
         assert!(config.install_root.is_none());
-        assert!(config.auto_expose_installed);
+        assert!(!config.auto_expose_installed);
     }
 
     #[test]

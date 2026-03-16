@@ -19,13 +19,13 @@ mod turn_loop;
 mod turn_shared;
 
 pub use analytics::{
-    ConversationEventRecord, SafeLaneEventSummary, SafeLaneFinalStatus,
+    ConversationEventRecord, DiscoveryFirstEventSummary, SafeLaneEventSummary, SafeLaneFinalStatus,
     SafeLaneHealthSignalSnapshot, SafeLaneMetricsSnapshot, SafeLaneToolOutputSnapshot,
     TurnCheckpointEventSummary, TurnCheckpointFailureStep, TurnCheckpointProgressStatus,
     TurnCheckpointRecoveryAction, TurnCheckpointRepairManualReason, TurnCheckpointRepairPlan,
     TurnCheckpointSessionState, TurnCheckpointStage, build_turn_checkpoint_repair_plan,
-    parse_conversation_event, plan_turn_checkpoint_recovery, summarize_safe_lane_events,
-    summarize_turn_checkpoint_events,
+    parse_conversation_event, plan_turn_checkpoint_recovery, summarize_discovery_first_events,
+    summarize_safe_lane_events, summarize_turn_checkpoint_events,
 };
 pub use context_engine::{
     AssembledConversationContext, CONTEXT_ENGINE_API_VERSION, ContextEngineBootstrapResult,
@@ -58,6 +58,7 @@ pub use safe_lane_failure::{
     is_safe_lane_terminal_instability_failure_code,
 };
 pub use session_address::ConversationSessionAddress;
+pub use session_history::load_discovery_first_event_summary;
 pub use session_history::{load_safe_lane_event_summary, load_turn_checkpoint_event_summary};
 pub use turn_budget::SafeLaneFailureRouteReason;
 pub use turn_coordinator::ConversationTurnCoordinator;

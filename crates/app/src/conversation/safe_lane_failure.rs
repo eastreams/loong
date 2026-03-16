@@ -212,6 +212,10 @@ pub fn classify_safe_lane_plan_failure(
         PlanRunFailure::NodeFailed {
             last_error_kind, ..
         } => match last_error_kind {
+            PlanNodeErrorKind::ApprovalRequired => (
+                SafeLaneFailureCode::PlanNodePolicyDenied,
+                TurnFailureKind::PolicyDenied,
+            ),
             PlanNodeErrorKind::PolicyDenied => (
                 SafeLaneFailureCode::PlanNodePolicyDenied,
                 TurnFailureKind::PolicyDenied,
@@ -385,6 +389,20 @@ mod tests {
 
     #[test]
     fn classify_safe_lane_plan_failure_maps_node_and_static_failures() {
+        let approval_node = PlanRunFailure::NodeFailed {
+            node_id: "tool-approval".to_owned(),
+            attempts_used: 1,
+            last_error_kind: PlanNodeErrorKind::ApprovalRequired,
+            last_error: "approval required".to_owned(),
+        };
+        assert_eq!(
+            classify_safe_lane_plan_failure(&approval_node),
+            (
+                SafeLaneFailureCode::PlanNodePolicyDenied,
+                TurnFailureKind::PolicyDenied
+            )
+        );
+
         let retryable_node = PlanRunFailure::NodeFailed {
             node_id: "tool-1".to_owned(),
             attempts_used: 1,

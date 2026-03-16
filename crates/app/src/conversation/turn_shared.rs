@@ -6,6 +6,8 @@ use super::runtime_binding::ConversationRuntimeBinding;
 use super::turn_engine::{ApprovalRequirement, ApprovalRequirementKind, ProviderTurn, TurnResult};
 use serde::Serialize;
 use serde_json::Value;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::CliResult;
 
@@ -13,6 +15,16 @@ pub const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to answer the 
 pub const TOOL_TRUNCATION_HINT_PROMPT: &str = "One or more tool results were truncated for context safety. If exact missing details are needed, explicitly state the truncation and request a narrower rerun.";
 pub const EXTERNAL_SKILL_FOLLOWUP_PROMPT: &str = "A managed external skill has been loaded into runtime context. Follow its instructions while answering the original user request. Do not restate the skill verbatim unless the user explicitly asks for it.";
 pub const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rounds. Do not repeat identical or cyclical tool calls without new evidence. Adjust strategy (different tool, arguments, or decomposition) or provide the best possible final answer and clearly state remaining gaps.";
+
+pub fn next_conversation_turn_id() -> String {
+    static NEXT_CONVERSATION_TURN_SEQ: AtomicU64 = AtomicU64::new(1);
+    let seq = NEXT_CONVERSATION_TURN_SEQ.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("turn-{nanos:x}-{seq:x}")
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolDrivenFollowupPayload {
@@ -40,6 +52,28 @@ impl ToolDrivenFollowupPayload {
             Self::ToolResult { text } => ("tool_result", text.as_str()),
             Self::ToolFailure { reason } => ("tool_failure", reason.as_str()),
         }
+    }
+}
+
+pub fn tool_driven_followup_payload(
+    had_tool_intents: bool,
+    turn_result: &TurnResult,
+) -> Option<ToolDrivenFollowupPayload> {
+    if !had_tool_intents {
+        return None;
+    }
+
+    match turn_result {
+        TurnResult::FinalText(text) => {
+            Some(ToolDrivenFollowupPayload::ToolResult { text: text.clone() })
+        }
+        TurnResult::NeedsApproval(_) => None,
+        TurnResult::ToolDenied(failure) | TurnResult::ToolError(failure) => {
+            Some(ToolDrivenFollowupPayload::ToolFailure {
+                reason: failure.reason.clone(),
+            })
+        }
+        TurnResult::ProviderError(_) => None,
     }
 }
 
@@ -208,21 +242,7 @@ impl<'a> ToolDrivenReplyKernel<'a> {
     }
 
     pub fn followup_payload(&self) -> Option<ToolDrivenFollowupPayload> {
-        if !self.had_tool_intents {
-            return None;
-        }
-        match self.turn_result {
-            TurnResult::FinalText(text) => {
-                Some(ToolDrivenFollowupPayload::ToolResult { text: text.clone() })
-            }
-            TurnResult::NeedsApproval(_) => None,
-            TurnResult::ToolDenied(failure) | TurnResult::ToolError(failure) => {
-                Some(ToolDrivenFollowupPayload::ToolFailure {
-                    reason: failure.reason.clone(),
-                })
-            }
-            TurnResult::ProviderError(_) => None,
-        }
+        tool_driven_followup_payload(self.had_tool_intents, self.turn_result)
     }
 
     pub fn base_decision(&self, raw_tool_output_requested: bool) -> ToolDrivenReplyBaseDecision {

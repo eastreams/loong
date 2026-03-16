@@ -359,6 +359,8 @@ pub trait ConversationRuntime: Send + Sync {
     async fn request_turn(
         &self,
         config: &LoongClawConfig,
+        session_id: &str,
+        turn_id: &str,
         messages: &[Value],
         tool_view: &ToolView,
         binding: ConversationRuntimeBinding<'_>,
@@ -599,12 +601,16 @@ where
     async fn request_turn(
         &self,
         config: &LoongClawConfig,
+        session_id: &str,
+        turn_id: &str,
         messages: &[Value],
         tool_view: &ToolView,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ProviderTurn> {
         provider::request_turn_in_view(
             config,
+            session_id,
+            turn_id,
             messages,
             tool_view,
             provider::ProviderRuntimeBinding::from_optional_kernel_context(

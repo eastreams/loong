@@ -107,6 +107,38 @@ pub(crate) fn inject_internal_tool_ingress(
         };
     };
     let canonical_name = crate::tools::canonical_tool_name(tool_name);
+
+    // When tool.invoke wraps a feishu.* tool, inject internal context into
+    // the nested `arguments` object rather than the top-level payload.
+    if canonical_name == "tool.invoke" {
+        let inner_is_feishu = payload
+            .get("tool_id")
+            .and_then(Value::as_str)
+            .map(crate::tools::canonical_tool_name)
+            .is_some_and(|name| name.starts_with("feishu."));
+        if inner_is_feishu {
+            let Value::Object(mut outer) = payload else {
+                return InjectedToolPayload {
+                    payload,
+                    trusted_internal_context: false,
+                };
+            };
+            let arguments = outer
+                .remove("arguments")
+                .unwrap_or_else(|| Value::Object(Map::new()));
+            let injected_arguments = inject_feishu_internal_context(arguments, ingress);
+            outer.insert("arguments".to_owned(), injected_arguments.payload);
+            return InjectedToolPayload {
+                payload: Value::Object(outer),
+                trusted_internal_context: injected_arguments.trusted_internal_context,
+            };
+        }
+        return InjectedToolPayload {
+            payload,
+            trusted_internal_context: false,
+        };
+    }
+
     if !canonical_name.starts_with("feishu.") {
         return InjectedToolPayload {
             payload,
@@ -114,6 +146,13 @@ pub(crate) fn inject_internal_tool_ingress(
         };
     }
 
+    inject_feishu_internal_context(payload, ingress)
+}
+
+fn inject_feishu_internal_context(
+    payload: Value,
+    ingress: &ConversationIngressContext,
+) -> InjectedToolPayload {
     let Value::Object(mut body) = payload else {
         return InjectedToolPayload {
             payload,

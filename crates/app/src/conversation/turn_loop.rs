@@ -115,6 +115,7 @@ impl ConversationTurnLoop {
             MemoryRuntimeConfig::from_memory_config(&config.memory),
             config.clone(),
         );
+        let turn_id = super::turn_shared::next_conversation_turn_id();
         let mut session = initialize_turn_loop_session(
             runtime
                 .build_messages(config, session_id, true, &tool_view, binding)
@@ -126,7 +127,14 @@ impl ConversationTurnLoop {
         for round_index in 0..policy.max_rounds {
             let turn = match decide_provider_turn_request_action(
                 runtime
-                    .request_turn(config, &session.messages, &tool_view, binding)
+                    .request_turn(
+                        config,
+                        session_id,
+                        turn_id.as_str(),
+                        &session.messages,
+                        &tool_view,
+                        binding,
+                    )
                     .await,
                 error_mode,
             ) {

@@ -13,7 +13,8 @@ use crate::memory;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 
 use super::analytics::{
-    SafeLaneEventSummary, TurnCheckpointEventSummary, summarize_safe_lane_events,
+    DiscoveryFirstEventSummary, SafeLaneEventSummary, TurnCheckpointEventSummary,
+    summarize_discovery_first_events, summarize_safe_lane_events,
     summarize_turn_checkpoint_history,
 };
 use super::runtime_binding::ConversationRuntimeBinding;
@@ -102,6 +103,33 @@ pub async fn load_safe_lane_event_summary(
     {
         let _ = (session_id, limit, binding);
         Err("safe-lane summary unavailable: memory-sqlite feature disabled".to_owned())
+    }
+}
+
+pub async fn load_discovery_first_event_summary(
+    session_id: &str,
+    limit: usize,
+    kernel_ctx: Option<&crate::KernelContext>,
+    #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
+) -> CliResult<DiscoveryFirstEventSummary> {
+    #[cfg(feature = "memory-sqlite")]
+    {
+        let binding =
+            super::runtime_binding::ConversationRuntimeBinding::from_optional_kernel_context(
+                kernel_ctx,
+            );
+        let assistant_contents =
+            load_assistant_contents_from_session_window(session_id, limit, binding, memory_config)
+                .await?;
+        Ok(summarize_discovery_first_events(
+            assistant_contents.iter().map(String::as_str),
+        ))
+    }
+
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = (session_id, limit, kernel_ctx);
+        Err("discovery-first summary unavailable: memory-sqlite feature disabled".to_owned())
     }
 }
 

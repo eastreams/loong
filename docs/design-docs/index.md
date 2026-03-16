@@ -7,6 +7,7 @@ Catalog of design documents and architectural decisions.
 | Document | Scope | Status |
 |----------|-------|--------|
 | [Core Beliefs](core-beliefs.md) | Engineering principles and taste enforcement | Living |
+| [Discovery-First Tool Runtime Contract](discovery-first-tool-runtime-contract.md) | Provider-core tools, leases, parser rewrites, and follow-up turn contract | Active |
 | [Layered Kernel Design](layered-kernel-design.md) | L0-L9 kernel layer specification and boundary rules | Living |
 | [Provider Runtime Roadmap](provider-runtime-roadmap.md) | Provider/runtime evolution strategy | Active |
 | [ACP/ACPX Pre-Embed](acp-acpx-preembed.md) | Advanced cryptographic primitives | Active |

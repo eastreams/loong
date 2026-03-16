@@ -200,6 +200,8 @@ pub struct ConversationTurnLoopConfig {
     pub max_followup_tool_payload_chars: usize,
     #[serde(default = "default_turn_loop_max_followup_tool_payload_chars_total")]
     pub max_followup_tool_payload_chars_total: usize,
+    #[serde(default = "default_turn_loop_max_discovery_followup_rounds")]
+    pub max_discovery_followup_rounds: usize,
 }
 
 impl Default for ConversationTurnLoopConfig {
@@ -213,6 +215,7 @@ impl Default for ConversationTurnLoopConfig {
             max_followup_tool_payload_chars: default_turn_loop_max_followup_tool_payload_chars(),
             max_followup_tool_payload_chars_total:
                 default_turn_loop_max_followup_tool_payload_chars_total(),
+            max_discovery_followup_rounds: default_turn_loop_max_discovery_followup_rounds(),
         }
     }
 }
@@ -436,6 +439,10 @@ const fn default_turn_loop_max_followup_tool_payload_chars() -> usize {
 
 const fn default_turn_loop_max_followup_tool_payload_chars_total() -> usize {
     20_000
+}
+
+const fn default_turn_loop_max_discovery_followup_rounds() -> usize {
+    2
 }
 
 const fn default_fast_lane_max_tool_steps_per_turn() -> usize {

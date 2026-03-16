@@ -9,17 +9,43 @@ use crate::conversation::turn_engine::{ProviderTurn, ToolIntent};
 use crate::tools;
 
 pub fn extract_provider_turn(body: &Value) -> Option<ProviderTurn> {
-    if let Some(turn) = extract_responses_provider_turn(body) {
+    extract_provider_turn_with_scope(body, None, None)
+}
+
+pub fn extract_provider_turn_with_scope(
+    body: &Value,
+    session_id: Option<&str>,
+    turn_id: Option<&str>,
+) -> Option<ProviderTurn> {
+    extract_provider_turn_with_scope_and_messages(body, session_id, turn_id, &[])
+}
+
+pub fn extract_provider_turn_with_scope_and_messages(
+    body: &Value,
+    session_id: Option<&str>,
+    turn_id: Option<&str>,
+    messages: &[Value],
+) -> Option<ProviderTurn> {
+    let bridge_context = provider_tool_bridge_context_from_messages(messages);
+
+    if let Some(turn) = extract_responses_provider_turn(body, session_id, turn_id, &bridge_context)
+    {
         return Some(turn);
     }
 
     if let Some(message) = openai_message(body) {
         let mut assistant_text = message_content(message).unwrap_or_default();
         let mut raw_meta = message.clone();
-        let mut tool_intents = extract_openai_tool_intents(message);
+        let mut tool_intents =
+            extract_openai_tool_intents(message, session_id, turn_id, &bridge_context);
 
         if tool_intents.is_empty() {
-            match extract_inline_function_call_turn(assistant_text.as_str()) {
+            match extract_inline_function_call_turn(
+                assistant_text.as_str(),
+                session_id,
+                turn_id,
+                &bridge_context,
+            ) {
                 InlineFunctionParseResult::Parsed {
                     cleaned_text,
                     tool_intents: inline_tool_intents,
@@ -46,13 +72,18 @@ pub fn extract_provider_turn(body: &Value) -> Option<ProviderTurn> {
     if let Some(message) = bedrock_message(body) {
         return Some(ProviderTurn {
             assistant_text: message_content(message).unwrap_or_default(),
-            tool_intents: extract_bedrock_tool_intents(message),
+            tool_intents: extract_bedrock_tool_intents(
+                message,
+                session_id,
+                turn_id,
+                &bridge_context,
+            ),
             raw_meta: normalize_bedrock_message(message),
         });
     }
 
     let assistant_text = extract_body_content_text(body).unwrap_or_default();
-    let tool_intents = extract_anthropic_tool_intents(body);
+    let tool_intents = extract_anthropic_tool_intents(body, session_id, turn_id, &bridge_context);
     if assistant_text.is_empty() && tool_intents.is_empty() {
         return None;
     }
@@ -61,6 +92,83 @@ pub fn extract_provider_turn(body: &Value) -> Option<ProviderTurn> {
         assistant_text,
         tool_intents,
         raw_meta: body.clone(),
+    })
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ProviderToolBridgeContext {
+    discoverable_leases: BTreeMap<String, String>,
+}
+
+fn provider_tool_bridge_context_from_messages(messages: &[Value]) -> ProviderToolBridgeContext {
+    messages
+        .iter()
+        .rev()
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
+        .filter_map(|message| {
+            message
+                .get("content")
+                .and_then(Value::as_str)
+                .and_then(parse_discovery_followup_leases_from_message_content)
+        })
+        .find(|context| !context.discoverable_leases.is_empty())
+        .unwrap_or_default()
+}
+
+fn parse_discovery_followup_leases_from_message_content(
+    content: &str,
+) -> Option<ProviderToolBridgeContext> {
+    let tool_result_text = content.trim().strip_prefix("[tool_result]\n")?;
+    let mut discoverable_leases = BTreeMap::new();
+
+    for line in tool_result_text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some(payload) = trimmed.strip_prefix("[ok] ") else {
+            continue;
+        };
+        let Ok(envelope) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
+        if envelope.get("tool").and_then(Value::as_str) != Some("tool.search") {
+            continue;
+        }
+        if envelope
+            .get("payload_truncated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let Some(payload_summary) = envelope.get("payload_summary").and_then(Value::as_str) else {
+            continue;
+        };
+        let Ok(payload_json) = serde_json::from_str::<Value>(payload_summary) else {
+            continue;
+        };
+        let Some(results) = payload_json.get("results").and_then(Value::as_array) else {
+            continue;
+        };
+        for result in results {
+            let Some(tool_id) = result.get("tool_id").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(lease) = result.get("lease").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(discoverable_tool_name) = discoverable_tool_name(tool_id) else {
+                continue;
+            };
+            discoverable_leases
+                .entry(discoverable_tool_name.to_owned())
+                .or_insert_with(|| lease.to_owned());
+        }
+    }
+
+    (!discoverable_leases.is_empty()).then_some(ProviderToolBridgeContext {
+        discoverable_leases,
     })
 }
 
@@ -103,7 +211,56 @@ fn extract_body_content_text(body: &Value) -> Option<String> {
     body_content_value(body).and_then(extract_content_text)
 }
 
-fn extract_openai_tool_intents(message: &Value) -> Vec<ToolIntent> {
+fn build_provider_tool_intent(
+    raw_tool_name: &str,
+    args_json: Value,
+    source: &str,
+    session_id: Option<&str>,
+    turn_id: Option<&str>,
+    tool_call_id: String,
+    bridge_context: &ProviderToolBridgeContext,
+) -> ToolIntent {
+    let canonical_tool_name = tools::canonical_tool_name(raw_tool_name).to_owned();
+    let (tool_name, args_json) = discoverable_tool_name(canonical_tool_name.as_str())
+        .and_then(|discoverable_tool_name| {
+            bridge_context
+                .discoverable_leases
+                .get(discoverable_tool_name)
+                .cloned()
+                .map(|lease| {
+                    (
+                        "tool.invoke".to_owned(),
+                        json!({
+                            "tool_id": discoverable_tool_name,
+                            "lease": lease,
+                            "arguments": args_json,
+                        }),
+                    )
+                })
+        })
+        .unwrap_or((canonical_tool_name, args_json));
+    ToolIntent {
+        tool_name,
+        args_json,
+        source: source.to_owned(),
+        session_id: session_id.unwrap_or_default().to_owned(),
+        turn_id: turn_id.unwrap_or_default().to_owned(),
+        tool_call_id,
+    }
+}
+
+fn discoverable_tool_name(raw_tool_name: &str) -> Option<&'static str> {
+    let resolved = tools::resolve_tool_execution(raw_tool_name)?;
+    (!tools::is_provider_exposed_tool_name(resolved.canonical_name))
+        .then_some(resolved.canonical_name)
+}
+
+fn extract_openai_tool_intents(
+    message: &Value,
+    session_id: Option<&str>,
+    turn_id: Option<&str>,
+    bridge_context: &ProviderToolBridgeContext,
+) -> Vec<ToolIntent> {
     message
         .get("tool_calls")
         .and_then(Value::as_array)
@@ -113,7 +270,6 @@ fn extract_openai_tool_intents(message: &Value) -> Vec<ToolIntent> {
                 .filter_map(|call| {
                     let function = call.get("function")?;
                     let raw_tool_name = function.get("name").and_then(Value::as_str)?;
-                    let tool_name = tools::canonical_tool_name(raw_tool_name).to_owned();
                     let args_str = function
                         .get("arguments")
                         .and_then(Value::as_str)
@@ -130,21 +286,27 @@ fn extract_openai_tool_intents(message: &Value) -> Vec<ToolIntent> {
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .to_owned();
-                    Some(ToolIntent {
-                        tool_name,
+                    Some(build_provider_tool_intent(
+                        raw_tool_name,
                         args_json,
-                        source: "provider_tool_call".to_owned(),
-                        session_id: String::new(),
-                        turn_id: String::new(),
+                        "provider_tool_call",
+                        session_id,
+                        turn_id,
                         tool_call_id,
-                    })
+                        bridge_context,
+                    ))
                 })
                 .collect()
         })
         .unwrap_or_default()
 }
 
-fn extract_anthropic_tool_intents(body: &Value) -> Vec<ToolIntent> {
+fn extract_anthropic_tool_intents(
+    body: &Value,
+    session_id: Option<&str>,
+    turn_id: Option<&str>,
+    bridge_context: &ProviderToolBridgeContext,
+) -> Vec<ToolIntent> {
     body.get("content")
         .and_then(Value::as_array)
         .map(|blocks| {
@@ -155,25 +317,31 @@ fn extract_anthropic_tool_intents(body: &Value) -> Vec<ToolIntent> {
                         return None;
                     }
                     let raw_tool_name = block.get("name").and_then(Value::as_str)?;
-                    Some(ToolIntent {
-                        tool_name: tools::canonical_tool_name(raw_tool_name).to_owned(),
-                        args_json: block.get("input").cloned().unwrap_or_else(|| json!({})),
-                        source: "provider_tool_call".to_owned(),
-                        session_id: String::new(),
-                        turn_id: String::new(),
-                        tool_call_id: block
+                    Some(build_provider_tool_intent(
+                        raw_tool_name,
+                        block.get("input").cloned().unwrap_or_else(|| json!({})),
+                        "provider_tool_call",
+                        session_id,
+                        turn_id,
+                        block
                             .get("id")
                             .and_then(Value::as_str)
                             .unwrap_or("")
                             .to_owned(),
-                    })
+                        bridge_context,
+                    ))
                 })
                 .collect()
         })
         .unwrap_or_default()
 }
 
-fn extract_bedrock_tool_intents(message: &Value) -> Vec<ToolIntent> {
+fn extract_bedrock_tool_intents(
+    message: &Value,
+    session_id: Option<&str>,
+    turn_id: Option<&str>,
+    bridge_context: &ProviderToolBridgeContext,
+) -> Vec<ToolIntent> {
     message
         .get("content")
         .and_then(Value::as_array)
@@ -183,18 +351,19 @@ fn extract_bedrock_tool_intents(message: &Value) -> Vec<ToolIntent> {
                 .filter_map(|block| {
                     let tool_use = block.get("toolUse")?;
                     let raw_tool_name = tool_use.get("name").and_then(Value::as_str)?;
-                    Some(ToolIntent {
-                        tool_name: tools::canonical_tool_name(raw_tool_name).to_owned(),
-                        args_json: tool_use.get("input").cloned().unwrap_or_else(|| json!({})),
-                        source: "provider_tool_call".to_owned(),
-                        session_id: String::new(),
-                        turn_id: String::new(),
-                        tool_call_id: tool_use
+                    Some(build_provider_tool_intent(
+                        raw_tool_name,
+                        tool_use.get("input").cloned().unwrap_or_else(|| json!({})),
+                        "provider_tool_call",
+                        session_id,
+                        turn_id,
+                        tool_use
                             .get("toolUseId")
                             .and_then(Value::as_str)
                             .unwrap_or("")
                             .to_owned(),
-                    })
+                        bridge_context,
+                    ))
                 })
                 .collect()
         })
@@ -245,12 +414,19 @@ fn normalize_bedrock_content_block(block: &Value) -> Option<Value> {
     }))
 }
 
-fn extract_responses_provider_turn(body: &Value) -> Option<ProviderTurn> {
+fn extract_responses_provider_turn(
+    body: &Value,
+    session_id: Option<&str>,
+    turn_id: Option<&str>,
+    bridge_context: &ProviderToolBridgeContext,
+) -> Option<ProviderTurn> {
     let output = response_output_items(body)?;
     let assistant_text = extract_responses_message_content(body).unwrap_or_default();
     let tool_intents = output
         .iter()
-        .filter_map(response_tool_intent_from_item)
+        .filter_map(|item| {
+            response_tool_intent_from_item(item, session_id, turn_id, bridge_context)
+        })
         .collect::<Vec<_>>();
 
     if assistant_text.is_empty() && tool_intents.is_empty() {
@@ -295,7 +471,12 @@ fn response_output_items(body: &Value) -> Option<&[Value]> {
         .map(Vec::as_slice)
 }
 
-fn response_tool_intent_from_item(item: &Value) -> Option<ToolIntent> {
+fn response_tool_intent_from_item(
+    item: &Value,
+    session_id: Option<&str>,
+    turn_id: Option<&str>,
+    bridge_context: &ProviderToolBridgeContext,
+) -> Option<ToolIntent> {
     let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
     if item_type != "function_call" && item_type != "tool_call" {
         return None;
@@ -329,14 +510,15 @@ fn response_tool_intent_from_item(item: &Value) -> Option<ToolIntent> {
         .unwrap_or("")
         .to_owned();
 
-    Some(ToolIntent {
-        tool_name: tools::canonical_tool_name(raw_tool_name).to_owned(),
+    Some(build_provider_tool_intent(
+        raw_tool_name,
         args_json,
-        source: "provider_tool_call".to_owned(),
-        session_id: String::new(),
-        turn_id: String::new(),
+        "provider_tool_call",
+        session_id,
+        turn_id,
         tool_call_id,
-    })
+        bridge_context,
+    ))
 }
 
 fn extract_content_text(content: &Value) -> Option<String> {
@@ -497,7 +679,12 @@ fn attach_inline_function_parse_telemetry(
     );
 }
 
-fn extract_inline_function_call_turn(text: &str) -> InlineFunctionParseResult {
+fn extract_inline_function_call_turn(
+    text: &str,
+    session_id: Option<&str>,
+    turn_id: Option<&str>,
+    bridge_context: &ProviderToolBridgeContext,
+) -> InlineFunctionParseResult {
     const FUNCTION_OPEN: &str = "<function=";
     const FUNCTION_CLOSE: &str = "</function>";
 
@@ -572,14 +759,16 @@ fn extract_inline_function_call_turn(text: &str) -> InlineFunctionParseResult {
 
         found_inline_function = true;
         cleaned.push_str(&text[cursor..start]);
-        tool_intents.push(ToolIntent {
-            tool_name: canonical_tool_name,
+        let tool_call_id = format!("inline-call-{}", tool_intents.len());
+        tool_intents.push(build_provider_tool_intent(
+            canonical_tool_name.as_str(),
             args_json,
-            source: "provider_inline_function_call".to_owned(),
-            session_id: String::new(),
-            turn_id: String::new(),
-            tool_call_id: format!("inline-call-{}", tool_intents.len()),
-        });
+            "provider_inline_function_call",
+            session_id,
+            turn_id,
+            tool_call_id,
+            bridge_context,
+        ));
 
         cursor = function_end;
     }
@@ -700,32 +889,13 @@ fn inline_parameter_schema_types()
     SCHEMA_TYPES.get_or_init(|| {
         let mut tools_by_name =
             BTreeMap::<String, BTreeMap<String, InlineParameterSchemaType>>::new();
-        for tool in tools::provider_tool_definitions() {
-            let Some(function) = tool.get("function") else {
-                continue;
-            };
-            let Some(raw_tool_name) = function.get("name").and_then(Value::as_str) else {
-                continue;
-            };
-            let Some(properties) = function
-                .get("parameters")
-                .and_then(|value| value.get("properties"))
-                .and_then(Value::as_object)
-            else {
-                continue;
-            };
-
-            let tool_name = tools::canonical_tool_name(raw_tool_name).to_owned();
+        for (tool_name, properties) in tools::tool_parameter_schema_types() {
             let entry = tools_by_name.entry(tool_name).or_default();
-            for (parameter_name, schema) in properties {
-                let Some(parameter_type) = schema
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .and_then(InlineParameterSchemaType::parse)
-                else {
+            for (parameter_name, schema_type) in properties {
+                let Some(parameter_type) = InlineParameterSchemaType::parse(schema_type) else {
                     continue;
                 };
-                entry.insert(parameter_name.clone(), parameter_type);
+                entry.insert(parameter_name, parameter_type);
             }
         }
         tools_by_name
@@ -1095,6 +1265,31 @@ mod tests {
 
     use super::*;
 
+    fn discovery_followup_messages(tool_id: &str, lease: &str) -> Vec<Value> {
+        let payload_summary = serde_json::to_string(&json!({
+            "results": [
+                {
+                    "tool_id": tool_id,
+                    "lease": lease,
+                }
+            ]
+        }))
+        .expect("encode search payload summary");
+        let envelope = serde_json::to_string(&json!({
+            "status": "ok",
+            "tool": "tool.search",
+            "tool_call_id": "call-search",
+            "payload_summary": payload_summary,
+            "payload_chars": payload_summary.chars().count(),
+            "payload_truncated": false,
+        }))
+        .expect("encode search envelope");
+        vec![json!({
+            "role": "assistant",
+            "content": format!("[tool_result]\n[ok] {envelope}"),
+        })]
+    }
+
     #[test]
     fn extract_provider_turn_parses_tool_calls() {
         let body = serde_json::json!({
@@ -1116,6 +1311,7 @@ mod tests {
         assert_eq!(turn.assistant_text, "checking");
         assert_eq!(turn.tool_intents.len(), 1);
         assert_eq!(turn.tool_intents[0].tool_name, "file.read");
+        assert_eq!(turn.tool_intents[0].args_json, json!({"path":"README.md"}));
         assert_eq!(turn.tool_intents[0].tool_call_id, "call_1");
     }
 
@@ -1169,6 +1365,148 @@ mod tests {
         let turn = extract_provider_turn(&body).expect("turn");
         assert_eq!(turn.tool_intents.len(), 1);
         assert_eq!(turn.tool_intents[0].tool_name, "file.read");
+        assert_eq!(turn.tool_intents[0].args_json, json!({"path":"README.md"}));
+    }
+
+    #[test]
+    fn extract_provider_turn_with_scope_rewrites_discoverable_tools_to_tool_invoke_after_search() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "checking",
+                    "tool_calls": [{
+                        "id": "call_compat",
+                        "type": "function",
+                        "function": {
+                            "name": "file.read",
+                            "arguments": "{\"path\":\"README.md\"}"
+                        }
+                    }]
+                }
+            }]
+        });
+        let messages = discovery_followup_messages("file.read", "lease-openai");
+
+        let turn = extract_provider_turn_with_scope_and_messages(
+            &body,
+            Some("session-shape"),
+            Some("turn-shape"),
+            &messages,
+        )
+        .expect("turn");
+        assert_eq!(turn.assistant_text, "checking");
+        assert_eq!(turn.tool_intents.len(), 1);
+        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
+        assert_eq!(turn.tool_intents[0].session_id, "session-shape");
+        assert_eq!(turn.tool_intents[0].turn_id, "turn-shape");
+        assert_eq!(turn.tool_intents[0].tool_call_id, "call_compat");
+        assert_eq!(turn.tool_intents[0].args_json["tool_id"], "file.read");
+        assert_eq!(
+            turn.tool_intents[0].args_json["arguments"],
+            json!({"path":"README.md"})
+        );
+        assert_eq!(turn.tool_intents[0].args_json["lease"], "lease-openai");
+    }
+
+    #[cfg(feature = "feishu-integration")]
+    #[test]
+    fn extract_provider_turn_with_scope_rewrites_runtime_discovered_feishu_tools_to_tool_invoke_after_search()
+     {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "updating card",
+                    "tool_calls": [{
+                        "id": "call_feishu_card_update_1",
+                        "type": "function",
+                        "function": {
+                            "name": "feishu_card_update",
+                            "arguments": "{\"markdown\":\"callback updated\"}"
+                        }
+                    }]
+                }
+            }]
+        });
+        let messages = discovery_followup_messages("feishu.card.update", "lease-feishu");
+
+        let turn = extract_provider_turn_with_scope_and_messages(
+            &body,
+            Some("session-feishu"),
+            Some("turn-feishu"),
+            &messages,
+        )
+        .expect("turn");
+        assert_eq!(turn.assistant_text, "updating card");
+        assert_eq!(turn.tool_intents.len(), 1);
+        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
+        assert_eq!(turn.tool_intents[0].session_id, "session-feishu");
+        assert_eq!(turn.tool_intents[0].turn_id, "turn-feishu");
+        assert_eq!(
+            turn.tool_intents[0].tool_call_id,
+            "call_feishu_card_update_1"
+        );
+        assert_eq!(
+            turn.tool_intents[0].args_json["tool_id"],
+            "feishu.card.update"
+        );
+        assert_eq!(
+            turn.tool_intents[0].args_json["arguments"],
+            json!({"markdown":"callback updated"})
+        );
+        assert_eq!(turn.tool_intents[0].args_json["lease"], "lease-feishu");
+    }
+
+    #[test]
+    fn bridge_context_skips_truncated_search_results() {
+        let payload_summary = serde_json::to_string(&json!({
+            "results": [
+                {
+                    "tool_id": "file.read",
+                    "lease": "lease-truncated",
+                }
+            ]
+        }))
+        .expect("encode");
+        let envelope = serde_json::to_string(&json!({
+            "status": "ok",
+            "tool": "tool.search",
+            "tool_call_id": "call-search",
+            "payload_summary": payload_summary,
+            "payload_chars": payload_summary.chars().count(),
+            "payload_truncated": true,
+        }))
+        .expect("encode envelope");
+        let messages = vec![json!({
+            "role": "assistant",
+            "content": format!("[tool_result]\n[ok] {envelope}"),
+        })];
+
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "reading",
+                    "tool_calls": [{
+                        "id": "call_trunc",
+                        "type": "function",
+                        "function": {
+                            "name": "file_read",
+                            "arguments": "{\"path\":\"README.md\"}"
+                        }
+                    }]
+                }
+            }]
+        });
+        let turn = extract_provider_turn_with_scope_and_messages(
+            &body,
+            Some("session-trunc"),
+            Some("turn-trunc"),
+            &messages,
+        )
+        .expect("turn");
+        // When payload is truncated, bridge context should be empty,
+        // so the tool call should NOT be rewritten to tool.invoke.
+        assert_eq!(turn.tool_intents[0].tool_name, "file.read");
+        assert_eq!(turn.tool_intents[0].args_json, json!({"path": "README.md"}));
     }
 
     #[test]
@@ -1204,12 +1542,36 @@ mod tests {
                 }
             ]
         });
-        let turn = extract_provider_turn(&body).expect("responses turn");
+        let messages = discovery_followup_messages("file.read", "lease-responses");
+        let turn = extract_provider_turn_with_scope(
+            &body,
+            Some("session-responses"),
+            Some("turn-responses"),
+        )
+        .expect("responses turn without search context should stay direct");
         assert_eq!(turn.assistant_text, "Reading the file.");
         assert_eq!(turn.tool_intents.len(), 1);
         assert_eq!(turn.tool_intents[0].tool_name, "file.read");
+        assert_eq!(turn.tool_intents[0].session_id, "session-responses");
+        assert_eq!(turn.tool_intents[0].turn_id, "turn-responses");
         assert_eq!(turn.tool_intents[0].args_json, json!({"path": "README.md"}));
         assert_eq!(turn.tool_intents[0].tool_call_id, "call_resp_1");
+
+        let turn = extract_provider_turn_with_scope_and_messages(
+            &body,
+            Some("session-responses"),
+            Some("turn-responses"),
+            &messages,
+        )
+        .expect("responses turn with search context");
+        assert_eq!(turn.tool_intents.len(), 1);
+        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
+        assert_eq!(turn.tool_intents[0].args_json["tool_id"], "file.read");
+        assert_eq!(
+            turn.tool_intents[0].args_json["arguments"],
+            json!({"path": "README.md"})
+        );
+        assert_eq!(turn.tool_intents[0].args_json["lease"], "lease-responses");
     }
 
     #[test]
@@ -1221,17 +1583,24 @@ mod tests {
                 }
             }]
         });
+        let messages = discovery_followup_messages("shell.exec", "lease-shell-inline");
 
-        let turn = extract_provider_turn(&body).expect("turn");
+        let turn = extract_provider_turn_with_scope_and_messages(&body, None, None, &messages)
+            .expect("turn");
         assert_eq!(
             turn.assistant_text,
             "sorry, that command failed. let me retry with a simpler approach:"
         );
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "shell.exec");
+        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
+        assert_eq!(turn.tool_intents[0].args_json["tool_id"], "shell.exec");
         assert_eq!(
-            turn.tool_intents[0].args_json,
+            turn.tool_intents[0].args_json["arguments"],
             json!({"command":"ls /root"})
+        );
+        assert_eq!(
+            turn.tool_intents[0].args_json["lease"],
+            "lease-shell-inline"
         );
         assert_eq!(
             turn.raw_meta["loongclaw_provider_parse"]["inline_function"]["status"],
@@ -1252,17 +1621,28 @@ mod tests {
                 }
             }]
         });
+        let messages =
+            discovery_followup_messages("external_skills.invoke", "lease-external-skill-inline");
 
-        let turn = extract_provider_turn(&body).expect("turn");
+        let turn = extract_provider_turn_with_scope_and_messages(&body, None, None, &messages)
+            .expect("turn");
         assert_eq!(
             turn.assistant_text,
             "i can see the Home Assistant skill is installed. let me call it to fetch all entity states."
         );
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "external_skills.invoke");
+        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
         assert_eq!(
-            turn.tool_intents[0].args_json,
+            turn.tool_intents[0].args_json["tool_id"],
+            "external_skills.invoke"
+        );
+        assert_eq!(
+            turn.tool_intents[0].args_json["arguments"],
             json!({"skill_id":"home-assistant-1-0-0","action":"get_states"})
+        );
+        assert_eq!(
+            turn.tool_intents[0].args_json["lease"],
+            "lease-external-skill-inline"
         );
     }
 
@@ -1510,12 +1890,19 @@ mod tests {
                 }
             ]
         });
-        let turn = extract_provider_turn(&body).expect("turn");
+        let messages = discovery_followup_messages("file.read", "lease-anthropic");
+        let turn = extract_provider_turn_with_scope_and_messages(&body, None, None, &messages)
+            .expect("turn");
         assert_eq!(turn.assistant_text, "checking");
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "file.read");
+        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
         assert_eq!(turn.tool_intents[0].tool_call_id, "toolu_1");
-        assert_eq!(turn.tool_intents[0].args_json["path"], "README.md");
+        assert_eq!(turn.tool_intents[0].args_json["tool_id"], "file.read");
+        assert_eq!(
+            turn.tool_intents[0].args_json["arguments"]["path"],
+            "README.md"
+        );
+        assert_eq!(turn.tool_intents[0].args_json["lease"], "lease-anthropic");
     }
 
     #[test]
@@ -1542,12 +1929,19 @@ mod tests {
             },
             "stopReason": "tool_use"
         });
-        let turn = extract_provider_turn(&body).expect("turn");
+        let messages = discovery_followup_messages("file.read", "lease-bedrock");
+        let turn = extract_provider_turn_with_scope_and_messages(&body, None, None, &messages)
+            .expect("turn");
         assert_eq!(turn.assistant_text, "checking");
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "file.read");
+        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
         assert_eq!(turn.tool_intents[0].tool_call_id, "toolu_1");
-        assert_eq!(turn.tool_intents[0].args_json["path"], "README.md");
+        assert_eq!(turn.tool_intents[0].args_json["tool_id"], "file.read");
+        assert_eq!(
+            turn.tool_intents[0].args_json["arguments"]["path"],
+            "README.md"
+        );
+        assert_eq!(turn.tool_intents[0].args_json["lease"], "lease-bedrock");
         assert_eq!(turn.raw_meta["content"][1]["type"], "tool_use");
         assert_eq!(turn.raw_meta["content"][1]["id"], "toolu_1");
     }

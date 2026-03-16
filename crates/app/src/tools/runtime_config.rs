@@ -26,7 +26,7 @@ impl Default for ExternalSkillsRuntimePolicy {
             allowed_domains: BTreeSet::new(),
             blocked_domains: BTreeSet::new(),
             install_root: None,
-            auto_expose_installed: true,
+            auto_expose_installed: false,
         }
     }
 }
@@ -254,7 +254,7 @@ impl ToolRuntimeConfig {
             .ok()
             .map(PathBuf::from);
         let auto_expose_installed =
-            parse_env_bool("LOONGCLAW_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED").unwrap_or(true);
+            parse_env_bool("LOONGCLAW_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED").unwrap_or(false);
 
         Self {
             file_root,
@@ -444,7 +444,7 @@ mod tests {
         assert!(config.external_skills.allowed_domains.is_empty());
         assert!(config.external_skills.blocked_domains.is_empty());
         assert!(config.external_skills.install_root.is_none());
-        assert!(config.external_skills.auto_expose_installed);
+        assert!(!config.external_skills.auto_expose_installed);
     }
 
     /// Deny starts empty so users are not forced to carry
@@ -540,6 +540,12 @@ mod tests {
             ..ToolRuntimeConfig::default()
         };
         assert_eq!(config.file_root, Some(PathBuf::from("/tmp/test-root")));
+    }
+
+    #[test]
+    fn from_env_defaults_to_empty_allowlist() {
+        let config = ToolRuntimeConfig::from_env();
+        assert!(config.shell_allow.is_empty());
     }
 
     #[cfg(feature = "tool-shell")]
