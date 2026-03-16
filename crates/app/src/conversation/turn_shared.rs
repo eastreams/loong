@@ -5,7 +5,8 @@ use super::runtime::ConversationRuntime;
 use super::runtime_binding::ConversationRuntimeBinding;
 use super::turn_engine::{ApprovalRequirement, ApprovalRequirementKind, ProviderTurn, TurnResult};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -415,14 +416,17 @@ pub fn parse_external_skill_invoke_context(
         .next()
 }
 
-pub fn reduce_followup_payload_for_model(label: &str, text: &str) -> String {
+pub fn reduce_followup_payload_for_model<'a>(label: &str, text: &'a str) -> Cow<'a, str> {
     if label != "tool_result" {
-        return text.to_owned();
+        return Cow::Borrowed(text);
     }
+
     reduce_tool_result_text_for_model(text)
+        .map(Cow::Owned)
+        .unwrap_or(Cow::Borrowed(text))
 }
 
-fn reduce_tool_result_text_for_model(text: &str) -> String {
+fn reduce_tool_result_text_for_model(text: &str) -> Option<String> {
     let mut changed = false;
     let reduced_lines = text
         .lines()
@@ -435,13 +439,13 @@ fn reduce_tool_result_text_for_model(text: &str) -> String {
         })
         .collect::<Vec<_>>();
     if !changed {
-        return text.to_owned();
+        return None;
     }
     let mut reduced = reduced_lines.join("\n");
     if text.ends_with('\n') {
         reduced.push('\n');
     }
-    reduced
+    Some(reduced)
 }
 
 fn reduce_tool_result_line_for_model(line: &str) -> String {
@@ -458,26 +462,47 @@ fn reduce_tool_result_line_for_model(line: &str) -> String {
     let Ok(mut envelope) = serde_json::from_str::<Value>(payload) else {
         return line.to_owned();
     };
-    let tool_name = envelope.get("tool").and_then(Value::as_str);
+    let Some(tool) = envelope.get("tool").and_then(Value::as_str) else {
+        return line.to_owned();
+    };
+
+    let payload_truncated = envelope
+        .get("payload_truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let Some(payload_summary) = envelope.get("payload_summary").and_then(Value::as_str) else {
         return line.to_owned();
     };
-    let Ok(mut payload_json) = serde_json::from_str::<Value>(payload_summary) else {
-        return line.to_owned();
-    };
-    let reduced_summary = match tool_name {
-        Some("file.read") => reduce_file_read_payload_summary(&payload_json),
-        Some("shell.exec") => reduce_shell_payload_summary(&mut payload_json),
+
+    let reduction = match tool {
+        "file.read" => {
+            let Ok(payload_json) = serde_json::from_str::<Value>(payload_summary) else {
+                return line.to_owned();
+            };
+            reduce_file_read_payload_summary(&payload_json).map(|summary| (summary, true))
+        }
+        "shell.exec" => {
+            let Ok(mut payload_json) = serde_json::from_str::<Value>(payload_summary) else {
+                return line.to_owned();
+            };
+            reduce_shell_payload_summary(&mut payload_json).map(|summary| (summary, true))
+        }
+        "tool.search" if !payload_truncated => {
+            compact_tool_search_payload_summary_str(payload_summary).map(|summary| (summary, false))
+        }
         _ => None,
     };
-    let Some(reduced_summary) = reduced_summary else {
+    let Some((reduced_summary, mark_truncated)) = reduction else {
         return line.to_owned();
     };
+
     let Some(envelope_object) = envelope.as_object_mut() else {
         return line.to_owned();
     };
     envelope_object.insert("payload_summary".to_owned(), Value::String(reduced_summary));
-    envelope_object.insert("payload_truncated".to_owned(), Value::Bool(true));
+    if mark_truncated {
+        envelope_object.insert("payload_truncated".to_owned(), Value::Bool(true));
+    }
     let Ok(encoded) = serde_json::to_string(&envelope) else {
         return line.to_owned();
     };
@@ -606,6 +631,68 @@ pub fn build_external_skill_followup_user_prompt(
     }
     sections.push(format!("Original request:\n{user_input}"));
     sections.join("\n\n")
+}
+
+fn compact_tool_search_payload_summary_str(payload_summary: &str) -> Option<String> {
+    let payload_json = serde_json::from_str::<Value>(payload_summary).ok()?;
+    let compacted_summary = compact_tool_search_payload_summary(&payload_json)?;
+    let compacted_summary_str = serde_json::to_string(&compacted_summary).ok()?;
+    (compacted_summary_str.len() < payload_summary.len()).then_some(compacted_summary_str)
+}
+
+fn compact_tool_search_payload_summary(payload: &Value) -> Option<Value> {
+    let payload_object = payload.as_object()?;
+    let results = payload_object.get("results")?.as_array()?;
+
+    let mut compacted = Map::new();
+    if let Some(query) = payload_object.get("query") {
+        compacted.insert("query".to_owned(), query.clone());
+    }
+    compacted.insert(
+        "results".to_owned(),
+        Value::Array(
+            results
+                .iter()
+                .map(compact_tool_search_payload_result)
+                .collect(),
+        ),
+    );
+
+    Some(Value::Object(compacted))
+}
+
+fn compact_tool_search_payload_result(result: &Value) -> Value {
+    let Some(result_object) = result.as_object() else {
+        return result.clone();
+    };
+
+    let mut compacted = Map::new();
+    clone_field_if_present(result_object, &mut compacted, "tool_id");
+    clone_field_if_present(result_object, &mut compacted, "summary");
+    clone_field_if_present(result_object, &mut compacted, "argument_hint");
+    clone_array_field_if_present(result_object, &mut compacted, "required_fields");
+    clone_array_field_if_present(result_object, &mut compacted, "required_field_groups");
+    clone_field_if_present(result_object, &mut compacted, "lease");
+    Value::Object(compacted)
+}
+
+fn clone_field_if_present(source: &Map<String, Value>, target: &mut Map<String, Value>, key: &str) {
+    if let Some(value) = source.get(key) {
+        target.insert(key.to_owned(), value.clone());
+    }
+}
+
+fn clone_array_field_if_present(
+    source: &Map<String, Value>,
+    target: &mut Map<String, Value>,
+    key: &str,
+) {
+    let Some(value) = source.get(key) else {
+        return;
+    };
+    if value.as_array().is_some() {
+        target.insert(key.to_owned(), value.clone());
+    }
 }
 
 pub fn build_tool_result_followup_tail<F>(
@@ -1739,5 +1826,126 @@ mod tests {
             parse_external_skill_invoke_context(line.as_str()).is_none(),
             "truncated external skill payload should not activate managed skill context"
         );
+    }
+
+    #[test]
+    fn reduce_followup_payload_for_model_compacts_tool_search_summary() {
+        let payload_summary = json!({
+            "adapter": "core-tools",
+            "tool_name": "tool.search",
+            "query": "read repo file",
+            "returned": 1,
+            "results": [
+                {
+                    "tool_id": "file.read",
+                    "summary": "Read a UTF-8 text file from the configured workspace root and return contents.",
+                    "argument_hint": "path:string",
+                    "required_fields": ["path"],
+                    "required_field_groups": [["path"]],
+                    "tags": ["core", "file", "read"],
+                    "why": ["summary matches query"],
+                    "lease": "lease-file"
+                }
+            ]
+        })
+        .to_string();
+        let tool_result = format!(
+            "[ok] {}",
+            json!({
+                "status": "ok",
+                "tool": "tool.search",
+                "tool_call_id": "call-search",
+                "payload_summary": payload_summary,
+                "payload_chars": 512,
+                "payload_truncated": false
+            })
+        );
+
+        let reduced = reduce_followup_payload_for_model("tool_result", tool_result.as_str());
+        let envelope: Value = serde_json::from_str(
+            reduced
+                .strip_prefix("[ok] ")
+                .expect("tool result should keep status prefix"),
+        )
+        .expect("reduced envelope should stay valid json");
+        let summary: Value = serde_json::from_str(
+            envelope["payload_summary"]
+                .as_str()
+                .expect("payload summary should stay encoded json"),
+        )
+        .expect("reduced payload summary should stay valid json");
+        let first = summary["results"]
+            .as_array()
+            .and_then(|results| results.first())
+            .expect("reduced payload should keep the first result");
+
+        assert_eq!(summary["query"], "read repo file");
+        assert!(summary.get("adapter").is_none());
+        assert!(summary.get("tool_name").is_none());
+        assert!(summary.get("returned").is_none());
+        assert_eq!(first["tool_id"], "file.read");
+        assert_eq!(first["lease"], "lease-file");
+        assert!(first.get("tags").is_none());
+        assert!(first.get("why").is_none());
+    }
+
+    #[test]
+    fn reduce_followup_payload_for_model_preserves_empty_required_arrays() {
+        let payload_summary = json!({
+            "query": "install a skill",
+            "results": [
+                {
+                    "tool_id": "external_skills.install",
+                    "summary": "Install a bundled skill or a local skill path.",
+                    "argument_hint": "bundled_skill_id?:string,path?:string",
+                    "required_fields": [],
+                    "required_field_groups": [],
+                    "lease": "lease-install"
+                }
+            ]
+        })
+        .to_string();
+        let tool_result = format!(
+            "[ok] {}",
+            json!({
+                "status": "ok",
+                "tool": "tool.search",
+                "tool_call_id": "call-search",
+                "payload_summary": payload_summary,
+                "payload_chars": 512,
+                "payload_truncated": false
+            })
+        );
+
+        let reduced = reduce_followup_payload_for_model("tool_result", tool_result.as_str());
+        let envelope: Value = serde_json::from_str(
+            reduced
+                .strip_prefix("[ok] ")
+                .expect("tool result should keep status prefix"),
+        )
+        .expect("reduced envelope should stay valid json");
+        let summary: Value = serde_json::from_str(
+            envelope["payload_summary"]
+                .as_str()
+                .expect("payload summary should stay encoded json"),
+        )
+        .expect("reduced payload summary should stay valid json");
+        let first = summary["results"]
+            .as_array()
+            .and_then(|results| results.first())
+            .expect("reduced payload should keep the first result");
+
+        assert_eq!(first["required_fields"], json!([]));
+        assert_eq!(first["required_field_groups"], json!([]));
+    }
+
+    #[test]
+    fn reduce_followup_payload_for_model_borrows_unmodified_tool_results() {
+        let tool_result = r#"[ok] {"status":"ok","tool":"shell.exec","tool_call_id":"call-shell","payload_summary":"{\"stdout\":\"hello\"}","payload_chars":32,"payload_truncated":false}"#;
+
+        let reduced = reduce_followup_payload_for_model("tool_result", tool_result);
+
+        assert_eq!(reduced.as_ref(), tool_result);
+        assert_eq!(reduced.as_ptr(), tool_result.as_ptr());
     }
 }

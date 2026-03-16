@@ -19,7 +19,8 @@ use super::turn_shared::{
     ProviderTurnRequestAction, ReplyPersistenceMode, ToolDrivenFollowupPayload,
     ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase, build_tool_driven_followup_tail,
     build_tool_loop_guard_tail, decide_provider_turn_request_action,
-    request_completion_with_raw_fallback, user_requested_raw_tool_output,
+    reduce_followup_payload_for_model, request_completion_with_raw_fallback,
+    user_requested_raw_tool_output,
 };
 
 #[derive(Default)]
@@ -484,9 +485,8 @@ fn append_tool_driven_followup_messages(
         user_input,
         loop_warning_reason,
         |label, text| {
-            let reduced =
-                crate::conversation::turn_shared::reduce_followup_payload_for_model(label, text);
-            followup_payload_budget.truncate_payload(label, reduced.as_str())
+            let reduced = reduce_followup_payload_for_model(label, text);
+            followup_payload_budget.truncate_payload(label, reduced.as_ref())
         },
     ));
 }
@@ -505,9 +505,8 @@ fn append_repeated_tool_guard_followup_messages(
         user_input,
         latest_tool_context,
         |label, text| {
-            let reduced =
-                crate::conversation::turn_shared::reduce_followup_payload_for_model(label, text);
-            followup_payload_budget.truncate_payload(label, reduced.as_str())
+            let reduced = reduce_followup_payload_for_model(label, text);
+            followup_payload_budget.truncate_payload(label, reduced.as_ref())
         },
     ));
 }
@@ -1114,6 +1113,125 @@ mod tests {
     }
 
     #[test]
+    fn append_tool_driven_followup_messages_compacts_tool_search_payload_summary() {
+        let mut messages = Vec::new();
+        let mut budget = FollowupPayloadBudget::new(8_000, 20_000);
+        let payload_summary = serde_json::json!({
+            "adapter": "core-tools",
+            "tool_name": "tool.search",
+            "query": "read repo file",
+            "returned": 2,
+            "results": [
+                {
+                    "tool_id": "file.read",
+                    "summary": "Read a UTF-8 text file from the configured workspace root and return contents.",
+                    "argument_hint": "path:string,offset?:integer,limit?:integer",
+                    "required_fields": ["path"],
+                    "required_field_groups": [["path"]],
+                    "tags": ["core", "file", "read"],
+                    "why": ["summary matches query", "tag matches read"],
+                    "lease": "lease-file"
+                },
+                {
+                    "tool_id": "shell.exec",
+                    "summary": "Execute a shell command in the workspace.",
+                    "argument_hint": "command:string,args?:string[]",
+                    "required_fields": ["command"],
+                    "required_field_groups": [["command"]],
+                    "tags": ["core", "shell", "exec"],
+                    "why": ["summary matches query", "tag matches exec"],
+                    "lease": "lease-shell"
+                }
+            ]
+        })
+        .to_string();
+        let tool_result = format!(
+            "[ok] {}",
+            serde_json::json!({
+                "status": "ok",
+                "tool": "tool.search",
+                "tool_call_id": "call-search",
+                "payload_summary": payload_summary,
+                "payload_chars": 2_048,
+                "payload_truncated": false
+            })
+        );
+
+        append_tool_driven_followup_messages(
+            &mut messages,
+            "preface",
+            &ToolDrivenFollowupPayload::ToolResult { text: tool_result },
+            "find the right tool",
+            &mut budget,
+            None,
+        );
+
+        let assistant_tool_result = messages
+            .iter()
+            .find(|message| {
+                message.get("role") == Some(&Value::String("assistant".to_owned()))
+                    && message
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .is_some_and(|content| content.starts_with("[tool_result]\n[ok] "))
+            })
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("assistant tool_result followup message should exist");
+        let line = assistant_tool_result
+            .lines()
+            .nth(1)
+            .expect("assistant tool_result should keep payload line");
+        let envelope: Value = serde_json::from_str(
+            line.strip_prefix("[ok] ")
+                .expect("tool result line should preserve status prefix"),
+        )
+        .expect("compacted followup envelope should stay valid json");
+        let summary: Value = serde_json::from_str(
+            envelope["payload_summary"]
+                .as_str()
+                .expect("payload summary should stay encoded json"),
+        )
+        .expect("compacted payload summary should stay json");
+        let first = summary["results"]
+            .as_array()
+            .and_then(|results| results.first())
+            .expect("compacted results should contain the first entry");
+
+        assert_eq!(envelope["tool"], "tool.search");
+        assert_eq!(envelope["payload_truncated"], false);
+        assert_eq!(summary["query"], "read repo file");
+        assert!(summary.get("adapter").is_none());
+        assert!(summary.get("tool_name").is_none());
+        assert!(summary.get("returned").is_none());
+        assert_eq!(first["tool_id"], "file.read");
+        assert_eq!(first["lease"], "lease-file");
+        for entry in summary["results"]
+            .as_array()
+            .expect("results should be an array")
+        {
+            assert!(entry.get("tool_id").and_then(Value::as_str).is_some());
+            assert!(entry.get("summary").and_then(Value::as_str).is_some());
+            assert!(entry.get("argument_hint").and_then(Value::as_str).is_some());
+            assert!(
+                entry
+                    .get("required_fields")
+                    .and_then(Value::as_array)
+                    .is_some()
+            );
+            assert!(
+                entry
+                    .get("required_field_groups")
+                    .and_then(Value::as_array)
+                    .is_some()
+            );
+            assert!(entry.get("lease").and_then(Value::as_str).is_some());
+            assert!(entry.get("tags").is_none());
+            assert!(entry.get("why").is_none());
+        }
+    }
+
+    #[test]
     fn append_repeated_tool_guard_followup_messages_reduces_file_read_payload_summary() {
         let mut messages = Vec::new();
         let mut budget = FollowupPayloadBudget::new(8_000, 20_000);
@@ -1159,6 +1277,69 @@ mod tests {
         assert!(summary.get("stderr_preview").is_some());
         assert!(summary.get("stderr_chars").is_some());
         assert_eq!(summary["stderr_truncated"], true);
+    }
+
+    #[test]
+    fn append_repeated_tool_guard_followup_messages_compacts_tool_search_payload_summary() {
+        let mut messages = Vec::new();
+        let mut budget = FollowupPayloadBudget::new(8_000, 20_000);
+        let payload_summary = serde_json::json!({
+            "adapter": "core-tools",
+            "tool_name": "tool.search",
+            "query": "read repo file",
+            "returned": 1,
+            "results": [
+                {
+                    "tool_id": "file.read",
+                    "summary": "Read a UTF-8 text file from the configured workspace root and return contents.",
+                    "argument_hint": "path:string,offset?:integer,limit?:integer",
+                    "required_fields": ["path"],
+                    "required_field_groups": [["path"]],
+                    "tags": ["core", "file", "read"],
+                    "why": ["summary matches query", "tag matches read"],
+                    "lease": "lease-file"
+                }
+            ]
+        })
+        .to_string();
+        let tool_result = format!(
+            "[ok] {}",
+            serde_json::json!({
+                "status": "ok",
+                "tool": "tool.search",
+                "tool_call_id": "call-search",
+                "payload_summary": payload_summary,
+                "payload_chars": 1_024,
+                "payload_truncated": false
+            })
+        );
+
+        append_repeated_tool_guard_followup_messages(
+            &mut messages,
+            "preface",
+            "stop",
+            "find the right tool",
+            Some(("tool_result", tool_result.as_str())),
+            &mut budget,
+        );
+
+        let (envelope, summary) =
+            crate::conversation::turn_shared::parse_tool_result_followup_for_test(&messages);
+        let first = summary["results"]
+            .as_array()
+            .and_then(|results| results.first())
+            .expect("compacted results should contain the first entry");
+
+        assert_eq!(envelope["tool"], "tool.search");
+        assert_eq!(envelope["payload_truncated"], false);
+        assert_eq!(summary["query"], "read repo file");
+        assert!(summary.get("adapter").is_none());
+        assert!(summary.get("tool_name").is_none());
+        assert!(summary.get("returned").is_none());
+        assert_eq!(first["tool_id"], "file.read");
+        assert_eq!(first["lease"], "lease-file");
+        assert!(first.get("tags").is_none());
+        assert!(first.get("why").is_none());
     }
 
     #[test]
