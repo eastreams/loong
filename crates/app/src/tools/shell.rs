@@ -46,11 +46,20 @@ pub(super) fn execute_shell_tool_with_config(
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
         let normalized_command = command.to_ascii_lowercase();
-        let basename = normalized_command
-            .rsplit('/')
-            .find(|segment| !segment.is_empty())
-            .and_then(|segment| segment.rsplit('\\').find(|segment| !segment.is_empty()))
+        let first_word = normalized_command
+            .split_whitespace()
+            .next()
             .unwrap_or(&normalized_command);
+
+        // Reject path-qualified commands (e.g. /tmp/git, ./git, ..\git) to
+        // prevent allowlist bypass via an absolute or relative path.
+        if first_word.contains('/') || first_word.contains('\\') {
+            return Err(format!(
+                "policy_denied: shell command `{first_word}` must be a bare command name without path separators"
+            ));
+        }
+
+        let basename = first_word;
 
         if config.shell_deny.contains(basename) {
             return Err(format!(
