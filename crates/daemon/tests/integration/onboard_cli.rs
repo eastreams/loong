@@ -5659,8 +5659,8 @@ fn render_onboarding_success_summary_compacts_for_narrow_width() {
                 .any(|line| line == "  '/tmp/loongclaw-config.toml' --message")
             && lines
                 .iter()
-                .any(|line| line == "  \"Summarize this repository and suggest the")
-            && lines.iter().any(|line| line == "  best next step.\""),
+                .any(|line| line == "  'Summarize this repository and suggest the")
+            && lines.iter().any(|line| line == "  best next step.'"),
         "narrow renderer should keep the primary ask example readable even when the command wraps: {lines:#?}"
     );
     assert!(

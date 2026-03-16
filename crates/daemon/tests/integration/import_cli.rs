@@ -633,15 +633,21 @@ fn import_cli_apply_summary_shell_quotes_config_paths_with_single_quotes() {
 
     assert!(
         rendered.contains(
-            "next step: loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message"
+            "next step: loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'Summarize this repository and suggest the best next step.'"
         ),
-        "apply summary should shell-quote single quotes in the primary ask command: {lines:#?}"
+        "apply summary should shell-quote single quotes in the primary ask command and keep the suggested message shell-safe: {lines:#?}"
     );
     assert!(
         rendered.contains(
             "also available: chat · loongclaw chat --config '/tmp/loongclaw'\"'\"'s config.toml'"
         ),
         "apply summary should shell-quote single quotes in the secondary chat command: {lines:#?}"
+    );
+    assert!(
+        rendered.contains(
+            "also available: telegram · loongclaw telegram-serve --config '/tmp/loongclaw'\"'\"'s config.toml'"
+        ),
+        "apply summary should shell-quote single quotes in channel handoff commands: {lines:#?}"
     );
 }
 
