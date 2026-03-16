@@ -1069,7 +1069,7 @@ pub fn collect_runtime_snapshot_cli_state(
         enabled_channel_ids,
         enabled_service_channel_ids,
         channels,
-        tool_runtime,
+        tool_runtime: snapshot_tool_runtime,
         visible_tool_names,
         capability_snapshot,
         capability_snapshot_sha256,

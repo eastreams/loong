@@ -345,6 +345,27 @@ fn runtime_snapshot_json_payload_reflects_effective_external_skills_policy_overr
     .expect("collect runtime snapshot");
     let payload = build_runtime_snapshot_cli_json_payload(&snapshot);
 
+    assert!(!snapshot.tool_runtime.external_skills.enabled);
+    assert!(
+        snapshot
+            .tool_runtime
+            .external_skills
+            .require_download_approval
+    );
+    assert!(
+        snapshot
+            .tool_runtime
+            .external_skills
+            .allowed_domains
+            .contains("override.example")
+    );
+    assert!(
+        snapshot
+            .tool_runtime
+            .external_skills
+            .blocked_domains
+            .contains("blocked.example")
+    );
     assert_eq!(payload["external_skills"]["policy"]["enabled"], false);
     assert_eq!(
         payload["external_skills"]["policy"]["require_download_approval"],
