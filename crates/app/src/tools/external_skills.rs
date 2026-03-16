@@ -524,7 +524,9 @@ pub(super) fn execute_external_skills_install_tool_with_config(
                 .and_then(|value| (!value.is_empty()).then_some(value))
                 .map(normalize_skill_id)
                 .transpose()?
-                .unwrap_or_else(|| derive_skill_id_from_markdown(&skill_root, skill_markdown.as_str()));
+                .unwrap_or_else(|| {
+                    derive_skill_id_from_markdown(&skill_root, skill_markdown.as_str())
+                });
             let display_name =
                 derive_skill_display_name(skill_markdown.as_str(), skill_id.as_str());
             let summary = derive_skill_summary(skill_markdown.as_str());
