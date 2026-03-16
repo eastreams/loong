@@ -1544,11 +1544,7 @@ fn discover_skill_inventory(
                 .then_with(|| left.entry.source_path.cmp(&right.entry.source_path))
         });
 
-        let winner_index = candidates
-            .iter()
-            .position(|candidate| candidate.entry.active)
-            .unwrap_or(0);
-        let winner = candidates.remove(winner_index);
+        let winner = candidates.remove(0);
         inventory.skills.push(winner.entry);
         inventory
             .shadowed_skills
@@ -1665,7 +1661,10 @@ fn discover_scoped_skill_candidates(
                 if !seen.insert(key.clone()) {
                     continue;
                 }
-                let skill_markdown = load_directory_skill_markdown(&skill_root)?;
+                let skill_markdown = match load_directory_skill_markdown(&skill_root) {
+                    Ok(md) => md,
+                    Err(_) => continue,
+                };
                 let skill_id = derive_skill_id_from_markdown(&skill_root, skill_markdown.as_str());
                 candidates.push(DiscoveredSkillCandidate {
                     probe_rank,
