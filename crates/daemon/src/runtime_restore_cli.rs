@@ -8,7 +8,11 @@ use loongclaw_app as mvp;
 use loongclaw_spec::CliResult;
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
 
 #[derive(Parser, Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeRestoreCommandOptions {
@@ -53,6 +57,10 @@ pub struct RuntimeRestoreManagedSkillAction {
     pub source_path: String,
     pub current_sha256: Option<String>,
     pub target_sha256: Option<String>,
+    use_target_config: bool,
+    apply_install_root: Option<String>,
+    current_source_kind: Option<String>,
+    current_source_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -66,6 +74,12 @@ pub struct RuntimeRestoreVerification {
 #[derive(Debug, Clone)]
 struct RuntimeRestoreArtifactInput {
     document: RuntimeSnapshotArtifactDocument,
+}
+
+#[derive(Debug, Clone)]
+struct ManagedSkillInventorySnapshot {
+    install_root: Option<String>,
+    skills: BTreeMap<String, ManagedSkillInventoryEntry>,
 }
 
 #[derive(Debug, Clone)]
@@ -201,10 +215,19 @@ fn build_runtime_restore_plan(
     target_config: &mvp::config::LoongClawConfig,
     artifact: &RuntimeRestoreArtifactInput,
 ) -> CliResult<RuntimeRestorePlan> {
-    let current_managed_skills = collect_managed_skill_inventory(resolved_path, target_config)?;
+    let current_managed_skills = collect_managed_skill_inventory(
+        resolved_path,
+        current_config,
+        current_config.external_skills.resolved_install_root(),
+    )?;
+    let target_install_root = target_config
+        .external_skills
+        .resolved_install_root()
+        .map(|path| path.display().to_string());
     let managed_skill_actions = plan_managed_skill_actions(
         &current_managed_skills,
         &artifact.document.restore_spec.managed_skills.skills,
+        target_install_root.clone(),
     );
 
     let mut changed_surfaces = Vec::new();
@@ -231,9 +254,22 @@ fn build_runtime_restore_plan(
     }
 
     let mut warnings = artifact.document.restore_spec.warnings.clone();
-    let can_apply = managed_skill_actions
-        .iter()
-        .all(|action| validate_managed_skill_action(action, &mut warnings));
+    if current_managed_skills.install_root != target_install_root
+        && !managed_skill_actions.is_empty()
+    {
+        warnings.push(format!(
+            "runtime restore will switch managed external skill install root from {} to {}",
+            current_managed_skills
+                .install_root
+                .as_deref()
+                .unwrap_or("-"),
+            target_install_root.as_deref().unwrap_or("-")
+        ));
+    }
+    let can_apply = !runtime_restore_has_blocking_warnings(&warnings)
+        && managed_skill_actions
+            .iter()
+            .all(|action| validate_managed_skill_action(action, &mut warnings));
 
     Ok(RuntimeRestorePlan {
         can_apply,
@@ -255,10 +291,21 @@ fn provider_runtime_changed(
 
 fn collect_managed_skill_inventory(
     resolved_path: &Path,
-    target_config: &mvp::config::LoongClawConfig,
-) -> CliResult<BTreeMap<String, ManagedSkillInventoryEntry>> {
+    base_config: &mvp::config::LoongClawConfig,
+    install_root: Option<PathBuf>,
+) -> CliResult<ManagedSkillInventorySnapshot> {
+    let mut inventory_config = base_config.clone();
+    inventory_config.external_skills.enabled = true;
+    if let Some(install_root) = install_root {
+        inventory_config.external_skills.install_root = Some(install_root.display().to_string());
+    }
+
+    let resolved_install_root = inventory_config
+        .external_skills
+        .resolved_install_root()
+        .map(|path| path.display().to_string());
     let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
-        target_config,
+        &inventory_config,
         Some(resolved_path),
     );
     let outcome = mvp::tools::execute_tool_core_with_config(
@@ -275,25 +322,29 @@ fn collect_managed_skill_inventory(
         .and_then(Value::as_array)
         .ok_or_else(|| "managed external skill inventory payload missing `skills`".to_owned())?;
 
-    Ok(skills
-        .iter()
-        .filter(|skill| skill.get("scope").and_then(Value::as_str) == Some("managed"))
-        .filter_map(|skill| {
-            Some((
-                skill.get("skill_id").and_then(Value::as_str)?.to_owned(),
-                ManagedSkillInventoryEntry {
-                    source_kind: skill.get("source_kind").and_then(Value::as_str)?.to_owned(),
-                    source_path: skill.get("source_path").and_then(Value::as_str)?.to_owned(),
-                    sha256: skill.get("sha256").and_then(Value::as_str)?.to_owned(),
-                },
-            ))
-        })
-        .collect())
+    Ok(ManagedSkillInventorySnapshot {
+        install_root: resolved_install_root,
+        skills: skills
+            .iter()
+            .filter(|skill| skill.get("scope").and_then(Value::as_str) == Some("managed"))
+            .filter_map(|skill| {
+                Some((
+                    skill.get("skill_id").and_then(Value::as_str)?.to_owned(),
+                    ManagedSkillInventoryEntry {
+                        source_kind: skill.get("source_kind").and_then(Value::as_str)?.to_owned(),
+                        source_path: skill.get("source_path").and_then(Value::as_str)?.to_owned(),
+                        sha256: skill.get("sha256").and_then(Value::as_str)?.to_owned(),
+                    },
+                ))
+            })
+            .collect(),
+    })
 }
 
 fn plan_managed_skill_actions(
-    current: &BTreeMap<String, ManagedSkillInventoryEntry>,
+    current: &ManagedSkillInventorySnapshot,
     target: &[RuntimeSnapshotRestoreManagedSkillSpec],
+    target_install_root: Option<String>,
 ) -> Vec<RuntimeRestoreManagedSkillAction> {
     let target = target
         .iter()
@@ -301,48 +352,113 @@ fn plan_managed_skill_actions(
         .collect::<BTreeMap<_, _>>();
 
     let mut actions = Vec::new();
+    let current_install_root = current.install_root.clone();
+    let install_root_changed = current_install_root != target_install_root;
     for skill_id in current
+        .skills
         .keys()
         .chain(target.keys())
         .cloned()
         .collect::<std::collections::BTreeSet<_>>()
     {
-        match (current.get(&skill_id), target.get(&skill_id)) {
-            (None, Some(target_skill)) => actions.push(RuntimeRestoreManagedSkillAction {
-                action: "install".to_owned(),
-                skill_id: skill_id.clone(),
-                source_kind: target_skill.source_kind.clone(),
-                source_path: target_skill.source_path.clone(),
-                current_sha256: None,
-                target_sha256: Some(target_skill.sha256.clone()),
-            }),
-            (Some(current_skill), None) => actions.push(RuntimeRestoreManagedSkillAction {
-                action: "remove".to_owned(),
-                skill_id: skill_id.clone(),
-                source_kind: current_skill.source_kind.clone(),
-                source_path: current_skill.source_path.clone(),
-                current_sha256: Some(current_skill.sha256.clone()),
-                target_sha256: None,
-            }),
-            (Some(current_skill), Some(target_skill))
-                if current_skill.sha256 != target_skill.sha256
-                    || current_skill.source_kind != target_skill.source_kind
-                    || current_skill.source_path != target_skill.source_path =>
-            {
-                actions.push(RuntimeRestoreManagedSkillAction {
-                    action: "replace".to_owned(),
-                    skill_id: skill_id.clone(),
-                    source_kind: target_skill.source_kind.clone(),
-                    source_path: target_skill.source_path.clone(),
-                    current_sha256: Some(current_skill.sha256.clone()),
-                    target_sha256: Some(target_skill.sha256.clone()),
-                });
+        match (current.skills.get(&skill_id), target.get(&skill_id)) {
+            (None, Some(target_skill)) => actions.push(build_install_action(
+                &skill_id,
+                target_skill,
+                target_install_root.clone(),
+            )),
+            (Some(current_skill), None) if !install_root_changed => {
+                actions.push(build_remove_action(
+                    &skill_id,
+                    current_skill,
+                    current_install_root.clone(),
+                ));
             }
+            (Some(current_skill), Some(target_skill))
+                if current_skill.sha256 != target_skill.sha256 =>
+            {
+                actions.push(build_replace_action(
+                    &skill_id,
+                    current_skill,
+                    target_skill,
+                    target_install_root
+                        .clone()
+                        .or_else(|| current_install_root.clone()),
+                ));
+            }
+            (Some(_current_skill), Some(target_skill)) if install_root_changed => actions.push(
+                build_install_action(&skill_id, target_skill, target_install_root.clone()),
+            ),
             _ => {}
         }
     }
     actions.sort_by(|left, right| left.skill_id.cmp(&right.skill_id));
     actions
+}
+
+fn build_install_action(
+    skill_id: &str,
+    target_skill: &RuntimeSnapshotRestoreManagedSkillSpec,
+    target_install_root: Option<String>,
+) -> RuntimeRestoreManagedSkillAction {
+    RuntimeRestoreManagedSkillAction {
+        action: "install".to_owned(),
+        skill_id: skill_id.to_owned(),
+        source_kind: target_skill.source_kind.clone(),
+        source_path: target_skill.source_path.clone(),
+        current_sha256: None,
+        target_sha256: Some(target_skill.sha256.clone()),
+        use_target_config: true,
+        apply_install_root: target_install_root,
+        current_source_kind: None,
+        current_source_path: None,
+    }
+}
+
+fn build_remove_action(
+    skill_id: &str,
+    current_skill: &ManagedSkillInventoryEntry,
+    current_install_root: Option<String>,
+) -> RuntimeRestoreManagedSkillAction {
+    RuntimeRestoreManagedSkillAction {
+        action: "remove".to_owned(),
+        skill_id: skill_id.to_owned(),
+        source_kind: current_skill.source_kind.clone(),
+        source_path: current_skill.source_path.clone(),
+        current_sha256: Some(current_skill.sha256.clone()),
+        target_sha256: None,
+        use_target_config: false,
+        apply_install_root: current_install_root,
+        current_source_kind: Some(current_skill.source_kind.clone()),
+        current_source_path: Some(current_skill.source_path.clone()),
+    }
+}
+
+fn build_replace_action(
+    skill_id: &str,
+    current_skill: &ManagedSkillInventoryEntry,
+    target_skill: &RuntimeSnapshotRestoreManagedSkillSpec,
+    apply_install_root: Option<String>,
+) -> RuntimeRestoreManagedSkillAction {
+    RuntimeRestoreManagedSkillAction {
+        action: "replace".to_owned(),
+        skill_id: skill_id.to_owned(),
+        source_kind: target_skill.source_kind.clone(),
+        source_path: target_skill.source_path.clone(),
+        current_sha256: Some(current_skill.sha256.clone()),
+        target_sha256: Some(target_skill.sha256.clone()),
+        use_target_config: true,
+        apply_install_root,
+        current_source_kind: Some(current_skill.source_kind.clone()),
+        current_source_path: Some(current_skill.source_path.clone()),
+    }
+}
+
+fn runtime_restore_has_blocking_warnings(warnings: &[String]) -> bool {
+    warnings.iter().any(|warning| {
+        warning.contains("redacted inline provider credential")
+            || warning.contains("redacted inline provider header")
+    })
 }
 
 fn validate_managed_skill_action(
@@ -353,7 +469,14 @@ fn validate_managed_skill_action(
         return true;
     }
     if action.source_kind == "bundled" {
-        return action.source_path.starts_with("bundled://");
+        let is_valid = action.source_path.starts_with("bundled://");
+        if !is_valid {
+            warnings.push(format!(
+                "restore action for bundled skill `{}` is missing a bundled source identifier",
+                action.skill_id
+            ));
+        }
+        return is_valid;
     }
     if Path::new(&action.source_path).exists() {
         return true;
@@ -373,21 +496,27 @@ fn apply_runtime_restore(
     artifact: &RuntimeRestoreArtifactInput,
 ) -> CliResult<RuntimeRestoreVerification> {
     let path_string = resolved_path.to_string_lossy();
-    mvp::config::write(Some(path_string.as_ref()), target_config, true).map_err(|error| {
-        format!(
-            "persist runtime restore config {} failed: {error}",
-            resolved_path.display()
-        )
-    })?;
-
-    let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+    let rollback_actions = apply_managed_skill_actions(
+        resolved_path,
+        current_config,
         target_config,
-        Some(resolved_path),
-    );
-    if let Err(error) = apply_managed_skill_actions(&tool_runtime, &plan.managed_skill_actions) {
-        let _ = mvp::config::write(Some(path_string.as_ref()), current_config, true);
+        &plan.managed_skill_actions,
+    )?;
+    if let Err(error) = mvp::config::write(Some(path_string.as_ref()), target_config, true) {
+        if let Err(rollback_error) = rollback_managed_skill_actions(
+            resolved_path,
+            current_config,
+            target_config,
+            &rollback_actions,
+        ) {
+            return Err(format!(
+                "persist runtime restore config {} failed: {error}; managed skill rollback also failed: {rollback_error}",
+                resolved_path.display()
+            ));
+        }
         return Err(format!(
-            "runtime restore managed skill sync failed after config update: {error}"
+            "persist runtime restore config {} failed after reverting managed skill changes: {error}",
+            resolved_path.display()
         ));
     }
 
@@ -396,60 +525,169 @@ fn apply_runtime_restore(
 }
 
 fn apply_managed_skill_actions(
-    tool_runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
+    resolved_path: &Path,
+    current_config: &mvp::config::LoongClawConfig,
+    target_config: &mvp::config::LoongClawConfig,
     actions: &[RuntimeRestoreManagedSkillAction],
-) -> CliResult<()> {
+) -> CliResult<Vec<RuntimeRestoreManagedSkillAction>> {
+    let mut rollback_actions = Vec::new();
     for action in actions {
-        match action.action.as_str() {
-            "install" | "replace" => {
-                let payload = if action.source_kind == "bundled" {
-                    json!({
-                        "bundled_skill_id": bundled_skill_id_for_action(action)?,
-                        "replace": action.action == "replace",
-                    })
-                } else {
-                    json!({
-                        "path": action.source_path,
-                        "replace": action.action == "replace",
-                    })
-                };
-                mvp::tools::execute_tool_core_with_config(
-                    ToolCoreRequest {
-                        tool_name: "external_skills.install".to_owned(),
-                        payload,
-                    },
-                    tool_runtime,
-                )
-                .map_err(|error| {
-                    format!(
-                        "{} managed external skill `{}` failed: {error}",
-                        action.action, action.skill_id
-                    )
-                })?;
+        if let Err(error) =
+            apply_single_managed_skill_action(resolved_path, current_config, target_config, action)
+        {
+            if let Err(rollback_error) = rollback_managed_skill_actions(
+                resolved_path,
+                current_config,
+                target_config,
+                &rollback_actions,
+            ) {
+                return Err(format!(
+                    "{error}; managed skill rollback also failed: {rollback_error}"
+                ));
             }
-            "remove" => {
-                mvp::tools::execute_tool_core_with_config(
-                    ToolCoreRequest {
-                        tool_name: "external_skills.remove".to_owned(),
-                        payload: json!({
-                            "skill_id": action.skill_id,
-                        }),
-                    },
-                    tool_runtime,
-                )
-                .map_err(|error| {
-                    format!(
-                        "remove managed external skill `{}` failed: {error}",
-                        action.skill_id
-                    )
-                })?;
-            }
-            other => {
-                return Err(format!("unknown managed skill restore action `{other}`"));
-            }
+            return Err(error);
+        }
+        if let Some(rollback_action) = rollback_action_for_success(action) {
+            rollback_actions.push(rollback_action);
         }
     }
-    Ok(())
+    Ok(rollback_actions)
+}
+
+fn rollback_managed_skill_actions(
+    resolved_path: &Path,
+    current_config: &mvp::config::LoongClawConfig,
+    target_config: &mvp::config::LoongClawConfig,
+    rollback_actions: &[RuntimeRestoreManagedSkillAction],
+) -> CliResult<()> {
+    let mut rollback_errors = Vec::new();
+    for action in rollback_actions.iter().rev() {
+        if let Err(error) =
+            apply_single_managed_skill_action(resolved_path, current_config, target_config, action)
+        {
+            rollback_errors.push(error);
+        }
+    }
+    if rollback_errors.is_empty() {
+        Ok(())
+    } else {
+        Err(rollback_errors.join("; "))
+    }
+}
+
+fn rollback_action_for_success(
+    action: &RuntimeRestoreManagedSkillAction,
+) -> Option<RuntimeRestoreManagedSkillAction> {
+    match action.action.as_str() {
+        "install" => Some(RuntimeRestoreManagedSkillAction {
+            action: "remove".to_owned(),
+            skill_id: action.skill_id.clone(),
+            source_kind: action.source_kind.clone(),
+            source_path: action.source_path.clone(),
+            current_sha256: action.target_sha256.clone(),
+            target_sha256: None,
+            use_target_config: true,
+            apply_install_root: action.apply_install_root.clone(),
+            current_source_kind: None,
+            current_source_path: None,
+        }),
+        "remove" | "replace" => Some(RuntimeRestoreManagedSkillAction {
+            action: if action.action == "replace" {
+                "replace".to_owned()
+            } else {
+                "install".to_owned()
+            },
+            skill_id: action.skill_id.clone(),
+            source_kind: action.current_source_kind.clone()?,
+            source_path: action.current_source_path.clone()?,
+            current_sha256: None,
+            target_sha256: action.current_sha256.clone(),
+            use_target_config: false,
+            apply_install_root: action.apply_install_root.clone(),
+            current_source_kind: None,
+            current_source_path: None,
+        }),
+        _ => None,
+    }
+}
+
+fn apply_single_managed_skill_action(
+    resolved_path: &Path,
+    current_config: &mvp::config::LoongClawConfig,
+    target_config: &mvp::config::LoongClawConfig,
+    action: &RuntimeRestoreManagedSkillAction,
+) -> CliResult<()> {
+    let tool_runtime =
+        build_action_tool_runtime(resolved_path, current_config, target_config, action);
+    match action.action.as_str() {
+        "install" | "replace" => {
+            let payload = if action.source_kind == "bundled" {
+                json!({
+                    "bundled_skill_id": bundled_skill_id_for_action(action)?,
+                    "replace": action.action == "replace",
+                })
+            } else {
+                json!({
+                    "path": action.source_path,
+                    "replace": action.action == "replace",
+                })
+            };
+            mvp::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload,
+                },
+                &tool_runtime,
+            )
+            .map_err(|error| {
+                format!(
+                    "{} managed external skill `{}` failed: {error}",
+                    action.action, action.skill_id
+                )
+            })?;
+            Ok(())
+        }
+        "remove" => {
+            mvp::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.remove".to_owned(),
+                    payload: json!({
+                        "skill_id": action.skill_id,
+                    }),
+                },
+                &tool_runtime,
+            )
+            .map_err(|error| {
+                format!(
+                    "remove managed external skill `{}` failed: {error}",
+                    action.skill_id
+                )
+            })?;
+            Ok(())
+        }
+        other => Err(format!("unknown managed skill restore action `{other}`")),
+    }
+}
+
+fn build_action_tool_runtime(
+    resolved_path: &Path,
+    current_config: &mvp::config::LoongClawConfig,
+    target_config: &mvp::config::LoongClawConfig,
+    action: &RuntimeRestoreManagedSkillAction,
+) -> mvp::tools::runtime_config::ToolRuntimeConfig {
+    let mut config = if action.use_target_config {
+        target_config.clone()
+    } else {
+        current_config.clone()
+    };
+    config.external_skills.enabled = true;
+    if let Some(install_root) = action.apply_install_root.as_ref() {
+        config.external_skills.install_root = Some(install_root.clone());
+    }
+    mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+        &config,
+        Some(resolved_path),
+    )
 }
 
 fn bundled_skill_id_for_action(action: &RuntimeRestoreManagedSkillAction) -> CliResult<String> {

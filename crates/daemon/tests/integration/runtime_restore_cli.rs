@@ -195,6 +195,19 @@ fn write_snapshot_artifact(
     (artifact_path, snapshot, payload)
 }
 
+fn write_snapshot_artifact_payload(root: &Path, relative: &str, payload: &Value) -> PathBuf {
+    let artifact_path = root.join(relative);
+    if let Some(parent) = artifact_path.parent() {
+        fs::create_dir_all(parent).expect("create artifact parent");
+    }
+    fs::write(
+        &artifact_path,
+        serde_json::to_string_pretty(payload).expect("encode artifact payload"),
+    )
+    .expect("write artifact payload");
+    artifact_path
+}
+
 fn mutate_runtime_restore_config(config_path: &Path, root: &Path) {
     let (_, mut config) = mvp::config::load(Some(
         config_path
@@ -332,6 +345,32 @@ fn runtime_snapshot_artifact_json_redacts_inline_provider_secrets_from_restore_s
 }
 
 #[test]
+fn runtime_snapshot_artifact_json_warns_when_managed_skill_inventory_is_disabled() {
+    let root = unique_temp_dir("loongclaw-runtime-restore-disabled-inventory");
+    let _env = RuntimeRestoreEnvGuard::set(&[
+        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("OPENAI_API_KEY", None),
+        ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
+    ]);
+    let (config_path, mut config) = write_runtime_restore_config(&root);
+    config.external_skills.enabled = false;
+    mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
+        .expect("write disabled inventory fixture");
+
+    let (_artifact_path, _snapshot, payload) = write_snapshot_artifact(&root, &config_path);
+
+    assert!(
+        payload["restore_spec"]["warnings"]
+            .as_array()
+            .expect("warnings should be an array")
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|warning| warning.contains("inventory is disabled")),
+        "restore spec should warn when managed skill inventory is disabled"
+    );
+}
+
+#[test]
 fn runtime_restore_dry_run_reports_pending_mutations_and_leaves_config_unchanged() {
     let root = unique_temp_dir("loongclaw-runtime-restore-dry-run");
     let _env = RuntimeRestoreEnvGuard::set(&[
@@ -385,6 +424,146 @@ fn runtime_restore_dry_run_reports_pending_mutations_and_leaves_config_unchanged
     assert_eq!(
         reloaded.memory.profile,
         mvp::config::MemoryProfile::WindowOnly
+    );
+}
+
+#[test]
+fn runtime_restore_dry_run_blocks_apply_when_provider_credentials_were_redacted() {
+    let root = unique_temp_dir("loongclaw-runtime-restore-redacted-block");
+    let _env = RuntimeRestoreEnvGuard::set(&[
+        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("OPENAI_API_KEY", None),
+        ("RUNTIME_RESTORE_DEEPSEEK_KEY", None),
+    ]);
+    let (config_path, mut config) = write_runtime_restore_config(&root);
+    config.set_active_provider_profile(
+        "deepseek-lab",
+        mvp::config::ProviderProfileConfig {
+            default_for_kind: true,
+            provider: mvp::config::ProviderConfig {
+                kind: mvp::config::ProviderKind::Deepseek,
+                model: "deepseek-chat".to_owned(),
+                api_key: Some("literal-secret-value".to_owned()),
+                ..Default::default()
+            },
+        },
+    );
+    mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
+        .expect("write redacted restore config");
+
+    let (artifact_path, _snapshot, _payload) = write_snapshot_artifact(&root, &config_path);
+
+    let dry_run = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+            config: Some(config_path.display().to_string()),
+            snapshot: artifact_path.display().to_string(),
+            json: false,
+            apply: false,
+        },
+    )
+    .expect("runtime restore dry-run should surface blocking warnings");
+
+    assert!(!dry_run.plan.can_apply);
+    assert!(
+        dry_run
+            .plan
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("redacted inline provider credential")),
+        "dry-run should keep the redacted credential warning visible"
+    );
+
+    let apply_error = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+            config: Some(config_path.display().to_string()),
+            snapshot: artifact_path.display().to_string(),
+            json: false,
+            apply: true,
+        },
+    )
+    .expect_err("apply should reject snapshots with redacted inline credentials");
+    assert!(apply_error.contains("cannot be safely applied"));
+}
+
+#[test]
+fn runtime_restore_dry_run_collects_current_inventory_when_target_snapshot_disables_external_skills()
+ {
+    let root = unique_temp_dir("loongclaw-runtime-restore-target-disabled");
+    let _env = RuntimeRestoreEnvGuard::set(&[
+        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("OPENAI_API_KEY", None),
+        ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
+    ]);
+    let (config_path, config) = write_runtime_restore_config(&root);
+    install_demo_skill(&root, &config, &config_path);
+    let (_artifact_path, _snapshot, mut payload) = write_snapshot_artifact(&root, &config_path);
+
+    payload["restore_spec"]["external_skills"]["enabled"] = Value::Bool(false);
+    payload["restore_spec"]["managed_skills"]["skills"] = Value::Array(Vec::new());
+    let disabled_artifact_path = write_snapshot_artifact_payload(
+        &root,
+        "artifacts/runtime-snapshot-disabled.json",
+        &payload,
+    );
+
+    let execution = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+            config: Some(config_path.display().to_string()),
+            snapshot: disabled_artifact_path.display().to_string(),
+            json: false,
+            apply: false,
+        },
+    )
+    .expect("restore planning should not depend on the target snapshot runtime being enabled");
+
+    assert!(execution.plan.can_apply);
+    assert!(
+        execution
+            .plan
+            .managed_skill_actions
+            .iter()
+            .any(|action| action.skill_id == "demo-skill" && action.action == "remove"),
+        "current managed inventory should still be collected and planned for removal"
+    );
+}
+
+#[test]
+fn runtime_restore_dry_run_ignores_source_path_only_drift_for_managed_skills() {
+    let root = unique_temp_dir("loongclaw-runtime-restore-source-drift");
+    let _env = RuntimeRestoreEnvGuard::set(&[
+        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("OPENAI_API_KEY", None),
+        ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
+    ]);
+    let (config_path, config) = write_runtime_restore_config(&root);
+    install_demo_skill(&root, &config, &config_path);
+    let (_artifact_path, _snapshot, mut payload) = write_snapshot_artifact(&root, &config_path);
+
+    payload["restore_spec"]["managed_skills"]["skills"][0]["source_path"] =
+        Value::String("/tmp/other-machine/demo-skill".to_owned());
+    let artifact_path = write_snapshot_artifact_payload(
+        &root,
+        "artifacts/runtime-snapshot-source-drift.json",
+        &payload,
+    );
+
+    let execution = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+            config: Some(config_path.display().to_string()),
+            snapshot: artifact_path.display().to_string(),
+            json: false,
+            apply: false,
+        },
+    )
+    .expect("source-path-only drift should remain a no-op when content digest matches");
+
+    assert!(execution.plan.managed_skill_actions.is_empty());
+    assert!(
+        !execution
+            .plan
+            .changed_surfaces
+            .iter()
+            .any(|surface| surface == "managed_skills")
     );
 }
 
@@ -455,4 +634,58 @@ fn runtime_restore_apply_replays_snapshot_state_and_verifies_post_apply_match() 
             .iter()
             .any(|skill| skill["skill_id"] == "demo-skill")
     );
+}
+
+#[test]
+fn runtime_restore_apply_rolls_back_managed_skill_changes_when_config_write_fails() {
+    let root = unique_temp_dir("loongclaw-runtime-restore-rollback");
+    let _env = RuntimeRestoreEnvGuard::set(&[
+        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("OPENAI_API_KEY", None),
+        ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
+    ]);
+    let (config_path, config) = write_runtime_restore_config(&root);
+    install_demo_skill(&root, &config, &config_path);
+    let (artifact_path, _snapshot, _payload) = write_snapshot_artifact(&root, &config_path);
+
+    mutate_runtime_restore_config(&config_path, &root);
+
+    let metadata = fs::metadata(&config_path).expect("read config metadata");
+    let original_permissions = metadata.permissions();
+    let mut readonly_permissions = original_permissions.clone();
+    readonly_permissions.set_readonly(true);
+    fs::set_permissions(&config_path, readonly_permissions).expect("mark config read-only");
+
+    let apply_error = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+            config: Some(config_path.display().to_string()),
+            snapshot: artifact_path.display().to_string(),
+            json: false,
+            apply: true,
+        },
+    )
+    .expect_err("apply should fail when config persistence fails");
+
+    fs::set_permissions(&config_path, original_permissions).expect("restore config write access");
+
+    assert!(apply_error.contains("persist runtime restore config"));
+    assert!(
+        !root.join("managed-skills").join("demo-skill").exists(),
+        "managed skill install should be rolled back when config persistence fails"
+    );
+
+    let index_path = root.join("managed-skills").join("index.json");
+    if index_path.exists() {
+        let index = serde_json::from_str::<Value>(
+            &fs::read_to_string(&index_path).expect("read managed skill index"),
+        )
+        .expect("decode managed skill index");
+        assert!(
+            index["skills"]
+                .as_array()
+                .expect("index skills should be an array")
+                .is_empty(),
+            "rollback should leave the managed skill index empty"
+        );
+    }
 }

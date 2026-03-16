@@ -1658,17 +1658,29 @@ fn build_runtime_snapshot_restore_managed_skills_spec(
     external_skills: &RuntimeSnapshotExternalSkillsState,
     warnings: &mut Vec<String>,
 ) -> RuntimeSnapshotRestoreManagedSkillsSpec {
+    match external_skills.inventory_status {
+        RuntimeSnapshotInventoryStatus::Disabled => {
+            warnings.push(
+                "restore spec could not enumerate managed external skills because runtime inventory is disabled"
+                    .to_owned(),
+            );
+            return RuntimeSnapshotRestoreManagedSkillsSpec::default();
+        }
+        RuntimeSnapshotInventoryStatus::Error => {
+            warnings.push(
+                "restore spec could not enumerate managed external skills because runtime inventory collection failed"
+                    .to_owned(),
+            );
+            return RuntimeSnapshotRestoreManagedSkillsSpec::default();
+        }
+        RuntimeSnapshotInventoryStatus::Ok => {}
+    }
+
     let Some(skills) = external_skills
         .inventory
         .get("skills")
         .and_then(Value::as_array)
     else {
-        if external_skills.inventory_status == RuntimeSnapshotInventoryStatus::Error {
-            warnings.push(
-                "restore spec could not enumerate managed external skills because runtime inventory collection failed"
-                    .to_owned(),
-            );
-        }
         return RuntimeSnapshotRestoreManagedSkillsSpec::default();
     };
 
