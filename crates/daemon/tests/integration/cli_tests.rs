@@ -241,13 +241,62 @@ fn runtime_snapshot_cli_parses() {
         "--config",
         "/tmp/loongclaw.toml",
         "--json",
+        "--output",
+        "/tmp/runtime-snapshot.json",
+        "--label",
+        "baseline",
+        "--experiment-id",
+        "exp-42",
+        "--parent-snapshot-id",
+        "snapshot-parent",
     ])
     .expect("`runtime-snapshot` should parse");
 
     match cli.command {
-        Some(Commands::RuntimeSnapshot { config, json }) => {
+        Some(Commands::RuntimeSnapshot {
+            config,
+            json,
+            output,
+            label,
+            experiment_id,
+            parent_snapshot_id,
+        }) => {
             assert_eq!(config.as_deref(), Some("/tmp/loongclaw.toml"));
             assert!(json);
+            assert_eq!(output.as_deref(), Some("/tmp/runtime-snapshot.json"));
+            assert_eq!(label.as_deref(), Some("baseline"));
+            assert_eq!(experiment_id.as_deref(), Some("exp-42"));
+            assert_eq!(parent_snapshot_id.as_deref(), Some("snapshot-parent"));
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn runtime_restore_cli_parses() {
+    let cli = Cli::try_parse_from([
+        "loongclaw",
+        "runtime-restore",
+        "--config",
+        "/tmp/loongclaw.toml",
+        "--snapshot",
+        "/tmp/runtime-snapshot.json",
+        "--json",
+        "--apply",
+    ])
+    .expect("`runtime-restore` should parse");
+
+    match cli.command {
+        Some(Commands::RuntimeRestore {
+            config,
+            snapshot,
+            json,
+            apply,
+        }) => {
+            assert_eq!(config.as_deref(), Some("/tmp/loongclaw.toml"));
+            assert_eq!(snapshot, "/tmp/runtime-snapshot.json");
+            assert!(json);
+            assert!(apply);
         }
         other => panic!("unexpected command parsed: {other:?}"),
     }

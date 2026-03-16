@@ -180,9 +180,34 @@ async fn main() {
         }),
         Commands::Channels { config, json } => run_channels_cli(config.as_deref(), json),
         Commands::ListModels { config, json } => run_list_models_cli(config.as_deref(), json).await,
-        Commands::RuntimeSnapshot { config, json } => {
-            run_runtime_snapshot_cli(config.as_deref(), json)
-        }
+        Commands::RuntimeSnapshot {
+            config,
+            json,
+            output,
+            label,
+            experiment_id,
+            parent_snapshot_id,
+        } => run_runtime_snapshot_cli(
+            config.as_deref(),
+            json,
+            output.as_deref(),
+            label.as_deref(),
+            experiment_id.as_deref(),
+            parent_snapshot_id.as_deref(),
+        ),
+        Commands::RuntimeRestore {
+            config,
+            snapshot,
+            json,
+            apply,
+        } => runtime_restore_cli::run_runtime_restore_cli(
+            runtime_restore_cli::RuntimeRestoreCommandOptions {
+                config,
+                snapshot,
+                json,
+                apply,
+            },
+        ),
         Commands::ListContextEngines { config, json } => {
             run_list_context_engines_cli(config.as_deref(), json)
         }

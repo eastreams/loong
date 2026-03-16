@@ -8,7 +8,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     future::Future,
-    path::Path,
+    path::{Path, PathBuf},
     pin::Pin,
     sync::Arc,
 };
@@ -18,9 +18,10 @@ use kernel::{
     Capability, ConnectorCommand, FixedClock, InMemoryAuditSink, TaskIntent, ToolCoreOutcome,
     ToolCoreRequest,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub use loongclaw_app as mvp;
 pub use loongclaw_spec::spec_execution::*;
@@ -48,6 +49,7 @@ pub mod next_actions;
 pub mod onboard_cli;
 pub mod onboard_presentation;
 pub mod provider_presentation;
+pub mod runtime_restore_cli;
 pub mod skills_cli;
 pub mod source_presentation;
 
@@ -378,6 +380,25 @@ pub enum Commands {
         config: Option<String>,
         #[arg(long, default_value_t = false)]
         json: bool,
+        #[arg(long)]
+        output: Option<String>,
+        #[arg(long)]
+        label: Option<String>,
+        #[arg(long)]
+        experiment_id: Option<String>,
+        #[arg(long)]
+        parent_snapshot_id: Option<String>,
+    },
+    /// Restore a persisted runtime snapshot artifact into the current config and managed skill state
+    RuntimeRestore {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        snapshot: String,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        #[arg(long, default_value_t = false)]
+        apply: bool,
     },
     /// List available conversation context engines and selected runtime engine
     ListContextEngines {
@@ -941,6 +962,7 @@ pub async fn run_list_models_cli(config_path: Option<&str>, as_json: bool) -> Cl
 }
 
 pub const RUNTIME_SNAPSHOT_CLI_JSON_SCHEMA_VERSION: u32 = 1;
+pub const RUNTIME_SNAPSHOT_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshotCliState {
@@ -957,6 +979,7 @@ pub struct RuntimeSnapshotCliState {
     pub capability_snapshot: String,
     pub capability_snapshot_sha256: String,
     pub external_skills: RuntimeSnapshotExternalSkillsState,
+    pub restore_spec: RuntimeSnapshotRestoreSpec,
 }
 
 #[derive(Debug, Clone)]
@@ -1019,18 +1042,109 @@ pub struct RuntimeSnapshotExternalSkillsState {
     pub shadowed_skill_count: usize,
 }
 
-pub fn run_runtime_snapshot_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSnapshotArtifactMetadata {
+    pub created_at: String,
+    pub label: Option<String>,
+    pub experiment_id: Option<String>,
+    pub parent_snapshot_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeSnapshotArtifactLineage {
+    pub snapshot_id: String,
+    pub created_at: String,
+    pub label: Option<String>,
+    pub experiment_id: Option<String>,
+    pub parent_snapshot_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RuntimeSnapshotRestoreSpec {
+    pub provider: RuntimeSnapshotRestoreProviderSpec,
+    pub conversation: mvp::config::ConversationConfig,
+    pub memory: mvp::config::MemoryConfig,
+    pub acp: mvp::config::AcpConfig,
+    pub tools: mvp::config::ToolConfig,
+    pub external_skills: mvp::config::ExternalSkillsConfig,
+    pub managed_skills: RuntimeSnapshotRestoreManagedSkillsSpec,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RuntimeSnapshotRestoreProviderSpec {
+    pub active_provider: Option<String>,
+    pub last_provider: Option<String>,
+    pub profiles: BTreeMap<String, mvp::config::ProviderProfileConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RuntimeSnapshotRestoreManagedSkillsSpec {
+    pub skills: Vec<RuntimeSnapshotRestoreManagedSkillSpec>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeSnapshotRestoreManagedSkillSpec {
+    pub skill_id: String,
+    pub display_name: String,
+    pub summary: String,
+    pub source_kind: String,
+    pub source_path: String,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeSnapshotArtifactSchema {
+    pub version: u32,
+    pub surface: String,
+    pub purpose: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RuntimeSnapshotArtifactDocument {
+    pub config: String,
+    pub schema: RuntimeSnapshotArtifactSchema,
+    pub lineage: RuntimeSnapshotArtifactLineage,
+    pub provider: Value,
+    pub context_engine: Value,
+    pub memory_system: Value,
+    pub acp: Value,
+    pub channels: Value,
+    pub tool_runtime: Value,
+    pub tools: Value,
+    pub external_skills: Value,
+    pub restore_spec: RuntimeSnapshotRestoreSpec,
+}
+
+pub fn run_runtime_snapshot_cli(
+    config_path: Option<&str>,
+    as_json: bool,
+    output_path: Option<&str>,
+    label: Option<&str>,
+    experiment_id: Option<&str>,
+    parent_snapshot_id: Option<&str>,
+) -> CliResult<()> {
     let snapshot = collect_runtime_snapshot_cli_state(config_path)?;
+    let metadata =
+        runtime_snapshot_artifact_metadata_now(label, experiment_id, parent_snapshot_id)?;
+    let artifact_payload = build_runtime_snapshot_artifact_json_payload(&snapshot, &metadata)?;
+
+    if let Some(output_path) = output_path {
+        persist_runtime_snapshot_artifact(output_path, &artifact_payload)?;
+    }
 
     if as_json {
-        let payload = build_runtime_snapshot_cli_json_payload(&snapshot);
-        let pretty = serde_json::to_string_pretty(&payload)
-            .map_err(|error| format!("serialize runtime snapshot output failed: {error}"))?;
+        let pretty = serde_json::to_string_pretty(&artifact_payload).map_err(|error| {
+            format!("serialize runtime snapshot artifact output failed: {error}")
+        })?;
         println!("{pretty}");
         return Ok(());
     }
 
-    println!("{}", render_runtime_snapshot_text(&snapshot));
+    println!(
+        "{}",
+        render_runtime_snapshot_artifact_text(&snapshot, &artifact_payload)
+    );
     Ok(())
 }
 
@@ -1060,6 +1174,7 @@ pub fn collect_runtime_snapshot_cli_state(
     let capability_snapshot = mvp::tools::capability_snapshot_with_config(&snapshot_tool_runtime);
     let capability_snapshot_sha256 =
         runtime_snapshot_tool_digest(&visible_tool_names, &capability_snapshot)?;
+    let restore_spec = build_runtime_snapshot_restore_spec(&config, &external_skills);
 
     Ok(RuntimeSnapshotCliState {
         config: config_display,
@@ -1075,6 +1190,7 @@ pub fn collect_runtime_snapshot_cli_state(
         capability_snapshot,
         capability_snapshot_sha256,
         external_skills,
+        restore_spec,
     })
 }
 
@@ -1361,6 +1477,366 @@ fn json_string_array_to_set(
                 .ok_or_else(|| format!("{context} must contain only strings"))
         })
         .collect()
+}
+
+fn build_runtime_snapshot_restore_spec(
+    config: &mvp::config::LoongClawConfig,
+    external_skills: &RuntimeSnapshotExternalSkillsState,
+) -> RuntimeSnapshotRestoreSpec {
+    let mut warnings = Vec::new();
+    let mut profiles = runtime_snapshot_restore_provider_profiles(config);
+    for (profile_id, profile) in &mut profiles {
+        normalize_runtime_snapshot_restore_provider_profile(profile_id, profile, &mut warnings);
+    }
+
+    RuntimeSnapshotRestoreSpec {
+        provider: RuntimeSnapshotRestoreProviderSpec {
+            active_provider: config.active_provider_id().map(str::to_owned),
+            last_provider: config.last_provider_id().map(str::to_owned),
+            profiles,
+        },
+        conversation: config.conversation.clone(),
+        memory: config.memory.clone(),
+        acp: config.acp.clone(),
+        tools: config.tools.clone(),
+        external_skills: config.external_skills.clone(),
+        managed_skills: build_runtime_snapshot_restore_managed_skills_spec(
+            external_skills,
+            &mut warnings,
+        ),
+        warnings,
+    }
+}
+
+fn runtime_snapshot_restore_provider_profiles(
+    config: &mvp::config::LoongClawConfig,
+) -> BTreeMap<String, mvp::config::ProviderProfileConfig> {
+    if !config.providers.is_empty() {
+        return config.providers.clone();
+    }
+
+    let profile_id = config
+        .active_provider_id()
+        .unwrap_or(config.provider.kind.profile().id)
+        .to_owned();
+    BTreeMap::from([(
+        profile_id,
+        mvp::config::ProviderProfileConfig {
+            default_for_kind: true,
+            provider: config.provider.clone(),
+        },
+    )])
+}
+
+fn normalize_runtime_snapshot_restore_provider_profile(
+    profile_id: &str,
+    profile: &mut mvp::config::ProviderProfileConfig,
+    warnings: &mut Vec<String>,
+) {
+    if profile.provider.api_key.is_none() {
+        profile.provider.api_key =
+            runtime_snapshot_canonical_env_reference(profile.provider.api_key_env.as_deref());
+    }
+    if profile.provider.oauth_access_token.is_none() {
+        profile.provider.oauth_access_token = runtime_snapshot_canonical_env_reference(
+            profile.provider.oauth_access_token_env.as_deref(),
+        );
+    }
+
+    profile.provider.api_key_env = None;
+    profile.provider.oauth_access_token_env = None;
+
+    if runtime_snapshot_redact_provider_secret_field(
+        profile.provider.api_key.as_mut(),
+        profile_id,
+        "api_key",
+        warnings,
+    ) {
+        profile.provider.api_key = None;
+    }
+    if runtime_snapshot_redact_provider_secret_field(
+        profile.provider.oauth_access_token.as_mut(),
+        profile_id,
+        "oauth_access_token",
+        warnings,
+    ) {
+        profile.provider.oauth_access_token = None;
+    }
+
+    let header_keys_to_remove = profile
+        .provider
+        .headers
+        .iter()
+        .filter_map(|(header_name, header_value)| {
+            runtime_snapshot_provider_header_is_secret(header_name)
+                .then_some((header_name, header_value))
+        })
+        .filter(|(_, header_value)| !runtime_snapshot_is_env_reference_literal(header_value))
+        .map(|(header_name, _)| header_name.clone())
+        .collect::<Vec<_>>();
+    for header_name in header_keys_to_remove {
+        profile.provider.headers.remove(&header_name);
+        warnings.push(format!(
+            "restore spec redacted inline provider header `{header_name}` for profile `{profile_id}`"
+        ));
+    }
+}
+
+fn runtime_snapshot_redact_provider_secret_field(
+    raw: Option<&mut String>,
+    profile_id: &str,
+    field_name: &str,
+    warnings: &mut Vec<String>,
+) -> bool {
+    let Some(raw) = raw else {
+        return false;
+    };
+    if raw.trim().is_empty() || runtime_snapshot_is_env_reference_literal(raw) {
+        return false;
+    }
+    warnings.push(format!(
+        "restore spec redacted inline provider credential `{field_name}` for profile `{profile_id}`"
+    ));
+    true
+}
+
+fn runtime_snapshot_provider_header_is_secret(header_name: &str) -> bool {
+    matches!(
+        header_name.trim().to_ascii_lowercase().as_str(),
+        "authorization" | "proxy-authorization" | "x-api-key" | "api-key"
+    )
+}
+
+fn runtime_snapshot_canonical_env_reference(env_name: Option<&str>) -> Option<String> {
+    let env_name = env_name.map(str::trim).filter(|value| !value.is_empty())?;
+    Some(format!("${{{env_name}}}"))
+}
+
+fn runtime_snapshot_is_env_reference_literal(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    if let Some(inner) = trimmed
+        .strip_prefix("${")
+        .and_then(|value| value.strip_suffix('}'))
+    {
+        return runtime_snapshot_is_valid_env_name(inner);
+    }
+
+    if let Some(inner) = trimmed.strip_prefix('$') {
+        return runtime_snapshot_is_valid_env_name(inner);
+    }
+
+    if let Some(inner) = trimmed.strip_prefix("env:") {
+        return runtime_snapshot_is_valid_env_name(inner);
+    }
+
+    if let Some(inner) = trimmed
+        .strip_prefix('%')
+        .and_then(|value| value.strip_suffix('%'))
+    {
+        return runtime_snapshot_is_valid_env_name(inner);
+    }
+
+    false
+}
+
+fn runtime_snapshot_is_valid_env_name(raw: &str) -> bool {
+    let mut chars = raw.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first == '_' || first.is_ascii_alphabetic()) {
+        return false;
+    }
+    chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+fn build_runtime_snapshot_restore_managed_skills_spec(
+    external_skills: &RuntimeSnapshotExternalSkillsState,
+    warnings: &mut Vec<String>,
+) -> RuntimeSnapshotRestoreManagedSkillsSpec {
+    let Some(skills) = external_skills
+        .inventory
+        .get("skills")
+        .and_then(Value::as_array)
+    else {
+        if external_skills.inventory_status == RuntimeSnapshotInventoryStatus::Error {
+            warnings.push(
+                "restore spec could not enumerate managed external skills because runtime inventory collection failed"
+                    .to_owned(),
+            );
+        }
+        return RuntimeSnapshotRestoreManagedSkillsSpec::default();
+    };
+
+    let mut managed_skills = skills
+        .iter()
+        .filter(|skill| skill.get("scope").and_then(Value::as_str) == Some("managed"))
+        .filter_map(|skill| {
+            let skill_id = skill.get("skill_id").and_then(Value::as_str)?;
+            let display_name = skill.get("display_name").and_then(Value::as_str)?;
+            let summary = skill.get("summary").and_then(Value::as_str)?;
+            let source_kind = skill.get("source_kind").and_then(Value::as_str)?;
+            let source_path = skill.get("source_path").and_then(Value::as_str)?;
+            let sha256 = skill.get("sha256").and_then(Value::as_str)?;
+            Some(RuntimeSnapshotRestoreManagedSkillSpec {
+                skill_id: skill_id.to_owned(),
+                display_name: display_name.to_owned(),
+                summary: summary.to_owned(),
+                source_kind: source_kind.to_owned(),
+                source_path: source_path.to_owned(),
+                sha256: sha256.to_owned(),
+            })
+        })
+        .collect::<Vec<_>>();
+    managed_skills.sort_by(|left, right| left.skill_id.cmp(&right.skill_id));
+    RuntimeSnapshotRestoreManagedSkillsSpec {
+        skills: managed_skills,
+    }
+}
+
+fn runtime_snapshot_artifact_metadata_now(
+    label: Option<&str>,
+    experiment_id: Option<&str>,
+    parent_snapshot_id: Option<&str>,
+) -> CliResult<RuntimeSnapshotArtifactMetadata> {
+    let created_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|error| format!("format runtime snapshot artifact timestamp failed: {error}"))?;
+    Ok(RuntimeSnapshotArtifactMetadata {
+        created_at,
+        label: runtime_snapshot_optional_arg(label),
+        experiment_id: runtime_snapshot_optional_arg(experiment_id),
+        parent_snapshot_id: runtime_snapshot_optional_arg(parent_snapshot_id),
+    })
+}
+
+fn runtime_snapshot_optional_arg(raw: Option<&str>) -> Option<String> {
+    raw.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn persist_runtime_snapshot_artifact(output_path: &str, payload: &Value) -> CliResult<()> {
+    let output_path = PathBuf::from(output_path);
+    if let Some(parent) = output_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "create runtime snapshot artifact directory {} failed: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let encoded = serde_json::to_string_pretty(payload)
+        .map_err(|error| format!("serialize runtime snapshot artifact failed: {error}"))?;
+    fs::write(&output_path, encoded).map_err(|error| {
+        format!(
+            "write runtime snapshot artifact {} failed: {error}",
+            output_path.display()
+        )
+    })?;
+    Ok(())
+}
+
+pub fn build_runtime_snapshot_artifact_json_payload(
+    snapshot: &RuntimeSnapshotCliState,
+    metadata: &RuntimeSnapshotArtifactMetadata,
+) -> CliResult<Value> {
+    let base_payload = build_runtime_snapshot_cli_json_payload(snapshot);
+    let lineage = runtime_snapshot_artifact_lineage(snapshot, metadata)?;
+    let document = RuntimeSnapshotArtifactDocument {
+        config: snapshot.config.clone(),
+        schema: RuntimeSnapshotArtifactSchema {
+            version: RUNTIME_SNAPSHOT_ARTIFACT_JSON_SCHEMA_VERSION,
+            surface: "runtime_snapshot".to_owned(),
+            purpose: "experiment_reproducibility".to_owned(),
+        },
+        lineage,
+        provider: base_payload.get("provider").cloned().unwrap_or(Value::Null),
+        context_engine: base_payload
+            .get("context_engine")
+            .cloned()
+            .unwrap_or(Value::Null),
+        memory_system: base_payload
+            .get("memory_system")
+            .cloned()
+            .unwrap_or(Value::Null),
+        acp: base_payload.get("acp").cloned().unwrap_or(Value::Null),
+        channels: base_payload.get("channels").cloned().unwrap_or(Value::Null),
+        tool_runtime: base_payload
+            .get("tool_runtime")
+            .cloned()
+            .unwrap_or(Value::Null),
+        tools: base_payload.get("tools").cloned().unwrap_or(Value::Null),
+        external_skills: base_payload
+            .get("external_skills")
+            .cloned()
+            .unwrap_or(Value::Null),
+        restore_spec: snapshot.restore_spec.clone(),
+    };
+    serde_json::to_value(document)
+        .map_err(|error| format!("serialize runtime snapshot artifact payload failed: {error}"))
+}
+
+fn runtime_snapshot_artifact_lineage(
+    snapshot: &RuntimeSnapshotCliState,
+    metadata: &RuntimeSnapshotArtifactMetadata,
+) -> CliResult<RuntimeSnapshotArtifactLineage> {
+    let serialized = serde_json::to_vec(&json!({
+        "config": snapshot.config,
+        "created_at": metadata.created_at,
+        "label": metadata.label,
+        "experiment_id": metadata.experiment_id,
+        "parent_snapshot_id": metadata.parent_snapshot_id,
+        "capability_snapshot_sha256": snapshot.capability_snapshot_sha256,
+        "active_provider": snapshot.provider.active_profile_id,
+    }))
+    .map_err(|error| format!("serialize runtime snapshot lineage input failed: {error}"))?;
+    Ok(RuntimeSnapshotArtifactLineage {
+        snapshot_id: format!("{:x}", Sha256::digest(serialized)),
+        created_at: metadata.created_at.clone(),
+        label: metadata.label.clone(),
+        experiment_id: metadata.experiment_id.clone(),
+        parent_snapshot_id: metadata.parent_snapshot_id.clone(),
+    })
+}
+
+fn render_runtime_snapshot_artifact_text(
+    snapshot: &RuntimeSnapshotCliState,
+    artifact_payload: &Value,
+) -> String {
+    let lineage = artifact_payload
+        .get("lineage")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let schema_version = artifact_payload
+        .get("schema")
+        .and_then(|schema| schema.get("version"))
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::from(RUNTIME_SNAPSHOT_ARTIFACT_JSON_SCHEMA_VERSION));
+
+    [
+        format!("schema.version={schema_version}"),
+        format!("snapshot_id={}", json_string_field(&lineage, "snapshot_id")),
+        format!("created_at={}", json_string_field(&lineage, "created_at")),
+        format!("label={}", json_string_field(&lineage, "label")),
+        format!(
+            "experiment_id={}",
+            json_string_field(&lineage, "experiment_id")
+        ),
+        format!(
+            "parent_snapshot_id={}",
+            json_string_field(&lineage, "parent_snapshot_id")
+        ),
+        format!("restore_warnings={}", snapshot.restore_spec.warnings.len()),
+        render_runtime_snapshot_text(snapshot),
+    ]
+    .join("\n")
 }
 
 pub fn run_channels_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
