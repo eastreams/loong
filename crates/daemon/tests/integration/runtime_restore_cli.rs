@@ -327,10 +327,7 @@ fn runtime_snapshot_artifact_json_redacts_inline_provider_secrets_from_restore_s
                         "anthropic-api-key".to_owned(),
                         "literal-header-secret".to_owned(),
                     ),
-                    (
-                        "anthropic-version".to_owned(),
-                        "2023-06-01".to_owned(),
-                    ),
+                    ("anthropic-version".to_owned(), "2023-06-01".to_owned()),
                     ("x-goog-api-key".to_owned(), "${GOOGLE_API_KEY}".to_owned()),
                     ("user-agent".to_owned(), "loongclaw-test-suite".to_owned()),
                 ]),
