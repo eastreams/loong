@@ -48,6 +48,35 @@ impl ToolPolicyExtension {
     }
 }
 
+pub(crate) fn validate_shell_command_name(command: &str) -> Result<String, String> {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return Err("shell.exec requires payload.command".to_owned());
+    }
+
+    if trimmed.contains(char::is_whitespace) {
+        return Err(
+            "policy_denied: shell command must not contain embedded whitespace; use `args` instead"
+                .to_owned(),
+        );
+    }
+
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        return Err(format!(
+            "policy_denied: shell command `{trimmed}` must be a bare command name without path separators"
+        ));
+    }
+
+    let normalized = trimmed.to_ascii_lowercase();
+    if trimmed != normalized {
+        return Err(format!(
+            "policy_denied: shell command `{trimmed}` must use a lowercase bare command name to match shell policy"
+        ));
+    }
+
+    Ok(normalized)
+}
+
 impl PolicyExtension for ToolPolicyExtension {
     fn name(&self) -> &str {
         "tool-policy"
@@ -67,30 +96,30 @@ impl PolicyExtension for ToolPolicyExtension {
             .and_then(|payload| payload.get("command"))
             .and_then(|v| v.as_str())
             .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_ascii_lowercase);
+            .filter(|s| !s.is_empty());
 
         let Some(command) = command else {
             return Ok(());
         };
 
-        // Extract basename so absolute paths like "/usr/bin/rm" match "rm".
-        // Use `find` instead of `next` so trailing separators (e.g. "/usr/bin/")
-        // don't produce an empty string.
-        let basename = command
-            .rsplit('/')
-            .find(|s| !s.is_empty())
-            .and_then(|s| s.rsplit('\\').find(|s| !s.is_empty()))
-            .unwrap_or(&command);
+        let basename = match validate_shell_command_name(command) {
+            Ok(command) => command,
+            Err(reason) => {
+                return Err(PolicyError::ToolCallDenied {
+                    tool_name: tool_name.to_owned(),
+                    reason,
+                });
+            }
+        };
 
-        if self.hard_deny.contains(basename) {
+        if self.hard_deny.contains(basename.as_str()) {
             return Err(PolicyError::ToolCallDenied {
                 tool_name: tool_name.to_owned(),
                 reason: format!("command `{basename}` is blocked by shell policy"),
             });
         }
 
-        if self.allow.contains(basename) {
+        if self.allow.contains(basename.as_str()) {
             return Ok(());
         }
 
@@ -434,6 +463,30 @@ mod tests {
         let params = json!({"tool_name": "shell.exec", "payload": {"command": "git"}});
         let ctx = make_context(&pack, &token, &caps, Some(&params));
         assert!(ext.authorize_extension(&ctx).is_ok());
+    }
+
+    #[test]
+    fn mixed_case_command_is_denied_before_allowlist_lookup() {
+        let ext = ToolPolicyExtension::new(
+            BTreeSet::new(),
+            BTreeSet::from(["mixedcmd".to_owned()]),
+            ShellPolicyDefault::Deny,
+        );
+        let pack = test_pack();
+        let token = test_token();
+        let caps = BTreeSet::from([Capability::InvokeTool]);
+        let params = json!({"tool_name": "shell.exec", "payload": {"command": "MiXeDCmd"}});
+        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        let err = ext
+            .authorize_extension(&ctx)
+            .expect_err("mixed-case commands should be denied before allowlist lookup");
+        let PolicyError::ToolCallDenied { reason, .. } = err else {
+            panic!("expected ToolCallDenied for mixed-case command");
+        };
+        assert!(
+            reason.contains("lowercase"),
+            "expected lowercase rejection, got: {reason}"
+        );
     }
 
     #[test]

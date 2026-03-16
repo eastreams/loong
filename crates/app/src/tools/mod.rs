@@ -1422,6 +1422,7 @@ fn _shape_examples() -> BTreeMap<&'static str, Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::ScopedEnv;
     use std::path::PathBuf;
 
     fn test_tool_runtime_config(root: PathBuf) -> runtime_config::ToolRuntimeConfig {
@@ -2179,6 +2180,61 @@ mod tests {
         );
     }
 
+    #[cfg(all(feature = "tool-shell", unix))]
+    #[test]
+    fn shell_exec_rejects_non_lowercase_command_names_before_execution() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        fn unique_temp_dir(prefix: &str) -> PathBuf {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos();
+            std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+        }
+
+        let root = unique_temp_dir("loongclaw-shell-mixed-case");
+        fs::create_dir_all(&root).expect("create fixture root");
+
+        let script = root.join("MiXeDCmd");
+        fs::write(&script, "#!/bin/sh\nprintf '%s' \"$0\"\n").expect("write mixed-case script");
+        let mut perms = fs::metadata(&script)
+            .expect("script metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script, perms).expect("mark script executable");
+
+        let mut env = ScopedEnv::new();
+        let original_path = std::env::var_os("PATH").unwrap_or_default();
+        let mut path_value = root.clone().into_os_string();
+        if !original_path.is_empty() {
+            path_value.push(std::ffi::OsStr::new(":"));
+            path_value.push(original_path);
+        }
+        env.set("PATH", path_value);
+
+        let mut config = test_tool_runtime_config(root.clone());
+        config.shell_allow = BTreeSet::from(["mixedcmd".to_owned()]);
+
+        let error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "shell.exec".to_owned(),
+                payload: json!({"command": "MiXeDCmd"}),
+            },
+            &config,
+        )
+        .expect_err("mixed-case commands should be rejected before execution");
+
+        assert!(
+            error.contains("lowercase"),
+            "expected lowercase command rejection, got: {error}"
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
     fn tool_search_result_includes_compact_argument_hints() {
@@ -2263,6 +2319,28 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn runtime_discoverable_tool_entries_intersect_injected_view_with_runtime_surface() {
+        let mut config = test_tool_runtime_config(std::env::temp_dir());
+        config.sessions_enabled = false;
+
+        let injected = ToolView::from_tool_names(["sessions_list", "claw.import"]);
+        let names = runtime_discoverable_tool_entries(&config, Some(&injected))
+            .into_iter()
+            .map(|entry| entry.canonical_name)
+            .collect::<Vec<_>>();
+
+        assert!(
+            names.contains(&"claw.import".to_owned()),
+            "expected enabled injected tool to remain visible: {names:?}"
+        );
+        assert!(
+            !names.contains(&"sessions_list".to_owned()),
+            "disabled runtime tool should not be re-exposed by injected visibility: {names:?}"
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]

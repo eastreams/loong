@@ -656,16 +656,14 @@ fn fold_discovery_first_event_record(
 
     match record.event.as_str() {
         "discovery_first_search_round" => {
-            // Skip counter bump when required payload field is absent.
             if record
                 .payload
                 .get("search_tool_calls")
                 .and_then(Value::as_u64)
-                .is_none()
+                .is_some()
             {
-                return;
+                summary.search_round_events = summary.search_round_events.saturating_add(1);
             }
-            summary.search_round_events = summary.search_round_events.saturating_add(1);
             if let Some(initial_estimated_tokens) = record
                 .payload
                 .get("initial_estimated_tokens")
@@ -714,16 +712,10 @@ fn fold_discovery_first_event_record(
             }
         }
         "discovery_first_followup_result" => {
-            // Skip counter bump when required `outcome` field is absent.
-            if record
-                .payload
-                .get("outcome")
-                .and_then(Value::as_str)
-                .is_none()
-            {
-                return;
+            let outcome = record.payload.get("outcome").and_then(Value::as_str);
+            if outcome.is_some() {
+                summary.followup_result_events = summary.followup_result_events.saturating_add(1);
             }
-            summary.followup_result_events = summary.followup_result_events.saturating_add(1);
 
             if record
                 .payload
@@ -743,7 +735,7 @@ fn fold_discovery_first_event_record(
                 summary.search_to_invoke_hits = summary.search_to_invoke_hits.saturating_add(1);
             }
 
-            if let Some(outcome) = record.payload.get("outcome").and_then(Value::as_str) {
+            if let Some(outcome) = outcome {
                 summary.latest_followup_outcome = Some(outcome.to_owned());
                 bump_count(&mut summary.outcome_counts, outcome);
             }
@@ -2537,5 +2529,53 @@ mod tests {
         assert_eq!(summary.latest_added_estimated_tokens, Some(12));
         assert_eq!(summary.outcome_counts.get("final_reply").copied(), Some(1));
         assert_eq!(summary.outcome_counts.get("tool.invoke").copied(), None);
+    }
+
+    #[test]
+    fn summarize_discovery_first_events_preserves_initial_tokens_when_call_count_is_missing() {
+        let payloads = [json!({
+            "type": "conversation_event",
+            "event": "discovery_first_search_round",
+            "payload": {
+                "initial_estimated_tokens": 21
+            }
+        })
+        .to_string()];
+
+        let summary = summarize_discovery_first_events(payloads.iter().map(String::as_str));
+
+        assert_eq!(summary.search_round_events, 0);
+        assert_eq!(summary.latest_initial_estimated_tokens, Some(21));
+    }
+
+    #[test]
+    fn summarize_discovery_first_events_preserves_followup_flags_when_outcome_is_missing() {
+        let payloads = [json!({
+            "type": "conversation_event",
+            "event": "discovery_first_followup_result",
+            "payload": {
+                "raw_tool_output_requested": true,
+                "resolved_to_tool_invoke": true,
+                "followup_tool_name": "tool.invoke",
+                "followup_target_tool_id": "file.read"
+            }
+        })
+        .to_string()];
+
+        let summary = summarize_discovery_first_events(payloads.iter().map(String::as_str));
+
+        assert_eq!(summary.followup_result_events, 0);
+        assert_eq!(summary.raw_output_followup_events, 1);
+        assert_eq!(summary.search_to_invoke_hits, 1);
+        assert_eq!(
+            summary.latest_followup_tool_name.as_deref(),
+            Some("tool.invoke")
+        );
+        assert_eq!(
+            summary.latest_followup_target_tool_id.as_deref(),
+            Some("file.read")
+        );
+        assert_eq!(summary.latest_followup_outcome, None);
+        assert!(summary.outcome_counts.is_empty());
     }
 }

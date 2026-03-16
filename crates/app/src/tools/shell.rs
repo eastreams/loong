@@ -45,34 +45,17 @@ pub(super) fn execute_shell_tool_with_config(
             .map(PathBuf::from)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-        let normalized_command = command.to_ascii_lowercase();
+        let normalized_command =
+            crate::tools::shell_policy_ext::validate_shell_command_name(command)?;
+        let basename = normalized_command.as_str();
 
-        // Reject commands with embedded whitespace to ensure the policy check
-        // and execution operate on the same value.
-        if normalized_command.contains(char::is_whitespace) {
-            return Err(
-                "policy_denied: shell command must not contain embedded whitespace; use `args` instead"
-                    .to_owned(),
-            );
-        }
-
-        let basename = &normalized_command;
-
-        // Reject path-qualified commands (e.g. /tmp/git, ./git, ..\git) to
-        // prevent allowlist bypass via an absolute or relative path.
-        if basename.contains('/') || basename.contains('\\') {
-            return Err(format!(
-                "policy_denied: shell command `{basename}` must be a bare command name without path separators"
-            ));
-        }
-
-        if config.shell_deny.contains(basename.as_str()) {
+        if config.shell_deny.contains(basename) {
             return Err(format!(
                 "policy_denied: shell command `{basename}` is blocked by shell policy"
             ));
         }
 
-        let explicitly_allowed = config.shell_allow.contains(basename.as_str());
+        let explicitly_allowed = config.shell_allow.contains(basename);
         let default_allows = matches!(
             config.shell_default_mode,
             crate::tools::shell_policy_ext::ShellPolicyDefault::Allow

@@ -6686,7 +6686,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_provider_turn_tool_intents_populates_missing_ids_and_preserves_existing_ids() {
+    fn scope_provider_turn_tool_intents_overrides_existing_provider_ids_with_runtime_scope() {
         let turn = ProviderTurn {
             assistant_text: String::new(),
             tool_intents: vec![
