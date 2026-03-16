@@ -23,6 +23,8 @@ pub enum RuntimeExperimentCommands {
     Finish(RuntimeExperimentFinishCommandOptions),
     /// Load and render one persisted experiment-run artifact
     Show(RuntimeExperimentShowCommandOptions),
+    /// Compare one experiment run and, optionally, matching runtime snapshots
+    Compare(RuntimeExperimentCompareCommandOptions),
 }
 
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
@@ -71,6 +73,18 @@ pub struct RuntimeExperimentShowCommandOptions {
     pub json: bool,
 }
 
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeExperimentCompareCommandOptions {
+    #[arg(long)]
+    pub run: String,
+    #[arg(long)]
+    pub baseline_snapshot: Option<String>,
+    #[arg(long)]
+    pub result_snapshot: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeExperimentDecision {
@@ -91,6 +105,13 @@ pub enum RuntimeExperimentStatus {
 pub enum RuntimeExperimentFinishStatus {
     Completed,
     Aborted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeExperimentCompareMode {
+    RecordOnly,
+    SnapshotDelta,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -139,6 +160,63 @@ pub struct RuntimeExperimentArtifactDocument {
     pub evaluation: Option<RuntimeExperimentEvaluation>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct RuntimeExperimentCompareReport {
+    pub run_id: String,
+    pub experiment_id: String,
+    pub label: Option<String>,
+    pub status: RuntimeExperimentStatus,
+    pub decision: RuntimeExperimentDecision,
+    pub mutation: RuntimeExperimentMutationSummary,
+    pub baseline_snapshot: RuntimeExperimentSnapshotSummary,
+    pub result_snapshot: Option<RuntimeExperimentSnapshotSummary>,
+    pub evaluation: Option<RuntimeExperimentEvaluation>,
+    pub compare_mode: RuntimeExperimentCompareMode,
+    pub snapshot_delta: Option<RuntimeExperimentSnapshotDelta>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuntimeExperimentSnapshotDelta {
+    pub changed_surface_count: usize,
+    pub provider_active_profile: RuntimeExperimentScalarCompare,
+    pub provider_active_model: RuntimeExperimentScalarCompare,
+    pub context_engine_selected: RuntimeExperimentScalarCompare,
+    pub context_engine_compaction: RuntimeExperimentScalarCompare,
+    pub memory_selected: RuntimeExperimentScalarCompare,
+    pub memory_policy: RuntimeExperimentScalarCompare,
+    pub acp_selected: RuntimeExperimentScalarCompare,
+    pub acp_policy: RuntimeExperimentScalarCompare,
+    pub enabled_channel_ids: RuntimeExperimentSetCompare,
+    pub enabled_service_channel_ids: RuntimeExperimentSetCompare,
+    pub visible_tool_names: RuntimeExperimentSetCompare,
+    pub capability_snapshot_sha256: RuntimeExperimentScalarCompare,
+    pub external_skill_ids: RuntimeExperimentSetCompare,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuntimeExperimentScalarCompare {
+    pub before: Option<String>,
+    pub after: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuntimeExperimentSetCompare {
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+}
+
+impl RuntimeExperimentScalarCompare {
+    fn changed(&self) -> bool {
+        self.before != self.after
+    }
+}
+
+impl RuntimeExperimentSetCompare {
+    fn changed(&self) -> bool {
+        !self.added.is_empty() || !self.removed.is_empty()
+    }
+}
+
 pub fn run_runtime_experiment_cli(command: RuntimeExperimentCommands) -> CliResult<()> {
     match command {
         RuntimeExperimentCommands::Start(options) => {
@@ -155,6 +233,11 @@ pub fn run_runtime_experiment_cli(command: RuntimeExperimentCommands) -> CliResu
             let as_json = options.json;
             let artifact = execute_runtime_experiment_show_command(options)?;
             emit_runtime_experiment_artifact(&artifact, as_json)
+        }
+        RuntimeExperimentCommands::Compare(options) => {
+            let as_json = options.json;
+            let report = execute_runtime_experiment_compare_command(options)?;
+            emit_runtime_experiment_compare_report(&report, as_json)
         }
     }
 }
@@ -258,6 +341,37 @@ pub fn execute_runtime_experiment_show_command(
     load_runtime_experiment_artifact(Path::new(&options.run))
 }
 
+pub fn execute_runtime_experiment_compare_command(
+    options: RuntimeExperimentCompareCommandOptions,
+) -> CliResult<RuntimeExperimentCompareReport> {
+    let artifact = load_runtime_experiment_artifact(Path::new(&options.run))?;
+    let snapshot_delta = load_runtime_experiment_compare_snapshot_delta(
+        &artifact,
+        &options.run,
+        options.baseline_snapshot.as_deref(),
+        options.result_snapshot.as_deref(),
+    )?;
+    let compare_mode = if snapshot_delta.is_some() {
+        RuntimeExperimentCompareMode::SnapshotDelta
+    } else {
+        RuntimeExperimentCompareMode::RecordOnly
+    };
+
+    Ok(RuntimeExperimentCompareReport {
+        run_id: artifact.run_id,
+        experiment_id: artifact.experiment_id,
+        label: artifact.label,
+        status: artifact.status,
+        decision: artifact.decision,
+        mutation: artifact.mutation,
+        baseline_snapshot: artifact.baseline_snapshot,
+        result_snapshot: artifact.result_snapshot,
+        evaluation: artifact.evaluation,
+        compare_mode,
+        snapshot_delta,
+    })
+}
+
 fn emit_runtime_experiment_artifact(
     artifact: &RuntimeExperimentArtifactDocument,
     as_json: bool,
@@ -270,6 +384,22 @@ fn emit_runtime_experiment_artifact(
     }
 
     println!("{}", render_runtime_experiment_text(artifact));
+    Ok(())
+}
+
+fn emit_runtime_experiment_compare_report(
+    report: &RuntimeExperimentCompareReport,
+    as_json: bool,
+) -> CliResult<()> {
+    if as_json {
+        let pretty = serde_json::to_string_pretty(report).map_err(|error| {
+            format!("serialize runtime experiment compare report failed: {error}")
+        })?;
+        println!("{pretty}");
+        return Ok(());
+    }
+
+    println!("{}", render_runtime_experiment_compare_text(report));
     Ok(())
 }
 
@@ -321,6 +451,62 @@ fn load_runtime_experiment_artifact(path: &Path) -> CliResult<RuntimeExperimentA
         ));
     }
     Ok(artifact)
+}
+
+fn load_runtime_experiment_compare_snapshot_delta(
+    artifact: &RuntimeExperimentArtifactDocument,
+    run_path: &str,
+    baseline_snapshot_path: Option<&str>,
+    result_snapshot_path: Option<&str>,
+) -> CliResult<Option<RuntimeExperimentSnapshotDelta>> {
+    match (baseline_snapshot_path, result_snapshot_path) {
+        (None, None) => Ok(None),
+        (Some(_), None) | (None, Some(_)) => {
+            Err("runtime experiment compare requires --baseline-snapshot and --result-snapshot together".to_owned())
+        }
+        (Some(baseline_snapshot_path), Some(result_snapshot_path)) => {
+            let recorded_result_snapshot = artifact.result_snapshot.as_ref().ok_or_else(|| {
+                format!(
+                    "runtime experiment compare cannot load snapshot delta for run {} because the run has no result snapshot",
+                    run_path
+                )
+            })?;
+            let baseline_snapshot =
+                load_runtime_snapshot_artifact(Path::new(baseline_snapshot_path))?;
+            let result_snapshot = load_runtime_snapshot_artifact(Path::new(result_snapshot_path))?;
+            validate_compare_snapshot_identity(
+                "baseline",
+                &artifact.baseline_snapshot.snapshot_id,
+                &baseline_snapshot.lineage.snapshot_id,
+                Path::new(baseline_snapshot_path),
+            )?;
+            validate_compare_snapshot_identity(
+                "result",
+                &recorded_result_snapshot.snapshot_id,
+                &result_snapshot.lineage.snapshot_id,
+                Path::new(result_snapshot_path),
+            )?;
+            Ok(Some(build_runtime_experiment_snapshot_delta(
+                &baseline_snapshot,
+                &result_snapshot,
+            )))
+        }
+    }
+}
+
+fn validate_compare_snapshot_identity(
+    kind: &str,
+    expected_snapshot_id: &str,
+    actual_snapshot_id: &str,
+    path: &Path,
+) -> CliResult<()> {
+    if expected_snapshot_id == actual_snapshot_id {
+        return Ok(());
+    }
+    Err(format!(
+        "runtime experiment compare {kind} snapshot {} has snapshot_id `{actual_snapshot_id}` but run recorded `{expected_snapshot_id}`",
+        path.display()
+    ))
 }
 
 fn resolve_experiment_id(explicit: Option<&str>, baseline: Option<&str>) -> CliResult<String> {
@@ -421,6 +607,298 @@ fn build_snapshot_summary(
     }
 }
 
+fn build_runtime_experiment_snapshot_delta(
+    baseline: &RuntimeSnapshotArtifactDocument,
+    result: &RuntimeSnapshotArtifactDocument,
+) -> RuntimeExperimentSnapshotDelta {
+    let provider_active_profile = compare_optional_strings(
+        snapshot_provider_active_profile_id(baseline),
+        snapshot_provider_active_profile_id(result),
+    );
+    let provider_active_model = compare_optional_strings(
+        snapshot_provider_active_model(baseline),
+        snapshot_provider_active_model(result),
+    );
+    let context_engine_selected = compare_optional_strings(
+        snapshot_context_engine_selected_id(baseline),
+        snapshot_context_engine_selected_id(result),
+    );
+    let context_engine_compaction = compare_optional_strings(
+        snapshot_context_engine_compaction_summary(baseline),
+        snapshot_context_engine_compaction_summary(result),
+    );
+    let memory_selected = compare_optional_strings(
+        snapshot_memory_selected_id(baseline),
+        snapshot_memory_selected_id(result),
+    );
+    let memory_policy = compare_optional_strings(
+        snapshot_memory_policy_summary(baseline),
+        snapshot_memory_policy_summary(result),
+    );
+    let acp_selected = compare_optional_strings(
+        snapshot_acp_selected_id(baseline),
+        snapshot_acp_selected_id(result),
+    );
+    let acp_policy = compare_optional_strings(
+        snapshot_acp_policy_summary(baseline),
+        snapshot_acp_policy_summary(result),
+    );
+    let enabled_channel_ids = compare_string_sets(
+        snapshot_enabled_channel_ids(baseline),
+        snapshot_enabled_channel_ids(result),
+    );
+    let enabled_service_channel_ids = compare_string_sets(
+        snapshot_enabled_service_channel_ids(baseline),
+        snapshot_enabled_service_channel_ids(result),
+    );
+    let visible_tool_names = compare_string_sets(
+        snapshot_visible_tool_names(baseline),
+        snapshot_visible_tool_names(result),
+    );
+    let capability_snapshot_sha256 = compare_optional_strings(
+        snapshot_capability_snapshot_sha256(baseline),
+        snapshot_capability_snapshot_sha256(result),
+    );
+    let external_skill_ids = compare_string_sets(
+        snapshot_external_skill_ids(baseline),
+        snapshot_external_skill_ids(result),
+    );
+    let changed_surface_count = usize::from(provider_active_profile.changed())
+        + usize::from(provider_active_model.changed())
+        + usize::from(context_engine_selected.changed())
+        + usize::from(context_engine_compaction.changed())
+        + usize::from(memory_selected.changed())
+        + usize::from(memory_policy.changed())
+        + usize::from(acp_selected.changed())
+        + usize::from(acp_policy.changed())
+        + usize::from(enabled_channel_ids.changed())
+        + usize::from(enabled_service_channel_ids.changed())
+        + usize::from(visible_tool_names.changed())
+        + usize::from(capability_snapshot_sha256.changed())
+        + usize::from(external_skill_ids.changed());
+
+    RuntimeExperimentSnapshotDelta {
+        changed_surface_count,
+        provider_active_profile,
+        provider_active_model,
+        context_engine_selected,
+        context_engine_compaction,
+        memory_selected,
+        memory_policy,
+        acp_selected,
+        acp_policy,
+        enabled_channel_ids,
+        enabled_service_channel_ids,
+        visible_tool_names,
+        capability_snapshot_sha256,
+        external_skill_ids,
+    }
+}
+
+fn compare_optional_strings(
+    before: Option<String>,
+    after: Option<String>,
+) -> RuntimeExperimentScalarCompare {
+    RuntimeExperimentScalarCompare { before, after }
+}
+
+fn compare_string_sets(before: Vec<String>, after: Vec<String>) -> RuntimeExperimentSetCompare {
+    let before = before.into_iter().collect::<BTreeSet<_>>();
+    let after = after.into_iter().collect::<BTreeSet<_>>();
+    RuntimeExperimentSetCompare {
+        added: after.difference(&before).cloned().collect(),
+        removed: before.difference(&after).cloned().collect(),
+    }
+}
+
+fn snapshot_provider_active_profile_id(
+    snapshot: &RuntimeSnapshotArtifactDocument,
+) -> Option<String> {
+    json_string_path(&snapshot.provider, &["active_profile_id"])
+}
+
+fn snapshot_provider_active_model(snapshot: &RuntimeSnapshotArtifactDocument) -> Option<String> {
+    let active_profile_id = snapshot_provider_active_profile_id(snapshot)?;
+    snapshot
+        .provider
+        .get("profiles")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|profile| {
+            profile
+                .get("profile_id")
+                .and_then(Value::as_str)
+                .is_some_and(|profile_id| profile_id == active_profile_id)
+        })
+        .and_then(|profile| profile.get("model"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+fn snapshot_context_engine_selected_id(
+    snapshot: &RuntimeSnapshotArtifactDocument,
+) -> Option<String> {
+    json_string_path(&snapshot.context_engine, &["selected", "id"])
+}
+
+fn snapshot_context_engine_compaction_summary(
+    snapshot: &RuntimeSnapshotArtifactDocument,
+) -> Option<String> {
+    let enabled = render_optional_bool(json_bool_path(
+        &snapshot.context_engine,
+        &["compaction", "enabled"],
+    ));
+    let min_messages = render_optional_u64(json_u64_path(
+        &snapshot.context_engine,
+        &["compaction", "min_messages"],
+    ));
+    let trigger_estimated_tokens = render_optional_u64(json_u64_path(
+        &snapshot.context_engine,
+        &["compaction", "trigger_estimated_tokens"],
+    ));
+    let fail_open = render_optional_bool(json_bool_path(
+        &snapshot.context_engine,
+        &["compaction", "fail_open"],
+    ));
+    Some(format!(
+        "enabled:{enabled} min_messages:{min_messages} trigger_estimated_tokens:{trigger_estimated_tokens} fail_open:{fail_open}"
+    ))
+}
+
+fn snapshot_memory_selected_id(snapshot: &RuntimeSnapshotArtifactDocument) -> Option<String> {
+    json_string_path(&snapshot.memory_system, &["selected", "id"])
+}
+
+fn snapshot_memory_policy_summary(snapshot: &RuntimeSnapshotArtifactDocument) -> Option<String> {
+    Some(format!(
+        "backend:{} profile:{} mode:{} ingest_mode:{} fail_open:{} strict_mode_requested:{} strict_mode_active:{} effective_fail_open:{}",
+        json_string_path(&snapshot.memory_system, &["policy", "backend"])
+            .unwrap_or_else(|| "-".to_owned()),
+        json_string_path(&snapshot.memory_system, &["policy", "profile"])
+            .unwrap_or_else(|| "-".to_owned()),
+        json_string_path(&snapshot.memory_system, &["policy", "mode"])
+            .unwrap_or_else(|| "-".to_owned()),
+        json_string_path(&snapshot.memory_system, &["policy", "ingest_mode"])
+            .unwrap_or_else(|| "-".to_owned()),
+        render_optional_bool(json_bool_path(
+            &snapshot.memory_system,
+            &["policy", "fail_open"]
+        )),
+        render_optional_bool(json_bool_path(
+            &snapshot.memory_system,
+            &["policy", "strict_mode_requested"]
+        )),
+        render_optional_bool(json_bool_path(
+            &snapshot.memory_system,
+            &["policy", "strict_mode_active"]
+        )),
+        render_optional_bool(json_bool_path(
+            &snapshot.memory_system,
+            &["policy", "effective_fail_open"]
+        )),
+    ))
+}
+
+fn snapshot_acp_selected_id(snapshot: &RuntimeSnapshotArtifactDocument) -> Option<String> {
+    json_string_path(&snapshot.acp, &["selected", "id"])
+}
+
+fn snapshot_acp_policy_summary(snapshot: &RuntimeSnapshotArtifactDocument) -> Option<String> {
+    Some(format!(
+        "enabled:{} dispatch_enabled:{} conversation_routing:{} thread_routing:{} default_agent:{} allowed_agents:{}",
+        render_optional_bool(json_bool_path(&snapshot.acp, &["enabled"])),
+        render_optional_bool(json_bool_path(
+            &snapshot.acp,
+            &["control_plane", "dispatch_enabled"]
+        )),
+        json_string_path(&snapshot.acp, &["control_plane", "conversation_routing"])
+            .unwrap_or_else(|| "-".to_owned()),
+        json_string_path(&snapshot.acp, &["control_plane", "thread_routing"])
+            .unwrap_or_else(|| "-".to_owned()),
+        json_string_path(&snapshot.acp, &["control_plane", "default_agent"])
+            .unwrap_or_else(|| "-".to_owned()),
+        render_string_values(&json_string_array_path(
+            &snapshot.acp,
+            &["control_plane", "allowed_agents"]
+        )),
+    ))
+}
+
+fn snapshot_enabled_channel_ids(snapshot: &RuntimeSnapshotArtifactDocument) -> Vec<String> {
+    json_string_array_path(&snapshot.channels, &["enabled_channel_ids"])
+}
+
+fn snapshot_enabled_service_channel_ids(snapshot: &RuntimeSnapshotArtifactDocument) -> Vec<String> {
+    json_string_array_path(&snapshot.channels, &["enabled_service_channel_ids"])
+}
+
+fn snapshot_visible_tool_names(snapshot: &RuntimeSnapshotArtifactDocument) -> Vec<String> {
+    json_string_array_path(&snapshot.tools, &["visible_tool_names"])
+}
+
+fn snapshot_capability_snapshot_sha256(
+    snapshot: &RuntimeSnapshotArtifactDocument,
+) -> Option<String> {
+    json_string_path(&snapshot.tools, &["capability_snapshot_sha256"])
+}
+
+fn snapshot_external_skill_ids(snapshot: &RuntimeSnapshotArtifactDocument) -> Vec<String> {
+    json_object_array_string_field_path(
+        &snapshot.external_skills,
+        &["inventory", "skills"],
+        "skill_id",
+    )
+}
+
+fn json_value_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
+    let mut current = value;
+    for segment in path {
+        current = current.get(*segment)?;
+    }
+    Some(current)
+}
+
+fn json_string_path(value: &Value, path: &[&str]) -> Option<String> {
+    json_value_path(value, path)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+fn json_bool_path(value: &Value, path: &[&str]) -> Option<bool> {
+    json_value_path(value, path).and_then(Value::as_bool)
+}
+
+fn json_u64_path(value: &Value, path: &[&str]) -> Option<u64> {
+    json_value_path(value, path).and_then(Value::as_u64)
+}
+
+fn json_string_array_path(value: &Value, path: &[&str]) -> Vec<String> {
+    let values = json_value_path(value, path)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    values.into_iter().collect()
+}
+
+fn json_object_array_string_field_path(value: &Value, path: &[&str], field: &str) -> Vec<String> {
+    let values = json_value_path(value, path)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get(field))
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    values.into_iter().collect()
+}
+
 fn compute_run_id(
     created_at: &str,
     label: Option<&str>,
@@ -468,34 +946,6 @@ fn persist_runtime_experiment_artifact(
 }
 
 pub fn render_runtime_experiment_text(artifact: &RuntimeExperimentArtifactDocument) -> String {
-    let metrics = artifact
-        .evaluation
-        .as_ref()
-        .map(|evaluation| {
-            if evaluation.metrics.is_empty() {
-                "-".to_owned()
-            } else {
-                evaluation
-                    .metrics
-                    .iter()
-                    .map(|(key, value)| format!("{key}:{value}"))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            }
-        })
-        .unwrap_or_else(|| "-".to_owned());
-    let warnings = artifact
-        .evaluation
-        .as_ref()
-        .map(|evaluation| {
-            if evaluation.warnings.is_empty() {
-                "-".to_owned()
-            } else {
-                evaluation.warnings.join(" | ")
-            }
-        })
-        .unwrap_or_else(|| "-".to_owned());
-
     [
         format!("run_id={}", artifact.run_id),
         format!("experiment_id={}", artifact.experiment_id),
@@ -513,19 +963,205 @@ pub fn render_runtime_experiment_text(artifact: &RuntimeExperimentArtifactDocume
         ),
         format!("status={}", render_status(artifact.status)),
         format!("decision={}", render_decision(artifact.decision)),
-        format!("metrics={metrics}"),
-        format!("warnings={warnings}"),
+        format!("metrics={}", render_metrics(artifact.evaluation.as_ref())),
+        format!("warnings={}", render_warnings(artifact.evaluation.as_ref())),
         format!("mutation_summary={}", artifact.mutation.summary),
         format!(
             "mutation_tags={}",
-            if artifact.mutation.tags.is_empty() {
-                "-".to_owned()
-            } else {
-                artifact.mutation.tags.join(",")
-            }
+            render_string_values(&artifact.mutation.tags)
         ),
     ]
     .join("\n")
+}
+
+pub fn render_runtime_experiment_compare_text(report: &RuntimeExperimentCompareReport) -> String {
+    let mut lines = vec![
+        format!("run_id={}", report.run_id),
+        format!("experiment_id={}", report.experiment_id),
+        format!(
+            "baseline_snapshot_id={}",
+            report.baseline_snapshot.snapshot_id
+        ),
+        format!(
+            "result_snapshot_id={}",
+            report
+                .result_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.snapshot_id.as_str())
+                .unwrap_or("-")
+        ),
+        format!("status={}", render_status(report.status)),
+        format!("decision={}", render_decision(report.decision)),
+        format!(
+            "evaluation_summary={}",
+            render_evaluation_summary(report.evaluation.as_ref())
+        ),
+        format!("metrics={}", render_metrics(report.evaluation.as_ref())),
+        format!("warnings={}", render_warnings(report.evaluation.as_ref())),
+        format!("compare_mode={}", render_compare_mode(report.compare_mode)),
+        format!("mutation_summary={}", report.mutation.summary),
+        format!(
+            "mutation_tags={}",
+            render_string_values(&report.mutation.tags)
+        ),
+    ];
+
+    if let Some(snapshot_delta) = report.snapshot_delta.as_ref() {
+        lines.push(format!(
+            "snapshot_delta_changed_surfaces={}",
+            snapshot_delta.changed_surface_count
+        ));
+        push_scalar_compare_line(
+            &mut lines,
+            "provider_active_profile",
+            &snapshot_delta.provider_active_profile,
+        );
+        push_scalar_compare_line(
+            &mut lines,
+            "provider_active_model",
+            &snapshot_delta.provider_active_model,
+        );
+        push_scalar_compare_line(
+            &mut lines,
+            "context_engine_selected",
+            &snapshot_delta.context_engine_selected,
+        );
+        push_scalar_compare_line(
+            &mut lines,
+            "context_engine_compaction",
+            &snapshot_delta.context_engine_compaction,
+        );
+        push_scalar_compare_line(
+            &mut lines,
+            "memory_selected",
+            &snapshot_delta.memory_selected,
+        );
+        push_scalar_compare_line(&mut lines, "memory_policy", &snapshot_delta.memory_policy);
+        push_scalar_compare_line(&mut lines, "acp_selected", &snapshot_delta.acp_selected);
+        push_scalar_compare_line(&mut lines, "acp_policy", &snapshot_delta.acp_policy);
+        push_set_compare_lines(
+            &mut lines,
+            "enabled_channel_ids",
+            &snapshot_delta.enabled_channel_ids,
+        );
+        push_set_compare_lines(
+            &mut lines,
+            "enabled_service_channel_ids",
+            &snapshot_delta.enabled_service_channel_ids,
+        );
+        push_set_compare_lines(
+            &mut lines,
+            "visible_tool_names",
+            &snapshot_delta.visible_tool_names,
+        );
+        push_scalar_compare_line(
+            &mut lines,
+            "capability_snapshot_sha256",
+            &snapshot_delta.capability_snapshot_sha256,
+        );
+        push_set_compare_lines(
+            &mut lines,
+            "external_skill_ids",
+            &snapshot_delta.external_skill_ids,
+        );
+        if snapshot_delta.changed_surface_count == 0 {
+            lines.push("snapshot_delta=none".to_owned());
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn render_evaluation_summary(evaluation: Option<&RuntimeExperimentEvaluation>) -> String {
+    evaluation
+        .map(|evaluation| evaluation.summary.as_str())
+        .filter(|summary| !summary.is_empty())
+        .unwrap_or("-")
+        .to_owned()
+}
+
+fn render_metrics(evaluation: Option<&RuntimeExperimentEvaluation>) -> String {
+    evaluation
+        .map(|evaluation| {
+            if evaluation.metrics.is_empty() {
+                "-".to_owned()
+            } else {
+                evaluation
+                    .metrics
+                    .iter()
+                    .map(|(key, value)| format!("{key}:{value}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            }
+        })
+        .unwrap_or_else(|| "-".to_owned())
+}
+
+fn render_warnings(evaluation: Option<&RuntimeExperimentEvaluation>) -> String {
+    evaluation
+        .map(|evaluation| {
+            if evaluation.warnings.is_empty() {
+                "-".to_owned()
+            } else {
+                evaluation.warnings.join(" | ")
+            }
+        })
+        .unwrap_or_else(|| "-".to_owned())
+}
+
+fn render_string_values(values: &[String]) -> String {
+    if values.is_empty() {
+        "-".to_owned()
+    } else {
+        values.join(",")
+    }
+}
+
+fn render_optional_string(value: Option<&str>) -> &str {
+    value.unwrap_or("-")
+}
+
+fn render_optional_bool(value: Option<bool>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned())
+}
+
+fn render_optional_u64(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned())
+}
+
+fn push_scalar_compare_line(
+    lines: &mut Vec<String>,
+    name: &str,
+    compare: &RuntimeExperimentScalarCompare,
+) {
+    if compare.changed() {
+        lines.push(format!(
+            "{name}={} -> {}",
+            render_optional_string(compare.before.as_deref()),
+            render_optional_string(compare.after.as_deref())
+        ));
+    }
+}
+
+fn push_set_compare_lines(
+    lines: &mut Vec<String>,
+    name: &str,
+    compare: &RuntimeExperimentSetCompare,
+) {
+    if compare.changed() {
+        lines.push(format!(
+            "{name}_added={}",
+            render_string_values(&compare.added)
+        ));
+        lines.push(format!(
+            "{name}_removed={}",
+            render_string_values(&compare.removed)
+        ));
+    }
 }
 
 fn render_status(status: RuntimeExperimentStatus) -> &'static str {
@@ -541,5 +1177,12 @@ fn render_decision(decision: RuntimeExperimentDecision) -> &'static str {
         RuntimeExperimentDecision::Undecided => "undecided",
         RuntimeExperimentDecision::Promoted => "promoted",
         RuntimeExperimentDecision::Rejected => "rejected",
+    }
+}
+
+fn render_compare_mode(mode: RuntimeExperimentCompareMode) -> &'static str {
+    match mode {
+        RuntimeExperimentCompareMode::RecordOnly => "record_only",
+        RuntimeExperimentCompareMode::SnapshotDelta => "snapshot_delta",
     }
 }

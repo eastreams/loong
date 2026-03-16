@@ -288,7 +288,7 @@ Delivered in current baseline:
 - experiment-state operator surface foundation:
   - `runtime-snapshot` persists lineage-aware runtime checkpoint artifacts
   - `runtime-restore` replays a persisted checkpoint as a dry-run or apply plan
-  - `runtime-experiment start|finish|show` records baseline snapshot, mutation summary, result snapshot, evaluation metrics, warnings, and final decision
+  - `runtime-experiment start|finish|show|compare` records baseline snapshot, mutation summary, result snapshot, evaluation metrics, warnings, final decision, and optional snapshot-backed runtime deltas for operator review
 - modular channel/provider architecture for extension-safe evolution:
   - `app/channel/feishu/*` split into adapter/payload/webhook layers
   - Feishu encrypted webhook payload decrypt lane with signature verification
