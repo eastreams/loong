@@ -180,6 +180,9 @@ async fn main() {
         }),
         Commands::Channels { config, json } => run_channels_cli(config.as_deref(), json),
         Commands::ListModels { config, json } => run_list_models_cli(config.as_deref(), json).await,
+        Commands::RuntimeSnapshot { config, json } => {
+            run_runtime_snapshot_cli(config.as_deref(), json)
+        }
         Commands::ListContextEngines { config, json } => {
             run_list_context_engines_cli(config.as_deref(), json)
         }

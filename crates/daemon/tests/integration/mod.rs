@@ -32,6 +32,7 @@ mod import_cli;
 mod migration;
 mod onboard_cli;
 mod programmatic;
+mod runtime_snapshot_cli;
 mod skills_cli;
 mod spec_runtime;
 mod spec_runtime_bridge;

@@ -463,7 +463,7 @@ pub fn is_provider_exposed_tool_name(raw: &str) -> bool {
         .is_some_and(|entry| entry.is_provider_core())
 }
 
-pub(crate) fn runtime_tool_view_from_loongclaw_config(
+pub fn runtime_tool_view_from_loongclaw_config(
     config: &crate::config::LoongClawConfig,
 ) -> ToolView {
     let runtime_config = runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None);

@@ -20,6 +20,7 @@ use kernel::{
 };
 use serde::Serialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 pub use loongclaw_app as mvp;
 pub use loongclaw_spec::spec_execution::*;
@@ -365,6 +366,13 @@ pub enum Commands {
     },
     /// Fetch and print currently available provider model list
     ListModels {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Print a unified runtime snapshot for experiment reproducibility and lineage capture
+    RuntimeSnapshot {
         #[arg(long)]
         config: Option<String>,
         #[arg(long, default_value_t = false)]
@@ -929,6 +937,398 @@ pub async fn run_list_models_cli(config_path: Option<&str>, as_json: bool) -> Cl
         println!("{model}");
     }
     Ok(())
+}
+
+pub const RUNTIME_SNAPSHOT_CLI_JSON_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone)]
+pub struct RuntimeSnapshotCliState {
+    pub config: String,
+    pub provider: RuntimeSnapshotProviderState,
+    pub context_engine: mvp::conversation::ContextEngineRuntimeSnapshot,
+    pub memory_system: mvp::memory::MemorySystemRuntimeSnapshot,
+    pub acp: mvp::acp::AcpRuntimeSnapshot,
+    pub enabled_channel_ids: Vec<String>,
+    pub enabled_service_channel_ids: Vec<String>,
+    pub channels: mvp::channel::ChannelInventory,
+    pub tool_runtime: mvp::tools::runtime_config::ToolRuntimeConfig,
+    pub visible_tool_names: Vec<String>,
+    pub capability_snapshot: String,
+    pub capability_snapshot_sha256: String,
+    pub external_skills: RuntimeSnapshotExternalSkillsState,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeSnapshotProviderState {
+    pub active_profile_id: String,
+    pub active_label: String,
+    pub last_provider_id: Option<String>,
+    pub saved_profile_ids: Vec<String>,
+    pub profiles: Vec<RuntimeSnapshotProviderProfileState>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeSnapshotProviderProfileState {
+    pub profile_id: String,
+    pub is_active: bool,
+    pub default_for_kind: bool,
+    pub kind: mvp::config::ProviderKind,
+    pub model: String,
+    pub wire_api: mvp::config::ProviderWireApi,
+    pub base_url: String,
+    pub endpoint: String,
+    pub models_endpoint: String,
+    pub protocol_family: &'static str,
+    pub credential_resolved: bool,
+    pub auth_env: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub temperature: f64,
+    pub max_tokens: Option<u32>,
+    pub request_timeout_ms: u64,
+    pub retry_max_attempts: usize,
+    pub header_names: Vec<String>,
+    pub preferred_models: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSnapshotInventoryStatus {
+    Ok,
+    Disabled,
+    Error,
+}
+
+impl RuntimeSnapshotInventoryStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Disabled => "disabled",
+            Self::Error => "error",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeSnapshotExternalSkillsState {
+    pub policy: mvp::tools::runtime_config::ExternalSkillsRuntimePolicy,
+    pub override_active: bool,
+    pub inventory_status: RuntimeSnapshotInventoryStatus,
+    pub inventory_error: Option<String>,
+    pub inventory: Value,
+    pub resolved_skill_count: usize,
+    pub shadowed_skill_count: usize,
+}
+
+pub fn run_runtime_snapshot_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
+    let snapshot = collect_runtime_snapshot_cli_state(config_path)?;
+
+    if as_json {
+        let payload = build_runtime_snapshot_cli_json_payload(&snapshot);
+        let pretty = serde_json::to_string_pretty(&payload)
+            .map_err(|error| format!("serialize runtime snapshot output failed: {error}"))?;
+        println!("{pretty}");
+        return Ok(());
+    }
+
+    println!("{}", render_runtime_snapshot_text(&snapshot));
+    Ok(())
+}
+
+pub fn collect_runtime_snapshot_cli_state(
+    config_path: Option<&str>,
+) -> CliResult<RuntimeSnapshotCliState> {
+    let (resolved_path, config) = mvp::config::load(config_path)?;
+    let config_display = resolved_path.display().to_string();
+    let provider = collect_runtime_snapshot_provider_state(&config);
+    let context_engine = mvp::conversation::collect_context_engine_runtime_snapshot(&config)?;
+    let memory_system = mvp::memory::collect_memory_system_runtime_snapshot(&config)?;
+    let acp = mvp::acp::collect_acp_runtime_snapshot(&config)?;
+    let enabled_channel_ids = config.enabled_channel_ids();
+    let enabled_service_channel_ids = config.enabled_service_channel_ids();
+    let channels = mvp::channel::channel_inventory(&config);
+    let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+        &config,
+        Some(resolved_path.as_path()),
+    );
+    let tool_view = mvp::tools::runtime_tool_view_from_loongclaw_config(&config);
+    let visible_tool_names = tool_view
+        .tool_names()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let capability_snapshot = mvp::tools::capability_snapshot_with_config(&tool_runtime);
+    let capability_snapshot_sha256 =
+        runtime_snapshot_tool_digest(&visible_tool_names, &capability_snapshot)?;
+    let external_skills = collect_runtime_snapshot_external_skills_state(&tool_runtime);
+
+    Ok(RuntimeSnapshotCliState {
+        config: config_display,
+        provider,
+        context_engine,
+        memory_system,
+        acp,
+        enabled_channel_ids,
+        enabled_service_channel_ids,
+        channels,
+        tool_runtime,
+        visible_tool_names,
+        capability_snapshot,
+        capability_snapshot_sha256,
+        external_skills,
+    })
+}
+
+fn collect_runtime_snapshot_provider_state(
+    config: &mvp::config::LoongClawConfig,
+) -> RuntimeSnapshotProviderState {
+    let active_profile_id = config
+        .active_provider_id()
+        .unwrap_or(config.provider.kind.profile().id)
+        .to_owned();
+    let saved_profile_ids = provider_presentation::saved_provider_profile_ids(config);
+    let profiles = if config.providers.is_empty() {
+        vec![build_runtime_snapshot_provider_profile_state(
+            active_profile_id.as_str(),
+            &mvp::config::ProviderProfileConfig {
+                default_for_kind: true,
+                provider: config.provider.clone(),
+            },
+            true,
+        )]
+    } else {
+        saved_profile_ids
+            .iter()
+            .filter_map(|profile_id| {
+                config.providers.get(profile_id).map(|profile| {
+                    build_runtime_snapshot_provider_profile_state(
+                        profile_id,
+                        profile,
+                        profile_id == &active_profile_id,
+                    )
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+
+    RuntimeSnapshotProviderState {
+        active_profile_id,
+        active_label: provider_presentation::active_provider_detail_label(config),
+        last_provider_id: config.last_provider_id().map(str::to_owned),
+        saved_profile_ids,
+        profiles,
+    }
+}
+
+fn build_runtime_snapshot_provider_profile_state(
+    profile_id: &str,
+    profile: &mvp::config::ProviderProfileConfig,
+    is_active: bool,
+) -> RuntimeSnapshotProviderProfileState {
+    let provider = &profile.provider;
+    let mut header_names = provider.headers.keys().cloned().collect::<Vec<_>>();
+    header_names.sort();
+
+    RuntimeSnapshotProviderProfileState {
+        profile_id: profile_id.to_owned(),
+        is_active,
+        default_for_kind: profile.default_for_kind,
+        kind: provider.kind,
+        model: provider.model.clone(),
+        wire_api: provider.wire_api,
+        base_url: provider.resolved_base_url(),
+        endpoint: provider.endpoint(),
+        models_endpoint: provider.models_endpoint(),
+        protocol_family: provider.kind.profile().protocol_family.as_str(),
+        credential_resolved: provider.authorization_header().is_some(),
+        auth_env: provider.resolved_auth_env_name(),
+        reasoning_effort: provider
+            .reasoning_effort
+            .map(|value| value.as_str().to_owned()),
+        temperature: provider.temperature,
+        max_tokens: provider.max_tokens,
+        request_timeout_ms: provider.request_timeout_ms,
+        retry_max_attempts: provider.retry_max_attempts,
+        header_names,
+        preferred_models: provider.preferred_models.clone(),
+    }
+}
+
+fn collect_runtime_snapshot_external_skills_state(
+    tool_runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
+) -> RuntimeSnapshotExternalSkillsState {
+    let empty_inventory = json!({
+        "skills": [],
+        "shadowed_skills": [],
+    });
+
+    let (effective_policy, override_active) =
+        match runtime_snapshot_effective_external_skills_policy(tool_runtime) {
+            Ok(policy_state) => policy_state,
+            Err(error) => {
+                return RuntimeSnapshotExternalSkillsState {
+                    policy: tool_runtime.external_skills.clone(),
+                    override_active: false,
+                    inventory_status: RuntimeSnapshotInventoryStatus::Error,
+                    inventory_error: Some(error.clone()),
+                    inventory: json!({
+                        "skills": [],
+                        "shadowed_skills": [],
+                        "error": error,
+                    }),
+                    resolved_skill_count: 0,
+                    shadowed_skill_count: 0,
+                };
+            }
+        };
+
+    if !effective_policy.enabled {
+        return RuntimeSnapshotExternalSkillsState {
+            policy: effective_policy,
+            override_active,
+            inventory_status: RuntimeSnapshotInventoryStatus::Disabled,
+            inventory_error: None,
+            inventory: empty_inventory,
+            resolved_skill_count: 0,
+            shadowed_skill_count: 0,
+        };
+    }
+
+    match mvp::tools::execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "external_skills.list".to_owned(),
+            payload: json!({}),
+        },
+        tool_runtime,
+    ) {
+        Ok(outcome) => RuntimeSnapshotExternalSkillsState {
+            policy: effective_policy,
+            override_active,
+            inventory_status: RuntimeSnapshotInventoryStatus::Ok,
+            inventory_error: None,
+            resolved_skill_count: json_array_len(&outcome.payload["skills"]),
+            shadowed_skill_count: json_array_len(&outcome.payload["shadowed_skills"]),
+            inventory: outcome.payload,
+        },
+        Err(error) => RuntimeSnapshotExternalSkillsState {
+            policy: effective_policy,
+            override_active,
+            inventory_status: RuntimeSnapshotInventoryStatus::Error,
+            inventory_error: Some(error.clone()),
+            inventory: json!({
+                "skills": [],
+                "shadowed_skills": [],
+                "error": error,
+            }),
+            resolved_skill_count: 0,
+            shadowed_skill_count: 0,
+        },
+    }
+}
+
+fn runtime_snapshot_effective_external_skills_policy(
+    tool_runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
+) -> Result<
+    (
+        mvp::tools::runtime_config::ExternalSkillsRuntimePolicy,
+        bool,
+    ),
+    String,
+> {
+    let outcome = mvp::tools::execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "external_skills.policy".to_owned(),
+            payload: json!({
+                "action": "get",
+            }),
+        },
+        tool_runtime,
+    )
+    .map_err(|error| format!("resolve effective external skills policy failed: {error}"))?;
+
+    let policy = runtime_snapshot_external_skills_policy_from_payload(&outcome.payload)?;
+    let override_active = outcome
+        .payload
+        .get("override_active")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Ok((policy, override_active))
+}
+
+fn runtime_snapshot_external_skills_policy_from_payload(
+    payload: &Value,
+) -> Result<mvp::tools::runtime_config::ExternalSkillsRuntimePolicy, String> {
+    let policy = payload
+        .get("policy")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            "runtime snapshot external skills policy payload missing `policy`".to_owned()
+        })?;
+
+    Ok(mvp::tools::runtime_config::ExternalSkillsRuntimePolicy {
+        enabled: policy
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| {
+                "runtime snapshot external skills policy missing `enabled`".to_owned()
+            })?,
+        require_download_approval: policy
+            .get("require_download_approval")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| {
+                "runtime snapshot external skills policy missing `require_download_approval`"
+                    .to_owned()
+            })?,
+        allowed_domains: json_string_array_to_set(
+            policy.get("allowed_domains"),
+            "runtime snapshot external skills policy.allowed_domains",
+        )?,
+        blocked_domains: json_string_array_to_set(
+            policy.get("blocked_domains"),
+            "runtime snapshot external skills policy.blocked_domains",
+        )?,
+        install_root: policy
+            .get("install_root")
+            .and_then(Value::as_str)
+            .map(Path::new)
+            .map(Path::to_path_buf),
+        auto_expose_installed: policy
+            .get("auto_expose_installed")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| {
+                "runtime snapshot external skills policy missing `auto_expose_installed`".to_owned()
+            })?,
+    })
+}
+
+fn runtime_snapshot_tool_digest(
+    visible_tool_names: &[String],
+    capability_snapshot: &str,
+) -> CliResult<String> {
+    let serialized = serde_json::to_vec(&json!({
+        "visible_tool_names": visible_tool_names,
+        "capability_snapshot": capability_snapshot,
+    }))
+    .map_err(|error| format!("serialize runtime snapshot tool digest input failed: {error}"))?;
+    Ok(format!("{:x}", Sha256::digest(serialized)))
+}
+
+fn json_array_len(value: &Value) -> usize {
+    value.as_array().map_or(0, Vec::len)
+}
+
+fn json_string_array_to_set(
+    value: Option<&Value>,
+    context: &str,
+) -> Result<BTreeSet<String>, String> {
+    let items = value
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("{context} must be an array"))?;
+    items
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| format!("{context} must contain only strings"))
+        })
+        .collect()
 }
 
 pub fn run_channels_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
@@ -2195,6 +2595,467 @@ pub fn run_feishu_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCom
 
 pub fn parse_json_payload(raw: &str, context: &str) -> CliResult<Value> {
     serde_json::from_str(raw).map_err(|error| format!("invalid JSON for {context}: {error}"))
+}
+
+pub fn build_runtime_snapshot_cli_json_payload(snapshot: &RuntimeSnapshotCliState) -> Value {
+    json!({
+        "config": snapshot.config,
+        "schema": {
+            "version": RUNTIME_SNAPSHOT_CLI_JSON_SCHEMA_VERSION,
+            "surface": "runtime_snapshot",
+            "purpose": "experiment_reproducibility",
+        },
+        "provider": runtime_snapshot_provider_json(&snapshot.provider),
+        "context_engine": runtime_snapshot_context_engine_json(&snapshot.context_engine),
+        "memory_system": runtime_snapshot_memory_system_json(&snapshot.memory_system),
+        "acp": runtime_snapshot_acp_json(&snapshot.acp),
+        "channels": {
+            "enabled_channel_ids": snapshot.enabled_channel_ids,
+            "enabled_service_channel_ids": snapshot.enabled_service_channel_ids,
+            "inventory": build_channels_cli_json_payload(&snapshot.config, &snapshot.channels),
+        },
+        "tool_runtime": runtime_snapshot_tool_runtime_json(&snapshot.tool_runtime),
+        "tools": {
+            "visible_tool_count": snapshot.visible_tool_names.len(),
+            "visible_tool_names": snapshot.visible_tool_names,
+            "capability_snapshot_sha256": snapshot.capability_snapshot_sha256,
+            "capability_snapshot": snapshot.capability_snapshot,
+        },
+        "external_skills": runtime_snapshot_external_skills_json(&snapshot.external_skills),
+    })
+}
+
+pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> String {
+    let mut lines = vec![
+        format!("config={}", snapshot.config),
+        format!(
+            "provider active_profile={} active_label=\"{}\" last_provider={}",
+            snapshot.provider.active_profile_id,
+            snapshot.provider.active_label,
+            snapshot.provider.last_provider_id.as_deref().unwrap_or("-")
+        ),
+        format!(
+            "provider saved_profiles={}",
+            render_string_list(
+                snapshot
+                    .provider
+                    .saved_profile_ids
+                    .iter()
+                    .map(String::as_str)
+            )
+        ),
+    ];
+
+    for profile in &snapshot.provider.profiles {
+        lines.push(format!(
+            "  profile {} active={} default_for_kind={} kind={} model={} wire_api={} credential_resolved={} auth_env={} endpoint={} models_endpoint={} temperature={} max_tokens={} timeout_ms={} retries={} headers={} preferred_models={}",
+            profile.profile_id,
+            profile.is_active,
+            profile.default_for_kind,
+            profile.kind.as_str(),
+            profile.model,
+            profile.wire_api.as_str(),
+            profile.credential_resolved,
+            profile.auth_env.as_deref().unwrap_or("-"),
+            profile.endpoint,
+            profile.models_endpoint,
+            profile.temperature,
+            profile
+                .max_tokens
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_owned()),
+            profile.request_timeout_ms,
+            profile.retry_max_attempts,
+            render_string_list(profile.header_names.iter().map(String::as_str)),
+            render_string_list(profile.preferred_models.iter().map(String::as_str))
+        ));
+    }
+
+    lines.push(format!(
+        "context_engine selected={} source={} api_version={} capabilities={}",
+        snapshot.context_engine.selected_metadata.id,
+        snapshot.context_engine.selected.source.as_str(),
+        snapshot.context_engine.selected_metadata.api_version,
+        format_capability_names(&snapshot.context_engine.selected_metadata.capability_names())
+    ));
+    lines.push(format!(
+        "context_engine compaction=enabled:{} min_messages:{} trigger_estimated_tokens:{} fail_open:{}",
+        snapshot.context_engine.compaction.enabled,
+        snapshot
+            .context_engine
+            .compaction
+            .min_messages
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_owned()),
+        snapshot
+            .context_engine
+            .compaction
+            .trigger_estimated_tokens
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_owned()),
+        snapshot.context_engine.compaction.fail_open
+    ));
+    lines.push(format!(
+        "memory selected={} source={} api_version={} capabilities={} summary={}",
+        snapshot.memory_system.selected_metadata.id,
+        snapshot.memory_system.selected.source.as_str(),
+        snapshot.memory_system.selected_metadata.api_version,
+        format_capability_names(&snapshot.memory_system.selected_metadata.capability_names()),
+        snapshot.memory_system.selected_metadata.summary
+    ));
+    lines.push(format!(
+        "memory policy=backend:{} profile:{} mode:{} ingest_mode:{} fail_open:{} strict_mode_requested:{} strict_mode_active:{} effective_fail_open:{}",
+        snapshot.memory_system.policy.backend.as_str(),
+        snapshot.memory_system.policy.profile.as_str(),
+        snapshot.memory_system.policy.mode.as_str(),
+        snapshot.memory_system.policy.ingest_mode.as_str(),
+        snapshot.memory_system.policy.fail_open,
+        snapshot.memory_system.policy.strict_mode_requested,
+        snapshot.memory_system.policy.strict_mode_active,
+        snapshot.memory_system.policy.effective_fail_open
+    ));
+    lines.push(format!(
+        "acp enabled={} selected={} source={} api_version={} capabilities={} dispatch_enabled={} routing={} thread_routing={} default_agent={} allowed_agents={} allowed_channels={} allowed_account_ids={} bootstrap_mcp_servers={} working_directory={}",
+        snapshot.acp.control_plane.enabled,
+        snapshot.acp.selected_metadata.id,
+        snapshot.acp.selected.source.as_str(),
+        snapshot.acp.selected_metadata.api_version,
+        format_capability_names(&snapshot.acp.selected_metadata.capability_names()),
+        snapshot.acp.control_plane.dispatch_enabled,
+        snapshot.acp.control_plane.conversation_routing.as_str(),
+        snapshot.acp.control_plane.thread_routing.as_str(),
+        snapshot.acp.control_plane.default_agent,
+        render_string_list(snapshot.acp.control_plane.allowed_agents.iter().map(String::as_str)),
+        render_string_list(snapshot.acp.control_plane.allowed_channels.iter().map(String::as_str)),
+        render_string_list(
+            snapshot
+                .acp
+                .control_plane
+                .allowed_account_ids
+                .iter()
+                .map(String::as_str)
+        ),
+        render_string_list(
+            snapshot
+                .acp
+                .control_plane
+                .bootstrap_mcp_servers
+                .iter()
+                .map(String::as_str)
+        ),
+        snapshot
+            .acp
+            .control_plane
+            .working_directory
+            .as_deref()
+            .unwrap_or("-")
+    ));
+    lines.push(format!(
+        "channels enabled={} service_enabled={} configured_accounts={} surfaces={}",
+        render_string_list(snapshot.enabled_channel_ids.iter().map(String::as_str)),
+        render_string_list(
+            snapshot
+                .enabled_service_channel_ids
+                .iter()
+                .map(String::as_str)
+        ),
+        snapshot.channels.channels.len(),
+        snapshot.channels.channel_surfaces.len()
+    ));
+    for surface in &snapshot.channels.channel_surfaces {
+        lines.push(format!(
+            "  channel {} implementation_status={} configured_accounts={} default_configured_account={} aliases={}",
+            surface.catalog.id,
+            surface.catalog.implementation_status.as_str(),
+            surface.configured_accounts.len(),
+            surface
+                .default_configured_account_id
+                .as_deref()
+                .unwrap_or("-"),
+            render_string_list(surface.catalog.aliases.iter().copied())
+        ));
+    }
+    lines.push(format!(
+        "tool_runtime shell_default={} shell_allow={} shell_deny={} sessions_enabled={} messages_enabled={} delegate_enabled={}",
+        shell_policy_default_str(snapshot.tool_runtime.shell_default_mode),
+        render_string_list(snapshot.tool_runtime.shell_allow.iter().map(String::as_str)),
+        render_string_list(snapshot.tool_runtime.shell_deny.iter().map(String::as_str)),
+        snapshot.tool_runtime.sessions_enabled,
+        snapshot.tool_runtime.messages_enabled,
+        snapshot.tool_runtime.delegate_enabled
+    ));
+    lines.push(format!(
+        "tool_runtime browser enabled={} max_sessions={} max_links={} max_text_chars={}",
+        snapshot.tool_runtime.browser.enabled,
+        snapshot.tool_runtime.browser.max_sessions,
+        snapshot.tool_runtime.browser.max_links,
+        snapshot.tool_runtime.browser.max_text_chars
+    ));
+    lines.push(format!(
+        "tool_runtime browser_companion enabled={} ready={} command={} expected_version={}",
+        snapshot.tool_runtime.browser_companion.enabled,
+        snapshot.tool_runtime.browser_companion.ready,
+        snapshot
+            .tool_runtime
+            .browser_companion
+            .command
+            .as_deref()
+            .unwrap_or("-"),
+        snapshot
+            .tool_runtime
+            .browser_companion
+            .expected_version
+            .as_deref()
+            .unwrap_or("-")
+    ));
+    lines.push(format!(
+        "tool_runtime web_fetch enabled={} allow_private_hosts={} timeout_seconds={} max_bytes={} max_redirects={} allowed_domains={} blocked_domains={}",
+        snapshot.tool_runtime.web_fetch.enabled,
+        snapshot.tool_runtime.web_fetch.allow_private_hosts,
+        snapshot.tool_runtime.web_fetch.timeout_seconds,
+        snapshot.tool_runtime.web_fetch.max_bytes,
+        snapshot.tool_runtime.web_fetch.max_redirects,
+        render_string_list(snapshot.tool_runtime.web_fetch.allowed_domains.iter().map(String::as_str)),
+        render_string_list(snapshot.tool_runtime.web_fetch.blocked_domains.iter().map(String::as_str))
+    ));
+    lines.push(format!(
+        "tools visible_count={} capability_snapshot_sha256={} visible_names={}",
+        snapshot.visible_tool_names.len(),
+        snapshot.capability_snapshot_sha256,
+        render_string_list(snapshot.visible_tool_names.iter().map(String::as_str))
+    ));
+    lines.push(format!(
+        "external_skills inventory_status={} override_active={} enabled={} require_download_approval={} auto_expose_installed={} install_root={} resolved_skills={} shadowed_skills={} inventory_error={}",
+        snapshot.external_skills.inventory_status.as_str(),
+        snapshot.external_skills.override_active,
+        snapshot.external_skills.policy.enabled,
+        snapshot.external_skills.policy.require_download_approval,
+        snapshot.external_skills.policy.auto_expose_installed,
+        snapshot
+            .external_skills
+            .policy
+            .install_root
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "-".to_owned()),
+        snapshot.external_skills.resolved_skill_count,
+        snapshot.external_skills.shadowed_skill_count,
+        snapshot
+            .external_skills
+            .inventory_error
+            .as_deref()
+            .unwrap_or("-")
+    ));
+
+    if let Some(skills) = snapshot
+        .external_skills
+        .inventory
+        .get("skills")
+        .and_then(Value::as_array)
+    {
+        for skill in skills {
+            lines.push(format!(
+                "  external_skill {} scope={} active={} sha256={}",
+                json_string_field(skill, "skill_id"),
+                json_string_field(skill, "scope"),
+                skill
+                    .get("active")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                json_string_field(skill, "sha256")
+            ));
+        }
+    }
+
+    lines
+        .into_iter()
+        .chain([
+            "capability_snapshot:".to_owned(),
+            snapshot.capability_snapshot.clone(),
+        ])
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn runtime_snapshot_provider_json(snapshot: &RuntimeSnapshotProviderState) -> Value {
+    json!({
+        "active_profile_id": snapshot.active_profile_id,
+        "active_label": snapshot.active_label,
+        "last_provider_id": snapshot.last_provider_id,
+        "saved_profile_ids": snapshot.saved_profile_ids,
+        "profiles": snapshot
+            .profiles
+            .iter()
+            .map(runtime_snapshot_provider_profile_json)
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn runtime_snapshot_provider_profile_json(profile: &RuntimeSnapshotProviderProfileState) -> Value {
+    json!({
+        "profile_id": profile.profile_id,
+        "is_active": profile.is_active,
+        "default_for_kind": profile.default_for_kind,
+        "kind": profile.kind.as_str(),
+        "model": profile.model,
+        "wire_api": profile.wire_api.as_str(),
+        "base_url": profile.base_url,
+        "endpoint": profile.endpoint,
+        "models_endpoint": profile.models_endpoint,
+        "protocol_family": profile.protocol_family,
+        "credential_resolved": profile.credential_resolved,
+        "auth_env": profile.auth_env,
+        "reasoning_effort": profile.reasoning_effort,
+        "temperature": profile.temperature,
+        "max_tokens": profile.max_tokens,
+        "request_timeout_ms": profile.request_timeout_ms,
+        "retry_max_attempts": profile.retry_max_attempts,
+        "header_names": profile.header_names,
+        "preferred_models": profile.preferred_models,
+    })
+}
+
+fn runtime_snapshot_context_engine_json(
+    snapshot: &mvp::conversation::ContextEngineRuntimeSnapshot,
+) -> Value {
+    json!({
+        "selected": context_engine_metadata_json(
+            &snapshot.selected_metadata,
+            Some(snapshot.selected.source.as_str())
+        ),
+        "available": snapshot
+            .available
+            .iter()
+            .map(|metadata| context_engine_metadata_json(metadata, None))
+            .collect::<Vec<_>>(),
+        "compaction": {
+            "enabled": snapshot.compaction.enabled,
+            "min_messages": snapshot.compaction.min_messages,
+            "trigger_estimated_tokens": snapshot.compaction.trigger_estimated_tokens,
+            "fail_open": snapshot.compaction.fail_open,
+        },
+    })
+}
+
+fn runtime_snapshot_memory_system_json(
+    snapshot: &mvp::memory::MemorySystemRuntimeSnapshot,
+) -> Value {
+    json!({
+        "selected": memory_system_metadata_json(
+            &snapshot.selected_metadata,
+            Some(snapshot.selected.source.as_str())
+        ),
+        "available": snapshot
+            .available
+            .iter()
+            .map(|metadata| memory_system_metadata_json(metadata, None))
+            .collect::<Vec<_>>(),
+        "policy": memory_system_policy_json(&snapshot.policy),
+    })
+}
+
+fn runtime_snapshot_acp_json(snapshot: &mvp::acp::AcpRuntimeSnapshot) -> Value {
+    json!({
+        "enabled": snapshot.control_plane.enabled,
+        "selected": acp_backend_metadata_json(
+            &snapshot.selected_metadata,
+            Some(snapshot.selected.source.as_str())
+        ),
+        "available": snapshot
+            .available
+            .iter()
+            .map(|metadata| acp_backend_metadata_json(metadata, None))
+            .collect::<Vec<_>>(),
+        "control_plane": acp_control_plane_json(&snapshot.control_plane),
+    })
+}
+
+fn runtime_snapshot_tool_runtime_json(
+    runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
+) -> Value {
+    json!({
+        "file_root": runtime
+            .file_root
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        "shell": {
+            "default_mode": shell_policy_default_str(runtime.shell_default_mode),
+            "allow": runtime.shell_allow.iter().collect::<Vec<_>>(),
+            "deny": runtime.shell_deny.iter().collect::<Vec<_>>(),
+        },
+        "sessions_enabled": runtime.sessions_enabled,
+        "messages_enabled": runtime.messages_enabled,
+        "delegate_enabled": runtime.delegate_enabled,
+        "browser": {
+            "enabled": runtime.browser.enabled,
+            "max_sessions": runtime.browser.max_sessions,
+            "max_links": runtime.browser.max_links,
+            "max_text_chars": runtime.browser.max_text_chars,
+        },
+        "browser_companion": {
+            "enabled": runtime.browser_companion.enabled,
+            "ready": runtime.browser_companion.ready,
+            "command": runtime.browser_companion.command,
+            "expected_version": runtime.browser_companion.expected_version,
+        },
+        "web_fetch": {
+            "enabled": runtime.web_fetch.enabled,
+            "allow_private_hosts": runtime.web_fetch.allow_private_hosts,
+            "allowed_domains": runtime.web_fetch.allowed_domains.iter().collect::<Vec<_>>(),
+            "blocked_domains": runtime.web_fetch.blocked_domains.iter().collect::<Vec<_>>(),
+            "timeout_seconds": runtime.web_fetch.timeout_seconds,
+            "max_bytes": runtime.web_fetch.max_bytes,
+            "max_redirects": runtime.web_fetch.max_redirects,
+        },
+    })
+}
+
+fn runtime_snapshot_external_skills_json(snapshot: &RuntimeSnapshotExternalSkillsState) -> Value {
+    json!({
+        "policy": {
+            "enabled": snapshot.policy.enabled,
+            "require_download_approval": snapshot.policy.require_download_approval,
+            "allowed_domains": snapshot.policy.allowed_domains.iter().collect::<Vec<_>>(),
+            "blocked_domains": snapshot.policy.blocked_domains.iter().collect::<Vec<_>>(),
+            "install_root": snapshot
+                .policy
+                .install_root
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            "auto_expose_installed": snapshot.policy.auto_expose_installed,
+        },
+        "override_active": snapshot.override_active,
+        "inventory_status": snapshot.inventory_status.as_str(),
+        "inventory_error": snapshot.inventory_error,
+        "resolved_skill_count": snapshot.resolved_skill_count,
+        "shadowed_skill_count": snapshot.shadowed_skill_count,
+        "inventory": snapshot.inventory,
+    })
+}
+
+fn shell_policy_default_str(
+    mode: mvp::tools::shell_policy_ext::ShellPolicyDefault,
+) -> &'static str {
+    match mode {
+        mvp::tools::shell_policy_ext::ShellPolicyDefault::Deny => "deny",
+        mvp::tools::shell_policy_ext::ShellPolicyDefault::Allow => "allow",
+    }
+}
+
+fn render_string_list<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
+    let rendered = values
+        .into_iter()
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if rendered.is_empty() {
+        "-".to_owned()
+    } else {
+        rendered.join(",")
+    }
+}
+
+fn json_string_field<'a>(value: &'a Value, key: &str) -> &'a str {
+    value.get(key).and_then(Value::as_str).unwrap_or("-")
 }
 
 pub fn context_engine_metadata_json(
