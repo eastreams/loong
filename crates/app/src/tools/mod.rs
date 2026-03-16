@@ -490,6 +490,28 @@ pub(crate) fn runtime_tool_view_with_runtime_config(
     ToolView::from_tool_names(names)
 }
 
+/// Build a tool view from runtime config (respecting runtime toggles) plus
+/// feishu entries when the feishu integration is configured. This avoids
+/// using `ToolConfig::default()` which ignores runtime-disabled tools.
+fn full_runtime_tool_view_for_runtime_config(
+    config: &runtime_config::ToolRuntimeConfig,
+) -> ToolView {
+    let catalog = tool_catalog();
+    let mut names = catalog::runtime_tool_view_for_runtime_config(config)
+        .iter(&catalog)
+        .map(|descriptor| descriptor.name)
+        .collect::<Vec<_>>();
+    #[cfg(feature = "feishu-integration")]
+    if config.feishu.is_some() {
+        names.extend(
+            feishu::feishu_tool_registry_entries()
+                .into_iter()
+                .map(|entry| entry.name),
+        );
+    }
+    ToolView::from_tool_names(names)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ResolvedToolExecution {
     pub canonical_name: &'static str,
@@ -621,11 +643,10 @@ pub(crate) fn tool_registry_with_config(
             &default_runtime_config
         }
     };
-    let default_visible_tool_view =
-        runtime_tool_view_with_runtime_config(&ToolConfig::default(), config);
+    let runtime_visible_tool_view = full_runtime_tool_view_for_runtime_config(config);
     let mut entries: Vec<ToolRegistryEntry> = catalog::discoverable_tool_catalog()
         .into_iter()
-        .filter(|entry| default_visible_tool_view.contains(entry.canonical_name))
+        .filter(|entry| runtime_visible_tool_view.contains(entry.canonical_name))
         .filter(|entry| tool_search_entry_is_runtime_usable(*entry, config))
         .map(|entry| ToolRegistryEntry {
             name: entry.canonical_name,
@@ -637,7 +658,7 @@ pub(crate) fn tool_registry_with_config(
         entries.extend(
             feishu::feishu_tool_registry_entries()
                 .into_iter()
-                .filter(|entry| default_visible_tool_view.contains(entry.name)),
+                .filter(|entry| runtime_visible_tool_view.contains(entry.name)),
         );
     }
     entries.sort_by_key(|entry| entry.name);
@@ -859,7 +880,7 @@ fn search_tool_view_from_payload(
     };
     match visible_tool_names {
         Some(visible_tool_names) => ToolView::from_tool_names(visible_tool_names),
-        None => runtime_tool_view_with_runtime_config(&ToolConfig::default(), config),
+        None => full_runtime_tool_view_for_runtime_config(config),
     }
 }
 
@@ -867,13 +888,12 @@ fn runtime_discoverable_tool_entries(
     config: &runtime_config::ToolRuntimeConfig,
     visible_tool_view: Option<&ToolView>,
 ) -> Vec<SearchableToolEntry> {
-    let default_visible_tool_view;
+    let runtime_visible_tool_view;
     let visible_tool_view = match visible_tool_view {
         Some(view) => view,
         None => {
-            default_visible_tool_view =
-                runtime_tool_view_with_runtime_config(&ToolConfig::default(), config);
-            &default_visible_tool_view
+            runtime_visible_tool_view = full_runtime_tool_view_for_runtime_config(config);
+            &runtime_visible_tool_view
         }
     };
     let mut entries = catalog::discoverable_tool_catalog()

@@ -656,6 +656,15 @@ fn fold_discovery_first_event_record(
 
     match record.event.as_str() {
         "discovery_first_search_round" => {
+            // Skip counter bump when required payload field is absent.
+            if record
+                .payload
+                .get("search_tool_calls")
+                .and_then(Value::as_u64)
+                .is_none()
+            {
+                return;
+            }
             summary.search_round_events = summary.search_round_events.saturating_add(1);
             if let Some(initial_estimated_tokens) = record
                 .payload
@@ -705,6 +714,15 @@ fn fold_discovery_first_event_record(
             }
         }
         "discovery_first_followup_result" => {
+            // Skip counter bump when required `outcome` field is absent.
+            if record
+                .payload
+                .get("outcome")
+                .and_then(Value::as_str)
+                .is_none()
+            {
+                return;
+            }
             summary.followup_result_events = summary.followup_result_events.saturating_add(1);
 
             if record
@@ -2493,7 +2511,7 @@ mod tests {
     #[test]
     fn summarize_discovery_first_events_ignores_lookalikes_and_tracks_latest_request_snapshot() {
         let payloads = [
-            r#"{"type":"conversation_event","event":"discovery_first_search_round","payload":{"provider_round":0}}"#,
+            r#"{"type":"conversation_event","event":"discovery_first_search_round","payload":{"provider_round":0,"search_tool_calls":1}}"#,
             r#"{"type":"conversation_event","event":"discovery_first_followup_requested","payload":{"provider_round":1,"initial_estimated_tokens":20,"followup_estimated_tokens":32,"followup_added_estimated_tokens":12}}"#,
             r#"{"type":"conversation_event","event":"discovery_first_followup_result","payload":{"provider_round":1,"outcome":"final_reply","resolved_to_tool_invoke":false}}"#,
             r#"{"type":"conversation_event","event":"discovery_first_followup_noise","payload":{"outcome":"tool.invoke","resolved_to_tool_invoke":true,"followup_added_estimated_tokens":999}}"#,

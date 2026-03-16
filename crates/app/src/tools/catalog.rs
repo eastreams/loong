@@ -214,6 +214,17 @@ impl ToolView {
         self.allowed_names.iter().map(String::as_str)
     }
 
+    pub fn intersect(&self, other: &ToolView) -> ToolView {
+        let names: BTreeSet<String> = self
+            .allowed_names
+            .intersection(&other.allowed_names)
+            .cloned()
+            .collect();
+        ToolView {
+            allowed_names: names,
+        }
+    }
+
     pub fn iter<'a>(
         &'a self,
         catalog: &'a ToolCatalog,
@@ -1868,7 +1879,7 @@ fn tool_argument_hint(name: &str) -> &'static str {
             "path?:string,bundled_skill_id?:string,skill_id?:string,replace?:boolean"
         }
         "external_skills.invoke" => "skill_id:string",
-        "external_skills.list" => "active_only?:boolean",
+        "external_skills.list" => "",
         "external_skills.policy" => {
             "action?:string,enabled?:boolean,allowed_domains?:string[],blocked_domains?:string[]"
         }
@@ -1880,7 +1891,7 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "delegate" | "delegate_async" => "task:string,label?:string,timeout_seconds?:integer",
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => "session_id:string",
-        "sessions_list" => "limit?:integer,status?:string",
+        "sessions_list" => "limit?:integer,state?:string",
         "sessions_send" => "session_id:string,text:string",
         _ => "",
     }
@@ -1914,7 +1925,7 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("skill_id", "string"),
             ("replace", "boolean"),
         ],
-        "external_skills.list" => &[("active_only", "boolean")],
+        "external_skills.list" => &[],
         "external_skills.policy" => &[
             ("action", "string"),
             ("enabled", "boolean"),
@@ -1936,7 +1947,7 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
         ],
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => &[("session_id", "string")],
-        "sessions_list" => &[("limit", "integer"), ("status", "string")],
+        "sessions_list" => &[("limit", "integer"), ("state", "string")],
         "sessions_send" => &[("session_id", "string"), ("text", "string")],
         _ => &[],
     }

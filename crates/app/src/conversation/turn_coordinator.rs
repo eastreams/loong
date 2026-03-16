@@ -2286,11 +2286,18 @@ fn scope_provider_turn_tool_intents(
     turn_id: &str,
 ) -> ProviderTurn {
     for intent in &mut turn.tool_intents {
-        if intent.session_id.trim().is_empty() {
+        if intent.source.starts_with("provider_") {
+            // Provider-originated intents: runtime scope is authoritative.
             intent.session_id = session_id.to_owned();
-        }
-        if intent.turn_id.trim().is_empty() {
             intent.turn_id = turn_id.to_owned();
+        } else {
+            // Non-provider intents: only fill in if missing.
+            if intent.session_id.trim().is_empty() {
+                intent.session_id = session_id.to_owned();
+            }
+            if intent.turn_id.trim().is_empty() {
+                intent.turn_id = turn_id.to_owned();
+            }
         }
     }
     turn
@@ -2629,7 +2636,7 @@ struct DiscoveryFirstFollowupTurnSummary {
 fn summarize_discovery_first_followup_turn(
     turn: &ProviderTurn,
 ) -> DiscoveryFirstFollowupTurnSummary {
-    let Some(intent) = turn.tool_intents.first() else {
+    let Some(first) = turn.tool_intents.first() else {
         return DiscoveryFirstFollowupTurnSummary {
             outcome: "final_reply".to_owned(),
             followup_tool_name: None,
@@ -2637,6 +2644,13 @@ fn summarize_discovery_first_followup_turn(
             resolved_to_tool_invoke: false,
         };
     };
+
+    // Prefer the first `tool.invoke` intent if present; fall back to first intent.
+    let intent = turn
+        .tool_intents
+        .iter()
+        .find(|i| crate::tools::canonical_tool_name(i.tool_name.as_str()) == "tool.invoke")
+        .unwrap_or(first);
 
     let canonical_tool_name =
         crate::tools::canonical_tool_name(intent.tool_name.as_str()).to_owned();
@@ -6698,10 +6712,11 @@ mod tests {
 
         let scoped = scope_provider_turn_tool_intents(turn, "session-a", "turn-a");
 
+        // Provider-originated intents always get runtime scope overridden.
         assert_eq!(scoped.tool_intents[0].session_id, "session-a");
         assert_eq!(scoped.tool_intents[0].turn_id, "turn-a");
-        assert_eq!(scoped.tool_intents[1].session_id, "already-session");
-        assert_eq!(scoped.tool_intents[1].turn_id, "already-turn");
+        assert_eq!(scoped.tool_intents[1].session_id, "session-a");
+        assert_eq!(scoped.tool_intents[1].turn_id, "turn-a");
     }
 
     #[test]
