@@ -13,13 +13,14 @@ use super::{
     channels::{CliChannelConfig, FeishuChannelConfig, TelegramChannelConfig},
     conversation::ConversationConfig,
     feishu_integration::FeishuIntegrationConfig,
+    memory::MemoryConfig,
     provider::{ProviderConfig, ProviderKind, ProviderProfileConfig},
     shared::{
         ConfigValidationIssue, ConfigValidationLocale, DEFAULT_CONFIG_FILE,
         default_loongclaw_home as shared_default_loongclaw_home, expand_path,
         format_config_validation_issues,
     },
-    tools_memory::{ExternalSkillsConfig, MemoryConfig, ToolConfig},
+    tools::{ExternalSkillsConfig, ToolConfig},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -2221,7 +2222,7 @@ api_key = "${DEEPSEEK_API_KEY}"
     #[cfg(feature = "config-toml")]
     fn tool_config_round_trips_session_and_delegate_settings() {
         let mut config = LoongClawConfig::default();
-        config.tools.sessions.visibility = crate::config::tools_memory::SessionVisibility::SelfOnly;
+        config.tools.sessions.visibility = crate::config::tools::SessionVisibility::SelfOnly;
         config.tools.sessions.list_limit = 12;
         config.tools.sessions.history_limit = 34;
         config.tools.messages.enabled = true;

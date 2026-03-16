@@ -21,14 +21,110 @@ pub(super) fn execute_web_fetch_tool_with_config(
     }
 }
 
+/// Bridge sync-to-async: reuses the current tokio runtime when available
+/// (production path via `block_in_place`), otherwise creates a temporary
+/// single-threaded runtime on a dedicated thread.
+///
+/// Three cases:
+/// - **Multi-thread runtime** (production): use `block_in_place` + `block_on`.
+/// - **No runtime** (sync tests): create a temporary runtime and `block_on`.
+/// - **Current-thread runtime** (`#[tokio::test]`): spawn a dedicated thread
+///   with its own runtime, because both `block_in_place` and nested `block_on`
+///   panic under a `current_thread` runtime.
+#[cfg(feature = "tool-webfetch")]
+fn run_async<F>(fut: F) -> Result<F::Output, String>
+where
+    F: std::future::Future + Send,
+    F::Output: Send,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            Ok(tokio::task::block_in_place(|| handle.block_on(fut)))
+        }
+        Ok(_) => {
+            // current_thread runtime: neither block_in_place nor nested
+            // block_on is safe. Run on a dedicated thread with its own runtime.
+            std::thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        let rt = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .map_err(|error| {
+                                format!("failed to create tokio runtime for web.fetch: {error}")
+                            })?;
+                        Ok(rt.block_on(fut))
+                    })
+                    .join()
+                    .map_err(|_panic| "web.fetch async worker thread panicked".to_owned())?
+            })
+        }
+        Err(_) => {
+            // No runtime (sync tests): create a temporary runtime directly.
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| {
+                    format!("failed to create tokio runtime for web.fetch: {error}")
+                })?;
+            Ok(rt.block_on(fut))
+        }
+    }
+}
+
+/// Custom DNS resolver that rejects private/special-use IP addresses at
+/// connection time, eliminating the TOCTOU window between validation and
+/// the HTTP client's own DNS resolution.
+#[cfg(feature = "tool-webfetch")]
+struct SsrfSafeResolver {
+    allow_private_hosts: bool,
+}
+
+#[cfg(feature = "tool-webfetch")]
+impl reqwest::dns::Resolve for SsrfSafeResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let allow_private = self.allow_private_hosts;
+        Box::pin(async move {
+            let host = name.as_str();
+            let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host, 0))
+                .await
+                .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { Box::new(error) })?
+                .collect();
+
+            if addrs.is_empty() {
+                return Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("web.fetch resolved no addresses for host `{host}`"),
+                ))
+                    as Box<dyn std::error::Error + Send + Sync>);
+            }
+
+            if !allow_private {
+                for addr in &addrs {
+                    if is_private_or_special_ip(addr.ip()) {
+                        return Err(Box::new(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            format!(
+                                "web.fetch blocked private or special-use address `{}` for host `{host}`",
+                                addr.ip()
+                            ),
+                        ))
+                            as Box<dyn std::error::Error + Send + Sync>);
+                    }
+                }
+            }
+
+            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
 #[cfg(feature = "tool-webfetch")]
 fn execute_web_fetch_tool_enabled(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    use reqwest::blocking::Client;
-    use reqwest::header::{CONTENT_TYPE, LOCATION};
-    use std::io::Read;
+    use std::sync::Arc;
     use std::time::Duration;
 
     if !config.web_fetch.enabled {
@@ -48,7 +144,12 @@ fn execute_web_fetch_tool_enabled(
     let mode = parse_render_mode(payload)?;
     let max_bytes = parse_max_bytes(payload, config.web_fetch.max_bytes)?;
 
-    let client = Client::builder()
+    let resolver = SsrfSafeResolver {
+        allow_private_hosts: config.web_fetch.allow_private_hosts,
+    };
+
+    let client = reqwest::Client::builder()
+        .dns_resolver(Arc::new(resolver))
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(config.web_fetch.timeout_seconds))
         .user_agent("LoongClaw-WebFetch/0.1")
@@ -60,105 +161,123 @@ fn execute_web_fetch_tool_enabled(
     let mut current_host = validate_web_target(&current_url, &config.web_fetch, "web.fetch")?;
     let mut redirect_count = 0usize;
 
-    loop {
-        let response = client
-            .get(current_url.clone())
-            .send()
-            .map_err(|error| format!("web.fetch request failed: {error}"))?;
+    run_async(async {
+        loop {
+            let response = client
+                .get(current_url.clone())
+                .send()
+                .await
+                .map_err(|error| format!("web.fetch request failed: {error}"))?;
 
-        if response.status().is_redirection() {
-            if redirect_count >= config.web_fetch.max_redirects {
+            if response.status().is_redirection() {
+                if redirect_count >= config.web_fetch.max_redirects {
+                    return Err(format!(
+                        "web.fetch exceeded redirect limit ({})",
+                        config.web_fetch.max_redirects
+                    ));
+                }
+
+                let location = response
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .ok_or_else(|| {
+                        format!(
+                            "web.fetch received redirect status {} without Location header",
+                            response.status()
+                        )
+                    })?
+                    .to_str()
+                    .map_err(|error| {
+                        format!("web.fetch redirect Location header was invalid: {error}")
+                    })?;
+                let next_url = current_url.join(location).map_err(|error| {
+                    format!("web.fetch failed to resolve redirect target: {error}")
+                })?;
+                current_host = validate_web_target(&next_url, &config.web_fetch, "web.fetch")?;
+                current_url = next_url;
+                redirect_count += 1;
+                continue;
+            }
+
+            if !response.status().is_success() {
                 return Err(format!(
-                    "web.fetch exceeded redirect limit ({})",
-                    config.web_fetch.max_redirects
+                    "web.fetch returned non-success status {} for `{}`",
+                    response.status(),
+                    current_url
                 ));
             }
 
-            let location = response
+            let status_code = response.status().as_u16();
+            let content_type = response
                 .headers()
-                .get(LOCATION)
-                .ok_or_else(|| {
-                    format!(
-                        "web.fetch received redirect status {} without Location header",
-                        response.status()
-                    )
-                })?
-                .to_str()
-                .map_err(|error| {
-                    format!("web.fetch redirect Location header was invalid: {error}")
-                })?;
-            let next_url = current_url
-                .join(location)
-                .map_err(|error| format!("web.fetch failed to resolve redirect target: {error}"))?;
-            current_host = validate_web_target(&next_url, &config.web_fetch, "web.fetch")?;
-            current_url = next_url;
-            redirect_count += 1;
-            continue;
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .map(|value| value.to_owned());
+
+            // Short-circuit on Content-Length when the server advertises it.
+            if let Some(content_length) = response.content_length()
+                && content_length > max_bytes as u64
+            {
+                return Err(format!(
+                    "web.fetch response Content-Length ({content_length}) exceeds max_bytes limit ({max_bytes} bytes)"
+                ));
+            }
+
+            // Stream the body with a hard cap at max_bytes + 1 to detect
+            // oversize responses without unbounded memory allocation.
+            let limit = (max_bytes as u64).saturating_add(1);
+            let mut body = Vec::new();
+            let mut stream = response.bytes_stream();
+            use futures_util::StreamExt;
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk
+                    .map_err(|error| format!("failed to read web.fetch response body: {error}"))?;
+                if body.len() as u64 + chunk.len() as u64 > limit {
+                    return Err(format!(
+                        "web.fetch response exceeded max_bytes limit ({max_bytes} bytes)"
+                    ));
+                }
+                body.extend_from_slice(&chunk);
+            }
+
+            let raw_text = String::from_utf8_lossy(&body).into_owned();
+            let is_html = looks_like_html(content_type.as_deref(), raw_text.as_str());
+            if mode == RenderMode::ReadableText
+                && !is_html
+                && response_is_probably_binary(content_type.as_deref(), &body)
+            {
+                return Err(
+                    "web.fetch readable_text mode only supports text-like responses; binary bodies are not returned"
+                        .to_owned(),
+                );
+            }
+            let title = is_html
+                .then(|| extract_html_title(raw_text.as_str()))
+                .flatten();
+            let content = match mode {
+                RenderMode::ReadableText if is_html => extract_readable_text_from_html(&raw_text),
+                RenderMode::ReadableText | RenderMode::RawText => raw_text.trim().to_owned(),
+            };
+
+            return Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "adapter": "core-tools",
+                    "tool_name": request.tool_name,
+                    "requested_url": raw_url,
+                    "final_url": current_url.as_str(),
+                    "host": current_host,
+                    "status_code": status_code,
+                    "content_type": content_type,
+                    "mode": mode.as_str(),
+                    "content": content,
+                    "title": title,
+                    "bytes_downloaded": body.len(),
+                    "redirect_count": redirect_count,
+                }),
+            });
         }
-
-        if !response.status().is_success() {
-            return Err(format!(
-                "web.fetch returned non-success status {} for `{}`",
-                response.status(),
-                current_url
-            ));
-        }
-
-        let status_code = response.status().as_u16();
-        let content_type = response
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .map(|value| value.to_owned());
-
-        let mut body = Vec::new();
-        let mut limited_reader = response.take((max_bytes as u64).saturating_add(1));
-        limited_reader
-            .read_to_end(&mut body)
-            .map_err(|error| format!("failed to read web.fetch response body: {error}"))?;
-        if body.len() > max_bytes {
-            return Err(format!(
-                "web.fetch response exceeded max_bytes limit ({max_bytes} bytes)"
-            ));
-        }
-
-        let raw_text = String::from_utf8_lossy(&body).into_owned();
-        let is_html = looks_like_html(content_type.as_deref(), raw_text.as_str());
-        if mode == RenderMode::ReadableText
-            && !is_html
-            && response_is_probably_binary(content_type.as_deref(), &body)
-        {
-            return Err(
-                "web.fetch readable_text mode only supports text-like responses; binary bodies are not returned"
-                    .to_owned(),
-            );
-        }
-        let title = is_html
-            .then(|| extract_html_title(raw_text.as_str()))
-            .flatten();
-        let content = match mode {
-            RenderMode::ReadableText if is_html => extract_readable_text_from_html(&raw_text),
-            RenderMode::ReadableText | RenderMode::RawText => raw_text.trim().to_owned(),
-        };
-
-        return Ok(ToolCoreOutcome {
-            status: "ok".to_owned(),
-            payload: json!({
-                "adapter": "core-tools",
-                "tool_name": request.tool_name,
-                "requested_url": raw_url,
-                "final_url": current_url.as_str(),
-                "host": current_host,
-                "status_code": status_code,
-                "content_type": content_type,
-                "mode": mode.as_str(),
-                "content": content,
-                "title": title,
-                "bytes_downloaded": body.len(),
-                "redirect_count": redirect_count,
-            }),
-        });
-    }
+    })?
 }
 
 #[cfg(feature = "tool-webfetch")]
@@ -345,7 +464,7 @@ fn is_private_or_special_ipv4(ip: std::net::Ipv4Addr) -> bool {
         || ip.is_multicast()
         || first == 0
         || (first == 100 && (64..=127).contains(&second))
-        || (first == 192 && second == 0)
+        || (first == 192 && second == 0 && third == 0)
         || (first == 198 && matches!(second, 18 | 19))
         || (first == 198 && second == 51 && third == 100)
         || (first == 203 && second == 0 && third == 113)
@@ -358,8 +477,11 @@ fn is_private_or_special_ipv6(ip: std::net::Ipv6Addr) -> bool {
         return true;
     }
 
-    if let Some(mapped) = ip.to_ipv4_mapped() {
-        return is_private_or_special_ipv4(mapped);
+    // Check both IPv4-mapped (::ffff:x.x.x.x) and IPv4-compatible (::x.x.x.x)
+    // addresses. IPv4-compatible addresses are deprecated (RFC 4291) but still
+    // parseable, and we must not allow them to bypass the private-IP filter.
+    if let Some(ipv4) = ip.to_ipv4_mapped().or_else(|| ip.to_ipv4()) {
+        return is_private_or_special_ipv4(ipv4);
     }
 
     let segments = ip.segments();
@@ -708,7 +830,10 @@ mod tests {
         let error = execute_web_fetch_tool_with_config(request(json!({"url": url})), &config)
             .expect_err("oversized body should be rejected");
 
-        assert!(error.contains("exceeded max_bytes limit"));
+        assert!(
+            error.contains("max_bytes limit"),
+            "expected max_bytes error, got: {error}"
+        );
     }
 
     #[test]
@@ -800,5 +925,70 @@ mod tests {
             validate_web_target(&url, &policy, "web.fetch").expect("localhost should be allowed");
 
         assert_eq!(host, "localhost");
+    }
+
+    #[test]
+    fn ssrf_safe_resolver_blocks_private_ips() {
+        let resolver = SsrfSafeResolver {
+            allow_private_hosts: false,
+        };
+        let result = run_async(async {
+            use reqwest::dns::Resolve;
+            let name = "localhost".parse().expect("valid name");
+            resolver.resolve(name).await
+        })
+        .expect("runtime should build");
+        assert!(
+            result.is_err(),
+            "resolver should block localhost when allow_private_hosts is false"
+        );
+    }
+
+    #[test]
+    fn ssrf_safe_resolver_allows_private_ips_when_configured() {
+        let resolver = SsrfSafeResolver {
+            allow_private_hosts: true,
+        };
+        let result = run_async(async {
+            use reqwest::dns::Resolve;
+            let name = "localhost".parse().expect("valid name");
+            resolver.resolve(name).await
+        })
+        .expect("runtime should build");
+        assert!(
+            result.is_ok(),
+            "resolver should allow localhost when allow_private_hosts is true"
+        );
+    }
+
+    #[test]
+    fn ipv6_compatible_addresses_are_checked() {
+        // ::7f00:1 is the IPv4-compatible form of 127.0.0.1
+        let ip: std::net::Ipv6Addr = "::7f00:1".parse().expect("valid ipv6");
+        assert!(
+            is_private_or_special_ipv6(ip),
+            "IPv4-compatible loopback address should be detected as private"
+        );
+
+        // ::a00:1 is the IPv4-compatible form of 10.0.0.1
+        let ip: std::net::Ipv6Addr = "::a00:1".parse().expect("valid ipv6");
+        assert!(
+            is_private_or_special_ipv6(ip),
+            "IPv4-compatible private address should be detected as private"
+        );
+    }
+
+    #[test]
+    fn ipv4_over_block_192_tightened() {
+        // 192.0.0.1 (IETF Protocol Assignments) should be blocked
+        let ip: std::net::Ipv4Addr = "192.0.0.1".parse().expect("valid ipv4");
+        assert!(is_private_or_special_ipv4(ip));
+
+        // 192.0.1.1 is normal routable space and should NOT be blocked
+        let ip: std::net::Ipv4Addr = "192.0.1.1".parse().expect("valid ipv4");
+        assert!(
+            !is_private_or_special_ipv4(ip),
+            "192.0.1.x should not be blocked (normal routable space)"
+        );
     }
 }

@@ -1,10 +1,11 @@
 mod channels;
 mod conversation;
 mod feishu_integration;
+mod memory;
 mod provider;
 mod runtime;
 mod shared;
-mod tools_memory;
+mod tools;
 
 #[allow(unused_imports)]
 pub use channels::{
@@ -22,6 +23,10 @@ pub(crate) use channels::{
 #[allow(unused_imports)]
 pub use conversation::{ConversationConfig, ConversationTurnLoopConfig};
 pub use feishu_integration::FeishuIntegrationConfig;
+#[allow(unused_imports)]
+pub use memory::{
+    MemoryBackendKind, MemoryConfig, MemoryIngestMode, MemoryMode, MemoryProfile, MemorySystemKind,
+};
 #[allow(unused_imports)]
 pub use provider::{
     ProviderAuthScheme, ProviderConfig, ProviderFeatureFamily, ProviderKind, ProviderProfileConfig,
@@ -47,13 +52,12 @@ pub(crate) use runtime::{normalize_dispatch_account_id, normalize_dispatch_chann
 #[allow(unused_imports)]
 pub use shared::{CLI_COMMAND_NAME, expand_path};
 #[allow(unused_imports)]
-pub use tools_memory::{
+pub use tools::{
     BrowserToolConfig, DEFAULT_BROWSER_MAX_LINKS, DEFAULT_BROWSER_MAX_SESSIONS,
     DEFAULT_BROWSER_MAX_TEXT_CHARS, DEFAULT_SHELL_ALLOW, DEFAULT_WEB_FETCH_MAX_BYTES,
     DEFAULT_WEB_FETCH_MAX_REDIRECTS, DEFAULT_WEB_FETCH_TIMEOUT_SECONDS, ExternalSkillsConfig,
     GovernedToolApprovalConfig, GovernedToolApprovalMode, MAX_BROWSER_MAX_LINKS,
     MAX_BROWSER_MAX_SESSIONS, MAX_BROWSER_MAX_TEXT_CHARS, MAX_WEB_FETCH_MAX_BYTES,
-    MemoryBackendKind, MemoryConfig, MemoryIngestMode, MemoryMode, MemoryProfile, MemorySystemKind,
     SessionVisibility, ToolConfig, WebToolConfig,
 };
 
