@@ -19,6 +19,8 @@ config-toml = ["loongclaw-app/config-toml"]
 memory-sqlite = ["loongclaw-app/memory-sqlite"]
 tool-shell = ["loongclaw-app/tool-shell"]
 tool-file = ["loongclaw-app/tool-file"]
+tool-webfetch = ["loongclaw-app/tool-webfetch"]
+tool-browser = ["loongclaw-app/tool-browser"]
 
 [dependencies]
 clap.workspace = true

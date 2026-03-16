@@ -161,6 +161,81 @@ fn cli_onboard_help_mentions_detected_reusable_settings() {
 }
 
 #[test]
+fn cli_ask_help_mentions_one_shot_assistant_usage() {
+    let mut command = Cli::command();
+    let ask = command
+        .find_subcommand_mut("ask")
+        .expect("ask subcommand should exist");
+    let mut help = Vec::new();
+    ask.write_long_help(&mut help).expect("render ask help");
+    let help = String::from_utf8(help).expect("help should be utf8");
+
+    assert!(
+        help.contains("one-shot"),
+        "ask help should describe the non-interactive one-shot flow: {help}"
+    );
+    assert!(
+        help.contains("--message <MESSAGE>"),
+        "ask help should require an inline message input: {help}"
+    );
+    assert!(
+        help.contains("loongclaw chat"),
+        "ask help should point users to chat for the interactive path: {help}"
+    );
+}
+
+#[test]
+fn ask_cli_accepts_message_session_and_acp_flags() {
+    let cli = Cli::try_parse_from([
+        "loongclaw",
+        "ask",
+        "--message",
+        "Summarize this repository",
+        "--session",
+        "telegram:42",
+        "--acp",
+        "--acp-event-stream",
+        "--acp-bootstrap-mcp-server",
+        "filesystem",
+        "--acp-cwd",
+        "/workspace/project",
+    ])
+    .expect("ask CLI should parse one-shot flags");
+
+    match cli.command {
+        Some(Commands::Ask {
+            message,
+            session,
+            acp,
+            acp_event_stream,
+            acp_bootstrap_mcp_server,
+            acp_cwd,
+            ..
+        }) => {
+            assert_eq!(message, "Summarize this repository");
+            assert_eq!(session.as_deref(), Some("telegram:42"));
+            assert!(acp);
+            assert!(acp_event_stream);
+            assert_eq!(acp_bootstrap_mcp_server, vec!["filesystem".to_owned()]);
+            assert_eq!(acp_cwd.as_deref(), Some("/workspace/project"));
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn ask_cli_requires_message_flag() {
+    let error =
+        Cli::try_parse_from(["loongclaw", "ask"]).expect_err("ask without --message should fail");
+    let rendered = error.to_string();
+
+    assert!(
+        rendered.contains("--message <MESSAGE>"),
+        "parse failure should mention the required message flag: {rendered}"
+    );
+}
+
+#[test]
 fn resolve_validate_output_defaults_to_text() {
     let resolved = resolve_validate_output(false, None).expect("resolve default output");
     assert_eq!(resolved, ValidateConfigOutput::Text);

@@ -415,6 +415,7 @@ pub(crate) struct OnboardingDomainOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OnboardingActionKind {
+    Ask,
     Chat,
     Channel,
     Doctor,
@@ -2457,6 +2458,7 @@ fn build_onboarding_success_summary_with_memory(
         .into_iter()
         .map(|action| OnboardingAction {
             kind: match action.kind {
+                crate::next_actions::SetupNextActionKind::Ask => OnboardingActionKind::Ask,
                 crate::next_actions::SetupNextActionKind::Chat => OnboardingActionKind::Chat,
                 crate::next_actions::SetupNextActionKind::Channel => OnboardingActionKind::Channel,
                 crate::next_actions::SetupNextActionKind::Doctor => OnboardingActionKind::Doctor,

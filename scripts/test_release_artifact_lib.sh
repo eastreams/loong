@@ -47,10 +47,39 @@ EOF
     ".docs/traces/20260309T053941Z-post-release-v0.1.2-020e2a67" \
     "$(release_doc_backticked_field "$tmp_dir/v0.1.2.md" "Trace path")"
   assert_equals ".docs/releases/v0.1.2-debug.md" "$(release_debug_doc_relpath "v0.1.2")"
+  assert_equals \
+    "loongclaw-v0.1.2-x86_64-unknown-linux-gnu.tar.gz" \
+    "$(release_archive_name "loongclaw" "v0.1.2" "x86_64-unknown-linux-gnu")"
+  assert_equals \
+    "loongclaw-v0.1.2-aarch64-apple-darwin.tar.gz" \
+    "$(release_archive_name "loongclaw" "v0.1.2" "aarch64-apple-darwin")"
+  assert_equals \
+    "loongclaw-v0.1.2-x86_64-pc-windows-msvc.zip" \
+    "$(release_archive_name "loongclaw" "v0.1.2" "x86_64-pc-windows-msvc")"
+  assert_equals \
+    "loongclaw-v0.1.2-x86_64-pc-windows-msvc.zip.sha256" \
+    "$(release_archive_checksum_name "loongclaw" "v0.1.2" "x86_64-pc-windows-msvc")"
+  assert_equals \
+    "x86_64-unknown-linux-gnu" \
+    "$(release_target_for_platform "Linux" "x86_64")"
+  assert_equals \
+    "x86_64-apple-darwin" \
+    "$(release_target_for_platform "Darwin" "x86_64")"
+  assert_equals \
+    "aarch64-apple-darwin" \
+    "$(release_target_for_platform "Darwin" "arm64")"
+  assert_equals \
+    "x86_64-pc-windows-msvc" \
+    "$(release_target_for_platform "Windows_NT" "AMD64")"
 
   version_is_greater "0.1.2" "0.1.1"
   if version_is_greater "0.1.1" "0.1.2"; then
     echo "expected version_is_greater to reject smaller version" >&2
+    exit 1
+  fi
+
+  if release_target_for_platform "Linux" "ppc64le" >/dev/null 2>&1; then
+    echo "expected release_target_for_platform to reject unsupported host arch" >&2
     exit 1
   fi
 

@@ -7181,7 +7181,22 @@ async fn turn_engine_keeps_external_skill_invoke_payloads_intact() {
         raw_meta: serde_json::Value::Null,
     };
 
-    let result = engine.execute_turn(&turn, &ctx).await;
+    let tool_view = crate::tools::runtime_tool_view_for_runtime_config(
+        &crate::tools::runtime_config::ToolRuntimeConfig {
+            external_skills: crate::tools::runtime_config::ExternalSkillsRuntimePolicy {
+                enabled: true,
+                ..crate::tools::runtime_config::ExternalSkillsRuntimePolicy::default()
+            },
+            ..crate::tools::runtime_config::ToolRuntimeConfig::default()
+        },
+    );
+    let result = engine
+        .execute_turn_in_view(
+            &turn,
+            &tool_view,
+            super::runtime_binding::ConversationRuntimeBinding::kernel(&ctx),
+        )
+        .await;
     match result {
         TurnResult::FinalText(text) => {
             let line = text.lines().next().expect("tool result line should exist");
@@ -7204,6 +7219,111 @@ async fn turn_engine_keeps_external_skill_invoke_payloads_intact() {
         | other @ TurnResult::NeedsApproval(_)
         | other @ TurnResult::ToolError(_)
         | other @ TurnResult::ProviderError(_) => panic!("unexpected result: {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_engine_injects_browser_scope_into_kernel_request() {
+    use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, TurnEngine, TurnResult};
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loongclaw_kernel::CoreToolAdapter;
+
+    struct BrowserScopeEchoAdapter;
+
+    #[async_trait]
+    impl CoreToolAdapter for BrowserScopeEchoAdapter {
+        fn name(&self) -> &str {
+            "browser-scope-echo"
+        }
+
+        async fn execute_core_tool(
+            &self,
+            request: ToolCoreRequest,
+        ) -> Result<ToolCoreOutcome, ToolPlaneError> {
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "tool": request.tool_name,
+                    "scope": request.payload[crate::tools::BROWSER_SESSION_SCOPE_FIELD].clone(),
+                }),
+            })
+        }
+    }
+
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+    kernel.register_core_tool_adapter(BrowserScopeEchoAdapter);
+    kernel
+        .set_default_core_tool_adapter("browser-scope-echo")
+        .expect("set default");
+
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+
+    let ctx = KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    let engine = TurnEngine::new(5);
+    let turn = ProviderTurn {
+        assistant_text: "".to_owned(),
+        tool_intents: vec![ToolIntent {
+            tool_name: "browser.open".to_owned(),
+            args_json: json!({"url": "https://example.com"}),
+            source: "provider_tool_call".to_owned(),
+            session_id: "root-session".to_owned(),
+            turn_id: "t-browser".to_owned(),
+            tool_call_id: "c-browser".to_owned(),
+        }],
+        raw_meta: serde_json::Value::Null,
+    };
+
+    let result = engine
+        .execute_turn_in_view(
+            &turn,
+            &crate::tools::ToolView::from_tool_names(["browser.open"]),
+            super::runtime_binding::ConversationRuntimeBinding::kernel(&ctx),
+        )
+        .await;
+
+    match result {
+        TurnResult::FinalText(text) => {
+            let line = text.lines().next().expect("tool result line should exist");
+            let payload = line
+                .strip_prefix("[ok] ")
+                .expect("tool result line should keep [ok] prefix");
+            let envelope: Value =
+                serde_json::from_str(payload).expect("tool result envelope should be valid json");
+            assert_eq!(envelope["tool"], "browser.open");
+            assert!(
+                envelope["payload_summary"]
+                    .as_str()
+                    .expect("payload summary should be text")
+                    .contains("\"scope\":\"root-session\""),
+                "expected injected browser scope in payload summary, got: {envelope:?}"
+            );
+        }
+        other @ (TurnResult::NeedsApproval(_)
+        | TurnResult::ToolDenied(_)
+        | TurnResult::ToolError(_)
+        | TurnResult::ProviderError(_)) => panic!("unexpected result: {other:?}"),
     }
 }
 

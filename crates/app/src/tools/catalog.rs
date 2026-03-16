@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{Value, json};
 
+use super::runtime_config::ToolRuntimeConfig;
 use crate::config::ToolConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -446,22 +447,88 @@ pub fn tool_catalog() -> ToolCatalog {
         });
     }
 
+    #[cfg(feature = "tool-browser")]
+    {
+        descriptors.push(ToolDescriptor {
+            name: "browser.click",
+            provider_name: "browser_click",
+            aliases: &["browser_click"],
+            description: "Follow one previously discovered page link within a bounded browser session",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            provider_definition_builder: browser_click_definition,
+        });
+        descriptors.push(ToolDescriptor {
+            name: "browser.extract",
+            provider_name: "browser_extract",
+            aliases: &["browser_extract"],
+            description: "Extract structured text or links from the current browser session page",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            provider_definition_builder: browser_extract_definition,
+        });
+        descriptors.push(ToolDescriptor {
+            name: "browser.open",
+            provider_name: "browser_open",
+            aliases: &["browser_open"],
+            description:
+                "Open a public web page into a bounded browser session with safe link discovery",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            provider_definition_builder: browser_open_definition,
+        });
+    }
+
+    #[cfg(feature = "tool-webfetch")]
+    {
+        descriptors.push(ToolDescriptor {
+            name: "web.fetch",
+            provider_name: "web_fetch",
+            aliases: &["web_fetch"],
+            description: "Fetch a public web page with SSRF-safe guards and readable extraction",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            provider_definition_builder: web_fetch_definition,
+        });
+    }
+
     descriptors.sort_by(|left, right| left.name.cmp(right.name));
     ToolCatalog { descriptors }
 }
 
 pub fn runtime_tool_view() -> ToolView {
-    runtime_tool_view_for_config(&ToolConfig::default())
+    runtime_tool_view_for_runtime_config(super::runtime_config::get_tool_runtime_config())
 }
 
 pub fn runtime_tool_view_for_config(config: &ToolConfig) -> ToolView {
+    runtime_tool_view_for_config_with_external_skills(config, false)
+}
+
+pub fn runtime_tool_view_for_config_with_external_skills(
+    config: &ToolConfig,
+    external_skills_enabled: bool,
+) -> ToolView {
     let catalog = tool_catalog();
     ToolView::from_tool_names(
         catalog
             .descriptors()
             .iter()
             .filter(|descriptor| descriptor.availability == ToolAvailability::Runtime)
-            .filter(|descriptor| tool_is_enabled_for_runtime_view(descriptor.name, config))
+            .filter(|descriptor| {
+                tool_is_enabled_for_runtime_view(descriptor.name, config, external_skills_enabled)
+            })
+            .map(|descriptor| descriptor.name),
+    )
+}
+
+pub fn runtime_tool_view_for_runtime_config(config: &ToolRuntimeConfig) -> ToolView {
+    let catalog = tool_catalog();
+    ToolView::from_tool_names(
+        catalog
+            .descriptors()
+            .iter()
+            .filter(|descriptor| descriptor.availability == ToolAvailability::Runtime)
+            .filter(|descriptor| tool_is_enabled_for_runtime_policy(descriptor.name, config))
             .map(|descriptor| descriptor.name),
     )
 }
@@ -535,7 +602,11 @@ pub fn delegate_child_tool_view_for_config_with_delegate(
     ToolView::from_tool_names(names)
 }
 
-fn tool_is_enabled_for_runtime_view(tool_name: &str, config: &ToolConfig) -> bool {
+fn tool_is_enabled_for_runtime_view(
+    tool_name: &str,
+    config: &ToolConfig,
+    external_skills_enabled: bool,
+) -> bool {
     match tool_name {
         "approval_request_resolve"
         | "approval_request_status"
@@ -550,8 +621,133 @@ fn tool_is_enabled_for_runtime_view(tool_name: &str, config: &ToolConfig) -> boo
         | "session_wait" => config.sessions.enabled,
         "sessions_send" => config.messages.enabled,
         "delegate" | "delegate_async" => config.delegate.enabled,
+        "browser.open" | "browser.extract" | "browser.click" => config.browser.enabled,
+        "external_skills.fetch"
+        | "external_skills.inspect"
+        | "external_skills.install"
+        | "external_skills.invoke"
+        | "external_skills.list"
+        | "external_skills.remove" => external_skills_enabled,
+        "web.fetch" => config.web.enabled,
         _ => true,
     }
+}
+
+fn tool_is_enabled_for_runtime_policy(tool_name: &str, config: &ToolRuntimeConfig) -> bool {
+    match tool_name {
+        "approval_request_resolve"
+        | "approval_request_status"
+        | "approval_requests_list"
+        | "sessions_list"
+        | "sessions_history"
+        | "session_status"
+        | "session_events"
+        | "session_archive"
+        | "session_cancel"
+        | "session_recover"
+        | "session_wait" => config.sessions_enabled,
+        "sessions_send" => config.messages_enabled,
+        "delegate" | "delegate_async" => config.delegate_enabled,
+        "browser.open" | "browser.extract" | "browser.click" => config.browser.enabled,
+        "external_skills.fetch"
+        | "external_skills.inspect"
+        | "external_skills.install"
+        | "external_skills.invoke"
+        | "external_skills.list"
+        | "external_skills.remove" => config.external_skills.enabled,
+        "web.fetch" => config.web_fetch.enabled,
+        _ => true,
+    }
+}
+
+fn browser_open_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "HTTP or HTTPS URL to open."
+                    },
+                    "max_bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": crate::config::MAX_WEB_FETCH_MAX_BYTES,
+                        "description": "Optional per-call read limit in bytes. Cannot exceed the configured runtime max."
+                    }
+                },
+                "required": ["url"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn browser_extract_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Bounded browser session identifier returned by browser.open."
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["page_text", "title", "links", "selector_text"],
+                        "description": "Extraction mode. Defaults to `page_text`."
+                    },
+                    "selector": {
+                        "type": "string",
+                        "description": "Optional CSS selector used only with `selector_text` mode."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": crate::config::MAX_BROWSER_MAX_LINKS,
+                        "description": "Maximum extracted items when the mode returns a list."
+                    }
+                },
+                "required": ["session_id"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn browser_click_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Bounded browser session identifier returned by browser.open."
+                    },
+                    "link_id": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": crate::config::MAX_BROWSER_MAX_LINKS,
+                        "description": "One-based link identifier returned in the current page snapshot."
+                    }
+                },
+                "required": ["session_id", "link_id"],
+                "additionalProperties": false
+            }
+        }
+    })
 }
 
 fn claw_import_definition(descriptor: &ToolDescriptor) -> Value {
@@ -887,6 +1083,38 @@ fn file_write_definition(descriptor: &ToolDescriptor) -> Value {
                     }
                 },
                 "required": ["path", "content"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn web_fetch_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "HTTP or HTTPS URL to fetch."
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["readable_text", "raw_text"],
+                        "description": "How to render the response body. Defaults to `readable_text`."
+                    },
+                    "max_bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": crate::config::MAX_WEB_FETCH_MAX_BYTES,
+                        "description": "Optional per-call read limit in bytes. Cannot exceed the configured runtime max."
+                    }
+                },
+                "required": ["url"],
                 "additionalProperties": false
             }
         }

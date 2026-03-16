@@ -163,6 +163,7 @@ pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<(
     }
 
     let summary = summarize_checks(&checks);
+    let next_steps = build_doctor_next_steps(&checks, &config_path, &config, options.fix);
     if options.json {
         let payload = json!({
             "ok": summary.fail == 0,
@@ -181,6 +182,7 @@ pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<(
             }).collect::<Vec<_>>(),
             "fix_requested": options.fix,
             "applied_fixes": fixes,
+            "next_steps": next_steps,
         });
         let encoded = serde_json::to_string_pretty(&payload)
             .map_err(|error| format!("serialize doctor output failed: {error}"))?;
@@ -203,6 +205,12 @@ pub(crate) async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<(
         "doctor summary: {} ok, {} warn, {} fail",
         summary.pass, summary.warn, summary.fail
     );
+    if !next_steps.is_empty() {
+        println!("next actions:");
+        for step in &next_steps {
+            println!("- {step}");
+        }
+    }
 
     if summary.fail > 0 {
         return Err("doctor detected failing checks".to_owned());
@@ -1039,6 +1047,124 @@ fn check_level_json(level: DoctorCheckLevel) -> &'static str {
     }
 }
 
+fn build_doctor_next_steps(
+    checks: &[DoctorCheck],
+    config_path: &Path,
+    config: &mvp::config::LoongClawConfig,
+    fix_requested: bool,
+) -> Vec<String> {
+    let mut steps = Vec::new();
+    let config_path_display = config_path.display().to_string();
+    let rerun_command = format!(
+        "{} doctor --config '{}'",
+        mvp::config::CLI_COMMAND_NAME,
+        config_path_display
+    );
+
+    if !fix_requested
+        && checks.iter().any(|check| {
+            check.detail.contains("rerun with --fix")
+                || matches!(
+                    check.name.as_str(),
+                    "memory path" | "tool file root" | "tool file root policy"
+                )
+                || check.name.ends_with("policy")
+        })
+    {
+        push_unique_step(
+            &mut steps,
+            format!("Apply safe local repairs: {rerun_command} --fix"),
+        );
+    }
+
+    if checks
+        .iter()
+        .any(|check| check.name == "provider credentials" && check.level != DoctorCheckLevel::Pass)
+    {
+        let hints = crate::onboard_cli::provider_credential_env_hints(&config.provider);
+        if !hints.is_empty() {
+            push_unique_step(
+                &mut steps,
+                format!("Set provider credentials in env: {}", hints.join(" or ")),
+            );
+        }
+    }
+
+    if checks
+        .iter()
+        .any(|check| check.name == "provider model probe" && check.level == DoctorCheckLevel::Fail)
+    {
+        push_unique_step(
+            &mut steps,
+            format!("Retry provider probe only after credentials are ready: {rerun_command}"),
+        );
+        push_unique_step(
+            &mut steps,
+            format!(
+                "If your provider blocks model listing during setup, retry with: {rerun_command} --skip-model-probe"
+            ),
+        );
+    }
+
+    let channel_actions =
+        crate::migration::channels::collect_channel_next_actions(config, &config_path_display);
+    if checks.iter().any(|check| {
+        check.level != DoctorCheckLevel::Pass
+            && (check.name.contains("channel")
+                || check.name.contains("default account policy")
+                || channel_actions
+                    .iter()
+                    .any(|action| check.name.to_ascii_lowercase().contains(action.id)))
+    }) {
+        for action in &channel_actions {
+            push_unique_step(
+                &mut steps,
+                format!("Bring {} online: {}", action.label, action.command),
+            );
+        }
+    }
+
+    if doctor_ready_for_first_turn(checks) {
+        for action in crate::next_actions::collect_setup_next_actions(config, &config_path_display)
+            .into_iter()
+            .take(2)
+        {
+            let prefix = match action.kind {
+                crate::next_actions::SetupNextActionKind::Ask => "Try a one-shot task",
+                crate::next_actions::SetupNextActionKind::Chat => "Open interactive chat",
+                crate::next_actions::SetupNextActionKind::Channel => "Open a channel",
+                crate::next_actions::SetupNextActionKind::Doctor => "Run diagnostics",
+            };
+            push_unique_step(&mut steps, format!("{prefix}: {}", action.command));
+        }
+    }
+
+    if (!checks.is_empty() && steps.is_empty())
+        || checks
+            .iter()
+            .any(|check| check.level != DoctorCheckLevel::Pass)
+    {
+        push_unique_step(&mut steps, format!("Re-run diagnostics: {rerun_command}"));
+    }
+
+    steps
+}
+
+fn doctor_ready_for_first_turn(checks: &[DoctorCheck]) -> bool {
+    checks
+        .iter()
+        .all(|check| check.level != DoctorCheckLevel::Fail)
+        && checks.iter().any(|check| {
+            check.name == "provider credentials" && check.level == DoctorCheckLevel::Pass
+        })
+}
+
+fn push_unique_step(steps: &mut Vec<String>, step: String) {
+    if !steps.iter().any(|existing| existing == &step) {
+        steps.push(step);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1682,5 +1808,88 @@ mod tests {
                 && check.detail.contains("alerts")
                 && check.detail.contains("default_account")
         }));
+    }
+
+    #[test]
+    fn build_channel_surface_checks_ignores_stub_surfaces_without_accounts() {
+        let snapshots: Vec<mvp::channel::ChannelStatusSnapshot> = Vec::new();
+
+        let checks = build_channel_surface_checks(&snapshots);
+
+        assert!(checks.is_empty());
+    }
+
+    #[test]
+    fn build_doctor_next_steps_guides_fix_and_provider_credentials() {
+        let checks = vec![
+            DoctorCheck {
+                name: "provider credentials".to_owned(),
+                level: DoctorCheckLevel::Warn,
+                detail: "provider credentials are missing (try env: OPENAI_CODEX_OAUTH_TOKEN, OPENAI_API_KEY)"
+                    .to_owned(),
+            },
+            DoctorCheck {
+                name: "memory path".to_owned(),
+                level: DoctorCheckLevel::Fail,
+                detail: "/tmp/loongclaw-memory is missing".to_owned(),
+            },
+        ];
+        let next_steps = build_doctor_next_steps(
+            &checks,
+            Path::new("/tmp/loongclaw.toml"),
+            &mvp::config::LoongClawConfig::default(),
+            false,
+        );
+
+        assert_eq!(
+            next_steps[0],
+            "Apply safe local repairs: loongclaw doctor --config '/tmp/loongclaw.toml' --fix"
+        );
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Set provider credentials in env: OPENAI_CODEX_OAUTH_TOKEN or OPENAI_API_KEY"
+            }),
+            "doctor should turn missing provider auth into a concrete next step: {next_steps:#?}"
+        );
+        assert!(
+            next_steps.iter().any(|step| step
+                == "Re-run diagnostics: loongclaw doctor --config '/tmp/loongclaw.toml'"),
+            "doctor should tell the operator how to confirm the repair path: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn build_doctor_next_steps_promotes_ask_and_chat_when_green() {
+        let checks = vec![
+            DoctorCheck {
+                name: "provider credentials".to_owned(),
+                level: DoctorCheckLevel::Pass,
+                detail: "provider credentials are available".to_owned(),
+            },
+            DoctorCheck {
+                name: "provider transport".to_owned(),
+                level: DoctorCheckLevel::Pass,
+                detail: "responses api".to_owned(),
+            },
+        ];
+        let next_steps = build_doctor_next_steps(
+            &checks,
+            Path::new("/tmp/loongclaw.toml"),
+            &mvp::config::LoongClawConfig::default(),
+            false,
+        );
+
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Try a one-shot task: loongclaw ask --config '/tmp/loongclaw.toml' --message \"Summarize this repository and suggest the best next step.\""
+            }),
+            "green doctor runs should hand the user into ask immediately: {next_steps:#?}"
+        );
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Open interactive chat: loongclaw chat --config '/tmp/loongclaw.toml'"
+            }),
+            "green doctor runs should still advertise chat as the follow-up path: {next_steps:#?}"
+        );
     }
 }

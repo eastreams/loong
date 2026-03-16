@@ -195,7 +195,7 @@ pub(crate) fn collect_channel_next_actions(
                         id: adapter.id,
                         label: descriptor.label,
                         command: format!(
-                            "{} {} --config {}",
+                            "{} {} --config '{}'",
                             mvp::config::CLI_COMMAND_NAME,
                             subcommand,
                             config_path
