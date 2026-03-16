@@ -96,6 +96,17 @@ fn snapshot_id_from_payload(payload: &Value) -> String {
         .expect("snapshot payload should include lineage.snapshot_id")
 }
 
+fn rewrite_json_file(path: &Path, mutate: impl FnOnce(&mut Value)) {
+    let raw = fs::read_to_string(path).expect("read json fixture");
+    let mut payload = serde_json::from_str::<Value>(&raw).expect("decode json fixture");
+    mutate(&mut payload);
+    fs::write(
+        path,
+        serde_json::to_string_pretty(&payload).expect("encode json fixture"),
+    )
+    .expect("write json fixture");
+}
+
 fn rewrite_runtime_experiment_compare_config(config_path: &Path) {
     let (_, mut config) = mvp::config::load(Some(
         config_path
@@ -244,6 +255,76 @@ fn finish_runtime_experiment_with_compare_delta(
                 evaluation_summary: "provider and tool policy updated".to_owned(),
                 metric: vec!["task_success=1".to_owned(), "cost_delta=-0.2".to_owned()],
                 warning: vec!["manual verification only".to_owned()],
+                decision: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+                status: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
+                json: false,
+            },
+        )
+        .expect("runtime experiment finish should succeed");
+
+    (
+        run_path,
+        baseline_snapshot_path,
+        result_snapshot_path,
+        finished,
+    )
+}
+
+fn finish_runtime_experiment_with_missing_compare_sections(
+    root: &Path,
+    config_path: &Path,
+) -> (
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentArtifactDocument,
+) {
+    let (baseline_snapshot_path, baseline_snapshot_payload) = write_snapshot_artifact(
+        root,
+        config_path,
+        "artifacts/runtime-snapshot.json",
+        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+            created_at: "2026-03-16T12:00:00Z".to_owned(),
+            label: Some("baseline".to_owned()),
+            experiment_id: Some("exp-42".to_owned()),
+            parent_snapshot_id: Some("snapshot-parent".to_owned()),
+        },
+    );
+    rewrite_json_file(&baseline_snapshot_path, |payload| {
+        payload["context_engine"]
+            .as_object_mut()
+            .expect("context_engine should be an object")
+            .remove("compaction");
+        payload["memory_system"]
+            .as_object_mut()
+            .expect("memory_system should be an object")
+            .remove("policy");
+        payload["acp"] = Value::Null;
+    });
+
+    let (run_path, _) = start_runtime_experiment(root, &baseline_snapshot_path, None);
+    rewrite_runtime_experiment_compare_config(config_path);
+
+    let baseline_snapshot_id = snapshot_id_from_payload(&baseline_snapshot_payload);
+    let (result_snapshot_path, _) = write_snapshot_artifact(
+        root,
+        config_path,
+        "artifacts/runtime-snapshot-result.json",
+        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+            created_at: "2026-03-16T12:30:00Z".to_owned(),
+            label: Some("candidate".to_owned()),
+            experiment_id: Some("exp-42".to_owned()),
+            parent_snapshot_id: Some(baseline_snapshot_id),
+        },
+    );
+    let finished =
+        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
+            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
+                run: run_path.display().to_string(),
+                result_snapshot: result_snapshot_path.display().to_string(),
+                evaluation_summary: "filled missing runtime sections".to_owned(),
+                metric: vec!["task_success=1".to_owned()],
+                warning: Vec::new(),
                 decision: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
                 status: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
                 json: false,
@@ -847,6 +928,39 @@ fn runtime_experiment_compare_rejects_snapshot_identity_mismatch() {
 
     assert!(error.contains("result snapshot"));
     assert!(error.contains("snapshot_id"));
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_experiment_compare_treats_missing_snapshot_sections_as_absent() {
+    let root = unique_temp_dir("loongclaw-runtime-experiment-compare-missing-sections");
+    let config_path = write_runtime_experiment_config(&root);
+    let (run_path, baseline_snapshot_path, result_snapshot_path, _) =
+        finish_runtime_experiment_with_missing_compare_sections(&root, &config_path);
+
+    let report =
+        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
+            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
+                run: run_path.display().to_string(),
+                baseline_snapshot: Some(baseline_snapshot_path.display().to_string()),
+                result_snapshot: Some(result_snapshot_path.display().to_string()),
+                json: true,
+            },
+        )
+        .expect("compare should tolerate missing snapshot sections");
+
+    let snapshot_delta = report
+        .snapshot_delta
+        .as_ref()
+        .expect("compare should include snapshot delta");
+    assert_eq!(snapshot_delta.context_engine_compaction.before, None);
+    assert_eq!(snapshot_delta.memory_policy.before, None);
+    assert_eq!(snapshot_delta.acp_policy.before, None);
+    assert!(
+        snapshot_delta.changed_surface_count >= 3,
+        "missing sections should still register as changed surfaces"
+    );
 
     fs::remove_dir_all(&root).ok();
 }
