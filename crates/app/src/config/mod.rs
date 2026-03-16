@@ -626,17 +626,14 @@ mod tests {
     }
 
     #[test]
-    fn volcengine_coding_plan_oauth_can_override_api_key_auth() {
+    fn volcengine_coding_plan_defaults_to_api_key_auth() {
         let config = ProviderConfig {
             kind: ProviderKind::VolcengineCoding,
             oauth_access_token: Some("vc-oauth-token".to_owned()),
             api_key: Some("api-key-should-not-win".to_owned()),
             ..ProviderConfig::default()
         };
-        assert_eq!(
-            config.default_oauth_access_token_env().as_deref(),
-            Some("VOLCENGINE_CODING_PLAN_OAUTH_TOKEN")
-        );
+        assert_eq!(config.default_oauth_access_token_env().as_deref(), None);
         assert_eq!(
             config.authorization_header(),
             Some("Bearer vc-oauth-token".to_owned())

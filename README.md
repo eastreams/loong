@@ -270,8 +270,11 @@ cargo install --path crates/daemon
 
 2. Set your provider credential in the env that onboarding selected:
 
+   For OpenAI Codex account auth this will usually be `OPENAI_CODEX_OAUTH_TOKEN`; for
+   API-key providers it will usually be a `*_API_KEY` env such as `ARK_API_KEY`.
+
    ```bash
-   export PROVIDER_API_KEY=sk-...
+   export <ENV_NAME>=...
    ```
 
 3. Get a first one-shot answer:

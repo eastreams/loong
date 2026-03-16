@@ -1120,7 +1120,7 @@ fn resolve_api_key_env_selection(
             true,
         ),
     )?;
-    let value = ui.prompt_with_default("API key env var", initial)?;
+    let value = ui.prompt_with_default("Credential env var", initial)?;
     if is_explicit_onboard_clear_input(&value) {
         return Ok(String::new());
     }
@@ -1134,13 +1134,22 @@ fn apply_selected_api_key_env(
     let selected_api_key_env = selected_api_key_env.trim();
     if selected_api_key_env.is_empty() {
         provider.set_api_key_env(None);
+        provider.set_oauth_access_token_env(None);
         return;
     }
 
     provider.api_key = None;
     provider.oauth_access_token = None;
-    provider.set_oauth_access_token_env(None);
-    provider.set_api_key_env(Some(selected_api_key_env.to_owned()));
+    match selected_provider_credential_env_field(provider, selected_api_key_env) {
+        ProviderCredentialEnvField::ApiKey => {
+            provider.set_oauth_access_token_env(None);
+            provider.set_api_key_env(Some(selected_api_key_env.to_owned()));
+        }
+        ProviderCredentialEnvField::OAuthAccessToken => {
+            provider.set_api_key_env(None);
+            provider.set_oauth_access_token_env(Some(selected_api_key_env.to_owned()));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1642,6 +1651,81 @@ pub fn preferred_provider_credential_env_binding(
         })
 }
 
+fn configured_provider_credential_env_binding(
+    provider: &mvp::config::ProviderConfig,
+) -> Option<ProviderCredentialEnvBinding> {
+    provider
+        .oauth_access_token_env
+        .as_deref()
+        .and_then(normalize_provider_credential_env_name)
+        .map(|env_name| ProviderCredentialEnvBinding {
+            field: ProviderCredentialEnvField::OAuthAccessToken,
+            env_name,
+        })
+        .or_else(|| {
+            provider
+                .api_key_env
+                .as_deref()
+                .and_then(normalize_provider_credential_env_name)
+                .map(|env_name| ProviderCredentialEnvBinding {
+                    field: ProviderCredentialEnvField::ApiKey,
+                    env_name,
+                })
+        })
+}
+
+fn provider_has_inline_credential(provider: &mvp::config::ProviderConfig) -> bool {
+    provider
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+        || provider
+            .oauth_access_token
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+}
+
+fn selected_provider_credential_env_field(
+    provider: &mvp::config::ProviderConfig,
+    selected_env_name: &str,
+) -> ProviderCredentialEnvField {
+    let normalized = normalize_provider_credential_env_name(selected_env_name);
+    let matches_oauth = normalized.as_deref().is_some_and(|env_name| {
+        provider.kind.default_oauth_access_token_env() == Some(env_name)
+            || provider
+                .kind
+                .oauth_access_token_env_aliases()
+                .contains(&env_name)
+            || provider
+                .oauth_access_token_env
+                .as_deref()
+                .and_then(normalize_provider_credential_env_name)
+                .as_deref()
+                == Some(env_name)
+    });
+    let matches_api_key = normalized.as_deref().is_some_and(|env_name| {
+        provider.kind.default_api_key_env() == Some(env_name)
+            || provider.kind.api_key_env_aliases().contains(&env_name)
+            || provider
+                .api_key_env
+                .as_deref()
+                .and_then(normalize_provider_credential_env_name)
+                .as_deref()
+                == Some(env_name)
+    });
+
+    match (matches_oauth, matches_api_key) {
+        (true, false) => ProviderCredentialEnvField::OAuthAccessToken,
+        (false, true) => ProviderCredentialEnvField::ApiKey,
+        _ => configured_provider_credential_env_binding(provider)
+            .or_else(|| preferred_provider_credential_env_binding(provider))
+            .map(|binding| binding.field)
+            .unwrap_or(ProviderCredentialEnvField::ApiKey),
+    }
+}
+
 fn push_provider_credential_env_hint(hints: &mut Vec<String>, maybe_env_name: Option<&str>) {
     let Some(env_name) = maybe_env_name.and_then(normalize_provider_credential_env_name) else {
         return;
@@ -1665,40 +1749,15 @@ fn render_provider_credential_source_value(raw: Option<&str>) -> Option<String> 
 
 pub fn preferred_api_key_env_default(config: &mvp::config::LoongClawConfig) -> String {
     let provider = &config.provider;
-    if let Some(api_key_env) = provider
-        .api_key_env
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return api_key_env.to_owned();
+    if let Some(binding) = configured_provider_credential_env_binding(provider) {
+        return binding.env_name;
     }
-    let inline_or_oauth_auth = provider
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty())
-        || provider
-            .oauth_access_token
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
-        || provider
-            .oauth_access_token_env
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty());
-    if inline_or_oauth_auth {
+    if provider_has_inline_credential(provider) {
         return String::new();
     }
-    if provider.api_key().is_some() {
-        return provider_default_api_key_env(provider.kind)
-            .unwrap_or_default()
-            .to_owned();
-    }
-    provider_default_api_key_env(provider.kind)
+    preferred_provider_credential_env_binding(provider)
+        .map(|binding| binding.env_name)
         .unwrap_or_default()
-        .to_owned()
 }
 
 pub fn directory_preflight_check(name: &'static str, target: &Path) -> OnboardCheck {
@@ -3197,11 +3256,10 @@ fn render_api_key_env_selection_default_hint_line(
         .unwrap_or_else(|| prompt_default.trim().to_owned());
     let suggested_env = render_provider_credential_source_value(Some(suggested_env))
         .unwrap_or_else(|| suggested_env.trim().to_owned());
-    let current_env = config
-        .provider
-        .api_key_env
-        .as_deref()
-        .and_then(|value| render_provider_credential_source_value(Some(value)));
+    let current_env =
+        configured_provider_credential_env_binding(&config.provider).and_then(|binding| {
+            render_provider_credential_source_value(Some(binding.env_name.as_str()))
+        });
 
     if prompt_default.is_empty() {
         return render_default_input_hint_line("leave this blank");
@@ -4183,11 +4241,10 @@ fn render_api_key_env_selection_screen_lines_with_style(
         "- provider: {}",
         crate::provider_presentation::guided_provider_label(config.provider.kind)
     )];
-    if let Some(current_env) = config
-        .provider
-        .api_key_env
-        .as_deref()
-        .and_then(|value| render_provider_credential_source_value(Some(value)))
+    if let Some(current_env) = configured_provider_credential_env_binding(&config.provider)
+        .and_then(|binding| {
+            render_provider_credential_source_value(Some(binding.env_name.as_str()))
+        })
     {
         context_lines.push(format!("- current source: {current_env}"));
     }
@@ -4202,14 +4259,14 @@ fn render_api_key_env_selection_screen_lines_with_style(
         default_api_key_env,
         prompt_default,
     )];
-    if provider_supports_blank_api_key_env(config) {
-        if prompt_default.trim().is_empty() {
-            hint_lines.push("- leave this blank to keep inline or oauth credentials".to_owned());
-        } else {
-            hint_lines.push(render_clear_input_hint_line(
-                "keep inline or oauth credentials",
-            ));
+    if prompt_default.trim().is_empty() {
+        if provider_has_inline_credential(&config.provider) {
+            hint_lines.push("- leave this blank to keep inline credentials".to_owned());
         }
+    } else if provider_supports_blank_api_key_env(config) {
+        hint_lines.push(render_clear_input_hint_line(
+            "clear the configured credential env",
+        ));
     }
 
     render_onboard_input_screen(
@@ -4608,41 +4665,19 @@ fn summarize_provider_credential(
             value: "inline api key".to_owned(),
         });
     }
-    provider
-        .api_key_env
-        .as_deref()
-        .and_then(|value| render_provider_credential_source_value(Some(value)))
-        .or_else(|| {
-            provider
-                .kind
-                .default_api_key_env()
-                .and_then(|value| render_provider_credential_source_value(Some(value)))
+    preferred_provider_credential_env_binding(provider)
+        .and_then(|binding| {
+            render_provider_credential_source_value(Some(binding.env_name.as_str()))
         })
-        .map(|api_key_env| OnboardingCredentialSummary {
+        .map(|credential_env| OnboardingCredentialSummary {
             label: "credential source",
-            value: api_key_env,
+            value: credential_env,
         })
 }
 
 fn provider_supports_blank_api_key_env(config: &mvp::config::LoongClawConfig) -> bool {
-    config
-        .provider
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty())
-        || config
-            .provider
-            .oauth_access_token
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
-        || config
-            .provider
-            .oauth_access_token_env
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
+    provider_has_inline_credential(&config.provider)
+        || configured_provider_credential_env_binding(&config.provider).is_some()
 }
 
 fn prompt_import_candidate_choice(
@@ -5670,6 +5705,24 @@ mod tests {
         assert!(
             selected.is_empty(),
             "typing :clear should explicitly clear the api-key env selection instead of persisting the literal token: {selected:?}"
+        );
+    }
+
+    #[test]
+    fn apply_selected_api_key_env_routes_openai_oauth_env_to_oauth_binding() {
+        let mut provider = mvp::config::ProviderConfig::default();
+        provider.kind = mvp::config::ProviderKind::Openai;
+        provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
+
+        apply_selected_api_key_env(&mut provider, "OPENAI_CODEX_OAUTH_TOKEN".to_owned());
+
+        assert_eq!(
+            provider.oauth_access_token_env.as_deref(),
+            Some("OPENAI_CODEX_OAUTH_TOKEN")
+        );
+        assert_eq!(
+            provider.api_key_env, None,
+            "switching to the OpenAI oauth env should clear the stale api-key env binding"
         );
     }
 

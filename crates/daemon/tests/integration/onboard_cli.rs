@@ -1358,6 +1358,23 @@ fn preferred_api_key_env_default_stays_blank_when_provider_has_no_default_env() 
 }
 
 #[test]
+fn preferred_api_key_env_default_prefers_oauth_default_for_fresh_openai() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.kind = mvp::config::ProviderKind::Openai;
+    config.provider.api_key = None;
+    config.provider.api_key_env = None;
+    config.provider.oauth_access_token = None;
+    config.provider.oauth_access_token_env = None;
+
+    let value = loongclaw_daemon::onboard_cli::preferred_api_key_env_default(&config);
+
+    assert_eq!(
+        value, "OPENAI_CODEX_OAUTH_TOKEN",
+        "fresh OpenAI onboarding should surface the provider-preferred oauth env before the api-key fallback: {value:?}"
+    );
+}
+
+#[test]
 fn directory_preflight_check_has_no_filesystem_side_effects() {
     let base = unique_temp_path("preflight-root");
     let target = base.join("nested").join("tool-root");
@@ -3986,6 +4003,12 @@ fn onboard_api_key_env_screen_explains_suggested_env_and_blank_behavior() {
     assert!(
         lines
             .iter()
+            .any(|line| line.contains("- current source: ${OPENAI_CODEX_OAUTH_TOKEN}")),
+        "credential-env screen should show the active oauth credential source instead of hiding it behind api-key-only rendering: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
             .any(|line| line.contains("- suggested source: ${OPENAI_API_KEY}")),
         "credential-env screen should surface the suggested env var name: {lines:#?}"
     );
@@ -3998,8 +4021,8 @@ fn onboard_api_key_env_screen_explains_suggested_env_and_blank_behavior() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "- type :clear to keep inline or oauth credentials"),
-        "credential-env screen should explain the explicit clear token when Enter uses a non-empty default: {lines:#?}"
+            .any(|line| line == "- type :clear to clear the configured credential env"),
+        "credential-env screen should explain the explicit clear token when another credential env is already configured: {lines:#?}"
     );
 }
 
@@ -5416,8 +5439,8 @@ fn onboard_review_lines_include_core_setup_summary_for_fresh_setup() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("- credential source: ${OPENAI_API_KEY}")),
-        "review should keep the suggested credential env visible for fresh setup flows: {lines:#?}"
+            .any(|line| line.contains("- credential source: ${OPENAI_CODEX_OAUTH_TOKEN}")),
+        "review should keep the provider-preferred credential env visible for fresh setup flows: {lines:#?}"
     );
     assert!(
         lines

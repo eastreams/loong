@@ -152,8 +152,11 @@ cargo install --path crates/daemon
 
 2. 按 onboarding 选中的环境变量名设置 provider 凭据：
 
+   对于 OpenAI Codex 账号登录，这通常会是 `OPENAI_CODEX_OAUTH_TOKEN`；对于
+   走 API key 的 provider，则通常会是 `ARK_API_KEY` 这类 `*_API_KEY` 环境变量。
+
    ```bash
-   export PROVIDER_API_KEY=sk-...
+   export <ENV_NAME>=...
    ```
 
 3. 先拿到一次性回答：

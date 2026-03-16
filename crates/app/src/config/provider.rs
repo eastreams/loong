@@ -2645,8 +2645,8 @@ const PROVIDER_PROFILES: [ProviderProfile; 39] = [
         default_api_key_env: Some("ARK_API_KEY"),
         api_key_env_aliases: &[],
         default_user_agent: None,
-        default_oauth_access_token_env: Some("VOLCENGINE_CODING_PLAN_OAUTH_TOKEN"),
-        oauth_access_token_env_aliases: &["ARK_OAUTH_ACCESS_TOKEN"],
+        default_oauth_access_token_env: None,
+        oauth_access_token_env_aliases: &[],
         feature_family: ProviderFeatureFamily::Volcengine,
     },
     ProviderProfile {
