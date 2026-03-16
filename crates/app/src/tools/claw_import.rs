@@ -614,6 +614,7 @@ mod tests {
             messages_enabled: true,
             delegate_enabled: true,
             browser: Default::default(),
+            browser_companion: Default::default(),
             web_fetch: Default::default(),
             external_skills: Default::default(),
             #[cfg(feature = "feishu-integration")]

@@ -50,6 +50,21 @@ impl Default for BrowserRuntimePolicy {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BrowserCompanionRuntimePolicy {
+    pub enabled: bool,
+    pub ready: bool,
+    pub command: Option<String>,
+    pub expected_version: Option<String>,
+}
+
+impl BrowserCompanionRuntimePolicy {
+    #[must_use]
+    pub fn is_runtime_ready(&self) -> bool {
+        self.enabled && self.ready
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebFetchRuntimePolicy {
     pub enabled: bool,
@@ -117,6 +132,7 @@ pub struct ToolRuntimeConfig {
     pub messages_enabled: bool,
     pub delegate_enabled: bool,
     pub browser: BrowserRuntimePolicy,
+    pub browser_companion: BrowserCompanionRuntimePolicy,
     pub web_fetch: WebFetchRuntimePolicy,
     pub external_skills: ExternalSkillsRuntimePolicy,
     #[cfg(feature = "feishu-integration")]
@@ -138,6 +154,7 @@ impl Default for ToolRuntimeConfig {
             messages_enabled: false,
             delegate_enabled: true,
             browser: BrowserRuntimePolicy::default(),
+            browser_companion: BrowserCompanionRuntimePolicy::default(),
             web_fetch: WebFetchRuntimePolicy::default(),
             external_skills: ExternalSkillsRuntimePolicy::default(),
             #[cfg(feature = "feishu-integration")]
@@ -172,6 +189,16 @@ impl ToolRuntimeConfig {
                 max_sessions: config.tools.browser.max_sessions,
                 max_links: config.tools.browser.max_links,
                 max_text_chars: config.tools.browser.max_text_chars,
+            },
+            browser_companion: BrowserCompanionRuntimePolicy {
+                enabled: config.tools.browser_companion.enabled,
+                ready: parse_env_bool("LOONGCLAW_BROWSER_COMPANION_READY").unwrap_or(false),
+                command: normalize_optional_string(
+                    config.tools.browser_companion.command.as_deref(),
+                ),
+                expected_version: normalize_optional_string(
+                    config.tools.browser_companion.expected_version.as_deref(),
+                ),
             },
             web_fetch: WebFetchRuntimePolicy {
                 enabled: config.tools.web.enabled,
@@ -232,6 +259,13 @@ impl ToolRuntimeConfig {
             .unwrap_or(crate::config::DEFAULT_BROWSER_MAX_LINKS);
         let browser_max_text_chars = parse_env_usize("LOONGCLAW_BROWSER_MAX_TEXT_CHARS")
             .unwrap_or(crate::config::DEFAULT_BROWSER_MAX_TEXT_CHARS);
+        let browser_companion_enabled =
+            parse_env_bool("LOONGCLAW_BROWSER_COMPANION_ENABLED").unwrap_or(false);
+        let browser_companion_ready =
+            parse_env_bool("LOONGCLAW_BROWSER_COMPANION_READY").unwrap_or(false);
+        let browser_companion_command = parse_env_string("LOONGCLAW_BROWSER_COMPANION_COMMAND");
+        let browser_companion_expected_version =
+            parse_env_string("LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION");
         let web_fetch_enabled = parse_env_bool("LOONGCLAW_WEB_FETCH_ENABLED").unwrap_or(true);
         let web_fetch_allow_private_hosts =
             parse_env_bool("LOONGCLAW_WEB_FETCH_ALLOW_PRIVATE_HOSTS").unwrap_or(false);
@@ -267,6 +301,12 @@ impl ToolRuntimeConfig {
                 max_sessions: browser_max_sessions,
                 max_links: browser_max_links,
                 max_text_chars: browser_max_text_chars,
+            },
+            browser_companion: BrowserCompanionRuntimePolicy {
+                enabled: browser_companion_enabled,
+                ready: browser_companion_ready,
+                command: browser_companion_command,
+                expected_version: browser_companion_expected_version,
             },
             web_fetch: WebFetchRuntimePolicy {
                 enabled: web_fetch_enabled,
@@ -320,6 +360,16 @@ fn parse_env_usize(key: &str) -> Option<usize> {
     std::env::var(key)
         .ok()
         .and_then(|raw| raw.trim().parse::<usize>().ok())
+}
+
+fn normalize_optional_string(raw: Option<&str>) -> Option<String> {
+    raw.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn parse_env_string(key: &str) -> Option<String> {
+    normalize_optional_string(std::env::var(key).ok().as_deref())
 }
 
 fn parse_env_domain_list(key: &str) -> BTreeSet<String> {
@@ -432,6 +482,10 @@ mod tests {
         assert_eq!(config.browser.max_sessions, 8);
         assert_eq!(config.browser.max_links, 40);
         assert_eq!(config.browser.max_text_chars, 6000);
+        assert!(!config.browser_companion.enabled);
+        assert!(!config.browser_companion.ready);
+        assert!(config.browser_companion.command.is_none());
+        assert!(config.browser_companion.expected_version.is_none());
         assert!(config.web_fetch.enabled);
         assert!(!config.web_fetch.allow_private_hosts);
         assert!(config.web_fetch.allowed_domains.is_empty());
@@ -472,6 +526,12 @@ mod tests {
                 max_links: 12,
                 max_text_chars: 2_048,
             },
+            browser_companion: BrowserCompanionRuntimePolicy {
+                enabled: true,
+                ready: true,
+                command: Some("loongclaw-browser-companion".to_owned()),
+                expected_version: Some("1.2.3".to_owned()),
+            },
             web_fetch: WebFetchRuntimePolicy {
                 enabled: false,
                 allow_private_hosts: true,
@@ -506,6 +566,16 @@ mod tests {
         assert_eq!(config.browser.max_sessions, 4);
         assert_eq!(config.browser.max_links, 12);
         assert_eq!(config.browser.max_text_chars, 2_048);
+        assert!(config.browser_companion.enabled);
+        assert!(config.browser_companion.ready);
+        assert_eq!(
+            config.browser_companion.command.as_deref(),
+            Some("loongclaw-browser-companion")
+        );
+        assert_eq!(
+            config.browser_companion.expected_version.as_deref(),
+            Some("1.2.3")
+        );
         assert!(!config.web_fetch.enabled);
         assert!(config.web_fetch.allow_private_hosts);
         assert!(
@@ -548,6 +618,29 @@ mod tests {
         assert!(config.shell_allow.is_empty());
     }
 
+    #[test]
+    fn from_loongclaw_config_projects_browser_companion_policy() {
+        crate::process_env::set_var("LOONGCLAW_BROWSER_COMPANION_READY", "true");
+        let mut config = crate::config::LoongClawConfig::default();
+        config.tools.browser_companion.enabled = true;
+        config.tools.browser_companion.command = Some("loongclaw-browser-companion".to_owned());
+        config.tools.browser_companion.expected_version = Some("1.2.3".to_owned());
+
+        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+        assert!(runtime.browser_companion.enabled);
+        assert!(runtime.browser_companion.ready);
+        assert_eq!(
+            runtime.browser_companion.command.as_deref(),
+            Some("loongclaw-browser-companion")
+        );
+        assert_eq!(
+            runtime.browser_companion.expected_version.as_deref(),
+            Some("1.2.3")
+        );
+
+        crate::process_env::remove_var("LOONGCLAW_BROWSER_COMPANION_READY");
+    }
+
     #[cfg(feature = "tool-shell")]
     #[test]
     fn injected_config_overrides_global() {
@@ -583,6 +676,13 @@ mod tests {
         crate::process_env::set_var("LOONGCLAW_BROWSER_MAX_SESSIONS", "4");
         crate::process_env::set_var("LOONGCLAW_BROWSER_MAX_LINKS", "12");
         crate::process_env::set_var("LOONGCLAW_BROWSER_MAX_TEXT_CHARS", "2048");
+        crate::process_env::set_var("LOONGCLAW_BROWSER_COMPANION_ENABLED", "true");
+        crate::process_env::set_var("LOONGCLAW_BROWSER_COMPANION_READY", "true");
+        crate::process_env::set_var(
+            "LOONGCLAW_BROWSER_COMPANION_COMMAND",
+            "loongclaw-browser-companion",
+        );
+        crate::process_env::set_var("LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION", "1.2.3");
         crate::process_env::set_var("LOONGCLAW_WEB_FETCH_ENABLED", "false");
         crate::process_env::set_var("LOONGCLAW_WEB_FETCH_ALLOW_PRIVATE_HOSTS", "true");
         crate::process_env::set_var(
@@ -620,6 +720,16 @@ mod tests {
         assert_eq!(config.browser.max_sessions, 4);
         assert_eq!(config.browser.max_links, 12);
         assert_eq!(config.browser.max_text_chars, 2_048);
+        assert!(config.browser_companion.enabled);
+        assert!(config.browser_companion.ready);
+        assert_eq!(
+            config.browser_companion.command.as_deref(),
+            Some("loongclaw-browser-companion")
+        );
+        assert_eq!(
+            config.browser_companion.expected_version.as_deref(),
+            Some("1.2.3")
+        );
         assert!(!config.web_fetch.enabled);
         assert!(config.web_fetch.allow_private_hosts);
         assert!(
@@ -666,6 +776,10 @@ mod tests {
         crate::process_env::remove_var("LOONGCLAW_BROWSER_MAX_SESSIONS");
         crate::process_env::remove_var("LOONGCLAW_BROWSER_MAX_LINKS");
         crate::process_env::remove_var("LOONGCLAW_BROWSER_MAX_TEXT_CHARS");
+        crate::process_env::remove_var("LOONGCLAW_BROWSER_COMPANION_ENABLED");
+        crate::process_env::remove_var("LOONGCLAW_BROWSER_COMPANION_READY");
+        crate::process_env::remove_var("LOONGCLAW_BROWSER_COMPANION_COMMAND");
+        crate::process_env::remove_var("LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION");
         crate::process_env::remove_var("LOONGCLAW_WEB_FETCH_ENABLED");
         crate::process_env::remove_var("LOONGCLAW_WEB_FETCH_ALLOW_PRIVATE_HOSTS");
         crate::process_env::remove_var("LOONGCLAW_WEB_FETCH_ALLOWED_DOMAINS");
@@ -717,6 +831,24 @@ mod tests {
         assert_eq!(policy.max_sessions, 4);
         assert_eq!(policy.max_links, 12);
         assert_eq!(policy.max_text_chars, 2_048);
+    }
+
+    #[test]
+    fn browser_companion_policy_struct_construction() {
+        let policy = BrowserCompanionRuntimePolicy {
+            enabled: true,
+            ready: false,
+            command: Some("loongclaw-browser-companion".to_owned()),
+            expected_version: Some("1.2.3".to_owned()),
+        };
+
+        assert!(policy.enabled);
+        assert!(!policy.ready);
+        assert_eq!(
+            policy.command.as_deref(),
+            Some("loongclaw-browser-companion")
+        );
+        assert_eq!(policy.expected_version.as_deref(), Some("1.2.3"));
     }
 
     #[test]

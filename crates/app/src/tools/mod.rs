@@ -1349,6 +1349,7 @@ mod tests {
             messages_enabled: true,
             delegate_enabled: true,
             browser: Default::default(),
+            browser_companion: Default::default(),
             web_fetch: Default::default(),
             external_skills: runtime_config::ExternalSkillsRuntimePolicy {
                 enabled: true,
@@ -2016,6 +2017,7 @@ mod tests {
             messages_enabled: true,
             delegate_enabled: true,
             browser: Default::default(),
+            browser_companion: Default::default(),
             web_fetch: Default::default(),
             external_skills: runtime_config::ExternalSkillsRuntimePolicy::default(),
             #[cfg(feature = "feishu-integration")]

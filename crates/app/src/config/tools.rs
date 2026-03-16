@@ -47,6 +47,8 @@ pub struct ToolConfig {
     #[serde(default)]
     pub browser: BrowserToolConfig,
     #[serde(default)]
+    pub browser_companion: BrowserCompanionToolConfig,
+    #[serde(default)]
     pub web: WebToolConfig,
 }
 
@@ -122,6 +124,16 @@ pub struct BrowserToolConfig {
     pub max_text_chars: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct BrowserCompanionToolConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub expected_version: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WebToolConfig {
     #[serde(default = "default_enabled")]
@@ -192,6 +204,7 @@ impl Default for ToolConfig {
             messages: MessageToolConfig::default(),
             delegate: DelegateToolConfig::default(),
             browser: BrowserToolConfig::default(),
+            browser_companion: BrowserCompanionToolConfig::default(),
             web: WebToolConfig::default(),
         }
     }
@@ -451,6 +464,9 @@ mod tests {
         assert_eq!(config.browser.max_sessions, 8);
         assert_eq!(config.browser.max_links, 40);
         assert_eq!(config.browser.max_text_chars, 6000);
+        assert!(!config.browser_companion.enabled);
+        assert!(config.browser_companion.command.is_none());
+        assert!(config.browser_companion.expected_version.is_none());
         assert!(config.web.enabled);
         assert!(!config.web.allow_private_hosts);
         assert!(config.web.allowed_domains.is_empty());
@@ -561,6 +577,29 @@ max_text_chars = 2048
         assert_eq!(parsed.tools.browser.max_sessions, 4);
         assert_eq!(parsed.tools.browser.max_links, 12);
         assert_eq!(parsed.tools.browser.max_text_chars, 2048);
+    }
+
+    #[cfg(feature = "config-toml")]
+    #[test]
+    fn tool_config_parses_browser_companion_controls_from_toml() {
+        let raw = r#"
+[tools.browser_companion]
+enabled = true
+command = "loongclaw-browser-companion"
+expected_version = "1.2.3"
+"#;
+        let parsed =
+            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+
+        assert!(parsed.tools.browser_companion.enabled);
+        assert_eq!(
+            parsed.tools.browser_companion.command.as_deref(),
+            Some("loongclaw-browser-companion")
+        );
+        assert_eq!(
+            parsed.tools.browser_companion.expected_version.as_deref(),
+            Some("1.2.3")
+        );
     }
 
     /// When `shell_deny` is absent, it must default to empty — users start
