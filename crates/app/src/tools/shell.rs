@@ -83,7 +83,7 @@ pub(super) fn execute_shell_tool_with_config(
             ));
         }
 
-        let output = Command::new(command)
+        let output = Command::new(&normalized_command)
             .args(&args)
             .current_dir(&cwd)
             .output()
