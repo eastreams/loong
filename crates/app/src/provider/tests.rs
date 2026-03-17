@@ -2020,7 +2020,7 @@ async fn responses_turn_does_not_fallback_for_generic_gateway_failures() {
         "generic gateway failures should not trigger chat-completions fallback: {requests:#?}"
     );
     assert!(
-        requests.len() >= 1,
+        !requests.is_empty(),
         "the test server should observe at least the initial responses request"
     );
 }
