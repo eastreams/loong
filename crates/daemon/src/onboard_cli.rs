@@ -18,7 +18,8 @@ const ONBOARD_CLEAR_INPUT_TOKEN: &str = ":clear";
 const ONBOARD_ESCAPE_CANCEL_HINT: &str = "- press Esc then Enter to cancel onboarding";
 const ONBOARD_SINGLE_LINE_INPUT_HINT: &str =
     "- terminal input is single line; extra pasted lines are ignored";
-const ONBOARD_PASTE_DRAIN_WINDOW: Duration = Duration::from_millis(20);
+const ONBOARD_PASTE_DRAIN_WINDOW_ENV: &str = "LOONGCLAW_ONBOARD_PASTE_DRAIN_WINDOW_MS";
+const DEFAULT_ONBOARD_PASTE_DRAIN_WINDOW: Duration = Duration::from_millis(75);
 const ONBOARD_LINE_READER_BUFFER_SIZE: usize = 64;
 
 #[derive(Debug, Clone)]
@@ -124,6 +125,7 @@ type StdioOnboardLineSender = mpsc::SyncSender<StdioOnboardLineMessage>;
 enum StdioOnboardLineReader {
     Background {
         receiver: Receiver<StdioOnboardLineMessage>,
+        paste_drain_window: Duration,
     },
     Direct {
         degraded_notice: Option<String>,
@@ -142,6 +144,15 @@ fn onboard_line_channel_with_capacity(
         "onboard line reader buffer must be non-zero"
     );
     mpsc::sync_channel(buffer_size)
+}
+
+fn onboard_paste_drain_window() -> Duration {
+    env::var(ONBOARD_PASTE_DRAIN_WINDOW_ENV)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|millis| *millis > 0)
+        .map(Duration::from_millis)
+        .unwrap_or(DEFAULT_ONBOARD_PASTE_DRAIN_WINDOW)
 }
 
 fn spawn_onboard_stdin_reader(sender: StdioOnboardLineSender) -> io::Result<()> {
@@ -180,7 +191,10 @@ fn format_onboard_line_reader_spawn_notice(error: &io::Error) -> String {
 
 impl StdioOnboardLineReader {
     fn background_from_receiver(receiver: Receiver<StdioOnboardLineMessage>) -> Self {
-        Self::Background { receiver }
+        Self::Background {
+            receiver,
+            paste_drain_window: onboard_paste_drain_window(),
+        }
     }
 
     fn try_spawn_background_receiver() -> io::Result<Receiver<StdioOnboardLineMessage>> {
@@ -218,7 +232,7 @@ impl OnboardPromptLineReader for StdioOnboardLineReader {
             eprintln!("{notice}");
         }
         match self {
-            Self::Background { receiver } => match receiver.recv() {
+            Self::Background { receiver, .. } => match receiver.recv() {
                 Ok(StdioOnboardLineMessage::Line(line)) => Ok(OnboardPromptRead::Line(line)),
                 Ok(StdioOnboardLineMessage::Eof) => Ok(OnboardPromptRead::Eof),
                 Ok(StdioOnboardLineMessage::Error(error)) => Err(error),
@@ -239,16 +253,15 @@ impl OnboardPromptLineReader for StdioOnboardLineReader {
 
     fn read_pending_line(&mut self) -> CliResult<Option<String>> {
         match self {
-            Self::Background { receiver } => {
-                match receiver.recv_timeout(ONBOARD_PASTE_DRAIN_WINDOW) {
-                    Ok(StdioOnboardLineMessage::Line(line)) => Ok(Some(line)),
-                    Ok(StdioOnboardLineMessage::Eof) => Ok(None),
-                    Ok(StdioOnboardLineMessage::Error(error)) => Err(error),
-                    Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => {
-                        Ok(None)
-                    }
-                }
-            }
+            Self::Background {
+                receiver,
+                paste_drain_window,
+            } => match receiver.recv_timeout(*paste_drain_window) {
+                Ok(StdioOnboardLineMessage::Line(line)) => Ok(Some(line)),
+                Ok(StdioOnboardLineMessage::Eof) => Ok(None),
+                Ok(StdioOnboardLineMessage::Error(error)) => Err(error),
+                Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => Ok(None),
+            },
             Self::Direct { .. } => Ok(None),
         }
     }
@@ -5884,6 +5897,40 @@ mod tests {
         }
     }
 
+    struct PasteDrainWindowEnvGuard {
+        _lock: MutexGuard<'static, ()>,
+        saved_value: Option<OsString>,
+    }
+
+    impl PasteDrainWindowEnvGuard {
+        fn set(value: Option<&str>) -> Self {
+            let lock = crate::test_support::lock_daemon_test_environment();
+            let saved_value = std::env::var_os(ONBOARD_PASTE_DRAIN_WINDOW_ENV);
+            match value {
+                Some(value) => set_browser_companion_env_var(ONBOARD_PASTE_DRAIN_WINDOW_ENV, value),
+                None => remove_browser_companion_env_var(ONBOARD_PASTE_DRAIN_WINDOW_ENV),
+            }
+            Self {
+                _lock: lock,
+                saved_value,
+            }
+        }
+    }
+
+    impl Drop for PasteDrainWindowEnvGuard {
+        fn drop(&mut self) {
+            match &self.saved_value {
+                Some(value) => {
+                    set_browser_companion_env_var(
+                        ONBOARD_PASTE_DRAIN_WINDOW_ENV,
+                        &value.to_string_lossy(),
+                    );
+                }
+                None => remove_browser_companion_env_var(ONBOARD_PASTE_DRAIN_WINDOW_ENV),
+            }
+        }
+    }
+
     impl Drop for BrowserCompanionEnvGuard {
         fn drop(&mut self) {
             let key = "LOONGCLAW_BROWSER_COMPANION_READY";
@@ -6805,6 +6852,33 @@ mod tests {
         assert_eq!(second.raw, "window-plus-summary\n");
         assert_eq!(second.dropped_line_count, 0);
         assert!(!second.reached_eof);
+    }
+
+    #[test]
+    fn onboard_paste_drain_window_prefers_valid_env_override() {
+        let _guard = PasteDrainWindowEnvGuard::set(Some("125"));
+
+        assert_eq!(onboard_paste_drain_window(), Duration::from_millis(125));
+    }
+
+    #[test]
+    fn onboard_paste_drain_window_falls_back_for_invalid_env_values() {
+        let _guard = PasteDrainWindowEnvGuard::set(Some("not-a-number"));
+
+        assert_eq!(
+            onboard_paste_drain_window(),
+            DEFAULT_ONBOARD_PASTE_DRAIN_WINDOW
+        );
+    }
+
+    #[test]
+    fn onboard_paste_drain_window_rejects_zero_millisecond_override() {
+        let _guard = PasteDrainWindowEnvGuard::set(Some("0"));
+
+        assert_eq!(
+            onboard_paste_drain_window(),
+            DEFAULT_ONBOARD_PASTE_DRAIN_WINDOW
+        );
     }
 
     #[test]
