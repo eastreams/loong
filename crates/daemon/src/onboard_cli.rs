@@ -183,6 +183,7 @@ pub enum OnboardNonInteractiveWarningPolicy {
     AcceptedByExplicitModel,
     AcceptedByPreferredModels,
     RequiresExplicitModel,
+    RequiresExplicitModelWithoutReviewedDefault,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1438,7 +1439,11 @@ fn provider_model_probe_failure_check(
                 error.as_str(),
                 recommended_onboarding_model,
             ),
-            OnboardNonInteractiveWarningPolicy::RequiresExplicitModel,
+            if recommended_onboarding_model.is_some() {
+                OnboardNonInteractiveWarningPolicy::RequiresExplicitModel
+            } else {
+                OnboardNonInteractiveWarningPolicy::RequiresExplicitModelWithoutReviewedDefault
+            },
         ),
     };
 
@@ -3614,6 +3619,15 @@ fn preflight_attention_hint_line(checks: &[OnboardCheck]) -> Option<&'static str
         )
     }) {
         return Some(crate::onboard_presentation::preflight_explicit_model_rerun_hint());
+    }
+
+    if checks.iter().any(|check| {
+        matches!(
+            check.non_interactive_warning_policy,
+            OnboardNonInteractiveWarningPolicy::RequiresExplicitModelWithoutReviewedDefault
+        )
+    }) {
+        return Some(crate::onboard_presentation::preflight_explicit_model_only_rerun_hint());
     }
     None
 }
@@ -6238,6 +6252,32 @@ mod tests {
                 .iter()
                 .all(|line| !line.contains("--skip-model-probe")),
             "reviewed auto-model failures should not suggest --skip-model-probe because that contradicts the explicit-model recovery path: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn preflight_summary_uses_explicit_model_only_guidance_without_reviewed_default() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Custom;
+        config.provider.model = "auto".to_owned();
+
+        let check = provider_model_probe_failure_check(
+            &config,
+            "provider rejected the model list".to_owned(),
+        );
+        let lines = render_preflight_summary_screen_lines(&[check], 80);
+
+        assert!(
+            lines.iter().any(|line| {
+                line == crate::onboard_presentation::preflight_explicit_model_only_rerun_hint()
+            }),
+            "providers without a reviewed model should keep the summary hint aligned with the explicit-model-only recovery path: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains("choose a reviewed model")),
+            "providers without a reviewed model should not advertise a reviewed-model recovery path that does not exist: {lines:#?}"
         );
     }
 

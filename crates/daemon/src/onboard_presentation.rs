@@ -233,6 +233,10 @@ pub const fn preflight_explicit_model_rerun_hint() -> &'static str {
     "- rerun onboarding to choose a reviewed model, or set provider.model / preferred_models explicitly"
 }
 
+pub const fn preflight_explicit_model_only_rerun_hint() -> &'static str {
+    "- set provider.model / preferred_models explicitly before retrying"
+}
+
 pub const fn preflight_continue_label() -> &'static str {
     "Continue anyway"
 }
