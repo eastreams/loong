@@ -763,13 +763,18 @@ async fn non_interactive_onboard_allows_explicit_skip_model_probe_warning() {
         .expect("load written onboarding config");
     assert_eq!(config.provider.model, "openai/gpt-5.1-codex");
     assert_eq!(
-        config.provider.api_key.as_deref(),
-        Some("${OPENAI_API_KEY}")
+        config.provider.oauth_access_token.as_deref(),
+        Some("${OPENAI_CODEX_OAUTH_TOKEN}"),
+        "reloaded config should keep the canonical oauth credential source after provider-aligned routing"
     );
     assert_eq!(
-        config.provider.api_key(),
-        Some("test-openai-key".to_owned()),
-        "loaded config should still resolve the canonical env reference at runtime"
+        config.provider.api_key, None,
+        "reloaded config should not repopulate the legacy api_key field for the oauth-backed openai route"
+    );
+    assert_eq!(
+        config.provider.authorization_header(),
+        Some("Bearer test-openai-key".to_owned()),
+        "runtime auth resolution should still fall back to OPENAI_API_KEY when the oauth env is unset"
     );
 }
 
@@ -2425,14 +2430,7 @@ fn onboard_entry_screen_uses_compact_header_and_detected_setup_digest() {
         80,
     );
 
-    assert!(
-        lines[0].starts_with("LOONGCLAW"),
-        "entry screen should switch to the compact LOONGCLAW header after the initial risk gate: {lines:#?}"
-    );
-    assert!(
-        lines[0].contains("v"),
-        "entry screen should keep the build/version visible inside the compact header: {lines:#?}"
-    );
+    assert_compact_loongclaw_header(&lines, "entry screen");
     assert!(
         lines.iter().all(|line| !line.starts_with("██╗")),
         "entry screen should not repeat the large LOONGCLAW banner after the first screen: {lines:#?}"
@@ -2506,14 +2504,7 @@ fn onboard_entry_screen_compacts_to_plain_wordmark_on_narrow_width() {
         40,
     );
 
-    assert!(
-        lines[0].starts_with("LOONGCLAW"),
-        "narrow layout should keep the compact LOONGCLAW wordmark at the start of the header line: {lines:#?}"
-    );
-    assert!(
-        lines[0].contains("v"),
-        "narrow layout should keep the compact header metadata on the same line as the wordmark: {lines:#?}"
-    );
+    assert_compact_loongclaw_header(&lines, "narrow entry screen");
     assert!(
         lines.iter().any(|line| line == "Detected settings"),
         "narrow layout should retain the detected-settings section heading: {lines:#?}"
@@ -5498,14 +5489,7 @@ fn onboard_review_lines_use_compact_header() {
         80,
     );
 
-    assert!(
-        lines[0].starts_with("LOONGCLAW"),
-        "review screen should use the compact LOONGCLAW header after the first screen: {lines:#?}"
-    );
-    assert!(
-        lines[0].contains("v"),
-        "review screen should keep the version visible inside the compact header: {lines:#?}"
-    );
+    assert_compact_loongclaw_header(&lines, "review screen");
     assert!(
         lines.iter().all(|line| !line.starts_with("██╗")),
         "review screen should not repeat the large LOONGCLAW banner: {lines:#?}"
@@ -5867,14 +5851,7 @@ fn onboarding_success_summary_uses_compact_header() {
 
     let lines =
         loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
-    assert!(
-        lines[0].starts_with("LOONGCLAW"),
-        "success summary should use the compact LOONGCLAW header after the first screen: {lines:#?}"
-    );
-    assert!(
-        lines[0].contains("v"),
-        "success summary should keep the version visible inside the compact header: {lines:#?}"
-    );
+    assert_compact_loongclaw_header(&lines, "success summary");
     assert!(
         lines.iter().all(|line| !line.starts_with("██╗")),
         "success summary should not repeat the large LOONGCLAW banner after onboarding has already started: {lines:#?}"
