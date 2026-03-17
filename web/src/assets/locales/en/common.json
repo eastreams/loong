@@ -1,0 +1,20 @@
+{
+  "appName": "LoongClaw Web",
+  "nav": {
+    "chat": "Chat",
+    "dashboard": "Dashboard",
+    "theme": "Theme",
+    "language": "Language"
+  },
+  "status": {
+    "connected": "Connected",
+    "local": "Local-first",
+    "providerReady": "Provider ready",
+    "memoryHealthy": "Memory healthy"
+  },
+  "chrome": {
+    "eyebrow": "Web Console",
+    "title": "Local control surface for LoongClaw",
+    "subtitle": "English-first bilingual console aligned with the main LoongClaw website."
+  }
+}

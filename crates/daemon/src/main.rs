@@ -411,6 +411,7 @@ async fn main() {
             .await
         }
         Commands::Feishu { command } => feishu_cli::run_feishu_command(command).await,
+        Commands::Web { command } => web_cli::run_web_command(command).await,
     };
     if let Err(error) = result {
         #[allow(clippy::print_stderr)]

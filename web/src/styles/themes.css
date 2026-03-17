@@ -1,0 +1,18 @@
+[data-theme="light"] {
+  --color-bg-primary: rgb(252, 245, 226);
+  --color-bg-secondary: #f5ecd8;
+  --color-bg-tertiary: #ede4cf;
+  --color-bg-elevated: rgba(245, 236, 216, 0.9);
+  --color-border: rgba(120, 110, 90, 0.2);
+  --color-border-light: rgba(120, 110, 90, 0.08);
+  --color-border-medium: rgba(120, 110, 90, 0.16);
+  --color-text-primary: #2d2920;
+  --color-text-secondary: #5a5340;
+  --color-text-muted: #8a8068;
+  --color-text-accent: #1a1710;
+  --color-accent: #2d2920;
+  --color-accent-hover: #1a1710;
+  --color-success: #2f6f3e;
+  --bg-gradient: radial-gradient(circle at 50% -20%, #f5ecd8 0%, rgb(252, 245, 226) 80%);
+  --panel-gradient: linear-gradient(180deg, rgba(245, 236, 216, 0.95) 0%, rgba(252, 245, 226, 0.95) 100%);
+}

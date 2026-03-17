@@ -1,0 +1,20 @@
+{
+  "appName": "LoongClaw Web",
+  "nav": {
+    "chat": "对话",
+    "dashboard": "仪表板",
+    "theme": "主题",
+    "language": "语言"
+  },
+  "status": {
+    "connected": "已连接",
+    "local": "本地优先",
+    "providerReady": "Provider 已就绪",
+    "memoryHealthy": "Memory 状态正常"
+  },
+  "chrome": {
+    "eyebrow": "Web Console",
+    "title": "LoongClaw 的本地控制台",
+    "subtitle": "英文优先、中英双语，并与 LoongClaw 官网视觉体系保持一致。"
+  }
+}

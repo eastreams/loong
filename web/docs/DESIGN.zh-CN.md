@@ -1,162 +1,223 @@
-# LoongClaw Web Console 设计文档
+# LoongClaw Web 设计文档
 
-状态：提议中  
-范围：`alpha-test` 线，大型单 PR 交付  
+状态：Phase 1 提议  
+范围：`alpha-test` 分支，大型交付型 PR  
 最后更新：2026-03-17
 
 ## 1. 目标
 
-为 LoongClaw 构建一个 Web Console，包含两个主要界面：
+为 LoongClaw 增加一个独立的 `web/` 前端模块，首批至少包含两个主界面：
 
 - Web Chat
 - Web Dashboard
 
-Web Console 必须复用现有 LoongClaw 的会话、provider、tool、memory 和 audit
-语义。它是一个新的客户端界面，不是一个新的 assistant runtime。
+Web 只是新的客户端表面，不是新的 assistant runtime。实际执行、会话、provider、tool、memory、audit 语义仍然复用现有 LoongClaw runtime。
 
 ## 2. 产品定位
 
-Web Console 是一个可选前端模块。
+Web 是可选前端模块，不是基础安装的默认组成部分。
 
-- 基础安装仍然以 CLI 为主。
-- Web 资源不进入默认安装路径。
-- `onboard` 可以提供一个可选的 Web Console 安装项，并显示体积说明。
-- 第一优先级是本地部署。
-- 托管前端模式是后续分发选项，不是 MVP 要求。
+- 基础安装仍以 CLI/runtime 为主
+- Web 资源默认不进入基础安装包
+- `onboard` 可提供 Web 安装选项，并标注体积和用途
+- 首批优先支持本地部署模式
+- 托管前端模式保留为后续交付，不是 Phase 1 优先级
 
-## 3. 核心决策
+## 3. 语言与内容策略
+
+前端内容策略改为：
+
+- 优先英文
+- 中英双语
+- 组织方式与参考站点保持一致
+
+这里的“优先英文”指的是：
+
+- 信息架构先以英文命名和英文路径组织
+- 默认翻译资源先提供英文基线
+- 中文作为首批同步支持语言，不是后补语言
+
+推荐首批语言：
+
+- `en`
+- `zh-CN`
+
+文档本身可以继续以中文维护，但前端产品形态、目录、文案组织、国际化资源结构应与参考站点一致。
+
+## 4. 视觉与交互方向
+
+视觉上允许直接继承参考站点：
+
+- 参考仓库：`E:\GitDesktop\loongclaw-website`
+- 可以把它理解成“基于现有官网视觉系统，改造成 chat + dashboard 的产品界面”
+
+这意味着首版不需要刻意做出差异化外观。相反，应尽量继承：
+
+- 颜色 token
+- 字体系统
+- panel 边框和层次感
+- 深浅主题策略
+- spacing 和 typography scale
+- 动效节奏
+- 中英双语切换方式
+
+设计目标不是“做一个新的后台模板”，而是“把现有官网设计语言延展到一个可交互的控制台产品”。
+
+## 5. 核心架构决策
 
 采用 `local-first` 的前后端分离方案。
 
-- 本地 `loongclaw` 进程仍然是系统真实执行入口和事实来源。
-- Web Console 作为 `web/` 下的独立前端模块存在。
-- 后端暴露本地 HTTP API 控制面。
-- 前端消费该 API。
+- 本地 `loongclaw` 进程仍然是真实执行入口和事实来源
+- `web/` 是独立前端模块
+- 后端暴露本地 HTTP API 作为控制面
+- 前端消费本地 API，渲染 chat 和 dashboard
 
-这样既能让 Web 具备独立演进能力，又能保证 CLI、Web 和未来 channel
-都走同一条 runtime 路径。
+这样可以同时满足：
 
-## 4. MVP 非目标
+- Web 独立迭代
+- 对无头设备友好
+- 将来支持托管前端
+- 不破坏现有 CLI / channel / runtime 统一语义
 
-- 不做单独的云端 agent runtime
-- 不做多用户服务器模式
-- 不默认暴露到公网
-- 不承诺远程同步产品能力
-- 不强制提供托管前端路径
-- 不要求基础安装时自动安装 Web 资源
+## 6. MVP 非目标
 
-## 5. 仓库布局
+Phase 1 不做这些能力：
 
-建议结构如下：
+- 独立云端 agent runtime
+- 多用户服务端模式
+- 默认公网暴露
+- 远程同步产品闭环
+- 托管前端优先交付
+- 基础安装默认附带 Web 资源
+
+## 7. 仓库放置与边界
+
+首批继续同仓开发：
 
 ```text
 crates/
   app/
   daemon/
 web/
-  src/
+  docs/
   public/
+  src/
   package.json
-  DESIGN.md
-  DESIGN.zh-CN.md
 scripts/
   web/
-docs/
-  references/
 ```
 
-理由：
+原因：
 
-- 在协议快速演进阶段，前后端放在同仓协作成本更低
-- 避免过早拆仓带来的联调和发布协调成本
-- 未来如果前后端发布节奏明显分离，仍然可以再拆分
+- 当前协议和 UI 都在快速演进
+- 前后端联调和大型 PR 审查在同仓更高效
+- 后续如发布节奏明显分离，再考虑拆仓
 
-## 6. 运行时架构
+## 8. 运行时职责划分
 
-### 6.1 后端
+### 8.1 后端
 
-后端职责放在 `crates/daemon` 和 `crates/app`。
-
-`crates/daemon`：
+`crates/daemon`
 
 - 启动本地 HTTP 服务
-- 暴露 Web API 路由
-- 执行 HTTP 鉴权和 origin 检查
-- 可选地挂载本地已安装的静态资源
-- 报告安装和运行状态
+- 暴露 Web API
+- 处理本地 token 鉴权和 origin 校验
+- 可选挂载已安装的本地静态资源
 
-`crates/app`：
+`crates/app`
 
 - 继续承载真正的 conversation runtime
-- 提供一个可被 Web 和 CLI 复用的 session/turn service
-- 持续负责 provider、tool、memory、ACP 和 audit 行为
+- 提供可复用的 session/turn service
+- 负责 provider、tool、memory、ACP、audit 等核心行为
 
-### 6.2 前端
+### 8.2 前端
 
-`web/` 下的前端是独立客户端。
+`web/`
 
-职责：
-
-- 渲染 chat UI
-- 渲染 dashboard UI
-- 管理本地连接状态
+- 渲染 Web Chat
+- 渲染 Web Dashboard
+- 管理主题、语言、连接状态
 - 调用后端 API
-- 处理本地 token 输入和存储
+- 管理本地 token 和实例连接信息
 
-前端不能重写 runtime 逻辑。
+前端不能复制或重写 runtime 逻辑。
 
-## 7. 会话模型
+## 9. 会话模型
 
-Web 必须映射到现有的 conversation address 模型。
+Web 应直接映射到现有 conversation address 模型。
 
-建议映射方式：
+建议：
 
 - `channel_id = web`
 - `conversation_id = <browser_session_id>`
-- `thread_id = <tab_or_subthread_id>`，后续需要时再加入
+- `thread_id = <tab_or_subthread_id>`，后续需要时再引入
 
-ingress 元数据可以包含浏览器上下文，但只能作为路由和 UX 辅助信息，
-不能承担授权语义。
+浏览器来源、tab、user agent 等信息可以进入 ingress 元数据，但不能承担授权语义。
 
-## 8. 主要界面
+## 10. 主界面范围
 
-### 8.1 Web Chat
+### 10.1 Web Chat
 
-MVP 能力：
+MVP：
 
 - 创建或恢复会话
 - 发起一轮对话
 - 读取最近历史
-- 展示回复状态
-- 展示当前 provider/runtime 简要状态
+- 显示回复状态
+- 显示 provider/runtime 简要状态
 
-后续能力：
+后续：
 
-- 更高级的 trace 面板
-- 协作式会话视图
-- 更复杂的附件工作流
+- 更完整的 trace
+- 附件与工具结果面板
+- 多线程会话视图
 
-### 8.2 Web Dashboard
+### 10.2 Web Dashboard
 
-MVP 能力：
+MVP：
 
 - runtime 摘要
-- active provider 和 provider 可用性
-- memory 状态
-- tool 可用性和状态摘要
+- provider 摘要
+- memory 摘要
+- tool 摘要
 - 配置摘要
 - doctor/runtime 警告
-- Web Console 安装模式和资源状态
+- Web 安装模式和资源状态
 
-后续能力：
+后续：
 
-- 完整管理控制面
-- 多实例视图
-- 远程设备编排
+- 设置页
+- Provider Settings 面板，可修改 active provider、model、endpoint、API key
+- 运行时管理动作
+- 远程实例和多设备视图
 
-## 9. API 形态
+### 10.3 Dashboard 配置编辑原则
 
-初始 API 面：
+Web Dashboard 后续可以支持直接管理 provider 配置，但必须遵守以下原则：
+
+- 前端只提供表单和状态反馈
+- 真正的配置读取、校验、写入、重载都走后端 API
+- 前端不能直接读写 `config.toml`
+- API key 不应明文回显，最多显示“已配置”或部分掩码
+- 配置变更应具备 `validate -> apply -> reload` 的受控流程
+- 配置失败时应允许保留旧值或回滚
+
+建议支持的编辑项：
+
+- active provider
+- model
+- base URL / endpoint
+- API key
+
+不建议在首版开放：
+
+- 任意底层 TOML 编辑
+- 未校验直接写入
+- 自动公网暴露相关配置
+
+## 11. API 形态
+
+Phase 1 API 维持本地控制面最小集合：
 
 - `GET /healthz`
 - `GET /api/meta`
@@ -170,69 +231,49 @@ MVP 能力：
 - `GET /api/dashboard/runtime`
 - `GET /api/dashboard/config`
 
-后续可选扩展：
+后续可扩展：
 
-- `GET /api/chat/sessions/:id/stream/:turn_id`，通过 SSE
-- 更细的 diagnostics 接口
-- 本地 Web 资源的安装和更新接口
+- SSE 流式回复
+- 更细的 diagnostics
+- Web 资源安装和更新接口
 
-## 10. 安装与分发模式
+## 12. 安装与分发
 
-同一套协议需要支持多种交付模式。
+需要同时兼容两种分发方式：
 
-### 10.1 基础安装
+### 12.1 本地部署
 
-- 只安装 CLI/runtime
-- 默认不安装 Web 资源
+- 默认仅安装 CLI/runtime
+- 用户在 `onboard` 或后续命令中主动安装 Web 资源
+- 本地 daemon 提供静态资源和 API，或前端独立本地运行后连接 API
 
-### 10.2 本地 Web 安装
+### 12.2 托管前端
 
-- 用户在 `onboard` 或后续命令中主动选择
-- Web 资源下载或解压到本地目录
-- 本地 daemon 提供静态资源，或者用户本地直接打开
+仅作架构预留：
 
-建议配置：
+- 前端可由官方或用户自行托管
+- 前端仍连接用户自己的本地 runtime
+- 需要更严格的 origin、token、endpoint 引导和风险说明
 
-```toml
-[web]
-enabled = true
-bind = "127.0.0.1:4317"
-install_mode = "local_assets"
-static_dir = "~/.loongclaw/web/current"
-auth_mode = "local_token"
-allowed_origins = ["http://127.0.0.1:4317"]
-```
+Phase 1 不以该模式为交付重点。
 
-### 10.3 托管前端模式
+## 13. 安全模型
 
-仅作为后续模式：
+Phase 1 默认策略：
 
-- 前端可以由 LoongClaw 或用户自行部署到远端
-- 前端仍然连接用户自己的本地 runtime
-- 需要更严格的鉴权、origin、连接引导和产品说明
-
-该模式明确不是 MVP 优先级。
-
-## 11. 安全模型
-
-MVP 默认策略：
-
-- 默认绑定回环地址
+- 默认仅绑定回环地址
 - API 访问需要显式本地 token
 - 默认拒绝宽泛 origin
 - 不自动开放公网访问
 
-后续托管模式要重点处理：
+后续托管模式重点补充：
 
 - 跨域信任模型
-- 本地 endpoint 暴露风险说明
 - token 生命周期和撤销
-- 安全的设备配对 UX
-- 明确说明 runtime 仍然运行在本地
+- endpoint 暴露风险说明
+- 设备配对与授权 UX
 
-## 12. 命令面
-
-建议命令：
+## 14. 命令面建议
 
 - `loongclaw web serve`
 - `loongclaw web status`
@@ -244,60 +285,60 @@ MVP 默认策略：
 - `CLI only`
 - `CLI + Local Web Console`
 
-安装选项应显示大致的 Web 资源体积。
+并显示大致资源体积。
 
-## 13. 实施计划
+## 15. 实施分期
 
-### Phase 1：设计与协议
+### Phase 1：协议与设计固化
 
-- 固化架构和安装模式
-- 定义 API 响应结构
-- 定义本地鉴权和 local-only 默认值
+- 固化前后端边界
+- 固化中英双语和参考站点继承策略
+- 固化本地安装模式
 
 ### Phase 2：后端复用层
 
-- 从 CLI 现有代码中抽出可复用的 chat session 初始化逻辑
-- 在 `crates/app` 中暴露一个对 Web 友好的 conversation service
+- 从 CLI 现有代码中抽可复用的 session/turn 初始化逻辑
+- 在 `crates/app` 暴露对 Web 友好的 conversation service
 
-### Phase 3：本地 HTTP 控制面
+### Phase 3：本地 API 控制面
 
-- 增加 `web serve`
-- 实现 chat 和 dashboard 核心接口
-- 实现本地 token 鉴权
+- 实现 `web serve`
+- 实现 chat 和 dashboard 最小接口
+- 接入本地 token 鉴权
 
 ### Phase 4：前端 MVP
 
-- 实现 chat 页面
-- 实现 dashboard 页面
-- 建立共享 API client 和连接状态
+- 基于参考站点结构搭建前端
+- 实现双语、主题、布局骨架
+- 完成 chat 和 dashboard 两个页面
 
 ### Phase 5：可选安装流程
 
-- 将 Web 资源构建与核心 CLI 构建分离
+- 分离 Web 构建产物
 - 增加 install/remove/status 命令
-- 接入 `onboard` 选择流程
+- 接入 `onboard`
 
-### Phase 6：托管模式预留
+### Phase 6：Dashboard 受控写入能力
+
+- 增加 provider 配置读取和编辑界面
+- 增加验证、应用、重载与失败反馈
+- 保持 key 掩码显示和安全边界
+
+### Phase 7：托管模式预留
 
 - 保持协议稳定
-- 增加 origin 和 endpoint 配置扩展点
-- 在本地模式验证成熟前，不推进托管交付
+- 增加 endpoint / origin 扩展点
+- 不在本地模式成熟前提前推进托管交付
 
-## 14. 待决问题
+## 16. 验收标准
 
-- 本地静态资源应该由 `loongclaw web serve` 直接提供，还是只负责下载资源，
-  页面由独立前端开发/生产服务承载？
-- Chat 的回复在 MVP 中是普通请求/响应即可，还是首个 PR 就要引入 SSE？
-- Dashboard 首版应该只读，还是带有限动作能力？
-- Web 资源与本地 daemon 的版本兼容关系应如何约束？
-
-## 15. 首批交付验收标准
-
-首个大型 PR 成功的标准：
+首个大型 PR 的验收标准：
 
 - Web Chat 和 Web Dashboard 都存在
-- Web 复用了现有 LoongClaw runtime 语义
-- 基础安装仍然以 CLI 为主
+- Web 前端复用了现有 LoongClaw runtime 语义
+- 基础安装仍以 CLI/runtime 为主
 - Web 资源是可选安装
-- 本地部署模式可用且不依赖托管基础设施
-- 托管模式仅保留为架构扩展点
+- 本地部署模式可用
+- 前端支持 `en` 和 `zh-CN`
+- 视觉系统和参考站点保持一致
+- 托管模式仅保留架构扩展位，不作为首批依赖

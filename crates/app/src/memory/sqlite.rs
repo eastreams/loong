@@ -25,6 +25,13 @@ pub struct ConversationTurn {
     pub ts: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationSessionSummary {
+    pub session_id: String,
+    pub turn_count: usize,
+    pub latest_turn_ts: i64,
+}
+
 #[derive(Debug, Clone, Default)]
 pub(super) struct PromptWindowTurn {
     pub role: String,
@@ -555,6 +562,41 @@ pub(super) fn window_direct_with_options(
     config: &MemoryRuntimeConfig,
 ) -> Result<Vec<ConversationTurn>, String> {
     load_window_internal(session_id, limit, allow_extended_limit, config).map(|window| window.turns)
+}
+
+pub(super) fn list_recent_sessions_direct(
+    limit: usize,
+    config: &MemoryRuntimeConfig,
+) -> Result<Vec<ConversationSessionSummary>, String> {
+    let runtime = acquire_memory_runtime(config)?;
+    let bounded_limit = limit.max(1).min(200) as i64;
+    runtime.with_connection("memory.list_recent_sessions", |conn| {
+        let mut statement = prepare_cached_sqlite_statement(
+            conn,
+            "SELECT state.session_id,
+                    state.turn_count,
+                    COALESCE(MAX(turns.ts), 0) AS latest_turn_ts
+             FROM memory_session_state state
+             LEFT JOIN turns ON turns.session_id = state.session_id
+             GROUP BY state.session_id, state.turn_count
+             ORDER BY latest_turn_ts DESC, state.session_id ASC
+             LIMIT ?1",
+            "prepare list recent sessions statement failed",
+        )?;
+
+        let rows = statement
+            .query_map(rusqlite::params![bounded_limit], |row| {
+                Ok(ConversationSessionSummary {
+                    session_id: row.get::<_, String>(0)?,
+                    turn_count: row.get::<_, i64>(1)? as usize,
+                    latest_turn_ts: row.get::<_, i64>(2)?,
+                })
+            })
+            .map_err(|error| format!("query recent sessions failed: {error}"))?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("decode recent sessions failed: {error}"))
+    })
 }
 
 pub(super) fn load_context_snapshot(

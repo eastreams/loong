@@ -1,0 +1,15 @@
+{
+  "eyebrow": "Web Chat",
+  "title": "Conversation surface",
+  "subtitle": "Reuse the existing LoongClaw runtime through a browser-first shell.",
+  "newSession": "New session",
+  "deleteSession": "Delete session",
+  "deleting": "Deleting...",
+  "inputPlaceholder": "Ask LoongClaw about runtime, tools, or workflow...",
+  "send": "Send",
+  "panels": {
+    "sessions": "Sessions",
+    "composer": "Composer",
+    "inspector": "Inspector"
+  }
+}

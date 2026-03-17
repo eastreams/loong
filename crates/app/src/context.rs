@@ -11,7 +11,7 @@ use loongclaw_kernel::{
 const MVP_PACK_ID: &str = "dev-automation";
 
 /// Default token TTL (24 hours) for long-running MVP entry points.
-pub(crate) const DEFAULT_TOKEN_TTL_S: u64 = 86400;
+pub const DEFAULT_TOKEN_TTL_S: u64 = 86400;
 
 /// Kernel execution context for policy-gated MVP operations.
 ///
@@ -41,7 +41,7 @@ impl KernelContext {
 /// Registers a default pack manifest with `InvokeTool`, `MemoryRead`, and
 /// `MemoryWrite` capabilities, then issues a long-lived token for the given
 /// `agent_id`.
-pub(crate) fn bootstrap_kernel_context(
+pub fn bootstrap_kernel_context(
     agent_id: &str,
     ttl_s: u64,
 ) -> Result<KernelContext, String> {

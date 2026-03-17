@@ -1,0 +1,25 @@
+{
+  "eyebrow": "Web Dashboard",
+  "title": "运行态总览",
+  "subtitle": "在一个页面里查看 provider、tool、memory 和 Web 安装状态。",
+  "cards": {
+    "runtime": "Runtime",
+    "providers": "Providers",
+    "tools": "Tools",
+    "memory": "Memory",
+    "install": "Web 安装"
+  },
+  "settings": {
+    "eyebrow": "Provider Settings",
+    "title": "Provider 配置",
+    "subtitle": "先在这里编辑 provider 相关配置，后续再通过本地 runtime 完成校验和应用。",
+    "activeProvider": "当前 Provider",
+    "model": "模型",
+    "endpoint": "API 地址",
+    "apiKey": "API Key",
+    "apiKeyMasked": "已配置并已掩码",
+    "validate": "校验配置",
+    "apply": "应用更改",
+    "helper": "这个面板目前只是受控写入能力的界面壳子，还不会真正改动 runtime 配置。"
+  }
+}

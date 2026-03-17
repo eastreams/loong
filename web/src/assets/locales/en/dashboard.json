@@ -1,0 +1,25 @@
+{
+  "eyebrow": "Web Dashboard",
+  "title": "Runtime visibility",
+  "subtitle": "Inspect providers, tools, memory, and installation status from one place.",
+  "cards": {
+    "runtime": "Runtime",
+    "providers": "Providers",
+    "tools": "Tools",
+    "memory": "Memory",
+    "install": "Web install"
+  },
+  "settings": {
+    "eyebrow": "Provider Settings",
+    "title": "Provider configuration",
+    "subtitle": "Stage provider changes here, then validate and apply them through the local runtime.",
+    "activeProvider": "Active provider",
+    "model": "Model",
+    "endpoint": "API endpoint",
+    "apiKey": "API key",
+    "apiKeyMasked": "Configured and masked",
+    "validate": "Validate",
+    "apply": "Apply changes",
+    "helper": "This panel is a UI shell for the future controlled write path. It does not write runtime config yet."
+  }
+}

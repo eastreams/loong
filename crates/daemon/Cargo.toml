@@ -43,13 +43,13 @@ base64.workspace = true
 rand.workspace = true
 sha2.workspace = true
 ed25519-dalek.workspace = true
+axum.workspace = true
 
 [[bin]]
 name = "loongclaw"
 path = "src/main.rs"
 
 [dev-dependencies]
-axum.workspace = true
 loongclaw-spec = { path = "../spec", features = ["test-hooks"] }
 sha2.workspace = true
 wat = "1"

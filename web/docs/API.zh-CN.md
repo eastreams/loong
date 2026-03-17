@@ -1,327 +1,391 @@
-# LoongClaw Web API 草案
+# LoongClaw Web Phase 1 API 草案
 
 状态：Phase 1 草案  
-范围：本地优先的 Web Chat + Web Dashboard  
+范围：本地优先的 Web Chat + Web Dashboard 控制面 API  
 最后更新：2026-03-17
 
-## 1. 目的
+## 1. 目标
 
-本文定义 Web 前端消费的本地 HTTP API 初稿。它明确只服务于 phase 1，
-主要优化目标是：
+Phase 1 API 只服务于本地优先的 Web 控制面：
 
-- 单一本地 runtime
-- 单一本地操作者
-- Web 资源可选安装
-- 不带托管优先假设
+- Web Chat
+- Web Dashboard
 
-## 2. 协议规则
+API 的目标是稳定承载前端，不重新定义 runtime 语义。
 
-- Base URL：`http://127.0.0.1:<port>`
-- 默认绑定：`127.0.0.1:4317`
-- 所有 `/api/*` 路由返回 JSON
-- `GET /healthz` 不鉴权
-- 其余 `/api/*` 路由都要求 `Authorization: Bearer <token>`
-- 响应体包含 `schema_version`，用于未来兼容
+## 2. 总体原则
 
-Phase 1 不要求浏览器登录流程。本地 token 由 CLI / install 流程提供，
-前端只负责使用。
+- 默认仅面向本地实例
+- 默认仅绑定回环地址
+- 默认需要本地 token
+- 响应结构尽量稳定、可扩展
+- API 字段命名优先英文
+- 用户可见文案不从 API 直接下发，由前端通过双语资源本地化
 
-## 3. 通用响应结构
+最后一条很重要：前端采用英文优先、中英双语策略，因此 API 应尽量返回稳定的英文键和值，而不是携带面向 UI 的中文文案。
 
-### 3.1 成功响应
+## 3. 认证方式
+
+Phase 1 推荐：
+
+- `Authorization: Bearer <local-token>`
+
+也可兼容：
+
+- `X-LoongClaw-Token: <local-token>`
+
+首版不引入复杂登录会话。
+
+## 4. 通用响应结构
+
+成功响应：
 
 ```json
 {
   "ok": true,
-  "schema_version": "2026-03-17.phase1",
   "data": {}
 }
 ```
 
-### 3.2 错误响应
+错误响应：
 
 ```json
 {
   "ok": false,
-  "schema_version": "2026-03-17.phase1",
   "error": {
     "code": "unauthorized",
-    "message": "missing or invalid token",
-    "retryable": false
+    "message": "Token is missing or invalid"
   }
 }
 ```
 
-建议错误码：
+建议：
 
-- `unauthorized`
-- `forbidden_origin`
-- `not_found`
-- `invalid_request`
-- `turn_failed`
-- `runtime_unavailable`
-- `web_assets_not_installed`
+- `code` 使用稳定英文标识
+- `message` 供调试和日志使用
+- 前端可基于 `code` 做双语映射
 
-## 4. 接口列表
+## 5. 基础接口
 
-### 4.1 `GET /healthz`
+### `GET /healthz`
 
 用途：
 
-- 进程存活检查
+- 健康检查
 
-响应：
+示例响应：
 
 ```json
 {
   "ok": true,
-  "schema_version": "2026-03-17.phase1",
   "data": {
     "status": "ok"
   }
 }
 ```
 
-### 4.2 `GET /api/meta`
+### `GET /api/meta`
 
 用途：
 
-- 前端启动时拉取基础信息
-- 获取 runtime 能力
-- 获取当前安装模式
+- 返回运行时和 Web 支撑信息
 
-响应：
+示例响应：
 
 ```json
 {
   "ok": true,
-  "schema_version": "2026-03-17.phase1",
   "data": {
-    "product": "loongclaw",
-    "version": "0.1.2",
-    "mode": "local",
-    "web": {
-      "install_mode": "local_assets",
-      "static_assets_present": true
-    },
-    "surfaces": {
-      "chat": true,
-      "dashboard": true
-    },
-    "auth": {
-      "mode": "local_token"
-    }
+    "appVersion": "0.1.0-alpha",
+    "apiVersion": "v1",
+    "webInstallMode": "local_assets",
+    "supportedLocales": ["en", "zh-CN"],
+    "defaultLocale": "en"
   }
 }
 ```
 
-### 4.3 `GET /api/chat/sessions`
+## 6. Chat API
+
+### `GET /api/chat/sessions`
 
 用途：
 
-- 列出最近可见的会话
+- 获取会话列表
 
-响应：
+示例响应：
 
 ```json
 {
   "ok": true,
-  "schema_version": "2026-03-17.phase1",
   "data": {
-    "sessions": [
+    "items": [
       {
-        "id": "web:browser-123",
-        "title": "Default",
-        "last_message_at": "2026-03-17T14:55:00Z",
-        "message_count": 8
+        "id": "sess_001",
+        "title": "Debug memory state",
+        "updatedAt": "2026-03-17T10:20:00Z"
       }
     ]
   }
 }
 ```
 
-### 4.4 `POST /api/chat/sessions`
+### `POST /api/chat/sessions`
 
 用途：
 
-- 创建或恢复 Web 会话
+- 创建新会话
 
-请求：
+示例请求：
 
 ```json
 {
-  "client_session_id": "browser-123",
-  "title": "Default"
+  "title": "New Chat"
 }
 ```
 
-响应：
+示例响应：
 
 ```json
 {
   "ok": true,
-  "schema_version": "2026-03-17.phase1",
   "data": {
-    "session": {
-      "id": "web:browser-123",
-      "title": "Default"
-    }
+    "id": "sess_002"
   }
 }
 ```
 
-### 4.5 `GET /api/chat/sessions/:id/history?limit=50`
+### `GET /api/chat/sessions/:id/history`
 
 用途：
 
-- 加载最近历史，用于 chat 页面初始化
+- 获取会话历史
 
-响应：
+示例响应：
 
 ```json
 {
   "ok": true,
-  "schema_version": "2026-03-17.phase1",
   "data": {
-    "session_id": "web:browser-123",
+    "sessionId": "sess_002",
     "messages": [
       {
-        "id": "turn-user-1",
+        "id": "msg_001",
         "role": "user",
-        "content": "hello"
+        "content": "Check provider status",
+        "createdAt": "2026-03-17T10:25:00Z"
       },
       {
-        "id": "turn-assistant-1",
+        "id": "msg_002",
         "role": "assistant",
-        "content": "hi"
+        "content": "Provider is available.",
+        "createdAt": "2026-03-17T10:25:03Z"
       }
     ]
   }
 }
 ```
 
-### 4.6 `POST /api/chat/sessions/:id/turn`
+### `POST /api/chat/sessions/:id/turn`
 
 用途：
 
-- 提交一轮用户输入
+- 提交一轮用户输入并返回结果
 
-请求：
+示例请求：
 
 ```json
 {
-  "message": "Summarize this repository.",
-  "client_turn_id": "ui-turn-001",
-  "stream": false
+  "input": "Summarize the current runtime health"
 }
 ```
 
-响应：
+示例响应：
 
 ```json
 {
   "ok": true,
-  "schema_version": "2026-03-17.phase1",
   "data": {
-    "session_id": "web:browser-123",
-    "turn_id": "turn-0001",
+    "turnId": "turn_001",
     "message": {
-      "id": "turn-assistant-0001",
+      "id": "msg_010",
       "role": "assistant",
-      "content": "This repository is ..."
-    },
-    "runtime": {
-      "provider": "deepseek-chat",
-      "status": "completed"
+      "content": "Runtime health is stable."
     }
   }
 }
 ```
 
-Phase 1 默认只返回最终文本，不强制首版就上流式输出。
+后续可扩展：
 
-### 4.7 `GET /api/dashboard/summary`
+- SSE 流式输出
+- tool trace
+- richer message blocks
+
+## 7. Dashboard API
+
+### `GET /api/dashboard/summary`
 
 用途：
 
-- dashboard 首页概览
+- 获取 dashboard 顶层摘要
 
-响应：
+### `GET /api/dashboard/providers`
+
+用途：
+
+- 获取 provider 状态与可用性
+
+### `GET /api/dashboard/tools`
+
+用途：
+
+- 获取 tool 状态摘要
+
+### `GET /api/dashboard/runtime`
+
+用途：
+
+- 获取 runtime 状态和告警
+
+### `GET /api/dashboard/config`
+
+用途：
+
+- 获取对 UI 有意义的配置摘要
+
+这些接口的字段命名统一使用英文；任何用户可见标题都由前端翻译资源控制。
+
+## 8. Phase 2 Provider Settings API
+
+下面这组接口不属于当前 Phase 1 必做范围，但建议在 Phase 2 作为 Dashboard 的受控配置能力引入。
+
+### `GET /api/dashboard/providers`
+
+用途：
+
+- 获取 provider 列表、当前激活项、模型、endpoint 和 key 配置状态
+
+示例响应：
 
 ```json
 {
   "ok": true,
-  "schema_version": "2026-03-17.phase1",
   "data": {
-    "runtime": {
-      "status": "ready"
-    },
-    "provider": {
-      "active": "deepseek-chat"
-    },
-    "memory": {
-      "enabled": true,
-      "backend": "sqlite"
-    },
-    "tools": {
-      "available_count": 6
-    },
-    "web": {
-      "install_mode": "local_assets",
-      "static_assets_present": true
-    }
+    "activeProvider": "openai",
+    "items": [
+      {
+        "id": "openai",
+        "label": "OpenAI",
+        "enabled": true,
+        "model": "gpt-5",
+        "endpoint": "https://api.openai.com/v1",
+        "apiKeyConfigured": true,
+        "apiKeyMasked": "****abcd"
+      }
+    ]
   }
 }
 ```
 
-### 4.8 `GET /api/dashboard/providers`
+### `PATCH /api/dashboard/providers/:id`
 
 用途：
 
-- provider 列表与 active 状态
+- 更新某个 provider 的可编辑配置
 
-### 4.9 `GET /api/dashboard/tools`
+示例请求：
+
+```json
+{
+  "enabled": true,
+  "model": "gpt-5",
+  "endpoint": "https://api.openai.com/v1",
+  "apiKey": "sk-..."
+}
+```
+
+说明：
+
+- `apiKey` 只允许写入，不应通过该接口原样回显
+- 接口应只接受受控字段，不允许任意配置透传
+
+### `POST /api/dashboard/providers/:id/validate`
 
 用途：
 
-- tool 可用性摘要，不做完整执行 trace
+- 对当前编辑值做校验或探测连接
 
-### 4.10 `GET /api/dashboard/runtime`
+示例响应：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "valid": true,
+    "warnings": []
+  }
+}
+```
+
+### `POST /api/dashboard/runtime/reload`
 
 用途：
 
-- runtime readiness 与诊断摘要
+- 在配置写入成功后请求 runtime 重载
 
-### 4.11 `GET /api/dashboard/config`
+示例响应：
 
-用途：
+```json
+{
+  "ok": true,
+  "data": {
+    "reloaded": true
+  }
+}
+```
 
-- 返回适合 UI 展示的安全配置摘要
-- 不返回密钥或敏感字段
+### Provider Settings 安全约束
 
-## 5. 流式输出后续方案
+- 前端不能直接修改 `config.toml`
+- 服务端必须负责校验、持久化和重载
+- API key 不应明文回读
+- 建议支持失败回滚或保留旧值
+- 默认仍然只允许本地受信访问
 
-如果在 phase 1.5 增加流式输出，建议接口为：
+## 9. 错误码建议
 
-- `GET /api/chat/sessions/:id/stream/:turn_id`
+建议首批统一以下英文错误码：
 
-优先使用：
+- `unauthorized`
+- `forbidden_origin`
+- `not_found`
+- `invalid_request`
+- `runtime_unavailable`
+- `provider_unavailable`
+- `tool_execution_failed`
+- `internal_error`
+- `config_validation_failed`
+- `runtime_reload_failed`
 
-- 先上 SSE
-- 只有在后续确实需要更强交互控制时，再考虑 WebSocket
+前端应基于这些 code 做中英双语提示，而不是直接展示服务端 message。
 
-## 6. 安全说明
+## 10. 兼容性约定
 
-Phase 1 假设：
+- API path 采用 `/api/...`
+- 字段名采用英文 camelCase
+- 错误码采用英文 snake_case 或 kebab-case 二选一，首版需固定一种
+- `supportedLocales` 至少包含 `en` 和 `zh-CN`
 
-- 仅绑定回环地址
-- 仅用 bearer token
-- 单操作者模型
-- 不使用浏览器 cookie 鉴权
-- 不支持公网直出
+## 11. Phase 1 边界
 
-## 7. 兼容规则
+Phase 1 不要求：
 
-- 新字段必须是增量添加
-- 现有字段在当前分支线内必须保持兼容
-- 破坏性路由调整应发生在 Web GA 之前，而不是之后
+- 复杂登录态
+- 远程设备同步
+- 多用户权限体系
+- 云端会话存储
+- 完整托管模式 API
+- Provider Settings 写入能力
+
+Phase 1 只需要把本地优先的 Web Chat 与 Web Dashboard 稳定跑通。

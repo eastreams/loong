@@ -1,0 +1,34 @@
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@100;400;500;700;800&family=Noto+Sans+SC:wght@400;500;700;900&family=Syncopate:wght@400;700&display=swap");
+
+:root {
+  --color-bg-primary: rgb(13, 17, 22);
+  --color-bg-secondary: #161b22;
+  --color-bg-tertiary: #21262d;
+  --color-bg-elevated: rgba(22, 27, 34, 0.85);
+  --color-border: rgba(139, 148, 158, 0.2);
+  --color-border-light: rgba(139, 148, 158, 0.08);
+  --color-border-medium: rgba(139, 148, 158, 0.16);
+  --color-text-primary: #c9d1d9;
+  --color-text-secondary: #8b949e;
+  --color-text-muted: #586069;
+  --color-text-accent: #ffffff;
+  --color-accent: #c9d1d9;
+  --color-accent-hover: #ffffff;
+  --color-success: #7ee787;
+  --bg-gradient: radial-gradient(circle at 50% -20%, #1c2128 0%, rgb(13, 17, 22) 80%);
+  --panel-gradient: linear-gradient(180deg, rgba(33, 38, 45, 0.92) 0%, rgba(13, 17, 22, 0.92) 100%);
+  --font-chinese: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", Consolas, "Noto Sans SC", sans-serif;
+  --font-display: "Syncopate", "Orbitron", "Noto Sans SC", sans-serif;
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2rem;
+  --space-2xl: 3rem;
+  --space-3xl: 4rem;
+  --content-max-width: 1360px;
+  --transition-fast: 150ms ease;
+  --transition-base: 200ms ease;
+  --transition-slow: 300ms ease;
+}

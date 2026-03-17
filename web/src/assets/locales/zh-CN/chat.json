@@ -1,0 +1,13 @@
+{
+  "eyebrow": "Web Chat",
+  "title": "对话界面",
+  "subtitle": "通过浏览器外壳复用现有 LoongClaw runtime。",
+  "newSession": "新建会话",
+  "inputPlaceholder": "向 LoongClaw 询问 runtime、工具或工作流问题……",
+  "send": "发送",
+  "panels": {
+    "sessions": "会话",
+    "composer": "输入区",
+    "inspector": "状态面板"
+  }
+}
