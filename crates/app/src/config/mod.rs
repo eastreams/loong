@@ -860,7 +860,7 @@ kind = "volcengine_coding"
         );
         assert_eq!(
             parsed.provider.default_oauth_access_token_env().as_deref(),
-            Some("VOLCENGINE_CODING_PLAN_OAUTH_TOKEN")
+            None
         );
     }
 

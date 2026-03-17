@@ -5709,9 +5709,11 @@ mod tests {
 
     #[test]
     fn apply_selected_api_key_env_routes_openai_oauth_env_to_oauth_binding() {
-        let mut provider = mvp::config::ProviderConfig::default();
-        provider.kind = mvp::config::ProviderKind::Openai;
-        provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
+        let mut provider = mvp::config::ProviderConfig {
+            kind: mvp::config::ProviderKind::Openai,
+            api_key_env: Some("OPENAI_API_KEY".to_owned()),
+            ..mvp::config::ProviderConfig::default()
+        };
 
         apply_selected_api_key_env(&mut provider, "OPENAI_CODEX_OAUTH_TOKEN".to_owned());
 
