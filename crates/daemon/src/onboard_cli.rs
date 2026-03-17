@@ -1719,10 +1719,11 @@ fn selected_provider_credential_env_field(
     match (matches_oauth, matches_api_key) {
         (true, false) => ProviderCredentialEnvField::OAuthAccessToken,
         (false, true) => ProviderCredentialEnvField::ApiKey,
-        _ => configured_provider_credential_env_binding(provider)
+        (true, true) => configured_provider_credential_env_binding(provider)
             .or_else(|| preferred_provider_credential_env_binding(provider))
             .map(|binding| binding.field)
             .unwrap_or(ProviderCredentialEnvField::ApiKey),
+        (false, false) => ProviderCredentialEnvField::ApiKey,
     }
 }
 
@@ -5724,6 +5725,27 @@ mod tests {
         assert_eq!(
             provider.api_key_env, None,
             "switching to the OpenAI oauth env should clear the stale api-key env binding"
+        );
+    }
+
+    #[test]
+    fn apply_selected_api_key_env_routes_unknown_openai_env_to_api_key_binding() {
+        let mut provider = mvp::config::ProviderConfig {
+            kind: mvp::config::ProviderKind::Openai,
+            oauth_access_token_env: Some("OPENAI_CODEX_OAUTH_TOKEN".to_owned()),
+            ..mvp::config::ProviderConfig::default()
+        };
+
+        apply_selected_api_key_env(&mut provider, "OPENAI_ALT_BEARER".to_owned());
+
+        assert_eq!(
+            provider.api_key_env.as_deref(),
+            Some("OPENAI_ALT_BEARER"),
+            "unknown env names should stay on the explicit api-key field instead of being silently rebound to oauth"
+        );
+        assert_eq!(
+            provider.oauth_access_token_env, None,
+            "switching to a custom env name should clear the stale oauth binding"
         );
     }
 

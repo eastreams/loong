@@ -2724,10 +2724,7 @@ fn onboard_provider_selection_screen_includes_focus_title_and_choices() {
 
     let lines = loongclaw_daemon::onboard_cli::render_provider_selection_screen_lines(&plan, 80);
 
-    assert!(
-        lines[0].starts_with("LOONGCLAW"),
-        "provider choice screen should use the compact LOONGCLAW header after the initial screen: {lines:#?}"
-    );
+    assert_compact_loongclaw_header(&lines, "provider choice screen");
     assert!(
         lines.iter().all(|line| !line.starts_with("██╗")),
         "provider choice screen should not re-render the large LOONGCLAW banner mid-onboarding: {lines:#?}"
@@ -3114,10 +3111,7 @@ fn onboard_current_setup_shortcut_screen_summarizes_existing_setup_and_choices()
     let lines =
         loongclaw_daemon::onboard_cli::render_continue_current_setup_screen_lines(&config, 80);
 
-    assert!(
-        lines[0].starts_with("LOONGCLAW"),
-        "current-setup shortcut should use the compact LOONGCLAW header after the entry screen: {lines:#?}"
-    );
+    assert_compact_loongclaw_header(&lines, "current-setup shortcut");
     assert!(
         lines.iter().any(|line| line == "continue current setup"),
         "current-setup shortcut should use a focused title: {lines:#?}"
@@ -3214,10 +3208,7 @@ fn onboard_detected_setup_shortcut_screen_summarizes_starting_point_and_choices(
         80,
     );
 
-    assert!(
-        lines[0].starts_with("LOONGCLAW"),
-        "detected-setup shortcut should use the compact LOONGCLAW header after the entry screen: {lines:#?}"
-    );
+    assert_compact_loongclaw_header(&lines, "detected-setup shortcut");
     assert!(
         lines
             .iter()
@@ -3375,10 +3366,7 @@ fn onboard_starting_point_selection_screen_uses_compact_header_and_detected_opti
         80,
     );
 
-    assert!(
-        lines[0].starts_with("LOONGCLAW"),
-        "starting-point screen should use the compact LOONGCLAW header after the entry screen: {lines:#?}"
-    );
+    assert_compact_loongclaw_header(&lines, "starting-point screen");
     assert!(
         lines
             .iter()
@@ -3545,10 +3533,7 @@ fn onboard_single_detected_setup_preview_screen_uses_compact_follow_up_layout() 
         80,
     );
 
-    assert!(
-        lines[0].starts_with("LOONGCLAW"),
-        "single detected-setup preview should use the compact LOONGCLAW header after the entry screen: {lines:#?}"
-    );
+    assert_compact_loongclaw_header(&lines, "single detected-setup preview");
     assert!(
         lines
             .iter()
@@ -4275,10 +4260,7 @@ fn onboard_personality_selection_screen_shows_native_personality_choices() {
 
     let lines = crate::onboard_cli::render_personality_selection_screen_lines(&config, 80);
 
-    assert!(
-        lines[0].starts_with("LOONGCLAW"),
-        "personality screen should keep the compact LOONGCLAW header instead of re-showing the large banner: {lines:#?}"
-    );
+    assert_compact_loongclaw_header(&lines, "personality screen");
     assert!(
         lines.iter().all(|line| !line.starts_with("██╗")),
         "personality screen should not repeat the large LOONGCLAW banner mid-onboarding: {lines:#?}"
@@ -4335,10 +4317,7 @@ fn onboard_memory_profile_screen_shows_supported_profiles() {
 
     let lines = crate::onboard_cli::render_memory_profile_selection_screen_lines(&config, 80);
 
-    assert!(
-        lines[0].starts_with("LOONGCLAW"),
-        "memory-profile screen should keep the compact LOONGCLAW header instead of re-showing the large banner: {lines:#?}"
-    );
+    assert_compact_loongclaw_header(&lines, "memory-profile screen");
     assert!(
         lines.iter().any(|line| line == "choose memory profile"),
         "memory-profile screen should use a focused title: {lines:#?}"
