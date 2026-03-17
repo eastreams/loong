@@ -262,9 +262,7 @@ fn should_fallback_responses_to_chat_completions(
     status_code: u16,
     error: &ProviderApiError,
 ) -> bool {
-    if provider.responses_fallback_provider().is_none()
-        || !matches!(status_code, 400 | 404 | 405 | 415 | 422)
-    {
+    if provider.responses_fallback_provider().is_none() {
         return false;
     }
 
@@ -276,6 +274,19 @@ fn should_fallback_responses_to_chat_completions(
         || message.contains("rate limit")
         || message.contains("insufficient quota")
     {
+        return false;
+    }
+
+    let compatibility_status = matches!(status_code, 400 | 404 | 405 | 415 | 422);
+    let gateway_rejection = matches!(status_code, 500 | 502 | 503 | 504)
+        && (message.contains("bad gateway")
+            || message.contains("gateway timeout")
+            || message.contains("upstream")
+            || message.contains("proxy")
+            || message.contains("error code: 502")
+            || message.contains("error code: 503")
+            || message.contains("error code: 504"));
+    if !compatibility_status && !gateway_rejection {
         return false;
     }
 
@@ -308,5 +319,9 @@ fn should_fallback_responses_to_chat_completions(
         || message.contains("unsupported parameter `instructions`")
         || message.contains("unsupported parameter: `instructions`");
 
-    mentions_chat_endpoint || rejects_responses_input || requires_messages || textual_messages_hint
+    gateway_rejection
+        || mentions_chat_endpoint
+        || rejects_responses_input
+        || requires_messages
+        || textual_messages_hint
 }

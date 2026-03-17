@@ -544,17 +544,21 @@ fn extract_error_string(error: &Value, field_names: &[&str]) -> Option<String> {
 }
 
 fn extract_error_message(error: &Value) -> Option<String> {
-    extract_error_string(error, &["message", "Message", "detail", "Detail"]).or_else(|| {
-        error
-            .get("details")
-            .and_then(Value::as_array)
-            .and_then(|details| {
-                details
-                    .iter()
-                    .filter_map(|detail| detail.get("message").and_then(value_to_trimmed_string))
-                    .find(|message| !message.is_empty())
-            })
-    })
+    extract_error_string(error, &["message", "Message", "detail", "Detail"])
+        .or_else(|| error.get("raw_body").and_then(value_to_trimmed_string))
+        .or_else(|| {
+            error
+                .get("details")
+                .and_then(Value::as_array)
+                .and_then(|details| {
+                    details
+                        .iter()
+                        .filter_map(|detail| {
+                            detail.get("message").and_then(value_to_trimmed_string)
+                        })
+                        .find(|message| !message.is_empty())
+                })
+        })
 }
 
 fn value_to_trimmed_string(value: &Value) -> Option<String> {
