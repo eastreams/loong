@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -12,6 +12,8 @@ use wait_timeout::ChildExt;
 
 const DEFAULT_BROWSER_COMPANION_SCOPE_ID: &str = "__global";
 const BROWSER_COMPANION_PROTOCOL: &str = "loongclaw.browser_companion.v1";
+const BROWSER_COMPANION_SPAWN_RETRY_ATTEMPTS: usize = 5;
+const BROWSER_COMPANION_SPAWN_RETRY_DELAY: Duration = Duration::from_millis(25);
 
 #[derive(Debug, Clone)]
 struct BrowserCompanionSession {
@@ -121,12 +123,15 @@ impl BrowserCompanionRunner for CommandBrowserCompanionRunner {
     ) -> Result<Value, String> {
         let encoded = serde_json::to_vec(request)
             .map_err(|error| format!("browser_companion_request_encode_failed: {error}"))?;
-        let mut child = Command::new(command)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| format!("browser_companion_spawn_failed: {error}"))?;
+        let mut child = retry_executable_file_busy(|| {
+            let mut process = Command::new(command);
+            process
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            process.spawn()
+        })
+        .map_err(|error| format!("browser_companion_spawn_failed: {error}"))?;
 
         if let Some(mut stdin) = child.stdin.take() {
             stdin
@@ -159,6 +164,30 @@ impl BrowserCompanionRunner for CommandBrowserCompanionRunner {
                 .unwrap_or_else(|| "companion reported failure".to_owned())
         ))
     }
+}
+
+fn retry_executable_file_busy<T, F>(mut operation: F) -> std::io::Result<T>
+where
+    F: FnMut() -> std::io::Result<T>,
+{
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if should_retry_spawn_error(&error)
+                    && attempt < BROWSER_COMPANION_SPAWN_RETRY_ATTEMPTS =>
+            {
+                std::thread::sleep(BROWSER_COMPANION_SPAWN_RETRY_DELAY);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn should_retry_spawn_error(error: &std::io::Error) -> bool {
+    error.kind() == ErrorKind::ExecutableFileBusy
 }
 
 fn wait_for_browser_companion_output(
@@ -473,4 +502,58 @@ fn remove_browser_companion_session(scope_id: &str, session_id: &str) -> Result<
         sessions.remove(scope_id);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn retry_executable_file_busy_retries_until_success() {
+        let attempts = AtomicUsize::new(0);
+
+        let result = super::retry_executable_file_busy(|| {
+            let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+            if attempt < 2 {
+                Err(std::io::Error::from(std::io::ErrorKind::ExecutableFileBusy))
+            } else {
+                Ok("spawned")
+            }
+        })
+        .expect("retry should recover once the executable is no longer busy");
+
+        assert_eq!(result, "spawned");
+        assert_eq!(attempts.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn retry_executable_file_busy_surfaces_non_retryable_error_immediately() {
+        let attempts = AtomicUsize::new(0);
+
+        let error = super::retry_executable_file_busy::<(), _>(|| {
+            attempts.fetch_add(1, Ordering::Relaxed);
+            Err(std::io::Error::other("boom"))
+        })
+        .expect_err("non-retryable spawn errors should surface immediately");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn retry_executable_file_busy_stops_after_retry_budget() {
+        let attempts = AtomicUsize::new(0);
+
+        let error = super::retry_executable_file_busy::<(), _>(|| {
+            attempts.fetch_add(1, Ordering::Relaxed);
+            Err(std::io::Error::from(std::io::ErrorKind::ExecutableFileBusy))
+        })
+        .expect_err("retry should stop after exhausting the executable-busy budget");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::ExecutableFileBusy);
+        assert_eq!(
+            attempts.load(Ordering::Relaxed),
+            super::BROWSER_COMPANION_SPAWN_RETRY_ATTEMPTS
+        );
+    }
 }
