@@ -1,6 +1,6 @@
 # File Read Follow-up Payload Reducer Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> Implement this plan task-by-task using the available execution workflow for this repository.
 
 **Goal:** Reduce model-facing token waste from oversized `file.read` outputs during tool-result follow-up rounds without changing raw tool output semantics.
 
@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Add failing tests for file.read follow-up reduction
+## Task 1: Add failing tests for file.read follow-up reduction
 
 **Files:**
 - Modify: `crates/app/src/conversation/turn_shared.rs`
@@ -43,7 +43,7 @@ Expected: FAIL because repeated-tool-guard currently only applies generic trunca
 
 Add a `turn_shared.rs` test proving the follow-up prompt includes the truncation hint when the rendered follow-up payload is newly marked truncated even if the original tool result was not.
 
-### Task 2: Implement the shared follow-up reducer
+## Task 2: Implement the shared follow-up reducer
 
 **Files:**
 - Modify: `crates/app/src/conversation/turn_shared.rs`
@@ -74,7 +74,7 @@ Update `build_turn_reply_followup_messages(...)` so follow-up provider messages 
 
 Update both follow-up paths in `turn_loop.rs` so `file.read` reduction happens before generic follow-up budget truncation.
 
-### Task 3: Verify and prepare GitHub delivery
+## Task 3: Verify and prepare GitHub delivery
 
 **Files:**
 - Modify: `docs/plans/2026-03-16-file-read-followup-payload-reducer-design.md`
