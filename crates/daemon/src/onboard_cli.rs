@@ -56,26 +56,10 @@ pub trait OnboardUi {
                 self.prompt_required(label)?
             };
             let trimmed = input.trim();
-            if let Ok(selected) = trimmed.parse::<usize>()
-                && (1..=options.len()).contains(&selected)
-            {
-                return Ok(selected - 1);
-            }
-            if let Some(index) = options
-                .iter()
-                .position(|option| option.slug.eq_ignore_ascii_case(trimmed))
-            {
+            if let Some(index) = parse_select_one_input(trimmed, options) {
                 return Ok(index);
             }
-            self.print_line(&format!(
-                "invalid selection. enter a number between 1 and {}, or one of: {}",
-                options.len(),
-                options
-                    .iter()
-                    .map(|option| option.slug.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))?;
+            self.print_line(&render_select_one_invalid_input_message(options))?;
         }
     }
 }
@@ -215,15 +199,10 @@ impl OnboardUi for StdioOnboardUi {
                 println!("Please select an option.");
                 continue;
             }
-            match trimmed.parse::<usize>() {
-                Ok(n) if n >= 1 && n <= options.len() => return Ok(n - 1),
-                _ => {
-                    println!(
-                        "Invalid selection. Enter a number between 1 and {}.",
-                        options.len()
-                    );
-                }
+            if let Some(index) = parse_select_one_input(trimmed, options) {
+                return Ok(index);
             }
+            println!("{}", render_select_one_invalid_input_message(options));
         }
     }
 }
@@ -244,6 +223,29 @@ fn validate_select_one_state(
         ));
     }
     Ok(default)
+}
+
+fn parse_select_one_input(trimmed: &str, options: &[SelectOption]) -> Option<usize> {
+    if let Ok(selected) = trimmed.parse::<usize>()
+        && (1..=options.len()).contains(&selected)
+    {
+        return Some(selected - 1);
+    }
+    options
+        .iter()
+        .position(|option| option.slug.eq_ignore_ascii_case(trimmed))
+}
+
+fn render_select_one_invalid_input_message(options: &[SelectOption]) -> String {
+    format!(
+        "invalid selection. enter a number between 1 and {}, or one of: {}",
+        options.len(),
+        options
+            .iter()
+            .map(|option| option.slug.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 fn resolve_select_one_eof(default: Option<usize>) -> CliResult<usize> {
@@ -3495,10 +3497,12 @@ fn render_onboard_option_lines(options: &[OnboardScreenOption], width: usize) ->
         } else {
             ""
         };
+        let prefix = render_onboard_option_prefix(&option.key);
+        let continuation = " ".repeat(prefix.chars().count());
         lines.extend(
             mvp::presentation::render_wrapped_text_line_with_continuation(
-                &render_onboard_option_prefix(&option.key),
-                "    ",
+                &prefix,
+                &continuation,
                 &format!("{}{}", option.label, suffix),
                 width,
             ),
@@ -5650,39 +5654,6 @@ mod tests {
             }
             Ok(matches!(value.as_str(), "y" | "yes"))
         }
-
-        fn select_one(
-            &mut self,
-            _label: &str,
-            options: &[SelectOption],
-            default: Option<usize>,
-        ) -> CliResult<usize> {
-            let default = validate_select_one_state(options.len(), default)?;
-            match self.inputs.pop_front() {
-                Some(value) => {
-                    let value = ensure_onboard_input_not_cancelled(value)?;
-                    let trimmed = value.trim();
-                    if trimmed.is_empty() {
-                        return default
-                            .ok_or_else(|| "no default for required selection".to_owned());
-                    }
-                    let n: usize = trimmed
-                        .parse()
-                        .map_err(|_err| format!("invalid test selection input: {trimmed}"))?;
-                    if n >= 1 && n <= options.len() {
-                        Ok(n - 1)
-                    } else {
-                        Err(format!(
-                            "test selection {n} out of range 1..={}",
-                            options.len()
-                        ))
-                    }
-                }
-                None => {
-                    default.ok_or_else(|| "missing test input for required selection".to_owned())
-                }
-            }
-        }
     }
 
     struct BrowserCompanionEnvGuard {
@@ -6717,6 +6688,34 @@ mod tests {
     }
 
     #[test]
+    fn render_onboard_option_lines_align_wrapped_labels_with_option_prefix() {
+        let lines = render_onboard_option_lines(
+            &[OnboardScreenOption {
+                key: "friendly_collab".to_owned(),
+                label: "friendly collab keeps longer wrapped labels aligned".to_owned(),
+                detail_lines: Vec::new(),
+                recommended: false,
+            }],
+            28,
+        );
+        let continuation = lines
+            .iter()
+            .find(|line| line.starts_with(' ') && !line.trim().is_empty())
+            .expect("wrapped option labels should emit a continuation line");
+
+        assert!(
+            continuation.starts_with(
+                &" ".repeat(
+                    render_onboard_option_prefix("friendly_collab")
+                        .chars()
+                        .count()
+                )
+            ),
+            "wrapped option labels should continue under the label text instead of snapping back to a fixed indent: {lines:#?}"
+        );
+    }
+
+    #[test]
     fn onboard_ui_select_one_default_impl_accepts_slug_input() {
         struct FallbackSelectUi {
             input: Option<String>,
@@ -6761,6 +6760,31 @@ mod tests {
         let index = ui
             .select_one("Personality", &options, Some(0))
             .expect("default trait implementation should accept slug input");
+
+        assert_eq!(index, 1);
+    }
+
+    #[test]
+    fn test_onboard_ui_select_one_accepts_slug_input() {
+        let mut ui = TestOnboardUi::with_inputs(["friendly_collab"]);
+        let options = vec![
+            SelectOption {
+                label: "calm engineering".to_owned(),
+                slug: "calm_engineering".to_owned(),
+                description: String::new(),
+                recommended: true,
+            },
+            SelectOption {
+                label: "friendly collab".to_owned(),
+                slug: "friendly_collab".to_owned(),
+                description: String::new(),
+                recommended: false,
+            },
+        ];
+
+        let index = ui
+            .select_one("Personality", &options, Some(0))
+            .expect("test ui should stay aligned with shared slug-selection behavior");
 
         assert_eq!(index, 1);
     }
