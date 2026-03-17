@@ -24,7 +24,7 @@ pub const DEFAULT_AGENT_ID: &str = "agent-dev-01";
 pub type NativeToolExecutor = fn(ToolCoreRequest) -> Option<Result<ToolCoreOutcome, String>>;
 
 pub fn tool_name_requires_native_tool_executor(tool_name: &str) -> bool {
-    matches!(tool_name, "claw.import" | "claw_import" | "import_claw")
+    matches!(tool_name, "claw.migrate" | "claw_migrate")
 }
 
 pub fn spec_requires_native_tool_executor(spec: &RunnerSpec) -> bool {

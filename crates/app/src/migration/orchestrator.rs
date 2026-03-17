@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::ErrorKind,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -453,16 +454,8 @@ fn build_external_skills_apply_manifest(
     }
 }
 
-pub fn rollback_last_import(output_path: &Path) -> CliResult<PathBuf> {
-    let manifest_path = manifest_path_for_output(output_path, &migration_state_dir(output_path));
-    let manifest_body = fs::read(&manifest_path).map_err(|error| {
-        format!(
-            "failed to read migration manifest {}: {error}",
-            manifest_path.display()
-        )
-    })?;
-    let manifest: ImportApplyManifest = serde_json::from_slice(&manifest_body)
-        .map_err(|error| format!("failed to parse migration manifest: {error}"))?;
+pub fn rollback_last_migration(output_path: &Path) -> CliResult<PathBuf> {
+    let manifest = load_last_migration_manifest(output_path)?;
     let backup_path = PathBuf::from(&manifest.backup_path);
     if manifest.output_preexisted {
         fs::copy(&backup_path, output_path).map_err(|error| {
@@ -481,6 +474,47 @@ pub fn rollback_last_import(output_path: &Path) -> CliResult<PathBuf> {
         })?;
     }
     Ok(output_path.to_path_buf())
+}
+
+fn load_last_migration_manifest(output_path: &Path) -> CliResult<ImportApplyManifest> {
+    let state_dir = migration_state_dir(output_path);
+    let manifest_path = manifest_path_for_output(output_path, &state_dir);
+    match fs::read(&manifest_path) {
+        Ok(manifest_body) => parse_import_apply_manifest(&manifest_path, &manifest_body),
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            let legacy_manifest_path = legacy_manifest_path_for_output(output_path, &state_dir);
+            match fs::read(&legacy_manifest_path) {
+                Ok(manifest_body) => {
+                    parse_import_apply_manifest(&legacy_manifest_path, &manifest_body)
+                }
+                Err(legacy_error) if legacy_error.kind() == ErrorKind::NotFound => Err(format!(
+                    "failed to read migration manifest {} or legacy import manifest {}: {error}",
+                    manifest_path.display(),
+                    legacy_manifest_path.display()
+                )),
+                Err(legacy_error) => Err(format!(
+                    "failed to read legacy import manifest {}: {legacy_error}",
+                    legacy_manifest_path.display()
+                )),
+            }
+        }
+        Err(error) => Err(format!(
+            "failed to read migration manifest {}: {error}",
+            manifest_path.display()
+        )),
+    }
+}
+
+fn parse_import_apply_manifest(
+    path: &Path,
+    manifest_body: &[u8],
+) -> CliResult<ImportApplyManifest> {
+    serde_json::from_slice(manifest_body).map_err(|error| {
+        format!(
+            "failed to parse migration manifest {}: {error}",
+            path.display()
+        )
+    })
 }
 
 fn collect_candidate_directories(
@@ -705,6 +739,14 @@ fn migration_state_dir(output_path: &Path) -> PathBuf {
 }
 
 fn manifest_path_for_output(output_path: &Path, state_dir: &Path) -> PathBuf {
+    let file_tag = output_path
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| "loongclaw-config".to_owned());
+    state_dir.join(format!("{file_tag}.last-migration.json"))
+}
+
+fn legacy_manifest_path_for_output(output_path: &Path, state_dir: &Path) -> PathBuf {
     let file_tag = output_path
         .file_name()
         .map(|value| value.to_string_lossy().to_string())
@@ -1164,7 +1206,7 @@ mod tests {
     }
 
     #[test]
-    fn rollback_last_import_restores_previous_config() {
+    fn rollback_last_migration_restores_previous_config() {
         let root = unique_temp_dir("loongclaw-import-rollback");
         fs::create_dir_all(&root).expect("create fixture root");
 
@@ -1199,7 +1241,58 @@ mod tests {
         })
         .expect("apply should succeed");
 
-        rollback_last_import(&output_path).expect("rollback should succeed");
+        rollback_last_migration(&output_path).expect("rollback should succeed");
+        assert_eq!(
+            fs::read_to_string(&output_path).expect("read restored config"),
+            original_body
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn rollback_last_migration_falls_back_to_legacy_manifest_name() {
+        let root = unique_temp_dir("loongclaw-import-rollback-legacy-manifest");
+        fs::create_dir_all(&root).expect("create fixture root");
+
+        let openclaw_root = root.join("openclaw-workspace");
+        fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+        write_file(
+            &openclaw_root,
+            "SOUL.md",
+            "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+        );
+        write_file(
+            &openclaw_root,
+            "IDENTITY.md",
+            "# Identity\n\n- role: release copilot\n- tone: steady\n",
+        );
+
+        let discovery = discover_import_sources(&root, DiscoveryOptions::default())
+            .expect("discovery should succeed");
+        let output_path = root.join("loongclaw.toml");
+        let original_body =
+            crate::config::render(&crate::config::LoongClawConfig::default()).expect("render");
+        fs::write(&output_path, &original_body).expect("write original config");
+
+        let result = apply_import_selection(&ApplyImportSelection {
+            discovery,
+            output_path: output_path.clone(),
+            mode: ImportSelectionMode::RecommendedSingleSource {
+                source_id: "openclaw".to_owned(),
+            },
+            apply_external_skills_plan: false,
+            external_skills_input_path: None,
+        })
+        .expect("apply should succeed");
+
+        let legacy_manifest_path =
+            migration_state_dir(&output_path).join("loongclaw.toml.last-import.json");
+        fs::rename(&result.manifest_path, &legacy_manifest_path)
+            .expect("rename manifest to legacy name");
+
+        rollback_last_migration(&output_path)
+            .expect("rollback should succeed from legacy manifest");
         assert_eq!(
             fs::read_to_string(&output_path).expect("read restored config"),
             original_body

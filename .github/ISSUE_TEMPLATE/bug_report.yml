@@ -1,5 +1,6 @@
 name: Bug Report
-description: Report a reproducible bug.
+description: Report a reproducible defect in LoongClaw's active alpha-test runtime.
+title: "[Bug]: "
 labels:
   - bug
   - triage
@@ -7,46 +8,155 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting. Please provide a minimal reproducible case.
+        Thanks for filing a bug report.
+        Please keep the report evidence-based, redact secrets, and provide the shortest reproducible path you can.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which surface looks most affected?
+      options:
+        - Kernel / policy / approvals
+        - Contracts
+        - Protocol
+        - Spec / architecture boundaries
+        - Daemon / CLI / install
+        - Providers / routing
+        - Tools
+        - Browser automation
+        - Channels / integrations
+        - ACP control plane
+        - Conversation / session runtime
+        - Memory / context assembly
+        - Config
+        - Migration / onboarding
+        - Docs / contributor workflow
+        - CI / release / workflows
+        - Unknown / needs triage
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: What is the practical impact?
+      options:
+        - S0 - security risk / data loss
+        - S1 - workflow blocked
+        - S2 - degraded behavior
+        - S3 - minor issue
+    validations:
+      required: true
+
+  - type: dropdown
+    id: regression
+    attributes:
+      label: Regression?
+      options:
+        - Unknown
+        - Yes, this worked before
+        - No, this is a first-time setup or newly exercised path
+    validations:
+      required: true
+
   - type: textarea
     id: summary
     attributes:
       label: Summary
       description: What happened?
-      placeholder: Clear description of the bug.
+      placeholder: After updating provider profiles, LoongClaw selects the wrong active provider for a channel turn.
     validations:
       required: true
+
   - type: textarea
     id: expected
     attributes:
       label: Expected behavior
-      placeholder: What did you expect instead?
+      description: What should have happened instead?
+      placeholder: The runtime should preserve the explicitly selected provider profile and route the request through it.
     validations:
       required: true
+
   - type: textarea
     id: repro
     attributes:
       label: Reproduction steps
+      description: Provide exact commands, config edits, or request flow.
       placeholder: |
-        1. ...
-        2. ...
-        3. ...
+        1. Configure provider profile A and provider profile B.
+        2. Set profile B as the active profile.
+        3. Run `loongclaw ask --message "ping"`.
+        4. Observe the request executes through profile A.
+      render: bash
     validations:
       required: true
+
   - type: input
     id: version
     attributes:
       label: Version / commit
-      placeholder: e.g. main@<sha> or release tag
+      description: Release tag or exact branch/commit tested.
+      placeholder: alpha-test@ec9ee5f or v0.3.2
     validations:
       required: true
-  - type: dropdown
-    id: track
+
+  - type: input
+    id: os
     attributes:
-      label: Contribution track impact
-      description: Which track is most likely affected?
-      options:
-        - Track A (routine/low-risk)
-        - Track B (higher-risk/policy-impacting)
+      label: Operating system
+      placeholder: macOS 15.4 / Ubuntu 24.04 / Windows 11
     validations:
       required: true
+
+  - type: input
+    id: runtime_context
+    attributes:
+      label: Runtime context
+      description: Optional but recommended. Include the relevant provider / model / tool / channel / browser / ACP context. Redact secrets.
+      placeholder: provider=openrouter, model=claude-sonnet, channel=telegram, tool=browser.open, acp=disabled
+
+  - type: textarea
+    id: config_context
+    attributes:
+      label: Config / environment context
+      description: Relevant config keys, env overrides, and feature flags. Redact secrets and private endpoints.
+      placeholder: |
+        [provider]
+        active_profile = "work"
+
+        [tools.browser]
+        enabled = true
+
+        Env overrides:
+        LOONGCLAW_CONTEXT_ENGINE=legacy
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots / evidence
+      description: Paste the shortest logs or screenshots that prove the defect. Redact tokens, credentials, and private data.
+      render: text
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Who is affected, how often this happens, and what practical damage it causes.
+      placeholder: |
+        Affected users: contributors testing multi-provider configs
+        Frequency: always
+        Consequence: wrong provider routing and misleading operator output
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I reproduced this on the latest `alpha-test` branch tip or the latest published release.
+          required: true
+        - label: I redacted secrets, tokens, and private endpoints from everything I attached.
+          required: true
+        - label: I searched existing issues and did not find the same report already tracked.
+          required: true

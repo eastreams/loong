@@ -4410,7 +4410,7 @@ async fn execute_spec_default_medium_policy_allows_low_risk_tool_call_without_ap
 }
 
 #[tokio::test]
-async fn execute_spec_tool_core_can_run_claw_import_plan_via_native_tool_runtime() {
+async fn execute_spec_tool_core_can_run_claw_migrate_plan_via_native_tool_runtime() {
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -4433,7 +4433,7 @@ async fn execute_spec_tool_core_can_run_claw_import_plan_via_native_tool_runtime
         fs::write(path, content).expect("write fixture");
     }
 
-    let root = unique_temp_dir("loongclaw-spec-tool-core-import");
+    let root = unique_temp_dir("loongclaw-spec-tool-core-migrate");
     fs::create_dir_all(&root).expect("create fixture root");
     write_file(
         &root,
@@ -4448,7 +4448,7 @@ async fn execute_spec_tool_core_can_run_claw_import_plan_via_native_tool_runtime
 
     let spec = RunnerSpec {
         pack: VerticalPackManifest {
-            pack_id: "spec-tool-core-claw-import".to_owned(),
+            pack_id: "spec-tool-core-claw-migrate".to_owned(),
             domain: "ops".to_owned(),
             version: "0.1.0".to_owned(),
             default_route: ExecutionRoute {
@@ -4459,7 +4459,7 @@ async fn execute_spec_tool_core_can_run_claw_import_plan_via_native_tool_runtime
             granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
             metadata: BTreeMap::new(),
         },
-        agent_id: "agent-tool-core-claw-import".to_owned(),
+        agent_id: "agent-tool-core-claw-migrate".to_owned(),
         ttl_s: 120,
         approval: None,
         defaults: None,
@@ -4470,7 +4470,7 @@ async fn execute_spec_tool_core_can_run_claw_import_plan_via_native_tool_runtime
         auto_provision: None,
         hotfixes: Vec::new(),
         operation: OperationSpec::ToolCore {
-            tool_name: "claw.import".to_owned(),
+            tool_name: "claw.migrate".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
             payload: json!({
                 "mode": "plan",
@@ -4501,7 +4501,7 @@ async fn execute_spec_tool_core_can_run_claw_import_plan_via_native_tool_runtime
 }
 
 #[tokio::test]
-async fn execute_spec_tool_extension_can_hot_handle_claw_import_via_core_wrapper() {
+async fn execute_spec_tool_extension_can_hot_handle_claw_migrate_via_core_wrapper() {
     use std::{
         fs,
         path::{Path, PathBuf},

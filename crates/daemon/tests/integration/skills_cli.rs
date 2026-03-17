@@ -30,16 +30,25 @@ fn write_file(root: &Path, relative: &str, content: &str) {
     fs::write(path, content).expect("write fixture");
 }
 
-fn write_external_skills_config(root: &Path, enabled: bool) -> PathBuf {
+fn write_external_skills_config_with_cli(root: &Path, enabled: bool, cli_enabled: bool) -> PathBuf {
     fs::create_dir_all(root).expect("create fixture root");
     let config_path = root.join("loongclaw.toml");
     let mut config = mvp::config::LoongClawConfig::default();
+    config.cli.enabled = cli_enabled;
     config.tools.file_root = Some(root.display().to_string());
     config.external_skills.enabled = enabled;
     config.external_skills.install_root = Some(root.join("managed-skills").display().to_string());
     mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
         .expect("write config fixture");
     config_path
+}
+
+fn write_external_skills_config(root: &Path, enabled: bool) -> PathBuf {
+    write_external_skills_config_with_cli(root, enabled, true)
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 struct SkillsCliEnvironmentGuard {
@@ -330,6 +339,14 @@ fn execute_skills_command_enable_browser_preview_persists_runtime_and_installs_h
         enable.outcome.payload["display_name"],
         "Browser Companion Preview"
     );
+    assert!(
+        enable.outcome.payload["next_steps"].is_array(),
+        "enable browser preview should surface follow-up steps in the payload"
+    );
+    assert!(
+        enable.outcome.payload["recipes"].is_array(),
+        "enable browser preview should surface ready-to-run recipe commands in the payload"
+    );
 
     let reloaded = mvp::config::load(Some(config_path.to_string_lossy().as_ref()))
         .expect("reload config")
@@ -366,6 +383,110 @@ fn execute_skills_command_enable_browser_preview_persists_runtime_and_installs_h
             .iter()
             .any(|skill| skill["skill_id"] == "browser-companion-preview"),
         "browser preview helper skill should be installed into the managed skills runtime"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn execute_skills_command_enable_browser_preview_quotes_follow_up_config_path() {
+    let root = unique_temp_dir("loongclaw's-skills-cli-browser-preview");
+    let _env = SkillsCliEnvironmentGuard::set(&[]);
+    let config_path = write_external_skills_config(&root, false);
+
+    let enable = loongclaw_daemon::skills_cli::execute_skills_command(
+        loongclaw_daemon::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::EnableBrowserPreview {
+                replace: false,
+            },
+        },
+    )
+    .expect("enable browser preview should succeed");
+
+    let next_steps = enable.outcome.payload["next_steps"]
+        .as_array()
+        .expect("enable browser preview should return next_steps");
+    let expected = format!(
+        "Run diagnostics: loongclaw doctor --config {}",
+        shell_quote(&config_path.display().to_string())
+    );
+    assert!(
+        next_steps
+            .iter()
+            .any(|step| step.as_str() == Some(expected.as_str())),
+        "follow-up steps should shell-quote config paths: {next_steps:#?}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn execute_skills_command_enable_browser_preview_hides_recipes_when_cli_is_disabled() {
+    let root = unique_temp_dir("loongclaw-skills-cli-browser-preview-cli-disabled");
+    let _env = SkillsCliEnvironmentGuard::set(&[("PATH", Some(""))]);
+    let config_path = write_external_skills_config_with_cli(&root, false, false);
+
+    let enable = loongclaw_daemon::skills_cli::execute_skills_command(
+        loongclaw_daemon::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::EnableBrowserPreview {
+                replace: false,
+            },
+        },
+    )
+    .expect("enable browser preview should succeed even when cli is disabled");
+
+    assert_eq!(enable.outcome.payload["cli_enabled"], false);
+    let next_steps = enable.outcome.payload["next_steps"]
+        .as_array()
+        .expect("enable browser preview should return next_steps");
+    let expected_doctor_step = format!(
+        "Run diagnostics: loongclaw doctor --config {}",
+        shell_quote(&config_path.display().to_string())
+    );
+    assert!(
+        next_steps.iter().any(|step| {
+            step.as_str()
+                == Some(
+                    "Install browser preview runtime: npm install -g agent-browser && agent-browser install",
+                )
+        }),
+        "cli-disabled configs should still surface the runtime install step: {next_steps:#?}"
+    );
+    assert!(
+        next_steps.iter().any(|step| {
+            step.as_str() == Some("Verify browser preview runtime: agent-browser open example.com")
+        }),
+        "cli-disabled configs should still surface the runtime verification step: {next_steps:#?}"
+    );
+    assert!(
+        next_steps
+            .iter()
+            .any(|step| step.as_str() == Some(expected_doctor_step.as_str())),
+        "cli-disabled configs should keep the doctor follow-up step: {next_steps:#?}"
+    );
+    assert!(
+        next_steps.iter().any(|step| {
+            step.as_str() == Some("Re-enable `cli.enabled` before running the preview recipes.")
+        }),
+        "cli-disabled configs should explicitly explain why preview recipes are withheld: {next_steps:#?}"
+    );
+    assert!(
+        !next_steps.iter().any(|step| {
+            step.as_str()
+                .is_some_and(|step| step.contains("Try browser companion preview: loongclaw ask"))
+        }),
+        "cli-disabled configs should not advertise ask-based preview follow-up: {next_steps:#?}"
+    );
+    let recipes = enable.outcome.payload["recipes"]
+        .as_array()
+        .expect("enable browser preview should return recipes");
+    assert!(
+        recipes.is_empty(),
+        "cli-disabled configs should not expose ready-to-run ask recipes: {recipes:#?}"
     );
 
     fs::remove_dir_all(&root).ok();
@@ -1257,6 +1378,99 @@ fn render_skills_cli_text_surfaces_operator_install_summary() {
     assert!(rendered.contains("installed skill_id=demo-skill"));
     assert!(rendered.contains("display_name=Demo Skill"));
     assert!(rendered.contains("replaced=true"));
+}
+
+#[test]
+fn render_skills_cli_text_surfaces_browser_preview_guidance() {
+    let config_path = "/tmp/loongclaw's config.toml";
+    let rendered = loongclaw_daemon::skills_cli::render_skills_cli_text(
+        &loongclaw_daemon::skills_cli::SkillsCommandExecution {
+            resolved_config_path: config_path.to_owned(),
+            outcome: kernel::ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: serde_json::json!({
+                    "tool_name": "skills.enable-browser-preview",
+                    "skill_id": "browser-companion-preview",
+                    "display_name": "Browser Companion Preview",
+                    "source_path": "bundled://browser-companion-preview",
+                    "install_path": "/tmp/managed/browser-companion-preview",
+                    "replaced": false,
+                    "config_updated": true,
+                    "runtime_binary_available": false,
+                    "next_steps": [
+                        "Install browser preview runtime: npm install -g agent-browser && agent-browser install",
+                        "Verify browser preview runtime: agent-browser open example.com",
+                        "Run diagnostics: loongclaw doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"
+                    ],
+                    "recipes": [
+                        {
+                            "label": "summarize a page",
+                            "command": "loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'Use the browser companion preview to open https://example.com, snapshot the page, and summarize what is visible.'"
+                        },
+                        {
+                            "label": "extract page text",
+                            "command": "loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'Use the browser companion preview to open https://example.com, extract the main page text, and return the key points.'"
+                        }
+                    ]
+                }),
+            },
+        },
+    )
+    .expect("browser preview payload should render");
+
+    assert!(rendered.contains("config=/tmp/loongclaw's config.toml"));
+    assert!(rendered.contains("runtime_binary_available=false"));
+    assert!(rendered.contains("next steps:"));
+    assert!(rendered.contains(
+        "Install browser preview runtime: npm install -g agent-browser && agent-browser install"
+    ));
+    assert!(rendered.contains(
+        "Run diagnostics: loongclaw doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"
+    ));
+    assert!(rendered.contains("recipes:"));
+    assert!(rendered.contains("- summarize a page: loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'Use the browser companion preview to open https://example.com, snapshot the page, and summarize what is visible.'"));
+}
+
+#[test]
+fn render_skills_cli_text_hides_browser_preview_recipes_when_cli_is_disabled() {
+    let rendered = loongclaw_daemon::skills_cli::render_skills_cli_text(
+        &loongclaw_daemon::skills_cli::SkillsCommandExecution {
+            resolved_config_path: "/tmp/loongclaw.toml".to_owned(),
+            outcome: kernel::ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: serde_json::json!({
+                    "tool_name": "skills.enable-browser-preview",
+                    "skill_id": "browser-companion-preview",
+                    "display_name": "Browser Companion Preview",
+                    "source_path": "bundled://browser-companion-preview",
+                    "install_path": "/tmp/managed/browser-companion-preview",
+                    "replaced": false,
+                    "config_updated": true,
+                    "runtime_binary_available": false,
+                    "cli_enabled": false,
+                    "next_steps": [
+                        "Install browser preview runtime: npm install -g agent-browser && agent-browser install",
+                        "Verify browser preview runtime: agent-browser open example.com",
+                        "Run diagnostics: loongclaw doctor --config '/tmp/loongclaw.toml'",
+                        "Re-enable `cli.enabled` before running the preview recipes."
+                    ],
+                    "recipes": []
+                }),
+            },
+        },
+    )
+    .expect("browser preview payload should render");
+
+    assert!(rendered.contains("next steps:"));
+    assert!(rendered.contains("Re-enable `cli.enabled` before running the preview recipes."));
+    assert!(
+        !rendered.contains("recipes:"),
+        "cli-disabled payloads should not render an empty recipes section: {rendered}"
+    );
+    assert!(
+        !rendered.contains("Try browser companion preview:"),
+        "cli-disabled payloads should not advertise ask-based preview follow-up: {rendered}"
+    );
 }
 
 #[test]

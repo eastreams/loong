@@ -31,10 +31,10 @@ The app-layer importer:
 
 ### Daemon Layer
 
-Added `crates/daemon/src/import_claw_cli.rs` and wired a new subcommand:
+Added `crates/daemon/src/migrate_cli.rs` and wired a new subcommand:
 
 ```text
-loongclawd import-claw --input <path> [--output <config>] [--source <auto|nanobot|openclaw|picoclaw|zeroclaw|nanoclaw>] [--force]
+loongclawd migrate --input <path> [--output <config>] [--source <auto|nanobot|openclaw|picoclaw|zeroclaw|nanoclaw>] [--force]
 ```
 
 Behavior:
@@ -49,10 +49,10 @@ Behavior:
 
 ### Agent Tool Layer
 
-Added an app-native tool in `crates/app/src/tools/claw_import.rs` and registered:
+Added an app-native tool in `crates/app/src/tools/claw_migrate.rs` and registered:
 
-- canonical tool name: `claw.import`
-- provider function alias: `claw_import`
+- canonical tool name: `claw.migrate`
+- provider function alias: `claw_migrate`
 
 Behavior:
 
@@ -67,7 +67,7 @@ Behavior:
 Extended spec runtime so hot-routed agents can access the same capability without
 duplicating migration logic:
 
-- `CoreToolRuntime` delegates `claw.import` requests into the app-native tool
+- `CoreToolRuntime` delegates `claw.migrate` requests into the app-native tool
 - added tool extension wrapper `claw-migration`
 - registered hot example spec: `examples/spec/claw-import-hotplug.json`
 
@@ -125,14 +125,14 @@ is identity/tuning re-entry, not full operational parity.
 - stock NanoBot templates nativeize to LoongClaw defaults
 - custom prompt + identity content survive as addendum/profile note
 - ZeroClaw AIEOS identity becomes LoongClaw-flavored profile note
-- `claw.import` plan mode returns a structured nativeized preview
-- `claw.import` apply mode writes a target config
+- `claw.migrate` plan mode returns a structured nativeized preview
+- `claw.migrate` apply mode writes a target config
 
 ### Daemon Tests
 
 - source parser accepts supported source IDs
-- `run_import_claw_cli(...)` writes a nativeized LoongClaw config
-- spec tool-core path can execute `claw.import`
+- `run_migrate_cli(...)` writes a nativeized LoongClaw config
+- spec tool-core path can execute `claw.migrate`
 - spec tool-extension path can hot-handle `claw-migration`
 
 ## Recommended Next Steps

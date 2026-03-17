@@ -1148,8 +1148,6 @@ fn build_doctor_next_steps_with_path_env(
     let config_path_display = config_path.display().to_string();
     let rerun_command =
         crate::cli_handoff::format_subcommand_with_config("doctor", &config_path_display);
-    let browser_preview =
-        crate::browser_preview::inspect_browser_preview_state_with_path_env(config, path_env);
 
     if !fix_requested
         && checks.iter().any(|check| {
@@ -1250,6 +1248,7 @@ fn build_doctor_next_steps_with_path_env(
     }
 
     if doctor_ready_for_first_turn(checks) {
+        let mut browser_preview_needs_runtime_verify = false;
         for action in select_doctor_first_turn_actions(
             crate::next_actions::collect_setup_next_actions_with_path_env(
                 config,
@@ -1270,7 +1269,7 @@ fn build_doctor_next_steps_with_path_env(
                             "Unblock browser preview"
                         }
                         Some(crate::next_actions::BrowserPreviewActionPhase::InstallRuntime) => {
-                            "Verify `agent-browser` is available"
+                            "Install browser preview runtime"
                         }
                         Some(crate::next_actions::BrowserPreviewActionPhase::Ready) | None => {
                             "Try browser companion preview"
@@ -1279,13 +1278,18 @@ fn build_doctor_next_steps_with_path_env(
                 }
                 crate::next_actions::SetupNextActionKind::Doctor => "Run diagnostics",
             };
+            if action.kind == crate::next_actions::SetupNextActionKind::BrowserPreview
+                && action.browser_preview_phase
+                    == Some(crate::next_actions::BrowserPreviewActionPhase::InstallRuntime)
+            {
+                browser_preview_needs_runtime_verify = true;
+            }
             push_unique_step(&mut steps, format!("{prefix}: {}", action.command));
         }
-        if !browser_preview.runtime_available {
+        if browser_preview_needs_runtime_verify {
             push_unique_step(
                 &mut steps,
-                "Install `agent-browser` and verify the CLI is available on PATH: agent-browser --help"
-                    .to_owned(),
+                crate::browser_preview::browser_preview_verify_step(),
             );
         }
     }
@@ -1328,6 +1332,7 @@ fn select_doctor_first_turn_actions(
                 Some(crate::next_actions::BrowserPreviewActionPhase::Ready)
                     | Some(crate::next_actions::BrowserPreviewActionPhase::Unblock)
                     | Some(crate::next_actions::BrowserPreviewActionPhase::Enable)
+                    | Some(crate::next_actions::BrowserPreviewActionPhase::InstallRuntime)
             )
     });
 
@@ -1395,7 +1400,6 @@ mod tests {
         ChannelStatusSnapshot,
     };
 
-    #[cfg(unix)]
     fn browser_companion_temp_dir(label: &str) -> PathBuf {
         static NEXT_TEMP_DIR_SEED: AtomicU64 = AtomicU64::new(1);
         let seed = NEXT_TEMP_DIR_SEED.fetch_add(1, Ordering::Relaxed);
@@ -2173,11 +2177,12 @@ mod tests {
                 detail: "/tmp/loongclaw-memory is missing".to_owned(),
             },
         ];
-        let next_steps = build_doctor_next_steps(
+        let next_steps = build_doctor_next_steps_with_path_env(
             &checks,
             Path::new("/tmp/loongclaw.toml"),
             &mvp::config::LoongClawConfig::default(),
             false,
+            Some(std::ffi::OsStr::new("")),
         );
 
         assert_eq!(
@@ -2232,11 +2237,12 @@ mod tests {
             level: DoctorCheckLevel::Warn,
             detail: "command `loongclaw-browser-companion` was not found on PATH".to_owned(),
         }];
-        let next_steps = build_doctor_next_steps(
+        let next_steps = build_doctor_next_steps_with_path_env(
             &checks,
             Path::new("/tmp/loongclaw.toml"),
             &mvp::config::LoongClawConfig::default(),
             false,
+            Some(std::ffi::OsStr::new("")),
         );
 
         assert!(
@@ -2375,11 +2381,12 @@ mod tests {
                 detail: "responses api".to_owned(),
             },
         ];
-        let next_steps = build_doctor_next_steps(
+        let next_steps = build_doctor_next_steps_with_path_env(
             &checks,
             Path::new("/tmp/loongclaw.toml"),
             &mvp::config::LoongClawConfig::default(),
             false,
+            Some(std::ffi::OsStr::new("")),
         );
 
         assert!(
@@ -2400,16 +2407,44 @@ mod tests {
             }),
             "green doctor runs should surface the optional browser preview with a single concrete command: {next_steps:#?}"
         );
+        assert!(
+            !next_steps.iter().any(|step| {
+                step == "Install browser preview runtime: npm install -g agent-browser && agent-browser install"
+            }),
+            "green doctor runs should not push runtime install steps before preview has been enabled: {next_steps:#?}"
+        );
+        assert!(
+            !next_steps.iter().any(
+                |step| step == "Verify browser preview runtime: agent-browser open example.com"
+            ),
+            "green doctor runs should not ask for runtime verification before preview has been enabled: {next_steps:#?}"
+        );
     }
 
     #[test]
     fn build_doctor_next_steps_guides_browser_companion_preview_setup() {
+        let root = browser_companion_temp_dir("preview-runtime-missing");
+        let install_root = root.join("managed-skills");
+        std::fs::create_dir_all(install_root.join("browser-companion-preview"))
+            .expect("create managed skill directory");
+        std::fs::write(
+            install_root
+                .join("browser-companion-preview")
+                .join("SKILL.md"),
+            "# Browser Companion Preview\n\nUse agent-browser through shell.exec.\n",
+        )
+        .expect("write managed preview skill");
         let checks = vec![DoctorCheck {
             name: "provider credentials".to_owned(),
             level: DoctorCheckLevel::Pass,
             detail: "provider credentials are available".to_owned(),
         }];
-        let config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.tools.file_root = Some(root.display().to_string());
+        config.tools.shell_allow.push("agent-browser".to_owned());
+        config.external_skills.enabled = true;
+        config.external_skills.auto_expose_installed = true;
+        config.external_skills.install_root = Some(install_root.display().to_string());
 
         let next_steps = build_doctor_next_steps_with_path_env(
             &checks,
@@ -2421,16 +2456,24 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Optional browser preview: loongclaw skills enable-browser-preview --config '/tmp/loongclaw.toml'"
+                step == "Install browser preview runtime: npm install -g agent-browser && agent-browser install"
             }),
-            "doctor should collapse preview setup into one operator-facing enable step by default: {next_steps:#?}"
+            "doctor should point preview-enabled operators at a concrete runtime install action when agent-browser is missing: {next_steps:#?}"
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "Install `agent-browser` and verify the CLI is available on PATH: agent-browser --help"
+                step == "Verify browser preview runtime: agent-browser open example.com"
             }),
-            "doctor should still point to the missing agent-browser runtime dependency: {next_steps:#?}"
+            "doctor should still surface a verification step after the runtime install hint: {next_steps:#?}"
         );
+        assert!(
+            !next_steps.iter().any(|step| {
+                step == "Optional browser preview: loongclaw skills enable-browser-preview --config '/tmp/loongclaw.toml'"
+            }),
+            "doctor should not fall back to the optional enable step after preview has already been configured: {next_steps:#?}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

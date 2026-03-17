@@ -8,6 +8,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+$ReleaseBaseUrl = if ($env:LOONGCLAW_INSTALL_RELEASE_BASE_URL) { $env:LOONGCLAW_INSTALL_RELEASE_BASE_URL } else { "https://github.com/$Repository/releases" }
 
 function Write-Usage {
     @"
@@ -36,12 +37,24 @@ function Normalize-ReleaseTag([string]$Raw) {
     return "v$Raw"
 }
 
+function New-MissingReleaseGuidance([string]$Repo) {
+    $repoName = ($Repo -split "/")[-1]
+    return @"
+no GitHub release is published for $Repo yet.
+
+Install from a local checkout instead:
+  git clone https://github.com/$Repo.git
+  cd $repoName
+  pwsh ./scripts/install.ps1 -Source -Onboard
+"@
+}
+
 function Resolve-LatestReleaseTag([string]$Repo) {
     $headers = @{ "User-Agent" = "LoongClaw-Install" }
     try {
         $release = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$Repo/releases/latest"
     } catch {
-        throw "no GitHub release is published for $Repo yet. Run this installer from a repository checkout with -Source, or install from source manually."
+        throw (New-MissingReleaseGuidance -Repo $Repo)
     }
     if (-not $release.tag_name) {
         throw "failed to resolve latest release tag for $Repo"
@@ -122,7 +135,7 @@ function Install-FromRelease {
     $packageName = "loongclaw"
     $archiveName = Get-ReleaseArchiveName -PackageName $packageName -Tag $releaseTag -Target $target
     $checksumName = Get-ReleaseChecksumName -PackageName $packageName -Tag $releaseTag -Target $target
-    $releaseBase = "https://github.com/$Repository/releases/download/$releaseTag"
+    $releaseBase = "$ReleaseBaseUrl/download/$releaseTag"
     $archiveUrl = "$releaseBase/$archiveName"
     $checksumUrl = "$releaseBase/$checksumName"
 

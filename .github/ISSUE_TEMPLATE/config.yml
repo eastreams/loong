@@ -3,3 +3,15 @@ contact_links:
   - name: Security vulnerability report
     url: https://github.com/loongclaw-ai/loongclaw/security/advisories/new
     about: Report security issues privately.
+  - name: Questions and troubleshooting
+    url: https://github.com/loongclaw-ai/loongclaw/discussions
+    about: Use Discussions for Q&A, setup questions, and general troubleshooting.
+  - name: Community chat
+    url: https://discord.gg/7kSTX9mca
+    about: Join Discord for community help and operator discussion.
+  - name: Contribution guide
+    url: https://github.com/loongclaw-ai/loongclaw/blob/alpha-test/CONTRIBUTING.md
+    about: Read the active alpha-test contribution workflow before opening a PR.
+  - name: GitHub collaboration reference
+    url: https://github.com/loongclaw-ai/loongclaw/blob/alpha-test/docs/references/github-collaboration.md
+    about: See labels, branch model, and intake/review rules for the active collaboration baseline.

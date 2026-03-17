@@ -1,0 +1,134 @@
+"area: kernel":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/kernel/**"
+
+"area: contracts":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/contracts/**"
+
+"area: protocol":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/protocol/**"
+
+"area: spec":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/spec/**"
+          - "docs/design-docs/**"
+          - "docs/product-specs/**"
+
+"area: daemon":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/daemon/**"
+          - "scripts/install.sh"
+          - "scripts/install.ps1"
+
+"area: providers":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/app/src/provider/**"
+          - "crates/app/src/config/provider.rs"
+
+"area: tools":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/app/src/tools/**"
+
+"area: browser":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/app/src/tools/browser.rs"
+
+"area: channels":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/app/src/channel/**"
+          - "crates/app/src/feishu/**"
+
+"area: memory":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/app/src/memory/**"
+          - "crates/app/src/config/memory.rs"
+
+"area: conversation":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/app/src/conversation/**"
+          - "crates/app/src/prompt/**"
+          - "crates/app/src/session/**"
+          - "crates/app/src/config/conversation.rs"
+
+"area: config":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/app/src/config/**"
+          - "crates/spec/config/**"
+
+"area: acp":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/app/src/acp/**"
+
+"area: migration":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/app/src/migration/**"
+
+"area: docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/**"
+          - "README.md"
+          - "README.zh-CN.md"
+          - "CONTRIBUTING.md"
+          - "SECURITY.md"
+          - "CODE_OF_CONDUCT.md"
+          - ".github/ISSUE_TEMPLATE/**"
+          - ".github/PULL_REQUEST_TEMPLATE.md"
+
+"area: ci":
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/workflows/**"
+          - ".github/dependabot.yml"
+          - ".github/labeler.yml"
+          - "Taskfile.yml"
+          - "scripts/architecture_budget_lib.sh"
+          - "scripts/bootstrap_release_local_artifacts.sh"
+          - "scripts/check*.sh"
+          - "scripts/generate_architecture_drift_report.sh"
+          - "scripts/lint_*.sh"
+          - "scripts/release_artifact_lib.sh"
+          - "scripts/test_*.sh"
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+          - ".github/ISSUE_TEMPLATE/**"
+          - ".github/PULL_REQUEST_TEMPLATE.md"
+
+github_actions:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/workflows/**"
+
+rust:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.rs"
+          - "Cargo.toml"
+          - "Cargo.lock"
+          - "crates/**/Cargo.toml"
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Cargo.lock"
+          - "Cargo.toml"
+          - "crates/**/Cargo.toml"

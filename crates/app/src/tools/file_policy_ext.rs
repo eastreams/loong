@@ -30,7 +30,7 @@ impl FilePolicyExtension {
 
     fn required_capability(tool_name: &str) -> Option<Capability> {
         match tool_name {
-            "file.read" | "claw.import" => Some(Capability::FilesystemRead),
+            "file.read" | "claw.migrate" => Some(Capability::FilesystemRead),
             "file.write" => Some(Capability::FilesystemWrite),
             _ => None,
         }
@@ -142,8 +142,8 @@ impl PolicyExtension for FilePolicyExtension {
         }
 
         if let Some(ref root) = self.file_root {
-            // claw.import uses `input_path`; all other file tools use `path`.
-            let path_key = if tool_name == "claw.import" {
+            // claw.migrate uses `input_path`; all other file tools use `path`.
+            let path_key = if tool_name == "claw.migrate" {
                 "input_path"
             } else {
                 "path"
@@ -298,12 +298,12 @@ mod tests {
     }
 
     #[test]
-    fn claw_import_requires_filesystem_read() {
+    fn claw_migrate_requires_filesystem_read() {
         let ext = FilePolicyExtension::new(None);
         let pack = test_pack();
         let token = token_with_caps(BTreeSet::from([Capability::InvokeTool]));
         let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "claw.import", "payload": {"input_path": "config.toml"}});
+        let params = json!({"tool_name": "claw.migrate", "payload": {"input_path": "config.toml"}});
         let ctx = make_context(&pack, &token, &caps, Some(&params));
         assert!(matches!(
             ext.authorize_extension(&ctx).unwrap_err(),
@@ -312,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn claw_import_allowed_with_filesystem_read() {
+    fn claw_migrate_allowed_with_filesystem_read() {
         let ext = FilePolicyExtension::new(None);
         let pack = test_pack();
         let token = token_with_caps(BTreeSet::from([
@@ -320,7 +320,7 @@ mod tests {
             Capability::FilesystemRead,
         ]));
         let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({"tool_name": "claw.import", "payload": {"input_path": "config.toml"}});
+        let params = json!({"tool_name": "claw.migrate", "payload": {"input_path": "config.toml"}});
         let ctx = make_context(&pack, &token, &caps, Some(&params));
         assert!(ext.authorize_extension(&ctx).is_ok());
     }
@@ -373,7 +373,7 @@ mod tests {
     }
 
     #[test]
-    fn claw_import_sandbox_uses_input_path_key() {
+    fn claw_migrate_sandbox_uses_input_path_key() {
         let ext = FilePolicyExtension::new(Some(PathBuf::from("/home/user/project")));
         let pack = test_pack();
         let token = token_with_caps(BTreeSet::from([
@@ -383,7 +383,7 @@ mod tests {
         let caps = BTreeSet::from([Capability::InvokeTool]);
         // input_path escapes the root — must be denied
         let params =
-            json!({"tool_name": "claw.import", "payload": {"input_path": "../../etc/passwd"}});
+            json!({"tool_name": "claw.migrate", "payload": {"input_path": "../../etc/passwd"}});
         let ctx = make_context(&pack, &token, &caps, Some(&params));
         assert!(matches!(
             ext.authorize_extension(&ctx).unwrap_err(),
@@ -392,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn claw_import_within_root_allowed() {
+    fn claw_migrate_within_root_allowed() {
         let ext = FilePolicyExtension::new(Some(PathBuf::from("/home/user/project")));
         let pack = test_pack();
         let token = token_with_caps(BTreeSet::from([
@@ -401,7 +401,7 @@ mod tests {
         ]));
         let caps = BTreeSet::from([Capability::InvokeTool]);
         let params =
-            json!({"tool_name": "claw.import", "payload": {"input_path": "subdir/config.toml"}});
+            json!({"tool_name": "claw.migrate", "payload": {"input_path": "subdir/config.toml"}});
         let ctx = make_context(&pack, &token, &caps, Some(&params));
         assert!(ext.authorize_extension(&ctx).is_ok());
     }

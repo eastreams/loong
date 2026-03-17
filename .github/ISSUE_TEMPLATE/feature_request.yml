@@ -1,35 +1,118 @@
 name: Feature Request
-description: Propose a new feature or enhancement.
+description: Propose a new capability or meaningful product/runtime improvement.
+title: "[Feature]: "
 labels:
   - enhancement
   - triage
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion.
+        Please focus on the user or operator problem, concrete constraints, and what "done" should mean.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which surface would this request primarily affect?
+      options:
+        - Kernel / policy / approvals
+        - Contracts
+        - Protocol
+        - Spec / architecture boundaries
+        - Daemon / CLI / install
+        - Providers / routing
+        - Tools
+        - Browser automation
+        - Channels / integrations
+        - ACP control plane
+        - Conversation / session runtime
+        - Memory / context assembly
+        - Config
+        - Migration / onboarding
+        - Docs / contributor workflow
+        - CI / release / workflows
+        - Unknown / needs triage
+    validations:
+      required: true
+
   - type: textarea
     id: problem
     attributes:
       label: Problem statement
-      description: What user/system problem are you trying to solve?
-      placeholder: Describe the problem and constraints.
+      description: What user or system problem are you trying to solve?
+      placeholder: Contributors cannot tell which branch or issue intake path is authoritative, so review and triage context arrives fragmented.
     validations:
       required: true
+
   - type: textarea
     id: proposal
     attributes:
       label: Proposed solution
-      placeholder: Describe your proposed approach.
+      description: Describe the preferred behavior, UX, API, or workflow.
+      placeholder: Add area-aware issue intake, lightweight path label automation, and explicit alpha-test contribution guidance.
     validations:
       required: true
+
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-goals / out of scope
+      description: What should not be included in the first iteration?
+      placeholder: Do not add aggressive auto-close bots or a 300-label taxonomy in the first pass.
+
   - type: textarea
     id: alternatives
     attributes:
       label: Alternatives considered
-      placeholder: What alternatives did you consider and why not use them?
-  - type: dropdown
-    id: risk
+      description: What alternatives did you consider and why not use them?
+      placeholder: Keep manual triage, add only docs, or copy OpenClaw's full automation without adaptation.
+
+  - type: textarea
+    id: acceptance
     attributes:
-      label: Estimated risk track
+      label: Acceptance criteria
+      description: What concrete outcomes would make this request complete?
+      placeholder: |
+        - PRs get stable area labels automatically
+        - Bug reports capture runtime evidence consistently
+        - Contributor docs point external PRs at alpha-test
+
+  - type: dropdown
+    id: sensitivity
+    attributes:
+      label: Policy / security / breaking sensitivity
       options:
-        - Track A (routine/low-risk)
-        - Track B (higher-risk/policy-impacting)
+        - No, this looks routine
+        - Yes, this touches policy, security, or potentially breaking behavior
+        - Not sure
     validations:
       required: true
+
+  - type: textarea
+    id: rollout
+    attributes:
+      label: Rollout / rollback notes
+      description: Optional. How should this land safely, and how could it be backed out quickly if needed?
+      placeholder: Start with documentation + labeler only, then add stronger automation later if triage quality improves.
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Who benefits, how often this matters, and what the practical consequence is if it does not land.
+      placeholder: |
+        Affected users: external contributors and maintainers
+        Frequency: every issue / PR intake
+        Consequence if missing: more manual triage and weaker review context
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues and did not find the same request already tracked.
+          required: true
+        - label: I used project-scoped wording and removed secrets or private data from examples.
+          required: true

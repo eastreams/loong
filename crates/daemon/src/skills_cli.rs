@@ -382,6 +382,37 @@ fn execute_enable_browser_preview_command(
         }
     };
     *config = updated_config;
+    let resolved_config_path = resolved_path.display().to_string();
+    let runtime_available =
+        crate::browser_preview::inspect_browser_preview_state(config).runtime_available;
+    let cli_enabled = config.cli.enabled;
+    let recipes = if cli_enabled {
+        crate::browser_preview::browser_preview_recipe_commands(&resolved_config_path)
+    } else {
+        Vec::new()
+    };
+    let doctor_command =
+        crate::cli_handoff::format_subcommand_with_config("doctor", &resolved_config_path);
+    let mut next_steps = if runtime_available {
+        let mut steps = Vec::new();
+        if cli_enabled && let Some(first_recipe) = recipes.first() {
+            steps.push(format!(
+                "Try browser companion preview: {}",
+                first_recipe.command
+            ));
+        }
+        steps.push(format!("Run diagnostics: {doctor_command}"));
+        steps
+    } else {
+        vec![
+            crate::browser_preview::browser_preview_install_step(),
+            crate::browser_preview::browser_preview_verify_step(),
+            format!("Run diagnostics: {doctor_command}"),
+        ]
+    };
+    if !cli_enabled {
+        next_steps.push("Re-enable `cli.enabled` before running the preview recipes.".to_owned());
+    }
 
     if let Some(payload) = outcome.payload.as_object_mut() {
         payload.insert(
@@ -392,7 +423,21 @@ fn execute_enable_browser_preview_command(
         payload.insert("browser_preview_enabled".to_owned(), json!(true));
         payload.insert(
             "runtime_binary_available".to_owned(),
-            json!(crate::browser_preview::inspect_browser_preview_state(config).runtime_available),
+            json!(runtime_available),
+        );
+        payload.insert("cli_enabled".to_owned(), json!(cli_enabled));
+        payload.insert("next_steps".to_owned(), json!(next_steps));
+        payload.insert(
+            "recipes".to_owned(),
+            json!(
+                recipes
+                    .into_iter()
+                    .map(|recipe| json!({
+                        "label": recipe.label,
+                        "command": recipe.command,
+                    }))
+                    .collect::<Vec<_>>()
+            ),
         );
     }
 
@@ -569,6 +614,7 @@ pub fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliResult<S
                     .unwrap_or(false)
             ));
             if tool_name == "skills.enable-browser-preview" {
+                lines.push("browser preview enabled via bundled helper skill".to_owned());
                 lines.push(format!(
                     "config_updated={}",
                     payload
@@ -583,6 +629,13 @@ pub fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliResult<S
                         .and_then(Value::as_bool)
                         .unwrap_or(false)
                 ));
+                render_string_section(
+                    &mut lines,
+                    "next steps:",
+                    payload.get("next_steps"),
+                    "skills enable-browser-preview payload missing `next_steps` array",
+                )?;
+                render_recipe_section(&mut lines, payload.get("recipes"))?;
             }
         }
         "external_skills.remove" => {
@@ -682,6 +735,52 @@ fn render_string_list(value: Option<&Value>) -> String {
             }
         })
         .unwrap_or_else(|| "-".to_owned())
+}
+
+fn render_string_section(
+    lines: &mut Vec<String>,
+    heading: &str,
+    value: Option<&Value>,
+    missing_error: &str,
+) -> CliResult<()> {
+    let items = value
+        .and_then(Value::as_array)
+        .ok_or_else(|| missing_error.to_owned())?;
+    if items.is_empty() {
+        return Ok(());
+    }
+
+    lines.push(heading.to_owned());
+    for item in items {
+        let rendered = item
+            .as_str()
+            .ok_or_else(|| format!("{missing_error}: entries must be strings"))?;
+        lines.push(format!("- {rendered}"));
+    }
+    Ok(())
+}
+
+fn render_recipe_section(lines: &mut Vec<String>, value: Option<&Value>) -> CliResult<()> {
+    let recipes = value.and_then(Value::as_array).ok_or_else(|| {
+        "skills enable-browser-preview payload missing `recipes` array".to_owned()
+    })?;
+    if recipes.is_empty() {
+        return Ok(());
+    }
+
+    lines.push("recipes:".to_owned());
+    for recipe in recipes {
+        let label = recipe
+            .get("label")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "browser preview recipe is missing `label`".to_owned())?;
+        let command = recipe
+            .get("command")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "browser preview recipe is missing `command`".to_owned())?;
+        lines.push(format!("- {label}: {command}"));
+    }
+    Ok(())
 }
 
 fn render_skill_summary_line(skill: &Value) -> String {

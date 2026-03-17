@@ -190,7 +190,7 @@ The runtime tool catalog is split into two classes:
   - `tool.search`
   - `tool.invoke`
 - discoverable tools
-  - existing built-in tools such as `claw.import`, `file.read`, `file.write`,
+  - existing built-in tools such as `claw.migrate`, `file.read`, `file.write`,
     `shell.exec`, and the managed external-skill lifecycle tools
 
 Only core provider tools are directly valid provider-emitted tool intents.
@@ -355,7 +355,7 @@ If the model reuses an expired or tampered lease:
   tool request instead of stopping at `InvokeTool`
   - `file.read` requires `InvokeTool + FilesystemRead`
   - `file.write` requires `InvokeTool + FilesystemWrite`
-  - writeful `claw.import` modes require `FilesystemWrite` in addition to read
+  - writeful `claw.migrate` modes require `FilesystemWrite` in addition to read
 - leases are scoped to one tool id and expire quickly
 - file-root and migration-root escapes surface as explicit `policy_denied:`
   tool-plane failures so retry logic stays fail-closed

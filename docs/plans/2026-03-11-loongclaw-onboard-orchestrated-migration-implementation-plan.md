@@ -96,7 +96,7 @@ git commit -m "feat: add legacy claw discovery and scoring"
 
 **Files:**
 - Modify: `crates/app/src/migration/orchestrator.rs`
-- Modify: `crates/app/src/tools/claw_import.rs`
+- Modify: `crates/app/src/tools/claw_migrate.rs`
 - Test: `crates/app/src/migration/orchestrator.rs`
 - Test: `crates/app/src/tools/mod.rs`
 
@@ -120,7 +120,7 @@ fn recommend_primary_source_prefers_richer_custom_source() {
 }
 
 #[test]
-fn claw_import_supports_discover_and_plan_many_modes() {
+fn claw_migrate_supports_discover_and_plan_many_modes() {
     let outcome = execute_tool_core_with_config(request, &config).expect("tool should succeed");
     assert_eq!(outcome.payload["mode"], "discover");
 }
@@ -130,7 +130,7 @@ fn claw_import_supports_discover_and_plan_many_modes() {
 
 Run: `cargo test -p loongclaw-app plan_import_sources -- --nocapture`
 Run: `cargo test -p loongclaw-app recommend_primary_source -- --nocapture`
-Run: `cargo test -p loongclaw-app claw_import_supports_discover_and_plan_many_modes -- --nocapture`
+Run: `cargo test -p loongclaw-app claw_migrate_supports_discover_and_plan_many_modes -- --nocapture`
 Expected: FAIL because orchestration modes and recommendation API do not exist.
 
 **Step 3: Write minimal implementation**
@@ -153,7 +153,7 @@ pub struct PrimarySourceRecommendation {
 }
 ```
 
-Extend `claw.import` modes to accept:
+Extend `claw.migrate` modes to accept:
 
 - `discover`
 - `plan_many`
@@ -163,13 +163,13 @@ Keep the existing `plan` and `apply` paths intact.
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p loongclaw-app plan_import_sources recommend_primary_source claw_import_supports_discover_and_plan_many_modes -- --nocapture`
+Run: `cargo test -p loongclaw-app plan_import_sources recommend_primary_source claw_migrate_supports_discover_and_plan_many_modes -- --nocapture`
 Expected: PASS.
 
 **Step 5: Commit**
 
 ```bash
-git add crates/app/src/migration/orchestrator.rs crates/app/src/tools/claw_import.rs crates/app/src/tools/mod.rs
+git add crates/app/src/migration/orchestrator.rs crates/app/src/tools/claw_migrate.rs crates/app/src/tools/mod.rs
 git commit -m "feat: add migration planning and recommendation modes"
 ```
 
@@ -201,7 +201,7 @@ fn onboard_import_summary_shows_safe_merge_as_secondary_option() {
 
 If you expose new CLI flags, add parser coverage in daemon tests for:
 
-- `--import-claw`
+- `migrate`
 - `--import-strategy`
 - `--skip-import`
 
@@ -391,7 +391,7 @@ git commit -m "feat: expand claw-migration extension actions"
 
 **Files:**
 - Modify: `crates/app/src/migration/orchestrator.rs`
-- Modify: `crates/app/src/tools/claw_import.rs`
+- Modify: `crates/app/src/tools/claw_migrate.rs`
 - Modify: `crates/daemon/src/onboard_cli.rs`
 - Test: `crates/app/src/migration/orchestrator.rs`
 - Test: `crates/daemon/src/tests/onboard_cli.rs`
@@ -461,7 +461,7 @@ Expected: PASS.
 **Step 5: Commit**
 
 ```bash
-git add crates/app/src/migration/orchestrator.rs crates/app/src/tools/claw_import.rs crates/daemon/src/onboard_cli.rs crates/daemon/src/tests/onboard_cli.rs docs/plans/2026-03-11-loongclaw-migration-nativeization-implementation.md
+git add crates/app/src/migration/orchestrator.rs crates/app/src/tools/claw_migrate.rs crates/daemon/src/onboard_cli.rs crates/daemon/src/tests/onboard_cli.rs docs/plans/2026-03-11-loongclaw-migration-nativeization-implementation.md
 git commit -m "feat: add migration backup manifest and rollback"
 ```
 
@@ -500,7 +500,7 @@ Expected: all commands succeed with zero failing tests.
 Document:
 
 - onboarding import behavior
-- `claw.import` orchestration modes
+- `claw.migrate` orchestration modes
 - `claw-migration` action surface
 - backup and rollback behavior
 

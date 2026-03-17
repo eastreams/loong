@@ -1,4 +1,4 @@
-#![allow(dead_code)] // legacy import-claw flow remains test-covered but is not exposed by the current daemon CLI
+#![allow(dead_code)] // migrate flow remains test-covered until the daemon CLI exposes it directly
 
 use std::path::{Path, PathBuf};
 
@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "snake_case")]
-pub enum ImportClawMode {
+pub enum MigrateMode {
     Apply,
     Plan,
     Discover,
@@ -21,7 +21,7 @@ pub enum ImportClawMode {
     RollbackLastApply,
 }
 
-impl ImportClawMode {
+impl MigrateMode {
     fn requires_input(self) -> bool {
         !matches!(self, Self::RollbackLastApply)
     }
@@ -46,11 +46,11 @@ impl ImportClawMode {
 }
 
 #[derive(Debug, Clone)]
-pub struct ImportClawCommandOptions {
+pub struct MigrateCommandOptions {
     pub input: Option<String>,
     pub output: Option<String>,
     pub source: Option<String>,
-    pub mode: ImportClawMode,
+    pub mode: MigrateMode,
     pub json: bool,
     pub source_id: Option<String>,
     pub safe_profile_merge: bool,
@@ -63,7 +63,7 @@ pub fn parse_legacy_claw_source(raw: &str) -> Option<mvp::migration::LegacyClawS
     mvp::migration::LegacyClawSource::from_id(raw)
 }
 
-pub fn run_import_claw_cli(options: ImportClawCommandOptions) -> CliResult<()> {
+pub fn run_migrate_cli(options: MigrateCommandOptions) -> CliResult<()> {
     let output_path = resolve_output_path(options.output.as_deref());
     let input_path = options.input.as_deref().map(mvp::config::expand_path);
 
@@ -75,8 +75,8 @@ pub fn run_import_claw_cli(options: ImportClawCommandOptions) -> CliResult<()> {
     }
 
     match options.mode {
-        ImportClawMode::RollbackLastApply => run_rollback_mode(&output_path, options.json),
-        ImportClawMode::Discover => {
+        MigrateMode::RollbackLastApply => run_rollback_mode(&output_path, options.json),
+        MigrateMode::Discover => {
             let input = require_input_path(input_path, options.mode)?;
             let report = mvp::migration::discover_import_sources(
                 &input,
@@ -94,7 +94,7 @@ pub fn run_import_claw_cli(options: ImportClawCommandOptions) -> CliResult<()> {
                 }));
             }
 
-            println!("import discovery complete");
+            println!("migration discovery complete");
             println!("- input: {}", input.display());
             println!("- discovered sources: {}", report.sources.len());
             for source in &report.sources {
@@ -108,7 +108,7 @@ pub fn run_import_claw_cli(options: ImportClawCommandOptions) -> CliResult<()> {
             }
             Ok(())
         }
-        ImportClawMode::PlanMany | ImportClawMode::RecommendPrimary => {
+        MigrateMode::PlanMany | MigrateMode::RecommendPrimary => {
             let input = require_input_path(input_path, options.mode)?;
             let report = mvp::migration::discover_import_sources(
                 &input,
@@ -117,8 +117,7 @@ pub fn run_import_claw_cli(options: ImportClawCommandOptions) -> CliResult<()> {
             let summary = mvp::migration::plan_import_sources(&report)?;
             let recommendation = mvp::migration::recommend_primary_source(&summary).ok();
 
-            if matches!(options.mode, ImportClawMode::RecommendPrimary) && recommendation.is_none()
-            {
+            if matches!(options.mode, MigrateMode::RecommendPrimary) && recommendation.is_none() {
                 return Err(
                     "no import sources discovered; cannot recommend primary source".to_owned(),
                 );
@@ -133,7 +132,7 @@ pub fn run_import_claw_cli(options: ImportClawCommandOptions) -> CliResult<()> {
                 }));
             }
 
-            println!("import planning complete");
+            println!("migration planning complete");
             println!("- mode: {}", options.mode.as_id());
             println!("- input: {}", input.display());
             println!("- planned sources: {}", summary.plans.len());
@@ -158,7 +157,7 @@ pub fn run_import_claw_cli(options: ImportClawCommandOptions) -> CliResult<()> {
             }
             Ok(())
         }
-        ImportClawMode::MergeProfiles => {
+        MigrateMode::MergeProfiles => {
             let input = require_input_path(input_path, options.mode)?;
             let report = mvp::migration::discover_import_sources(
                 &input,
@@ -196,7 +195,7 @@ pub fn run_import_claw_cli(options: ImportClawCommandOptions) -> CliResult<()> {
             println!("- dropped duplicates: {}", merged.dropped_duplicates.len());
             Ok(())
         }
-        ImportClawMode::MapExternalSkills => {
+        MigrateMode::MapExternalSkills => {
             let input = require_input_path(input_path, options.mode)?;
             let mapping = mvp::migration::plan_external_skill_mapping(&input);
 
@@ -229,13 +228,13 @@ pub fn run_import_claw_cli(options: ImportClawCommandOptions) -> CliResult<()> {
                 println!("- warning: {warning}");
             }
             println!(
-                "next step: loongclaw import-claw --mode apply_selected --input {} --output {} --apply-external-skills-plan --force",
+                "next step: loongclaw migrate --mode apply_selected --input {} --output {} --apply-external-skills-plan --force",
                 input.display(),
                 output_path.display()
             );
             Ok(())
         }
-        ImportClawMode::ApplySelected => {
+        MigrateMode::ApplySelected => {
             let input = require_input_path(input_path, options.mode)?;
             let report = mvp::migration::discover_import_sources(
                 &input,
@@ -270,7 +269,7 @@ pub fn run_import_claw_cli(options: ImportClawCommandOptions) -> CliResult<()> {
                 }));
             }
 
-            println!("import selection applied");
+            println!("migration selection applied");
             println!("- mode: {}", options.mode.as_id());
             println!("- input: {}", input.display());
             println!("- output: {}", result.output_path.display());
@@ -312,7 +311,7 @@ pub fn run_import_claw_cli(options: ImportClawCommandOptions) -> CliResult<()> {
             }
             Ok(())
         }
-        ImportClawMode::Plan | ImportClawMode::Apply => {
+        MigrateMode::Plan | MigrateMode::Apply => {
             let input = require_input_path(input_path, options.mode)?;
             let hint = if let Some(raw) = options.source.as_deref() {
                 let parsed = parse_legacy_claw_source(raw).ok_or_else(|| {
@@ -334,7 +333,7 @@ pub fn run_import_claw_cli(options: ImportClawCommandOptions) -> CliResult<()> {
             let mut config = load_or_default_config(&output_path, output_path.exists())?;
             mvp::migration::apply_import_plan(&mut config, &plan);
 
-            if matches!(options.mode, ImportClawMode::Plan) {
+            if matches!(options.mode, MigrateMode::Plan) {
                 if options.json {
                     let rendered = mvp::config::render(&config)
                         .map_err(|error| format!("render preview failed: {error}"))?;
@@ -349,7 +348,7 @@ pub fn run_import_claw_cli(options: ImportClawCommandOptions) -> CliResult<()> {
                     }));
                 }
 
-                println!("import plan ready");
+                println!("migration plan ready");
                 println!("- source: {}", legacy_claw_source_id(plan.source));
                 println!("- input: {}", input.display());
                 println!("- output target: {}", output_path.display());
@@ -365,18 +364,18 @@ pub fn run_import_claw_cli(options: ImportClawCommandOptions) -> CliResult<()> {
                     memory_profile_id(config.memory.profile)
                 );
                 println!(
-                    "- imported prompt addendum: {}",
+                    "- migrated prompt addendum: {}",
                     yes_no(config.cli.system_prompt_addendum.is_some())
                 );
                 println!(
-                    "- imported profile note: {}",
+                    "- migrated profile note: {}",
                     yes_no(config.memory.profile_note.is_some())
                 );
                 for warning in &plan.warnings {
                     println!("- warning: {warning}");
                 }
                 println!(
-                    "next step: loongclaw import-claw --mode apply --input {} --output {} --force",
+                    "next step: loongclaw migrate --mode apply --input {} --output {} --force",
                     input.display(),
                     output_path.display()
                 );
@@ -410,7 +409,7 @@ pub fn run_import_claw_cli(options: ImportClawCommandOptions) -> CliResult<()> {
                 }));
             }
 
-            println!("import complete");
+            println!("migration complete");
             println!("- source: {}", legacy_claw_source_id(plan.source));
             println!("- input: {}", input.display());
             println!("- config: {}", written.display());
@@ -426,11 +425,11 @@ pub fn run_import_claw_cli(options: ImportClawCommandOptions) -> CliResult<()> {
                 memory_profile_id(config.memory.profile)
             );
             println!(
-                "- imported prompt addendum: {}",
+                "- migrated prompt addendum: {}",
                 yes_no(config.cli.system_prompt_addendum.is_some())
             );
             println!(
-                "- imported profile note: {}",
+                "- migrated profile note: {}",
                 yes_no(config.memory.profile_note.is_some())
             );
             #[cfg(feature = "memory-sqlite")]
@@ -476,10 +475,9 @@ fn resolve_output_path(output: Option<&str>) -> PathBuf {
         .unwrap_or_else(mvp::config::default_config_path)
 }
 
-fn require_input_path(input: Option<PathBuf>, mode: ImportClawMode) -> CliResult<PathBuf> {
+fn require_input_path(input: Option<PathBuf>, mode: MigrateMode) -> CliResult<PathBuf> {
     if mode.requires_input() {
-        return input
-            .ok_or_else(|| format!("import-claw mode `{}` requires --input", mode.as_id()));
+        return input.ok_or_else(|| format!("migrate mode `{}` requires --input", mode.as_id()));
     }
     Ok(PathBuf::new())
 }
@@ -492,7 +490,7 @@ fn print_json_payload(payload: Value) -> CliResult<()> {
 }
 
 fn resolve_apply_selection_mode(
-    options: &ImportClawCommandOptions,
+    options: &MigrateCommandOptions,
     summary: &mvp::migration::DiscoveryPlanSummary,
 ) -> CliResult<mvp::migration::ImportSelectionMode> {
     let source_id = options
@@ -679,7 +677,7 @@ fn selection_mode_id(selection: &mvp::migration::ImportSelectionMode) -> &'stati
 }
 
 fn run_rollback_mode(output_path: &Path, as_json: bool) -> CliResult<()> {
-    let restored = mvp::migration::rollback_last_import(output_path)?;
+    let restored = mvp::migration::rollback_last_migration(output_path)?;
     if as_json {
         return print_json_payload(json!({
             "mode": "rollback_last_apply",

@@ -1,0 +1,235 @@
+name: labeler
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+      - edited
+  issues:
+    types:
+      - opened
+      - edited
+      - reopened
+  workflow_dispatch:
+
+concurrency:
+  group: labeler-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  sync-managed-labels:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Ensure managed labels exist
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const managedLabels = [
+              { name: "triage", color: "ededed", description: "Needs maintainer routing or follow-up." },
+              { name: "area: kernel", color: "0052cc", description: "Kernel policy, approvals, and audit surfaces." },
+              { name: "area: contracts", color: "0052cc", description: "Shared contract and type surfaces." },
+              { name: "area: protocol", color: "0052cc", description: "Protocol crate and wire-level behavior." },
+              { name: "area: spec", color: "0052cc", description: "Architecture boundaries, product specs, and design docs." },
+              { name: "area: daemon", color: "0052cc", description: "Daemon binary, CLI entrypoints, and install flow." },
+              { name: "area: providers", color: "0052cc", description: "Provider routing, selection, and transport behavior." },
+              { name: "area: tools", color: "0052cc", description: "Tool runtime, policy adapters, and tool catalog behavior." },
+              { name: "area: browser", color: "0052cc", description: "Browser automation surfaces and related tooling." },
+              { name: "area: channels", color: "0052cc", description: "Channel adapters and external integration surfaces." },
+              { name: "area: memory", color: "0052cc", description: "Memory system, context assembly, and persistence flow." },
+              { name: "area: conversation", color: "0052cc", description: "Conversation runtime, session flow, and prompt assembly." },
+              { name: "area: config", color: "0052cc", description: "Runtime config parsing, schema, and defaults." },
+              { name: "area: acp", color: "0052cc", description: "ACP manager, binding, routing, and control plane surfaces." },
+              { name: "area: migration", color: "0052cc", description: "Onboarding, legacy import, and migration flow." },
+              { name: "area: docs", color: "0052cc", description: "Contributor docs, references, and issue/PR guidance." },
+              { name: "area: ci", color: "0052cc", description: "CI, workflows, release automation, and repo governance scripts." },
+              { name: "documentation", color: "0075ca", description: "Improvements or additions to documentation." },
+              { name: "dependencies", color: "0366d6", description: "Pull requests that update dependency files." },
+              { name: "github_actions", color: "000000", description: "Pull requests that update GitHub Actions code." },
+              { name: "rust", color: "000000", description: "Pull requests that update Rust code." },
+              { name: "size: XS", color: "c2e0c6", description: "Tiny pull request: 0-50 changed lines." },
+              { name: "size: S", color: "bfd4f2", description: "Small pull request: 51-200 changed lines." },
+              { name: "size: M", color: "fbca04", description: "Medium pull request: 201-500 changed lines." },
+              { name: "size: L", color: "f9d0c4", description: "Large pull request: 501-1000 changed lines." },
+              { name: "size: XL", color: "d93f0b", description: "Very large pull request: more than 1000 changed lines." }
+            ];
+
+            for (const label of managedLabels) {
+              try {
+                const { data: current } = await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label.name
+                });
+
+                const currentDescription = current.description || "";
+                if (
+                  current.color.toLowerCase() !== label.color.toLowerCase() ||
+                  currentDescription !== label.description
+                ) {
+                  await github.rest.issues.updateLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name: label.name,
+                    new_name: label.name,
+                    color: label.color,
+                    description: label.description
+                  });
+                  core.info(`Updated label ${label.name}`);
+                }
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
+                }
+
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label.name,
+                  color: label.color,
+                  description: label.description
+                });
+                core.info(`Created label ${label.name}`);
+              }
+            }
+
+            core.notice(`Managed ${managedLabels.length} labels.`);
+
+  label-pull-request:
+    if: ${{ github.event_name == 'pull_request_target' }}
+    needs: sync-managed-labels
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout base repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Apply path labels
+        uses: actions/labeler@634933edcd8ababfe52f92936142cc22ac488b1b
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          configuration-path: .github/labeler.yml
+          sync-labels: true
+
+      - name: Apply size label
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const issueNumber = context.payload.pull_request.number;
+            const sizeLabels = ["size: XS", "size: S", "size: M", "size: L", "size: XL"];
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: issueNumber,
+              per_page: 100
+            });
+
+            const changedLines = files.reduce((total, file) => total + file.additions + file.deletions, 0);
+
+            let sizeLabel = "size: XL";
+            if (changedLines <= 50) {
+              sizeLabel = "size: XS";
+            } else if (changedLines <= 200) {
+              sizeLabel = "size: S";
+            } else if (changedLines <= 500) {
+              sizeLabel = "size: M";
+            } else if (changedLines <= 1000) {
+              sizeLabel = "size: L";
+            }
+
+            const { data: existingLabels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber
+            });
+
+            const mergedLabels = [
+              ...existingLabels
+                .map((label) => label.name)
+                .filter((name) => !sizeLabels.includes(name)),
+              sizeLabel
+            ];
+
+            await github.rest.issues.setLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              labels: mergedLabels
+            });
+
+            core.notice(`Applied ${sizeLabel} from ${changedLines} changed lines.`);
+
+  label-issue-area:
+    if: ${{ github.event_name == 'issues' }}
+    needs: sync-managed-labels
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Sync issue area label from form
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const areaLabelMap = {
+              "Kernel / policy / approvals": "area: kernel",
+              "Contracts": "area: contracts",
+              "Protocol": "area: protocol",
+              "Spec / architecture boundaries": "area: spec",
+              "Daemon / CLI / install": "area: daemon",
+              "Providers / routing": "area: providers",
+              "Tools": "area: tools",
+              "Browser automation": "area: browser",
+              "Channels / integrations": "area: channels",
+              "ACP control plane": "area: acp",
+              "Conversation / session runtime": "area: conversation",
+              "Memory / context assembly": "area: memory",
+              "Config": "area: config",
+              "Migration / onboarding": "area: migration",
+              "Docs / contributor workflow": "area: docs",
+              "CI / release / workflows": "area: ci",
+              "Unknown / needs triage": null
+            };
+
+            const managedAreaLabels = Object.values(areaLabelMap).filter(Boolean);
+            const body = (issue.body || "").replace(/\r\n/g, "\n");
+            const match = body.match(/^### Area\s*\n+([^\n]+)/m);
+            const selectedArea = match ? match[1].trim() : null;
+            const nextAreaLabel = selectedArea ? areaLabelMap[selectedArea] : null;
+
+            const { data: existingLabels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number
+            });
+
+            const mergedLabels = existingLabels
+              .map((label) => label.name)
+              .filter((name) => !managedAreaLabels.includes(name));
+
+            if (nextAreaLabel) {
+              mergedLabels.push(nextAreaLabel);
+            }
+
+            await github.rest.issues.setLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              labels: mergedLabels
+            });
+
+            if (selectedArea) {
+              core.notice(`Resolved issue area "${selectedArea}" to ${nextAreaLabel ?? "no managed area label"}.`);
+            } else {
+              core.notice("No Area section found in issue body; left managed area labels cleared.");
+            }

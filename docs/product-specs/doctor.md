@@ -15,14 +15,16 @@ can recover a broken setup without reverse-engineering runtime internals.
       automation and support tooling, including machine-readable `next_steps`
       when doctor can recommend a concrete repair or first-value command.
 - [ ] Text-mode doctor output ends with concrete next actions such as
-      credential env hints, `doctor --fix`, and first-turn ask/chat commands.
+      credential env hints, `doctor --fix`, first-turn ask/chat commands, and
+      optional browser preview enable or runtime setup commands when relevant.
 - [ ] On a healthy setup, the first-turn recommendations read like the next user
       action, not just a status report, for example "Get a first answer" and
       "Continue in chat".
 - [ ] When `onboard`, `ask`, `chat`, or channel setup hits a common health
       failure, the CLI points users toward `doctor`.
 - [ ] Doctor checks cover the current MVP path: config presence, provider
-      readiness, SQLite memory readiness, and shipped channel prerequisites.
+      readiness, SQLite memory readiness, shipped channel prerequisites, and
+      the optional browser preview companion readiness path.
 - [ ] When `tools.browser_companion.enabled=true`, doctor surfaces companion
       install/runtime readiness as warnings with concrete repair steps instead
       of turning the optional managed lane into a hard core-runtime failure.

@@ -171,7 +171,7 @@ Credentials should stay operator-managed and explicit.
 The next product step is not a broader rename table. It is onboarding-level
 integration:
 
-- `loongclawd onboard --import-claw <path>`
+- `loongclawd onboard --migrate <path>`
 - personality selection applied after nativeization
 - future pluggable memory backends still reading the same imported
   `profile_note`

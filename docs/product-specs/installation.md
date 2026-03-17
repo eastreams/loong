@@ -8,17 +8,17 @@ or `chat` without reverse-engineering release or source workflows.
 
 ## Acceptance Criteria
 
-- [ ] Product docs expose a bootstrap installer path for Linux/macOS and
+- [x] Product docs expose a bootstrap installer path for Linux/macOS and
       Windows.
-- [ ] The bootstrap installer prefers GitHub Release binaries, verifies their
+- [x] The bootstrap installer prefers GitHub Release binaries, verifies their
       SHA256 checksums, and installs the matching `loongclaw` binary when a
       release exists for the requested version.
-- [ ] If the repository has not published a matching release yet, the installer
+- [x] If the repository has not published a matching release yet, the installer
       fails with an explicit next action instead of constructing a misleading or
       broken download URL.
-- [ ] Product docs keep a source-install path for repository users and document
+- [x] Product docs keep a source-install path for repository users and document
       the explicit `--source` fallback from a local checkout.
-- [ ] The install path can hand users directly into `loongclaw onboard` after a
+- [x] The install path can hand users directly into `loongclaw onboard` after a
       successful install.
 
 ## Out of Scope

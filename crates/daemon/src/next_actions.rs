@@ -98,8 +98,8 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
             Some(SetupNextAction {
                 kind: SetupNextActionKind::BrowserPreview,
                 browser_preview_phase: Some(BrowserPreviewActionPhase::InstallRuntime),
-                label: format!("{} check", mvp::tools::BROWSER_COMPANION_COMMAND),
-                command: format!("{} --help", mvp::tools::BROWSER_COMPANION_COMMAND),
+                label: format!("install {}", mvp::tools::BROWSER_COMPANION_COMMAND),
+                command: crate::browser_preview::browser_preview_install_command().to_owned(),
             })
         } else {
             None
@@ -210,8 +210,8 @@ mod tests {
         assert!(
             actions[2]
                 .command
-                .contains("Use external_skills.invoke to load browser-companion-preview"),
-            "ready preview action should hand users into a truthful one-shot ask flow: {actions:#?}"
+                .contains("Use the browser companion preview to open https://example.com"),
+            "ready preview action should hand users into a task-shaped first browser recipe: {actions:#?}"
         );
 
         fs::remove_dir_all(&root).ok();
@@ -319,11 +319,15 @@ mod tests {
         );
         assert_eq!(
             actions[2].label,
-            format!("{} check", mvp::tools::BROWSER_COMPANION_COMMAND)
+            format!("install {}", mvp::tools::BROWSER_COMPANION_COMMAND)
         );
         assert_eq!(
             actions[2].command,
-            format!("{} --help", mvp::tools::BROWSER_COMPANION_COMMAND)
+            format!(
+                "npm install -g {} && {} install",
+                mvp::tools::BROWSER_COMPANION_COMMAND,
+                mvp::tools::BROWSER_COMPANION_COMMAND
+            )
         );
 
         fs::remove_dir_all(&root).ok();

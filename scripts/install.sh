@@ -107,7 +107,7 @@ run_onboard=0
 install_source=0
 release_version="${LOONGCLAW_INSTALL_VERSION:-latest}"
 release_repo="${LOONGCLAW_INSTALL_REPO:-loongclaw-ai/loongclaw}"
-release_base_url="https://github.com/${release_repo}/releases"
+release_base_url="${LOONGCLAW_INSTALL_RELEASE_BASE_URL:-https://github.com/${release_repo}/releases}"
 package_name="loongclaw"
 bin_name="loongclaw"
 
@@ -171,6 +171,17 @@ normalize_release_tag() {
   printf 'v%s\n' "$raw"
 }
 
+print_missing_release_guidance() {
+  cat >&2 <<EOF
+error: no GitHub release is published for ${release_repo} yet.
+
+Install from a local checkout instead:
+  git clone https://github.com/${release_repo}.git
+  cd $(basename "${release_repo}")
+  bash scripts/install.sh --source --onboard
+EOF
+}
+
 resolve_latest_release_tag() {
   local api_url response tag
   api_url="https://api.github.com/repos/${release_repo}/releases/latest"
@@ -180,7 +191,7 @@ resolve_latest_release_tag() {
       -H 'User-Agent: LoongClaw-Install' \
       "${api_url}"
   )"; then
-    echo "error: no GitHub release is published for ${release_repo} yet. Run this installer from a repository checkout with --source, or install from source manually." >&2
+    print_missing_release_guidance
     exit 1
   fi
 

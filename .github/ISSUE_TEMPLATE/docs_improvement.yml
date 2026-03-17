@@ -1,0 +1,91 @@
+name: Documentation Improvement
+description: Report missing, incorrect, or confusing docs and contributor guidance.
+title: "[Docs]: "
+labels:
+  - documentation
+  - triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for documentation drift, missing guidance, broken workflows, or confusing contributor instructions.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which documentation surface is most affected?
+      options:
+        - Docs / contributor workflow
+        - CI / release / workflows
+        - Daemon / CLI / install
+        - Providers / routing
+        - Tools
+        - Browser automation
+        - Channels / integrations
+        - ACP control plane
+        - Conversation / session runtime
+        - Memory / context assembly
+        - Config
+        - Migration / onboarding
+        - Kernel / policy / approvals
+        - Contracts
+        - Protocol
+        - Spec / architecture boundaries
+        - Unknown / needs triage
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is wrong or missing?
+      placeholder: CONTRIBUTING.md tells contributors to branch from main even though alpha-test is the actual integration branch.
+    validations:
+      required: true
+
+  - type: textarea
+    id: current_gap
+    attributes:
+      label: Current gap
+      description: Describe the incorrect, missing, or confusing documentation in detail.
+      placeholder: The docs do not explain which branch external contributors should target, and issue intake links do not reflect the current review flow.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_fix
+    attributes:
+      label: Proposed improvement
+      description: What should the documentation say instead?
+      placeholder: Add an explicit branch model section, issue intake guidance, and label automation reference.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence / links
+      description: Link the relevant files, PRs, workflows, or screenshots if available.
+      placeholder: |
+        - CONTRIBUTING.md
+        - .github/workflows/enforce-alpha-test-to-main.yml
+        - recent PRs targeting alpha-test
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Who is confused or blocked, and what practical consequence follows from the current docs?
+      placeholder: New contributors follow the wrong branch model and open PRs with the wrong base branch.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues and did not find the same documentation gap already tracked.
+          required: true
+        - label: I used concrete file or workflow references where possible.
+          required: true

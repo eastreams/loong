@@ -6,7 +6,29 @@ pub(crate) const BROWSER_PREVIEW_SKILL_ID: &str = mvp::tools::BROWSER_COMPANION_
 pub(crate) const BROWSER_PREVIEW_ENABLE_LABEL: &str = "enable browser preview";
 pub(crate) const BROWSER_PREVIEW_UNBLOCK_LABEL: &str = "allow agent-browser";
 pub(crate) const BROWSER_PREVIEW_READY_LABEL: &str = "browser companion preview";
-const DEFAULT_BROWSER_PREVIEW_ASK_MESSAGE: &str = "Use external_skills.invoke to load browser-companion-preview, then use the browser companion preview to inspect https://example.com and summarize the result.";
+const BROWSER_PREVIEW_INSTALL_COMMAND: &str =
+    "npm install -g agent-browser && agent-browser install";
+const BROWSER_PREVIEW_VERIFY_COMMAND: &str = "agent-browser open example.com";
+const BROWSER_PREVIEW_RECIPES: &[(&str, &str)] = &[
+    (
+        "summarize a page",
+        "Use the browser companion preview to open https://example.com, snapshot the page, and summarize what is visible.",
+    ),
+    (
+        "extract page text",
+        "Use the browser companion preview to open https://example.com, extract the main page text, and return the key points.",
+    ),
+    (
+        "follow a link",
+        "Use the browser companion preview to open https://example.com, click the first relevant link, wait for navigation, and summarize the result.",
+    ),
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BrowserPreviewRecipeCommand {
+    pub(crate) label: String,
+    pub(crate) command: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BrowserPreviewState {
@@ -86,8 +108,46 @@ pub(crate) fn browser_preview_unblock_command(config_path: &str) -> String {
     )
 }
 
+pub(crate) fn browser_preview_install_command() -> &'static str {
+    BROWSER_PREVIEW_INSTALL_COMMAND
+}
+
+pub(crate) fn browser_preview_verify_command() -> &'static str {
+    BROWSER_PREVIEW_VERIFY_COMMAND
+}
+
+pub(crate) fn browser_preview_install_step() -> String {
+    format!(
+        "Install browser preview runtime: {}",
+        browser_preview_install_command()
+    )
+}
+
+pub(crate) fn browser_preview_verify_step() -> String {
+    format!(
+        "Verify browser preview runtime: {}",
+        browser_preview_verify_command()
+    )
+}
+
+pub(crate) fn browser_preview_recipe_commands(
+    config_path: &str,
+) -> Vec<BrowserPreviewRecipeCommand> {
+    BROWSER_PREVIEW_RECIPES
+        .iter()
+        .map(|(label, message)| BrowserPreviewRecipeCommand {
+            label: (*label).to_owned(),
+            command: browser_preview_ask_command(config_path, message),
+        })
+        .collect()
+}
+
 pub(crate) fn browser_preview_ready_command(config_path: &str) -> String {
-    crate::cli_handoff::format_ask_with_config(config_path, DEFAULT_BROWSER_PREVIEW_ASK_MESSAGE)
+    browser_preview_recipe_commands(config_path)
+        .into_iter()
+        .next()
+        .map(|recipe| recipe.command)
+        .unwrap_or_else(|| browser_preview_ask_command(config_path, "Use the browser companion preview to open https://example.com and summarize the result."))
 }
 
 pub(crate) fn ensure_browser_preview_config(config: &mut mvp::config::LoongClawConfig) -> bool {
@@ -255,6 +315,9 @@ fn command_candidates(command: &str) -> Vec<String> {
     }
 }
 
+fn browser_preview_ask_command(config_path: &str, message: &str) -> String {
+    crate::cli_handoff::format_ask_with_config(config_path, message)
+}
 #[cfg(unix)]
 fn command_candidate_is_available(path: &std::path::Path) -> bool {
     use std::os::unix::fs::PermissionsExt;

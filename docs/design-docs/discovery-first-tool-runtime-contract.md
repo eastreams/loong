@@ -31,7 +31,7 @@ This includes built-in non-core tools such as:
 - `file.read`
 - `file.write`
 - `shell.exec`
-- `claw.import`
+- `claw.migrate`
 - managed external-skill lifecycle and invoke tools
 
 Discoverable tools may execute only through `tool.invoke` after discovery.

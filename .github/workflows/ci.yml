@@ -28,6 +28,7 @@ jobs:
 
       - name: Shell syntax checks
         run: |
+          bash -n scripts/install.sh
           bash -n scripts/architecture_budget_lib.sh
           bash -n scripts/check_architecture_boundaries.sh
           bash -n scripts/check_architecture_drift_freshness.sh
@@ -35,6 +36,7 @@ jobs:
           bash -n scripts/test_architecture_budget_scripts.sh
           bash -n scripts/test_check_architecture_drift_freshness.sh
           bash -n scripts/test_generate_architecture_drift_report.sh
+          bash -n scripts/test_install_sh.sh
           bash -n scripts/release_artifact_lib.sh
           bash -n scripts/bootstrap_release_local_artifacts.sh
           bash -n scripts/test_release_artifact_lib.sh
@@ -49,6 +51,7 @@ jobs:
           bash scripts/test_architecture_budget_scripts.sh
           bash scripts/test_check_architecture_drift_freshness.sh
           bash scripts/test_generate_architecture_drift_report.sh
+          bash scripts/test_install_sh.sh
           bash scripts/test_release_artifact_lib.sh
           bash scripts/test_bootstrap_release_local_artifacts.sh
           bash scripts/test_stress_daemon_tests.sh

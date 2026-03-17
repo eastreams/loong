@@ -176,8 +176,15 @@ The bootstrap installer is fetched directly from the repository. It prefers the 
 Release binary, verifies its SHA256 checksum, installs `loongclaw`, and can immediately hand you
 into guided onboarding.
 
-If the repository has not published its first release yet, the installer exits with a clear message.
-Use the source install path below in that case.
+If the repository has not published a public release yet, the installer exits with an explicit
+source-install fallback instead of constructing a broken download URL. Until the first public
+release is shipped, expect the source path below to be the fast path:
+
+```bash
+git clone https://github.com/loongclaw-ai/loongclaw.git
+cd loongclaw
+bash scripts/install.sh --source --onboard
+```
 
 <details>
 <summary>Linux / macOS</summary>
@@ -353,26 +360,26 @@ CLI migration workflow:
 - applying external-skills plan also writes `.loongclaw-migration/<config>.external-skills.json` for audit and replay.
 
 ```bash
-# Discover and score import candidates under a root
-loongclaw import-claw --mode discover --input ~/legacy-claws
+# Discover and score migration candidates under a root
+loongclaw migrate --mode discover --input ~/legacy-claws
 
 # Plan all candidates and print recommendation
-loongclaw import-claw --mode plan_many --input ~/legacy-claws
+loongclaw migrate --mode plan_many --input ~/legacy-claws
 
 # Preview external skills mapping artifacts and generated profile addendum
-loongclaw import-claw --mode map_external_skills --input ~/legacy-claws
+loongclaw migrate --mode map_external_skills --input ~/legacy-claws
 
 # Apply one selected source to a target config
-loongclaw import-claw --mode apply_selected --input ~/legacy-claws \
+loongclaw migrate --mode apply_selected --input ~/legacy-claws \
   --source-id openclaw --output ~/.loongclaw/config.toml --force
 
 # Apply selected source and also attach external-skills mapping addendum
-loongclaw import-claw --mode apply_selected --input ~/legacy-claws \
+loongclaw migrate --mode apply_selected --input ~/legacy-claws \
   --source-id openclaw --output ~/.loongclaw/config.toml \
   --apply-external-skills-plan --force
 
-# Roll back the last apply_selected/import apply for this output config
-loongclaw import-claw --mode rollback_last_apply --output ~/.loongclaw/config.toml
+# Roll back the last apply_selected migration for this output config
+loongclaw migrate --mode rollback_last_apply --output ~/.loongclaw/config.toml
 ```
 
 ## External Skills Runtime Guardrails
@@ -466,16 +473,31 @@ as the built-in browser tools.
 
 ```bash
 loongclaw skills enable-browser-preview --config ~/.loongclaw/config.toml
-agent-browser --help
+npm install -g agent-browser && agent-browser install
 loongclaw doctor --config ~/.loongclaw/config.toml
+loongclaw ask --config ~/.loongclaw/config.toml --message 'Use the browser companion preview to open https://example.com, snapshot the page, and summarize what is visible.'
 ```
 
 It adds a first-party managed helper skill that can route richer multi-step page
 work through `agent-browser` when the runtime, shell policy, and local binary
-are all ready. It does not install or manage the `agent-browser` runtime for
-you; bring that binary yourself, then use `doctor` to confirm it is available
-on `PATH`. A healthy `doctor` run should report `agent-browser` as available and
-avoid browser preview follow-up errors.
+are all ready. `loongclaw skills enable-browser-preview` now turns on the needed
+LoongClaw config, installs the bundled helper skill, and prints concrete next
+steps plus ready-to-run recipes. LoongClaw still does not install or manage the
+`agent-browser` runtime for you, so the intended flow is:
+
+1. Enable the preview with `loongclaw skills enable-browser-preview`.
+2. Install the runtime with `npm install -g agent-browser && agent-browser install`.
+3. Verify the runtime with `agent-browser open example.com` or rerun `loongclaw doctor`.
+4. Try one of the generated recipes, such as:
+   - summarize a page
+   - extract page text
+   - follow a link and summarize the destination
+
+A healthy `doctor` run should then keep the browser preview in the suggested
+next actions instead of dropping the user into low-level runtime wording.
+If you have disabled the CLI surface with `cli.enabled=false`, LoongClaw will
+stop short of printing the ask-based browser preview recipes until you re-enable
+the CLI.
 
 ## Key Features
 
@@ -699,8 +721,8 @@ loongclaw validate-config --config ~/.loongclaw/config.toml --json
 ## Contributing
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow,
-including contribution workflows (routine vs. higher-risk changes) and recipes for adding
-providers, tools, and channels.
+including the active `alpha-test` contribution branch, issue intake routes, validation
+expectations, and recipes for adding providers, tools, and channels.
 
 - [Contributing Guide](CONTRIBUTING.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)

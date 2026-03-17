@@ -70,6 +70,81 @@ impl Drop for ScopedEnv {
 /// Monotonic counter for unique harness IDs (avoids temp dir collisions).
 static HARNESS_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
+static TEST_TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+pub(crate) fn unique_temp_dir(prefix: &str) -> PathBuf {
+    let id = TEST_TEMP_DIR_COUNTER.fetch_add(1, Ordering::SeqCst);
+    std::env::temp_dir().join(format!("{prefix}-{}-{id}", std::process::id()))
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn write_executable_script_atomically(
+    script_path: &std::path::Path,
+    contents: &str,
+) -> std::io::Result<()> {
+    write_executable_script_atomically_with(script_path, |file| {
+        std::io::Write::write_all(file, contents.as_bytes())
+    })
+}
+
+#[cfg(all(test, unix))]
+fn write_executable_script_atomically_with<F>(
+    script_path: &std::path::Path,
+    writer: F,
+) -> std::io::Result<()>
+where
+    F: FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+{
+    static NEXT_STAGING_FILE_SEED: AtomicU64 = AtomicU64::new(1);
+
+    let Some(parent) = script_path.parent() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "script path `{}` has no parent directory",
+                script_path.display()
+            ),
+        ));
+    };
+    let Some(file_name) = script_path.file_name().and_then(|name| name.to_str()) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "script path `{}` has no UTF-8 file name",
+                script_path.display()
+            ),
+        ));
+    };
+
+    let seed = NEXT_STAGING_FILE_SEED.fetch_add(1, Ordering::Relaxed);
+    let staged_path = parent.join(format!(".{file_name}.{}.{seed}.tmp", std::process::id()));
+    let mut staged_file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&staged_path)?;
+    let write_result = writer(&mut staged_file).and_then(|()| staged_file.sync_all());
+    drop(staged_file);
+
+    if let Err(error) = write_result {
+        let _ = std::fs::remove_file(&staged_path);
+        return Err(error);
+    }
+
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = std::fs::metadata(&staged_path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&staged_path, permissions)?;
+    if let Err(error) = std::fs::rename(&staged_path, script_path) {
+        let _ = std::fs::remove_file(&staged_path);
+        return Err(error);
+    }
+
+    Ok(())
+}
+
 /// Ergonomic builder for constructing fake `ProviderTurn` responses in tests.
 pub struct FakeProviderBuilder {
     text: String,
@@ -255,7 +330,10 @@ impl Drop for TurnTestHarness {
 
 #[cfg(test)]
 mod tests {
-    use super::ScopedEnv;
+    use super::{ScopedEnv, unique_temp_dir};
+
+    #[cfg(unix)]
+    use super::{write_executable_script_atomically, write_executable_script_atomically_with};
 
     #[test]
     fn scoped_env_recovers_after_mutex_poison() {
@@ -272,5 +350,36 @@ mod tests {
             recovery.is_ok(),
             "ScopedEnv::new should recover from a poisoned env lock"
         );
+    }
+
+    #[test]
+    fn unique_temp_dir_uses_distinct_paths() {
+        let first = unique_temp_dir("loongclaw-test-support");
+        let second = unique_temp_dir("loongclaw-test-support");
+
+        assert_ne!(first, second);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_executable_script_atomically_preserves_existing_script_when_write_fails() {
+        let root = unique_temp_dir("loongclaw-test-support-script-write-failure");
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let script_path = root.join("fixture-script");
+
+        write_executable_script_atomically(&script_path, "#!/bin/sh\necho old\n")
+            .expect("write baseline script");
+
+        let error = write_executable_script_atomically_with(&script_path, |_file| {
+            Err(std::io::Error::other("forced write failure"))
+        })
+        .expect_err("failed staged write should surface an error");
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert_eq!(
+            std::fs::read_to_string(&script_path).expect("baseline script should remain readable"),
+            "#!/bin/sh\necho old\n"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }

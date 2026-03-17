@@ -376,10 +376,10 @@ fn benchmark_copy_helper_preserves_contents() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn run_spec_pressure_once_rejects_native_claw_import_scenarios() {
+async fn run_spec_pressure_once_rejects_native_claw_migrate_scenarios() {
     let spec = loongclaw_spec::RunnerSpec {
         pack: VerticalPackManifest {
-            pack_id: "bench-spec-native-claw-import".to_owned(),
+            pack_id: "bench-spec-native-claw-migrate".to_owned(),
             domain: "ops".to_owned(),
             version: "0.1.0".to_owned(),
             default_route: ExecutionRoute {
@@ -390,7 +390,7 @@ async fn run_spec_pressure_once_rejects_native_claw_import_scenarios() {
             granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
             metadata: BTreeMap::new(),
         },
-        agent_id: "bench-agent-native-claw-import".to_owned(),
+        agent_id: "bench-agent-native-claw-migrate".to_owned(),
         ttl_s: 60,
         approval: None,
         defaults: None,
@@ -401,14 +401,14 @@ async fn run_spec_pressure_once_rejects_native_claw_import_scenarios() {
         auto_provision: None,
         hotfixes: Vec::new(),
         operation: loongclaw_spec::OperationSpec::ToolCore {
-            tool_name: "claw.import".to_owned(),
+            tool_name: "claw.migrate".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
             payload: json!({"mode": "plan"}),
             core: None,
         },
     };
     let scenario = ProgrammaticPressureScenario {
-        name: "native-claw-import".to_owned(),
+        name: "native-claw-migrate".to_owned(),
         description: None,
         iterations: Some(1),
         warmup_iterations: Some(0),
@@ -419,7 +419,7 @@ async fn run_spec_pressure_once_rejects_native_claw_import_scenarios() {
 
     let error = run_spec_pressure_once(&spec, &scenario, None)
         .await
-        .expect_err("bench spec runs should reject native claw.import scenarios");
+        .expect_err("bench spec runs should reject native claw.migrate scenarios");
     assert!(error.contains("native tool executor"));
 }
 
@@ -427,7 +427,7 @@ async fn run_spec_pressure_once_rejects_native_claw_import_scenarios() {
 async fn run_spec_pressure_once_uses_native_executor_when_present() {
     let spec = loongclaw_spec::RunnerSpec {
         pack: VerticalPackManifest {
-            pack_id: "bench-spec-native-claw-import-exec".to_owned(),
+            pack_id: "bench-spec-native-claw-migrate-exec".to_owned(),
             domain: "ops".to_owned(),
             version: "0.1.0".to_owned(),
             default_route: ExecutionRoute {
@@ -438,7 +438,7 @@ async fn run_spec_pressure_once_uses_native_executor_when_present() {
             granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
             metadata: BTreeMap::new(),
         },
-        agent_id: "bench-agent-native-claw-import-exec".to_owned(),
+        agent_id: "bench-agent-native-claw-migrate-exec".to_owned(),
         ttl_s: 60,
         approval: None,
         defaults: None,
@@ -449,14 +449,14 @@ async fn run_spec_pressure_once_uses_native_executor_when_present() {
         auto_provision: None,
         hotfixes: Vec::new(),
         operation: loongclaw_spec::OperationSpec::ToolCore {
-            tool_name: "claw.import".to_owned(),
+            tool_name: "claw.migrate".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
             payload: json!({"mode": "plan"}),
             core: None,
         },
     };
     let scenario = ProgrammaticPressureScenario {
-        name: "native-claw-import-exec".to_owned(),
+        name: "native-claw-migrate-exec".to_owned(),
         description: None,
         iterations: Some(1),
         warmup_iterations: Some(0),
@@ -477,7 +477,7 @@ async fn run_spec_pressure_once_uses_native_executor_when_present() {
 async fn run_spec_pressure_once_errors_when_executor_declines_native_request() {
     let spec = loongclaw_spec::RunnerSpec {
         pack: VerticalPackManifest {
-            pack_id: "bench-spec-native-claw-import-declined".to_owned(),
+            pack_id: "bench-spec-native-claw-migrate-declined".to_owned(),
             domain: "ops".to_owned(),
             version: "0.1.0".to_owned(),
             default_route: ExecutionRoute {
@@ -488,7 +488,7 @@ async fn run_spec_pressure_once_errors_when_executor_declines_native_request() {
             granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
             metadata: BTreeMap::new(),
         },
-        agent_id: "bench-agent-native-claw-import-declined".to_owned(),
+        agent_id: "bench-agent-native-claw-migrate-declined".to_owned(),
         ttl_s: 60,
         approval: None,
         defaults: None,
@@ -499,14 +499,14 @@ async fn run_spec_pressure_once_errors_when_executor_declines_native_request() {
         auto_provision: None,
         hotfixes: Vec::new(),
         operation: loongclaw_spec::OperationSpec::ToolCore {
-            tool_name: "claw.import".to_owned(),
+            tool_name: "claw.migrate".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
             payload: json!({"mode": "plan"}),
             core: None,
         },
     };
     let scenario = ProgrammaticPressureScenario {
-        name: "native-claw-import-declined".to_owned(),
+        name: "native-claw-migrate-declined".to_owned(),
         description: None,
         iterations: Some(1),
         warmup_iterations: Some(0),

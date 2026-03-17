@@ -53,7 +53,7 @@ Create a catalog module with deterministic metadata for:
   - `tool.search`
   - `tool.invoke`
 - discoverable tools
-  - `claw.import`
+  - `claw.migrate`
   - `external_skills.fetch`
   - `external_skills.inspect`
   - `external_skills.install`
@@ -421,7 +421,7 @@ fn external_skills_auto_expose_default_is_disabled() {
 #[test]
 fn required_capabilities_follow_effective_tool_request() {
     // `tool.invoke(file.read)` must require FilesystemRead.
-    // Writeful `claw.import` must also require FilesystemWrite.
+    // Writeful `claw.migrate` must also require FilesystemWrite.
 }
 
 #[tokio::test]

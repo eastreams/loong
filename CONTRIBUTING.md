@@ -66,6 +66,12 @@ Track B flow:
 
 If you are unsure which track applies, open an issue and ask maintainers for triage.
 
+## Branch Model
+
+- `alpha-test` is the active integration branch for normal OSS work.
+- `main` is the promotion branch and should only receive reviewed changes from `alpha-test`.
+- The repository default branch setting does not yet fully reflect this flow. Until that changes, treat the docs and workflow files on `alpha-test` as the authoritative contributor baseline.
+
 ## Where Do I Start?
 
 Use [Core Beliefs](docs/design-docs/core-beliefs.md) and [Layered Kernel Design](docs/design-docs/layered-kernel-design.md) for architecture principles and dependency boundaries.
@@ -127,11 +133,21 @@ cargo test --workspace --all-features
 ## Standard Workflow
 
 1. Fork the repository.
-2. Create a branch from `main`.
+2. Create a branch from `alpha-test`.
 3. Make focused commits.
 4. Run required checks.
-5. Open a pull request using the PR template.
+5. Open a pull request against `alpha-test` using the PR template unless a maintainer explicitly asks for a promotion PR into `main`.
 6. Address review feedback and keep PR scope focused.
+
+## Issue Intake
+
+- Use the bug report form for reproducible runtime or workflow defects.
+- Use the feature request form for new capabilities, behavior changes, or meaningful product/runtime improvements.
+- Use the documentation improvement form for contributor guide drift, missing references, or confusing review workflow docs.
+- Use GitHub Discussions for setup questions and general troubleshooting.
+- Use the private security advisory flow for vulnerabilities instead of public issues.
+
+See [docs/references/github-collaboration.md](docs/references/github-collaboration.md) for the current label baseline, issue routing, and the default-branch visibility caveat for issue forms.
 
 ## Commit and PR Expectations
 

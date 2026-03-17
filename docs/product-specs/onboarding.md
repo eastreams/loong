@@ -17,6 +17,9 @@ next.
       saved provider, prompt, memory, and channel inventory.
 - [ ] The primary post-onboard handoff prefers a one-shot `ask` example before
       interactive `chat`, so first success does not require learning the REPL.
+- [ ] The shared post-onboard next-step model can also surface optional browser
+      preview enable, runtime install, or first-recipe guidance when that lane
+      is available for the current config.
 - [ ] Rerunning onboarding does not silently overwrite an existing config unless
       the user explicitly opts into a destructive path such as `--force`.
 - [ ] Onboarding uses the same provider, memory, and channel configuration

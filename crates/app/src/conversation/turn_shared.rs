@@ -16,6 +16,8 @@ pub const TOOL_TRUNCATION_HINT_PROMPT: &str = "One or more tool results were tru
 pub const EXTERNAL_SKILL_FOLLOWUP_PROMPT: &str = "A managed external skill has been loaded into runtime context. Follow its instructions while answering the original user request. Do not restate the skill verbatim unless the user explicitly asks for it.";
 pub const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rounds. Do not repeat identical or cyclical tool calls without new evidence. Adjust strategy (different tool, arguments, or decomposition) or provide the best possible final answer and clearly state remaining gaps.";
 
+const FILE_READ_FOLLOWUP_CONTENT_PREVIEW_CHARS: usize = 384;
+
 pub fn next_conversation_turn_id() -> String {
     static NEXT_CONVERSATION_TURN_SEQ: AtomicU64 = AtomicU64::new(1);
     let seq = NEXT_CONVERSATION_TURN_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -374,6 +376,7 @@ pub fn build_tool_followup_user_prompt(
     user_input: &str,
     loop_warning_reason: Option<&str>,
     tool_result_text: Option<&str>,
+    rendered_tool_result_text: Option<&str>,
 ) -> String {
     let mut sections = vec![TOOL_FOLLOWUP_PROMPT.to_owned()];
     if let Some(reason) = loop_warning_reason {
@@ -381,14 +384,23 @@ pub fn build_tool_followup_user_prompt(
             "Loop warning:\n{reason}\nAvoid repeating the same tool call with unchanged results. Try a different tool, adjust arguments, or provide a best-effort final answer if evidence is sufficient."
         ));
     }
-    if tool_result_text
-        .map(tool_result_contains_truncation_signal)
-        .unwrap_or(false)
-    {
+    if followup_prompt_needs_truncation_hint(tool_result_text, rendered_tool_result_text) {
         sections.push(TOOL_TRUNCATION_HINT_PROMPT.to_owned());
     }
     sections.push(format!("Original request:\n{user_input}"));
     sections.join("\n\n")
+}
+
+fn followup_prompt_needs_truncation_hint(
+    tool_result_text: Option<&str>,
+    rendered_tool_result_text: Option<&str>,
+) -> bool {
+    tool_result_text
+        .map(tool_result_contains_truncation_signal)
+        .unwrap_or(false)
+        || rendered_tool_result_text
+            .map(tool_result_contains_truncation_signal)
+            .unwrap_or(false)
 }
 
 pub fn parse_external_skill_invoke_context(
@@ -399,6 +411,105 @@ pub fn parse_external_skill_invoke_context(
         .lines()
         .filter_map(parse_external_skill_invoke_context_line)
         .next()
+}
+
+pub fn reduce_followup_payload_for_model(label: &str, text: &str) -> String {
+    if label != "tool_result" {
+        return text.to_owned();
+    }
+    reduce_tool_result_text_for_model(text)
+}
+
+fn reduce_tool_result_text_for_model(text: &str) -> String {
+    let mut changed = false;
+    let reduced_lines = text
+        .lines()
+        .map(|line| {
+            let reduced = reduce_tool_result_line_for_model(line);
+            if reduced != line {
+                changed = true;
+            }
+            reduced
+        })
+        .collect::<Vec<_>>();
+    if !changed {
+        return text.to_owned();
+    }
+    let mut reduced = reduced_lines.join("\n");
+    if text.ends_with('\n') {
+        reduced.push('\n');
+    }
+    reduced
+}
+
+fn reduce_tool_result_line_for_model(line: &str) -> String {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return line.to_owned();
+    }
+    let Some((status_prefix, payload)) = trimmed.split_once(' ') else {
+        return line.to_owned();
+    };
+    if !(status_prefix.starts_with('[') && status_prefix.ends_with(']')) {
+        return line.to_owned();
+    }
+    let Ok(mut envelope) = serde_json::from_str::<Value>(payload) else {
+        return line.to_owned();
+    };
+    if envelope.get("tool").and_then(Value::as_str) != Some("file.read") {
+        return line.to_owned();
+    }
+    let Some(payload_summary) = envelope.get("payload_summary").and_then(Value::as_str) else {
+        return line.to_owned();
+    };
+    let Ok(payload_json) = serde_json::from_str::<Value>(payload_summary) else {
+        return line.to_owned();
+    };
+    let Some(reduced_summary) = reduce_file_read_payload_summary(&payload_json) else {
+        return line.to_owned();
+    };
+    let Some(envelope_object) = envelope.as_object_mut() else {
+        return line.to_owned();
+    };
+    envelope_object.insert("payload_summary".to_owned(), Value::String(reduced_summary));
+    envelope_object.insert("payload_truncated".to_owned(), Value::Bool(true));
+    let Ok(encoded) = serde_json::to_string(&envelope) else {
+        return line.to_owned();
+    };
+    format!("{status_prefix} {encoded}")
+}
+
+fn reduce_file_read_payload_summary(payload: &Value) -> Option<String> {
+    let payload_object = payload.as_object()?;
+    let (content_preview, content_chars, content_truncated) =
+        summarize_file_read_content_preview(payload_object.get("content"));
+    if !content_truncated {
+        return None;
+    }
+    serde_json::to_string(&serde_json::json!({
+        "path": payload_object.get("path").cloned().unwrap_or(Value::Null),
+        "bytes": payload_object.get("bytes").cloned().unwrap_or(Value::Null),
+        "truncated": payload_object.get("truncated").cloned().unwrap_or(Value::Null),
+        "content_preview": content_preview,
+        "content_chars": content_chars,
+        "content_truncated": content_truncated,
+    }))
+    .ok()
+}
+
+fn summarize_file_read_content_preview(value: Option<&Value>) -> (String, usize, bool) {
+    let text = value.and_then(Value::as_str).unwrap_or_default();
+    let total_chars = text.chars().count();
+    if total_chars <= FILE_READ_FOLLOWUP_CONTENT_PREVIEW_CHARS {
+        return (text.to_owned(), total_chars, false);
+    }
+    (
+        text.chars()
+            .take(FILE_READ_FOLLOWUP_CONTENT_PREVIEW_CHARS)
+            .collect(),
+        total_chars,
+        true,
+    )
 }
 
 pub fn build_external_skill_system_message(skill_context: &ExternalSkillInvokeContext) -> String {
@@ -470,6 +581,7 @@ where
             user_input,
             loop_warning_reason,
             Some(tool_result_text),
+            Some(bounded_result.as_str()),
         ),
     }));
     messages
@@ -495,7 +607,7 @@ where
     append_followup_warning(&mut messages, loop_warning_reason);
     messages.push(serde_json::json!({
         "role": "user",
-        "content": build_tool_followup_user_prompt(user_input, loop_warning_reason, None),
+        "content": build_tool_followup_user_prompt(user_input, loop_warning_reason, None, None),
     }));
     messages
 }
@@ -1059,6 +1171,26 @@ mod tests {
     }
 
     #[test]
+    fn tool_result_followup_tail_keeps_truncation_hint_when_payload_mapper_marks_result_truncated()
+    {
+        let tail = build_tool_result_followup_tail(
+            "preface",
+            r#"[ok] {"payload_truncated":false}"#,
+            "summarize note.md",
+            Some("warning"),
+            |_, _| r#"[ok] {"payload_truncated":true}"#.to_owned(),
+        );
+
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+        assert!(user_prompt.contains(TOOL_TRUNCATION_HINT_PROMPT));
+        assert!(user_prompt.contains("Loop warning:\nwarning"));
+    }
+
+    #[test]
     fn tool_failure_followup_tail_uses_payload_mapper_without_truncation_hint() {
         let tail = build_tool_failure_followup_tail(
             "preface",
@@ -1234,6 +1366,19 @@ mod tests {
         let prompt = build_tool_followup_user_prompt(
             "summarize this result",
             None,
+            Some(r#"[ok] {"payload_truncated":true}"#),
+            None,
+        );
+        assert!(prompt.contains(TOOL_TRUNCATION_HINT_PROMPT));
+        assert!(prompt.contains("Original request:\nsummarize this result"));
+    }
+
+    #[test]
+    fn followup_prompt_includes_truncation_hint_when_rendered_payload_is_truncated() {
+        let prompt = build_tool_followup_user_prompt(
+            "summarize this result",
+            None,
+            Some(r#"[ok] {"payload_truncated":false}"#),
             Some(r#"[ok] {"payload_truncated":true}"#),
         );
         assert!(prompt.contains(TOOL_TRUNCATION_HINT_PROMPT));

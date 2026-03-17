@@ -1250,9 +1250,9 @@ fn session_context_from_turn(turn: &ProviderTurn, tool_view: ToolView) -> Sessio
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::unique_temp_dir;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     use serde_json::json;
 
@@ -1337,11 +1337,7 @@ mod tests {
     }
 
     fn unique_browser_companion_temp_dir(prefix: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock should be after epoch")
-            .as_nanos();
-        std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+        unique_temp_dir(prefix)
     }
 
     #[cfg(unix)]
@@ -1351,18 +1347,14 @@ mod tests {
         stdout_body: &str,
         log_path: &Path,
     ) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-
         let path = root.join(name);
         let script = format!(
             "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf '1.2.3\\n'\n  exit 0\nfi\nBODY=\"$(cat)\"\nprintf '%s' \"$BODY\" > \"{}\"\nprintf '%s' '{}'\n",
             log_path.display(),
             stdout_body.replace('\'', "'\"'\"'")
         );
-        fs::write(&path, script).expect("write browser companion script");
-        let mut perms = fs::metadata(&path).expect("metadata").permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&path, perms).expect("chmod script");
+        crate::test_support::write_executable_script_atomically(&path, &script)
+            .expect("write browser companion script");
         path
     }
 
