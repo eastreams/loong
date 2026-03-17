@@ -207,7 +207,8 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
         label: &str,
         default: &str,
     ) -> loongclaw_daemon::CliResult<String> {
-        self.outputs.push(format!("PROMPT {label} [{default}]"));
+        self.outputs
+            .push(format!("PROMPT {label} (default: {default})"));
         let value = self.next_input(label)?;
         if value.trim().is_empty() {
             return Ok(default.to_owned());
@@ -1684,17 +1685,17 @@ fn onboard_risk_screen_uses_brand_header_and_continue_cancel_options() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("[y] Continue onboarding")),
+            .any(|line| line.contains("y) Continue onboarding")),
         "risk screen should show the affirmative path explicitly: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line.contains("[n] Cancel")),
+        lines.iter().any(|line| line.contains("n) Cancel")),
         "risk screen should keep cancellation explicit: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use [n], cancel"),
+            .any(|line| line == "press Enter to use default n, cancel"),
         "risk screen should make the safe default explicit on the screen itself: {lines:#?}"
     );
 }
@@ -2655,13 +2656,13 @@ fn onboard_entry_screen_uses_compact_header_and_detected_setup_digest() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("[2] Use detected starting point (recommended)")),
+            .any(|line| line.contains("2) Use detected starting point (recommended)")),
         "entry screen should keep the detected-setup path visible and recommended: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use [2], the detected starting point"),
+            .any(|line| line == "press Enter to use default 2, the detected starting point"),
         "entry screen should make the recommended default path explicit instead of hiding it only in the prompt default: {lines:#?}"
     );
 }
@@ -2696,7 +2697,7 @@ fn onboard_entry_screen_compacts_to_plain_wordmark_on_narrow_width() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "[1] Use detected starting point"),
+            .any(|line| line == "1) Use detected starting point"),
         "narrow layout should keep the primary entry choice readable: {lines:#?}"
     );
     assert!(
@@ -2993,7 +2994,7 @@ fn onboard_provider_selection_screen_shows_default_enter_choice_when_provider_is
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use [openai], the OpenAI provider"),
+            .any(|line| line == "press Enter to use default openai, the OpenAI provider"),
         "provider choice screen should make the resolved default provider explicit instead of relying only on the prompt default: {lines:#?}"
     );
 }
@@ -3035,13 +3036,13 @@ fn onboard_provider_selection_screen_uses_profile_ids_for_same_kind_choices() {
     let lines = loongclaw_daemon::onboard_cli::render_provider_selection_screen_lines(&plan, 80);
 
     assert!(
-        lines.iter().any(|line| line == "[openai-gpt-5] OpenAI"),
+        lines.iter().any(|line| line == "openai-gpt-5) OpenAI"),
         "same-kind provider choices should expose the stable profile id instead of only the provider kind: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "[openai-o4-mini] OpenAI (recommended)"),
+            .any(|line| line == "openai-o4-mini) OpenAI (recommended)"),
         "only the resolved default profile should be marked recommended when same-kind choices coexist: {lines:#?}"
     );
     assert!(
@@ -3059,7 +3060,7 @@ fn onboard_provider_selection_screen_uses_profile_ids_for_same_kind_choices() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use [openai-o4-mini], the OpenAI provider"),
+            .any(|line| line == "press Enter to use default openai-o4-mini, the OpenAI provider"),
         "the Enter shortcut should point at the concrete default profile id, not only the provider kind: {lines:#?}"
     );
     assert!(
@@ -3317,19 +3318,17 @@ fn onboard_current_setup_shortcut_screen_summarizes_existing_setup_and_choices()
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("[1] Keep current setup (recommended)")),
+            .any(|line| line.contains("1) Keep current setup (recommended)")),
         "current-setup shortcut should make the keep-as-is path primary: {lines:#?}"
     );
     assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("[2] Adjust settings")),
+        lines.iter().any(|line| line.contains("2) Adjust settings")),
         "current-setup shortcut should keep an explicit path into detailed edits: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use [1], keep current setup"),
+            .any(|line| line == "press Enter to use default 1, keep current setup"),
         "current-setup shortcut should make the fast-lane default explicit on the screen: {lines:#?}"
     );
 }
@@ -3422,7 +3421,7 @@ fn onboard_detected_setup_shortcut_screen_summarizes_starting_point_and_choices(
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("[1] Use detected starting point (recommended)")),
+            .any(|line| line.contains("1) Use detected starting point (recommended)")),
         "detected-setup shortcut should make the detected fast lane primary: {lines:#?}"
     );
     assert!(
@@ -3438,15 +3437,13 @@ fn onboard_detected_setup_shortcut_screen_summarizes_starting_point_and_choices(
         "detected-setup shortcut should not imply that review is skipped entirely: {lines:#?}"
     );
     assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("[2] Adjust settings")),
+        lines.iter().any(|line| line.contains("2) Adjust settings")),
         "detected-setup shortcut should keep an explicit path into detailed edits: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use [1], the detected starting point"),
+            .any(|line| line == "press Enter to use default 1, the detected starting point"),
         "detected-setup shortcut should make the fast-lane default explicit on the screen: {lines:#?}"
     );
 }
@@ -3560,7 +3557,7 @@ fn onboard_starting_point_selection_screen_uses_compact_header_and_detected_opti
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("[1] suggested starting point (recommended)")),
+            .any(|line| line.contains("1) suggested starting point (recommended)")),
         "starting-point screen should promote the suggested starting point first: {lines:#?}"
     );
     assert!(
@@ -3576,7 +3573,7 @@ fn onboard_starting_point_selection_screen_uses_compact_header_and_detected_opti
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use [1], the suggested starting point"),
+            .any(|line| line == "press Enter to use default 1, the suggested starting point"),
         "starting-point screen should make the default Enter behavior explicit when a suggested starting point is available: {lines:#?}"
     );
 }
@@ -4003,10 +4000,10 @@ fn onboard_starting_point_selection_screen_prioritizes_richer_direct_sources() {
     .join("\n");
 
     let environment_index = joined
-        .find("[1] your current environment")
+        .find("1) your current environment")
         .expect("environment option should render first when it covers more setup domains");
     let codex_index = joined
-        .find("[2] Codex config at ~/.codex/config.toml")
+        .find("2) Codex config at ~/.codex/config.toml")
         .expect("codex option should render after the richer environment candidate");
 
     assert!(
@@ -4039,10 +4036,10 @@ fn onboard_starting_point_selection_screen_prefers_explicit_config_sources_when_
     .join("\n");
 
     let codex_index = joined
-        .find("[1] Codex config at ~/.codex/config.toml")
+        .find("1) Codex config at ~/.codex/config.toml")
         .expect("codex option should render first when direct-source coverage is tied");
     let environment_index = joined
-        .find("[2] your current environment")
+        .find("2) your current environment")
         .expect("environment option should render after codex when coverage is tied");
 
     assert!(
@@ -4067,7 +4064,7 @@ fn onboard_starting_point_selection_screen_wraps_long_option_labels_and_details(
         loongclaw_daemon::onboard_cli::render_starting_point_selection_screen_lines(&[codex], 48);
 
     assert!(
-        lines.iter().any(|line| line == "[1] Codex config at"),
+        lines.iter().any(|line| line == "1) Codex config at"),
         "starting-point screen should wrap long option labels instead of overflowing them: {lines:#?}"
     );
     assert!(
@@ -4706,23 +4703,23 @@ fn onboard_existing_config_write_screen_offers_replace_backup_and_cancel() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("[o] Replace existing config")),
+            .any(|line| line.contains("o) Replace existing config")),
         "existing-config write screen should keep the replace path visible: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("[b] Create backup and replace")),
+            .any(|line| line.contains("b) Create backup and replace")),
         "existing-config write screen should keep the safer backup path visible: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line.contains("[c] Cancel")),
+        lines.iter().any(|line| line.contains("c) Cancel")),
         "existing-config write screen should keep cancellation explicit: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use [c], cancel"),
+            .any(|line| line == "press Enter to use default c, cancel"),
         "existing-config write screen should make the safe default explicit on the screen itself: {lines:#?}"
     );
 }
@@ -4783,19 +4780,17 @@ fn onboard_preflight_screen_summarizes_status_counts_and_guidance() {
         "preflight screen should explain the decision context when warnings or failures exist: {lines:#?}"
     );
     assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("[y] Continue anyway")),
+        lines.iter().any(|line| line.contains("y) Continue anyway")),
         "preflight screen should show the continue path explicitly when attention is still required: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line.contains("[n] Cancel")),
+        lines.iter().any(|line| line.contains("n) Cancel")),
         "preflight screen should keep the cancel path explicit when checks are not green: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use [n], cancel"),
+            .any(|line| line == "press Enter to use default n, cancel"),
         "preflight screen should make the safe default explicit when attention is still required: {lines:#?}"
     );
     assert!(
@@ -4821,17 +4816,17 @@ fn onboard_preflight_screen_omits_continue_cancel_choices_when_all_checks_are_gr
     assert!(
         lines
             .iter()
-            .all(|line| !line.contains("[y] Continue anyway")),
+            .all(|line| !line.contains("y) Continue anyway")),
         "fully green preflight should not render a continue-anyway choice that will never be asked: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| !line.contains("[n] Cancel")),
+        lines.iter().all(|line| !line.contains("n) Cancel")),
         "fully green preflight should not render a cancellation choice that does not apply on this screen: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .all(|line| line.as_str() != "press Enter to use [n], cancel"),
+            .all(|line| line.as_str() != "press Enter to use default n, cancel"),
         "fully green preflight should not show a default-cancel hint when the flow proceeds automatically: {lines:#?}"
     );
 }
@@ -4941,13 +4936,13 @@ fn onboard_write_confirmation_screen_shows_target_path_and_write_choice() {
         "write-confirm screen should remind users when they are writing despite warnings: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line.contains("[y] Write config")),
+        lines.iter().any(|line| line.contains("y) Write config")),
         "write-confirm screen should show the affirmative path explicitly: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use [y], write config"),
+            .any(|line| line == "press Enter to use default y, write config"),
         "write-confirm screen should make the default write action explicit instead of relying only on the prompt suffix: {lines:#?}"
     );
 }
@@ -5240,7 +5235,7 @@ requires_openai_auth = true
 
     let joined = transcript.join("\n");
     assert!(
-        joined.contains("[2] Codex config at"),
+        joined.contains("2) Codex config at"),
         "the Codex candidate should remain selectable by the same index it shows on screen: {transcript:#?}"
     );
     assert!(

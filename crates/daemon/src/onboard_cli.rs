@@ -47,7 +47,37 @@ pub trait OnboardUi {
         label: &str,
         options: &[SelectOption],
         default: Option<usize>,
-    ) -> CliResult<usize>;
+    ) -> CliResult<usize> {
+        let default = validate_select_one_state(options.len(), default)?;
+        loop {
+            let input = if let Some(default_index) = default {
+                self.prompt_with_default(label, &(default_index + 1).to_string())?
+            } else {
+                self.prompt_required(label)?
+            };
+            let trimmed = input.trim();
+            if let Ok(selected) = trimmed.parse::<usize>()
+                && (1..=options.len()).contains(&selected)
+            {
+                return Ok(selected - 1);
+            }
+            if let Some(index) = options
+                .iter()
+                .position(|option| option.slug.eq_ignore_ascii_case(trimmed))
+            {
+                return Ok(index);
+            }
+            self.print_line(&format!(
+                "invalid selection. enter a number between 1 and {}, or one of: {}",
+                options.len(),
+                options
+                    .iter()
+                    .map(|option| option.slug.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))?;
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -89,7 +119,7 @@ impl OnboardUi for StdioOnboardUi {
     }
 
     fn prompt_with_default(&mut self, label: &str, default: &str) -> CliResult<String> {
-        print!("{label} [{default}]: ");
+        print!("{}", render_prompt_with_default_text(label, default));
         io::stdout()
             .flush()
             .map_err(|error| format!("flush stdout failed: {error}"))?;
@@ -161,7 +191,7 @@ impl OnboardUi for StdioOnboardUi {
             }
             println!();
             let prompt_text = match default {
-                Some(idx) => format!("{label} (default {}):", idx + 1),
+                Some(idx) => render_prompt_with_default_text(label, &(idx + 1).to_string()),
                 None => format!("{label}: "),
             };
             print!("{prompt_text}");
@@ -3467,7 +3497,7 @@ fn render_onboard_option_lines(options: &[OnboardScreenOption], width: usize) ->
         };
         lines.extend(
             mvp::presentation::render_wrapped_text_line_with_continuation(
-                &format!("[{}] ", option.key),
+                &render_onboard_option_prefix(&option.key),
                 "    ",
                 &format!("{}{}", option.label, suffix),
                 width,
@@ -3486,7 +3516,15 @@ fn render_onboard_option_lines(options: &[OnboardScreenOption], width: usize) ->
 }
 
 fn render_default_choice_footer_line(key: &str, description: &str) -> String {
-    format!("press Enter to use [{key}], {description}")
+    format!("press Enter to use default {key}, {description}")
+}
+
+fn render_prompt_with_default_text(label: &str, default: &str) -> String {
+    format!("{label} (default: {default}): ")
+}
+
+fn render_onboard_option_prefix(key: &str) -> String {
+    format!("{key}) ")
 }
 
 fn render_default_input_hint_line(description: impl AsRef<str>) -> String {
@@ -6636,6 +6674,95 @@ mod tests {
             error.contains("default selection index"),
             "invalid default index should be reported clearly: {error}"
         );
+    }
+
+    #[test]
+    fn default_choice_footer_avoids_bracket_default_syntax() {
+        assert_eq!(
+            render_default_choice_footer_line("1", "keep current setup"),
+            "press Enter to use default 1, keep current setup"
+        );
+    }
+
+    #[test]
+    fn prompt_with_default_text_avoids_bracket_default_syntax() {
+        assert_eq!(
+            render_prompt_with_default_text("Setup path", "1"),
+            "Setup path (default: 1): "
+        );
+    }
+
+    #[test]
+    fn render_onboard_option_lines_avoid_bracketed_choice_tokens() {
+        let lines = render_onboard_option_lines(
+            &[OnboardScreenOption {
+                key: "1".to_owned(),
+                label: "Keep current setup".to_owned(),
+                detail_lines: vec!["reuse the detected setup".to_owned()],
+                recommended: true,
+            }],
+            80,
+        );
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("1) Keep current setup (recommended)")),
+            "choice rows should present plain option markers instead of bracket wrappers: {lines:#?}"
+        );
+        assert!(
+            lines.iter().all(|line| !line.contains("[1]")),
+            "choice rows should not imply that brackets are part of the expected input syntax: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn onboard_ui_select_one_default_impl_accepts_slug_input() {
+        struct FallbackSelectUi {
+            input: Option<String>,
+        }
+
+        impl OnboardUi for FallbackSelectUi {
+            fn print_line(&mut self, _line: &str) -> CliResult<()> {
+                Ok(())
+            }
+
+            fn prompt_with_default(&mut self, _label: &str, _default: &str) -> CliResult<String> {
+                Ok(self.input.take().unwrap_or_default())
+            }
+
+            fn prompt_required(&mut self, _label: &str) -> CliResult<String> {
+                Ok(self.input.take().unwrap_or_default())
+            }
+
+            fn prompt_confirm(&mut self, _message: &str, default: bool) -> CliResult<bool> {
+                Ok(default)
+            }
+        }
+
+        let mut ui = FallbackSelectUi {
+            input: Some("friendly_collab".to_owned()),
+        };
+        let options = vec![
+            SelectOption {
+                label: "calm engineering".to_owned(),
+                slug: "calm_engineering".to_owned(),
+                description: String::new(),
+                recommended: true,
+            },
+            SelectOption {
+                label: "friendly collab".to_owned(),
+                slug: "friendly_collab".to_owned(),
+                description: String::new(),
+                recommended: false,
+            },
+        ];
+
+        let index = ui
+            .select_one("Personality", &options, Some(0))
+            .expect("default trait implementation should accept slug input");
+
+        assert_eq!(index, 1);
     }
 
     #[test]
