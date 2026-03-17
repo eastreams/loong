@@ -6031,6 +6031,7 @@ fn onboarding_success_summary_reports_existing_config_kept() {
         saved_provider_profiles: Vec::new(),
         model: "auto".to_owned(),
         transport: "chat_completions compatibility mode".to_owned(),
+        provider_endpoint: None,
         credential: Some(loongclaw_daemon::onboard_cli::OnboardingCredentialSummary {
             label: "credential source",
             value: "${OPENAI_API_KEY}".to_owned(),
@@ -6108,6 +6109,7 @@ fn onboarding_success_summary_groups_domain_outcomes_by_decision() {
         saved_provider_profiles: Vec::new(),
         model: "openai/gpt-5.1-codex".to_owned(),
         transport: "chat_completions compatibility mode".to_owned(),
+        provider_endpoint: None,
         credential: Some(loongclaw_daemon::onboard_cli::OnboardingCredentialSummary {
             label: "credential source",
             value: "${OPENAI_API_KEY}".to_owned(),
@@ -6172,6 +6174,7 @@ fn onboarding_success_summary_wraps_domain_outcomes_for_narrow_width() {
         saved_provider_profiles: Vec::new(),
         model: "openai/gpt-5.1-codex".to_owned(),
         transport: "chat_completions compatibility mode".to_owned(),
+        provider_endpoint: None,
         credential: Some(loongclaw_daemon::onboard_cli::OnboardingCredentialSummary {
             label: "credential source",
             value: "${OPENAI_API_KEY}".to_owned(),
@@ -6342,6 +6345,25 @@ fn onboard_review_lines_surface_transport_summary_for_responses_compatibility_mo
 }
 
 #[test]
+fn onboard_review_lines_surface_region_endpoint_note_for_minimax() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.kind = mvp::config::ProviderKind::Minimax;
+
+    let lines = loongclaw_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
+        &config,
+        None,
+        &[],
+        80,
+    );
+
+    assert!(
+        lines.iter().any(|line| line.contains("api.minimaxi.com"))
+            && lines.iter().any(|line| line.contains("api.minimax.io")),
+        "review screen should show the current and alternate MiniMax regional endpoints: {lines:#?}"
+    );
+}
+
+#[test]
 fn onboarding_success_summary_surfaces_transport_summary() {
     let mut config = mvp::config::LoongClawConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Deepseek;
@@ -6359,6 +6381,24 @@ fn onboarding_success_summary_surfaces_transport_summary() {
             .iter()
             .any(|line| { line == "- transport: responses compatibility mode with chat fallback" }),
         "success summary should preserve the transport mode so imported Responses configs stay explainable: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_surfaces_region_endpoint_note_for_zhipu() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.kind = mvp::config::ProviderKind::Zhipu;
+
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary =
+        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let lines =
+        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+
+    let rendered = lines.join("\n");
+    assert!(
+        rendered.contains("open.bigmodel.cn") && rendered.contains("api.z.ai"),
+        "success summary should preserve region endpoint guidance for region-sensitive providers: {lines:#?}"
     );
 }
 

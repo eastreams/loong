@@ -461,6 +461,7 @@ pub struct OnboardingSuccessSummary {
     pub saved_provider_profiles: Vec<String>,
     pub model: String,
     pub transport: String,
+    pub provider_endpoint: Option<String>,
     pub credential: Option<OnboardingCredentialSummary>,
     pub prompt_mode: String,
     pub personality: Option<String>,
@@ -1411,34 +1412,42 @@ fn provider_model_probe_failure_check(
     error: String,
 ) -> OnboardCheck {
     let provider_prefix = provider_check_detail_prefix(config);
+    let auth_style_failure = mvp::provider::is_auth_style_failure_message(error.as_str());
+    let append_region_hint = |mut detail: String| {
+        if auth_style_failure && let Some(hint) = config.provider.region_endpoint_failure_hint() {
+            detail.push(' ');
+            detail.push_str(hint.as_str());
+        }
+        detail
+    };
     let (level, detail, non_interactive_warning_policy) = match config
         .provider
         .model_catalog_probe_recovery()
     {
         mvp::config::ModelCatalogProbeRecovery::ExplicitModel(model) => (
             OnboardCheckLevel::Warn,
-            format!(
+            append_region_hint(format!(
                 "{provider_prefix}: model catalog probe failed ({error}); chat may still work because model `{model}` is explicitly configured"
-            ),
+            )),
             OnboardNonInteractiveWarningPolicy::AcceptedByExplicitModel,
         ),
         mvp::config::ModelCatalogProbeRecovery::ConfiguredPreferredModels(fallback_models) => (
             OnboardCheckLevel::Warn,
-            format!(
+            append_region_hint(format!(
                 "{provider_prefix}: model catalog probe failed ({error}); runtime will try configured preferred model fallback(s): {}",
                 render_onboard_model_candidate_list(&fallback_models)
-            ),
+            )),
             OnboardNonInteractiveWarningPolicy::AcceptedByPreferredModels,
         ),
         mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
             recommended_onboarding_model,
         } => (
             OnboardCheckLevel::Fail,
-            provider_model_probe_requires_explicit_model_detail(
+            append_region_hint(provider_model_probe_requires_explicit_model_detail(
                 provider_prefix.as_str(),
                 error.as_str(),
                 recommended_onboarding_model,
-            ),
+            )),
             if recommended_onboarding_model.is_some() {
                 OnboardNonInteractiveWarningPolicy::RequiresExplicitModel
             } else {
@@ -2938,6 +2947,7 @@ fn build_onboarding_success_summary_with_memory(
         saved_provider_profiles: crate::provider_presentation::saved_provider_profile_ids(config),
         model: config.provider.model.clone(),
         transport: config.provider.transport_readiness().summary,
+        provider_endpoint: config.provider.region_endpoint_note(),
         credential: summarize_provider_credential(&config.provider),
         prompt_mode: summarize_prompt_mode(config),
         personality: config
@@ -3090,6 +3100,13 @@ fn render_onboarding_success_summary_with_width_and_style(
         &summary.transport,
         width,
     ));
+    if let Some(provider_endpoint) = summary.provider_endpoint.as_deref() {
+        lines.extend(mvp::presentation::render_wrapped_text_line(
+            "- provider endpoint: ",
+            provider_endpoint,
+            width,
+        ));
+    }
     if let Some(credential) = summary.credential.as_ref() {
         lines.extend(mvp::presentation::render_wrapped_text_line(
             &format!("- {}: ", credential.label),
@@ -4607,6 +4624,13 @@ fn render_onboard_review_digest_lines(
         &config.provider.transport_readiness().summary,
         width,
     ));
+    if let Some(provider_endpoint) = config.provider.region_endpoint_note() {
+        lines.extend(mvp::presentation::render_wrapped_text_line(
+            "- provider endpoint: ",
+            &provider_endpoint,
+            width,
+        ));
+    }
 
     if let Some(credential_line) = render_onboard_review_credential_line(&config.provider) {
         lines.push(credential_line);
@@ -5616,6 +5640,44 @@ mod tests {
         assert!(
             check.detail.contains("rerun onboarding"),
             "reviewed providers should suggest rerunning onboarding to accept the reviewed model instead of leaving recovery implicit: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn provider_model_probe_failure_includes_region_hint_for_minimax() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Minimax;
+        config.provider.model = "auto".to_owned();
+
+        let check =
+            provider_model_probe_failure_check(&config, "provider returned status 401".to_owned());
+
+        assert_eq!(check.name, "provider model probe");
+        assert_eq!(check.level, OnboardCheckLevel::Fail);
+        assert!(
+            check.detail.contains("https://api.minimax.io"),
+            "onboard probe failures for region-sensitive providers should surface the alternate endpoint: {check:#?}"
+        );
+        assert!(
+            check.detail.contains("provider.base_url"),
+            "onboard probe failures should explain the concrete config knob to change: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn provider_model_probe_failure_skips_region_hint_for_non_auth_errors() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Minimax;
+        config.provider.model = "auto".to_owned();
+
+        let check =
+            provider_model_probe_failure_check(&config, "provider returned status 503".to_owned());
+
+        assert_eq!(check.name, "provider model probe");
+        assert_eq!(check.level, OnboardCheckLevel::Fail);
+        assert!(
+            !check.detail.contains("provider.base_url"),
+            "non-auth probe failures should not steer operators toward region endpoint changes: {check:#?}"
         );
     }
 

@@ -84,6 +84,27 @@ fn plan_model_status_outcome(
     }
 }
 
+fn render_status_failure_message(
+    provider: &ProviderConfig,
+    reason: ProviderFailoverReason,
+    status_code: u16,
+    model: &str,
+    attempt: usize,
+    max_attempts: usize,
+    response_body: &Value,
+) -> String {
+    let mut message = format!(
+        "provider returned status {status_code} for model `{model}` on attempt {attempt}/{max_attempts}: {response_body}"
+    );
+    if matches!(reason, ProviderFailoverReason::AuthRejected)
+        && let Some(hint) = provider.request_region_endpoint_failure_hint()
+    {
+        message.push(' ');
+        message.push_str(hint.as_str());
+    }
+    message
+}
+
 pub(super) async fn execute_model_request<T, BuildBody, ParseSuccess, PreStatusError>(
     runtime: ModelRequestRuntime<'_>,
     mut build_body: BuildBody,
@@ -311,10 +332,14 @@ where
                     }
                     ModelStatusOutcome::Fail { reason } => {
                         return Err(build_model_request_error(
-                            format!(
-                                "provider returned status {status_code} for model `{}` on attempt {attempt}/{max_attempts}: {response_body}",
+                            render_status_failure_message(
+                                runtime.provider,
+                                reason,
+                                status_code,
                                 runtime.model,
-                                max_attempts = runtime.request_policy.max_attempts
+                                attempt,
+                                runtime.request_policy.max_attempts,
+                                &response_body,
                             ),
                             false,
                             reason,
@@ -377,6 +402,7 @@ where
 mod tests {
     use super::*;
     use crate::provider::contracts::provider_runtime_contract;
+    use serde_json::json;
 
     struct ModelStatusCase {
         status_code: u16,
@@ -471,5 +497,59 @@ mod tests {
                 case.status_code, case.attempt, case.auto_model_mode, case.api_error
             );
         }
+    }
+
+    #[test]
+    fn render_status_failure_message_includes_region_hint_for_auth_rejection() {
+        let provider = ProviderConfig {
+            kind: crate::config::ProviderKind::Minimax,
+            ..ProviderConfig::default()
+        };
+
+        let message = render_status_failure_message(
+            &provider,
+            ProviderFailoverReason::AuthRejected,
+            401,
+            "MiniMax-M2.5",
+            1,
+            3,
+            &json!({
+                "error": {
+                    "message": "invalid api key"
+                }
+            }),
+        );
+
+        assert!(message.contains("provider.base_url"));
+        assert!(message.contains("https://api.minimax.io"));
+        assert!(message.contains("https://api.minimaxi.com"));
+    }
+
+    #[test]
+    fn render_status_failure_message_ignores_models_endpoint_override_for_request_auth_hint() {
+        let mut provider = ProviderConfig {
+            kind: crate::config::ProviderKind::Zai,
+            ..ProviderConfig::default()
+        };
+        provider.set_models_endpoint(Some("https://open.bigmodel.cn/v1/models".to_owned()));
+
+        let message = render_status_failure_message(
+            &provider,
+            ProviderFailoverReason::AuthRejected,
+            401,
+            "glm-4.5",
+            1,
+            3,
+            &json!({
+                "error": {
+                    "message": "invalid api key"
+                }
+            }),
+        );
+
+        assert!(message.contains("provider.base_url"));
+        assert!(!message.contains("provider.models_endpoint"));
+        assert!(message.contains("https://api.z.ai"));
+        assert!(message.contains("https://open.bigmodel.cn"));
     }
 }

@@ -991,33 +991,41 @@ fn provider_model_probe_failure_check(
     error: String,
 ) -> DoctorCheck {
     let provider_prefix = crate::provider_presentation::active_provider_detail_label(config);
+    let auth_style_failure = mvp::provider::is_auth_style_failure_message(error.as_str());
+    let append_region_hint = |mut detail: String| {
+        if auth_style_failure && let Some(hint) = config.provider.region_endpoint_failure_hint() {
+            detail.push(' ');
+            detail.push_str(hint.as_str());
+        }
+        detail
+    };
     let (level, detail) = match config.provider.model_catalog_probe_recovery() {
         mvp::config::ModelCatalogProbeRecovery::ExplicitModel(model) => (
             DoctorCheckLevel::Warn,
-            format!(
+            append_region_hint(format!(
                 "{provider_prefix}: {MODEL_CATALOG_PROBE_FAILED_MARKER} ({error}); chat may still work because model `{model}` is explicitly configured"
-            ),
+            )),
         ),
         mvp::config::ModelCatalogProbeRecovery::ConfiguredPreferredModels(fallback_models) => (
             DoctorCheckLevel::Warn,
-            format!(
+            append_region_hint(format!(
                 "{provider_prefix}: {MODEL_CATALOG_PROBE_FAILED_MARKER} ({error}); runtime will try configured preferred model fallback(s): {}",
                 fallback_models
                     .iter()
                     .map(|model| format!("`{model}`"))
                     .collect::<Vec<_>>()
                     .join(", ")
-            ),
+            )),
         ),
         mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
             recommended_onboarding_model,
         } => (
             DoctorCheckLevel::Fail,
-            provider_model_probe_requires_explicit_model_detail(
+            append_region_hint(provider_model_probe_requires_explicit_model_detail(
                 provider_prefix.as_str(),
                 error.as_str(),
                 recommended_onboarding_model,
-            ),
+            )),
         ),
     };
 
@@ -1042,6 +1050,7 @@ fn provider_model_probe_requires_explicit_model_detail(
         ),
     }
 }
+
 #[allow(dead_code)]
 fn collect_channel_doctor_checks(config: &mvp::config::LoongClawConfig) -> Vec<DoctorCheck> {
     crate::migration::channels::collect_channel_doctor_checks(config)
@@ -1219,6 +1228,12 @@ fn build_doctor_next_steps_with_path_env(
             && check.level != DoctorCheckLevel::Pass
             && check.detail.contains(MODEL_CATALOG_PROBE_FAILED_MARKER)
     }) {
+        let provider_model_probe_auth_failure = checks.iter().any(|check| {
+            check.name == "provider model probe"
+                && check.level != DoctorCheckLevel::Pass
+                && check.detail.contains(MODEL_CATALOG_PROBE_FAILED_MARKER)
+                && mvp::provider::is_auth_style_failure_message(check.detail.as_str())
+        });
         match config.provider.model_catalog_probe_recovery() {
             mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
                 recommended_onboarding_model: Some(model),
@@ -1261,6 +1276,11 @@ fn build_doctor_next_steps_with_path_env(
                     ),
                 );
             }
+        }
+        if provider_model_probe_auth_failure
+            && let Some(hint) = config.provider.region_endpoint_failure_hint()
+        {
+            push_unique_step(&mut steps, hint);
         }
     }
 
@@ -1801,6 +1821,112 @@ mod tests {
         assert!(
             check.detail.contains("rerun onboarding"),
             "doctor should suggest rerunning onboarding to accept the reviewed model instead of leaving recovery implicit: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn provider_model_probe_failure_includes_region_hint_for_zhipu() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Zhipu;
+        config.provider.model = "auto".to_owned();
+
+        let check =
+            provider_model_probe_failure_check(&config, "provider returned status 401".to_owned());
+
+        assert_eq!(check.name, "provider model probe");
+        assert_eq!(check.level, DoctorCheckLevel::Fail);
+        assert!(
+            check.detail.contains("https://api.z.ai"),
+            "doctor probe failures should surface the alternate regional endpoint when auth can be region-bound: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn provider_model_probe_failure_skips_region_hint_for_non_auth_errors() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Zhipu;
+        config.provider.model = "auto".to_owned();
+
+        let check =
+            provider_model_probe_failure_check(&config, "provider returned status 503".to_owned());
+
+        assert_eq!(check.name, "provider model probe");
+        assert_eq!(check.level, DoctorCheckLevel::Fail);
+        assert!(
+            !check.detail.contains("provider.base_url"),
+            "non-auth doctor probe failures should not steer operators toward region endpoint changes: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn build_doctor_next_steps_includes_region_endpoint_step_for_minimax_probe_failures() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Minimax;
+        let checks = vec![
+            DoctorCheck {
+                name: "provider credentials".to_owned(),
+                level: DoctorCheckLevel::Pass,
+                detail: "provider credentials are available".to_owned(),
+            },
+            DoctorCheck {
+                name: "provider model probe".to_owned(),
+                level: DoctorCheckLevel::Fail,
+                detail:
+                    "MiniMax [minimax]: model catalog probe failed (provider returned status 401)"
+                        .to_owned(),
+            },
+        ];
+
+        let next_steps = build_doctor_next_steps_with_path_env(
+            &checks,
+            Path::new("/tmp/loongclaw.toml"),
+            &config,
+            false,
+            Some(std::ffi::OsStr::new("")),
+        );
+
+        assert!(
+            next_steps.iter().any(|step| {
+                step.contains("provider.base_url")
+                    && step.contains("https://api.minimax.io")
+                    && step.contains("https://api.minimaxi.com")
+            }),
+            "doctor next steps should include a concrete region endpoint adjustment for MiniMax auth/probe failures: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn build_doctor_next_steps_skips_region_endpoint_step_for_non_auth_probe_failures() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Minimax;
+        let checks = vec![
+            DoctorCheck {
+                name: "provider credentials".to_owned(),
+                level: DoctorCheckLevel::Pass,
+                detail: "provider credentials are available".to_owned(),
+            },
+            DoctorCheck {
+                name: "provider model probe".to_owned(),
+                level: DoctorCheckLevel::Fail,
+                detail:
+                    "MiniMax [minimax]: model catalog probe failed (provider returned status 503)"
+                        .to_owned(),
+            },
+        ];
+
+        let next_steps = build_doctor_next_steps_with_path_env(
+            &checks,
+            Path::new("/tmp/loongclaw.toml"),
+            &config,
+            false,
+            Some(std::ffi::OsStr::new("")),
+        );
+
+        assert!(
+            !next_steps
+                .iter()
+                .any(|step| step.contains("provider.base_url")),
+            "doctor next steps should not include a region endpoint adjustment for non-auth probe failures: {next_steps:#?}"
         );
     }
 

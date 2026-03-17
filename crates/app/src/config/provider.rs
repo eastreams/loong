@@ -122,6 +122,200 @@ pub enum ModelCatalogProbeRecovery {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProviderRegionEndpointVariant {
+    label: &'static str,
+    base_url: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProviderRegionEndpointGuide {
+    family_label: &'static str,
+    default_variant: ProviderRegionEndpointVariant,
+    alternate_variant: ProviderRegionEndpointVariant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProviderRegionEndpointSelection {
+    BaseUrl(String),
+    Endpoint(String),
+    ModelsEndpoint(String),
+    EndpointAndModels {
+        endpoint: String,
+        models_endpoint: String,
+    },
+}
+
+impl ProviderRegionEndpointGuide {
+    fn note(self, provider: &ProviderConfig) -> String {
+        match self.selection(provider) {
+            ProviderRegionEndpointSelection::BaseUrl(resolved_base_url) => {
+                self.base_url_note(provider, resolved_base_url.as_str())
+            }
+            ProviderRegionEndpointSelection::Endpoint(endpoint) => {
+                self.override_note("provider.endpoint", endpoint.as_str())
+            }
+            ProviderRegionEndpointSelection::ModelsEndpoint(models_endpoint) => {
+                self.override_note("provider.models_endpoint", models_endpoint.as_str())
+            }
+            ProviderRegionEndpointSelection::EndpointAndModels {
+                endpoint,
+                models_endpoint,
+            } => format!(
+                "{} region endpoint: explicit endpoint overrides are in use (`provider.endpoint` = `{endpoint}`, `provider.models_endpoint` = `{models_endpoint}`); official {} endpoint `{}`; official {} endpoint `{}`",
+                self.family_label,
+                self.default_variant.label,
+                self.default_variant.base_url,
+                self.alternate_variant.label,
+                self.alternate_variant.base_url
+            ),
+        }
+    }
+
+    fn failure_hint(self, provider: &ProviderConfig) -> String {
+        match self.selection(provider) {
+            ProviderRegionEndpointSelection::BaseUrl(_) => self.base_url_failure_hint(),
+            ProviderRegionEndpointSelection::Endpoint(endpoint) => {
+                self.override_failure_hint("provider.endpoint", endpoint.as_str())
+            }
+            ProviderRegionEndpointSelection::ModelsEndpoint(models_endpoint) => {
+                self.override_failure_hint("provider.models_endpoint", models_endpoint.as_str())
+            }
+            ProviderRegionEndpointSelection::EndpointAndModels {
+                endpoint,
+                models_endpoint,
+            } => format!(
+                "{} keys can be region-scoped. Verify the explicit endpoint overrides match your account region: use `{}` for {} accounts or `{}` for {} accounts. Changing `provider.base_url` alone will not affect `provider.endpoint` (`{endpoint}`) or `provider.models_endpoint` (`{models_endpoint}`).",
+                self.family_label,
+                self.default_variant.base_url,
+                self.default_variant.label,
+                self.alternate_variant.base_url,
+                self.alternate_variant.label
+            ),
+        }
+    }
+
+    fn request_failure_hint(self, provider: &ProviderConfig) -> String {
+        if provider.endpoint_explicit {
+            return self.override_failure_hint("provider.endpoint", provider.endpoint().as_str());
+        }
+
+        self.base_url_failure_hint()
+    }
+
+    fn selection(self, provider: &ProviderConfig) -> ProviderRegionEndpointSelection {
+        match (
+            provider.endpoint_explicit,
+            provider.models_endpoint_explicit,
+        ) {
+            (true, true) => ProviderRegionEndpointSelection::EndpointAndModels {
+                endpoint: provider.endpoint(),
+                models_endpoint: provider.models_endpoint(),
+            },
+            (true, false) => ProviderRegionEndpointSelection::Endpoint(provider.endpoint()),
+            (false, true) => {
+                ProviderRegionEndpointSelection::ModelsEndpoint(provider.models_endpoint())
+            }
+            (false, false) => {
+                ProviderRegionEndpointSelection::BaseUrl(provider.resolved_base_url())
+            }
+        }
+    }
+
+    fn base_url_note(self, provider: &ProviderConfig, resolved_base_url: &str) -> String {
+        if is_same_base_url(resolved_base_url, self.alternate_variant.base_url) {
+            return format!(
+                "{} region endpoint: using {} endpoint (`{}`); use `{}` for {} accounts",
+                self.family_label,
+                self.alternate_variant.label,
+                self.alternate_variant.base_url,
+                self.default_variant.base_url,
+                self.default_variant.label
+            );
+        }
+        if is_same_base_url(resolved_base_url, self.default_variant.base_url)
+            || provider.base_url_is_profile_default_like()
+        {
+            return format!(
+                "{} region endpoint: {} default (`{}`); switch `provider.base_url` to `{}` for {} accounts",
+                self.family_label,
+                self.default_variant.label,
+                self.default_variant.base_url,
+                self.alternate_variant.base_url,
+                self.alternate_variant.label
+            );
+        }
+
+        format!(
+            "{} region endpoint: using custom endpoint (`{}`); official {} endpoint `{}`; official {} endpoint `{}`",
+            self.family_label,
+            resolved_base_url,
+            self.default_variant.label,
+            self.default_variant.base_url,
+            self.alternate_variant.label,
+            self.alternate_variant.base_url
+        )
+    }
+
+    fn override_note(self, field_name: &str, endpoint: &str) -> String {
+        if let Some(active_variant) = self.override_variant(endpoint) {
+            let alternate_variant = if active_variant == self.default_variant {
+                self.alternate_variant
+            } else {
+                self.default_variant
+            };
+            return format!(
+                "{} region endpoint: using explicit `{field_name}` {} endpoint (`{endpoint}`); use `{}` for {} accounts",
+                self.family_label,
+                active_variant.label,
+                alternate_variant.base_url,
+                alternate_variant.label
+            );
+        }
+
+        format!(
+            "{} region endpoint: using explicit `{field_name}` (`{endpoint}`); official {} endpoint `{}`; official {} endpoint `{}`",
+            self.family_label,
+            self.default_variant.label,
+            self.default_variant.base_url,
+            self.alternate_variant.label,
+            self.alternate_variant.base_url
+        )
+    }
+
+    fn base_url_failure_hint(self) -> String {
+        format!(
+            "{} keys can be region-scoped. Verify `provider.base_url` matches your account region: use `{}` for {} accounts or `{}` for {} accounts.",
+            self.family_label,
+            self.default_variant.base_url,
+            self.default_variant.label,
+            self.alternate_variant.base_url,
+            self.alternate_variant.label
+        )
+    }
+
+    fn override_failure_hint(self, field_name: &str, endpoint: &str) -> String {
+        format!(
+            "{} keys can be region-scoped. Verify explicit `{field_name}` matches your account region: use `{}` for {} accounts or `{}` for {} accounts. Changing `provider.base_url` alone will not affect `{field_name}` (`{endpoint}`).",
+            self.family_label,
+            self.default_variant.base_url,
+            self.default_variant.label,
+            self.alternate_variant.base_url,
+            self.alternate_variant.label
+        )
+    }
+
+    fn override_variant(self, endpoint: &str) -> Option<ProviderRegionEndpointVariant> {
+        if matches_region_endpoint_url(endpoint, self.default_variant.base_url) {
+            return Some(self.default_variant);
+        }
+        if matches_region_endpoint_url(endpoint, self.alternate_variant.base_url) {
+            return Some(self.alternate_variant);
+        }
+        None
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReasoningEffort {
@@ -1336,6 +1530,22 @@ impl ProviderConfig {
         None
     }
 
+    pub fn region_endpoint_note(&self) -> Option<String> {
+        Some(self.kind.region_endpoint_guide()?.note(self))
+    }
+
+    pub fn region_endpoint_failure_hint(&self) -> Option<String> {
+        Some(self.kind.region_endpoint_guide()?.failure_hint(self))
+    }
+
+    pub fn request_region_endpoint_failure_hint(&self) -> Option<String> {
+        Some(
+            self.kind
+                .region_endpoint_guide()?
+                .request_failure_hint(self),
+        )
+    }
+
     fn uses_byteplus_coding_plan_path(&self) -> bool {
         if self.kind != ProviderKind::Byteplus {
             return false;
@@ -1934,6 +2144,91 @@ impl ProviderKind {
             )
         } else {
             None
+        }
+    }
+
+    fn region_endpoint_guide(self) -> Option<ProviderRegionEndpointGuide> {
+        let profile = self.profile();
+        match self {
+            ProviderKind::Kimi => Some(ProviderRegionEndpointGuide {
+                family_label: "Moonshot Kimi",
+                default_variant: ProviderRegionEndpointVariant {
+                    label: "CN",
+                    base_url: profile.base_url,
+                },
+                alternate_variant: ProviderRegionEndpointVariant {
+                    label: "Global",
+                    base_url: "https://api.moonshot.ai",
+                },
+            }),
+            ProviderKind::Minimax => Some(ProviderRegionEndpointGuide {
+                family_label: "MiniMax",
+                default_variant: ProviderRegionEndpointVariant {
+                    label: "CN",
+                    base_url: profile.base_url,
+                },
+                alternate_variant: ProviderRegionEndpointVariant {
+                    label: "Global",
+                    base_url: "https://api.minimax.io",
+                },
+            }),
+            ProviderKind::Zai => Some(ProviderRegionEndpointGuide {
+                family_label: "Z.ai / BigModel",
+                default_variant: ProviderRegionEndpointVariant {
+                    label: "Global",
+                    base_url: profile.base_url,
+                },
+                alternate_variant: ProviderRegionEndpointVariant {
+                    label: "CN",
+                    base_url: "https://open.bigmodel.cn",
+                },
+            }),
+            ProviderKind::Zhipu => Some(ProviderRegionEndpointGuide {
+                family_label: "Z.ai / BigModel",
+                default_variant: ProviderRegionEndpointVariant {
+                    label: "CN",
+                    base_url: profile.base_url,
+                },
+                alternate_variant: ProviderRegionEndpointVariant {
+                    label: "Global",
+                    base_url: "https://api.z.ai",
+                },
+            }),
+            ProviderKind::Anthropic
+            | ProviderKind::Bedrock
+            | ProviderKind::Byteplus
+            | ProviderKind::ByteplusCoding
+            | ProviderKind::Cerebras
+            | ProviderKind::CloudflareAiGateway
+            | ProviderKind::Cohere
+            | ProviderKind::Custom
+            | ProviderKind::Deepseek
+            | ProviderKind::Fireworks
+            | ProviderKind::Gemini
+            | ProviderKind::Groq
+            | ProviderKind::KimiCoding
+            | ProviderKind::Llamacpp
+            | ProviderKind::LmStudio
+            | ProviderKind::Mistral
+            | ProviderKind::Novita
+            | ProviderKind::Nvidia
+            | ProviderKind::Ollama
+            | ProviderKind::Openai
+            | ProviderKind::Openrouter
+            | ProviderKind::Perplexity
+            | ProviderKind::Qianfan
+            | ProviderKind::Qwen
+            | ProviderKind::Sambanova
+            | ProviderKind::Sglang
+            | ProviderKind::Siliconflow
+            | ProviderKind::Stepfun
+            | ProviderKind::Together
+            | ProviderKind::Venice
+            | ProviderKind::VercelAiGateway
+            | ProviderKind::Vllm
+            | ProviderKind::Volcengine
+            | ProviderKind::VolcengineCoding
+            | ProviderKind::Xai => None,
         }
     }
 
@@ -2956,6 +3251,15 @@ fn normalize_api_path(path: &str) -> String {
 
 fn is_same_base_url(left: &str, right: &str) -> bool {
     left.trim().trim_end_matches('/') == right.trim().trim_end_matches('/')
+}
+
+fn matches_region_endpoint_url(endpoint: &str, base_url: &str) -> bool {
+    let endpoint = endpoint.trim().trim_end_matches('/');
+    let base_url = base_url.trim().trim_end_matches('/');
+    endpoint == base_url
+        || endpoint
+            .strip_prefix(base_url)
+            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 fn is_same_chat_path(left: &str, right: &str) -> bool {

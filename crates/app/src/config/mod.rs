@@ -916,6 +916,116 @@ kind = "volcengine_coding"
     }
 
     #[test]
+    fn minimax_region_endpoint_note_points_to_global_alternative() {
+        let config = ProviderConfig {
+            kind: ProviderKind::Minimax,
+            ..ProviderConfig::default()
+        };
+
+        let note = config
+            .region_endpoint_note()
+            .expect("minimax should surface region endpoint guidance");
+        assert!(note.contains("CN default"));
+        assert!(note.contains("https://api.minimaxi.com"));
+        assert!(note.contains("https://api.minimax.io"));
+    }
+
+    #[test]
+    fn kimi_region_endpoint_note_respects_explicit_global_override() {
+        let config = ProviderConfig {
+            kind: ProviderKind::Kimi,
+            base_url: "https://api.moonshot.ai".to_owned(),
+            ..ProviderConfig::default()
+        };
+
+        let note = config
+            .region_endpoint_note()
+            .expect("kimi should surface region endpoint guidance");
+        assert!(note.contains("using Global"));
+        assert!(note.contains("https://api.moonshot.ai"));
+        assert!(note.contains("https://api.moonshot.cn"));
+    }
+
+    #[test]
+    fn zhipu_region_endpoint_failure_hint_points_to_global_zai_endpoint() {
+        let config = ProviderConfig {
+            kind: ProviderKind::Zhipu,
+            ..ProviderConfig::default()
+        };
+
+        let hint = config
+            .region_endpoint_failure_hint()
+            .expect("zhipu should surface a region retry hint");
+        assert!(hint.contains("provider.base_url"));
+        assert!(hint.contains("https://open.bigmodel.cn"));
+        assert!(hint.contains("https://api.z.ai"));
+    }
+
+    #[test]
+    fn minimax_region_endpoint_hint_respects_explicit_endpoint_override() {
+        let mut config = ProviderConfig {
+            kind: ProviderKind::Minimax,
+            ..ProviderConfig::default()
+        };
+        config.set_endpoint(Some(
+            "https://api.minimax.io/v1/chat/completions".to_owned(),
+        ));
+
+        let note = config
+            .region_endpoint_note()
+            .expect("minimax should surface explicit endpoint override guidance");
+        assert!(note.contains("provider.endpoint"));
+        assert!(note.contains("https://api.minimax.io/v1/chat/completions"));
+
+        let hint = config
+            .region_endpoint_failure_hint()
+            .expect("minimax should surface explicit endpoint override failure guidance");
+        assert!(hint.contains("provider.endpoint"));
+        assert!(hint.contains("Changing `provider.base_url` alone will not affect"));
+    }
+
+    #[test]
+    fn zai_region_endpoint_hint_respects_explicit_models_endpoint_override() {
+        let mut config = ProviderConfig {
+            kind: ProviderKind::Zai,
+            ..ProviderConfig::default()
+        };
+        config.set_models_endpoint(Some("https://open.bigmodel.cn/v1/models".to_owned()));
+
+        let note = config
+            .region_endpoint_note()
+            .expect("zai should surface explicit models endpoint override guidance");
+        assert!(note.contains("provider.models_endpoint"));
+        assert!(note.contains("https://open.bigmodel.cn/v1/models"));
+
+        let hint = config
+            .region_endpoint_failure_hint()
+            .expect("zai should surface explicit models endpoint override failure guidance");
+        assert!(hint.contains("provider.models_endpoint"));
+        assert!(hint.contains("Changing `provider.base_url` alone will not affect"));
+    }
+
+    #[test]
+    fn minimax_region_endpoint_note_for_custom_explicit_endpoint_labels_official_hosts_correctly() {
+        let mut config = ProviderConfig {
+            kind: ProviderKind::Minimax,
+            ..ProviderConfig::default()
+        };
+        config.set_endpoint(Some(
+            "https://proxy.example.test/v1/chat/completions".to_owned(),
+        ));
+
+        let note = config
+            .region_endpoint_note()
+            .expect("minimax should surface explicit endpoint override guidance");
+
+        assert!(note.contains("provider.endpoint"));
+        assert!(note.contains("https://proxy.example.test/v1/chat/completions"));
+        assert!(note.contains("official CN endpoint `https://api.minimaxi.com`"));
+        assert!(note.contains("official Global endpoint `https://api.minimax.io`"));
+    }
+
+    #[test]
     fn models_endpoint_resolution_for_supported_provider_profiles_includes_new_first_class_providers()
      {
         let cases = vec![
