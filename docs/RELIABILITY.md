@@ -30,7 +30,7 @@ Enforced by: CI (`verify` workflow). The optional `scripts/pre-commit` hook mirr
 ## Kernel Invariants
 
 1. **Token authorization is fail-closed** — if the policy engine cannot determine authorization (e.g., mutex poisoned), the operation is denied.
-2. **Audit events are never silently dropped** — all bootstrap paths use `InMemoryAuditSink` or better. `NoopAuditSink` is reserved for tests that explicitly don't need audit.
+2. **Audit events are never silently dropped** — production-shaped CLI chat, Telegram, and Feishu bootstraps default to `audit.mode = "fanout"`, which appends `~/.loongclaw/audit/events.jsonl` and can retain in-memory snapshots for local diagnostics. Test-only helpers may still use `InMemoryAuditSink`, and `NoopAuditSink` remains reserved for cases that explicitly do not need audit.
 3. **Pack registration is idempotent-safe** — duplicate pack IDs return `DuplicatePack` error, never silently overwrite.
 4. **Generation-based revocation is monotonic** — the revocation threshold only increases, never decreases.
 5. **TaskState transitions are irreversible from terminal states** — `Completed` and `Faulted` states cannot transition.

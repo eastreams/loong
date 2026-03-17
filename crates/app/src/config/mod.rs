@@ -1,3 +1,4 @@
+mod audit;
 mod channels;
 mod conversation;
 mod feishu_integration;
@@ -7,6 +8,8 @@ mod runtime;
 mod shared;
 mod tools;
 
+#[allow(unused_imports)]
+pub use audit::{AuditConfig, AuditMode};
 #[allow(unused_imports)]
 pub use channels::{
     ChannelAcpConfig, ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource,

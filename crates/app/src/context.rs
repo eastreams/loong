@@ -3,9 +3,11 @@ use std::sync::Arc;
 
 use loongclaw_contracts::CapabilityToken;
 use loongclaw_kernel::{
-    AuditSink, Capability, Clock, ExecutionRoute, HarnessKind, InMemoryAuditSink, LoongClawKernel,
-    StaticPolicyEngine, SystemClock, VerticalPackManifest,
+    AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind, InMemoryAuditSink,
+    JsonlAuditSink, LoongClawKernel, StaticPolicyEngine, SystemClock, VerticalPackManifest,
 };
+
+use crate::config::{AuditMode, LoongClawConfig};
 
 /// Default pack identifier used by MVP entry points.
 const MVP_PACK_ID: &str = "dev-automation";
@@ -41,14 +43,65 @@ impl KernelContext {
 /// Registers a default pack manifest with `InvokeTool`, `MemoryRead`, and
 /// `MemoryWrite` capabilities, then issues a long-lived token for the given
 /// `agent_id`.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn bootstrap_kernel_context(
     agent_id: &str,
     ttl_s: u64,
 ) -> Result<KernelContext, String> {
+    bootstrap_kernel_context_with_audit_sink(
+        agent_id,
+        ttl_s,
+        Arc::new(InMemoryAuditSink::default()) as Arc<dyn AuditSink>,
+    )
+}
+
+pub(crate) fn bootstrap_kernel_context_with_config(
+    agent_id: &str,
+    ttl_s: u64,
+    config: &LoongClawConfig,
+) -> Result<KernelContext, String> {
+    bootstrap_kernel_context_with_audit_sink(agent_id, ttl_s, build_audit_sink(config)?)
+}
+
+fn build_audit_sink(config: &LoongClawConfig) -> Result<Arc<dyn AuditSink>, String> {
+    match config.audit.mode {
+        AuditMode::InMemory => Ok(Arc::new(InMemoryAuditSink::default()) as Arc<dyn AuditSink>),
+        AuditMode::Jsonl => build_jsonl_audit_sink(config),
+        AuditMode::Fanout => {
+            let durable = build_jsonl_audit_sink(config)?;
+            if !config.audit.retain_in_memory {
+                return Ok(durable);
+            }
+
+            Ok(Arc::new(FanoutAuditSink::new(vec![
+                Arc::new(InMemoryAuditSink::default()) as Arc<dyn AuditSink>,
+                durable,
+            ])) as Arc<dyn AuditSink>)
+        }
+    }
+}
+
+fn build_jsonl_audit_sink(config: &LoongClawConfig) -> Result<Arc<dyn AuditSink>, String> {
+    let path = config.audit.resolved_path();
+    JsonlAuditSink::new(path.clone())
+        .map(|sink| Arc::new(sink) as Arc<dyn AuditSink>)
+        .map_err(|error| {
+            format!(
+                "failed to initialize durable audit journal {}: {error}",
+                path.display()
+            )
+        })
+}
+
+fn bootstrap_kernel_context_with_audit_sink(
+    agent_id: &str,
+    ttl_s: u64,
+    audit_sink: Arc<dyn AuditSink>,
+) -> Result<KernelContext, String> {
     let mut kernel = LoongClawKernel::with_runtime(
         StaticPolicyEngine::default(),
         Arc::new(SystemClock) as Arc<dyn Clock>,
-        Arc::new(InMemoryAuditSink::default()) as Arc<dyn AuditSink>,
+        audit_sink,
     );
 
     let pack = VerticalPackManifest {
@@ -107,4 +160,39 @@ pub(crate) fn bootstrap_kernel_context(
         kernel: Arc::new(kernel),
         token,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn bootstrap_kernel_context_with_config_writes_jsonl_audit_events() {
+        let tempdir = tempdir().expect("tempdir");
+        let audit_path = tempdir.path().join("audit").join("events.jsonl");
+        let mut config = LoongClawConfig::default();
+        config.audit.mode = AuditMode::Jsonl;
+        config.audit.path = audit_path.display().to_string();
+        config.audit.retain_in_memory = false;
+
+        let context = bootstrap_kernel_context_with_config("test-agent", 60, &config)
+            .expect("bootstrap with jsonl audit should succeed");
+
+        assert_eq!(context.agent_id(), "test-agent");
+
+        let journal = fs::read_to_string(&audit_path).expect("audit journal should exist");
+        assert_eq!(
+            journal.lines().count(),
+            1,
+            "token bootstrap should emit one audit event"
+        );
+        assert!(
+            journal.contains("\"TokenIssued\"") || journal.contains("\"token_id\""),
+            "bootstrap journal should capture token issuance"
+        );
+    }
 }

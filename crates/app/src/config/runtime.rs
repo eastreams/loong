@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::CliResult;
 
 use super::{
+    audit::AuditConfig,
     channels::{CliChannelConfig, FeishuChannelConfig, TelegramChannelConfig},
     conversation::ConversationConfig,
     feishu_integration::FeishuIntegrationConfig,
@@ -87,6 +88,8 @@ pub struct LoongClawConfig {
     pub external_skills: ExternalSkillsConfig,
     #[serde(default)]
     pub memory: MemoryConfig,
+    #[serde(default)]
+    pub audit: AuditConfig,
     #[serde(default)]
     pub acp: AcpConfig,
 }
@@ -2751,5 +2754,19 @@ model = "gpt-5"
         assert_eq!(parsed.tools.sessions, config.tools.sessions);
         assert_eq!(parsed.tools.messages, config.tools.messages);
         assert_eq!(parsed.tools.delegate, config.tools.delegate);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn audit_config_round_trips_mode_and_path_settings() {
+        let mut config = LoongClawConfig::default();
+        config.audit.mode = crate::config::AuditMode::Jsonl;
+        config.audit.path = "~/.loongclaw/audit/custom-events.jsonl".to_owned();
+        config.audit.retain_in_memory = false;
+
+        let encoded = encode_toml_config(&config).expect("encode config");
+        let parsed = toml::from_str::<LoongClawConfig>(&encoded).expect("parse encoded config");
+
+        assert_eq!(parsed.audit, config.audit);
     }
 }
