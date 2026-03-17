@@ -2,8 +2,32 @@
 use clap::Parser;
 use loongclaw_daemon::*;
 
+/// Guard that flushes the terminal input queue on drop.
+///
+/// When a user pastes multi-line text at an interactive prompt, `read_line()`
+/// consumes only the first line. The remaining lines stay in the kernel's tty
+/// input queue (cooked mode). If the process exits without draining, the parent
+/// shell reads those lines as commands — a potential code execution vector.
+///
+/// This guard calls `tcflush(STDIN_FILENO, TCIFLUSH)` on drop to discard any
+/// unread input, covering all exit paths including early returns and panics.
+struct StdinGuard;
+
+impl Drop for StdinGuard {
+    #[allow(unsafe_code)]
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        // SAFETY: tcflush is a POSIX function that discards unread terminal input.
+        // STDIN_FILENO is a well-defined constant. No memory or resource concerns.
+        unsafe {
+            libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
+    let _stdin_guard = StdinGuard;
     let cli = Cli::parse();
     let result = match cli.command.unwrap_or(Commands::Demo) {
         Commands::Demo => run_demo().await,

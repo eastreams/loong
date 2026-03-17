@@ -27,6 +27,10 @@ tool-file = ["loongclaw-app/tool-file"]
 tool-webfetch = ["loongclaw-app/tool-webfetch"]
 tool-browser = ["loongclaw-app/tool-browser"]
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+
 [dependencies]
 clap.workspace = true
 kernel = { package = "loongclaw-kernel", path = "../kernel" }
