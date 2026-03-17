@@ -1472,13 +1472,19 @@ fn backup_existing_config_copies_without_removing_original() {
 }
 
 #[test]
-fn onboard_risk_screen_uses_compact_header_and_continue_cancel_options() {
+fn onboard_risk_screen_uses_brand_header_and_continue_cancel_options() {
     let lines = loongclaw_daemon::onboard_cli::render_onboarding_risk_screen_lines(80);
 
-    assert_compact_loongclaw_header(&lines, "risk screen");
     assert!(
-        !lines[0].starts_with("██╗"),
-        "risk screen should avoid the oversized block-logo banner on the guard screen: {lines:#?}"
+        lines[0].starts_with("██╗"),
+        "risk screen should keep the oversized LOONGCLAW brand banner on the initial guard screen: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .take_while(|line| !line.is_empty())
+            .any(|line| line.contains(concat!("v", env!("CARGO_PKG_VERSION")))),
+        "risk screen should keep the current build version visible under the brand banner: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "security check"),

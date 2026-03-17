@@ -3464,7 +3464,7 @@ fn render_onboarding_risk_screen_lines_with_style(
 ) -> Vec<String> {
     let copy = crate::onboard_presentation::risk_screen_copy();
     render_onboard_choice_screen(
-        OnboardHeaderStyle::Compact,
+        OnboardHeaderStyle::Brand,
         width,
         copy.subtitle,
         copy.title,
@@ -6067,6 +6067,19 @@ mod tests {
             .expect("missing input should keep the configured default");
 
         assert_eq!(value, "\u{1b}");
+    }
+
+    #[test]
+    fn explicit_onboard_cancel_input_requires_escape_byte() {
+        assert!(is_explicit_onboard_cancel_input("\u{1b}"));
+        assert!(
+            !is_explicit_onboard_cancel_input("esc"),
+            "literal text should remain valid operator input instead of being treated as an escape keystroke"
+        );
+        assert!(
+            !is_explicit_onboard_cancel_input("ESC"),
+            "case variants of plain text should not trigger onboarding cancellation"
+        );
     }
 
     #[test]

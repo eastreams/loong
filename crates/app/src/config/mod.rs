@@ -626,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn volcengine_coding_plan_defaults_to_api_key_auth() {
+    fn volcengine_coding_plan_has_no_default_oauth_env_but_accepts_explicit_oauth_token() {
         let config = ProviderConfig {
             kind: ProviderKind::VolcengineCoding,
             oauth_access_token: Some("vc-oauth-token".to_owned()),
