@@ -502,27 +502,28 @@ fn reduce_file_read_payload_summary(payload: &Value) -> Option<String> {
 }
 
 fn reduce_shell_payload_summary(payload: &Value) -> Option<String> {
-    let payload_object = payload.as_object()?;
-    let (stdout_preview, stdout_chars, stdout_truncated) =
-        summarize_shell_output_preview(payload_object.get("stdout"));
-    let (stderr_preview, stderr_chars, stderr_truncated) =
-        summarize_shell_output_preview(payload_object.get("stderr"));
+    let mut reduced_payload = payload.as_object()?.clone();
+    let stdout_truncated = replace_shell_stdio_with_preview(&mut reduced_payload, "stdout");
+    let stderr_truncated = replace_shell_stdio_with_preview(&mut reduced_payload, "stderr");
     if !stdout_truncated && !stderr_truncated {
         return None;
     }
-    serde_json::to_string(&serde_json::json!({
-        "command": payload_object.get("command").cloned().unwrap_or(Value::Null),
-        "args": payload_object.get("args").cloned().unwrap_or_else(|| serde_json::json!([])),
-        "cwd": payload_object.get("cwd").cloned().unwrap_or(Value::Null),
-        "exit_code": payload_object.get("exit_code").cloned().unwrap_or(Value::Null),
-        "stdout_preview": stdout_preview,
-        "stdout_chars": stdout_chars,
-        "stdout_truncated": stdout_truncated,
-        "stderr_preview": stderr_preview,
-        "stderr_chars": stderr_chars,
-        "stderr_truncated": stderr_truncated,
-    }))
-    .ok()
+    serde_json::to_string(&Value::Object(reduced_payload)).ok()
+}
+
+fn replace_shell_stdio_with_preview(
+    payload_object: &mut serde_json::Map<String, Value>,
+    field: &str,
+) -> bool {
+    let (preview, chars, truncated) = summarize_shell_output_preview(payload_object.get(field));
+    if !truncated {
+        return false;
+    }
+    payload_object.remove(field);
+    payload_object.insert(format!("{field}_preview"), Value::String(preview));
+    payload_object.insert(format!("{field}_chars"), serde_json::json!(chars));
+    payload_object.insert(format!("{field}_truncated"), Value::Bool(true));
+    true
 }
 
 fn summarize_file_read_content_preview(value: Option<&Value>) -> (String, usize, bool) {
@@ -697,9 +698,15 @@ where
     F: FnMut(&str, &str) -> String,
 {
     let mut messages = Vec::new();
+    let mut original_tool_result_text = None;
+    let mut rendered_tool_result_text = None;
     append_followup_preface(&mut messages, assistant_preface);
     if let Some((label, text)) = latest_tool_context {
         let bounded = payload_mapper(label, text);
+        if label == "tool_result" {
+            original_tool_result_text = Some(text);
+            rendered_tool_result_text = Some(bounded.clone());
+        }
         messages.push(serde_json::json!({
             "role": "assistant",
             "content": format!("[{label}]\n{bounded}"),
@@ -711,7 +718,12 @@ where
     }));
     messages.push(serde_json::json!({
         "role": "user",
-        "content": build_tool_loop_guard_prompt(user_input, reason),
+        "content": build_tool_loop_guard_prompt(
+            user_input,
+            reason,
+            original_tool_result_text,
+            rendered_tool_result_text.as_deref(),
+        ),
     }));
     messages
 }
@@ -764,10 +776,21 @@ fn append_followup_warning(messages: &mut Vec<Value>, loop_warning_reason: Optio
     }
 }
 
-fn build_tool_loop_guard_prompt(user_input: &str, reason: &str) -> String {
-    format!(
-        "{TOOL_LOOP_GUARD_PROMPT}\n\nLoop guard reason:\n{reason}\n\nOriginal request:\n{user_input}"
-    )
+fn build_tool_loop_guard_prompt(
+    user_input: &str,
+    reason: &str,
+    tool_result_text: Option<&str>,
+    rendered_tool_result_text: Option<&str>,
+) -> String {
+    let mut sections = vec![
+        TOOL_LOOP_GUARD_PROMPT.to_owned(),
+        format!("Loop guard reason:\n{reason}"),
+    ];
+    if followup_prompt_needs_truncation_hint(tool_result_text, rendered_tool_result_text) {
+        sections.push(TOOL_TRUNCATION_HINT_PROMPT.to_owned());
+    }
+    sections.push(format!("Original request:\n{user_input}"));
+    sections.join("\n\n")
 }
 
 fn parse_external_skill_invoke_context_line(line: &str) -> Option<ExternalSkillInvokeContext> {
@@ -1368,6 +1391,26 @@ mod tests {
     }
 
     #[test]
+    fn tool_loop_guard_tail_includes_truncation_hint_when_payload_mapper_truncates_result() {
+        let tail = build_tool_loop_guard_tail(
+            "preface",
+            "stop",
+            "summarize note.md",
+            Some(("tool_result", r#"[ok] {"payload_truncated":false}"#)),
+            |_, _| r#"[ok] {"payload_truncated":true}"#.to_owned(),
+        );
+
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+        assert!(user_prompt.contains(TOOL_LOOP_GUARD_PROMPT));
+        assert!(user_prompt.contains(TOOL_TRUNCATION_HINT_PROMPT));
+        assert!(user_prompt.contains("Loop guard reason:\nstop"));
+    }
+
+    #[test]
     fn tool_loop_guard_tail_skips_latest_tool_context_without_payload_mapping() {
         let tail = build_tool_loop_guard_tail("", "stop", "summarize note.md", None, |_, _| {
             panic!("missing latest tool context should bypass payload mapper")
@@ -1429,6 +1472,54 @@ mod tests {
         );
         assert!(prompt.contains(TOOL_TRUNCATION_HINT_PROMPT));
         assert!(prompt.contains("Original request:\nsummarize this result"));
+    }
+
+    #[test]
+    fn reduce_followup_payload_for_model_preserves_shell_payload_metadata() {
+        let payload = json!({
+            "adapter": "core-tools",
+            "tool_name": "shell.exec",
+            "command": "cargo",
+            "args": ["test", "--workspace"],
+            "cwd": "/repo",
+            "exit_code": 0,
+            "stdout": format!("prefix {}", "x".repeat(512)),
+            "stderr": "",
+            "trace_id": "trace-123",
+        });
+        let line = format!(
+            "[ok] {}",
+            json!({
+                "status": "ok",
+                "tool": "shell.exec",
+                "tool_call_id": "call-shell",
+                "payload_summary": serde_json::to_string(&payload).expect("encode payload"),
+                "payload_chars": 8_192,
+                "payload_truncated": false
+            })
+        );
+
+        let reduced = reduce_followup_payload_for_model("tool_result", line.as_str());
+        let envelope: Value = serde_json::from_str(
+            reduced
+                .strip_prefix("[ok] ")
+                .expect("tool result line should preserve status prefix"),
+        )
+        .expect("reduced followup envelope should stay valid json");
+        let summary: Value = serde_json::from_str(
+            envelope["payload_summary"]
+                .as_str()
+                .expect("payload summary should stay encoded json"),
+        )
+        .expect("shell payload summary should stay valid json");
+
+        assert_eq!(summary["adapter"], "core-tools");
+        assert_eq!(summary["tool_name"], "shell.exec");
+        assert_eq!(summary["trace_id"], "trace-123");
+        assert_eq!(summary["command"], "cargo");
+        assert_eq!(summary["exit_code"], 0);
+        assert!(summary.get("stdout_preview").is_some());
+        assert_eq!(summary["stdout_truncated"], true);
     }
 
     #[test]
