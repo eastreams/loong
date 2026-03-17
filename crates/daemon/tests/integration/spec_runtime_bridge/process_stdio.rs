@@ -377,6 +377,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_id_mismatch() {
 #   "metadata": {
 #     "bridge_kind":"process_stdio",
 #     "command":"python3",
+#     "process_timeout_ms":"15000",
 #     "args_json":"[\"-c\",\"import json,sys,time; sys.stdout.write(json.dumps({'method':'tools/call','id':'wrong-id','payload':{'ok':True}})+'\\\\n'); sys.stdout.flush(); time.sleep(0.05)\"]",
 #     "version":"1.0.0"
 #   }
@@ -488,6 +489,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_method_mismatch() {
 #   "metadata": {
 #     "bridge_kind":"process_stdio",
 #     "command":"python3",
+#     "process_timeout_ms":"15000",
 #     "args_json":"[\"-c\",\"import json,sys,time; sys.stdout.write(json.dumps({'method':'tools/list','id':'stdio-mismatch-method-provider:primary:invoke','payload':{'ok':True}})+'\\\\n'); sys.stdout.flush(); time.sleep(0.05)\"]",
 #     "version":"1.0.0"
 #   }

@@ -50,6 +50,7 @@ pub mod next_actions;
 pub mod onboard_cli;
 pub mod onboard_presentation;
 pub mod provider_presentation;
+pub mod runtime_capability_cli;
 pub mod runtime_experiment_cli;
 pub mod runtime_restore_cli;
 pub mod skills_cli;
@@ -409,6 +410,11 @@ pub enum Commands {
     RuntimeExperiment {
         #[command(subcommand)]
         command: runtime_experiment_cli::RuntimeExperimentCommands,
+    },
+    /// Manage run-derived capability candidate records
+    RuntimeCapability {
+        #[command(subcommand)]
+        command: runtime_capability_cli::RuntimeCapabilityCommands,
     },
     /// List available conversation context engines and selected runtime engine
     ListContextEngines {

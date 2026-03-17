@@ -289,6 +289,7 @@ Delivered in current baseline:
   - `runtime-snapshot` persists lineage-aware runtime checkpoint artifacts
   - `runtime-restore` replays a persisted checkpoint as a dry-run or apply plan
   - `runtime-experiment start|finish|show|compare` records baseline snapshot, mutation summary, result snapshot, evaluation metrics, warnings, final decision, and optional snapshot-backed runtime deltas for operator review
+  - `runtime-capability propose|review|show` records one run-derived capability candidate, bounded scope, required capabilities, and explicit operator review without mutating live runtime state
 - modular channel/provider architecture for extension-safe evolution:
   - `app/channel/feishu/*` split into adapter/payload/webhook layers
   - Feishu encrypted webhook payload decrypt lane with signature verification
@@ -307,7 +308,7 @@ Remaining deliverables:
   - sustain tagged release publishing across macOS/Linux/Windows
   - expand beyond installer scripts into package-manager distribution only after release adoption is stable
 - experiment-state operator surface follow-through:
-  - use the shipped snapshot/restore/experiment record layer as the prerequisite for later evaluator pipelines and automated skill-optimization loops
+  - use the shipped snapshot/restore/experiment/capability record layer as the prerequisite for later evaluator pipelines and automated skill-optimization loops
 - managed browser automation companion:
   - keep `browser.open`, `browser.extract`, and `browser.click` as the shipped safe browser lane
   - partial governed adapter skeleton now exists for richer page actions:
