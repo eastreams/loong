@@ -29,11 +29,25 @@ pub struct OnboardCommandOptions {
     pub skip_model_probe: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct SelectOption {
+    pub label: String,
+    pub slug: String,
+    pub description: String,
+    pub recommended: bool,
+}
+
 pub trait OnboardUi {
     fn print_line(&mut self, line: &str) -> CliResult<()>;
     fn prompt_with_default(&mut self, label: &str, default: &str) -> CliResult<String>;
     fn prompt_required(&mut self, label: &str) -> CliResult<String>;
     fn prompt_confirm(&mut self, message: &str, default: bool) -> CliResult<bool>;
+    fn select_one(
+        &mut self,
+        label: &str,
+        options: &[SelectOption],
+        default: Option<usize>,
+    ) -> CliResult<usize>;
 }
 
 #[derive(Debug, Clone)]
@@ -83,6 +97,7 @@ impl OnboardUi for StdioOnboardUi {
         io::stdin()
             .read_line(&mut line)
             .map_err(|error| format!("read stdin failed: {error}"))?;
+        drain_stdin();
         let line = ensure_onboard_input_not_cancelled(line)?;
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -100,6 +115,7 @@ impl OnboardUi for StdioOnboardUi {
         io::stdin()
             .read_line(&mut line)
             .map_err(|error| format!("read stdin failed: {error}"))?;
+        drain_stdin();
         let line = ensure_onboard_input_not_cancelled(line)?;
         Ok(line.trim().to_owned())
     }
@@ -114,6 +130,7 @@ impl OnboardUi for StdioOnboardUi {
         io::stdin()
             .read_line(&mut line)
             .map_err(|error| format!("read stdin failed: {error}"))?;
+        drain_stdin();
         let line = ensure_onboard_input_not_cancelled(line)?;
         let value = line.trim().to_ascii_lowercase();
         if value.is_empty() {
@@ -121,7 +138,136 @@ impl OnboardUi for StdioOnboardUi {
         }
         Ok(matches!(value.as_str(), "y" | "yes"))
     }
+
+    fn select_one(
+        &mut self,
+        label: &str,
+        options: &[SelectOption],
+        default: Option<usize>,
+    ) -> CliResult<usize> {
+        let default = validate_select_one_state(options.len(), default)?;
+        loop {
+            for (i, opt) in options.iter().enumerate() {
+                let num = i + 1;
+                let rec = if opt.recommended {
+                    " (recommended)"
+                } else {
+                    ""
+                };
+                println!("  {num}) {}{rec}", opt.label);
+                if !opt.description.is_empty() {
+                    println!("     {}", opt.description);
+                }
+            }
+            println!();
+            let prompt_text = match default {
+                Some(idx) => format!("{label} (default {}):", idx + 1),
+                None => format!("{label}: "),
+            };
+            print!("{prompt_text}");
+            io::stdout()
+                .flush()
+                .map_err(|error| format!("flush stdout failed: {error}"))?;
+            let mut input = String::new();
+            let bytes_read = io::stdin()
+                .read_line(&mut input)
+                .map_err(|error| format!("read stdin failed: {error}"))?;
+            drain_stdin();
+            if bytes_read == 0 {
+                return resolve_select_one_eof(default);
+            }
+            let input = ensure_onboard_input_not_cancelled(input)?;
+            let trimmed = input.trim();
+            if trimmed.is_empty() {
+                if let Some(idx) = default {
+                    return Ok(idx);
+                }
+                println!("Please select an option.");
+                continue;
+            }
+            match trimmed.parse::<usize>() {
+                Ok(n) if n >= 1 && n <= options.len() => return Ok(n - 1),
+                _ => {
+                    println!(
+                        "Invalid selection. Enter a number between 1 and {}.",
+                        options.len()
+                    );
+                }
+            }
+        }
+    }
 }
+
+fn validate_select_one_state(
+    options_len: usize,
+    default: Option<usize>,
+) -> CliResult<Option<usize>> {
+    if options_len == 0 {
+        return Err("no selection options available".to_owned());
+    }
+    if let Some(idx) = default
+        && idx >= options_len
+    {
+        return Err(format!(
+            "default selection index {idx} out of range 0..{}",
+            options_len - 1
+        ));
+    }
+    Ok(default)
+}
+
+fn resolve_select_one_eof(default: Option<usize>) -> CliResult<usize> {
+    default.ok_or_else(|| {
+        "onboarding cancelled: stdin closed while waiting for required selection".to_owned()
+    })
+}
+
+/// Drain any buffered bytes from stdin so that multi-line pastes do not
+/// leak into subsequent prompts.
+///
+/// Drains both Rust's internal `BufReader` (used by `stdin().read_line()`)
+/// and the OS-level kernel buffer via non-blocking `libc::read`.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn drain_stdin() {
+    use std::io::Read;
+    use std::os::unix::io::AsRawFd;
+
+    let stdin = std::io::stdin();
+    let fd = stdin.as_raw_fd();
+
+    // SAFETY: fcntl(F_GETFL) reads the file-descriptor flags for stdin,
+    // which is a well-defined POSIX operation with no memory concerns.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 {
+        return;
+    }
+    // SAFETY: fcntl(F_SETFL) temporarily sets stdin to non-blocking mode
+    // so we can drain without hanging. The original flags are restored below.
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return;
+    }
+
+    // Drain Rust's internal BufReader via stdin().lock().
+    // This consumes bytes already buffered in userspace that libc::read cannot reach.
+    {
+        let mut handle = stdin.lock();
+        let mut discard = [0u8; 1024];
+        loop {
+            match handle.read(&mut discard) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => continue,
+            }
+        }
+    }
+
+    // SAFETY: restoring the original file-descriptor flags is a well-defined
+    // POSIX operation with no memory concerns.
+    unsafe { libc::fcntl(fd, libc::F_SETFL, flags) };
+}
+
+#[cfg(not(unix))]
+fn drain_stdin() {}
 
 fn print_lines(ui: &mut impl OnboardUi, lines: impl IntoIterator<Item = String>) -> CliResult<()> {
     for line in lines {
@@ -906,36 +1052,95 @@ fn resolve_provider_selection(
         ));
     }
 
+    if !provider_selection.imported_choices.is_empty() {
+        let select_options: Vec<SelectOption> = provider_selection
+            .imported_choices
+            .iter()
+            .map(|choice| SelectOption {
+                label: provider_kind_display_name(choice.kind).to_owned(),
+                slug: choice.profile_id.clone(),
+                description: format!("source: {}, summary: {}", choice.source, choice.summary),
+                recommended: Some(choice.profile_id.as_str())
+                    == provider_selection.default_profile_id.as_deref(),
+            })
+            .collect();
+        let default_idx = if provider_selection.requires_explicit_choice {
+            None
+        } else {
+            provider_selection
+                .default_profile_id
+                .as_deref()
+                .and_then(|default_id| {
+                    provider_selection
+                        .imported_choices
+                        .iter()
+                        .position(|choice| choice.profile_id == default_id)
+                })
+        };
+        print_lines(
+            ui,
+            render_provider_selection_header_lines(
+                provider_selection,
+                guided_prompt_path,
+                context.render_width,
+            ),
+        )?;
+        let idx = ui.select_one("Provider", &select_options, default_idx)?;
+        let choice = provider_selection
+            .imported_choices
+            .get(idx)
+            .ok_or_else(|| format!("provider selection index {idx} out of range"))?;
+        return Ok(choice.config.clone());
+    }
+
+    // No imported choices — still use the numbered chooser so the provider
+    // step stays aligned with the rest of onboarding.
+    let default_provider_kind = options
+        .provider
+        .as_deref()
+        .and_then(parse_provider_kind)
+        .or(provider_selection.default_kind)
+        .or_else(|| {
+            provider_selection
+                .default_profile_id
+                .as_deref()
+                .and_then(parse_provider_kind)
+        })
+        .unwrap_or(config.provider.kind);
+    let provider_kinds = mvp::config::ProviderKind::all_sorted();
+    let select_options: Vec<SelectOption> = provider_kinds
+        .iter()
+        .map(|kind| SelectOption {
+            label: provider_kind_display_name(*kind).to_owned(),
+            slug: provider_kind_id(*kind).to_owned(),
+            description: String::new(),
+            recommended: *kind == default_provider_kind,
+        })
+        .collect();
+    let default_idx = if provider_selection.requires_explicit_choice {
+        None
+    } else {
+        provider_kinds
+            .iter()
+            .position(|kind| *kind == default_provider_kind)
+    };
     print_lines(
         ui,
-        render_provider_selection_screen_lines_with_style(
+        render_provider_selection_header_lines(
             provider_selection,
             guided_prompt_path,
             context.render_width,
-            true,
         ),
     )?;
-    let default_provider = options
-        .provider
-        .clone()
-        .or_else(|| provider_selection.default_profile_id.clone())
-        .or_else(|| {
-            provider_selection
-                .default_kind
-                .map(|kind| provider_kind_id(kind).to_owned())
-        })
-        .unwrap_or_else(|| provider_kind_id(config.provider.kind).to_owned());
-    loop {
-        let input = if provider_selection.requires_explicit_choice {
-            ui.prompt_required("Provider")?
-        } else {
-            ui.prompt_with_default("Provider", &default_provider)?
-        };
-        match resolve_provider_config_from_selector(&config.provider, provider_selection, &input) {
-            Ok(provider) => return Ok(provider),
-            Err(error) => print_message(ui, error)?,
-        }
-    }
+    let idx = ui.select_one("Provider", &select_options, default_idx)?;
+    let kind = *provider_kinds
+        .get(idx)
+        .ok_or_else(|| format!("provider selection index {idx} out of range"))?;
+    Ok(resolve_provider_config_from_selection(
+        &config.provider,
+        provider_selection,
+        kind,
+    ))
 }
 
 pub fn resolve_provider_config_from_selector(
@@ -1201,29 +1406,46 @@ fn resolve_personality_selection(
         .as_deref()
         .and_then(parse_prompt_personality)
         .unwrap_or_else(|| config.cli.resolved_personality());
+
+    let personalities = [
+        (
+            mvp::prompt::PromptPersonality::CalmEngineering,
+            "calm engineering",
+            "rigorous, direct, and technically grounded",
+        ),
+        (
+            mvp::prompt::PromptPersonality::FriendlyCollab,
+            "friendly collab",
+            "warm, cooperative, and explanatory when helpful",
+        ),
+        (
+            mvp::prompt::PromptPersonality::AutonomousExecutor,
+            "autonomous executor",
+            "decisive, high-initiative, and execution-oriented",
+        ),
+    ];
+    let select_options: Vec<SelectOption> = personalities
+        .iter()
+        .map(|(p, label, desc)| SelectOption {
+            label: label.to_string(),
+            slug: prompt_personality_id(*p).to_owned(),
+            description: desc.to_string(),
+            recommended: *p == default_personality,
+        })
+        .collect();
+    let default_idx = personalities
+        .iter()
+        .position(|(p, _, _)| *p == default_personality);
+
     print_lines(
         ui,
-        render_personality_selection_screen_lines_with_style(
-            config,
-            default_personality,
-            context.render_width,
-            true,
-        ),
+        render_personality_selection_header_lines(config, context.render_width),
     )?;
-    loop {
-        let input =
-            ui.prompt_with_default("Personality", prompt_personality_id(default_personality))?;
-        if let Some(personality) = parse_prompt_personality(&input) {
-            return Ok(personality);
-        }
-        print_message(
-            ui,
-            format!(
-                "Unsupported personality: {input}. Use one of: {}",
-                supported_personality_list()
-            ),
-        )?;
-    }
+    let idx = ui.select_one("Personality", &select_options, default_idx)?;
+    let (personality, _, _) = personalities
+        .get(idx)
+        .ok_or_else(|| format!("personality selection index {idx} out of range"))?;
+    Ok(*personality)
 }
 
 fn resolve_prompt_addendum_selection(
@@ -1319,29 +1541,48 @@ fn resolve_memory_profile_selection(
         .as_deref()
         .and_then(parse_memory_profile)
         .unwrap_or(config.memory.profile);
+
+    let profiles = [
+        (
+            mvp::config::MemoryProfile::WindowOnly,
+            "recent turns only",
+            "load only the active sliding window",
+        ),
+        (
+            mvp::config::MemoryProfile::WindowPlusSummary,
+            "window plus summary",
+            "add a summary block before the recent window",
+        ),
+        (
+            mvp::config::MemoryProfile::ProfilePlusWindow,
+            "profile plus window",
+            "inject durable profile notes before the recent window",
+        ),
+    ];
+    let select_options: Vec<SelectOption> = profiles
+        .iter()
+        .map(|(p, label, desc)| SelectOption {
+            label: label.to_string(),
+            slug: memory_profile_id(*p).to_owned(),
+            description: desc.to_string(),
+            recommended: *p == default_profile,
+        })
+        .collect();
+    let default_idx = profiles.iter().position(|(p, _, _)| *p == default_profile);
+
     print_lines(
         ui,
-        render_memory_profile_selection_screen_lines_with_style(
+        render_memory_profile_selection_header_lines(
             config,
-            default_profile,
             guided_prompt_path,
             context.render_width,
-            true,
         ),
     )?;
-    loop {
-        let input = ui.prompt_with_default("Memory profile", memory_profile_id(default_profile))?;
-        if let Some(profile) = parse_memory_profile(&input) {
-            return Ok(profile);
-        }
-        print_message(
-            ui,
-            format!(
-                "Unsupported memory profile: {input}. Use one of: {}",
-                supported_memory_profile_list()
-            ),
-        )?;
-    }
+    let idx = ui.select_one("Memory profile", &select_options, default_idx)?;
+    let (profile, _, _) = profiles
+        .get(idx)
+        .ok_or_else(|| format!("memory profile selection index {idx} out of range"))?;
+    Ok(*profile)
 }
 
 async fn run_preflight_checks(
@@ -4079,13 +4320,7 @@ fn render_provider_selection_screen_lines_with_style(
     width: usize,
     color_enabled: bool,
 ) -> Vec<String> {
-    let intro = if plan.imported_choices.is_empty() {
-        vec!["pick the provider that should back this setup".to_owned()]
-    } else if plan.requires_explicit_choice {
-        vec!["other detected settings stay merged".to_owned()]
-    } else {
-        vec!["review the detected provider choices for this setup".to_owned()]
-    };
+    let intro = provider_selection_intro_lines(plan);
     let options = plan
         .imported_choices
         .iter()
@@ -4128,6 +4363,34 @@ fn render_provider_selection_screen_lines_with_style(
         ),
         color_enabled,
     )
+}
+
+fn render_provider_selection_header_lines(
+    plan: &crate::migration::ProviderSelectionPlan,
+    guided_prompt_path: GuidedPromptPath,
+    width: usize,
+) -> Vec<String> {
+    render_onboard_choice_screen(
+        OnboardHeaderStyle::Compact,
+        width,
+        "choose the current provider",
+        "choose active provider",
+        Some((GuidedOnboardStep::Provider, guided_prompt_path)),
+        provider_selection_intro_lines(plan),
+        vec![],
+        vec![],
+        true,
+    )
+}
+
+fn provider_selection_intro_lines(plan: &crate::migration::ProviderSelectionPlan) -> Vec<String> {
+    if plan.imported_choices.is_empty() {
+        vec!["pick the provider that should back this setup".to_owned()]
+    } else if plan.requires_explicit_choice {
+        vec!["other detected settings stay merged".to_owned()]
+    } else {
+        vec!["review the detected provider choices for this setup".to_owned()]
+    }
 }
 
 fn render_provider_selection_default_choice_footer_line(
@@ -4435,6 +4698,29 @@ fn render_personality_selection_screen_lines_with_style(
     )
 }
 
+fn render_personality_selection_header_lines(
+    config: &mvp::config::LoongClawConfig,
+    width: usize,
+) -> Vec<String> {
+    render_onboard_choice_screen(
+        OnboardHeaderStyle::Compact,
+        width,
+        "choose how LoongClaw should speak and take initiative",
+        "choose personality",
+        Some((
+            GuidedOnboardStep::Personality,
+            GuidedPromptPath::NativePromptPack,
+        )),
+        vec![format!(
+            "- current personality: {}",
+            prompt_personality_id(config.cli.resolved_personality())
+        )],
+        vec![],
+        vec![],
+        true,
+    )
+}
+
 pub fn render_prompt_addendum_selection_screen_lines(
     config: &mvp::config::LoongClawConfig,
     width: usize,
@@ -4537,6 +4823,27 @@ fn render_memory_profile_selection_screen_lines_with_style(
             "the current memory profile",
         )],
         color_enabled,
+    )
+}
+
+fn render_memory_profile_selection_header_lines(
+    config: &mvp::config::LoongClawConfig,
+    guided_prompt_path: GuidedPromptPath,
+    width: usize,
+) -> Vec<String> {
+    render_onboard_choice_screen(
+        OnboardHeaderStyle::Compact,
+        width,
+        "choose how much memory context LoongClaw should inject",
+        "choose memory profile",
+        Some((GuidedOnboardStep::MemoryProfile, guided_prompt_path)),
+        vec![format!(
+            "- current profile: {}",
+            memory_profile_id(config.memory.profile)
+        )],
+        vec![],
+        vec![],
+        true,
     )
 }
 
@@ -5280,6 +5587,39 @@ mod tests {
                 return Ok(default);
             }
             Ok(matches!(value.as_str(), "y" | "yes"))
+        }
+
+        fn select_one(
+            &mut self,
+            _label: &str,
+            options: &[SelectOption],
+            default: Option<usize>,
+        ) -> CliResult<usize> {
+            let default = validate_select_one_state(options.len(), default)?;
+            match self.inputs.pop_front() {
+                Some(value) => {
+                    let value = ensure_onboard_input_not_cancelled(value)?;
+                    let trimmed = value.trim();
+                    if trimmed.is_empty() {
+                        return default
+                            .ok_or_else(|| "no default for required selection".to_owned());
+                    }
+                    let n: usize = trimmed
+                        .parse()
+                        .map_err(|_err| format!("invalid test selection input: {trimmed}"))?;
+                    if n >= 1 && n <= options.len() {
+                        Ok(n - 1)
+                    } else {
+                        Err(format!(
+                            "test selection {n} out of range 1..={}",
+                            options.len()
+                        ))
+                    }
+                }
+                None => {
+                    default.ok_or_else(|| "missing test input for required selection".to_owned())
+                }
+            }
         }
     }
 
@@ -6192,6 +6532,65 @@ mod tests {
             .expect("required prompt should preserve stdio trimming semantics");
 
         assert_eq!(value, "minimax");
+    }
+
+    #[test]
+    fn test_onboard_ui_select_one_cancels_on_escape_input() {
+        let mut ui = TestOnboardUi::with_inputs(["\u{1b}"]);
+        let options = vec![SelectOption {
+            label: "OpenAI".to_owned(),
+            slug: "openai".to_owned(),
+            description: String::new(),
+            recommended: true,
+        }];
+
+        let error = ui
+            .select_one("Provider", &options, Some(0))
+            .expect_err("escape input should cancel selection instead of surfacing a parse error");
+
+        assert!(
+            error.contains("cancelled"),
+            "escape cancellation should stay user-facing for selection prompts: {error}"
+        );
+    }
+
+    #[test]
+    fn validate_select_one_state_rejects_empty_options() {
+        let error = validate_select_one_state(0, None)
+            .expect_err("select_one should reject empty option lists before prompting");
+
+        assert!(
+            error.contains("no selection options"),
+            "empty option lists should return a clear error: {error}"
+        );
+    }
+
+    #[test]
+    fn validate_select_one_state_rejects_out_of_bounds_default() {
+        let error = validate_select_one_state(2, Some(2))
+            .expect_err("select_one should reject a default index that is outside the option list");
+
+        assert!(
+            error.contains("default selection index"),
+            "invalid default index should be reported clearly: {error}"
+        );
+    }
+
+    #[test]
+    fn resolve_select_one_eof_returns_default_when_available() {
+        let idx = resolve_select_one_eof(Some(1)).expect("EOF should fall back to the default");
+        assert_eq!(idx, 1);
+    }
+
+    #[test]
+    fn resolve_select_one_eof_errors_when_selection_is_required() {
+        let error = resolve_select_one_eof(None)
+            .expect_err("EOF without a default should terminate instead of looping forever");
+
+        assert!(
+            error.contains("stdin closed"),
+            "required selections should surface EOF as a terminal error: {error}"
+        );
     }
 
     #[test]
