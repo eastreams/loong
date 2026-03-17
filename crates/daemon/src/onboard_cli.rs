@@ -145,6 +145,7 @@ impl OnboardUi for StdioOnboardUi {
         options: &[SelectOption],
         default: Option<usize>,
     ) -> CliResult<usize> {
+        let default = validate_select_one_state(options.len(), default)?;
         loop {
             for (i, opt) in options.iter().enumerate() {
                 let num = i + 1;
@@ -168,10 +169,13 @@ impl OnboardUi for StdioOnboardUi {
                 .flush()
                 .map_err(|error| format!("flush stdout failed: {error}"))?;
             let mut input = String::new();
-            io::stdin()
+            let bytes_read = io::stdin()
                 .read_line(&mut input)
                 .map_err(|error| format!("read stdin failed: {error}"))?;
             drain_stdin();
+            if bytes_read == 0 {
+                return resolve_select_one_eof(default);
+            }
             let input = ensure_onboard_input_not_cancelled(input)?;
             let trimmed = input.trim();
             if trimmed.is_empty() {
@@ -192,6 +196,30 @@ impl OnboardUi for StdioOnboardUi {
             }
         }
     }
+}
+
+fn validate_select_one_state(
+    options_len: usize,
+    default: Option<usize>,
+) -> CliResult<Option<usize>> {
+    if options_len == 0 {
+        return Err("no selection options available".to_owned());
+    }
+    if let Some(idx) = default {
+        if idx >= options_len {
+            return Err(format!(
+                "default selection index {idx} out of range 0..{}",
+                options_len - 1
+            ));
+        }
+    }
+    Ok(default)
+}
+
+fn resolve_select_one_eof(default: Option<usize>) -> CliResult<usize> {
+    default.ok_or_else(|| {
+        "onboarding cancelled: stdin closed while waiting for required selection".to_owned()
+    })
 }
 
 /// Drain any buffered bytes from stdin so that multi-line pastes do not
@@ -5536,6 +5564,7 @@ mod tests {
             options: &[SelectOption],
             default: Option<usize>,
         ) -> CliResult<usize> {
+            let default = validate_select_one_state(options.len(), default)?;
             match self.inputs.pop_front() {
                 Some(value) => {
                     let value = ensure_onboard_input_not_cancelled(value)?;
@@ -6431,6 +6460,45 @@ mod tests {
         assert!(
             error.contains("cancelled"),
             "escape cancellation should stay user-facing for selection prompts: {error}"
+        );
+    }
+
+    #[test]
+    fn validate_select_one_state_rejects_empty_options() {
+        let error = validate_select_one_state(0, None)
+            .expect_err("select_one should reject empty option lists before prompting");
+
+        assert!(
+            error.contains("no selection options"),
+            "empty option lists should return a clear error: {error}"
+        );
+    }
+
+    #[test]
+    fn validate_select_one_state_rejects_out_of_bounds_default() {
+        let error = validate_select_one_state(2, Some(2))
+            .expect_err("select_one should reject a default index that is outside the option list");
+
+        assert!(
+            error.contains("default selection index"),
+            "invalid default index should be reported clearly: {error}"
+        );
+    }
+
+    #[test]
+    fn resolve_select_one_eof_returns_default_when_available() {
+        let idx = resolve_select_one_eof(Some(1)).expect("EOF should fall back to the default");
+        assert_eq!(idx, 1);
+    }
+
+    #[test]
+    fn resolve_select_one_eof_errors_when_selection_is_required() {
+        let error = resolve_select_one_eof(None)
+            .expect_err("EOF without a default should terminate instead of looping forever");
+
+        assert!(
+            error.contains("stdin closed"),
+            "required selections should surface EOF as a terminal error: {error}"
         );
     }
 

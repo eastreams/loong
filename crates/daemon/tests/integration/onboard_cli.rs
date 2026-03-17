@@ -243,6 +243,17 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
         options: &[loongclaw_daemon::onboard_cli::SelectOption],
         default: Option<usize>,
     ) -> loongclaw_daemon::CliResult<usize> {
+        if options.is_empty() {
+            return Err("no selection options available".to_owned());
+        }
+        if let Some(idx) = default {
+            if idx >= options.len() {
+                return Err(format!(
+                    "default selection index {idx} out of range 0..{}",
+                    options.len() - 1
+                ));
+            }
+        }
         self.outputs.push(format!("SELECT {label}"));
         let value = scripted_input_not_cancelled(self.next_input(label)?)?;
         let trimmed = value.trim();
