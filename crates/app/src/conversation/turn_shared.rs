@@ -18,6 +18,7 @@ pub const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rou
 
 const FILE_READ_FOLLOWUP_CONTENT_PREVIEW_CHARS: usize = 384;
 const SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS: usize = 384;
+const SHELL_FOLLOWUP_STDIO_OMISSION_MARKER: &str = "\n[... omitted ...]\n";
 
 pub fn next_conversation_turn_id() -> String {
     static NEXT_CONVERSATION_TURN_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -547,10 +548,33 @@ fn summarize_shell_output_preview(value: Option<&Value>) -> (String, usize, bool
     if total_chars <= SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS {
         return (text.to_owned(), total_chars, false);
     }
+    let marker_chars = SHELL_FOLLOWUP_STDIO_OMISSION_MARKER.chars().count();
+    let Some(available_chars) = SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS.checked_sub(marker_chars) else {
+        return (
+            text.chars()
+                .take(SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS)
+                .collect(),
+            total_chars,
+            true,
+        );
+    };
+    if available_chars < 2 {
+        return (
+            text.chars()
+                .take(SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS)
+                .collect(),
+            total_chars,
+            true,
+        );
+    }
+
+    let tail_chars = available_chars / 2;
+    let head_chars = available_chars - tail_chars;
+    let head: String = text.chars().take(head_chars).collect();
+    let tail: String = text.chars().skip(total_chars - tail_chars).collect();
+
     (
-        text.chars()
-            .take(SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS)
-            .collect(),
+        format!("{head}{SHELL_FOLLOWUP_STDIO_OMISSION_MARKER}{tail}"),
         total_chars,
         true,
     )
@@ -1601,6 +1625,67 @@ mod tests {
                 .chars()
                 .count(),
             SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS
+        );
+    }
+
+    #[test]
+    fn reduce_followup_payload_for_model_preserves_shell_tail_context() {
+        let stdout = format!(
+            "{}\n{}\n{}",
+            "build log ".repeat(80),
+            "intermediate output ".repeat(80),
+            "final status: test suite failed on browser companion startup"
+        );
+        let payload = json!({
+            "adapter": "core-tools",
+            "tool_name": "shell.exec",
+            "command": "cargo",
+            "args": ["test", "--workspace"],
+            "cwd": "/repo",
+            "exit_code": 1,
+            "stdout": stdout,
+            "stderr": "",
+        });
+        let line = format!(
+            "[ok] {}",
+            json!({
+                "status": "ok",
+                "tool": "shell.exec",
+                "tool_call_id": "call-shell",
+                "payload_summary": serde_json::to_string(&payload).expect("encode payload"),
+                "payload_chars": 8_192,
+                "payload_truncated": false
+            })
+        );
+
+        let reduced = reduce_followup_payload_for_model("tool_result", line.as_str());
+        let envelope: Value = serde_json::from_str(
+            reduced
+                .strip_prefix("[ok] ")
+                .expect("tool result line should preserve status prefix"),
+        )
+        .expect("reduced followup envelope should stay valid json");
+        let summary: Value = serde_json::from_str(
+            envelope["payload_summary"]
+                .as_str()
+                .expect("payload summary should stay encoded json"),
+        )
+        .expect("shell payload summary should stay valid json");
+        let preview = summary["stdout_preview"]
+            .as_str()
+            .expect("stdout preview should exist");
+
+        assert!(
+            preview.contains("build log"),
+            "preview should keep shell prefix"
+        );
+        assert!(
+            preview.contains("final status: test suite failed on browser companion startup"),
+            "preview should keep the final shell status"
+        );
+        assert!(
+            preview.contains("[... omitted ...]"),
+            "preview should signal when middle content is omitted"
         );
     }
 
