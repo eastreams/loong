@@ -4,7 +4,6 @@ use super::*;
 async fn execute_spec_process_stdio_bridge_executes_when_enabled_and_allowed() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    let _env_lock = lock_daemon_test_environment();
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
@@ -130,7 +129,6 @@ async fn execute_spec_process_stdio_bridge_executes_when_enabled_and_allowed() {
 async fn execute_spec_process_stdio_bridge_blocks_when_command_not_allowlisted() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    let _env_lock = lock_daemon_test_environment();
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
@@ -239,7 +237,6 @@ async fn execute_spec_process_stdio_bridge_blocks_when_command_not_allowlisted()
 async fn execute_spec_process_stdio_bridge_fails_on_invalid_json_line_response() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    let _env_lock = lock_daemon_test_environment();
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
@@ -357,7 +354,6 @@ async fn execute_spec_process_stdio_bridge_fails_on_invalid_json_line_response()
 async fn execute_spec_process_stdio_bridge_fails_on_response_id_mismatch() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    let _env_lock = lock_daemon_test_environment();
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
@@ -382,8 +378,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_id_mismatch() {
 #     "bridge_kind":"process_stdio",
 #     "command":"python3",
 #     "process_timeout_ms":"15000",
-#     "args_json":"[\"-c\",\"import json,sys,time; sys.stdout.write(json.dumps({'method':'tools/call','id':'wrong-id','payload':{'ok':True}})+'\\\\n'); sys.stdout.flush(); time.sleep(0.05)\"]",
-#     "process_timeout_ms":"15000",
+#     "args_json":"[\"-c\",\"import json,sys; request=json.loads(sys.stdin.readline()); response={'method':request['method'],'id':'wrong-id','payload':{'ok':True}}; sys.stdout.write(json.dumps(response)+'\\\\n'); sys.stdout.flush()\"]",
 #     "version":"1.0.0"
 #   }
 # }
@@ -471,7 +466,6 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_id_mismatch() {
 async fn execute_spec_process_stdio_bridge_fails_on_response_method_mismatch() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    let _env_lock = lock_daemon_test_environment();
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
@@ -496,8 +490,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_method_mismatch() {
 #     "bridge_kind":"process_stdio",
 #     "command":"python3",
 #     "process_timeout_ms":"15000",
-#     "args_json":"[\"-c\",\"import json,sys,time; sys.stdout.write(json.dumps({'method':'tools/list','id':'stdio-mismatch-method-provider:primary:invoke','payload':{'ok':True}})+'\\\\n'); sys.stdout.flush(); time.sleep(0.05)\"]",
-#     "process_timeout_ms":"15000",
+#     "args_json":"[\"-c\",\"import json,sys; request=json.loads(sys.stdin.readline()); response={'method':'tools/list','id':request['id'],'payload':{'ok':True}}; sys.stdout.write(json.dumps(response)+'\\\\n'); sys.stdout.flush()\"]",
 #     "version":"1.0.0"
 #   }
 # }
@@ -584,7 +577,6 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_method_mismatch() {
 async fn execute_spec_process_stdio_bridge_blocks_when_protocol_authorization_fails() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    let _env_lock = lock_daemon_test_environment();
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
@@ -711,7 +703,6 @@ async fn execute_spec_process_stdio_bridge_blocks_when_protocol_authorization_fa
 async fn execute_spec_process_stdio_bridge_fails_on_recv_timeout() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    let _env_lock = lock_daemon_test_environment();
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
