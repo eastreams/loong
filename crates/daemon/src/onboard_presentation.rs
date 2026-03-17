@@ -150,11 +150,9 @@ pub fn import_option_detail(
     }
 
     if detected_source_count == 1 {
-        "1 reusable source was detected for provider, channels, or workspace guidance.".to_owned()
+        "1 reusable source was detected for provider, channels, or guidance.".to_owned()
     } else {
-        format!(
-            "{reusable_source_phrase} were detected for provider, channels, or workspace guidance."
-        )
+        format!("{reusable_source_phrase} were detected for provider, channels, or guidance.")
     }
 }
 

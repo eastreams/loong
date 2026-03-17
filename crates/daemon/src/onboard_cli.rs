@@ -2163,12 +2163,10 @@ fn render_onboard_entry_screen_lines_with_style(
     let recommended_plan_available = import_candidates.iter().any(|candidate| {
         candidate.source_kind == crate::migration::ImportSourceKind::RecommendedPlan
     });
-    let mut lines = mvp::presentation::style_brand_lines(
-        &mvp::presentation::render_brand_header(
-            width,
-            &mvp::presentation::BuildVersionInfo::current(),
-            Some("guided setup for provider, channels, and workspace guidance"),
-        ),
+    let mut lines = render_onboard_header(
+        OnboardHeaderStyle::Compact,
+        width,
+        "guided setup for provider, channels, and workspace guidance",
         color_enabled,
     );
     lines.push(String::new());
@@ -2629,7 +2627,7 @@ fn render_single_detected_setup_preview_screen_lines_with_style(
     ));
 
     render_onboard_choice_screen(
-        OnboardHeaderStyle::Brand,
+        OnboardHeaderStyle::Compact,
         width,
         crate::onboard_presentation::single_detected_starting_point_preview_subtitle(),
         crate::onboard_presentation::single_detected_starting_point_preview_title(),
@@ -2847,7 +2845,8 @@ fn render_onboard_review_lines_with_guidance_and_style(
     flow_style: ReviewFlowStyle,
     color_enabled: bool,
 ) -> Vec<String> {
-    let mut lines = render_onboard_brand_header(width, flow_style.header_subtitle(), color_enabled);
+    let mut lines =
+        render_onboard_compact_header(width, flow_style.header_subtitle(), color_enabled);
     lines.push(String::new());
     lines.push("review setup".to_owned());
     lines.push(flow_style.progress_line());
@@ -3007,7 +3006,7 @@ fn render_onboarding_success_summary_with_width_and_style(
     width: usize,
     color_enabled: bool,
 ) -> Vec<String> {
-    let mut lines = render_onboard_brand_header(width, "setup complete", color_enabled);
+    let mut lines = render_onboard_compact_header(width, "setup complete", color_enabled);
     lines.push(String::new());
     lines.push("onboarding complete".to_owned());
     if !summary.next_actions.is_empty() {
@@ -3422,7 +3421,7 @@ fn render_onboard_shortcut_screen_lines_with_style(
     context_lines.push(shortcut_kind.summary_line().to_owned());
 
     render_onboard_choice_screen(
-        OnboardHeaderStyle::Brand,
+        OnboardHeaderStyle::Compact,
         width,
         shortcut_kind.subtitle(),
         shortcut_kind.title(),
@@ -4019,7 +4018,7 @@ fn render_starting_point_selection_screen_lines_with_style(
     let footer_lines = render_starting_point_selection_footer_lines(&sorted_candidates);
 
     render_onboard_choice_screen(
-        OnboardHeaderStyle::Brand,
+        OnboardHeaderStyle::Compact,
         width,
         crate::onboard_presentation::starting_point_selection_subtitle(),
         crate::onboard_presentation::starting_point_selection_title(),
@@ -4085,7 +4084,7 @@ fn render_provider_selection_screen_lines_with_style(
         })
         .collect::<Vec<_>>();
     render_onboard_choice_screen(
-        OnboardHeaderStyle::Brand,
+        OnboardHeaderStyle::Compact,
         width,
         "choose the current provider",
         "choose active provider",
@@ -4384,7 +4383,7 @@ fn render_personality_selection_screen_lines_with_style(
     .collect::<Vec<_>>();
 
     render_onboard_choice_screen(
-        OnboardHeaderStyle::Brand,
+        OnboardHeaderStyle::Compact,
         width,
         "choose how LoongClaw should speak and take initiative",
         "choose personality",
@@ -4492,7 +4491,7 @@ fn render_memory_profile_selection_screen_lines_with_style(
     .collect::<Vec<_>>();
 
     render_onboard_choice_screen(
-        OnboardHeaderStyle::Brand,
+        OnboardHeaderStyle::Compact,
         width,
         "choose how much memory context LoongClaw should inject",
         "choose memory profile",

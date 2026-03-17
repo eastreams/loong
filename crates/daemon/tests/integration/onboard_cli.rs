@@ -1078,6 +1078,62 @@ async fn interactive_onboard_clear_token_restores_builtin_system_prompt() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn interactive_onboard_only_shows_large_logo_on_the_initial_screen() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    unsafe {
+        std::env::set_var("OPENAI_API_KEY", "openai-test-token");
+    }
+
+    let output_path = unique_temp_path("interactive-single-banner.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        crate::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: false,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        ["y", "1", "2", "", "", "", "", "", "", "y"],
+        None,
+        None,
+    )
+    .await
+    .expect("run interactive onboarding with the risk gate enabled");
+
+    assert_eq!(
+        transcript
+            .iter()
+            .filter(|line| line.contains("██╗      ██████╗"))
+            .count(),
+        1,
+        "interactive onboarding should show the large LOONGCLAW banner only once, on the initial risk screen: {transcript:#?}"
+    );
+    assert!(
+        transcript
+            .iter()
+            .filter(|line| line.contains("LOONGCLAW"))
+            .count()
+            >= 3,
+        "follow-up screens should keep using the compact LOONGCLAW header instead of dropping branding entirely: {transcript:#?}"
+    );
+    assert!(
+        transcript.iter().any(|line| line == "choose personality"),
+        "regression flow should still reach the later onboarding steps where repeated banner reports came from: {transcript:#?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn non_interactive_onboard_uses_the_same_detected_starting_point_order_as_interactive_default()
  {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
@@ -2049,8 +2105,12 @@ fn onboard_presentation_entry_and_digest_copy_stays_canonical() {
         "A suggested starting point is ready, built from 2 reusable sources."
     );
     assert_eq!(
+        loongclaw_daemon::onboard_presentation::import_option_detail(false, false, 1),
+        "1 reusable source was detected for provider, channels, or guidance."
+    );
+    assert_eq!(
         loongclaw_daemon::onboard_presentation::import_option_detail(false, false, 2),
-        "2 reusable sources were detected for provider, channels, or workspace guidance."
+        "2 reusable sources were detected for provider, channels, or guidance."
     );
     assert_eq!(
         loongclaw_daemon::onboard_presentation::detected_coverage_prefix(true),
@@ -2305,7 +2365,7 @@ fn onboard_entry_import_option_explains_detected_additions_when_current_setup_ex
 }
 
 #[test]
-fn onboard_entry_screen_includes_brand_block_and_detected_setup_digest() {
+fn onboard_entry_screen_uses_compact_header_and_detected_setup_digest() {
     let current = import_candidate_with_kind(
         loongclaw_daemon::migration::types::ImportSourceKind::ExistingLoongClawConfig,
         "existing config at ~/.config/loongclaw/config.toml",
@@ -2356,12 +2416,16 @@ fn onboard_entry_screen_includes_brand_block_and_detected_setup_digest() {
     );
 
     assert!(
-        lines[0].starts_with("██╗"),
-        "entry screen should start with the shared LOONGCLAW brand block: {lines:#?}"
+        lines[0].starts_with("LOONGCLAW"),
+        "entry screen should switch to the compact LOONGCLAW header after the initial risk gate: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line.starts_with('v')),
-        "entry screen should include a build/version line under the banner: {lines:#?}"
+        lines[0].contains("v"),
+        "entry screen should keep the build/version visible inside the compact header: {lines:#?}"
+    );
+    assert!(
+        lines.iter().all(|line| !line.starts_with("██╗")),
+        "entry screen should not repeat the large LOONGCLAW banner after the first screen: {lines:#?}"
     );
     assert!(
         lines
@@ -2653,8 +2717,12 @@ fn onboard_provider_selection_screen_includes_focus_title_and_choices() {
     let lines = loongclaw_daemon::onboard_cli::render_provider_selection_screen_lines(&plan, 80);
 
     assert!(
-        lines[0].starts_with("██╗"),
-        "provider choice screen should start with the shared LOONGCLAW brand block: {lines:#?}"
+        lines[0].starts_with("LOONGCLAW"),
+        "provider choice screen should use the compact LOONGCLAW header after the initial screen: {lines:#?}"
+    );
+    assert!(
+        lines.iter().all(|line| !line.starts_with("██╗")),
+        "provider choice screen should not re-render the large LOONGCLAW banner mid-onboarding: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "choose active provider"),
@@ -3039,8 +3107,8 @@ fn onboard_current_setup_shortcut_screen_summarizes_existing_setup_and_choices()
         loongclaw_daemon::onboard_cli::render_continue_current_setup_screen_lines(&config, 80);
 
     assert!(
-        lines[0].starts_with("██╗"),
-        "current-setup shortcut should start with the shared LOONGCLAW brand block: {lines:#?}"
+        lines[0].starts_with("LOONGCLAW"),
+        "current-setup shortcut should use the compact LOONGCLAW header after the entry screen: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "continue current setup"),
@@ -3139,8 +3207,8 @@ fn onboard_detected_setup_shortcut_screen_summarizes_starting_point_and_choices(
     );
 
     assert!(
-        lines[0].starts_with("██╗"),
-        "detected-setup shortcut should start with the shared LOONGCLAW brand block: {lines:#?}"
+        lines[0].starts_with("LOONGCLAW"),
+        "detected-setup shortcut should use the compact LOONGCLAW header after the entry screen: {lines:#?}"
     );
     assert!(
         lines
@@ -3269,7 +3337,7 @@ fn onboard_detected_setup_shortcut_is_limited_to_interactive_import_flow_with_de
 }
 
 #[test]
-fn onboard_starting_point_selection_screen_includes_brand_header_and_detected_options() {
+fn onboard_starting_point_selection_screen_uses_compact_header_and_detected_options() {
     let mut recommended = import_candidate_with_provider(
         loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
         "recommended import plan",
@@ -3300,8 +3368,8 @@ fn onboard_starting_point_selection_screen_includes_brand_header_and_detected_op
     );
 
     assert!(
-        lines[0].starts_with("██╗"),
-        "starting-point screen should start with the shared LOONGCLAW brand block: {lines:#?}"
+        lines[0].starts_with("LOONGCLAW"),
+        "starting-point screen should use the compact LOONGCLAW header after the entry screen: {lines:#?}"
     );
     assert!(
         lines
@@ -3454,7 +3522,7 @@ fn onboard_starting_point_selection_screen_summarizes_multi_source_origin() {
 }
 
 #[test]
-fn onboard_single_detected_setup_preview_screen_uses_branded_preview_layout() {
+fn onboard_single_detected_setup_preview_screen_uses_compact_follow_up_layout() {
     let candidate = import_candidate_with_provider(
         loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
         "Codex config at ~/.codex/config.toml",
@@ -3470,8 +3538,8 @@ fn onboard_single_detected_setup_preview_screen_uses_branded_preview_layout() {
     );
 
     assert!(
-        lines[0].starts_with("██╗"),
-        "single detected-setup preview should start with the shared LOONGCLAW brand block: {lines:#?}"
+        lines[0].starts_with("LOONGCLAW"),
+        "single detected-setup preview should use the compact LOONGCLAW header after the entry screen: {lines:#?}"
     );
     assert!(
         lines
@@ -4200,6 +4268,14 @@ fn onboard_personality_selection_screen_shows_native_personality_choices() {
     let lines = crate::onboard_cli::render_personality_selection_screen_lines(&config, 80);
 
     assert!(
+        lines[0].starts_with("LOONGCLAW"),
+        "personality screen should keep the compact LOONGCLAW header instead of re-showing the large banner: {lines:#?}"
+    );
+    assert!(
+        lines.iter().all(|line| !line.starts_with("██╗")),
+        "personality screen should not repeat the large LOONGCLAW banner mid-onboarding: {lines:#?}"
+    );
+    assert!(
         lines.iter().any(|line| line == "choose personality"),
         "personality screen should use a focused title: {lines:#?}"
     );
@@ -4251,6 +4327,10 @@ fn onboard_memory_profile_screen_shows_supported_profiles() {
 
     let lines = crate::onboard_cli::render_memory_profile_selection_screen_lines(&config, 80);
 
+    assert!(
+        lines[0].starts_with("LOONGCLAW"),
+        "memory-profile screen should keep the compact LOONGCLAW header instead of re-showing the large banner: {lines:#?}"
+    );
     assert!(
         lines.iter().any(|line| line == "choose memory profile"),
         "memory-profile screen should use a focused title: {lines:#?}"
@@ -4439,8 +4519,8 @@ fn onboard_existing_config_write_screen_offers_replace_backup_and_cancel() {
 
     assert_compact_loongclaw_header(&lines, "existing-config write screen");
     assert!(
-        !lines[0].starts_with("██╗"),
-        "existing-config write screen should avoid the oversized block-logo banner on the write guard screen: {lines:#?}"
+        lines.iter().all(|line| !line.starts_with("██╗")),
+        "existing-config write screen should not repeat the large LOONGCLAW banner after the first screen: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "existing config found"),
@@ -5393,7 +5473,7 @@ fn onboard_review_lines_include_starting_point_and_domain_preview() {
 }
 
 #[test]
-fn onboard_review_lines_include_brand_header() {
+fn onboard_review_lines_use_compact_header() {
     let lines = loongclaw_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
         &mvp::config::LoongClawConfig::default(),
         None,
@@ -5402,12 +5482,16 @@ fn onboard_review_lines_include_brand_header() {
     );
 
     assert!(
-        lines[0].starts_with("██╗"),
-        "review screen should start with the shared LOONGCLAW brand block: {lines:#?}"
+        lines[0].starts_with("LOONGCLAW"),
+        "review screen should use the compact LOONGCLAW header after the first screen: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line.starts_with('v')),
-        "review screen should include a version line: {lines:#?}"
+        lines[0].contains("v"),
+        "review screen should keep the version visible inside the compact header: {lines:#?}"
+    );
+    assert!(
+        lines.iter().all(|line| !line.starts_with("██╗")),
+        "review screen should not repeat the large LOONGCLAW banner: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "review setup"),
@@ -5756,7 +5840,7 @@ fn onboarding_success_summary_uses_starting_point_language() {
 }
 
 #[test]
-fn onboarding_success_summary_includes_brand_header() {
+fn onboarding_success_summary_uses_compact_header() {
     let path = PathBuf::from("/tmp/loongclaw-config.toml");
     let summary = loongclaw_daemon::onboard_cli::build_onboarding_success_summary(
         &path,
@@ -5767,12 +5851,16 @@ fn onboarding_success_summary_includes_brand_header() {
     let lines =
         loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
     assert!(
-        lines[0].starts_with("██╗"),
-        "success summary should start with the shared LOONGCLAW brand block: {lines:#?}"
+        lines[0].starts_with("LOONGCLAW"),
+        "success summary should use the compact LOONGCLAW header after the first screen: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line.starts_with('v')),
-        "success summary should include a version line under the banner: {lines:#?}"
+        lines[0].contains("v"),
+        "success summary should keep the version visible inside the compact header: {lines:#?}"
+    );
+    assert!(
+        lines.iter().all(|line| !line.starts_with("██╗")),
+        "success summary should not repeat the large LOONGCLAW banner after onboarding has already started: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "onboarding complete"),
