@@ -461,12 +461,12 @@ fn reduce_tool_result_line_for_model(line: &str) -> String {
     let Some(payload_summary) = envelope.get("payload_summary").and_then(Value::as_str) else {
         return line.to_owned();
     };
-    let Ok(payload_json) = serde_json::from_str::<Value>(payload_summary) else {
+    let Ok(mut payload_json) = serde_json::from_str::<Value>(payload_summary) else {
         return line.to_owned();
     };
     let reduced_summary = match tool_name {
         Some("file.read") => reduce_file_read_payload_summary(&payload_json),
-        Some("shell.exec") => reduce_shell_payload_summary(&payload_json),
+        Some("shell.exec") => reduce_shell_payload_summary(&mut payload_json),
         _ => None,
     };
     let Some(reduced_summary) = reduced_summary else {
@@ -501,14 +501,14 @@ fn reduce_file_read_payload_summary(payload: &Value) -> Option<String> {
     .ok()
 }
 
-fn reduce_shell_payload_summary(payload: &Value) -> Option<String> {
-    let mut reduced_payload = payload.as_object()?.clone();
-    let stdout_truncated = replace_shell_stdio_with_preview(&mut reduced_payload, "stdout");
-    let stderr_truncated = replace_shell_stdio_with_preview(&mut reduced_payload, "stderr");
+fn reduce_shell_payload_summary(payload: &mut Value) -> Option<String> {
+    let payload_object = payload.as_object_mut()?;
+    let stdout_truncated = replace_shell_stdio_with_preview(payload_object, "stdout");
+    let stderr_truncated = replace_shell_stdio_with_preview(payload_object, "stderr");
     if !stdout_truncated && !stderr_truncated {
         return None;
     }
-    serde_json::to_string(&Value::Object(reduced_payload)).ok()
+    serde_json::to_string(payload).ok()
 }
 
 fn replace_shell_stdio_with_preview(
@@ -542,10 +542,7 @@ fn summarize_file_read_content_preview(value: Option<&Value>) -> (String, usize,
 }
 
 fn summarize_shell_output_preview(value: Option<&Value>) -> (String, usize, bool) {
-    let text = value
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or_default();
+    let text = value.and_then(Value::as_str).unwrap_or_default();
     let total_chars = text.chars().count();
     if total_chars <= SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS {
         return (text.to_owned(), total_chars, false);
@@ -837,6 +834,38 @@ fn parse_external_skill_invoke_context_line(line: &str) -> Option<ExternalSkillI
         display_name,
         instructions,
     })
+}
+
+#[cfg(test)]
+pub(crate) fn parse_tool_result_followup_for_test(messages: &[Value]) -> (Value, Value) {
+    let assistant_tool_result = messages
+        .iter()
+        .find(|message| {
+            message.get("role") == Some(&Value::String("assistant".to_owned()))
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| content.starts_with("[tool_result]\n[ok] "))
+        })
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_str)
+        .expect("assistant tool_result followup message should exist");
+    let line = assistant_tool_result
+        .lines()
+        .nth(1)
+        .expect("assistant tool_result should keep payload line");
+    let envelope: Value = serde_json::from_str(
+        line.strip_prefix("[ok] ")
+            .expect("tool result line should preserve status prefix"),
+    )
+    .expect("followup envelope should stay valid json");
+    let summary: Value = serde_json::from_str(
+        envelope["payload_summary"]
+            .as_str()
+            .expect("payload summary should stay encoded json"),
+    )
+    .expect("payload summary should stay valid json");
+    (envelope, summary)
 }
 
 #[cfg(test)]
@@ -1520,6 +1549,59 @@ mod tests {
         assert_eq!(summary["exit_code"], 0);
         assert!(summary.get("stdout_preview").is_some());
         assert_eq!(summary["stdout_truncated"], true);
+    }
+
+    #[test]
+    fn reduce_followup_payload_for_model_counts_raw_shell_whitespace() {
+        let payload = json!({
+            "adapter": "core-tools",
+            "tool_name": "shell.exec",
+            "command": "printf",
+            "args": ["%s", " "],
+            "cwd": "/repo",
+            "exit_code": 0,
+            "stdout": " ".repeat(SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS + 32),
+            "stderr": "",
+        });
+        let line = format!(
+            "[ok] {}",
+            json!({
+                "status": "ok",
+                "tool": "shell.exec",
+                "tool_call_id": "call-shell",
+                "payload_summary": serde_json::to_string(&payload).expect("encode payload"),
+                "payload_chars": 8_192,
+                "payload_truncated": false
+            })
+        );
+
+        let reduced = reduce_followup_payload_for_model("tool_result", line.as_str());
+        let envelope: Value = serde_json::from_str(
+            reduced
+                .strip_prefix("[ok] ")
+                .expect("tool result line should preserve status prefix"),
+        )
+        .expect("reduced followup envelope should stay valid json");
+        let summary: Value = serde_json::from_str(
+            envelope["payload_summary"]
+                .as_str()
+                .expect("payload summary should stay encoded json"),
+        )
+        .expect("shell payload summary should stay valid json");
+
+        assert_eq!(summary["stdout_truncated"], true);
+        assert_eq!(
+            summary["stdout_chars"],
+            json!(SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS + 32)
+        );
+        assert_eq!(
+            summary["stdout_preview"]
+                .as_str()
+                .expect("stdout preview should exist")
+                .chars()
+                .count(),
+            SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS
+        );
     }
 
     #[test]

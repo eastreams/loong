@@ -21,7 +21,7 @@
 Add tests that prove:
 - discovery-first follow-up messages reduce oversized `shell.exec` payload summaries before the next provider round
 - reduced shell payloads mark `payload_truncated=true`
-- `tool.search` follow-up payloads remain untouched so lease parsing semantics are preserved
+- `tool.search` follow-up payloads remain untouched so payload parsing semantics are preserved
 - raw-output reply behavior is not part of this reducer path
 
 **Step 2: Run test to verify it fails**
