@@ -133,11 +133,10 @@ impl BrowserCompanionRunner for CommandBrowserCompanionRunner {
         })
         .map_err(|error| format!("browser_companion_spawn_failed: {error}"))?;
 
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(&encoded)
-                .map_err(|error| format!("browser_companion_stdin_write_failed: {error}"))?;
-        }
+        let stdin = child.stdin.take();
+        write_browser_companion_request(stdin, &encoded, || {
+            cleanup_browser_companion_after_stdin_write_failure(&mut child);
+        })?;
 
         let output = wait_for_browser_companion_output(child, timeout_seconds)?;
         if !output.status.success() {
@@ -170,6 +169,19 @@ fn retry_executable_file_busy<T, F>(mut operation: F) -> std::io::Result<T>
 where
     F: FnMut() -> std::io::Result<T>,
 {
+    retry_executable_file_busy_with_pause(&mut operation, || {
+        pause_before_browser_companion_spawn_retry(BROWSER_COMPANION_SPAWN_RETRY_DELAY);
+    })
+}
+
+fn retry_executable_file_busy_with_pause<T, F, P>(
+    mut operation: F,
+    mut pause: P,
+) -> std::io::Result<T>
+where
+    F: FnMut() -> std::io::Result<T>,
+    P: FnMut(),
+{
     let mut attempt = 0;
     loop {
         attempt += 1;
@@ -179,15 +191,50 @@ where
                 if should_retry_spawn_error(&error)
                     && attempt < BROWSER_COMPANION_SPAWN_RETRY_ATTEMPTS =>
             {
-                std::thread::sleep(BROWSER_COMPANION_SPAWN_RETRY_DELAY);
+                pause();
             }
             Err(error) => return Err(error),
         }
     }
 }
 
+fn pause_before_browser_companion_spawn_retry(delay: Duration) {
+    if let Ok(handle) = tokio::runtime::Handle::try_current()
+        && handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
+    {
+        tokio::task::block_in_place(|| std::thread::park_timeout(delay));
+        return;
+    }
+
+    std::thread::park_timeout(delay);
+}
+
 fn should_retry_spawn_error(error: &std::io::Error) -> bool {
     error.kind() == ErrorKind::ExecutableFileBusy
+}
+
+fn write_browser_companion_request<W, C>(
+    stdin: Option<W>,
+    encoded: &[u8],
+    mut cleanup: C,
+) -> Result<(), String>
+where
+    W: Write,
+    C: FnMut(),
+{
+    if let Some(mut stdin) = stdin {
+        stdin.write_all(encoded).map_err(|error| {
+            cleanup();
+            format!("browser_companion_stdin_write_failed: {error}")
+        })?;
+    }
+
+    Ok(())
+}
+
+fn cleanup_browser_companion_after_stdin_write_failure(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn wait_for_browser_companion_output(
@@ -506,7 +553,23 @@ fn remove_browser_companion_session(scope_id: &str, session_id: &str) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        io,
+        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+        time::Duration,
+    };
+
+    struct BrokenWriter;
+
+    impl std::io::Write for BrokenWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::from(io::ErrorKind::BrokenPipe))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn retry_executable_file_busy_retries_until_success() {
@@ -555,5 +618,62 @@ mod tests {
             attempts.load(Ordering::Relaxed),
             super::BROWSER_COMPANION_SPAWN_RETRY_ATTEMPTS
         );
+    }
+
+    #[test]
+    fn retry_executable_file_busy_pauses_between_retryable_failures() {
+        let attempts = AtomicUsize::new(0);
+        let pauses = AtomicUsize::new(0);
+
+        let result = super::retry_executable_file_busy_with_pause(
+            || {
+                let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+                if attempt < 2 {
+                    Err(std::io::Error::from(std::io::ErrorKind::ExecutableFileBusy))
+                } else {
+                    Ok("spawned")
+                }
+            },
+            || {
+                pauses.fetch_add(1, Ordering::Relaxed);
+            },
+        )
+        .expect("retry should pause between retryable executable-busy failures");
+
+        assert_eq!(result, "spawned");
+        assert_eq!(attempts.load(Ordering::Relaxed), 3);
+        assert_eq!(pauses.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn write_browser_companion_request_cleans_up_failed_stdin_writes() {
+        let cleaned_up = AtomicBool::new(false);
+
+        let error =
+            super::write_browser_companion_request(Some(BrokenWriter), br#"{"ok":true}"#, || {
+                cleaned_up.store(true, Ordering::Relaxed);
+            })
+            .expect_err("stdin write failure should be surfaced");
+
+        assert!(
+            error.contains("browser_companion_stdin_write_failed"),
+            "expected stdin write failure prefix, got {error}"
+        );
+        assert!(
+            cleaned_up.load(Ordering::Relaxed),
+            "stdin write failure should trigger child cleanup"
+        );
+    }
+
+    #[test]
+    fn pause_before_browser_companion_spawn_retry_is_safe_on_current_thread_runtime() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("build current-thread runtime");
+
+        runtime.block_on(async {
+            super::pause_before_browser_companion_spawn_retry(Duration::from_millis(0));
+        });
     }
 }
