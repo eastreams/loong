@@ -181,4 +181,4 @@ Reflect the corrected architecture:
 
 **Step 2: Keep issue/PR traceability intact**
 
-Continue on issue `#214` and PR `#215` rather than opening replacement artifacts.
+Continue on issue `#236` and PR `#215` rather than opening replacement artifacts.
