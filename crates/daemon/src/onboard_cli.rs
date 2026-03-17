@@ -914,6 +914,18 @@ fn check_level_marker(level: OnboardCheckLevel) -> &'static str {
     }
 }
 
+/// Strip surrounding brackets from user input.
+///
+/// The prompt displays defaults as `[value]`, and users sometimes type the
+/// brackets back. This strips a matched `[…]` wrapper so the inner value
+/// reaches the downstream parser cleanly.
+pub(crate) fn strip_default_brackets(input: &str) -> &str {
+    input
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(input)
+}
+
 fn prompt_with_default(label: &str, default: &str) -> CliResult<String> {
     print!("{label} [{default}]: ");
     io::stdout()
@@ -923,7 +935,7 @@ fn prompt_with_default(label: &str, default: &str) -> CliResult<String> {
     io::stdin()
         .read_line(&mut line)
         .map_err(|error| format!("read stdin failed: {error}"))?;
-    let trimmed = line.trim();
+    let trimmed = strip_default_brackets(line.trim());
     if trimmed.is_empty() {
         return Ok(default.to_owned());
     }
@@ -957,7 +969,7 @@ fn prompt_optional(label: &str, current: Option<&str>) -> CliResult<Option<Strin
     io::stdin()
         .read_line(&mut line)
         .map_err(|error| format!("read stdin failed: {error}"))?;
-    let trimmed = line.trim();
+    let trimmed = strip_default_brackets(line.trim());
     if trimmed.is_empty() {
         return Ok(current.map(str::to_owned));
     }

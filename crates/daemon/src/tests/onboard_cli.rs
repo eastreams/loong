@@ -273,3 +273,29 @@ async fn non_interactive_onboard_preserves_inline_api_key_literals() {
     fs::remove_file(&config_path).ok();
     fs::remove_dir_all(&temp_dir).ok();
 }
+
+#[test]
+fn strip_default_brackets_removes_matched_wrapper() {
+    assert_eq!(
+        crate::onboard_cli::strip_default_brackets("[calm_engineering]"),
+        "calm_engineering"
+    );
+    assert_eq!(
+        crate::onboard_cli::strip_default_brackets("[window_only]"),
+        "window_only"
+    );
+    assert_eq!(
+        crate::onboard_cli::strip_default_brackets("calm_engineering"),
+        "calm_engineering"
+    );
+    assert_eq!(
+        crate::onboard_cli::strip_default_brackets("[partial"),
+        "[partial"
+    );
+    assert_eq!(
+        crate::onboard_cli::strip_default_brackets("partial]"),
+        "partial]"
+    );
+    assert_eq!(crate::onboard_cli::strip_default_brackets("[]"), "");
+    assert_eq!(crate::onboard_cli::strip_default_brackets(""), "");
+}

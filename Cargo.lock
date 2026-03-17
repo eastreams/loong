@@ -1261,6 +1261,7 @@ dependencies = [
  "chrono",
  "clap",
  "ed25519-dalek",
+ "libc",
  "loongclaw-app",
  "loongclaw-bench",
  "loongclaw-kernel",
