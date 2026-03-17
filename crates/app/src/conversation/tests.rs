@@ -7597,6 +7597,223 @@ async fn turn_engine_parallel_safe_app_batch_executes_concurrently_in_source_ord
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_engine_mixed_batch_parallelizes_parallel_safe_segments_without_crossing_serial_only_boundaries()
+ {
+    use async_trait::async_trait;
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use tokio::sync::Notify;
+    use tokio::time::{Duration, timeout};
+
+    #[derive(Default)]
+    struct SegmentedParallelDispatcher {
+        first_segment_overlap: AtomicBool,
+        second_segment_overlap: AtomicBool,
+        serial_started_before_first_segment_completed: AtomicBool,
+        second_segment_started_before_serial_completed: AtomicBool,
+        first_segment_completed: AtomicUsize,
+        serial_completed: AtomicBool,
+        first_segment_second_started: Notify,
+        second_segment_second_started: Notify,
+    }
+
+    #[async_trait]
+    impl crate::conversation::AppToolDispatcher for SegmentedParallelDispatcher {
+        async fn execute_app_tool(
+            &self,
+            _session_context: &crate::conversation::SessionContext,
+            request: ToolCoreRequest,
+            _binding: crate::conversation::ConversationRuntimeBinding<'_>,
+        ) -> Result<ToolCoreOutcome, String> {
+            let marker = request
+                .payload
+                .get("marker")
+                .and_then(Value::as_str)
+                .expect("marker should be present");
+
+            match marker {
+                "p1a" => {
+                    if timeout(
+                        Duration::from_millis(200),
+                        self.first_segment_second_started.notified(),
+                    )
+                    .await
+                    .is_ok()
+                    {
+                        self.first_segment_overlap.store(true, Ordering::SeqCst);
+                    }
+                    self.first_segment_completed.fetch_add(1, Ordering::SeqCst);
+                }
+                "p1b" => {
+                    self.first_segment_second_started.notify_waiters();
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                    self.first_segment_completed.fetch_add(1, Ordering::SeqCst);
+                }
+                "serial" => {
+                    if self.first_segment_completed.load(Ordering::SeqCst) < 2 {
+                        self.serial_started_before_first_segment_completed
+                            .store(true, Ordering::SeqCst);
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    self.serial_completed.store(true, Ordering::SeqCst);
+                }
+                "p2a" => {
+                    if !self.serial_completed.load(Ordering::SeqCst) {
+                        self.second_segment_started_before_serial_completed
+                            .store(true, Ordering::SeqCst);
+                    }
+                    if timeout(
+                        Duration::from_millis(200),
+                        self.second_segment_second_started.notified(),
+                    )
+                    .await
+                    .is_ok()
+                    {
+                        self.second_segment_overlap.store(true, Ordering::SeqCst);
+                    }
+                }
+                "p2b" => {
+                    if !self.serial_completed.load(Ordering::SeqCst) {
+                        self.second_segment_started_before_serial_completed
+                            .store(true, Ordering::SeqCst);
+                    }
+                    self.second_segment_second_started.notify_waiters();
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+                other => panic!("unexpected marker `{other}`"),
+            }
+
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "marker": marker,
+                    "tool_name": request.tool_name,
+                }),
+            })
+        }
+    }
+
+    let dispatcher = SegmentedParallelDispatcher::default();
+    let engine = TurnEngine::with_parallel_tool_execution(5, 2_048, true, 2);
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![
+            provider_tool_intent(
+                "sessions_list",
+                json!({
+                    "marker": "p1a",
+                }),
+                "root-session",
+                "turn-segmented-parallel-batch",
+                "call-segmented-parallel-batch-1",
+            ),
+            provider_tool_intent(
+                "sessions_list",
+                json!({
+                    "marker": "p1b",
+                }),
+                "root-session",
+                "turn-segmented-parallel-batch",
+                "call-segmented-parallel-batch-2",
+            ),
+            provider_tool_intent(
+                "session_status",
+                json!({
+                    "session_id": "root-session",
+                    "marker": "serial",
+                }),
+                "root-session",
+                "turn-segmented-parallel-batch",
+                "call-segmented-parallel-batch-3",
+            ),
+            provider_tool_intent(
+                "sessions_list",
+                json!({
+                    "marker": "p2a",
+                }),
+                "root-session",
+                "turn-segmented-parallel-batch",
+                "call-segmented-parallel-batch-4",
+            ),
+            provider_tool_intent(
+                "sessions_list",
+                json!({
+                    "marker": "p2b",
+                }),
+                "root-session",
+                "turn-segmented-parallel-batch",
+                "call-segmented-parallel-batch-5",
+            ),
+        ],
+        raw_meta: Value::Null,
+    };
+    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
+
+    let result = engine
+        .execute_turn_in_context(
+            &turn,
+            &session_context,
+            &dispatcher,
+            crate::conversation::ConversationRuntimeBinding::direct(),
+            None,
+        )
+        .await;
+
+    match result {
+        TurnResult::FinalText(text) => {
+            let lines = text.lines().collect::<Vec<_>>();
+            assert_eq!(lines.len(), 5, "expected one line per tool result");
+            for (line, marker) in lines.iter().zip(["p1a", "p1b", "serial", "p2a", "p2b"]) {
+                let envelope = line
+                    .strip_prefix("[ok] ")
+                    .map(|payload| {
+                        serde_json::from_str::<Value>(payload)
+                            .expect("tool result envelope should be json")
+                    })
+                    .expect("line should keep [ok] prefix");
+                assert!(
+                    envelope["payload_summary"]
+                        .as_str()
+                        .expect("payload summary should be text")
+                        .contains(&format!("\"marker\":\"{marker}\"")),
+                    "expected output to stay in source order, got: {text}"
+                );
+            }
+        }
+        other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected FinalText, got: {other:?}")
+        }
+    }
+
+    assert!(
+        dispatcher.first_segment_overlap.load(Ordering::SeqCst),
+        "first parallel-safe segment should overlap instead of falling back to whole-batch serial execution"
+    );
+    assert!(
+        dispatcher.second_segment_overlap.load(Ordering::SeqCst),
+        "second parallel-safe segment should overlap instead of falling back to whole-batch serial execution"
+    );
+    assert!(
+        !dispatcher
+            .serial_started_before_first_segment_completed
+            .load(Ordering::SeqCst),
+        "serial-only intent should not start before the preceding parallel-safe segment fully completes"
+    );
+    assert!(
+        !dispatcher
+            .second_segment_started_before_serial_completed
+            .load(Ordering::SeqCst),
+        "parallel-safe segment after a serial-only intent should not start before that serial-only intent completes"
+    );
+}
+
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn default_app_tool_dispatcher_executes_session_wait_for_visible_terminal_child_session() {

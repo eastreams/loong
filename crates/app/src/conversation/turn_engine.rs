@@ -1159,31 +1159,51 @@ impl TurnEngine {
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
     ) -> Result<Vec<String>, TurnResult> {
-        if self.should_execute_prepared_batch_in_parallel(prepared) {
-            self.execute_prepared_batch_in_parallel(
-                prepared,
-                session_context,
-                app_dispatcher,
-                binding,
-            )
-            .await
-        } else {
-            self.execute_prepared_batch_sequential(
-                prepared,
-                session_context,
-                app_dispatcher,
-                binding,
-            )
-            .await
+        if !self.parallel_tool_execution_enabled || prepared.len() <= 1 {
+            return self
+                .execute_prepared_batch_sequential(
+                    prepared,
+                    session_context,
+                    app_dispatcher,
+                    binding,
+                )
+                .await;
         }
-    }
 
-    fn should_execute_prepared_batch_in_parallel(&self, prepared: &[PreparedToolIntent]) -> bool {
-        self.parallel_tool_execution_enabled
-            && prepared.len() > 1
-            && prepared.iter().all(|prepared_intent| {
-                prepared_intent.scheduling_class == ToolSchedulingClass::ParallelSafe
-            })
+        let mut outputs = Vec::with_capacity(prepared.len());
+        let mut remaining = prepared;
+        while let Some((first, _)) = remaining.split_first() {
+            let scheduling_class = first.scheduling_class;
+            let segment_len = remaining
+                .iter()
+                .take_while(|prepared_intent| prepared_intent.scheduling_class == scheduling_class)
+                .count();
+            let (segment, rest) = remaining.split_at(segment_len);
+            let mut segment_outputs = match scheduling_class {
+                ToolSchedulingClass::ParallelSafe if segment.len() > 1 => {
+                    self.execute_prepared_batch_in_parallel(
+                        segment,
+                        session_context,
+                        app_dispatcher,
+                        binding,
+                    )
+                    .await?
+                }
+                ToolSchedulingClass::ParallelSafe | ToolSchedulingClass::SerialOnly => {
+                    self.execute_prepared_batch_sequential(
+                        segment,
+                        session_context,
+                        app_dispatcher,
+                        binding,
+                    )
+                    .await?
+                }
+            };
+            outputs.append(&mut segment_outputs);
+            remaining = rest;
+        }
+
+        Ok(outputs)
     }
 
     async fn execute_prepared_batch_sequential<D: AppToolDispatcher + ?Sized>(
