@@ -2328,6 +2328,10 @@ fn onboard_presentation_risk_preflight_and_write_copy_stays_canonical() {
         "- rerun onboarding to choose a reviewed model, or set provider.model / preferred_models explicitly"
     );
     assert_eq!(
+        loongclaw_daemon::onboard_presentation::preflight_explicit_model_only_rerun_hint(),
+        "- set provider.model / preferred_models explicitly before retrying"
+    );
+    assert_eq!(
         loongclaw_daemon::onboard_presentation::preflight_continue_label(),
         "Continue anyway"
     );
