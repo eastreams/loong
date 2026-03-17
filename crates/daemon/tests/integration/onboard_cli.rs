@@ -2234,6 +2234,10 @@ fn onboard_presentation_risk_preflight_and_write_copy_stays_canonical() {
         "- rerun with --skip-model-probe if your provider blocks model listing during setup"
     );
     assert_eq!(
+        loongclaw_daemon::onboard_presentation::preflight_explicit_model_rerun_hint(),
+        "- rerun onboarding to choose a reviewed model, or set provider.model / preferred_models explicitly"
+    );
+    assert_eq!(
         loongclaw_daemon::onboard_presentation::preflight_continue_label(),
         "Continue anyway"
     );
@@ -4613,6 +4617,12 @@ fn onboard_preflight_screen_summarizes_status_counts_and_guidance() {
             .iter()
             .any(|line| line == "press Enter to use [n], cancel"),
         "preflight screen should make the safe default explicit when attention is still required: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("--skip-model-probe")),
+        "generic failing preflight checks should not suggest --skip-model-probe unless the underlying recovery policy explicitly allows it: {lines:#?}"
     );
 }
 

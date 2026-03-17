@@ -182,6 +182,7 @@ pub enum OnboardNonInteractiveWarningPolicy {
     AcceptedBySkipModelProbe,
     AcceptedByExplicitModel,
     AcceptedByPreferredModels,
+    RequiresExplicitModel,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1039,11 +1040,14 @@ fn resolve_model_selection(
         return Err("model cannot be empty".to_owned());
     }
 
-    let default_model = resolve_onboarding_model_prompt_default(options, config);
     if options.non_interactive {
-        return Ok(default_model);
+        if let Some(model) = options.model.as_deref() {
+            return Ok(model.trim().to_owned());
+        }
+        return Ok(config.provider.configured_model_value());
     }
 
+    let default_model = resolve_onboarding_model_prompt_default(options, config);
     print_lines(
         ui,
         render_model_selection_screen_lines_with_style(
@@ -1074,13 +1078,14 @@ fn resolve_onboarding_model_prompt_default(
         return model;
     }
 
-    if config.provider.configured_model_value() == "auto"
+    let configured_model = config.provider.configured_model_value();
+    if configured_model.eq_ignore_ascii_case("auto")
         && let Some(model) = config.provider.kind.recommended_onboarding_model()
     {
         return model.to_owned();
     }
 
-    config.provider.configured_model_value()
+    configured_model
 }
 
 fn resolve_api_key_env_selection(
@@ -1433,7 +1438,7 @@ fn provider_model_probe_failure_check(
                 error.as_str(),
                 recommended_onboarding_model,
             ),
-            OnboardNonInteractiveWarningPolicy::Block,
+            OnboardNonInteractiveWarningPolicy::RequiresExplicitModel,
         ),
     };
 
@@ -3550,9 +3555,8 @@ fn render_preflight_summary_screen_lines_with_style(
     if has_attention {
         summary_lines
             .push(crate::onboard_presentation::preflight_attention_summary_line().to_owned());
-        if counts.fail > 0 {
-            summary_lines
-                .push(crate::onboard_presentation::preflight_probe_rerun_hint().to_owned());
+        if let Some(hint) = preflight_attention_hint_line(checks) {
+            summary_lines.push(hint.to_owned());
         }
     } else {
         summary_lines.push(crate::onboard_presentation::preflight_green_summary_line().to_owned());
@@ -3600,6 +3604,28 @@ fn render_preflight_summary_screen_lines_with_style(
         lines.extend(render_onboard_wrapped_display_lines(footer_lines, width));
     }
     lines
+}
+
+fn preflight_attention_hint_line(checks: &[OnboardCheck]) -> Option<&'static str> {
+    if checks.iter().any(|check| {
+        matches!(
+            check.non_interactive_warning_policy,
+            OnboardNonInteractiveWarningPolicy::RequiresExplicitModel
+        )
+    }) {
+        return Some(crate::onboard_presentation::preflight_explicit_model_rerun_hint());
+    }
+
+    if checks.iter().any(|check| {
+        matches!(
+            check.non_interactive_warning_policy,
+            OnboardNonInteractiveWarningPolicy::AcceptedBySkipModelProbe
+        )
+    }) {
+        return Some(crate::onboard_presentation::preflight_probe_rerun_hint());
+    }
+
+    None
 }
 
 pub fn render_write_confirmation_screen_lines(
@@ -5575,6 +5601,10 @@ mod tests {
 
         assert_eq!(check.name, "provider model probe");
         assert_eq!(check.level, OnboardCheckLevel::Fail);
+        assert_eq!(
+            check.non_interactive_warning_policy,
+            OnboardNonInteractiveWarningPolicy::RequiresExplicitModel
+        );
         assert!(
             check.detail.contains("deepseek-chat"),
             "reviewed providers should point users to the reviewed onboarding default when catalog probing is unavailable: {check:#?}"
@@ -5931,7 +5961,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_model_selection_prefills_minimax_recommended_model_non_interactively() {
+    fn resolve_model_selection_preserves_minimax_auto_non_interactively() {
         let mut config = mvp::config::LoongClawConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
         config.provider.model = "auto".to_owned();
@@ -5960,8 +5990,8 @@ mod tests {
         .expect("resolve model selection");
 
         assert!(
-            selected == "MiniMax-M2.5",
-            "non-interactive onboarding should pick the provider-recommended explicit model for MiniMax instead of preserving auto: {selected:?}"
+            selected == "auto",
+            "non-interactive onboarding should preserve auto for MiniMax instead of silently rewriting the operator config to the reviewed default: {selected:?}"
         );
     }
 
@@ -6001,7 +6031,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_model_selection_prefills_deepseek_recommended_model_non_interactively() {
+    fn resolve_model_selection_preserves_deepseek_auto_non_interactively() {
         let mut config = mvp::config::LoongClawConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Deepseek;
         config.provider.model = "auto".to_owned();
@@ -6030,8 +6060,43 @@ mod tests {
         .expect("resolve model selection");
 
         assert!(
-            selected == "deepseek-chat",
-            "non-interactive onboarding should pick the provider-recommended explicit model for DeepSeek instead of preserving auto: {selected:?}"
+            selected == "auto",
+            "non-interactive onboarding should preserve auto for DeepSeek instead of silently rewriting the operator config to the reviewed default: {selected:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_model_selection_prefills_reviewed_model_for_mixed_case_auto_interactively() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Deepseek;
+        config.provider.model = "  AUTO  ".to_owned();
+        let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let selected = resolve_model_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: false,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            GuidedPromptPath::NativePromptPack,
+            &mut ui,
+            &context,
+        )
+        .expect("resolve model selection");
+
+        assert_eq!(
+            selected, "deepseek-chat",
+            "interactive onboarding should treat mixed-case auto the same as auto when choosing a reviewed provider default"
         );
     }
 
@@ -6156,6 +6221,52 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("Esc") && line.contains("cancel")),
             "interactive preflight review should teach the exit gesture explicitly: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn preflight_summary_uses_explicit_model_guidance_for_reviewed_auto_failures() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Deepseek;
+        config.provider.model = "auto".to_owned();
+
+        let check = provider_model_probe_failure_check(
+            &config,
+            "provider rejected the model list".to_owned(),
+        );
+        let lines = render_preflight_summary_screen_lines(&[check], 80);
+
+        assert!(
+            lines.iter().any(|line| {
+                line.contains("rerun onboarding to choose a reviewed model")
+                    || line.contains("set provider.model / preferred_models explicitly")
+            }),
+            "reviewed auto-model failures should keep the explicit-model remediation visible in the summary: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains("--skip-model-probe")),
+            "reviewed auto-model failures should not suggest --skip-model-probe because that contradicts the explicit-model recovery path: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn preflight_summary_keeps_skip_model_probe_hint_for_skip_accepted_checks() {
+        let lines = render_preflight_summary_screen_lines(
+            &[OnboardCheck {
+                name: "provider model probe",
+                level: OnboardCheckLevel::Warn,
+                detail: "provider rejected the model list".to_owned(),
+                non_interactive_warning_policy:
+                    OnboardNonInteractiveWarningPolicy::AcceptedBySkipModelProbe,
+            }],
+            80,
+        );
+
+        assert!(
+            lines.iter().any(|line| line.contains("--skip-model-probe")),
+            "skip-model-probe-accepted checks should keep the rerun hint visible in the summary: {lines:#?}"
         );
     }
 
