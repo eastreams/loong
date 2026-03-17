@@ -113,6 +113,15 @@ pub struct ProviderTransportPolicy {
     pub fallback: Option<ProviderTransportFallback>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelCatalogProbeRecovery {
+    ExplicitModel(String),
+    ConfiguredPreferredModels(Vec<String>),
+    RequiresExplicitModel {
+        recommended_onboarding_model: Option<&'static str>,
+    },
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReasoningEffort {
@@ -146,7 +155,6 @@ const ARK_REASONING_EFFORTS: &[ReasoningEffort] = &[
     ReasoningEffort::Medium,
     ReasoningEffort::High,
 ];
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
@@ -1006,6 +1014,21 @@ impl ProviderConfig {
         models
     }
 
+    pub fn model_catalog_probe_recovery(&self) -> ModelCatalogProbeRecovery {
+        if let Some(model) = self.explicit_model() {
+            return ModelCatalogProbeRecovery::ExplicitModel(model);
+        }
+
+        let preferred_models = self.configured_auto_model_candidates();
+        if !preferred_models.is_empty() {
+            return ModelCatalogProbeRecovery::ConfiguredPreferredModels(preferred_models);
+        }
+
+        ModelCatalogProbeRecovery::RequiresExplicitModel {
+            recommended_onboarding_model: self.kind.recommended_onboarding_model(),
+        }
+    }
+
     pub fn resolved_model(&self) -> Option<String> {
         self.explicit_model()
     }
@@ -1105,6 +1128,7 @@ impl ProviderConfig {
         Self {
             kind: self.kind,
             model: self.model.clone(),
+            preferred_models: self.preferred_models.clone(),
             base_url: profile.base_url.to_owned(),
             wire_api: self.wire_api,
             chat_completions_path: profile.chat_completions_path.to_owned(),
@@ -1920,6 +1944,16 @@ impl ProviderKind {
             None
         }
     }
+
+    pub const fn recommended_onboarding_model(self) -> Option<&'static str> {
+        if matches!(self, ProviderKind::Deepseek) {
+            Some("deepseek-chat")
+        } else if matches!(self, ProviderKind::Minimax) {
+            Some("MiniMax-M2.5")
+        } else {
+            None
+        }
+    }
 }
 
 pub fn parse_provider_kind_id(raw: &str) -> Option<ProviderKind> {
@@ -2611,8 +2645,8 @@ const PROVIDER_PROFILES: [ProviderProfile; 39] = [
         default_api_key_env: Some("ARK_API_KEY"),
         api_key_env_aliases: &[],
         default_user_agent: None,
-        default_oauth_access_token_env: Some("VOLCENGINE_CODING_PLAN_OAUTH_TOKEN"),
-        oauth_access_token_env_aliases: &["ARK_OAUTH_ACCESS_TOKEN"],
+        default_oauth_access_token_env: None,
+        oauth_access_token_env_aliases: &[],
         feature_family: ProviderFeatureFamily::Volcengine,
     },
     ProviderProfile {
@@ -3028,6 +3062,95 @@ mod tests {
         assert_eq!(
             config.authorization_header().as_deref(),
             Some("Bearer api-key-wins")
+        );
+    }
+
+    #[test]
+    fn fresh_minimax_provider_does_not_seed_hidden_preferred_models() {
+        let config = ProviderConfig::fresh_for_kind(ProviderKind::Minimax);
+
+        assert_eq!(config.model, "auto");
+        assert!(
+            config.preferred_models.is_empty(),
+            "provider defaults should not inject hidden runtime fallback models: {config:#?}"
+        );
+    }
+
+    #[test]
+    fn configured_auto_model_candidates_require_explicit_preferred_models() {
+        let config = ProviderConfig {
+            kind: ProviderKind::Minimax,
+            model: "auto".to_owned(),
+            ..ProviderConfig::default()
+        };
+
+        assert!(
+            config.configured_auto_model_candidates().is_empty(),
+            "auto-model fallback candidates should only exist when the operator configured preferred_models explicitly"
+        );
+    }
+
+    #[test]
+    fn only_reviewed_providers_expose_onboarding_models() {
+        assert_eq!(
+            ProviderKind::Deepseek.recommended_onboarding_model(),
+            Some("deepseek-chat")
+        );
+        assert_eq!(
+            ProviderKind::Minimax.recommended_onboarding_model(),
+            Some("MiniMax-M2.5")
+        );
+        assert_eq!(
+            ProviderKind::KimiCoding.recommended_onboarding_model(),
+            None
+        );
+        assert_eq!(ProviderKind::Openai.recommended_onboarding_model(), None);
+    }
+
+    #[test]
+    fn model_catalog_probe_recovery_requires_explicit_model_for_reviewed_auto_provider() {
+        let config = ProviderConfig {
+            kind: ProviderKind::Deepseek,
+            model: "auto".to_owned(),
+            ..ProviderConfig::default()
+        };
+
+        assert_eq!(
+            config.model_catalog_probe_recovery(),
+            ModelCatalogProbeRecovery::RequiresExplicitModel {
+                recommended_onboarding_model: Some("deepseek-chat"),
+            }
+        );
+    }
+
+    #[test]
+    fn model_catalog_probe_recovery_prefers_explicit_runtime_configuration() {
+        let explicit = ProviderConfig {
+            kind: ProviderKind::Deepseek,
+            model: "deepseek-chat".to_owned(),
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            explicit.model_catalog_probe_recovery(),
+            ModelCatalogProbeRecovery::ExplicitModel("deepseek-chat".to_owned())
+        );
+
+        let preferred = ProviderConfig {
+            kind: ProviderKind::Deepseek,
+            model: "auto".to_owned(),
+            preferred_models: vec![
+                "deepseek-chat".to_owned(),
+                "deepseek-chat".to_owned(),
+                "deepseek-reasoner".to_owned(),
+            ],
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            preferred.model_catalog_probe_recovery(),
+            ModelCatalogProbeRecovery::ConfiguredPreferredModels(vec![
+                "deepseek-chat".to_owned(),
+                "deepseek-reasoner".to_owned(),
+            ])
         );
     }
 }

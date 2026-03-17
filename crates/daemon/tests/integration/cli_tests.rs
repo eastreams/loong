@@ -515,6 +515,7 @@ fn runtime_experiment_cli_parses_compare() {
                     options.result_snapshot.as_deref(),
                     Some("/tmp/runtime-snapshot-result.json")
                 );
+                assert!(!options.recorded_snapshots);
                 assert!(options.json);
             }
             other @ (loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCommands::Start(_)
@@ -526,6 +527,60 @@ fn runtime_experiment_cli_parses_compare() {
         },
         other => panic!("unexpected command parsed: {other:?}"),
     }
+}
+
+#[test]
+fn runtime_experiment_cli_parses_compare_with_recorded_snapshots() {
+    let compare = Cli::try_parse_from([
+        "loongclaw",
+        "runtime-experiment",
+        "compare",
+        "--run",
+        "/tmp/runtime-experiment.json",
+        "--recorded-snapshots",
+        "--json",
+    ])
+    .expect("`runtime-experiment compare --recorded-snapshots` should parse");
+
+    match compare.command {
+        Some(Commands::RuntimeExperiment { command }) => match command {
+            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCommands::Compare(
+                options,
+            ) => {
+                assert_eq!(options.run, "/tmp/runtime-experiment.json");
+                assert_eq!(options.baseline_snapshot, None);
+                assert_eq!(options.result_snapshot, None);
+                assert!(options.recorded_snapshots);
+                assert!(options.json);
+            }
+            other @ (loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCommands::Start(_)
+            | loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCommands::Finish(_)
+            | loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCommands::Show(_)
+            | loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCommands::Restore(_)) => {
+                panic!("unexpected runtime-experiment subcommand parsed: {other:?}")
+            }
+        },
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn runtime_experiment_cli_rejects_compare_recorded_snapshots_with_manual_paths() {
+    let error = Cli::try_parse_from([
+        "loongclaw",
+        "runtime-experiment",
+        "compare",
+        "--run",
+        "/tmp/runtime-experiment.json",
+        "--recorded-snapshots",
+        "--baseline-snapshot",
+        "/tmp/runtime-snapshot.json",
+        "--result-snapshot",
+        "/tmp/runtime-snapshot-result.json",
+    ])
+    .expect_err("manual snapshot paths should conflict with --recorded-snapshots");
+
+    assert!(error.to_string().contains("--recorded-snapshots"));
 }
 
 #[test]

@@ -28,6 +28,7 @@ pub(super) async fn resolve_request_models(
     if let Some(model) = config.provider.resolved_model() {
         return Ok(vec![model]);
     }
+    let preferred_fallback_models = preferred_model_fallback_candidates(&config.provider);
     let cache_ttl_ms = config.provider.resolved_model_catalog_cache_ttl_ms();
     let stale_if_error_ms = config.provider.resolved_model_catalog_stale_if_error_ms();
     let cache_max_entries = config.provider.resolved_model_catalog_cache_max_entries();
@@ -96,6 +97,12 @@ pub(super) async fn resolve_request_models(
                     ));
                 }
             }
+            if !preferred_fallback_models.is_empty() {
+                return Ok(prioritize_model_candidates_by_cooldown(
+                    preferred_fallback_models,
+                    model_candidate_cooldown_policy,
+                ));
+            }
             return Err(error);
         }
     };
@@ -152,4 +159,62 @@ fn push_unique_model(out: &mut Vec<String>, model: &str) {
         return;
     }
     out.push(model.to_owned());
+}
+
+fn preferred_model_fallback_candidates(provider: &ProviderConfig) -> Vec<String> {
+    provider.configured_auto_model_candidates()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ProviderConfig, ProviderKind};
+
+    #[test]
+    fn preferred_model_fallback_candidates_preserve_unique_order_for_auto_model() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Minimax,
+            model: "auto".to_owned(),
+            preferred_models: vec![
+                "MiniMax-M1".to_owned(),
+                "MiniMax-M1".to_owned(),
+                "MiniMax-Text-01".to_owned(),
+            ],
+            ..ProviderConfig::default()
+        };
+
+        assert_eq!(
+            preferred_model_fallback_candidates(&provider),
+            vec!["MiniMax-M1", "MiniMax-Text-01"],
+        );
+    }
+
+    #[test]
+    fn preferred_model_fallback_candidates_ignore_explicit_model() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Minimax,
+            model: "MiniMax-M1".to_owned(),
+            preferred_models: vec!["MiniMax-M1".to_owned(), "MiniMax-Text-01".to_owned()],
+            ..ProviderConfig::default()
+        };
+
+        assert!(
+            preferred_model_fallback_candidates(&provider).is_empty(),
+            "explicit models should not rely on preferred-model auto fallback"
+        );
+    }
+
+    #[test]
+    fn preferred_model_fallback_candidates_do_not_infer_provider_defaults() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Minimax,
+            model: "auto".to_owned(),
+            ..ProviderConfig::default()
+        };
+
+        assert!(
+            preferred_model_fallback_candidates(&provider).is_empty(),
+            "runtime should not infer provider-owned fallback models when the operator did not configure preferred_models"
+        );
+    }
 }

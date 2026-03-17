@@ -83,6 +83,12 @@ pub struct RuntimeExperimentCompareCommandOptions {
     pub baseline_snapshot: Option<String>,
     #[arg(long)]
     pub result_snapshot: Option<String>,
+    #[arg(
+        long,
+        default_value_t = false,
+        conflicts_with_all = ["baseline_snapshot", "result_snapshot"]
+    )]
+    pub recorded_snapshots: bool,
     #[arg(long, default_value_t = false)]
     pub json: bool,
 }
@@ -391,6 +397,7 @@ pub fn execute_runtime_experiment_compare_command(
         &options.run,
         options.baseline_snapshot.as_deref(),
         options.result_snapshot.as_deref(),
+        options.recorded_snapshots,
     )?;
     let compare_mode = if snapshot_delta.is_some() {
         RuntimeExperimentCompareMode::SnapshotDelta
@@ -546,13 +553,56 @@ fn load_runtime_experiment_compare_snapshot_delta(
     run_path: &str,
     baseline_snapshot_path: Option<&str>,
     result_snapshot_path: Option<&str>,
+    recorded_snapshots: bool,
 ) -> CliResult<Option<RuntimeExperimentSnapshotDelta>> {
-    match (baseline_snapshot_path, result_snapshot_path) {
-        (None, None) => Ok(None),
-        (Some(_), None) | (None, Some(_)) => {
+    match (baseline_snapshot_path, result_snapshot_path, recorded_snapshots) {
+        (Some(_), _, true) | (_, Some(_), true) => Err(
+            "runtime experiment compare cannot combine --recorded-snapshots with manual snapshot paths"
+                .to_owned(),
+        ),
+        (None, None, false) => Ok(None),
+        (None, None, true) => {
+            let run_path = Path::new(run_path);
+            let recorded_result_snapshot = artifact.result_snapshot.as_ref().ok_or_else(|| {
+                format!(
+                    "runtime experiment compare cannot load recorded snapshots for run {} because the run has no result snapshot",
+                    run_path.display()
+                )
+            })?;
+            let baseline_snapshot_path = resolve_runtime_experiment_compare_snapshot_path(
+                &artifact.baseline_snapshot,
+                run_path,
+                "baseline",
+            )?;
+            let result_snapshot_path = resolve_runtime_experiment_compare_snapshot_path(
+                recorded_result_snapshot,
+                run_path,
+                "result",
+            )?;
+            let baseline_snapshot =
+                load_runtime_snapshot_artifact(Path::new(&baseline_snapshot_path))?;
+            let result_snapshot = load_runtime_snapshot_artifact(Path::new(&result_snapshot_path))?;
+            validate_compare_snapshot_identity(
+                "baseline",
+                &artifact.baseline_snapshot.snapshot_id,
+                &baseline_snapshot.lineage.snapshot_id,
+                Path::new(&baseline_snapshot_path),
+            )?;
+            validate_compare_snapshot_identity(
+                "result",
+                &recorded_result_snapshot.snapshot_id,
+                &result_snapshot.lineage.snapshot_id,
+                Path::new(&result_snapshot_path),
+            )?;
+            Ok(Some(build_runtime_experiment_snapshot_delta(
+                &baseline_snapshot,
+                &result_snapshot,
+            )))
+        }
+        (Some(_), None, false) | (None, Some(_), false) => {
             Err("runtime experiment compare requires --baseline-snapshot and --result-snapshot together".to_owned())
         }
-        (Some(baseline_snapshot_path), Some(result_snapshot_path)) => {
+        (Some(baseline_snapshot_path), Some(result_snapshot_path), false) => {
             let recorded_result_snapshot = artifact.result_snapshot.as_ref().ok_or_else(|| {
                 format!(
                     "runtime experiment compare cannot load snapshot delta for run {} because the run has no result snapshot",
@@ -580,6 +630,29 @@ fn load_runtime_experiment_compare_snapshot_delta(
             )))
         }
     }
+}
+
+fn resolve_runtime_experiment_compare_snapshot_path(
+    summary: &RuntimeExperimentSnapshotSummary,
+    run_path: &Path,
+    stage: &str,
+) -> CliResult<String> {
+    let artifact_path = summary.artifact_path.as_deref().ok_or_else(|| {
+        format!(
+            "runtime experiment run {} is missing recorded {} snapshot path",
+            run_path.display(),
+            stage
+        )
+    })?;
+
+    canonicalize_snapshot_artifact_path(artifact_path).map_err(|error| {
+        format!(
+            "runtime experiment run {} recorded {} snapshot path {} cannot be resolved: {error}",
+            run_path.display(),
+            stage,
+            artifact_path
+        )
+    })
 }
 
 fn resolve_runtime_experiment_restore_snapshot_path(

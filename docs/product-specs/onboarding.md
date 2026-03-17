@@ -20,6 +20,8 @@ next.
 - [ ] The shared post-onboard next-step model can also surface optional browser
       preview enable, runtime install, or first-recipe guidance when that lane
       is available for the current config.
+- [ ] Interactive onboarding explains how to exit cleanly, including an
+      explicit `Esc` cancellation hint before any config write.
 - [ ] Rerunning onboarding does not silently overwrite an existing config unless
       the user explicitly opts into a destructive path such as `--force`.
 - [ ] Onboarding uses the same provider, memory, and channel configuration
@@ -29,6 +31,15 @@ next.
 - [ ] Onboarding preflight reuses the same browser companion diagnostics as
       `loongclaw doctor`, surfacing optional managed-lane blockers before write
       without redefining runtime truth inside onboarding.
+- [ ] Providers with a reviewed onboarding default model, such as MiniMax and
+      DeepSeek, can complete setup with an explicit model even when model
+      catalog discovery is unavailable during setup.
+- [ ] `preferred_models` remains an explicit operator-configured fallback path
+      rather than a hidden provider-owned runtime default.
+- [ ] When model catalog discovery fails while the config still uses
+      `model = auto`, onboarding gives actionable remediation: rerun onboarding
+      to accept a reviewed explicit model when one exists, or set
+      `provider.model` / `preferred_models` explicitly.
 
 ## Out of Scope
 

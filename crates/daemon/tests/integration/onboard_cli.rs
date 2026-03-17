@@ -772,8 +772,12 @@ async fn non_interactive_onboard_allows_explicit_skip_model_probe_warning() {
 
     let raw = std::fs::read_to_string(&output).expect("read written onboarding config");
     assert!(
-        raw.contains("api_key = \"${OPENAI_API_KEY}\""),
-        "onboarding should persist the default provider credential as a canonical env reference: {raw}"
+        raw.contains("oauth_access_token = \"${OPENAI_CODEX_OAUTH_TOKEN}\""),
+        "onboarding should persist the openai oauth binding as the canonical env reference after provider-aligned credential routing: {raw}"
+    );
+    assert!(
+        !raw.contains("api_key = "),
+        "provider-aligned onboarding should not fall back to the legacy api_key field for the openai oauth route: {raw}"
     );
     assert!(
         !raw.contains("api_key_env"),
@@ -784,13 +788,18 @@ async fn non_interactive_onboard_allows_explicit_skip_model_probe_warning() {
         .expect("load written onboarding config");
     assert_eq!(config.provider.model, "openai/gpt-5.1-codex");
     assert_eq!(
-        config.provider.api_key.as_deref(),
-        Some("${OPENAI_API_KEY}")
+        config.provider.oauth_access_token.as_deref(),
+        Some("${OPENAI_CODEX_OAUTH_TOKEN}"),
+        "reloaded config should keep the canonical oauth credential source after provider-aligned routing"
     );
     assert_eq!(
-        config.provider.api_key(),
-        Some("test-openai-key".to_owned()),
-        "loaded config should still resolve the canonical env reference at runtime"
+        config.provider.api_key, None,
+        "reloaded config should not repopulate the legacy api_key field for the oauth-backed openai route"
+    );
+    assert_eq!(
+        config.provider.authorization_header(),
+        Some("Bearer test-openai-key".to_owned()),
+        "runtime auth resolution should still fall back to OPENAI_API_KEY when the oauth env is unset"
     );
 }
 
@@ -1103,6 +1112,62 @@ async fn interactive_onboard_clear_token_restores_builtin_system_prompt() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn interactive_onboard_only_shows_large_logo_on_the_initial_screen() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    unsafe {
+        std::env::set_var("OPENAI_API_KEY", "openai-test-token");
+    }
+
+    let output_path = unique_temp_path("interactive-single-banner.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        crate::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: false,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        ["y", "1", "2", "", "", "", "", "", "", "y"],
+        None,
+        None,
+    )
+    .await
+    .expect("run interactive onboarding with the risk gate enabled");
+
+    assert_eq!(
+        transcript
+            .iter()
+            .filter(|line| line.contains("██╗      ██████╗"))
+            .count(),
+        1,
+        "interactive onboarding should show the large LOONGCLAW banner only once, on the initial risk screen: {transcript:#?}"
+    );
+    assert!(
+        transcript
+            .iter()
+            .filter(|line| line.contains("LOONGCLAW"))
+            .count()
+            >= 3,
+        "follow-up screens should keep using the compact LOONGCLAW header instead of dropping branding entirely: {transcript:#?}"
+    );
+    assert!(
+        transcript.iter().any(|line| line == "choose personality"),
+        "regression flow should still reach the later onboarding steps where repeated banner reports came from: {transcript:#?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn non_interactive_onboard_uses_the_same_detected_starting_point_order_as_interactive_default()
  {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
@@ -1383,6 +1448,23 @@ fn preferred_api_key_env_default_stays_blank_when_provider_has_no_default_env() 
 }
 
 #[test]
+fn preferred_api_key_env_default_prefers_oauth_default_for_fresh_openai() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.kind = mvp::config::ProviderKind::Openai;
+    config.provider.api_key = None;
+    config.provider.api_key_env = None;
+    config.provider.oauth_access_token = None;
+    config.provider.oauth_access_token_env = None;
+
+    let value = loongclaw_daemon::onboard_cli::preferred_api_key_env_default(&config);
+
+    assert_eq!(
+        value, "OPENAI_CODEX_OAUTH_TOKEN",
+        "fresh OpenAI onboarding should surface the provider-preferred oauth env before the api-key fallback: {value:?}"
+    );
+}
+
+#[test]
 fn directory_preflight_check_has_no_filesystem_side_effects() {
     let base = unique_temp_path("preflight-root");
     let target = base.join("nested").join("tool-root");
@@ -1424,13 +1506,19 @@ fn backup_existing_config_copies_without_removing_original() {
 }
 
 #[test]
-fn onboard_risk_screen_uses_compact_header_and_continue_cancel_options() {
+fn onboard_risk_screen_uses_brand_header_and_continue_cancel_options() {
     let lines = loongclaw_daemon::onboard_cli::render_onboarding_risk_screen_lines(80);
 
-    assert_compact_loongclaw_header(&lines, "risk screen");
     assert!(
-        !lines[0].starts_with("██╗"),
-        "risk screen should avoid the oversized block-logo banner on the guard screen: {lines:#?}"
+        lines[0].starts_with("██╗"),
+        "risk screen should keep the oversized LOONGCLAW brand banner on the initial guard screen: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .take_while(|line| !line.is_empty())
+            .any(|line| line.contains(concat!("v", env!("CARGO_PKG_VERSION")))),
+        "risk screen should keep the current build version visible under the brand banner: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "security check"),
@@ -2057,8 +2145,12 @@ fn onboard_presentation_entry_and_digest_copy_stays_canonical() {
         "A suggested starting point is ready, built from 2 reusable sources."
     );
     assert_eq!(
+        loongclaw_daemon::onboard_presentation::import_option_detail(false, false, 1),
+        "1 reusable source was detected for provider, channels, or guidance."
+    );
+    assert_eq!(
         loongclaw_daemon::onboard_presentation::import_option_detail(false, false, 2),
-        "2 reusable sources were detected for provider, channels, or workspace guidance."
+        "2 reusable sources were detected for provider, channels, or guidance."
     );
     assert_eq!(
         loongclaw_daemon::onboard_presentation::detected_coverage_prefix(true),
@@ -2313,7 +2405,7 @@ fn onboard_entry_import_option_explains_detected_additions_when_current_setup_ex
 }
 
 #[test]
-fn onboard_entry_screen_includes_brand_block_and_detected_setup_digest() {
+fn onboard_entry_screen_uses_compact_header_and_detected_setup_digest() {
     let current = import_candidate_with_kind(
         loongclaw_daemon::migration::types::ImportSourceKind::ExistingLoongClawConfig,
         "existing config at ~/.config/loongclaw/config.toml",
@@ -2363,13 +2455,10 @@ fn onboard_entry_screen_includes_brand_block_and_detected_setup_digest() {
         80,
     );
 
+    assert_compact_loongclaw_header(&lines, "entry screen");
     assert!(
-        lines[0].starts_with("██╗"),
-        "entry screen should start with the shared LOONGCLAW brand block: {lines:#?}"
-    );
-    assert!(
-        lines.iter().any(|line| line.starts_with('v')),
-        "entry screen should include a build/version line under the banner: {lines:#?}"
+        lines.iter().all(|line| !line.starts_with("██╗")),
+        "entry screen should not repeat the large LOONGCLAW banner after the first screen: {lines:#?}"
     );
     assert!(
         lines
@@ -2440,7 +2529,7 @@ fn onboard_entry_screen_compacts_to_plain_wordmark_on_narrow_width() {
         40,
     );
 
-    assert_eq!(lines[0], "LOONGCLAW");
+    assert_compact_loongclaw_header(&lines, "narrow entry screen");
     assert!(
         lines.iter().any(|line| line == "Detected settings"),
         "narrow layout should retain the detected-settings section heading: {lines:#?}"
@@ -2661,8 +2750,12 @@ fn onboard_provider_selection_screen_includes_focus_title_and_choices() {
     let lines = loongclaw_daemon::onboard_cli::render_provider_selection_screen_lines(&plan, 80);
 
     assert!(
-        lines[0].starts_with("██╗"),
-        "provider choice screen should start with the shared LOONGCLAW brand block: {lines:#?}"
+        lines[0].starts_with("LOONGCLAW"),
+        "provider choice screen should use the compact LOONGCLAW header after the initial screen: {lines:#?}"
+    );
+    assert!(
+        lines.iter().all(|line| !line.starts_with("██╗")),
+        "provider choice screen should not re-render the large LOONGCLAW banner mid-onboarding: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "choose active provider"),
@@ -3047,8 +3140,8 @@ fn onboard_current_setup_shortcut_screen_summarizes_existing_setup_and_choices()
         loongclaw_daemon::onboard_cli::render_continue_current_setup_screen_lines(&config, 80);
 
     assert!(
-        lines[0].starts_with("██╗"),
-        "current-setup shortcut should start with the shared LOONGCLAW brand block: {lines:#?}"
+        lines[0].starts_with("LOONGCLAW"),
+        "current-setup shortcut should use the compact LOONGCLAW header after the entry screen: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "continue current setup"),
@@ -3147,8 +3240,8 @@ fn onboard_detected_setup_shortcut_screen_summarizes_starting_point_and_choices(
     );
 
     assert!(
-        lines[0].starts_with("██╗"),
-        "detected-setup shortcut should start with the shared LOONGCLAW brand block: {lines:#?}"
+        lines[0].starts_with("LOONGCLAW"),
+        "detected-setup shortcut should use the compact LOONGCLAW header after the entry screen: {lines:#?}"
     );
     assert!(
         lines
@@ -3277,7 +3370,7 @@ fn onboard_detected_setup_shortcut_is_limited_to_interactive_import_flow_with_de
 }
 
 #[test]
-fn onboard_starting_point_selection_screen_includes_brand_header_and_detected_options() {
+fn onboard_starting_point_selection_screen_uses_compact_header_and_detected_options() {
     let mut recommended = import_candidate_with_provider(
         loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
         "recommended import plan",
@@ -3308,8 +3401,8 @@ fn onboard_starting_point_selection_screen_includes_brand_header_and_detected_op
     );
 
     assert!(
-        lines[0].starts_with("██╗"),
-        "starting-point screen should start with the shared LOONGCLAW brand block: {lines:#?}"
+        lines[0].starts_with("LOONGCLAW"),
+        "starting-point screen should use the compact LOONGCLAW header after the entry screen: {lines:#?}"
     );
     assert!(
         lines
@@ -3462,7 +3555,7 @@ fn onboard_starting_point_selection_screen_summarizes_multi_source_origin() {
 }
 
 #[test]
-fn onboard_single_detected_setup_preview_screen_uses_branded_preview_layout() {
+fn onboard_single_detected_setup_preview_screen_uses_compact_follow_up_layout() {
     let candidate = import_candidate_with_provider(
         loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
         "Codex config at ~/.codex/config.toml",
@@ -3478,8 +3571,8 @@ fn onboard_single_detected_setup_preview_screen_uses_branded_preview_layout() {
     );
 
     assert!(
-        lines[0].starts_with("██╗"),
-        "single detected-setup preview should start with the shared LOONGCLAW brand block: {lines:#?}"
+        lines[0].starts_with("LOONGCLAW"),
+        "single detected-setup preview should use the compact LOONGCLAW header after the entry screen: {lines:#?}"
     );
     assert!(
         lines
@@ -4011,6 +4104,12 @@ fn onboard_api_key_env_screen_explains_suggested_env_and_blank_behavior() {
     assert!(
         lines
             .iter()
+            .any(|line| line.contains("- current source: ${OPENAI_CODEX_OAUTH_TOKEN}")),
+        "credential-env screen should show the active oauth credential source instead of hiding it behind api-key-only rendering: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
             .any(|line| line.contains("- suggested source: ${OPENAI_API_KEY}")),
         "credential-env screen should surface the suggested env var name: {lines:#?}"
     );
@@ -4023,8 +4122,8 @@ fn onboard_api_key_env_screen_explains_suggested_env_and_blank_behavior() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "- type :clear to keep inline or oauth credentials"),
-        "credential-env screen should explain the explicit clear token when Enter uses a non-empty default: {lines:#?}"
+            .any(|line| line == "- type :clear to clear the configured credential env"),
+        "credential-env screen should explain the explicit clear token when another credential env is already configured: {lines:#?}"
     );
 }
 
@@ -4202,6 +4301,14 @@ fn onboard_personality_selection_screen_shows_native_personality_choices() {
     let lines = crate::onboard_cli::render_personality_selection_screen_lines(&config, 80);
 
     assert!(
+        lines[0].starts_with("LOONGCLAW"),
+        "personality screen should keep the compact LOONGCLAW header instead of re-showing the large banner: {lines:#?}"
+    );
+    assert!(
+        lines.iter().all(|line| !line.starts_with("██╗")),
+        "personality screen should not repeat the large LOONGCLAW banner mid-onboarding: {lines:#?}"
+    );
+    assert!(
         lines.iter().any(|line| line == "choose personality"),
         "personality screen should use a focused title: {lines:#?}"
     );
@@ -4253,6 +4360,10 @@ fn onboard_memory_profile_screen_shows_supported_profiles() {
 
     let lines = crate::onboard_cli::render_memory_profile_selection_screen_lines(&config, 80);
 
+    assert!(
+        lines[0].starts_with("LOONGCLAW"),
+        "memory-profile screen should keep the compact LOONGCLAW header instead of re-showing the large banner: {lines:#?}"
+    );
     assert!(
         lines.iter().any(|line| line == "choose memory profile"),
         "memory-profile screen should use a focused title: {lines:#?}"
@@ -4441,8 +4552,8 @@ fn onboard_existing_config_write_screen_offers_replace_backup_and_cancel() {
 
     assert_compact_loongclaw_header(&lines, "existing-config write screen");
     assert!(
-        !lines[0].starts_with("██╗"),
-        "existing-config write screen should avoid the oversized block-logo banner on the write guard screen: {lines:#?}"
+        lines.iter().all(|line| !line.starts_with("██╗")),
+        "existing-config write screen should not repeat the large LOONGCLAW banner after the first screen: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "existing config found"),
@@ -5395,7 +5506,7 @@ fn onboard_review_lines_include_starting_point_and_domain_preview() {
 }
 
 #[test]
-fn onboard_review_lines_include_brand_header() {
+fn onboard_review_lines_use_compact_header() {
     let lines = loongclaw_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
         &mvp::config::LoongClawConfig::default(),
         None,
@@ -5403,13 +5514,10 @@ fn onboard_review_lines_include_brand_header() {
         80,
     );
 
+    assert_compact_loongclaw_header(&lines, "review screen");
     assert!(
-        lines[0].starts_with("██╗"),
-        "review screen should start with the shared LOONGCLAW brand block: {lines:#?}"
-    );
-    assert!(
-        lines.iter().any(|line| line.starts_with('v')),
-        "review screen should include a version line: {lines:#?}"
+        lines.iter().all(|line| !line.starts_with("██╗")),
+        "review screen should not repeat the large LOONGCLAW banner: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "review setup"),
@@ -5441,8 +5549,8 @@ fn onboard_review_lines_include_core_setup_summary_for_fresh_setup() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("- credential source: ${OPENAI_API_KEY}")),
-        "review should keep the suggested credential env visible for fresh setup flows: {lines:#?}"
+            .any(|line| line.contains("- credential source: ${OPENAI_CODEX_OAUTH_TOKEN}")),
+        "review should keep the provider-preferred credential env visible for fresh setup flows: {lines:#?}"
     );
     assert!(
         lines
@@ -5758,7 +5866,7 @@ fn onboarding_success_summary_uses_starting_point_language() {
 }
 
 #[test]
-fn onboarding_success_summary_includes_brand_header() {
+fn onboarding_success_summary_uses_compact_header() {
     let path = PathBuf::from("/tmp/loongclaw-config.toml");
     let summary = loongclaw_daemon::onboard_cli::build_onboarding_success_summary(
         &path,
@@ -5768,13 +5876,10 @@ fn onboarding_success_summary_includes_brand_header() {
 
     let lines =
         loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+    assert_compact_loongclaw_header(&lines, "success summary");
     assert!(
-        lines[0].starts_with("██╗"),
-        "success summary should start with the shared LOONGCLAW brand block: {lines:#?}"
-    );
-    assert!(
-        lines.iter().any(|line| line.starts_with('v')),
-        "success summary should include a version line under the banner: {lines:#?}"
+        lines.iter().all(|line| !line.starts_with("██╗")),
+        "success summary should not repeat the large LOONGCLAW banner after onboarding has already started: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "onboarding complete"),

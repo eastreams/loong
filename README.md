@@ -256,11 +256,25 @@ cargo install --path crates/daemon
    personality, optional prompt addendum, and memory profile selection. Use
    `--system-prompt` only when you want to replace the native prompt pack with a
    full inline override.
+   For providers with a reviewed onboarding default model, such as MiniMax and
+   DeepSeek, onboarding now prefills an explicit recommended model instead of
+   relying on a hidden runtime fallback.
+   If model catalog discovery fails while the config still uses `model = auto`,
+   onboarding now tells you to rerun onboarding and accept the reviewed model,
+   or set `provider.model` / `preferred_models` explicitly.
+   Press `Esc`, then `Enter`, at any onboarding prompt to cancel before writing config.
+
+   WSL note: CLI onboarding works in WSL. If you want service-style workflows or Linux daemons
+   that depend on `systemd`, use WSL `0.67.6+`; Ubuntu installed via `wsl --install` now defaults
+   to `systemd`, while other distros may still need `[boot] systemd=true` in `/etc/wsl.conf`.
 
 2. Set your provider credential in the env that onboarding selected:
 
+   For OpenAI Codex account auth this will usually be `OPENAI_CODEX_OAUTH_TOKEN`; for
+   API-key providers it will usually be a `*_API_KEY` env such as `ARK_API_KEY`.
+
    ```bash
-   export PROVIDER_API_KEY=sk-...
+   export <ENV_NAME>=...
    ```
 
 3. Get a first one-shot answer:

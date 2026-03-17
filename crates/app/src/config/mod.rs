@@ -29,11 +29,12 @@ pub use memory::{
 };
 #[allow(unused_imports)]
 pub use provider::{
-    ProviderAuthScheme, ProviderConfig, ProviderFeatureFamily, ProviderKind, ProviderProfileConfig,
-    ProviderProfileHealthModeConfig, ProviderProfileStateBackendKind, ProviderProtocolFamily,
-    ProviderReasoningExtraBodyModeConfig, ProviderToolSchemaModeConfig, ProviderTransportFallback,
-    ProviderTransportPolicy, ProviderTransportReadiness, ProviderTransportReadinessLevel,
-    ProviderWireApi, ReasoningEffort, parse_provider_kind_id,
+    ModelCatalogProbeRecovery, ProviderAuthScheme, ProviderConfig, ProviderFeatureFamily,
+    ProviderKind, ProviderProfileConfig, ProviderProfileHealthModeConfig,
+    ProviderProfileStateBackendKind, ProviderProtocolFamily, ProviderReasoningExtraBodyModeConfig,
+    ProviderToolSchemaModeConfig, ProviderTransportFallback, ProviderTransportPolicy,
+    ProviderTransportReadiness, ProviderTransportReadinessLevel, ProviderWireApi, ReasoningEffort,
+    parse_provider_kind_id,
 };
 #[allow(unused_imports)]
 pub use runtime::{
@@ -625,17 +626,14 @@ mod tests {
     }
 
     #[test]
-    fn volcengine_coding_plan_oauth_can_override_api_key_auth() {
+    fn volcengine_coding_plan_has_no_default_oauth_env_but_accepts_explicit_oauth_token() {
         let config = ProviderConfig {
             kind: ProviderKind::VolcengineCoding,
             oauth_access_token: Some("vc-oauth-token".to_owned()),
             api_key: Some("api-key-should-not-win".to_owned()),
             ..ProviderConfig::default()
         };
-        assert_eq!(
-            config.default_oauth_access_token_env().as_deref(),
-            Some("VOLCENGINE_CODING_PLAN_OAUTH_TOKEN")
-        );
+        assert_eq!(config.default_oauth_access_token_env().as_deref(), None);
         assert_eq!(
             config.authorization_header(),
             Some("Bearer vc-oauth-token".to_owned())
@@ -862,7 +860,7 @@ kind = "volcengine_coding"
         );
         assert_eq!(
             parsed.provider.default_oauth_access_token_env().as_deref(),
-            Some("VOLCENGINE_CODING_PLAN_OAUTH_TOKEN")
+            None
         );
     }
 

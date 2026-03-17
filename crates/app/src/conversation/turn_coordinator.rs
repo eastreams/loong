@@ -80,7 +80,7 @@ use super::turn_shared::{
     ProviderTurnRequestAction, ReplyPersistenceMode, ReplyResolutionMode, ToolDrivenFollowupKind,
     ToolDrivenFollowupPayload, ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase,
     build_tool_driven_followup_tail, decide_provider_turn_request_action,
-    format_approval_required_reply, next_conversation_turn_id,
+    format_approval_required_reply, next_conversation_turn_id, reduce_followup_payload_for_model,
     request_completion_with_raw_fallback, tool_driven_followup_payload,
     tool_result_contains_truncation_signal, user_requested_raw_tool_output,
 };
@@ -2645,7 +2645,7 @@ fn build_turn_reply_followup_messages(
         &followup,
         user_input,
         None,
-        crate::conversation::turn_shared::reduce_followup_payload_for_model,
+        |label, text| reduce_followup_payload_for_model(label, text).into_owned(),
     ));
     messages
 }
@@ -6566,25 +6566,31 @@ mod tests {
     }
 
     #[test]
-    fn build_turn_reply_followup_messages_preserves_tool_search_payload_summary() {
-        let payload_summary = serde_json::json!({
-            "results": [
-                {
-                    "tool_id": "file.read",
-                    "summary": "Read a file",
-                    "lease": "lease-1"
-                }
-            ]
-        })
-        .to_string();
+    fn build_turn_reply_followup_messages_reduces_shell_exec_payload_summary() {
         let tool_result = format!(
             "[ok] {}",
             serde_json::json!({
                 "status": "ok",
-                "tool": "tool.search",
-                "tool_call_id": "call-search",
-                "payload_summary": payload_summary,
-                "payload_chars": 256,
+                "tool": "shell.exec",
+                "tool_call_id": "call-shell",
+                "payload_summary": serde_json::json!({
+                    "adapter": "core-tools",
+                    "tool_name": "shell.exec",
+                    "command": "cargo",
+                    "args": ["test", "--workspace"],
+                    "cwd": "/repo",
+                    "exit_code": 0,
+                    "stdout": (0..80)
+                        .map(|index| format!("stdout line {index}: {}", "x".repeat(40)))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    "stderr": (0..48)
+                        .map(|index| format!("stderr line {index}: {}", "e".repeat(32)))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .to_string(),
+                "payload_chars": 8_192,
                 "payload_truncated": false
             })
         );
@@ -6596,37 +6602,131 @@ mod tests {
             })],
             "preface",
             ToolDrivenFollowupPayload::ToolResult { text: tool_result },
-            "read note.md",
+            "summarize the test run",
         );
 
-        let assistant_tool_result = messages
-            .iter()
-            .find(|message| {
-                message.get("role") == Some(&Value::String("assistant".to_owned()))
-                    && message
-                        .get("content")
-                        .and_then(Value::as_str)
-                        .is_some_and(|content| content.starts_with("[tool_result]\n[ok] "))
+        let (envelope, summary) =
+            crate::conversation::turn_shared::parse_tool_result_followup_for_test(&messages);
+
+        assert_eq!(envelope["tool"], "shell.exec");
+        assert_eq!(envelope["payload_truncated"], true);
+        assert_eq!(summary["command"], "cargo");
+        assert_eq!(summary["exit_code"], 0);
+        assert!(summary.get("stdout_preview").is_some());
+        assert!(summary.get("stdout_chars").is_some());
+        assert_eq!(summary["stdout_truncated"], true);
+        assert!(summary.get("stderr_preview").is_some());
+        assert!(summary.get("stderr_chars").is_some());
+        assert_eq!(summary["stderr_truncated"], true);
+        assert!(
+            summary["stdout_preview"]
+                .as_str()
+                .expect("stdout preview should exist")
+                .contains("stdout line 0"),
+            "expected compact stdout preview, got: {summary:?}"
+        );
+        assert!(
+            summary["stderr_preview"]
+                .as_str()
+                .expect("stderr preview should exist")
+                .contains("stderr line 0"),
+            "expected compact stderr preview, got: {summary:?}"
+        );
+    }
+
+    #[test]
+    fn build_turn_reply_followup_messages_compacts_tool_search_payload_summary() {
+        let payload_summary = serde_json::json!({
+            "adapter": "core-tools",
+            "tool_name": "tool.search",
+            "query": "read repo file",
+            "returned": 2,
+            "results": [
+                {
+                    "tool_id": "file.read",
+                    "summary": "Read a UTF-8 text file from the configured workspace root and return contents.",
+                    "argument_hint": "path:string,offset?:integer,limit?:integer",
+                    "required_fields": ["path"],
+                    "required_field_groups": [["path"]],
+                    "tags": ["core", "file", "read"],
+                    "why": ["summary matches query", "tag matches read"],
+                    "lease": "lease-file"
+                },
+                {
+                    "tool_id": "shell.exec",
+                    "summary": "Execute a shell command in the workspace.",
+                    "argument_hint": "command:string,args?:string[]",
+                    "required_fields": ["command"],
+                    "required_field_groups": [["command"]],
+                    "tags": ["core", "shell", "exec"],
+                    "why": ["summary matches query", "tag matches exec"],
+                    "lease": "lease-shell"
+                }
+            ]
+        });
+        let payload_summary_str = payload_summary.to_string();
+        let tool_result = format!(
+            "[ok] {}",
+            serde_json::json!({
+                "status": "ok",
+                "tool": "tool.search",
+                "tool_call_id": "call-search",
+                "payload_chars": 2_048,
+                "payload_summary": payload_summary_str,
+                "payload_truncated": false
             })
-            .and_then(|message| message.get("content"))
-            .and_then(Value::as_str)
-            .expect("assistant tool_result followup message should exist");
-        let line = assistant_tool_result
-            .lines()
-            .nth(1)
-            .expect("assistant tool_result should keep payload line");
-        let envelope: Value = serde_json::from_str(
-            line.strip_prefix("[ok] ")
-                .expect("tool result line should preserve status prefix"),
-        )
-        .expect("tool.search followup envelope should stay valid json");
+        );
+
+        let messages = build_turn_reply_followup_messages(
+            &[serde_json::json!({
+                "role": "system",
+                "content": "sys"
+            })],
+            "preface",
+            ToolDrivenFollowupPayload::ToolResult { text: tool_result },
+            "find the right tool",
+        );
+
+        let (envelope, summary) =
+            crate::conversation::turn_shared::parse_tool_result_followup_for_test(&messages);
+        let summary_str = envelope["payload_summary"]
+            .as_str()
+            .expect("payload summary should stay encoded json");
+        let results = summary["results"]
+            .as_array()
+            .expect("results should be an array");
+        let first = &results[0];
 
         assert_eq!(envelope["tool"], "tool.search");
         assert_eq!(envelope["payload_truncated"], false);
-        assert_eq!(
-            envelope["payload_summary"].as_str(),
-            Some(payload_summary.as_str())
-        );
+        assert_ne!(summary_str, payload_summary.to_string());
+        assert_eq!(summary["query"], "read repo file");
+        assert!(summary.get("adapter").is_none());
+        assert!(summary.get("tool_name").is_none());
+        assert!(summary.get("returned").is_none());
+        assert_eq!(results.len(), 2);
+        assert_eq!(first["tool_id"], "file.read");
+        assert_eq!(first["lease"], "lease-file");
+        for entry in results {
+            assert!(entry.get("tool_id").and_then(Value::as_str).is_some());
+            assert!(entry.get("summary").and_then(Value::as_str).is_some());
+            assert!(entry.get("argument_hint").and_then(Value::as_str).is_some());
+            assert!(
+                entry
+                    .get("required_fields")
+                    .and_then(Value::as_array)
+                    .is_some()
+            );
+            assert!(
+                entry
+                    .get("required_field_groups")
+                    .and_then(Value::as_array)
+                    .is_some()
+            );
+            assert!(entry.get("lease").and_then(Value::as_str).is_some());
+            assert!(entry.get("tags").is_none());
+            assert!(entry.get("why").is_none());
+        }
     }
 
     #[test]

@@ -1510,6 +1510,43 @@ mod tests {
     }
 
     #[test]
+    fn bridge_context_accepts_compacted_search_results() {
+        let payload_summary = serde_json::to_string(&json!({
+            "query": "read repo file",
+            "results": [
+                {
+                    "tool_id": "file.read",
+                    "summary": "Read a UTF-8 text file from the configured workspace root and return contents.",
+                    "argument_hint": "path:string,offset?:integer,limit?:integer",
+                    "required_fields": ["path"],
+                    "required_field_groups": [["path"]],
+                    "lease": "lease-compacted"
+                }
+            ]
+        }))
+        .expect("encode compacted search payload summary");
+        let envelope = serde_json::to_string(&json!({
+            "status": "ok",
+            "tool": "tool.search",
+            "tool_call_id": "call-search",
+            "payload_summary": payload_summary,
+            "payload_chars": payload_summary.chars().count(),
+            "payload_truncated": false,
+        }))
+        .expect("encode search envelope");
+        let messages = vec![json!({
+            "role": "assistant",
+            "content": format!("[tool_result]\n[ok] {envelope}"),
+        })];
+
+        let context = provider_tool_bridge_context_from_messages(&messages);
+        assert_eq!(
+            context.discoverable_leases.get("file.read"),
+            Some(&"lease-compacted".to_owned())
+        );
+    }
+
+    #[test]
     fn extract_provider_turn_handles_text_only() {
         let body = serde_json::json!({
             "choices": [{

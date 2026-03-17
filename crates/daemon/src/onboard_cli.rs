@@ -12,6 +12,7 @@ use time::macros::format_description;
 const BACKUP_TIMESTAMP_FORMAT: &[FormatItem<'static>] =
     format_description!("[year][month][day]-[hour][minute][second]");
 const ONBOARD_CLEAR_INPUT_TOKEN: &str = ":clear";
+const ONBOARD_ESCAPE_CANCEL_HINT: &str = "- press Esc then Enter to cancel onboarding";
 
 #[derive(Debug, Clone)]
 pub struct OnboardCommandOptions {
@@ -97,6 +98,7 @@ impl OnboardUi for StdioOnboardUi {
             .read_line(&mut line)
             .map_err(|error| format!("read stdin failed: {error}"))?;
         drain_stdin();
+        let line = ensure_onboard_input_not_cancelled(line)?;
         let trimmed = line.trim();
         if trimmed.is_empty() {
             return Ok(default.to_owned());
@@ -114,6 +116,7 @@ impl OnboardUi for StdioOnboardUi {
             .read_line(&mut line)
             .map_err(|error| format!("read stdin failed: {error}"))?;
         drain_stdin();
+        let line = ensure_onboard_input_not_cancelled(line)?;
         Ok(line.trim().to_owned())
     }
 
@@ -128,6 +131,7 @@ impl OnboardUi for StdioOnboardUi {
             .read_line(&mut line)
             .map_err(|error| format!("read stdin failed: {error}"))?;
         drain_stdin();
+        let line = ensure_onboard_input_not_cancelled(line)?;
         let value = line.trim().to_ascii_lowercase();
         if value.is_empty() {
             return Ok(default);
@@ -240,6 +244,17 @@ fn is_explicit_onboard_clear_input(raw: &str) -> bool {
     raw.trim().eq_ignore_ascii_case(ONBOARD_CLEAR_INPUT_TOKEN)
 }
 
+fn is_explicit_onboard_cancel_input(raw: &str) -> bool {
+    matches!(raw.trim(), "\u{1b}")
+}
+
+fn ensure_onboard_input_not_cancelled(raw: String) -> CliResult<String> {
+    if is_explicit_onboard_cancel_input(raw.as_str()) {
+        return Err("onboarding cancelled: escape input received".to_owned());
+    }
+    Ok(raw)
+}
+
 fn prompt_optional(
     ui: &mut impl OnboardUi,
     label: &str,
@@ -272,6 +287,7 @@ pub enum OnboardNonInteractiveWarningPolicy {
     Block,
     AcceptedBySkipModelProbe,
     AcceptedByExplicitModel,
+    AcceptedByPreferredModels,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -767,10 +783,7 @@ pub async fn run_onboard_cli_with_ui(
             ));
         }
         if has_failures {
-            return Err(
-                "onboard preflight failed. rerun with --skip-model-probe if your provider blocks model listing during setup"
-                    .to_owned(),
-            );
+            return Err(non_interactive_preflight_failure_message(&checks));
         }
         if has_blocking_non_interactive_warnings {
             return Err(
@@ -1168,39 +1181,54 @@ fn resolve_model_selection(
     ui: &mut impl OnboardUi,
     context: &OnboardRuntimeContext,
 ) -> CliResult<String> {
-    if options.non_interactive {
-        if let Some(model) = options.model.as_deref() {
-            let trimmed = model.trim();
-            if trimmed.is_empty() {
-                return Err("--model cannot be empty".to_owned());
-            }
-            return Ok(trimmed.to_owned());
-        }
-        return Ok(config.provider.model.clone());
+    if let Some(model) = options.model.as_deref()
+        && model.trim().is_empty()
+    {
+        return Err("model cannot be empty".to_owned());
     }
 
-    let default_model = options
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(config.provider.model.as_str());
+    let default_model = resolve_onboarding_model_prompt_default(options, config);
+    if options.non_interactive {
+        return Ok(default_model);
+    }
+
     print_lines(
         ui,
         render_model_selection_screen_lines_with_style(
             config,
-            default_model,
+            default_model.as_str(),
             guided_prompt_path,
             context.render_width,
             true,
         ),
     )?;
-    let value = ui.prompt_with_default("Model", default_model)?;
+    let value = ui.prompt_with_default("Model", default_model.as_str())?;
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err("model cannot be empty".to_owned());
     }
     Ok(trimmed.to_owned())
+}
+
+fn resolve_onboarding_model_prompt_default(
+    options: &OnboardCommandOptions,
+    config: &mvp::config::LoongClawConfig,
+) -> String {
+    if let Some(model) = options.model.as_deref() {
+        return model.trim().to_owned();
+    }
+
+    if let Some(model) = config.provider.explicit_model() {
+        return model;
+    }
+
+    if config.provider.configured_model_value() == "auto"
+        && let Some(model) = config.provider.kind.recommended_onboarding_model()
+    {
+        return model.to_owned();
+    }
+
+    config.provider.configured_model_value()
 }
 
 fn resolve_api_key_env_selection(
@@ -1240,7 +1268,7 @@ fn resolve_api_key_env_selection(
             true,
         ),
     )?;
-    let value = ui.prompt_with_default("API key env var", initial)?;
+    let value = ui.prompt_with_default("Credential env var", initial)?;
     if is_explicit_onboard_clear_input(&value) {
         return Ok(String::new());
     }
@@ -1254,13 +1282,22 @@ fn apply_selected_api_key_env(
     let selected_api_key_env = selected_api_key_env.trim();
     if selected_api_key_env.is_empty() {
         provider.set_api_key_env(None);
+        provider.set_oauth_access_token_env(None);
         return;
     }
 
     provider.api_key = None;
     provider.oauth_access_token = None;
-    provider.set_oauth_access_token_env(None);
-    provider.set_api_key_env(Some(selected_api_key_env.to_owned()));
+    match selected_provider_credential_env_field(provider, selected_api_key_env) {
+        ProviderCredentialEnvField::ApiKey => {
+            provider.set_oauth_access_token_env(None);
+            provider.set_api_key_env(Some(selected_api_key_env.to_owned()));
+        }
+        ProviderCredentialEnvField::OAuthAccessToken => {
+            provider.set_api_key_env(None);
+            provider.set_oauth_access_token_env(Some(selected_api_key_env.to_owned()));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1539,28 +1576,56 @@ fn provider_check_detail_prefix(config: &mvp::config::LoongClawConfig) -> String
     crate::provider_presentation::active_provider_detail_label(config)
 }
 
+fn render_onboard_model_candidate_list(models: &[String]) -> String {
+    models
+        .iter()
+        .map(|model| format!("`{model}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn provider_model_probe_failure_check(
     config: &mvp::config::LoongClawConfig,
     error: String,
 ) -> OnboardCheck {
-    if let Some(model) = config.provider.explicit_model() {
-        return OnboardCheck {
-            name: "provider model probe",
-            level: OnboardCheckLevel::Warn,
-            detail: format!(
-                "{}: model catalog probe failed ({error}); chat may still work because model `{model}` is explicitly configured",
-                provider_check_detail_prefix(config)
+    let provider_prefix = provider_check_detail_prefix(config);
+    let (level, detail, non_interactive_warning_policy) = match config
+        .provider
+        .model_catalog_probe_recovery()
+    {
+        mvp::config::ModelCatalogProbeRecovery::ExplicitModel(model) => (
+            OnboardCheckLevel::Warn,
+            format!(
+                "{provider_prefix}: model catalog probe failed ({error}); chat may still work because model `{model}` is explicitly configured"
             ),
-            non_interactive_warning_policy:
-                OnboardNonInteractiveWarningPolicy::AcceptedByExplicitModel,
-        };
-    }
+            OnboardNonInteractiveWarningPolicy::AcceptedByExplicitModel,
+        ),
+        mvp::config::ModelCatalogProbeRecovery::ConfiguredPreferredModels(fallback_models) => (
+            OnboardCheckLevel::Warn,
+            format!(
+                "{provider_prefix}: model catalog probe failed ({error}); runtime will try configured preferred model fallback(s): {}",
+                render_onboard_model_candidate_list(&fallback_models)
+            ),
+            OnboardNonInteractiveWarningPolicy::AcceptedByPreferredModels,
+        ),
+        mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
+            recommended_onboarding_model,
+        } => (
+            OnboardCheckLevel::Fail,
+            provider_model_probe_requires_explicit_model_detail(
+                provider_prefix.as_str(),
+                error.as_str(),
+                recommended_onboarding_model,
+            ),
+            OnboardNonInteractiveWarningPolicy::Block,
+        ),
+    };
 
     OnboardCheck {
         name: "provider model probe",
-        level: OnboardCheckLevel::Fail,
-        detail: format!("{}: {error}", provider_check_detail_prefix(config)),
-        non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+        level,
+        detail,
+        non_interactive_warning_policy,
     }
 }
 
@@ -1592,6 +1657,30 @@ async fn collect_browser_companion_preflight_checks(
         detail,
         non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
     }]
+}
+
+fn provider_model_probe_requires_explicit_model_detail(
+    provider_prefix: &str,
+    error: &str,
+    recommended_onboarding_model: Option<&str>,
+) -> String {
+    match recommended_onboarding_model {
+        Some(model) => format!(
+            "{provider_prefix}: model catalog probe failed ({error}); current config still uses `model = auto`; rerun onboarding and accept reviewed model `{model}`, or set `provider.model` / `preferred_models` explicitly"
+        ),
+        None => format!(
+            "{provider_prefix}: model catalog probe failed ({error}); current config still uses `model = auto`; set `provider.model` explicitly or configure `preferred_models` before retrying"
+        ),
+    }
+}
+
+fn non_interactive_preflight_failure_message(checks: &[OnboardCheck]) -> String {
+    let detail = checks
+        .iter()
+        .find(|check| check.level == OnboardCheckLevel::Fail)
+        .map(|check| check.detail.as_str())
+        .unwrap_or("preflight checks failed");
+    format!("onboard preflight failed: {detail}")
 }
 
 pub fn provider_credential_check(config: &mvp::config::LoongClawConfig) -> OnboardCheck {
@@ -1674,6 +1763,7 @@ fn is_explicitly_accepted_non_interactive_warning(
         || matches!(
             check.non_interactive_warning_policy,
             OnboardNonInteractiveWarningPolicy::AcceptedByExplicitModel
+                | OnboardNonInteractiveWarningPolicy::AcceptedByPreferredModels
         )
 }
 
@@ -1745,6 +1835,81 @@ pub fn preferred_provider_credential_env_binding(
         })
 }
 
+fn configured_provider_credential_env_binding(
+    provider: &mvp::config::ProviderConfig,
+) -> Option<ProviderCredentialEnvBinding> {
+    provider
+        .oauth_access_token_env
+        .as_deref()
+        .and_then(normalize_provider_credential_env_name)
+        .map(|env_name| ProviderCredentialEnvBinding {
+            field: ProviderCredentialEnvField::OAuthAccessToken,
+            env_name,
+        })
+        .or_else(|| {
+            provider
+                .api_key_env
+                .as_deref()
+                .and_then(normalize_provider_credential_env_name)
+                .map(|env_name| ProviderCredentialEnvBinding {
+                    field: ProviderCredentialEnvField::ApiKey,
+                    env_name,
+                })
+        })
+}
+
+fn provider_has_inline_credential(provider: &mvp::config::ProviderConfig) -> bool {
+    provider
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+        || provider
+            .oauth_access_token
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+}
+
+fn selected_provider_credential_env_field(
+    provider: &mvp::config::ProviderConfig,
+    selected_env_name: &str,
+) -> ProviderCredentialEnvField {
+    let normalized = normalize_provider_credential_env_name(selected_env_name);
+    let matches_oauth = normalized.as_deref().is_some_and(|env_name| {
+        provider.kind.default_oauth_access_token_env() == Some(env_name)
+            || provider
+                .kind
+                .oauth_access_token_env_aliases()
+                .contains(&env_name)
+            || provider
+                .oauth_access_token_env
+                .as_deref()
+                .and_then(normalize_provider_credential_env_name)
+                .as_deref()
+                == Some(env_name)
+    });
+    let matches_api_key = normalized.as_deref().is_some_and(|env_name| {
+        provider.kind.default_api_key_env() == Some(env_name)
+            || provider.kind.api_key_env_aliases().contains(&env_name)
+            || provider
+                .api_key_env
+                .as_deref()
+                .and_then(normalize_provider_credential_env_name)
+                .as_deref()
+                == Some(env_name)
+    });
+
+    match (matches_oauth, matches_api_key) {
+        (true, false) => ProviderCredentialEnvField::OAuthAccessToken,
+        (false, true) => ProviderCredentialEnvField::ApiKey,
+        _ => configured_provider_credential_env_binding(provider)
+            .or_else(|| preferred_provider_credential_env_binding(provider))
+            .map(|binding| binding.field)
+            .unwrap_or(ProviderCredentialEnvField::ApiKey),
+    }
+}
+
 fn push_provider_credential_env_hint(hints: &mut Vec<String>, maybe_env_name: Option<&str>) {
     let Some(env_name) = maybe_env_name.and_then(normalize_provider_credential_env_name) else {
         return;
@@ -1768,40 +1933,15 @@ fn render_provider_credential_source_value(raw: Option<&str>) -> Option<String> 
 
 pub fn preferred_api_key_env_default(config: &mvp::config::LoongClawConfig) -> String {
     let provider = &config.provider;
-    if let Some(api_key_env) = provider
-        .api_key_env
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return api_key_env.to_owned();
+    if let Some(binding) = configured_provider_credential_env_binding(provider) {
+        return binding.env_name;
     }
-    let inline_or_oauth_auth = provider
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty())
-        || provider
-            .oauth_access_token
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
-        || provider
-            .oauth_access_token_env
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty());
-    if inline_or_oauth_auth {
+    if provider_has_inline_credential(provider) {
         return String::new();
     }
-    if provider.api_key().is_some() {
-        return provider_default_api_key_env(provider.kind)
-            .unwrap_or_default()
-            .to_owned();
-    }
-    provider_default_api_key_env(provider.kind)
+    preferred_provider_credential_env_binding(provider)
+        .map(|binding| binding.env_name)
         .unwrap_or_default()
-        .to_owned()
 }
 
 pub fn directory_preflight_check(name: &'static str, target: &Path) -> OnboardCheck {
@@ -2207,12 +2347,10 @@ fn render_onboard_entry_screen_lines_with_style(
     let recommended_plan_available = import_candidates.iter().any(|candidate| {
         candidate.source_kind == crate::migration::ImportSourceKind::RecommendedPlan
     });
-    let mut lines = mvp::presentation::style_brand_lines(
-        &mvp::presentation::render_brand_header(
-            width,
-            &mvp::presentation::BuildVersionInfo::current(),
-            Some("guided setup for provider, channels, and workspace guidance"),
-        ),
+    let mut lines = render_onboard_header(
+        OnboardHeaderStyle::Compact,
+        width,
+        "guided setup for provider, channels, and workspace guidance",
         color_enabled,
     );
     lines.push(String::new());
@@ -2240,12 +2378,14 @@ fn render_onboard_entry_screen_lines_with_style(
         })
         .collect::<Vec<_>>();
     lines.extend(render_onboard_option_lines(&screen_options, width));
-    if let Some(default_choice_line) = render_onboard_entry_default_choice_footer_line(options) {
+    let footer_lines = append_escape_cancel_hint(
+        render_onboard_entry_default_choice_footer_line(options)
+            .into_iter()
+            .collect::<Vec<_>>(),
+    );
+    if !footer_lines.is_empty() {
         lines.push(String::new());
-        lines.extend(render_onboard_wrapped_display_lines(
-            [default_choice_line],
-            width,
-        ));
+        lines.extend(render_onboard_wrapped_display_lines(footer_lines, width));
     }
     lines
 }
@@ -2671,7 +2811,7 @@ fn render_single_detected_setup_preview_screen_lines_with_style(
     ));
 
     render_onboard_choice_screen(
-        OnboardHeaderStyle::Brand,
+        OnboardHeaderStyle::Compact,
         width,
         crate::onboard_presentation::single_detected_starting_point_preview_subtitle(),
         crate::onboard_presentation::single_detected_starting_point_preview_title(),
@@ -2889,7 +3029,8 @@ fn render_onboard_review_lines_with_guidance_and_style(
     flow_style: ReviewFlowStyle,
     color_enabled: bool,
 ) -> Vec<String> {
-    let mut lines = render_onboard_brand_header(width, flow_style.header_subtitle(), color_enabled);
+    let mut lines =
+        render_onboard_compact_header(width, flow_style.header_subtitle(), color_enabled);
     lines.push(String::new());
     lines.push("review setup".to_owned());
     lines.push(flow_style.progress_line());
@@ -3049,7 +3190,7 @@ fn render_onboarding_success_summary_with_width_and_style(
     width: usize,
     color_enabled: bool,
 ) -> Vec<String> {
-    let mut lines = render_onboard_brand_header(width, "setup complete", color_enabled);
+    let mut lines = render_onboard_compact_header(width, "setup complete", color_enabled);
     lines.push(String::new());
     lines.push("onboarding complete".to_owned());
     if !summary.next_actions.is_empty() {
@@ -3298,11 +3439,10 @@ fn render_api_key_env_selection_default_hint_line(
         .unwrap_or_else(|| prompt_default.trim().to_owned());
     let suggested_env = render_provider_credential_source_value(Some(suggested_env))
         .unwrap_or_else(|| suggested_env.trim().to_owned());
-    let current_env = config
-        .provider
-        .api_key_env
-        .as_deref()
-        .and_then(|value| render_provider_credential_source_value(Some(value)));
+    let current_env =
+        configured_provider_credential_env_binding(&config.provider).and_then(|binding| {
+            render_provider_credential_source_value(Some(binding.env_name.as_str()))
+        });
 
     if prompt_default.is_empty() {
         return render_default_input_hint_line("leave this blank");
@@ -3352,6 +3492,16 @@ fn with_default_choice_footer(
     footer_lines
 }
 
+fn append_escape_cancel_hint(mut lines: Vec<String>) -> Vec<String> {
+    if !lines.iter().any(|line| {
+        let lower = line.to_ascii_lowercase();
+        lower.contains("esc") && lower.contains("cancel")
+    }) {
+        lines.push(ONBOARD_ESCAPE_CANCEL_HINT.to_owned());
+    }
+    lines
+}
+
 fn render_onboard_choice_screen(
     header_style: OnboardHeaderStyle,
     width: usize,
@@ -3363,6 +3513,7 @@ fn render_onboard_choice_screen(
     footer_lines: Vec<String>,
     color_enabled: bool,
 ) -> Vec<String> {
+    let footer_lines = append_escape_cancel_hint(footer_lines);
     let mut lines = render_onboard_header(header_style, width, subtitle, color_enabled);
     lines.push(String::new());
     lines.extend(render_onboard_wrapped_display_lines([title], width));
@@ -3393,6 +3544,7 @@ fn render_onboard_input_screen(
     hint_lines: Vec<String>,
     color_enabled: bool,
 ) -> Vec<String> {
+    let hint_lines = append_escape_cancel_hint(hint_lines);
     let mut lines = render_onboard_header(OnboardHeaderStyle::Compact, width, "", color_enabled);
     lines.push(String::new());
     lines.extend(render_onboard_wrapped_display_lines([title], width));
@@ -3453,7 +3605,7 @@ fn render_onboard_shortcut_screen_lines_with_style(
     context_lines.push(shortcut_kind.summary_line().to_owned());
 
     render_onboard_choice_screen(
-        OnboardHeaderStyle::Brand,
+        OnboardHeaderStyle::Compact,
         width,
         shortcut_kind.subtitle(),
         shortcut_kind.title(),
@@ -3496,7 +3648,7 @@ fn render_onboarding_risk_screen_lines_with_style(
 ) -> Vec<String> {
     let copy = crate::onboard_presentation::risk_screen_copy();
     render_onboard_choice_screen(
-        OnboardHeaderStyle::Compact,
+        OnboardHeaderStyle::Brand,
         width,
         copy.subtitle,
         copy.title,
@@ -3624,13 +3776,11 @@ fn render_preflight_summary_screen_lines_with_style(
         lines.push(String::new());
         lines.extend(render_onboard_option_lines(&options, width));
         lines.push(String::new());
-        lines.extend(render_onboard_wrapped_display_lines(
-            [render_default_choice_footer_line(
-                "n",
-                crate::onboard_presentation::preflight_default_choice_description(),
-            )],
-            width,
-        ));
+        let footer_lines = append_escape_cancel_hint(vec![render_default_choice_footer_line(
+            "n",
+            crate::onboard_presentation::preflight_default_choice_description(),
+        )]);
+        lines.extend(render_onboard_wrapped_display_lines(footer_lines, width));
     }
     lines
 }
@@ -3718,13 +3868,11 @@ fn render_write_confirmation_screen_lines_with_style(
     lines.push(String::new());
     lines.extend(render_onboard_option_lines(&options, width));
     lines.push(String::new());
-    lines.extend(render_onboard_wrapped_display_lines(
-        [render_default_choice_footer_line(
-            "y",
-            crate::onboard_presentation::write_confirmation_default_choice_description(),
-        )],
-        width,
-    ));
+    let footer_lines = append_escape_cancel_hint(vec![render_default_choice_footer_line(
+        "y",
+        crate::onboard_presentation::write_confirmation_default_choice_description(),
+    )]);
+    lines.extend(render_onboard_wrapped_display_lines(footer_lines, width));
     lines
 }
 
@@ -4054,7 +4202,7 @@ fn render_starting_point_selection_screen_lines_with_style(
     let footer_lines = render_starting_point_selection_footer_lines(&sorted_candidates);
 
     render_onboard_choice_screen(
-        OnboardHeaderStyle::Brand,
+        OnboardHeaderStyle::Compact,
         width,
         crate::onboard_presentation::starting_point_selection_subtitle(),
         crate::onboard_presentation::starting_point_selection_title(),
@@ -4120,7 +4268,7 @@ fn render_provider_selection_screen_lines_with_style(
         })
         .collect::<Vec<_>>();
     render_onboard_choice_screen(
-        OnboardHeaderStyle::Brand,
+        OnboardHeaderStyle::Compact,
         width,
         "choose the current provider",
         "choose active provider",
@@ -4146,7 +4294,7 @@ fn render_provider_selection_header_lines(
         vec!["review the detected provider choices for this setup".to_owned()]
     };
     render_onboard_choice_screen(
-        OnboardHeaderStyle::Brand,
+        OnboardHeaderStyle::Compact,
         width,
         "choose the current provider",
         "choose active provider",
@@ -4211,6 +4359,7 @@ fn render_model_selection_screen_lines_with_style(
     width: usize,
     color_enabled: bool,
 ) -> Vec<String> {
+    let preferred_fallback_models = config.provider.configured_auto_model_candidates();
     let mut context_lines = vec![
         format!(
             "- provider: {}",
@@ -4221,10 +4370,27 @@ fn render_model_selection_screen_lines_with_style(
     if let Some(default_model) = config
         .provider
         .kind
-        .default_model()
+        .recommended_onboarding_model()
         .filter(|default_model| *default_model != config.provider.model)
     {
-        context_lines.push(format!("- provider default: {default_model}"));
+        context_lines.push(format!("- recommended model: {default_model}"));
+    }
+    if !preferred_fallback_models.is_empty() {
+        context_lines.push(format!(
+            "- configured preferred fallback: {}",
+            preferred_fallback_models.join(", ")
+        ));
+    }
+
+    let mut hint_lines = vec![
+        render_model_selection_default_hint_line(config, prompt_default),
+        "- type any provider model id to override it".to_owned(),
+    ];
+    if !preferred_fallback_models.is_empty() && config.provider.explicit_model().is_none() {
+        hint_lines.push(format!(
+            "- type `auto` to let runtime try configured preferred fallbacks first: {}",
+            preferred_fallback_models.join(", ")
+        ));
     }
 
     render_onboard_input_screen(
@@ -4233,10 +4399,7 @@ fn render_model_selection_screen_lines_with_style(
         GuidedOnboardStep::Model,
         guided_prompt_path,
         context_lines,
-        vec![
-            render_model_selection_default_hint_line(config, prompt_default),
-            "- type any provider model id to override it".to_owned(),
-        ],
+        hint_lines,
         color_enabled,
     )
 }
@@ -4284,11 +4447,10 @@ fn render_api_key_env_selection_screen_lines_with_style(
         "- provider: {}",
         crate::provider_presentation::guided_provider_label(config.provider.kind)
     )];
-    if let Some(current_env) = config
-        .provider
-        .api_key_env
-        .as_deref()
-        .and_then(|value| render_provider_credential_source_value(Some(value)))
+    if let Some(current_env) = configured_provider_credential_env_binding(&config.provider)
+        .and_then(|binding| {
+            render_provider_credential_source_value(Some(binding.env_name.as_str()))
+        })
     {
         context_lines.push(format!("- current source: {current_env}"));
     }
@@ -4303,14 +4465,14 @@ fn render_api_key_env_selection_screen_lines_with_style(
         default_api_key_env,
         prompt_default,
     )];
-    if provider_supports_blank_api_key_env(config) {
-        if prompt_default.trim().is_empty() {
-            hint_lines.push("- leave this blank to keep inline or oauth credentials".to_owned());
-        } else {
-            hint_lines.push(render_clear_input_hint_line(
-                "keep inline or oauth credentials",
-            ));
+    if prompt_default.trim().is_empty() {
+        if provider_has_inline_credential(&config.provider) {
+            hint_lines.push("- leave this blank to keep inline credentials".to_owned());
         }
+    } else if provider_supports_blank_api_key_env(config) {
+        hint_lines.push(render_clear_input_hint_line(
+            "clear the configured credential env",
+        ));
     }
 
     render_onboard_input_screen(
@@ -4428,7 +4590,7 @@ fn render_personality_selection_screen_lines_with_style(
     .collect::<Vec<_>>();
 
     render_onboard_choice_screen(
-        OnboardHeaderStyle::Brand,
+        OnboardHeaderStyle::Compact,
         width,
         "choose how LoongClaw should speak and take initiative",
         "choose personality",
@@ -4454,7 +4616,7 @@ fn render_personality_selection_header_lines(
     width: usize,
 ) -> Vec<String> {
     render_onboard_choice_screen(
-        OnboardHeaderStyle::Brand,
+        OnboardHeaderStyle::Compact,
         width,
         "choose how LoongClaw should speak and take initiative",
         "choose personality",
@@ -4559,7 +4721,7 @@ fn render_memory_profile_selection_screen_lines_with_style(
     .collect::<Vec<_>>();
 
     render_onboard_choice_screen(
-        OnboardHeaderStyle::Brand,
+        OnboardHeaderStyle::Compact,
         width,
         "choose how much memory context LoongClaw should inject",
         "choose memory profile",
@@ -4583,7 +4745,7 @@ fn render_memory_profile_selection_header_lines(
     width: usize,
 ) -> Vec<String> {
     render_onboard_choice_screen(
-        OnboardHeaderStyle::Brand,
+        OnboardHeaderStyle::Compact,
         width,
         "choose how much memory context LoongClaw should inject",
         "choose memory profile",
@@ -4753,41 +4915,19 @@ fn summarize_provider_credential(
             value: "inline api key".to_owned(),
         });
     }
-    provider
-        .api_key_env
-        .as_deref()
-        .and_then(|value| render_provider_credential_source_value(Some(value)))
-        .or_else(|| {
-            provider
-                .kind
-                .default_api_key_env()
-                .and_then(|value| render_provider_credential_source_value(Some(value)))
+    preferred_provider_credential_env_binding(provider)
+        .and_then(|binding| {
+            render_provider_credential_source_value(Some(binding.env_name.as_str()))
         })
-        .map(|api_key_env| OnboardingCredentialSummary {
+        .map(|credential_env| OnboardingCredentialSummary {
             label: "credential source",
-            value: api_key_env,
+            value: credential_env,
         })
 }
 
 fn provider_supports_blank_api_key_env(config: &mvp::config::LoongClawConfig) -> bool {
-    config
-        .provider
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty())
-        || config
-            .provider
-            .oauth_access_token
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
-        || config
-            .provider
-            .oauth_access_token_env
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
+    provider_has_inline_credential(&config.provider)
+        || configured_provider_credential_env_binding(&config.provider).is_some()
 }
 
 fn prompt_import_candidate_choice(
@@ -5333,24 +5473,33 @@ mod tests {
         }
 
         fn prompt_with_default(&mut self, _label: &str, default: &str) -> CliResult<String> {
-            Ok(self
-                .inputs
-                .pop_front()
-                .unwrap_or_else(|| default.to_owned()))
+            let value =
+                ensure_onboard_input_not_cancelled(self.inputs.pop_front().unwrap_or_default())?;
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Ok(default.to_owned());
+            }
+            Ok(trimmed.to_owned())
         }
 
         fn prompt_required(&mut self, _label: &str) -> CliResult<String> {
-            self.inputs
+            let value = self
+                .inputs
                 .pop_front()
-                .ok_or_else(|| "missing required test input".to_owned())
+                .ok_or_else(|| "missing required test input".to_owned())?;
+            Ok(ensure_onboard_input_not_cancelled(value)?.trim().to_owned())
         }
 
         fn prompt_confirm(&mut self, _message: &str, default: bool) -> CliResult<bool> {
-            Ok(self
-                .inputs
-                .pop_front()
-                .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
-                .unwrap_or(default))
+            let Some(value) = self.inputs.pop_front() else {
+                return Ok(default);
+            };
+            let value = ensure_onboard_input_not_cancelled(value)?;
+            let value = value.trim().to_ascii_lowercase();
+            if value.is_empty() {
+                return Ok(default);
+            }
+            Ok(matches!(value.as_str(), "y" | "yes"))
         }
 
         fn select_one(
@@ -5652,6 +5801,69 @@ mod tests {
             check.detail.contains("OpenAI [openai]"),
             "onboard failures should still identify the active provider context: {check:#?}"
         );
+        assert!(
+            check.detail.contains("model = auto"),
+            "auto-model probe failures should explain why onboarding cannot continue with an unresolved automatic model: {check:#?}"
+        );
+        assert!(
+            check.detail.contains("provider.model"),
+            "auto-model probe failures should point users to an explicit provider.model remediation path: {check:#?}"
+        );
+        assert!(
+            check.detail.contains("preferred_models"),
+            "auto-model probe failures should point users to preferred_models when catalog probing is unavailable: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn provider_model_probe_failure_warns_for_preferred_model_fallbacks() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Minimax;
+        config.provider.model = "auto".to_owned();
+        config.provider.preferred_models = vec![
+            "MiniMax-M1".to_owned(),
+            "MiniMax-M1".to_owned(),
+            "MiniMax-Text-01".to_owned(),
+        ];
+
+        let check = provider_model_probe_failure_check(
+            &config,
+            "provider rejected the model list".to_owned(),
+        );
+
+        assert_eq!(check.name, "provider model probe");
+        assert_eq!(check.level, OnboardCheckLevel::Warn);
+        assert!(
+            check.detail.contains("configured preferred"),
+            "onboarding should only advertise fallback continuation for explicitly configured preferred models: {check:#?}"
+        );
+        assert!(
+            check.detail.contains("MiniMax-M1"),
+            "onboard warning should surface the first fallback model to keep the first-run path actionable: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn provider_model_probe_failure_guides_reviewed_default_for_auto_model() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Deepseek;
+        config.provider.model = "auto".to_owned();
+
+        let check = provider_model_probe_failure_check(
+            &config,
+            "provider rejected the model list".to_owned(),
+        );
+
+        assert_eq!(check.name, "provider model probe");
+        assert_eq!(check.level, OnboardCheckLevel::Fail);
+        assert!(
+            check.detail.contains("deepseek-chat"),
+            "reviewed providers should point users to the reviewed onboarding default when catalog probing is unavailable: {check:#?}"
+        );
+        assert!(
+            check.detail.contains("rerun onboarding"),
+            "reviewed providers should suggest rerunning onboarding to accept the reviewed model instead of leaving recovery implicit: {check:#?}"
+        );
     }
 
     #[test]
@@ -5679,6 +5891,65 @@ mod tests {
         assert!(
             is_explicitly_accepted_non_interactive_warning(&check, &options),
             "explicit-model probe warnings should not block non-interactive onboarding because model discovery is advisory: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn configured_preferred_model_probe_warning_is_accepted_non_interactively() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Minimax;
+        config.provider.model = "auto".to_owned();
+        config.provider.preferred_models = vec!["MiniMax-M1".to_owned()];
+        let check = provider_model_probe_failure_check(
+            &config,
+            "provider rejected the model list".to_owned(),
+        );
+        let options = OnboardCommandOptions {
+            output: None,
+            force: false,
+            non_interactive: true,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: false,
+        };
+
+        assert!(
+            is_explicitly_accepted_non_interactive_warning(&check, &options),
+            "configured preferred-model fallback warnings should not block non-interactive onboarding because runtime can still try the operator-configured models: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn non_interactive_preflight_failure_message_uses_first_failing_check_detail() {
+        let checks = vec![
+            OnboardCheck {
+                name: "provider credentials",
+                level: OnboardCheckLevel::Pass,
+                detail: "credentials ok".to_owned(),
+                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+            },
+            OnboardCheck {
+                name: "provider model probe",
+                level: OnboardCheckLevel::Fail,
+                detail: "DeepSeek [deepseek]: model catalog probe failed (401 Unauthorized); current config still uses `model = auto`; rerun onboarding and accept reviewed model `deepseek-chat`, or set `provider.model` / `preferred_models` explicitly".to_owned(),
+                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+            },
+        ];
+
+        let message = non_interactive_preflight_failure_message(&checks);
+
+        assert!(
+            message.contains("onboard preflight failed: DeepSeek [deepseek]"),
+            "non-interactive onboarding should return the actionable failing-check detail instead of a generic probe hint: {message}"
+        );
+        assert!(
+            message.contains("provider.model"),
+            "non-interactive onboarding should preserve the explicit remediation from the failing check: {message}"
         );
     }
 
@@ -5715,6 +5986,26 @@ mod tests {
         assert!(
             selected.is_empty(),
             "typing :clear should explicitly clear the api-key env selection instead of persisting the literal token: {selected:?}"
+        );
+    }
+
+    #[test]
+    fn apply_selected_api_key_env_routes_openai_oauth_env_to_oauth_binding() {
+        let mut provider = mvp::config::ProviderConfig {
+            kind: mvp::config::ProviderKind::Openai,
+            api_key_env: Some("OPENAI_API_KEY".to_owned()),
+            ..mvp::config::ProviderConfig::default()
+        };
+
+        apply_selected_api_key_env(&mut provider, "OPENAI_CODEX_OAUTH_TOKEN".to_owned());
+
+        assert_eq!(
+            provider.oauth_access_token_env.as_deref(),
+            Some("OPENAI_CODEX_OAUTH_TOKEN")
+        );
+        assert_eq!(
+            provider.api_key_env, None,
+            "switching to the OpenAI oauth env should clear the stale api-key env binding"
         );
     }
 
@@ -5861,6 +6152,337 @@ mod tests {
         assert!(
             is_explicitly_accepted_non_interactive_warning(&check, &options),
             "non-interactive warning acceptance should follow structured policy rather than fragile display strings"
+        );
+    }
+
+    #[test]
+    fn resolve_model_selection_prefills_minimax_recommended_model_interactively() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Minimax;
+        config.provider.model = "auto".to_owned();
+        let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let selected = resolve_model_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: false,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            GuidedPromptPath::NativePromptPack,
+            &mut ui,
+            &context,
+        )
+        .expect("resolve model selection");
+
+        assert!(
+            selected == "MiniMax-M2.5",
+            "interactive onboarding should prefill the provider-recommended explicit model for MiniMax instead of leaving the operator on hidden runtime fallbacks: {selected:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_model_selection_prefills_minimax_recommended_model_non_interactively() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Minimax;
+        config.provider.model = "auto".to_owned();
+        let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let selected = resolve_model_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: true,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            GuidedPromptPath::NativePromptPack,
+            &mut ui,
+            &context,
+        )
+        .expect("resolve model selection");
+
+        assert!(
+            selected == "MiniMax-M2.5",
+            "non-interactive onboarding should pick the provider-recommended explicit model for MiniMax instead of preserving auto: {selected:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_model_selection_prefills_deepseek_recommended_model_interactively() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Deepseek;
+        config.provider.model = "auto".to_owned();
+        let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let selected = resolve_model_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: false,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            GuidedPromptPath::NativePromptPack,
+            &mut ui,
+            &context,
+        )
+        .expect("resolve model selection");
+
+        assert!(
+            selected == "deepseek-chat",
+            "interactive onboarding should prefill the provider-recommended explicit model for DeepSeek instead of leaving the operator on auto: {selected:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_model_selection_prefills_deepseek_recommended_model_non_interactively() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Deepseek;
+        config.provider.model = "auto".to_owned();
+        let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let selected = resolve_model_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: true,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            GuidedPromptPath::NativePromptPack,
+            &mut ui,
+            &context,
+        )
+        .expect("resolve model selection");
+
+        assert!(
+            selected == "deepseek-chat",
+            "non-interactive onboarding should pick the provider-recommended explicit model for DeepSeek instead of preserving auto: {selected:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_model_selection_rejects_blank_explicit_model_non_interactively() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Deepseek;
+        config.provider.model = "auto".to_owned();
+        let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let error = resolve_model_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: true,
+                accept_risk: true,
+                provider: None,
+                model: Some("   ".to_owned()),
+                api_key_env: None,
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            GuidedPromptPath::NativePromptPack,
+            &mut ui,
+            &context,
+        )
+        .expect_err(
+            "blank explicit --model should fail instead of falling back to a recommended model",
+        );
+
+        assert_eq!(error, "model cannot be empty");
+    }
+
+    #[test]
+    fn prompt_onboard_shortcut_choice_cancels_on_escape_input() {
+        let mut ui = TestOnboardUi::with_inputs(["\u{1b}"]);
+
+        let error = prompt_onboard_shortcut_choice(&mut ui)
+            .expect_err("escape input should cancel instead of silently falling through");
+
+        assert!(
+            error.contains("cancelled"),
+            "escape cancellation should produce a user-facing cancel error: {error}"
+        );
+    }
+
+    #[test]
+    fn test_onboard_ui_prompt_with_default_only_checks_user_input_for_cancel() {
+        let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
+
+        let value = ui
+            .prompt_with_default("Provider", "\u{1b}")
+            .expect("missing input should keep the configured default");
+
+        assert_eq!(value, "\u{1b}");
+    }
+
+    #[test]
+    fn explicit_onboard_cancel_input_requires_escape_byte() {
+        assert!(is_explicit_onboard_cancel_input("\u{1b}"));
+        assert!(
+            !is_explicit_onboard_cancel_input("esc"),
+            "literal text should remain valid operator input instead of being treated as an escape keystroke"
+        );
+        assert!(
+            !is_explicit_onboard_cancel_input("ESC"),
+            "case variants of plain text should not trigger onboarding cancellation"
+        );
+    }
+
+    #[test]
+    fn literal_esc_text_is_not_treated_as_cancel_input() {
+        let value = ensure_onboard_input_not_cancelled("esc".to_owned())
+            .expect("literal esc text should remain valid input");
+
+        assert_eq!(value, "esc");
+    }
+
+    #[test]
+    fn test_onboard_ui_prompt_required_trims_input_like_stdio() {
+        let mut ui = TestOnboardUi::with_inputs(["  minimax  "]);
+
+        let value = ui
+            .prompt_required("Provider")
+            .expect("required prompt should preserve stdio trimming semantics");
+
+        assert_eq!(value, "minimax");
+    }
+
+    #[test]
+    fn shortcut_screen_footer_mentions_escape_cancel() {
+        let lines = render_continue_current_setup_screen_lines(
+            &mvp::config::LoongClawConfig::default(),
+            80,
+        );
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Esc") && line.contains("cancel")),
+            "choice screens should teach the exit gesture explicitly: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn preflight_summary_screen_footer_mentions_escape_cancel() {
+        let checks = vec![OnboardCheck {
+            name: "provider model probe",
+            level: OnboardCheckLevel::Warn,
+            detail: "catalog probe failed".to_owned(),
+            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+        }];
+
+        let lines = render_preflight_summary_screen_lines(&checks, 80);
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Esc") && line.contains("cancel")),
+            "interactive preflight review should teach the exit gesture explicitly: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn entry_screen_footer_mentions_escape_cancel() {
+        let options = build_onboard_entry_options(crate::migration::CurrentSetupState::Absent, &[]);
+        let lines = render_onboard_entry_screen_lines(
+            crate::migration::CurrentSetupState::Absent,
+            None,
+            &[],
+            &options,
+            None,
+            80,
+        );
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Esc") && line.contains("cancel")),
+            "interactive entry selection should teach the exit gesture explicitly: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn write_confirmation_screen_footer_mentions_escape_cancel() {
+        let lines = render_write_confirmation_screen_lines("/tmp/loongclaw.toml", false, 80);
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Esc") && line.contains("cancel")),
+            "write confirmation should teach the exit gesture explicitly: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn append_escape_cancel_hint_dedupes_case_insensitively() {
+        let footer_lines = append_escape_cancel_hint(vec![
+            "- press esc then enter to cancel onboarding".to_owned(),
+        ]);
+
+        assert_eq!(
+            footer_lines,
+            vec!["- press esc then enter to cancel onboarding".to_owned()],
+            "case-only changes should not duplicate the escape cancel footer: {footer_lines:#?}"
+        );
+    }
+
+    #[test]
+    fn model_selection_screen_tells_users_to_type_auto_for_fallbacks() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Minimax;
+        config.provider.model = "auto".to_owned();
+        config.provider.preferred_models = vec!["MiniMax-M1".to_owned()];
+
+        let lines = render_model_selection_screen_lines_with_default(&config, "MiniMax-M2.5", 80);
+        let rendered = lines.join("\n");
+
+        assert!(
+            rendered.contains("type `auto`")
+                && rendered.contains("configured preferred fallbacks first")
+                && rendered.contains("MiniMax-M1"),
+            "explicit prefill flows should tell users to type `auto` when they want configured fallback behavior: {lines:#?}"
+        );
+        assert!(
+            !rendered.contains("leave `auto`"),
+            "explicit prefill flows should not imply Enter keeps `auto`: {lines:#?}"
         );
     }
 

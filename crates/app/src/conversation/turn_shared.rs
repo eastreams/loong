@@ -5,7 +5,8 @@ use super::runtime::ConversationRuntime;
 use super::runtime_binding::ConversationRuntimeBinding;
 use super::turn_engine::{ApprovalRequirement, ApprovalRequirementKind, ProviderTurn, TurnResult};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -17,6 +18,8 @@ pub const EXTERNAL_SKILL_FOLLOWUP_PROMPT: &str = "A managed external skill has b
 pub const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rounds. Do not repeat identical or cyclical tool calls without new evidence. Adjust strategy (different tool, arguments, or decomposition) or provide the best possible final answer and clearly state remaining gaps.";
 
 const FILE_READ_FOLLOWUP_CONTENT_PREVIEW_CHARS: usize = 384;
+const SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS: usize = 384;
+const SHELL_FOLLOWUP_STDIO_OMISSION_MARKER: &str = "\n[... omitted ...]\n";
 
 pub fn next_conversation_turn_id() -> String {
     static NEXT_CONVERSATION_TURN_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -413,14 +416,17 @@ pub fn parse_external_skill_invoke_context(
         .next()
 }
 
-pub fn reduce_followup_payload_for_model(label: &str, text: &str) -> String {
+pub fn reduce_followup_payload_for_model<'a>(label: &str, text: &'a str) -> Cow<'a, str> {
     if label != "tool_result" {
-        return text.to_owned();
+        return Cow::Borrowed(text);
     }
+
     reduce_tool_result_text_for_model(text)
+        .map(Cow::Owned)
+        .unwrap_or(Cow::Borrowed(text))
 }
 
-fn reduce_tool_result_text_for_model(text: &str) -> String {
+fn reduce_tool_result_text_for_model(text: &str) -> Option<String> {
     let mut changed = false;
     let reduced_lines = text
         .lines()
@@ -433,13 +439,13 @@ fn reduce_tool_result_text_for_model(text: &str) -> String {
         })
         .collect::<Vec<_>>();
     if !changed {
-        return text.to_owned();
+        return None;
     }
     let mut reduced = reduced_lines.join("\n");
     if text.ends_with('\n') {
         reduced.push('\n');
     }
-    reduced
+    Some(reduced)
 }
 
 fn reduce_tool_result_line_for_model(line: &str) -> String {
@@ -456,23 +462,47 @@ fn reduce_tool_result_line_for_model(line: &str) -> String {
     let Ok(mut envelope) = serde_json::from_str::<Value>(payload) else {
         return line.to_owned();
     };
-    if envelope.get("tool").and_then(Value::as_str) != Some("file.read") {
+    let Some(tool) = envelope.get("tool").and_then(Value::as_str) else {
         return line.to_owned();
-    }
+    };
+
+    let payload_truncated = envelope
+        .get("payload_truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let Some(payload_summary) = envelope.get("payload_summary").and_then(Value::as_str) else {
         return line.to_owned();
     };
-    let Ok(payload_json) = serde_json::from_str::<Value>(payload_summary) else {
+
+    let reduction = match tool {
+        "file.read" => {
+            let Ok(payload_json) = serde_json::from_str::<Value>(payload_summary) else {
+                return line.to_owned();
+            };
+            reduce_file_read_payload_summary(&payload_json).map(|summary| (summary, true))
+        }
+        "shell.exec" => {
+            let Ok(mut payload_json) = serde_json::from_str::<Value>(payload_summary) else {
+                return line.to_owned();
+            };
+            reduce_shell_payload_summary(&mut payload_json).map(|summary| (summary, true))
+        }
+        "tool.search" if !payload_truncated => {
+            compact_tool_search_payload_summary_str(payload_summary).map(|summary| (summary, false))
+        }
+        _ => None,
+    };
+    let Some((reduced_summary, mark_truncated)) = reduction else {
         return line.to_owned();
     };
-    let Some(reduced_summary) = reduce_file_read_payload_summary(&payload_json) else {
-        return line.to_owned();
-    };
+
     let Some(envelope_object) = envelope.as_object_mut() else {
         return line.to_owned();
     };
     envelope_object.insert("payload_summary".to_owned(), Value::String(reduced_summary));
-    envelope_object.insert("payload_truncated".to_owned(), Value::Bool(true));
+    if mark_truncated {
+        envelope_object.insert("payload_truncated".to_owned(), Value::Bool(true));
+    }
     let Ok(encoded) = serde_json::to_string(&envelope) else {
         return line.to_owned();
     };
@@ -497,6 +527,31 @@ fn reduce_file_read_payload_summary(payload: &Value) -> Option<String> {
     .ok()
 }
 
+fn reduce_shell_payload_summary(payload: &mut Value) -> Option<String> {
+    let payload_object = payload.as_object_mut()?;
+    let stdout_truncated = replace_shell_stdio_with_preview(payload_object, "stdout");
+    let stderr_truncated = replace_shell_stdio_with_preview(payload_object, "stderr");
+    if !stdout_truncated && !stderr_truncated {
+        return None;
+    }
+    serde_json::to_string(payload).ok()
+}
+
+fn replace_shell_stdio_with_preview(
+    payload_object: &mut serde_json::Map<String, Value>,
+    field: &str,
+) -> bool {
+    let (preview, chars, truncated) = summarize_shell_output_preview(payload_object.get(field));
+    if !truncated {
+        return false;
+    }
+    payload_object.remove(field);
+    payload_object.insert(format!("{field}_preview"), Value::String(preview));
+    payload_object.insert(format!("{field}_chars"), serde_json::json!(chars));
+    payload_object.insert(format!("{field}_truncated"), Value::Bool(true));
+    true
+}
+
 fn summarize_file_read_content_preview(value: Option<&Value>) -> (String, usize, bool) {
     let text = value.and_then(Value::as_str).unwrap_or_default();
     let total_chars = text.chars().count();
@@ -507,6 +562,44 @@ fn summarize_file_read_content_preview(value: Option<&Value>) -> (String, usize,
         text.chars()
             .take(FILE_READ_FOLLOWUP_CONTENT_PREVIEW_CHARS)
             .collect(),
+        total_chars,
+        true,
+    )
+}
+
+fn summarize_shell_output_preview(value: Option<&Value>) -> (String, usize, bool) {
+    let text = value.and_then(Value::as_str).unwrap_or_default();
+    let total_chars = text.chars().count();
+    if total_chars <= SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS {
+        return (text.to_owned(), total_chars, false);
+    }
+    let marker_chars = SHELL_FOLLOWUP_STDIO_OMISSION_MARKER.chars().count();
+    let Some(available_chars) = SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS.checked_sub(marker_chars) else {
+        return (
+            text.chars()
+                .take(SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS)
+                .collect(),
+            total_chars,
+            true,
+        );
+    };
+    if available_chars < 2 {
+        return (
+            text.chars()
+                .take(SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS)
+                .collect(),
+            total_chars,
+            true,
+        );
+    }
+
+    let tail_chars = available_chars / 2;
+    let head_chars = available_chars - tail_chars;
+    let head: String = text.chars().take(head_chars).collect();
+    let tail: String = text.chars().skip(total_chars - tail_chars).collect();
+
+    (
+        format!("{head}{SHELL_FOLLOWUP_STDIO_OMISSION_MARKER}{tail}"),
         total_chars,
         true,
     )
@@ -538,6 +631,68 @@ pub fn build_external_skill_followup_user_prompt(
     }
     sections.push(format!("Original request:\n{user_input}"));
     sections.join("\n\n")
+}
+
+fn compact_tool_search_payload_summary_str(payload_summary: &str) -> Option<String> {
+    let payload_json = serde_json::from_str::<Value>(payload_summary).ok()?;
+    let compacted_summary = compact_tool_search_payload_summary(&payload_json)?;
+    let compacted_summary_str = serde_json::to_string(&compacted_summary).ok()?;
+    (compacted_summary_str.len() < payload_summary.len()).then_some(compacted_summary_str)
+}
+
+fn compact_tool_search_payload_summary(payload: &Value) -> Option<Value> {
+    let payload_object = payload.as_object()?;
+    let results = payload_object.get("results")?.as_array()?;
+
+    let mut compacted = Map::new();
+    if let Some(query) = payload_object.get("query") {
+        compacted.insert("query".to_owned(), query.clone());
+    }
+    compacted.insert(
+        "results".to_owned(),
+        Value::Array(
+            results
+                .iter()
+                .map(compact_tool_search_payload_result)
+                .collect(),
+        ),
+    );
+
+    Some(Value::Object(compacted))
+}
+
+fn compact_tool_search_payload_result(result: &Value) -> Value {
+    let Some(result_object) = result.as_object() else {
+        return result.clone();
+    };
+
+    let mut compacted = Map::new();
+    clone_field_if_present(result_object, &mut compacted, "tool_id");
+    clone_field_if_present(result_object, &mut compacted, "summary");
+    clone_field_if_present(result_object, &mut compacted, "argument_hint");
+    clone_array_field_if_present(result_object, &mut compacted, "required_fields");
+    clone_array_field_if_present(result_object, &mut compacted, "required_field_groups");
+    clone_field_if_present(result_object, &mut compacted, "lease");
+    Value::Object(compacted)
+}
+
+fn clone_field_if_present(source: &Map<String, Value>, target: &mut Map<String, Value>, key: &str) {
+    if let Some(value) = source.get(key) {
+        target.insert(key.to_owned(), value.clone());
+    }
+}
+
+fn clone_array_field_if_present(
+    source: &Map<String, Value>,
+    target: &mut Map<String, Value>,
+    key: &str,
+) {
+    let Some(value) = source.get(key) else {
+        return;
+    };
+    if value.as_array().is_some() {
+        target.insert(key.to_owned(), value.clone());
+    }
 }
 
 pub fn build_tool_result_followup_tail<F>(
@@ -651,9 +806,15 @@ where
     F: FnMut(&str, &str) -> String,
 {
     let mut messages = Vec::new();
+    let mut original_tool_result_text = None;
+    let mut rendered_tool_result_text = None;
     append_followup_preface(&mut messages, assistant_preface);
     if let Some((label, text)) = latest_tool_context {
         let bounded = payload_mapper(label, text);
+        if label == "tool_result" {
+            original_tool_result_text = Some(text);
+            rendered_tool_result_text = Some(bounded.clone());
+        }
         messages.push(serde_json::json!({
             "role": "assistant",
             "content": format!("[{label}]\n{bounded}"),
@@ -665,7 +826,12 @@ where
     }));
     messages.push(serde_json::json!({
         "role": "user",
-        "content": build_tool_loop_guard_prompt(user_input, reason),
+        "content": build_tool_loop_guard_prompt(
+            user_input,
+            reason,
+            original_tool_result_text,
+            rendered_tool_result_text.as_deref(),
+        ),
     }));
     messages
 }
@@ -718,10 +884,21 @@ fn append_followup_warning(messages: &mut Vec<Value>, loop_warning_reason: Optio
     }
 }
 
-fn build_tool_loop_guard_prompt(user_input: &str, reason: &str) -> String {
-    format!(
-        "{TOOL_LOOP_GUARD_PROMPT}\n\nLoop guard reason:\n{reason}\n\nOriginal request:\n{user_input}"
-    )
+fn build_tool_loop_guard_prompt(
+    user_input: &str,
+    reason: &str,
+    tool_result_text: Option<&str>,
+    rendered_tool_result_text: Option<&str>,
+) -> String {
+    let mut sections = vec![
+        TOOL_LOOP_GUARD_PROMPT.to_owned(),
+        format!("Loop guard reason:\n{reason}"),
+    ];
+    if followup_prompt_needs_truncation_hint(tool_result_text, rendered_tool_result_text) {
+        sections.push(TOOL_TRUNCATION_HINT_PROMPT.to_owned());
+    }
+    sections.push(format!("Original request:\n{user_input}"));
+    sections.join("\n\n")
 }
 
 fn parse_external_skill_invoke_context_line(line: &str) -> Option<ExternalSkillInvokeContext> {
@@ -768,6 +945,38 @@ fn parse_external_skill_invoke_context_line(line: &str) -> Option<ExternalSkillI
         display_name,
         instructions,
     })
+}
+
+#[cfg(test)]
+pub(crate) fn parse_tool_result_followup_for_test(messages: &[Value]) -> (Value, Value) {
+    let assistant_tool_result = messages
+        .iter()
+        .find(|message| {
+            message.get("role") == Some(&Value::String("assistant".to_owned()))
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| content.starts_with("[tool_result]\n[ok] "))
+        })
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_str)
+        .expect("assistant tool_result followup message should exist");
+    let line = assistant_tool_result
+        .lines()
+        .nth(1)
+        .expect("assistant tool_result should keep payload line");
+    let envelope: Value = serde_json::from_str(
+        line.strip_prefix("[ok] ")
+            .expect("tool result line should preserve status prefix"),
+    )
+    .expect("followup envelope should stay valid json");
+    let summary: Value = serde_json::from_str(
+        envelope["payload_summary"]
+            .as_str()
+            .expect("payload summary should stay encoded json"),
+    )
+    .expect("payload summary should stay valid json");
+    (envelope, summary)
 }
 
 #[cfg(test)]
@@ -1322,6 +1531,26 @@ mod tests {
     }
 
     #[test]
+    fn tool_loop_guard_tail_includes_truncation_hint_when_payload_mapper_truncates_result() {
+        let tail = build_tool_loop_guard_tail(
+            "preface",
+            "stop",
+            "summarize note.md",
+            Some(("tool_result", r#"[ok] {"payload_truncated":false}"#)),
+            |_, _| r#"[ok] {"payload_truncated":true}"#.to_owned(),
+        );
+
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+        assert!(user_prompt.contains(TOOL_LOOP_GUARD_PROMPT));
+        assert!(user_prompt.contains(TOOL_TRUNCATION_HINT_PROMPT));
+        assert!(user_prompt.contains("Loop guard reason:\nstop"));
+    }
+
+    #[test]
     fn tool_loop_guard_tail_skips_latest_tool_context_without_payload_mapping() {
         let tail = build_tool_loop_guard_tail("", "stop", "summarize note.md", None, |_, _| {
             panic!("missing latest tool context should bypass payload mapper")
@@ -1386,6 +1615,168 @@ mod tests {
     }
 
     #[test]
+    fn reduce_followup_payload_for_model_preserves_shell_payload_metadata() {
+        let payload = json!({
+            "adapter": "core-tools",
+            "tool_name": "shell.exec",
+            "command": "cargo",
+            "args": ["test", "--workspace"],
+            "cwd": "/repo",
+            "exit_code": 0,
+            "stdout": format!("prefix {}", "x".repeat(512)),
+            "stderr": "",
+            "trace_id": "trace-123",
+        });
+        let line = format!(
+            "[ok] {}",
+            json!({
+                "status": "ok",
+                "tool": "shell.exec",
+                "tool_call_id": "call-shell",
+                "payload_summary": serde_json::to_string(&payload).expect("encode payload"),
+                "payload_chars": 8_192,
+                "payload_truncated": false
+            })
+        );
+
+        let reduced = reduce_followup_payload_for_model("tool_result", line.as_str());
+        let envelope: Value = serde_json::from_str(
+            reduced
+                .strip_prefix("[ok] ")
+                .expect("tool result line should preserve status prefix"),
+        )
+        .expect("reduced followup envelope should stay valid json");
+        let summary: Value = serde_json::from_str(
+            envelope["payload_summary"]
+                .as_str()
+                .expect("payload summary should stay encoded json"),
+        )
+        .expect("shell payload summary should stay valid json");
+
+        assert_eq!(summary["adapter"], "core-tools");
+        assert_eq!(summary["tool_name"], "shell.exec");
+        assert_eq!(summary["trace_id"], "trace-123");
+        assert_eq!(summary["command"], "cargo");
+        assert_eq!(summary["exit_code"], 0);
+        assert!(summary.get("stdout_preview").is_some());
+        assert_eq!(summary["stdout_truncated"], true);
+    }
+
+    #[test]
+    fn reduce_followup_payload_for_model_counts_raw_shell_whitespace() {
+        let payload = json!({
+            "adapter": "core-tools",
+            "tool_name": "shell.exec",
+            "command": "printf",
+            "args": ["%s", " "],
+            "cwd": "/repo",
+            "exit_code": 0,
+            "stdout": " ".repeat(SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS + 32),
+            "stderr": "",
+        });
+        let line = format!(
+            "[ok] {}",
+            json!({
+                "status": "ok",
+                "tool": "shell.exec",
+                "tool_call_id": "call-shell",
+                "payload_summary": serde_json::to_string(&payload).expect("encode payload"),
+                "payload_chars": 8_192,
+                "payload_truncated": false
+            })
+        );
+
+        let reduced = reduce_followup_payload_for_model("tool_result", line.as_str());
+        let envelope: Value = serde_json::from_str(
+            reduced
+                .strip_prefix("[ok] ")
+                .expect("tool result line should preserve status prefix"),
+        )
+        .expect("reduced followup envelope should stay valid json");
+        let summary: Value = serde_json::from_str(
+            envelope["payload_summary"]
+                .as_str()
+                .expect("payload summary should stay encoded json"),
+        )
+        .expect("shell payload summary should stay valid json");
+
+        assert_eq!(summary["stdout_truncated"], true);
+        assert_eq!(
+            summary["stdout_chars"],
+            json!(SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS + 32)
+        );
+        assert_eq!(
+            summary["stdout_preview"]
+                .as_str()
+                .expect("stdout preview should exist")
+                .chars()
+                .count(),
+            SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS
+        );
+    }
+
+    #[test]
+    fn reduce_followup_payload_for_model_preserves_shell_tail_context() {
+        let stdout = format!(
+            "{}\n{}\n{}",
+            "build log ".repeat(80),
+            "intermediate output ".repeat(80),
+            "final status: test suite failed on browser companion startup"
+        );
+        let payload = json!({
+            "adapter": "core-tools",
+            "tool_name": "shell.exec",
+            "command": "cargo",
+            "args": ["test", "--workspace"],
+            "cwd": "/repo",
+            "exit_code": 1,
+            "stdout": stdout,
+            "stderr": "",
+        });
+        let line = format!(
+            "[ok] {}",
+            json!({
+                "status": "ok",
+                "tool": "shell.exec",
+                "tool_call_id": "call-shell",
+                "payload_summary": serde_json::to_string(&payload).expect("encode payload"),
+                "payload_chars": 8_192,
+                "payload_truncated": false
+            })
+        );
+
+        let reduced = reduce_followup_payload_for_model("tool_result", line.as_str());
+        let envelope: Value = serde_json::from_str(
+            reduced
+                .strip_prefix("[ok] ")
+                .expect("tool result line should preserve status prefix"),
+        )
+        .expect("reduced followup envelope should stay valid json");
+        let summary: Value = serde_json::from_str(
+            envelope["payload_summary"]
+                .as_str()
+                .expect("payload summary should stay encoded json"),
+        )
+        .expect("shell payload summary should stay valid json");
+        let preview = summary["stdout_preview"]
+            .as_str()
+            .expect("stdout preview should exist");
+
+        assert!(
+            preview.contains("build log"),
+            "preview should keep shell prefix"
+        );
+        assert!(
+            preview.contains("final status: test suite failed on browser companion startup"),
+            "preview should keep the final shell status"
+        );
+        assert!(
+            preview.contains("[... omitted ...]"),
+            "preview should signal when middle content is omitted"
+        );
+    }
+
+    #[test]
     fn parse_external_skill_invoke_context_extracts_full_instructions() {
         let instructions = format!("prefix {}\nsuffix-marker", "x".repeat(256));
         let payload = json!({
@@ -1435,5 +1826,126 @@ mod tests {
             parse_external_skill_invoke_context(line.as_str()).is_none(),
             "truncated external skill payload should not activate managed skill context"
         );
+    }
+
+    #[test]
+    fn reduce_followup_payload_for_model_compacts_tool_search_summary() {
+        let payload_summary = json!({
+            "adapter": "core-tools",
+            "tool_name": "tool.search",
+            "query": "read repo file",
+            "returned": 1,
+            "results": [
+                {
+                    "tool_id": "file.read",
+                    "summary": "Read a UTF-8 text file from the configured workspace root and return contents.",
+                    "argument_hint": "path:string",
+                    "required_fields": ["path"],
+                    "required_field_groups": [["path"]],
+                    "tags": ["core", "file", "read"],
+                    "why": ["summary matches query"],
+                    "lease": "lease-file"
+                }
+            ]
+        })
+        .to_string();
+        let tool_result = format!(
+            "[ok] {}",
+            json!({
+                "status": "ok",
+                "tool": "tool.search",
+                "tool_call_id": "call-search",
+                "payload_summary": payload_summary,
+                "payload_chars": 512,
+                "payload_truncated": false
+            })
+        );
+
+        let reduced = reduce_followup_payload_for_model("tool_result", tool_result.as_str());
+        let envelope: Value = serde_json::from_str(
+            reduced
+                .strip_prefix("[ok] ")
+                .expect("tool result should keep status prefix"),
+        )
+        .expect("reduced envelope should stay valid json");
+        let summary: Value = serde_json::from_str(
+            envelope["payload_summary"]
+                .as_str()
+                .expect("payload summary should stay encoded json"),
+        )
+        .expect("reduced payload summary should stay valid json");
+        let first = summary["results"]
+            .as_array()
+            .and_then(|results| results.first())
+            .expect("reduced payload should keep the first result");
+
+        assert_eq!(summary["query"], "read repo file");
+        assert!(summary.get("adapter").is_none());
+        assert!(summary.get("tool_name").is_none());
+        assert!(summary.get("returned").is_none());
+        assert_eq!(first["tool_id"], "file.read");
+        assert_eq!(first["lease"], "lease-file");
+        assert!(first.get("tags").is_none());
+        assert!(first.get("why").is_none());
+    }
+
+    #[test]
+    fn reduce_followup_payload_for_model_preserves_empty_required_arrays() {
+        let payload_summary = json!({
+            "query": "install a skill",
+            "results": [
+                {
+                    "tool_id": "external_skills.install",
+                    "summary": "Install a bundled skill or a local skill path.",
+                    "argument_hint": "bundled_skill_id?:string,path?:string",
+                    "required_fields": [],
+                    "required_field_groups": [],
+                    "lease": "lease-install"
+                }
+            ]
+        })
+        .to_string();
+        let tool_result = format!(
+            "[ok] {}",
+            json!({
+                "status": "ok",
+                "tool": "tool.search",
+                "tool_call_id": "call-search",
+                "payload_summary": payload_summary,
+                "payload_chars": 512,
+                "payload_truncated": false
+            })
+        );
+
+        let reduced = reduce_followup_payload_for_model("tool_result", tool_result.as_str());
+        let envelope: Value = serde_json::from_str(
+            reduced
+                .strip_prefix("[ok] ")
+                .expect("tool result should keep status prefix"),
+        )
+        .expect("reduced envelope should stay valid json");
+        let summary: Value = serde_json::from_str(
+            envelope["payload_summary"]
+                .as_str()
+                .expect("payload summary should stay encoded json"),
+        )
+        .expect("reduced payload summary should stay valid json");
+        let first = summary["results"]
+            .as_array()
+            .and_then(|results| results.first())
+            .expect("reduced payload should keep the first result");
+
+        assert_eq!(first["required_fields"], json!([]));
+        assert_eq!(first["required_field_groups"], json!([]));
+    }
+
+    #[test]
+    fn reduce_followup_payload_for_model_borrows_unmodified_tool_results() {
+        let tool_result = r#"[ok] {"status":"ok","tool":"shell.exec","tool_call_id":"call-shell","payload_summary":"{\"stdout\":\"hello\"}","payload_chars":32,"payload_truncated":false}"#;
+
+        let reduced = reduce_followup_payload_for_model("tool_result", tool_result);
+
+        assert_eq!(reduced.as_ref(), tool_result);
+        assert_eq!(reduced.as_ptr(), tool_result.as_ptr());
     }
 }
