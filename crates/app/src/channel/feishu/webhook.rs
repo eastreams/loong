@@ -1157,6 +1157,12 @@ mod tests {
                 let Ok(envelope) = serde_json::from_str::<Value>(payload) else {
                     continue;
                 };
+                if envelope["tool"].as_str() != Some("tool.search") {
+                    continue;
+                }
+                if envelope["payload_truncated"].as_bool().unwrap_or(false) {
+                    continue;
+                }
                 let summary_str = envelope["payload_summary"].as_str().unwrap_or("");
                 let Ok(summary) = serde_json::from_str::<Value>(summary_str) else {
                     continue;
@@ -1209,6 +1215,57 @@ mod tests {
         assert_eq!(
             extract_lease_from_provider_request_body(body.as_str(), "feishu.card.update"),
             "lease-feishu-card-update"
+        );
+    }
+
+    #[test]
+    fn extract_lease_from_provider_request_body_ignores_non_search_envelopes() {
+        let misleading_summary = serde_json::to_string(&json!({
+            "results": [{
+                "tool_id": "feishu.card.update",
+                "lease": "lease-from-non-search"
+            }]
+        }))
+        .expect("encode misleading payload summary");
+        let search_summary = serde_json::to_string(&json!({
+            "query": "feishu card update callback token markdown",
+            "results": [{
+                "tool_id": "feishu.card.update",
+                "summary": "Update a Feishu interactive card after a card callback.",
+                "argument_hint": "callback_token?:string,card?:object,markdown?:string",
+                "lease": "lease-from-search"
+            }]
+        }))
+        .expect("encode search payload summary");
+        let body = serde_json::to_string(&json!({
+            "messages": [{
+                "role": "assistant",
+                "content": format!(
+                    "[tool_result]\n[ok] {}\n[ok] {}",
+                    json!({
+                        "status": "ok",
+                        "tool": "file.read",
+                        "tool_call_id": "call_file_read_1",
+                        "payload_summary": misleading_summary,
+                        "payload_chars": 64,
+                        "payload_truncated": false,
+                    }),
+                    json!({
+                        "status": "ok",
+                        "tool": "tool.search",
+                        "tool_call_id": "call_tool_search_1",
+                        "payload_summary": search_summary,
+                        "payload_chars": 256,
+                        "payload_truncated": false,
+                    })
+                )
+            }]
+        }))
+        .expect("encode provider request body");
+
+        assert_eq!(
+            extract_lease_from_provider_request_body(body.as_str(), "feishu.card.update"),
+            "lease-from-search"
         );
     }
 
