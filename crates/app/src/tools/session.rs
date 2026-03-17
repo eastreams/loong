@@ -4556,7 +4556,16 @@ mod tests {
                     "timeout_seconds": 60,
                     "allow_shell_in_child": false,
                     "child_tool_allowlist": ["file.read", "file.write"],
-                    "kernel_bound": false
+                    "kernel_bound": false,
+                    "runtime_narrowing": {
+                        "web_fetch": {
+                            "allowed_domains": ["docs.example.com"],
+                            "allow_private_hosts": false
+                        },
+                        "browser": {
+                            "max_sessions": 1
+                        }
+                    }
                 }
             }),
         })
@@ -4618,6 +4627,18 @@ mod tests {
         assert_eq!(
             outcome.payload["delegate_lifecycle"]["execution"]["kernel_bound"],
             false
+        );
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["execution"]["runtime_narrowing"]["web_fetch"]["allowed_domains"],
+            json!(["docs.example.com"])
+        );
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["execution"]["runtime_narrowing"]["web_fetch"]["allow_private_hosts"],
+            false
+        );
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["execution"]["runtime_narrowing"]["browser"]["max_sessions"],
+            1
         );
     }
 

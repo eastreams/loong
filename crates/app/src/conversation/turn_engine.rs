@@ -648,11 +648,13 @@ pub(crate) fn render_kernel_error_reason(error: &KernelError) -> String {
 fn augment_tool_payload_for_kernel(
     canonical_tool_name: &str,
     payload: serde_json::Value,
-    session_id: &str,
+    session_context: &SessionContext,
 ) -> serde_json::Value {
+    let payload = inject_runtime_narrowing_context(payload, session_context);
+
     // Direct browser tool calls: inject scope at the top level.
     if browser_scope_injection_required(canonical_tool_name) {
-        return inject_browser_scope_field(payload, session_id);
+        return inject_browser_scope_field(payload, &session_context.session_id);
     }
 
     // tool.invoke wrapping a browser tool: inject scope into the nested arguments.
@@ -666,13 +668,43 @@ fn augment_tool_payload_for_kernel(
         if let Some(arguments) = outer.remove("arguments") {
             outer.insert(
                 "arguments".to_owned(),
-                inject_browser_scope_field(arguments, session_id),
+                inject_browser_scope_field(arguments, &session_context.session_id),
             );
         }
         return serde_json::Value::Object(outer);
     }
 
     payload
+}
+
+fn inject_runtime_narrowing_context(
+    payload: serde_json::Value,
+    session_context: &SessionContext,
+) -> serde_json::Value {
+    let Some(runtime_narrowing) = session_context.runtime_narrowing.as_ref() else {
+        return payload;
+    };
+    if runtime_narrowing.is_empty() {
+        return payload;
+    }
+
+    let serde_json::Value::Object(mut object) = payload else {
+        return payload;
+    };
+    let mut internal = object
+        .remove(crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY)
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    internal.insert(
+        crate::tools::LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY.to_owned(),
+        serde_json::to_value(runtime_narrowing)
+            .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new())),
+    );
+    object.insert(
+        crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
+        serde_json::Value::Object(internal),
+    );
+    serde_json::Value::Object(object)
 }
 
 fn browser_scope_injection_required(tool_name: &str) -> bool {
@@ -1450,7 +1482,7 @@ impl TurnEngine {
         let augmented_payload = augment_tool_payload_for_kernel(
             resolved_tool.canonical_name,
             injected.payload,
-            &session_context.session_id,
+            session_context,
         );
         let request = ToolCoreRequest {
             tool_name: resolved_tool.canonical_name.to_owned(),
@@ -2305,7 +2337,11 @@ mod tests {
             Some("turn-browser-companion-start"),
         );
 
-        let augmented = augment_tool_payload_for_kernel(&tool_name, payload, "root-session");
+        let session_context = SessionContext::root_with_tool_view(
+            "root-session",
+            crate::tools::ToolView::from_tool_names(std::iter::empty::<&str>()),
+        );
+        let augmented = augment_tool_payload_for_kernel(&tool_name, payload, &session_context);
 
         assert_eq!(augmented["tool_id"], "browser.companion.session.start");
         assert_eq!(

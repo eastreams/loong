@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use async_trait::async_trait;
 use loongclaw_contracts::{
-    Capability, ExecutionRoute, HarnessKind, MemoryPlaneError, ToolCoreRequest,
+    Capability, ExecutionRoute, HarnessKind, MemoryPlaneError, ToolCoreOutcome, ToolCoreRequest,
 };
 use loongclaw_kernel::{
     CoreMemoryAdapter, FixedClock, InMemoryAuditSink, LoongClawKernel, MemoryCoreOutcome,
@@ -31,6 +31,8 @@ use crate::acp::{
 use crate::memory::MEMORY_OP_WINDOW;
 #[cfg(feature = "memory-sqlite")]
 use crate::memory::runtime_config::MemoryRuntimeConfig;
+#[cfg(feature = "memory-sqlite")]
+use crate::session::repository::{NewSessionRecord, SessionKind, SessionRepository, SessionState};
 
 struct FakeRuntime {
     seed_messages: Vec<Value>,
@@ -12163,6 +12165,285 @@ async fn handle_turn_with_runtime_passes_restricted_tool_view_into_provider_requ
             .as_slice(),
         &[child_view]
     );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_child_session_injects_runtime_narrowing_into_kernel_payload() {
+    struct EchoToolAdapter;
+
+    #[async_trait::async_trait]
+    impl loongclaw_kernel::CoreToolAdapter for EchoToolAdapter {
+        fn name(&self) -> &str {
+            "echo-tools"
+        }
+
+        async fn execute_core_tool(
+            &self,
+            request: ToolCoreRequest,
+        ) -> Result<ToolCoreOutcome, loongclaw_contracts::ToolPlaneError> {
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "tool": request.tool_name,
+                    "payload": request.payload,
+                }),
+            })
+        }
+    }
+
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-delegate-runtime", "payload-context")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.tools.delegate.child_tool_allowlist = vec!["web.fetch".to_owned()];
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    repo.create_session(NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: SessionState::Running,
+    })
+    .expect("create child session");
+    repo.append_event(crate::session::repository::NewSessionEvent {
+        session_id: "child-session".to_owned(),
+        event_kind: "delegate_started".to_owned(),
+        actor_session_id: Some("root-session".to_owned()),
+        payload_json: json!({
+            "task": "fetch docs",
+            "label": "Child",
+            "execution": {
+                "mode": "inline",
+                "depth": 1,
+                "max_depth": 2,
+                "active_children": 0,
+                "max_active_children": 3,
+                "timeout_seconds": 60,
+                "allow_shell_in_child": false,
+                "child_tool_allowlist": ["web.fetch"],
+                "kernel_bound": true,
+                "runtime_narrowing": {
+                    "web_fetch": {
+                        "allowed_domains": ["docs.example.com"],
+                        "allow_private_hosts": false
+                    },
+                    "browser": {
+                        "max_sessions": 1,
+                        "max_links": 8,
+                        "max_text_chars": 512
+                    }
+                }
+            }
+        }),
+    })
+    .expect("append delegate_started event");
+
+    let runtime = DefaultConversationRuntime::default();
+    let session_context = runtime
+        .session_context(
+            &config,
+            "child-session",
+            ConversationRuntimeBinding::direct(),
+        )
+        .expect("load child session context");
+    assert_eq!(
+        session_context
+            .runtime_narrowing
+            .as_ref()
+            .and_then(|narrowing| { narrowing.web_fetch.allowed_domains.iter().next().cloned() }),
+        Some("docs.example.com".to_owned())
+    );
+
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+    kernel.register_core_tool_adapter(EchoToolAdapter);
+    kernel
+        .set_default_core_tool_adapter("echo-tools")
+        .expect("set default tool adapter");
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+    let kernel_ctx = KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![provider_tool_intent(
+            "web.fetch",
+            json!({
+                "url": "https://outside.invalid/docs"
+            }),
+            "child-session",
+            "turn-child-runtime",
+            "call-child-runtime",
+        )],
+        raw_meta: Value::Null,
+    };
+
+    let result = TurnEngine::new(5)
+        .execute_turn_in_context(
+            &turn,
+            &session_context,
+            &DefaultAppToolDispatcher::runtime(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            None,
+        )
+        .await;
+
+    match result {
+        TurnResult::FinalText(text) => {
+            let line = text.lines().next().expect("tool result line should exist");
+            let payload = line
+                .strip_prefix("[ok] ")
+                .expect("tool result line should keep [ok] prefix");
+            let envelope: Value =
+                serde_json::from_str(payload).expect("tool result envelope should be json");
+            let payload_summary = envelope["payload_summary"]
+                .as_str()
+                .expect("payload summary should be text");
+            assert!(
+                payload_summary.contains("\"runtime_narrowing\""),
+                "expected runtime_narrowing in payload summary, got: {payload_summary}"
+            );
+            assert!(
+                payload_summary.contains("docs.example.com"),
+                "expected narrowed domain in payload summary, got: {payload_summary}"
+            );
+            assert!(
+                payload_summary.contains("\"max_sessions\":1"),
+                "expected browser max_sessions narrowing in payload summary, got: {payload_summary}"
+            );
+        }
+        other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected final text tool output, got: {other:?}")
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn session_context_preserves_child_runtime_narrowing_after_many_later_events() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-delegate-runtime", "history-retention")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    repo.create_session(NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: SessionState::Running,
+    })
+    .expect("create child session");
+    repo.append_event(crate::session::repository::NewSessionEvent {
+        session_id: "child-session".to_owned(),
+        event_kind: "delegate_started".to_owned(),
+        actor_session_id: Some("root-session".to_owned()),
+        payload_json: json!({
+            "task": "fetch docs",
+            "label": "Child",
+            "execution": {
+                "mode": "inline",
+                "depth": 1,
+                "max_depth": 2,
+                "active_children": 0,
+                "max_active_children": 3,
+                "timeout_seconds": 60,
+                "allow_shell_in_child": false,
+                "child_tool_allowlist": ["web.fetch"],
+                "kernel_bound": true,
+                "runtime_narrowing": {
+                    "web_fetch": {
+                        "allowed_domains": ["docs.example.com"],
+                        "allow_private_hosts": false
+                    },
+                    "browser": {
+                        "max_sessions": 1
+                    }
+                }
+            }
+        }),
+    })
+    .expect("append delegate_started event");
+
+    for index in 0..24 {
+        repo.append_event(crate::session::repository::NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: format!("child_progress_{index}"),
+            actor_session_id: Some("child-session".to_owned()),
+            payload_json: json!({
+                "index": index,
+            }),
+        })
+        .expect("append later child event");
+    }
+
+    let runtime = DefaultConversationRuntime::default();
+    let session_context = runtime
+        .session_context(
+            &config,
+            "child-session",
+            ConversationRuntimeBinding::direct(),
+        )
+        .expect("load child session context");
+
+    let runtime_narrowing = session_context
+        .runtime_narrowing
+        .expect("child runtime narrowing should survive later events");
+    assert_eq!(
+        runtime_narrowing.web_fetch.allowed_domains,
+        BTreeSet::from(["docs.example.com".to_owned()])
+    );
+    assert_eq!(runtime_narrowing.browser.max_sessions, Some(1));
 }
 
 #[cfg(feature = "memory-sqlite")]

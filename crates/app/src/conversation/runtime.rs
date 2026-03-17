@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use crate::CliResult;
 use crate::KernelContext;
+use crate::tools::runtime_config::ToolRuntimeNarrowing;
 use crate::tools::{
     ToolView, delegate_child_tool_view_for_config,
     delegate_child_tool_view_for_config_with_delegate,
@@ -38,6 +39,7 @@ pub struct SessionContext {
     pub session_id: String,
     pub parent_session_id: Option<String>,
     pub tool_view: ToolView,
+    pub runtime_narrowing: Option<ToolRuntimeNarrowing>,
 }
 
 impl SessionContext {
@@ -46,6 +48,7 @@ impl SessionContext {
             session_id: normalize_session_id(session_id.into()),
             parent_session_id: None,
             tool_view,
+            runtime_narrowing: None,
         }
     }
 
@@ -58,7 +61,16 @@ impl SessionContext {
             session_id: normalize_session_id(session_id.into()),
             parent_session_id: Some(normalize_session_id(parent_session_id.into())),
             tool_view,
+            runtime_narrowing: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_runtime_narrowing(mut self, runtime_narrowing: ToolRuntimeNarrowing) -> Self {
+        if !runtime_narrowing.is_empty() {
+            self.runtime_narrowing = Some(runtime_narrowing);
+        }
+        self
     }
 }
 
@@ -69,6 +81,27 @@ fn normalize_session_id(session_id: String) -> String {
     } else {
         trimmed.to_owned()
     }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn load_delegate_runtime_narrowing(
+    repo: &SessionRepository,
+    session_id: &str,
+) -> Result<Option<ToolRuntimeNarrowing>, String> {
+    let events = repo.list_delegate_lifecycle_events(session_id)?;
+    let execution = events.into_iter().rev().find_map(|event| {
+        matches!(
+            event.event_kind.as_str(),
+            "delegate_queued" | "delegate_started"
+        )
+        .then(|| {
+            super::subagent::ConstrainedSubagentExecution::from_event_payload(&event.payload_json)
+        })
+        .flatten()
+    });
+    Ok(execution.and_then(|execution| {
+        (!execution.runtime_narrowing.is_empty()).then_some(execution.runtime_narrowing)
+    }))
 }
 
 #[derive(Clone)]
@@ -440,22 +473,26 @@ where
                     .map_err(|error| format!("load session context failed: {error}"))?
                 {
                     if let Some(parent_session_id) = session.parent_session_id {
+                        let runtime_narrowing = load_delegate_runtime_narrowing(&repo, session_id)?;
                         return Ok(SessionContext::child(
                             session.session_id,
                             parent_session_id,
                             tool_view,
-                        ));
+                        )
+                        .with_runtime_narrowing(runtime_narrowing.unwrap_or_default()));
                     }
                 } else if let Some(summary) = repo
                     .load_session_summary_with_legacy_fallback(session_id)
                     .map_err(|error| format!("load legacy session context failed: {error}"))?
                     && let Some(parent_session_id) = summary.parent_session_id
                 {
+                    let runtime_narrowing = load_delegate_runtime_narrowing(&repo, session_id)?;
                     return Ok(SessionContext::child(
                         summary.session_id,
                         parent_session_id,
                         tool_view,
-                    ));
+                    )
+                    .with_runtime_narrowing(runtime_narrowing.unwrap_or_default()));
                 }
             }
         }

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::tools::runtime_config::ToolRuntimeNarrowing;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConstrainedSubagentMode {
@@ -27,6 +29,8 @@ pub struct ConstrainedSubagentExecution {
     pub timeout_seconds: u64,
     pub allow_shell_in_child: bool,
     pub child_tool_allowlist: Vec<String>,
+    #[serde(default, skip_serializing_if = "ToolRuntimeNarrowing::is_empty")]
+    pub runtime_narrowing: ToolRuntimeNarrowing,
     pub kernel_bound: bool,
 }
 
@@ -95,6 +99,7 @@ mod tests {
             timeout_seconds: 60,
             allow_shell_in_child: false,
             child_tool_allowlist: vec!["file.read".to_owned(), "file.write".to_owned()],
+            runtime_narrowing: ToolRuntimeNarrowing::default(),
             kernel_bound: true,
         };
 

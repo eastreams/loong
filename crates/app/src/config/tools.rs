@@ -113,6 +113,42 @@ pub struct DelegateToolConfig {
     pub child_tool_allowlist: Vec<String>,
     #[serde(default)]
     pub allow_shell_in_child: bool,
+    #[serde(default)]
+    pub child_runtime: DelegateChildRuntimeConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct DelegateChildRuntimeConfig {
+    #[serde(default)]
+    pub web: DelegateChildWebRuntimeConfig,
+    #[serde(default)]
+    pub browser: DelegateChildBrowserRuntimeConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct DelegateChildWebRuntimeConfig {
+    #[serde(default)]
+    pub allow_private_hosts: Option<bool>,
+    #[serde(default)]
+    pub allowed_domains: Vec<String>,
+    #[serde(default)]
+    pub blocked_domains: Vec<String>,
+    #[serde(default)]
+    pub timeout_seconds: Option<u64>,
+    #[serde(default)]
+    pub max_bytes: Option<usize>,
+    #[serde(default)]
+    pub max_redirects: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct DelegateChildBrowserRuntimeConfig {
+    #[serde(default)]
+    pub max_sessions: Option<usize>,
+    #[serde(default)]
+    pub max_links: Option<usize>,
+    #[serde(default)]
+    pub max_text_chars: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -260,6 +296,7 @@ impl Default for DelegateToolConfig {
             timeout_seconds: default_delegate_timeout_seconds(),
             child_tool_allowlist: default_delegate_child_tool_allowlist(),
             allow_shell_in_child: false,
+            child_runtime: DelegateChildRuntimeConfig::default(),
         }
     }
 }
@@ -360,6 +397,66 @@ impl ToolConfig {
         ) {
             issues.push(*issue);
         }
+        if let Some(max_sessions) = self.delegate.child_runtime.browser.max_sessions
+            && let Err(issue) = validate_numeric_range(
+                "tools.delegate.child_runtime.browser.max_sessions",
+                max_sessions,
+                MIN_BROWSER_MAX_SESSIONS,
+                MAX_BROWSER_MAX_SESSIONS,
+            )
+        {
+            issues.push(*issue);
+        }
+        if let Some(max_links) = self.delegate.child_runtime.browser.max_links
+            && let Err(issue) = validate_numeric_range(
+                "tools.delegate.child_runtime.browser.max_links",
+                max_links,
+                MIN_BROWSER_MAX_LINKS,
+                MAX_BROWSER_MAX_LINKS,
+            )
+        {
+            issues.push(*issue);
+        }
+        if let Some(max_text_chars) = self.delegate.child_runtime.browser.max_text_chars
+            && let Err(issue) = validate_numeric_range(
+                "tools.delegate.child_runtime.browser.max_text_chars",
+                max_text_chars,
+                MIN_BROWSER_MAX_TEXT_CHARS,
+                MAX_BROWSER_MAX_TEXT_CHARS,
+            )
+        {
+            issues.push(*issue);
+        }
+        if let Some(max_bytes) = self.delegate.child_runtime.web.max_bytes
+            && let Err(issue) = validate_numeric_range(
+                "tools.delegate.child_runtime.web.max_bytes",
+                max_bytes,
+                MIN_WEB_FETCH_MAX_BYTES,
+                MAX_WEB_FETCH_MAX_BYTES,
+            )
+        {
+            issues.push(*issue);
+        }
+        if let Some(timeout_seconds) = self.delegate.child_runtime.web.timeout_seconds
+            && let Err(issue) = validate_numeric_range(
+                "tools.delegate.child_runtime.web.timeout_seconds",
+                timeout_seconds as usize,
+                MIN_WEB_FETCH_TIMEOUT_SECONDS,
+                MAX_WEB_FETCH_TIMEOUT_SECONDS,
+            )
+        {
+            issues.push(*issue);
+        }
+        if let Some(max_redirects) = self.delegate.child_runtime.web.max_redirects
+            && let Err(issue) = validate_numeric_range(
+                "tools.delegate.child_runtime.web.max_redirects",
+                max_redirects,
+                0,
+                MAX_WEB_FETCH_MAX_REDIRECTS,
+            )
+        {
+            issues.push(*issue);
+        }
         issues
     }
 }
@@ -385,6 +482,36 @@ impl WebToolConfig {
 
     pub fn normalized_blocked_domains(&self) -> Vec<String> {
         normalize_domain_entries(&self.blocked_domains)
+    }
+}
+
+impl DelegateChildWebRuntimeConfig {
+    pub fn normalized_allowed_domains(&self) -> Vec<String> {
+        normalize_domain_entries(&self.allowed_domains)
+    }
+
+    pub fn normalized_blocked_domains(&self) -> Vec<String> {
+        normalize_domain_entries(&self.blocked_domains)
+    }
+}
+
+impl DelegateChildRuntimeConfig {
+    pub fn runtime_narrowing(&self) -> crate::tools::runtime_config::ToolRuntimeNarrowing {
+        crate::tools::runtime_config::ToolRuntimeNarrowing {
+            web_fetch: crate::tools::runtime_config::WebFetchRuntimeNarrowing {
+                allow_private_hosts: self.web.allow_private_hosts,
+                allowed_domains: self.web.normalized_allowed_domains().into_iter().collect(),
+                blocked_domains: self.web.normalized_blocked_domains().into_iter().collect(),
+                timeout_seconds: self.web.timeout_seconds,
+                max_bytes: self.web.max_bytes,
+                max_redirects: self.web.max_redirects,
+            },
+            browser: crate::tools::runtime_config::BrowserRuntimeNarrowing {
+                max_sessions: self.browser.max_sessions,
+                max_links: self.browser.max_links,
+                max_text_chars: self.browser.max_text_chars,
+            },
+        }
     }
 }
 
@@ -530,6 +657,19 @@ max_active_children = 4
 timeout_seconds = 90
 allow_shell_in_child = true
 child_tool_allowlist = ["file.read", "shell.exec"]
+
+[tools.delegate.child_runtime.web]
+allow_private_hosts = false
+allowed_domains = ["Docs.Example.com", "docs.example.com"]
+blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
+timeout_seconds = 9
+max_bytes = 262144
+max_redirects = 1
+
+[tools.delegate.child_runtime.browser]
+max_sessions = 2
+max_links = 10
+max_text_chars = 1024
 "#;
         let parsed =
             toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
@@ -558,6 +698,52 @@ child_tool_allowlist = ["file.read", "shell.exec"]
         assert_eq!(
             parsed.tools.delegate.child_tool_allowlist,
             vec!["file.read".to_owned(), "shell.exec".to_owned()]
+        );
+        assert_eq!(
+            parsed
+                .tools
+                .delegate
+                .child_runtime
+                .web
+                .normalized_allowed_domains(),
+            vec!["docs.example.com".to_owned()]
+        );
+        assert_eq!(
+            parsed
+                .tools
+                .delegate
+                .child_runtime
+                .web
+                .normalized_blocked_domains(),
+            vec!["internal.example".to_owned()]
+        );
+        assert_eq!(
+            parsed.tools.delegate.child_runtime.web.allow_private_hosts,
+            Some(false)
+        );
+        assert_eq!(
+            parsed.tools.delegate.child_runtime.web.timeout_seconds,
+            Some(9)
+        );
+        assert_eq!(
+            parsed.tools.delegate.child_runtime.web.max_bytes,
+            Some(262144)
+        );
+        assert_eq!(
+            parsed.tools.delegate.child_runtime.web.max_redirects,
+            Some(1)
+        );
+        assert_eq!(
+            parsed.tools.delegate.child_runtime.browser.max_sessions,
+            Some(2)
+        );
+        assert_eq!(
+            parsed.tools.delegate.child_runtime.browser.max_links,
+            Some(10)
+        );
+        assert_eq!(
+            parsed.tools.delegate.child_runtime.browser.max_text_chars,
+            Some(1024)
         );
     }
 

@@ -4296,6 +4296,7 @@ fn constrained_subagent_execution_for_delegate(
         timeout_seconds,
         allow_shell_in_child: config.tools.delegate.allow_shell_in_child,
         child_tool_allowlist: config.tools.delegate.child_tool_allowlist.clone(),
+        runtime_narrowing: config.tools.delegate.child_runtime.runtime_narrowing(),
         kernel_bound: binding.is_kernel_bound(),
     })
 }
@@ -6431,6 +6432,7 @@ mod tests {
             timeout_seconds: 60,
             allow_shell_in_child: false,
             child_tool_allowlist: vec!["file.read".to_owned(), "file.write".to_owned()],
+            runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
             kernel_bound: false,
         };
         repo.create_session(NewSessionRecord {
@@ -6542,6 +6544,7 @@ mod tests {
             timeout_seconds: 60,
             allow_shell_in_child: false,
             child_tool_allowlist: vec!["file.read".to_owned(), "file.write".to_owned()],
+            runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
             kernel_bound: false,
         };
         repo.create_session(NewSessionRecord {
