@@ -1057,44 +1057,16 @@ mod tests {
                         .map(|index| format!("stdout line {index}: {}", "x".repeat(40)))
                         .collect::<Vec<_>>()
                         .join("\n"),
-                    "stderr": ""
+                    "stderr": (0..48)
+                        .map(|index| format!("stderr line {index}: {}", "e".repeat(32)))
+                        .collect::<Vec<_>>()
+                        .join("\n")
                 })
                 .to_string(),
                 "payload_chars": 8_192,
                 "payload_truncated": false
             })
         )
-    }
-
-    fn parse_assistant_tool_result_followup(messages: &[Value]) -> (Value, Value) {
-        let assistant_tool_result = messages
-            .iter()
-            .find(|message| {
-                message.get("role") == Some(&Value::String("assistant".to_owned()))
-                    && message
-                        .get("content")
-                        .and_then(Value::as_str)
-                        .is_some_and(|content| content.starts_with("[tool_result]\n[ok] "))
-            })
-            .and_then(|message| message.get("content"))
-            .and_then(Value::as_str)
-            .expect("assistant tool_result followup message should exist");
-        let line = assistant_tool_result
-            .lines()
-            .nth(1)
-            .expect("assistant tool_result should keep payload line");
-        let envelope: Value = serde_json::from_str(
-            line.strip_prefix("[ok] ")
-                .expect("tool result line should preserve status prefix"),
-        )
-        .expect("followup envelope should stay valid json");
-        let summary: Value = serde_json::from_str(
-            envelope["payload_summary"]
-                .as_str()
-                .expect("payload summary should stay encoded json"),
-        )
-        .expect("payload summary should stay valid json");
-        (envelope, summary)
     }
 
     #[test]
@@ -1112,7 +1084,8 @@ mod tests {
             None,
         );
 
-        let (envelope, summary) = parse_assistant_tool_result_followup(&messages);
+        let (envelope, summary) =
+            crate::conversation::turn_shared::parse_tool_result_followup_for_test(&messages);
 
         assert_eq!(envelope["tool"], "shell.exec");
         assert_eq!(envelope["payload_truncated"], true);
@@ -1121,12 +1094,22 @@ mod tests {
         assert!(summary.get("stdout_preview").is_some());
         assert!(summary.get("stdout_chars").is_some());
         assert_eq!(summary["stdout_truncated"], true);
+        assert!(summary.get("stderr_preview").is_some());
+        assert!(summary.get("stderr_chars").is_some());
+        assert_eq!(summary["stderr_truncated"], true);
         assert!(
             summary["stdout_preview"]
                 .as_str()
                 .expect("stdout preview should exist")
                 .contains("stdout line 0"),
             "expected compact stdout preview, got: {summary:?}"
+        );
+        assert!(
+            summary["stderr_preview"]
+                .as_str()
+                .expect("stderr preview should exist")
+                .contains("stderr line 0"),
+            "expected compact stderr preview, got: {summary:?}"
         );
     }
 
@@ -1163,7 +1146,8 @@ mod tests {
             &mut budget,
         );
 
-        let (envelope, summary) = parse_assistant_tool_result_followup(&messages);
+        let (envelope, summary) =
+            crate::conversation::turn_shared::parse_tool_result_followup_for_test(&messages);
 
         assert_eq!(envelope["tool"], "shell.exec");
         assert_eq!(envelope["payload_truncated"], true);
@@ -1172,6 +1156,9 @@ mod tests {
         assert!(summary.get("stdout_preview").is_some());
         assert!(summary.get("stdout_chars").is_some());
         assert_eq!(summary["stdout_truncated"], true);
+        assert!(summary.get("stderr_preview").is_some());
+        assert!(summary.get("stderr_chars").is_some());
+        assert_eq!(summary["stderr_truncated"], true);
     }
 
     #[test]
