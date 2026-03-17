@@ -12,8 +12,8 @@ use wait_timeout::ChildExt;
 
 const DEFAULT_BROWSER_COMPANION_SCOPE_ID: &str = "__global";
 const BROWSER_COMPANION_PROTOCOL: &str = "loongclaw.browser_companion.v1";
-const BROWSER_COMPANION_SPAWN_RETRY_ATTEMPTS: usize = 5;
-const BROWSER_COMPANION_SPAWN_RETRY_DELAY: Duration = Duration::from_millis(25);
+const BROWSER_COMPANION_SPAWN_RETRY_ATTEMPTS: usize = 20;
+const BROWSER_COMPANION_SPAWN_RETRY_DELAY: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone)]
 struct BrowserCompanionSession {
@@ -236,7 +236,6 @@ fn cleanup_browser_companion_after_stdin_write_failure(child: &mut std::process:
     let _ = child.kill();
     let _ = child.wait();
 }
-
 fn wait_for_browser_companion_output(
     mut child: std::process::Child,
     timeout_seconds: u64,
