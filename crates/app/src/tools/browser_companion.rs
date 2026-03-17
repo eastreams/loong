@@ -170,7 +170,7 @@ where
     F: FnMut() -> std::io::Result<T>,
 {
     retry_executable_file_busy_with_pause(&mut operation, || {
-        pause_before_browser_companion_spawn_retry(BROWSER_COMPANION_SPAWN_RETRY_DELAY);
+        pause_before_browser_companion_spawn_retry(BROWSER_COMPANION_SPAWN_RETRY_DELAY)
     })
 }
 
@@ -180,7 +180,7 @@ fn retry_executable_file_busy_with_pause<T, F, P>(
 ) -> std::io::Result<T>
 where
     F: FnMut() -> std::io::Result<T>,
-    P: FnMut(),
+    P: FnMut() -> std::io::Result<()>,
 {
     let mut attempt = 0;
     loop {
@@ -191,22 +191,59 @@ where
                 if should_retry_spawn_error(&error)
                     && attempt < BROWSER_COMPANION_SPAWN_RETRY_ATTEMPTS =>
             {
-                pause();
+                pause()?;
             }
             Err(error) => return Err(error),
         }
     }
 }
 
-fn pause_before_browser_companion_spawn_retry(delay: Duration) {
-    if let Ok(handle) = tokio::runtime::Handle::try_current()
-        && handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
-    {
-        tokio::task::block_in_place(|| std::thread::park_timeout(delay));
-        return;
+fn pause_before_browser_companion_spawn_retry(delay: Duration) -> std::io::Result<()> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(|| {
+                handle.block_on(async move {
+                    tokio::time::sleep(delay).await;
+                })
+            });
+            Ok(())
+        }
+        Ok(_) => std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_time()
+                        .build()
+                        .map_err(|error| {
+                            std::io::Error::other(format!(
+                                "browser_companion_retry_runtime_create_failed: {error}"
+                            ))
+                        })?;
+                    runtime.block_on(async move {
+                        tokio::time::sleep(delay).await;
+                    });
+                    Ok(())
+                })
+                .join()
+                .map_err(|_panic| {
+                    std::io::Error::other("browser_companion_retry_worker_thread_panicked")
+                })?
+        }),
+        Err(_) => {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .map_err(|error| {
+                    std::io::Error::other(format!(
+                        "browser_companion_retry_runtime_create_failed: {error}"
+                    ))
+                })?;
+            runtime.block_on(async move {
+                tokio::time::sleep(delay).await;
+            });
+            Ok(())
+        }
     }
-
-    std::thread::park_timeout(delay);
 }
 
 fn should_retry_spawn_error(error: &std::io::Error) -> bool {
@@ -635,6 +672,7 @@ mod tests {
             },
             || {
                 pauses.fetch_add(1, Ordering::Relaxed);
+                Ok(())
             },
         )
         .expect("retry should pause between retryable executable-busy failures");
@@ -672,7 +710,14 @@ mod tests {
             .expect("build current-thread runtime");
 
         runtime.block_on(async {
-            super::pause_before_browser_companion_spawn_retry(Duration::from_millis(0));
+            super::pause_before_browser_companion_spawn_retry(Duration::from_millis(0))
+                .expect("pause should work under a current-thread runtime");
         });
+    }
+
+    #[test]
+    fn pause_before_browser_companion_spawn_retry_succeeds_without_runtime() {
+        super::pause_before_browser_companion_spawn_retry(Duration::ZERO)
+            .expect("pause should work without a tokio runtime");
     }
 }
