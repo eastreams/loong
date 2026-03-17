@@ -261,17 +261,19 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
         if trimmed.is_empty() {
             return default.ok_or_else(|| "no default for required selection".to_owned());
         }
-        let n: usize = trimmed
-            .parse()
-            .map_err(|_err| format!("invalid scripted selection input: {trimmed}"))?;
-        if n >= 1 && n <= options.len() {
-            Ok(n - 1)
-        } else {
-            Err(format!(
+        if let Ok(n) = trimmed.parse::<usize>() {
+            if n >= 1 && n <= options.len() {
+                return Ok(n - 1);
+            }
+            return Err(format!(
                 "scripted selection {n} out of range 1..={}",
                 options.len()
-            ))
+            ));
         }
+        options
+            .iter()
+            .position(|option| option.slug.eq_ignore_ascii_case(trimmed))
+            .ok_or_else(|| format!("invalid scripted selection input: {trimmed}"))
     }
 }
 
@@ -391,6 +393,36 @@ fn default_non_interactive_onboard_options(
         system_prompt: None,
         skip_model_probe: false,
     }
+}
+
+#[test]
+fn scripted_onboard_ui_select_one_accepts_slug_input() {
+    let mut ui = ScriptedOnboardUi::new(["friendly_collab"]);
+    let options = vec![
+        loongclaw_daemon::onboard_cli::SelectOption {
+            label: "calm engineering".to_owned(),
+            slug: "calm_engineering".to_owned(),
+            description: String::new(),
+            recommended: true,
+        },
+        loongclaw_daemon::onboard_cli::SelectOption {
+            label: "friendly collab".to_owned(),
+            slug: "friendly_collab".to_owned(),
+            description: String::new(),
+            recommended: false,
+        },
+    ];
+
+    let index = loongclaw_daemon::onboard_cli::OnboardUi::select_one(
+        &mut ui,
+        "Personality",
+        &options,
+        Some(0),
+    )
+    .expect("scripted selection should accept slug input so integration tests stay aligned");
+
+    assert_eq!(index, 1);
+    assert_eq!(ui.transcript(), vec!["SELECT Personality".to_owned()]);
 }
 
 #[test]
@@ -2701,7 +2733,7 @@ fn onboard_entry_screen_compacts_to_plain_wordmark_on_narrow_width() {
         "narrow layout should keep the primary entry choice readable: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line == "    (recommended)"),
+        lines.iter().any(|line| line == "   (recommended)"),
         "narrow layout should still surface the recommendation marker when the longer label wraps: {lines:#?}"
     );
 }
@@ -4070,7 +4102,7 @@ fn onboard_starting_point_selection_screen_wraps_long_option_labels_and_details(
     assert!(
         lines
             .iter()
-            .any(|line| line == "    ~/.codex/agents/loongclaw/config.toml"),
+            .any(|line| line == "   ~/.codex/agents/loongclaw/config.toml"),
         "starting-point screen should continue long option labels on an indented line: {lines:#?}"
     );
     assert!(
