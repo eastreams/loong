@@ -1399,29 +1399,48 @@ fn resolve_memory_profile_selection(
         .as_deref()
         .and_then(parse_memory_profile)
         .unwrap_or(config.memory.profile);
+
+    let profiles = [
+        (
+            mvp::config::MemoryProfile::WindowOnly,
+            "recent turns only",
+            "load only the active sliding window",
+        ),
+        (
+            mvp::config::MemoryProfile::WindowPlusSummary,
+            "window plus summary",
+            "add a summary block before the recent window",
+        ),
+        (
+            mvp::config::MemoryProfile::ProfilePlusWindow,
+            "profile plus window",
+            "inject durable profile notes before the recent window",
+        ),
+    ];
+    let select_options: Vec<SelectOption> = profiles
+        .iter()
+        .map(|(p, label, desc)| SelectOption {
+            label: label.to_string(),
+            slug: memory_profile_id(*p).to_owned(),
+            description: desc.to_string(),
+            recommended: *p == default_profile,
+        })
+        .collect();
+    let default_idx = profiles.iter().position(|(p, _, _)| *p == default_profile);
+
     print_lines(
         ui,
-        render_memory_profile_selection_screen_lines_with_style(
+        render_memory_profile_selection_header_lines(
             config,
-            default_profile,
             guided_prompt_path,
             context.render_width,
-            true,
         ),
     )?;
-    loop {
-        let input = ui.prompt_with_default("Memory profile", memory_profile_id(default_profile))?;
-        if let Some(profile) = parse_memory_profile(&input) {
-            return Ok(profile);
-        }
-        print_message(
-            ui,
-            format!(
-                "Unsupported memory profile: {input}. Use one of: {}",
-                supported_memory_profile_list()
-            ),
-        )?;
-    }
+    let idx = ui.select_one("Memory profile", &select_options, default_idx)?;
+    let (profile, _, _) = profiles
+        .get(idx)
+        .ok_or_else(|| format!("memory profile selection index {idx} out of range"))?;
+    Ok(*profile)
 }
 
 async fn run_preflight_checks(
@@ -4490,6 +4509,27 @@ fn render_memory_profile_selection_screen_lines_with_style(
             "the current memory profile",
         )],
         color_enabled,
+    )
+}
+
+fn render_memory_profile_selection_header_lines(
+    config: &mvp::config::LoongClawConfig,
+    guided_prompt_path: GuidedPromptPath,
+    width: usize,
+) -> Vec<String> {
+    render_onboard_choice_screen(
+        OnboardHeaderStyle::Brand,
+        width,
+        "choose how much memory context LoongClaw should inject",
+        "choose memory profile",
+        Some((GuidedOnboardStep::MemoryProfile, guided_prompt_path)),
+        vec![format!(
+            "- current profile: {}",
+            memory_profile_id(config.memory.profile)
+        )],
+        vec![],
+        vec![],
+        true,
     )
 }
 
