@@ -773,7 +773,7 @@ fn expected_capability_snapshot_sha256(artifact: &RuntimeSnapshotArtifactDocumen
         .and_then(Value::as_str)
 }
 
-fn render_runtime_restore_text(execution: &RuntimeRestoreExecution) -> String {
+pub(crate) fn render_runtime_restore_text(execution: &RuntimeRestoreExecution) -> String {
     let mut lines = vec![
         format!("config={}", execution.resolved_config_path),
         format!("snapshot={}", execution.snapshot_path),

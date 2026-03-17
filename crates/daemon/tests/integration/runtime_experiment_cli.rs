@@ -96,6 +96,13 @@ fn snapshot_id_from_payload(payload: &Value) -> String {
         .expect("snapshot payload should include lineage.snapshot_id")
 }
 
+fn canonical_display_path(path: &Path) -> String {
+    fs::canonicalize(path)
+        .expect("canonicalize fixture path")
+        .display()
+        .to_string()
+}
+
 fn rewrite_json_file(path: &Path, mutate: impl FnOnce(&mut Value)) {
     let raw = fs::read_to_string(path).expect("read json fixture");
     let mut payload = serde_json::from_str::<Value>(&raw).expect("decode json fixture");
@@ -961,6 +968,112 @@ fn runtime_experiment_compare_treats_missing_snapshot_sections_as_absent() {
         snapshot_delta.changed_surface_count >= 3,
         "missing sections should still register as changed surfaces"
     );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_experiment_restore_uses_recorded_result_snapshot_path() {
+    let root = unique_temp_dir("loongclaw-runtime-experiment-restore-stage-result");
+    let config_path = write_runtime_experiment_config(&root);
+    let (run_path, _, result_snapshot_path, finished) =
+        finish_runtime_experiment_with_compare_delta(&root, &config_path);
+
+    let execution =
+        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_restore_command(
+            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentRestoreCommandOptions {
+                run: run_path.display().to_string(),
+                stage:
+                    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentRestoreStage::Result,
+                config: Some(config_path.display().to_string()),
+                json: false,
+                apply: false,
+            },
+        )
+        .expect("runtime experiment restore should resolve the result snapshot");
+
+    assert_eq!(
+        execution.stage,
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentRestoreStage::Result
+    );
+    assert_eq!(
+        execution.snapshot_path,
+        canonical_display_path(&result_snapshot_path)
+    );
+    assert_eq!(
+        execution.restore.lineage.snapshot_id,
+        finished
+            .result_snapshot
+            .as_ref()
+            .expect("finished run should record result snapshot")
+            .snapshot_id
+    );
+    assert!(!execution.restore.applied);
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_experiment_restore_rejects_missing_recorded_stage_path() {
+    let root = unique_temp_dir("loongclaw-runtime-experiment-restore-stage-missing-path");
+    let config_path = write_runtime_experiment_config(&root);
+    let (run_path, _, _, _) = finish_runtime_experiment_with_compare_delta(&root, &config_path);
+    rewrite_json_file(&run_path, |payload| {
+        payload["result_snapshot"]
+            .as_object_mut()
+            .expect("result_snapshot should be an object")
+            .remove("artifact_path");
+    });
+
+    let error =
+        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_restore_command(
+            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentRestoreCommandOptions {
+                run: run_path.display().to_string(),
+                stage:
+                    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentRestoreStage::Result,
+                config: Some(config_path.display().to_string()),
+                json: false,
+                apply: false,
+            },
+        )
+        .expect_err("runtime experiment restore should reject old artifacts without a path");
+
+    assert!(error.contains("missing recorded result snapshot path"));
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_experiment_restore_rejects_unavailable_result_stage() {
+    let root = unique_temp_dir("loongclaw-runtime-experiment-restore-stage-unavailable");
+    let config_path = write_runtime_experiment_config(&root);
+    let (baseline_snapshot_path, _) = write_snapshot_artifact(
+        &root,
+        &config_path,
+        "artifacts/runtime-snapshot.json",
+        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+            created_at: "2026-03-16T12:00:00Z".to_owned(),
+            label: Some("baseline".to_owned()),
+            experiment_id: Some("exp-42".to_owned()),
+            parent_snapshot_id: Some("snapshot-parent".to_owned()),
+        },
+    );
+    let (run_path, _) = start_runtime_experiment(&root, &baseline_snapshot_path, None);
+
+    let error =
+        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_restore_command(
+            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentRestoreCommandOptions {
+                run: run_path.display().to_string(),
+                stage:
+                    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentRestoreStage::Result,
+                config: Some(config_path.display().to_string()),
+                json: false,
+                apply: false,
+            },
+        )
+        .expect_err("planned runs should not expose a result stage restore");
+
+    assert!(error.contains("has no recorded result snapshot to restore"));
 
     fs::remove_dir_all(&root).ok();
 }

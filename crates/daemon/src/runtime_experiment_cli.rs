@@ -25,6 +25,8 @@ pub enum RuntimeExperimentCommands {
     Show(RuntimeExperimentShowCommandOptions),
     /// Compare one experiment run and, optionally, matching runtime snapshots
     Compare(RuntimeExperimentCompareCommandOptions),
+    /// Restore one recorded baseline/result stage through the snapshot restore pipeline
+    Restore(RuntimeExperimentRestoreCommandOptions),
 }
 
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
@@ -85,6 +87,20 @@ pub struct RuntimeExperimentCompareCommandOptions {
     pub json: bool,
 }
 
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeExperimentRestoreCommandOptions {
+    #[arg(long)]
+    pub run: String,
+    #[arg(long, value_enum)]
+    pub stage: RuntimeExperimentRestoreStage,
+    #[arg(long)]
+    pub config: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+    #[arg(long, default_value_t = false)]
+    pub apply: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeExperimentDecision {
@@ -114,6 +130,13 @@ pub enum RuntimeExperimentCompareMode {
     SnapshotDelta,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeExperimentRestoreStage {
+    Baseline,
+    Result,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeExperimentArtifactSchema {
     pub version: u32,
@@ -134,6 +157,7 @@ pub struct RuntimeExperimentSnapshotSummary {
     pub label: Option<String>,
     pub experiment_id: Option<String>,
     pub parent_snapshot_id: Option<String>,
+    pub artifact_path: Option<String>,
     pub capability_snapshot_sha256: Option<String>,
 }
 
@@ -173,6 +197,15 @@ pub struct RuntimeExperimentCompareReport {
     pub evaluation: Option<RuntimeExperimentEvaluation>,
     pub compare_mode: RuntimeExperimentCompareMode,
     pub snapshot_delta: Option<RuntimeExperimentSnapshotDelta>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeExperimentRestoreExecution {
+    pub run_id: String,
+    pub experiment_id: String,
+    pub stage: RuntimeExperimentRestoreStage,
+    pub snapshot_path: String,
+    pub restore: crate::runtime_restore_cli::RuntimeRestoreExecution,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -239,6 +272,11 @@ pub fn run_runtime_experiment_cli(command: RuntimeExperimentCommands) -> CliResu
             let report = execute_runtime_experiment_compare_command(options)?;
             emit_runtime_experiment_compare_report(&report, as_json)
         }
+        RuntimeExperimentCommands::Restore(options) => {
+            let as_json = options.json;
+            let execution = execute_runtime_experiment_restore_command(options)?;
+            emit_runtime_experiment_restore_execution(&execution, as_json)
+        }
     }
 }
 
@@ -254,7 +292,7 @@ pub fn execute_runtime_experiment_start_command(
     let label = optional_arg(options.label.as_deref());
     let mutation_summary = required_trimmed_arg("mutation_summary", &options.mutation_summary)?;
     let tags = normalize_repeated_values(&options.tag);
-    let baseline_snapshot = build_snapshot_summary(&baseline);
+    let baseline_snapshot = build_snapshot_summary(&baseline, Some(Path::new(&options.snapshot)))?;
     let run_id = compute_run_id(
         &created_at,
         label.as_deref(),
@@ -325,7 +363,10 @@ pub fn execute_runtime_experiment_finish_command(
         RuntimeExperimentFinishStatus::Aborted => RuntimeExperimentStatus::Aborted,
     };
     artifact.decision = options.decision;
-    artifact.result_snapshot = Some(build_snapshot_summary(&result_snapshot));
+    artifact.result_snapshot = Some(build_snapshot_summary(
+        &result_snapshot,
+        Some(Path::new(&options.result_snapshot)),
+    )?);
     artifact.evaluation = Some(RuntimeExperimentEvaluation {
         summary: required_trimmed_arg("evaluation_summary", &options.evaluation_summary)?,
         metrics: parse_metrics(&options.metric)?,
@@ -372,6 +413,37 @@ pub fn execute_runtime_experiment_compare_command(
     })
 }
 
+pub fn execute_runtime_experiment_restore_command(
+    options: RuntimeExperimentRestoreCommandOptions,
+) -> CliResult<RuntimeExperimentRestoreExecution> {
+    let RuntimeExperimentRestoreCommandOptions {
+        run,
+        stage,
+        config,
+        json: _,
+        apply,
+    } = options;
+    let artifact = load_runtime_experiment_artifact(Path::new(&run))?;
+    let snapshot_path =
+        resolve_runtime_experiment_restore_snapshot_path(&artifact, Path::new(&run), stage)?;
+    let restore = crate::runtime_restore_cli::execute_runtime_restore_command(
+        crate::runtime_restore_cli::RuntimeRestoreCommandOptions {
+            config,
+            snapshot: snapshot_path.clone(),
+            json: false,
+            apply,
+        },
+    )?;
+
+    Ok(RuntimeExperimentRestoreExecution {
+        run_id: artifact.run_id,
+        experiment_id: artifact.experiment_id,
+        stage,
+        snapshot_path,
+        restore,
+    })
+}
+
 fn emit_runtime_experiment_artifact(
     artifact: &RuntimeExperimentArtifactDocument,
     as_json: bool,
@@ -400,6 +472,22 @@ fn emit_runtime_experiment_compare_report(
     }
 
     println!("{}", render_runtime_experiment_compare_text(report));
+    Ok(())
+}
+
+fn emit_runtime_experiment_restore_execution(
+    execution: &RuntimeExperimentRestoreExecution,
+    as_json: bool,
+) -> CliResult<()> {
+    if as_json {
+        let pretty = serde_json::to_string_pretty(execution).map_err(|error| {
+            format!("serialize runtime experiment restore execution failed: {error}")
+        })?;
+        println!("{pretty}");
+        return Ok(());
+    }
+
+    println!("{}", render_runtime_experiment_restore_text(execution));
     Ok(())
 }
 
@@ -492,6 +580,40 @@ fn load_runtime_experiment_compare_snapshot_delta(
             )))
         }
     }
+}
+
+fn resolve_runtime_experiment_restore_snapshot_path(
+    artifact: &RuntimeExperimentArtifactDocument,
+    run_path: &Path,
+    stage: RuntimeExperimentRestoreStage,
+) -> CliResult<String> {
+    let summary = match stage {
+        RuntimeExperimentRestoreStage::Baseline => &artifact.baseline_snapshot,
+        RuntimeExperimentRestoreStage::Result => {
+            artifact.result_snapshot.as_ref().ok_or_else(|| {
+                format!(
+                    "runtime experiment run {} has no recorded result snapshot to restore",
+                    run_path.display()
+                )
+            })?
+        }
+    };
+    let artifact_path = summary.artifact_path.as_deref().ok_or_else(|| {
+        format!(
+            "runtime experiment run {} is missing recorded {} snapshot path",
+            run_path.display(),
+            stage.as_str()
+        )
+    })?;
+
+    canonicalize_snapshot_artifact_path(artifact_path).map_err(|error| {
+        format!(
+            "runtime experiment run {} recorded {} snapshot path {} cannot be resolved: {error}",
+            run_path.display(),
+            stage.as_str(),
+            artifact_path
+        )
+    })
 }
 
 fn validate_compare_snapshot_identity(
@@ -592,19 +714,34 @@ fn parse_metrics(values: &[String]) -> CliResult<BTreeMap<String, f64>> {
 
 fn build_snapshot_summary(
     artifact: &RuntimeSnapshotArtifactDocument,
-) -> RuntimeExperimentSnapshotSummary {
-    RuntimeExperimentSnapshotSummary {
+    artifact_path: Option<&Path>,
+) -> CliResult<RuntimeExperimentSnapshotSummary> {
+    Ok(RuntimeExperimentSnapshotSummary {
         snapshot_id: artifact.lineage.snapshot_id.clone(),
         created_at: artifact.lineage.created_at.clone(),
         label: artifact.lineage.label.clone(),
         experiment_id: artifact.lineage.experiment_id.clone(),
         parent_snapshot_id: artifact.lineage.parent_snapshot_id.clone(),
+        artifact_path: artifact_path
+            .map(|path| canonicalize_snapshot_artifact_path(&path.display().to_string()))
+            .transpose()?,
         capability_snapshot_sha256: artifact
             .tools
             .get("capability_snapshot_sha256")
             .and_then(Value::as_str)
             .map(str::to_owned),
-    }
+    })
+}
+
+fn canonicalize_snapshot_artifact_path(path: &str) -> CliResult<String> {
+    fs::canonicalize(path)
+        .map(|resolved| resolved.display().to_string())
+        .map_err(|error| {
+            format!(
+                "canonicalize snapshot artifact path {} failed: {error}",
+                path
+            )
+        })
 }
 
 fn build_runtime_experiment_snapshot_delta(
@@ -972,6 +1109,22 @@ pub fn render_runtime_experiment_text(artifact: &RuntimeExperimentArtifactDocume
         format!("decision={}", render_decision(artifact.decision)),
         format!("metrics={}", render_metrics(artifact.evaluation.as_ref())),
         format!("warnings={}", render_warnings(artifact.evaluation.as_ref())),
+        format!(
+            "baseline_snapshot_path={}",
+            artifact
+                .baseline_snapshot
+                .artifact_path
+                .as_deref()
+                .unwrap_or("-")
+        ),
+        format!(
+            "result_snapshot_path={}",
+            artifact
+                .result_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.artifact_path.as_deref())
+                .unwrap_or("-")
+        ),
         format!("mutation_summary={}", artifact.mutation.summary),
         format!(
             "mutation_tags={}",
@@ -1005,6 +1158,22 @@ pub fn render_runtime_experiment_compare_text(report: &RuntimeExperimentCompareR
         ),
         format!("metrics={}", render_metrics(report.evaluation.as_ref())),
         format!("warnings={}", render_warnings(report.evaluation.as_ref())),
+        format!(
+            "baseline_snapshot_path={}",
+            report
+                .baseline_snapshot
+                .artifact_path
+                .as_deref()
+                .unwrap_or("-")
+        ),
+        format!(
+            "result_snapshot_path={}",
+            report
+                .result_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.artifact_path.as_deref())
+                .unwrap_or("-")
+        ),
         format!("compare_mode={}", render_compare_mode(report.compare_mode)),
         format!("mutation_summary={}", report.mutation.summary),
         format!(
@@ -1077,6 +1246,16 @@ pub fn render_runtime_experiment_compare_text(report: &RuntimeExperimentCompareR
     }
 
     lines.join("\n")
+}
+
+fn render_runtime_experiment_restore_text(execution: &RuntimeExperimentRestoreExecution) -> String {
+    [
+        format!("run_id={}", execution.run_id),
+        format!("experiment_id={}", execution.experiment_id),
+        format!("stage={}", execution.stage.as_str()),
+        crate::runtime_restore_cli::render_runtime_restore_text(&execution.restore),
+    ]
+    .join("\n")
 }
 
 fn render_evaluation_summary(evaluation: Option<&RuntimeExperimentEvaluation>) -> String {
@@ -1191,5 +1370,14 @@ fn render_compare_mode(mode: RuntimeExperimentCompareMode) -> &'static str {
     match mode {
         RuntimeExperimentCompareMode::RecordOnly => "record_only",
         RuntimeExperimentCompareMode::SnapshotDelta => "snapshot_delta",
+    }
+}
+
+impl RuntimeExperimentRestoreStage {
+    fn as_str(self) -> &'static str {
+        match self {
+            RuntimeExperimentRestoreStage::Baseline => "baseline",
+            RuntimeExperimentRestoreStage::Result => "result",
+        }
     }
 }
