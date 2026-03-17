@@ -22,6 +22,11 @@ next.
       is available for the current config.
 - [ ] Interactive onboarding explains how to exit cleanly, including an
       explicit `Esc` cancellation hint before any config write.
+- [ ] Interactive fixed-choice prompts use terminal-native selection widgets
+      with arrow-key navigation instead of raw numeric or exact-string entry.
+- [ ] When provider credentials are already available and catalog discovery
+      succeeds, model selection offers a searchable model list while still
+      allowing a manual custom model override.
 - [ ] Rerunning onboarding does not silently overwrite an existing config unless
       the user explicitly opts into a destructive path such as `--force`.
 - [ ] Onboarding uses the same provider, memory, and channel configuration

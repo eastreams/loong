@@ -6,6 +6,9 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
+use dialoguer::console::{Term, user_attended};
+use dialoguer::theme::ColorfulTheme;
+use dialoguer::{Confirm, Error as DialoguerError, FuzzySelect, Input, Select};
 use loongclaw_app as mvp;
 use loongclaw_spec::CliResult;
 use time::OffsetDateTime;
@@ -15,6 +18,7 @@ use time::macros::format_description;
 const BACKUP_TIMESTAMP_FORMAT: &[FormatItem<'static>] =
     format_description!("[year][month][day]-[hour][minute][second]");
 const ONBOARD_CLEAR_INPUT_TOKEN: &str = ":clear";
+const ONBOARD_CUSTOM_MODEL_OPTION_SLUG: &str = "__custom_model__";
 const ONBOARD_ESCAPE_CANCEL_HINT: &str = "- press Esc then Enter to cancel onboarding";
 const ONBOARD_SINGLE_LINE_INPUT_HINT: &str =
     "- terminal input is single line; extra pasted lines are ignored";
@@ -45,6 +49,12 @@ pub struct SelectOption {
     pub recommended: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectInteractionMode {
+    List,
+    Search,
+}
+
 pub trait OnboardUi {
     fn print_line(&mut self, line: &str) -> CliResult<()>;
     fn prompt_with_default(&mut self, label: &str, default: &str) -> CliResult<String>;
@@ -55,21 +65,8 @@ pub trait OnboardUi {
         label: &str,
         options: &[SelectOption],
         default: Option<usize>,
-    ) -> CliResult<usize> {
-        let default = validate_select_one_state(options.len(), default)?;
-        loop {
-            let input = if let Some(default_index) = default {
-                self.prompt_with_default(label, &(default_index + 1).to_string())?
-            } else {
-                self.prompt_required(label)?
-            };
-            let trimmed = input.trim();
-            if let Some(index) = parse_select_one_input(trimmed, options) {
-                return Ok(index);
-            }
-            self.print_line(&render_select_one_invalid_input_message(options))?;
-        }
-    }
+        interaction_mode: SelectInteractionMode,
+    ) -> CliResult<usize>;
 }
 
 #[derive(Debug, Clone)]
@@ -321,45 +318,24 @@ impl OnboardUi for StdioOnboardUi {
     }
 
     fn prompt_with_default(&mut self, label: &str, default: &str) -> CliResult<String> {
-        print!("{}", render_prompt_with_default_text(label, default));
-        io::stdout()
-            .flush()
-            .map_err(|error| format!("flush stdout failed: {error}"))?;
-        let capture = read_single_line_prompt_capture(&mut self.line_reader)?;
-        let line = ensure_onboard_input_not_cancelled(capture.raw)?;
-        print_dropped_paste_notice(label, capture.dropped_line_count);
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return Ok(default.to_owned());
+        if rich_prompt_ui_available() {
+            return prompt_with_default_rich(label, default);
         }
-        Ok(trimmed.to_owned())
+        prompt_with_default_stdio(&mut self.line_reader, label, default)
     }
 
     fn prompt_required(&mut self, label: &str) -> CliResult<String> {
-        print!("{label}: ");
-        io::stdout()
-            .flush()
-            .map_err(|error| format!("flush stdout failed: {error}"))?;
-        let capture = read_single_line_prompt_capture(&mut self.line_reader)?;
-        let line = ensure_onboard_input_not_cancelled(capture.raw)?;
-        print_dropped_paste_notice(label, capture.dropped_line_count);
-        Ok(line.trim().to_owned())
+        if rich_prompt_ui_available() {
+            return prompt_required_rich(label);
+        }
+        prompt_required_stdio(&mut self.line_reader, label)
     }
 
     fn prompt_confirm(&mut self, message: &str, default: bool) -> CliResult<bool> {
-        let suffix = if default { "[Y/n]" } else { "[y/N]" };
-        print!("{message} {suffix}: ");
-        io::stdout()
-            .flush()
-            .map_err(|error| format!("flush stdout failed: {error}"))?;
-        let capture = read_single_line_prompt_capture(&mut self.line_reader)?;
-        let line = ensure_onboard_input_not_cancelled(capture.raw)?;
-        print_dropped_paste_notice(message, capture.dropped_line_count);
-        let value = line.trim().to_ascii_lowercase();
-        if value.is_empty() {
-            return Ok(default);
+        if rich_prompt_ui_available() {
+            return prompt_confirm_rich(message, default);
         }
-        Ok(matches!(value.as_str(), "y" | "yes"))
+        prompt_confirm_stdio(&mut self.line_reader, message, default)
     }
 
     fn select_one(
@@ -367,50 +343,357 @@ impl OnboardUi for StdioOnboardUi {
         label: &str,
         options: &[SelectOption],
         default: Option<usize>,
+        interaction_mode: SelectInteractionMode,
     ) -> CliResult<usize> {
-        let default = validate_select_one_state(options.len(), default)?;
-        loop {
-            for (i, opt) in options.iter().enumerate() {
-                let num = i + 1;
-                let rec = if opt.recommended {
-                    " (recommended)"
-                } else {
-                    ""
-                };
-                println!("  {num}) {}{rec}", opt.label);
-                if !opt.description.is_empty() {
-                    println!("     {}", opt.description);
-                }
-            }
-            println!();
-            let prompt_text = match default {
-                Some(idx) => render_prompt_with_default_text(label, &(idx + 1).to_string()),
-                None => format!("{label}: "),
-            };
-            print!("{prompt_text}");
-            io::stdout()
-                .flush()
-                .map_err(|error| format!("flush stdout failed: {error}"))?;
-            let capture = read_single_line_prompt_capture(&mut self.line_reader)?;
-            print_dropped_paste_notice(label, capture.dropped_line_count);
-            if capture.reached_eof {
-                return resolve_select_one_eof(default);
-            }
-            let input = ensure_onboard_input_not_cancelled(capture.raw)?;
-            let trimmed = input.trim();
-            if trimmed.is_empty() {
-                if let Some(idx) = default {
-                    return Ok(idx);
-                }
-                println!("Please select an option.");
-                continue;
-            }
-            if let Some(index) = parse_select_one_input(trimmed, options) {
-                return Ok(index);
-            }
-            println!("{}", render_select_one_invalid_input_message(options));
+        if rich_prompt_ui_available() {
+            return select_one_rich(label, options, default, interaction_mode);
         }
+        select_one_stdio(&mut self.line_reader, label, options, default)
     }
+}
+
+fn prompt_with_default_stdio(
+    line_reader: &mut impl OnboardPromptLineReader,
+    label: &str,
+    default: &str,
+) -> CliResult<String> {
+    print!("{}", render_prompt_with_default_text(label, default));
+    io::stdout()
+        .flush()
+        .map_err(|error| format!("flush stdout failed: {error}"))?;
+    let capture = read_single_line_prompt_capture(line_reader)?;
+    let line = ensure_onboard_input_not_cancelled(capture.raw)?;
+    print_dropped_paste_notice(label, capture.dropped_line_count);
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return Ok(default.to_owned());
+    }
+    Ok(trimmed.to_owned())
+}
+
+fn prompt_required_stdio(
+    line_reader: &mut impl OnboardPromptLineReader,
+    label: &str,
+) -> CliResult<String> {
+    print!("{label}: ");
+    io::stdout()
+        .flush()
+        .map_err(|error| format!("flush stdout failed: {error}"))?;
+    let capture = read_single_line_prompt_capture(line_reader)?;
+    let line = ensure_onboard_input_not_cancelled(capture.raw)?;
+    print_dropped_paste_notice(label, capture.dropped_line_count);
+    Ok(line.trim().to_owned())
+}
+
+fn prompt_confirm_stdio(
+    line_reader: &mut impl OnboardPromptLineReader,
+    message: &str,
+    default: bool,
+) -> CliResult<bool> {
+    let suffix = if default { "[Y/n]" } else { "[y/N]" };
+    print!("{message} {suffix}: ");
+    io::stdout()
+        .flush()
+        .map_err(|error| format!("flush stdout failed: {error}"))?;
+    let capture = read_single_line_prompt_capture(line_reader)?;
+    let line = ensure_onboard_input_not_cancelled(capture.raw)?;
+    print_dropped_paste_notice(message, capture.dropped_line_count);
+    let value = line.trim().to_ascii_lowercase();
+    if value.is_empty() {
+        return Ok(default);
+    }
+    Ok(matches!(value.as_str(), "y" | "yes"))
+}
+
+fn select_one_stdio(
+    line_reader: &mut impl OnboardPromptLineReader,
+    label: &str,
+    options: &[SelectOption],
+    default: Option<usize>,
+) -> CliResult<usize> {
+    let default = validate_select_one_state(options.len(), default)?;
+    loop {
+        for (i, opt) in options.iter().enumerate() {
+            let num = i + 1;
+            let rec = if opt.recommended {
+                " (recommended)"
+            } else {
+                ""
+            };
+            println!("  {num}) {}{rec}", opt.label);
+            if !opt.description.is_empty() {
+                println!("     {}", opt.description);
+            }
+        }
+        println!();
+        let prompt_text = match default {
+            Some(idx) => format!("{label} (default {}):", idx + 1),
+            None => format!("{label}: "),
+        };
+        print!("{prompt_text}");
+        io::stdout()
+            .flush()
+            .map_err(|error| format!("flush stdout failed: {error}"))?;
+        let capture = read_single_line_prompt_capture(line_reader)?;
+        print_dropped_paste_notice(label, capture.dropped_line_count);
+        if capture.reached_eof {
+            return resolve_select_one_eof(default);
+        }
+        let input = ensure_onboard_input_not_cancelled(capture.raw)?;
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            if let Some(idx) = default {
+                return Ok(idx);
+            }
+            println!("Please select an option.");
+            continue;
+        }
+        if let Some(index) = parse_select_one_input(trimmed, options) {
+            return Ok(index);
+        }
+        println!("{}", render_select_one_invalid_input_message(options));
+    }
+}
+
+fn rich_prompt_ui_available() -> bool {
+    user_attended()
+}
+
+fn rich_prompt_theme() -> ColorfulTheme {
+    ColorfulTheme::default()
+}
+
+fn rich_prompt_term() -> Term {
+    Term::stdout()
+}
+
+fn render_select_option_item(option: &SelectOption) -> String {
+    let mut rendered = option.label.clone();
+    if !option.description.trim().is_empty() {
+        rendered.push_str(" - ");
+        rendered.push_str(option.description.trim());
+    }
+    if option.recommended {
+        rendered.push_str(" (recommended)");
+    }
+    rendered
+}
+
+fn map_rich_prompt_error(action: &str, error: DialoguerError) -> String {
+    let error: io::Error = error.into();
+    if error.kind() == io::ErrorKind::Interrupted {
+        return "onboarding cancelled: prompt aborted".to_owned();
+    }
+    format!("{action} failed: {error}")
+}
+
+fn prompt_with_default_rich(label: &str, default: &str) -> CliResult<String> {
+    let term = rich_prompt_term();
+    let theme = rich_prompt_theme();
+    let value = Input::<String>::with_theme(&theme)
+        .with_prompt(label)
+        .default(default.to_owned())
+        .report(false)
+        .interact_text_on(&term)
+        .map_err(|error| map_rich_prompt_error("interactive prompt", error))?;
+    let value = ensure_onboard_input_not_cancelled(value)?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(default.to_owned());
+    }
+    Ok(trimmed.to_owned())
+}
+
+fn prompt_required_rich(label: &str) -> CliResult<String> {
+    let term = rich_prompt_term();
+    let theme = rich_prompt_theme();
+    let value = Input::<String>::with_theme(&theme)
+        .with_prompt(label)
+        .report(false)
+        .interact_text_on(&term)
+        .map_err(|error| map_rich_prompt_error("interactive prompt", error))?;
+    let value = ensure_onboard_input_not_cancelled(value)?;
+    Ok(value.trim().to_owned())
+}
+
+fn prompt_confirm_rich(message: &str, default: bool) -> CliResult<bool> {
+    let term = rich_prompt_term();
+    let theme = rich_prompt_theme();
+    Confirm::with_theme(&theme)
+        .with_prompt(message)
+        .default(default)
+        .report(false)
+        .interact_on_opt(&term)
+        .map_err(|error| map_rich_prompt_error("interactive confirmation", error))?
+        .ok_or_else(|| "onboarding cancelled: prompt aborted".to_owned())
+}
+
+fn select_one_rich(
+    label: &str,
+    options: &[SelectOption],
+    default: Option<usize>,
+    interaction_mode: SelectInteractionMode,
+) -> CliResult<usize> {
+    let default = validate_select_one_state(options.len(), default)?;
+    let items = options
+        .iter()
+        .map(render_select_option_item)
+        .collect::<Vec<_>>();
+    let term = rich_prompt_term();
+    let theme = rich_prompt_theme();
+    let selection = match interaction_mode {
+        SelectInteractionMode::List => {
+            let prompt = Select::with_theme(&theme)
+                .with_prompt(label)
+                .items(&items)
+                .report(false);
+            let prompt = if let Some(idx) = default {
+                prompt.default(idx)
+            } else {
+                prompt
+            };
+            prompt
+                .interact_on_opt(&term)
+                .map_err(|error| map_rich_prompt_error("interactive selection", error))?
+        }
+        SelectInteractionMode::Search => {
+            let prompt = FuzzySelect::with_theme(&theme)
+                .with_prompt(label)
+                .items(&items)
+                .report(false);
+            let prompt = if let Some(idx) = default {
+                prompt.default(idx)
+            } else {
+                prompt
+            };
+            prompt
+                .interact_on_opt(&term)
+                .map_err(|error| map_rich_prompt_error("interactive model search", error))?
+        }
+    };
+    selection.ok_or_else(|| "onboarding cancelled: prompt aborted".to_owned())
+}
+
+fn summarize_select_option_description(detail_lines: &[String]) -> String {
+    detail_lines
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+fn select_options_from_screen_options(options: &[OnboardScreenOption]) -> Vec<SelectOption> {
+    options
+        .iter()
+        .map(|option| SelectOption {
+            label: option.label.clone(),
+            slug: option.key.clone(),
+            description: summarize_select_option_description(&option.detail_lines),
+            recommended: option.recommended,
+        })
+        .collect()
+}
+
+fn select_screen_option(
+    ui: &mut impl OnboardUi,
+    label: &str,
+    options: &[OnboardScreenOption],
+    default_key: Option<&str>,
+) -> CliResult<usize> {
+    let select_options = select_options_from_screen_options(options);
+    let default_idx =
+        default_key.and_then(|key| options.iter().position(|option| option.key == key));
+    ui.select_one(
+        label,
+        &select_options,
+        default_idx,
+        SelectInteractionMode::List,
+    )
+}
+
+fn build_onboard_entry_screen_options(options: &[OnboardEntryOption]) -> Vec<OnboardScreenOption> {
+    options
+        .iter()
+        .enumerate()
+        .map(|(index, option)| OnboardScreenOption {
+            key: (index + 1).to_string(),
+            label: option.label.to_owned(),
+            detail_lines: vec![option.detail.clone()],
+            recommended: option.recommended,
+        })
+        .collect()
+}
+
+fn build_starting_point_selection_screen_options(
+    sorted_candidates: &[ImportCandidate],
+    width: usize,
+) -> Vec<OnboardScreenOption> {
+    let mut options = sorted_candidates
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| OnboardScreenOption {
+            key: (index + 1).to_string(),
+            label: onboard_starting_point_label(Some(candidate.source_kind), &candidate.source),
+            detail_lines: summarize_starting_point_detail_lines(candidate, width),
+            recommended: matches!(
+                candidate.source_kind,
+                crate::migration::ImportSourceKind::RecommendedPlan
+            ),
+        })
+        .collect::<Vec<_>>();
+    options.push(OnboardScreenOption {
+        key: "0".to_owned(),
+        label: crate::onboard_presentation::start_fresh_option_label().to_owned(),
+        detail_lines: start_fresh_starting_point_detail_lines(),
+        recommended: false,
+    });
+    options
+}
+
+fn build_onboard_shortcut_screen_options(
+    shortcut_kind: OnboardShortcutKind,
+) -> Vec<OnboardScreenOption> {
+    vec![
+        OnboardScreenOption {
+            key: "1".to_owned(),
+            label: shortcut_kind.primary_label().to_owned(),
+            detail_lines: vec![crate::onboard_presentation::shortcut_continue_detail().to_owned()],
+            recommended: true,
+        },
+        OnboardScreenOption {
+            key: "2".to_owned(),
+            label: crate::onboard_presentation::adjust_settings_label().to_owned(),
+            detail_lines: vec![crate::onboard_presentation::shortcut_adjust_detail().to_owned()],
+            recommended: false,
+        },
+    ]
+}
+
+fn build_existing_config_write_screen_options() -> Vec<OnboardScreenOption> {
+    vec![
+        OnboardScreenOption {
+            key: "o".to_owned(),
+            label: "Replace existing config".to_owned(),
+            detail_lines: vec!["overwrite the current file with this onboarding draft".to_owned()],
+            recommended: false,
+        },
+        OnboardScreenOption {
+            key: "b".to_owned(),
+            label: "Create backup and replace".to_owned(),
+            detail_lines: vec![
+                "save a timestamped .bak copy first, then write the new config".to_owned(),
+            ],
+            recommended: false,
+        },
+        OnboardScreenOption {
+            key: "c".to_owned(),
+            label: "Cancel".to_owned(),
+            detail_lines: vec!["leave the existing config untouched".to_owned()],
+            recommended: false,
+        },
+    ]
 }
 
 fn validate_select_one_state(
@@ -886,7 +1169,7 @@ pub async fn run_onboard_cli_with_ui(
             ),
         )?;
         matches!(
-            prompt_onboard_shortcut_choice(ui)?,
+            prompt_onboard_shortcut_choice(ui, shortcut_kind)?,
             OnboardShortcutChoice::UseShortcut
         )
     } else {
@@ -912,8 +1195,15 @@ pub async fn run_onboard_cli_with_ui(
         )?;
         config.provider = selected_provider;
 
-        let selected_model =
-            resolve_model_selection(&options, &config, guided_prompt_path, ui, context)?;
+        let available_models = load_onboarding_model_catalog(&options, &config).await;
+        let selected_model = resolve_model_selection(
+            &options,
+            &config,
+            guided_prompt_path,
+            &available_models,
+            ui,
+            context,
+        )?;
         config.provider.model = selected_model;
 
         let default_api_key_env = preferred_api_key_env_default(&config);
@@ -1277,7 +1567,12 @@ fn resolve_provider_selection(
                 context.render_width,
             ),
         )?;
-        let idx = ui.select_one("Provider", &select_options, default_idx)?;
+        let idx = ui.select_one(
+            "Provider",
+            &select_options,
+            default_idx,
+            SelectInteractionMode::List,
+        )?;
         let choice = provider_selection
             .imported_choices
             .get(idx)
@@ -1324,7 +1619,12 @@ fn resolve_provider_selection(
             context.render_width,
         ),
     )?;
-    let idx = ui.select_one("Provider", &select_options, default_idx)?;
+    let idx = ui.select_one(
+        "Provider",
+        &select_options,
+        default_idx,
+        SelectInteractionMode::List,
+    )?;
     let kind = *provider_kinds
         .get(idx)
         .ok_or_else(|| format!("provider selection index {idx} out of range"))?;
@@ -1429,6 +1729,7 @@ fn resolve_model_selection(
     options: &OnboardCommandOptions,
     config: &mvp::config::LoongClawConfig,
     guided_prompt_path: GuidedPromptPath,
+    available_models: &[String],
     ui: &mut impl OnboardUi,
     context: &OnboardRuntimeContext,
 ) -> CliResult<String> {
@@ -1454,14 +1755,95 @@ fn resolve_model_selection(
             guided_prompt_path,
             context.render_width,
             true,
+            !available_models.is_empty(),
         ),
     )?;
+    if !available_models.is_empty() {
+        let (select_options, default_idx) =
+            build_model_selection_options(default_model.as_str(), available_models);
+        let idx = ui.select_one(
+            "Model",
+            &select_options,
+            default_idx,
+            SelectInteractionMode::Search,
+        )?;
+        let selected = select_options
+            .get(idx)
+            .ok_or_else(|| format!("model selection index {idx} out of range"))?;
+        if selected.slug != ONBOARD_CUSTOM_MODEL_OPTION_SLUG {
+            return Ok(selected.slug.clone());
+        }
+        let custom_model = ui.prompt_with_default("Custom model id", default_model.as_str())?;
+        let trimmed = custom_model.trim();
+        if trimmed.is_empty() {
+            return Err("model cannot be empty".to_owned());
+        }
+        return Ok(trimmed.to_owned());
+    }
     let value = ui.prompt_with_default("Model", default_model.as_str())?;
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err("model cannot be empty".to_owned());
     }
     Ok(trimmed.to_owned())
+}
+
+async fn load_onboarding_model_catalog(
+    options: &OnboardCommandOptions,
+    config: &mvp::config::LoongClawConfig,
+) -> Vec<String> {
+    if options.non_interactive || options.skip_model_probe {
+        return Vec::new();
+    }
+    if !mvp::provider::provider_auth_ready(config).await {
+        return Vec::new();
+    }
+    mvp::provider::fetch_available_models(config)
+        .await
+        .unwrap_or_default()
+}
+
+fn build_model_selection_options(
+    default_model: &str,
+    available_models: &[String],
+) -> (Vec<SelectOption>, Option<usize>) {
+    let default_model = default_model.trim();
+    let mut models = Vec::new();
+    if !default_model.is_empty() {
+        models.push(default_model.to_owned());
+    }
+    for model in available_models {
+        let trimmed = model.trim();
+        if trimmed.is_empty() || models.iter().any(|existing| existing == trimmed) {
+            continue;
+        }
+        models.push(trimmed.to_owned());
+    }
+
+    let mut options = models
+        .iter()
+        .map(|model| SelectOption {
+            label: model.clone(),
+            slug: model.clone(),
+            description: if model == default_model {
+                "current or suggested default".to_owned()
+            } else {
+                String::new()
+            },
+            recommended: model == default_model,
+        })
+        .collect::<Vec<_>>();
+    let default_idx = options
+        .iter()
+        .position(|option| option.slug == default_model);
+    options.push(SelectOption {
+        label: "enter custom model id".to_owned(),
+        slug: ONBOARD_CUSTOM_MODEL_OPTION_SLUG.to_owned(),
+        description: "manually type any provider model id".to_owned(),
+        recommended: false,
+    });
+
+    (options, default_idx)
 }
 
 fn resolve_onboarding_model_prompt_default(
@@ -1633,7 +2015,12 @@ fn resolve_personality_selection(
         ui,
         render_personality_selection_header_lines(config, context.render_width),
     )?;
-    let idx = ui.select_one("Personality", &select_options, default_idx)?;
+    let idx = ui.select_one(
+        "Personality",
+        &select_options,
+        default_idx,
+        SelectInteractionMode::List,
+    )?;
     let (personality, _, _) = personalities
         .get(idx)
         .ok_or_else(|| format!("personality selection index {idx} out of range"))?;
@@ -1770,7 +2157,12 @@ fn resolve_memory_profile_selection(
             context.render_width,
         ),
     )?;
-    let idx = ui.select_one("Memory profile", &select_options, default_idx)?;
+    let idx = ui.select_one(
+        "Memory profile",
+        &select_options,
+        default_idx,
+        SelectInteractionMode::List,
+    )?;
     let (profile, _, _) = profiles
         .get(idx)
         .ok_or_else(|| format!("memory profile selection index {idx} out of range"))?;
@@ -2635,16 +3027,7 @@ fn render_onboard_entry_screen_lines_with_style(
     ));
     lines.push(String::new());
     lines.push(crate::onboard_presentation::entry_choice_section_heading().to_owned());
-    let screen_options = options
-        .iter()
-        .enumerate()
-        .map(|(index, option)| OnboardScreenOption {
-            key: (index + 1).to_string(),
-            label: option.label.to_owned(),
-            detail_lines: vec![option.detail.clone()],
-            recommended: option.recommended,
-        })
-        .collect::<Vec<_>>();
+    let screen_options = build_onboard_entry_screen_options(options);
     lines.extend(render_onboard_option_lines(&screen_options, width));
     let footer_lines = append_escape_cancel_hint(
         render_onboard_entry_default_choice_footer_line(options)
@@ -2843,23 +3226,17 @@ fn prompt_onboard_entry_choice(
     ui: &mut impl OnboardUi,
     options: &[OnboardEntryOption],
 ) -> CliResult<OnboardEntryChoice> {
-    let default_choice = options
+    let screen_options = build_onboard_entry_screen_options(options);
+    let default_key = screen_options
         .iter()
-        .position(|option| option.recommended)
-        .map(|index| (index + 1).to_string())
-        .unwrap_or_else(|| "1".to_owned());
-    loop {
-        let choice = ui.prompt_with_default("Setup path", &default_choice)?;
-        let trimmed = choice.trim();
-        let Ok(selected) = trimmed.parse::<usize>() else {
-            print_message(ui, format!("Invalid choice: {trimmed}"))?;
-            continue;
-        };
-        if let Some(option) = options.get(selected - 1) {
-            return Ok(option.choice);
-        }
-        print_message(ui, format!("Invalid choice: {trimmed}"))?;
-    }
+        .find(|option| option.recommended)
+        .map(|option| option.key.as_str())
+        .or_else(|| screen_options.first().map(|option| option.key.as_str()));
+    let idx = select_screen_option(ui, "Setup path", &screen_options, default_key)?;
+    options
+        .get(idx)
+        .map(|option| option.choice)
+        .ok_or_else(|| format!("entry selection index {idx} out of range"))
 }
 
 fn default_onboard_entry_choice(options: &[OnboardEntryOption]) -> OnboardEntryChoice {
@@ -2916,7 +3293,8 @@ fn select_interactive_import_starting_config(
     }
 
     print_import_candidates(ui, &import_candidates, context)?;
-    let Some(index) = prompt_import_candidate_choice(ui, import_candidates.len())? else {
+    let Some(index) = prompt_import_candidate_choice(ui, &import_candidates, context.render_width)?
+    else {
         return Ok(default_starting_config_selection());
     };
     if let Some(candidate) = import_candidates.get(index) {
@@ -3897,24 +4275,7 @@ fn render_onboard_shortcut_screen_lines_with_style(
         shortcut_kind.title(),
         None,
         context_lines,
-        vec![
-            OnboardScreenOption {
-                key: "1".to_owned(),
-                label: shortcut_kind.primary_label().to_owned(),
-                detail_lines: vec![
-                    crate::onboard_presentation::shortcut_continue_detail().to_owned(),
-                ],
-                recommended: true,
-            },
-            OnboardScreenOption {
-                key: "2".to_owned(),
-                label: crate::onboard_presentation::adjust_settings_label().to_owned(),
-                detail_lines: vec![
-                    crate::onboard_presentation::shortcut_adjust_detail().to_owned(),
-                ],
-                recommended: false,
-            },
-        ],
+        build_onboard_shortcut_screen_options(shortcut_kind),
         vec![render_shortcut_default_choice_footer_line(shortcut_kind)],
         color_enabled,
     )
@@ -4640,6 +5001,7 @@ pub fn render_model_selection_screen_lines(
         GuidedPromptPath::NativePromptPack,
         width,
         false,
+        false,
     )
 }
 
@@ -4654,6 +5016,7 @@ pub fn render_model_selection_screen_lines_with_default(
         GuidedPromptPath::NativePromptPack,
         width,
         false,
+        false,
     )
 }
 
@@ -4663,6 +5026,7 @@ fn render_model_selection_screen_lines_with_style(
     guided_prompt_path: GuidedPromptPath,
     width: usize,
     color_enabled: bool,
+    catalog_models_available: bool,
 ) -> Vec<String> {
     let preferred_fallback_models = config.provider.configured_auto_model_candidates();
     let mut context_lines = vec![
@@ -4687,10 +5051,20 @@ fn render_model_selection_screen_lines_with_style(
         ));
     }
 
-    let mut hint_lines = vec![
-        render_model_selection_default_hint_line(config, prompt_default),
-        "- type any provider model id to override it".to_owned(),
-    ];
+    let mut hint_lines = vec![render_model_selection_default_hint_line(
+        config,
+        prompt_default,
+    )];
+    if catalog_models_available {
+        hint_lines.push(
+            "- use arrow keys to browse or type to filter available provider models".to_owned(),
+        );
+        hint_lines.push(
+            "- choose `enter custom model id` if you want to type an override manually".to_owned(),
+        );
+    } else {
+        hint_lines.push("- type any provider model id to override it".to_owned());
+    }
     if !preferred_fallback_models.is_empty() && config.provider.explicit_model().is_none() {
         hint_lines.push(format!(
             "- type `auto` to let runtime try configured preferred fallbacks first: {}",
@@ -5086,30 +5460,7 @@ fn render_existing_config_write_screen_lines_with_style(
             format!("- config: {config_path}"),
             "- choose whether to replace it, keep a backup, or cancel".to_owned(),
         ],
-        vec![
-            OnboardScreenOption {
-                key: "o".to_owned(),
-                label: "Replace existing config".to_owned(),
-                detail_lines: vec![
-                    "overwrite the current file with this onboarding draft".to_owned(),
-                ],
-                recommended: false,
-            },
-            OnboardScreenOption {
-                key: "b".to_owned(),
-                label: "Create backup and replace".to_owned(),
-                detail_lines: vec![
-                    "save a timestamped .bak copy first, then write the new config".to_owned(),
-                ],
-                recommended: false,
-            },
-            OnboardScreenOption {
-                key: "c".to_owned(),
-                label: "Cancel".to_owned(),
-                detail_lines: vec!["leave the existing config untouched".to_owned()],
-                recommended: false,
-            },
-        ],
+        build_existing_config_write_screen_options(),
         vec![render_default_choice_footer_line("c", "cancel")],
         color_enabled,
     )
@@ -5246,33 +5597,38 @@ fn provider_supports_blank_api_key_env(config: &mvp::config::LoongClawConfig) ->
 
 fn prompt_import_candidate_choice(
     ui: &mut impl OnboardUi,
-    count: usize,
+    candidates: &[ImportCandidate],
+    width: usize,
 ) -> CliResult<Option<usize>> {
-    loop {
-        let choice = ui.prompt_with_default("Starting point", "1")?;
-        let trimmed = choice.trim();
-        if trimmed == "0" {
-            return Ok(None);
-        }
-        let Ok(selected) = trimmed.parse::<usize>() else {
-            print_message(ui, format!("Invalid choice: {trimmed}"))?;
-            continue;
-        };
-        if (1..=count).contains(&selected) {
-            return Ok(Some(selected - 1));
-        }
-        print_message(ui, format!("Invalid choice: {trimmed}"))?;
+    let screen_options = build_starting_point_selection_screen_options(candidates, width);
+    let idx = select_screen_option(ui, "Starting point", &screen_options, Some("1"))?;
+    let selected = screen_options
+        .get(idx)
+        .ok_or_else(|| format!("starting point selection index {idx} out of range"))?;
+    if selected.key == "0" {
+        return Ok(None);
     }
+    selected
+        .key
+        .parse::<usize>()
+        .map(|value| Some(value - 1))
+        .map_err(|error| {
+            format!(
+                "invalid starting point selection key {}: {error}",
+                selected.key
+            )
+        })
 }
 
-fn prompt_onboard_shortcut_choice(ui: &mut impl OnboardUi) -> CliResult<OnboardShortcutChoice> {
-    loop {
-        let choice = ui.prompt_with_default("Your choice", "1")?;
-        match choice.trim() {
-            "1" => return Ok(OnboardShortcutChoice::UseShortcut),
-            "2" => return Ok(OnboardShortcutChoice::AdjustSettings),
-            trimmed => print_message(ui, format!("Invalid choice: {trimmed}"))?,
-        }
+fn prompt_onboard_shortcut_choice(
+    ui: &mut impl OnboardUi,
+    shortcut_kind: OnboardShortcutKind,
+) -> CliResult<OnboardShortcutChoice> {
+    let options = build_onboard_shortcut_screen_options(shortcut_kind);
+    match select_screen_option(ui, "Your choice", &options, Some("1"))? {
+        0 => Ok(OnboardShortcutChoice::UseShortcut),
+        1 => Ok(OnboardShortcutChoice::AdjustSettings),
+        idx => Err(format!("shortcut selection index {idx} out of range")),
     }
 }
 
@@ -5598,31 +5954,28 @@ fn resolve_write_plan(
             true,
         ),
     )?;
-    loop {
-        let choice = ui.prompt_with_default("Your choice", "c")?;
-        match choice.trim().to_ascii_lowercase().as_str() {
-            "o" | "overwrite" => {
-                return Ok(ConfigWritePlan {
-                    force: true,
-                    backup_path: None,
-                });
-            }
-            "b" | "backup" => {
-                return Ok(ConfigWritePlan {
-                    force: true,
-                    backup_path: Some(resolve_backup_path(output_path)?),
-                });
-            }
-            "c" | "cancel" => {
-                return Err("onboarding cancelled: config file already exists".to_owned());
-            }
-            _ => {
-                print_message(
-                    ui,
-                    "Invalid choice. Please enter 'o' (overwrite), 'b' (backup), or 'c' (cancel)",
-                )?;
-            }
-        }
+    let options = build_existing_config_write_screen_options();
+    let selected = options
+        .get(select_screen_option(
+            ui,
+            "Your choice",
+            &options,
+            Some("c"),
+        )?)
+        .ok_or_else(|| "existing-config write selection out of range".to_owned())?;
+    match selected.key.as_str() {
+        "o" => Ok(ConfigWritePlan {
+            force: true,
+            backup_path: None,
+        }),
+        "b" => Ok(ConfigWritePlan {
+            force: true,
+            backup_path: Some(resolve_backup_path(output_path)?),
+        }),
+        "c" => Err("onboarding cancelled: config file already exists".to_owned()),
+        key => Err(format!(
+            "unexpected existing-config write selection key: {key}"
+        )),
     }
 }
 
@@ -5767,7 +6120,9 @@ mod tests {
     use super::*;
     use std::collections::VecDeque;
     use std::ffi::OsString;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, MutexGuard};
 
     struct TestOnboardUi {
@@ -5779,6 +6134,44 @@ mod tests {
             Self {
                 inputs: inputs.into_iter().map(Into::into).collect(),
             }
+        }
+    }
+
+    struct SelectOnlyTestUi {
+        inputs: VecDeque<String>,
+    }
+
+    impl SelectOnlyTestUi {
+        fn with_inputs(inputs: impl IntoIterator<Item = impl Into<String>>) -> Self {
+            Self {
+                inputs: inputs.into_iter().map(Into::into).collect(),
+            }
+        }
+    }
+
+    fn browser_companion_temp_dir(label: &str) -> PathBuf {
+        static NEXT_TEMP_DIR_SEED: AtomicU64 = AtomicU64::new(1);
+        let seed = NEXT_TEMP_DIR_SEED.fetch_add(1, Ordering::Relaxed);
+        let temp_dir = std::env::temp_dir().join(format!(
+            "loongclaw-browser-companion-onboard-{label}-{}-{seed}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("create browser companion onboard temp dir");
+        temp_dir
+    }
+
+    fn write_browser_companion_script(script_path: &Path, body: &str) {
+        let mut file = std::fs::File::create(script_path).expect("create browser companion script");
+        file.write_all(body.as_bytes())
+            .expect("write browser companion script");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = file.metadata().expect("script metadata").permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(script_path, permissions)
+                .expect("chmod browser companion script");
         }
     }
 
@@ -5815,6 +6208,92 @@ mod tests {
                 return Ok(default);
             }
             Ok(matches!(value.as_str(), "y" | "yes"))
+        }
+
+        fn select_one(
+            &mut self,
+            _label: &str,
+            options: &[SelectOption],
+            default: Option<usize>,
+            _interaction_mode: SelectInteractionMode,
+        ) -> CliResult<usize> {
+            let default = validate_select_one_state(options.len(), default)?;
+            match self.inputs.pop_front() {
+                Some(value) => {
+                    let value = ensure_onboard_input_not_cancelled(value)?;
+                    let trimmed = value.trim();
+                    if trimmed.is_empty() {
+                        return default
+                            .ok_or_else(|| "no default for required selection".to_owned());
+                    }
+                    if let Ok(n) = trimmed.parse::<usize>() {
+                        if n >= 1 && n <= options.len() {
+                            return Ok(n - 1);
+                        }
+                        return Err(format!(
+                            "test selection {n} out of range 1..={}",
+                            options.len()
+                        ));
+                    }
+                    parse_select_one_input(trimmed, options)
+                        .ok_or_else(|| format!("invalid test selection input: {trimmed}"))
+                }
+                None => {
+                    default.ok_or_else(|| "missing test input for required selection".to_owned())
+                }
+            }
+        }
+    }
+
+    impl OnboardUi for SelectOnlyTestUi {
+        fn print_line(&mut self, _line: &str) -> CliResult<()> {
+            Ok(())
+        }
+
+        fn prompt_with_default(&mut self, _label: &str, _default: &str) -> CliResult<String> {
+            Err("test expected interactive select widget instead of prompt_with_default".to_owned())
+        }
+
+        fn prompt_required(&mut self, _label: &str) -> CliResult<String> {
+            Err("test expected interactive select widget instead of prompt_required".to_owned())
+        }
+
+        fn prompt_confirm(&mut self, _message: &str, _default: bool) -> CliResult<bool> {
+            Err("test expected interactive select widget instead of prompt_confirm".to_owned())
+        }
+
+        fn select_one(
+            &mut self,
+            _label: &str,
+            options: &[SelectOption],
+            default: Option<usize>,
+            _interaction_mode: SelectInteractionMode,
+        ) -> CliResult<usize> {
+            let default = validate_select_one_state(options.len(), default)?;
+            match self.inputs.pop_front() {
+                Some(value) => {
+                    let value = ensure_onboard_input_not_cancelled(value)?;
+                    let trimmed = value.trim();
+                    if trimmed.is_empty() {
+                        return default
+                            .ok_or_else(|| "no default for required selection".to_owned());
+                    }
+                    if let Ok(n) = trimmed.parse::<usize>() {
+                        if n >= 1 && n <= options.len() {
+                            return Ok(n - 1);
+                        }
+                        return Err(format!(
+                            "test selection {n} out of range 1..={}",
+                            options.len()
+                        ));
+                    }
+                    parse_select_one_input(trimmed, options)
+                        .ok_or_else(|| format!("invalid test selection input: {trimmed}"))
+                }
+                None => {
+                    default.ok_or_else(|| "missing test input for required selection".to_owned())
+                }
+            }
         }
     }
 
@@ -6032,27 +6511,12 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn browser_companion_onboard_preflight_warns_when_runtime_gate_is_closed() {
         let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
-        let temp_dir = std::env::temp_dir().join(format!(
-            "loongclaw-browser-companion-onboard-runtime-gate-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&temp_dir).expect("create browser companion onboard temp dir");
+        let temp_dir = browser_companion_temp_dir("runtime-gate");
         let script_path = temp_dir.join("browser-companion");
-        std::fs::write(
+        write_browser_companion_script(
             &script_path,
             "#!/bin/sh\necho 'loongclaw-browser-companion 1.5.0'\n",
-        )
-        .expect("write browser companion onboard script");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut permissions = std::fs::metadata(&script_path)
-                .expect("script metadata")
-                .permissions();
-            permissions.set_mode(0o755);
-            std::fs::set_permissions(&script_path, permissions)
-                .expect("chmod browser companion onboard script");
-        }
+        );
 
         let mut config = mvp::config::LoongClawConfig::default();
         config.provider.api_key = Some("inline-openai-key".to_owned());
@@ -6075,27 +6539,12 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn browser_companion_onboard_preflight_passes_when_runtime_gate_is_open() {
         let _env_guard = BrowserCompanionEnvGuard::runtime_gate_open();
-        let temp_dir = std::env::temp_dir().join(format!(
-            "loongclaw-browser-companion-onboard-runtime-ready-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&temp_dir).expect("create browser companion onboard temp dir");
+        let temp_dir = browser_companion_temp_dir("runtime-ready");
         let script_path = temp_dir.join("browser-companion");
-        std::fs::write(
+        write_browser_companion_script(
             &script_path,
             "#!/bin/sh\necho 'loongclaw-browser-companion 1.5.0'\n",
-        )
-        .expect("write browser companion onboard script");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut permissions = std::fs::metadata(&script_path)
-                .expect("script metadata")
-                .permissions();
-            permissions.set_mode(0o755);
-            std::fs::set_permissions(&script_path, permissions)
-                .expect("chmod browser companion onboard script");
-        }
+        );
 
         let mut config = mvp::config::LoongClawConfig::default();
         config.provider.api_key = Some("inline-openai-key".to_owned());
@@ -6590,6 +7039,7 @@ mod tests {
             },
             &config,
             GuidedPromptPath::NativePromptPack,
+            &[],
             &mut ui,
             &context,
         )
@@ -6625,6 +7075,7 @@ mod tests {
             },
             &config,
             GuidedPromptPath::NativePromptPack,
+            &[],
             &mut ui,
             &context,
         )
@@ -6660,6 +7111,7 @@ mod tests {
             },
             &config,
             GuidedPromptPath::NativePromptPack,
+            &[],
             &mut ui,
             &context,
         )
@@ -6695,6 +7147,7 @@ mod tests {
             },
             &config,
             GuidedPromptPath::NativePromptPack,
+            &[],
             &mut ui,
             &context,
         )
@@ -6730,6 +7183,7 @@ mod tests {
             },
             &config,
             GuidedPromptPath::NativePromptPack,
+            &[],
             &mut ui,
             &context,
         )
@@ -6765,6 +7219,7 @@ mod tests {
             },
             &config,
             GuidedPromptPath::NativePromptPack,
+            &[],
             &mut ui,
             &context,
         )
@@ -6776,10 +7231,188 @@ mod tests {
     }
 
     #[test]
+    fn resolve_model_selection_uses_catalog_choices_when_available_interactively() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Deepseek;
+        config.provider.model = "auto".to_owned();
+        let mut ui = TestOnboardUi::with_inputs(["2"]);
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+        let available_models = vec!["deepseek-chat".to_owned(), "deepseek-reasoner".to_owned()];
+
+        let selected = resolve_model_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: false,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            GuidedPromptPath::NativePromptPack,
+            &available_models,
+            &mut ui,
+            &context,
+        )
+        .expect("resolve model selection");
+
+        assert_eq!(
+            selected, "deepseek-reasoner",
+            "interactive onboarding should use the probed model catalog instead of treating numeric selection input as a literal model id"
+        );
+    }
+
+    #[test]
+    fn resolve_model_selection_allows_custom_override_when_catalog_is_available() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Openai;
+        config.provider.model = "openai/gpt-5.1-codex".to_owned();
+        let mut ui = TestOnboardUi::with_inputs(["2", "openai/gpt-5.2"]);
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+        let available_models = vec!["openai/gpt-5.1-codex".to_owned()];
+
+        let selected = resolve_model_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: false,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            GuidedPromptPath::NativePromptPack,
+            &available_models,
+            &mut ui,
+            &context,
+        )
+        .expect("resolve model selection");
+
+        assert_eq!(
+            selected, "openai/gpt-5.2",
+            "interactive onboarding should keep a manual override path even when a searchable model catalog is available"
+        );
+    }
+
+    #[test]
+    fn prompt_onboard_entry_choice_uses_select_widget() {
+        let options = vec![
+            OnboardEntryOption {
+                choice: OnboardEntryChoice::ContinueCurrentSetup,
+                label: "continue current setup",
+                detail: "reuse current draft".to_owned(),
+                recommended: true,
+            },
+            OnboardEntryOption {
+                choice: OnboardEntryChoice::StartFresh,
+                label: "start fresh",
+                detail: "ignore detected setup".to_owned(),
+                recommended: false,
+            },
+        ];
+        let mut ui = SelectOnlyTestUi::with_inputs(["2"]);
+
+        let choice = prompt_onboard_entry_choice(&mut ui, &options)
+            .expect("entry choice should route through select_one");
+
+        assert_eq!(choice, OnboardEntryChoice::StartFresh);
+    }
+
+    #[test]
+    fn prompt_import_candidate_choice_uses_select_widget() {
+        let mut ui = SelectOnlyTestUi::with_inputs(["3"]);
+        let candidates = vec![
+            ImportCandidate {
+                source_kind: crate::migration::ImportSourceKind::RecommendedPlan,
+                source: "recommended plan".to_owned(),
+                config: mvp::config::LoongClawConfig::default(),
+                surfaces: Vec::new(),
+                domains: Vec::new(),
+                channel_candidates: Vec::new(),
+                workspace_guidance: Vec::new(),
+            },
+            ImportCandidate {
+                source_kind: crate::migration::ImportSourceKind::CodexConfig,
+                source: "codex config".to_owned(),
+                config: mvp::config::LoongClawConfig::default(),
+                surfaces: Vec::new(),
+                domains: Vec::new(),
+                channel_candidates: Vec::new(),
+                workspace_guidance: Vec::new(),
+            },
+        ];
+
+        let choice = prompt_import_candidate_choice(&mut ui, &candidates, 80)
+            .expect("starting-point choice should route through select_one");
+
+        assert_eq!(choice, None);
+    }
+
+    #[test]
+    fn prompt_onboard_shortcut_choice_uses_select_widget() {
+        let mut ui = SelectOnlyTestUi::with_inputs(["2"]);
+
+        let choice = prompt_onboard_shortcut_choice(&mut ui, OnboardShortcutKind::CurrentSetup)
+            .expect("shortcut choice should route through select_one");
+
+        assert_eq!(choice, OnboardShortcutChoice::AdjustSettings);
+    }
+
+    #[test]
+    fn resolve_write_plan_uses_select_widget_for_existing_config() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "loongclaw-onboard-write-plan-{}",
+            OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let output_path = temp_dir.join("loongclaw.toml");
+        fs::write(&output_path, "provider = 'openai'\n").expect("seed existing config");
+        let mut ui = SelectOnlyTestUi::with_inputs(["2"]);
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let plan = resolve_write_plan(
+            &output_path,
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: false,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &mut ui,
+            &context,
+        )
+        .expect("existing-config confirmation should route through select_one");
+
+        assert!(plan.force);
+        assert!(
+            plan.backup_path.is_some(),
+            "backup selection should preserve the safer write path"
+        );
+        fs::remove_dir_all(&temp_dir).expect("cleanup temp dir");
+    }
+
+    #[test]
     fn prompt_onboard_shortcut_choice_cancels_on_escape_input() {
         let mut ui = TestOnboardUi::with_inputs(["\u{1b}"]);
 
-        let error = prompt_onboard_shortcut_choice(&mut ui)
+        let error = prompt_onboard_shortcut_choice(&mut ui, OnboardShortcutKind::CurrentSetup)
             .expect_err("escape input should cancel instead of silently falling through");
 
         assert!(
@@ -6989,7 +7622,7 @@ mod tests {
         }];
 
         let error = ui
-            .select_one("Provider", &options, Some(0))
+            .select_one("Provider", &options, Some(0), SelectInteractionMode::List)
             .expect_err("escape input should cancel selection instead of surfacing a parse error");
 
         assert!(
@@ -7089,55 +7722,6 @@ mod tests {
     }
 
     #[test]
-    fn onboard_ui_select_one_default_impl_accepts_slug_input() {
-        struct FallbackSelectUi {
-            input: Option<String>,
-        }
-
-        impl OnboardUi for FallbackSelectUi {
-            fn print_line(&mut self, _line: &str) -> CliResult<()> {
-                Ok(())
-            }
-
-            fn prompt_with_default(&mut self, _label: &str, _default: &str) -> CliResult<String> {
-                Ok(self.input.take().unwrap_or_default())
-            }
-
-            fn prompt_required(&mut self, _label: &str) -> CliResult<String> {
-                Ok(self.input.take().unwrap_or_default())
-            }
-
-            fn prompt_confirm(&mut self, _message: &str, default: bool) -> CliResult<bool> {
-                Ok(default)
-            }
-        }
-
-        let mut ui = FallbackSelectUi {
-            input: Some("friendly_collab".to_owned()),
-        };
-        let options = vec![
-            SelectOption {
-                label: "calm engineering".to_owned(),
-                slug: "calm_engineering".to_owned(),
-                description: String::new(),
-                recommended: true,
-            },
-            SelectOption {
-                label: "friendly collab".to_owned(),
-                slug: "friendly_collab".to_owned(),
-                description: String::new(),
-                recommended: false,
-            },
-        ];
-
-        let index = ui
-            .select_one("Personality", &options, Some(0))
-            .expect("default trait implementation should accept slug input");
-
-        assert_eq!(index, 1);
-    }
-
-    #[test]
     fn test_onboard_ui_select_one_accepts_slug_input() {
         let mut ui = TestOnboardUi::with_inputs(["friendly_collab"]);
         let options = vec![
@@ -7156,7 +7740,12 @@ mod tests {
         ];
 
         let index = ui
-            .select_one("Personality", &options, Some(0))
+            .select_one(
+                "Personality",
+                &options,
+                Some(0),
+                SelectInteractionMode::List,
+            )
             .expect("test ui should stay aligned with shared slug-selection behavior");
 
         assert_eq!(index, 1);

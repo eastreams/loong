@@ -243,6 +243,7 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
         label: &str,
         options: &[loongclaw_daemon::onboard_cli::SelectOption],
         default: Option<usize>,
+        _interaction_mode: loongclaw_daemon::onboard_cli::SelectInteractionMode,
     ) -> loongclaw_daemon::CliResult<usize> {
         if options.is_empty() {
             return Err("no selection options available".to_owned());
