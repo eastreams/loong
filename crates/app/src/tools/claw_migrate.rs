@@ -15,14 +15,14 @@ use crate::{
 const DEFAULT_MODE: &str = "plan";
 const SUPPORTED_SOURCES: &str = "auto, nanobot, openclaw, picoclaw, zeroclaw, nanoclaw";
 
-pub(super) fn execute_claw_import_tool_with_config(
+pub(super) fn execute_claw_migrate_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let payload = request
         .payload
         .as_object()
-        .ok_or_else(|| "claw.import payload must be an object".to_owned())?;
+        .ok_or_else(|| "claw.migrate payload must be an object".to_owned())?;
     let mode = payload
         .get("mode")
         .and_then(Value::as_str)
@@ -42,7 +42,7 @@ pub(super) fn execute_claw_import_tool_with_config(
             | "rollback_last_apply"
     ) {
         return Err(format!(
-            "claw.import payload.mode must be `plan`, `apply`, `apply_selected`, `discover`, `plan_many`, `recommend_primary`, `merge_profiles`, `map_external_skills`, or `rollback_last_apply`, got `{mode}`"
+            "claw.migrate payload.mode must be `plan`, `apply`, `apply_selected`, `discover`, `plan_many`, `recommend_primary`, `merge_profiles`, `map_external_skills`, or `rollback_last_apply`, got `{mode}`"
         ));
     }
 
@@ -56,7 +56,7 @@ pub(super) fn execute_claw_import_tool_with_config(
 
     if matches!(mode, "apply" | "apply_selected" | "rollback_last_apply") && output_path.is_none() {
         return Err(format!(
-            "claw.import {mode} mode requires payload.output_path"
+            "claw.migrate {mode} mode requires payload.output_path"
         ));
     }
 
@@ -69,7 +69,7 @@ pub(super) fn execute_claw_import_tool_with_config(
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .ok_or_else(|| "claw.import requires payload.input_path".to_owned())
+                .ok_or_else(|| "claw.migrate requires payload.input_path".to_owned())
                 .and_then(|value| resolve_safe_path_with_config(value, config))?,
         )
     };
@@ -88,9 +88,9 @@ pub(super) fn execute_claw_import_tool_with_config(
 
     if mode == "rollback_last_apply" {
         let output_path = output_path.ok_or_else(|| {
-            "claw.import rollback_last_apply mode requires payload.output_path".to_owned()
+            "claw.migrate rollback_last_apply mode requires payload.output_path".to_owned()
         })?;
-        let restored_path = migration::rollback_last_import(&output_path)?;
+        let restored_path = migration::rollback_last_migration(&output_path)?;
         return Ok(ToolCoreOutcome {
             status: "ok".to_owned(),
             payload: json!({
@@ -104,7 +104,7 @@ pub(super) fn execute_claw_import_tool_with_config(
     }
 
     let input_path =
-        input_path.ok_or_else(|| "claw.import requires payload.input_path".to_owned())?;
+        input_path.ok_or_else(|| "claw.migrate requires payload.input_path".to_owned())?;
 
     if mode == "discover" {
         let report = migration::discover_import_sources(
@@ -193,7 +193,7 @@ pub(super) fn execute_claw_import_tool_with_config(
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let selected_output_path = output_path.ok_or_else(|| {
-            "claw.import apply_selected mode requires payload.output_path".to_owned()
+            "claw.migrate apply_selected mode requires payload.output_path".to_owned()
         })?;
         let result = migration::apply_import_selection(&migration::ApplyImportSelection {
             discovery: report,
@@ -229,7 +229,7 @@ pub(super) fn execute_claw_import_tool_with_config(
     let written_output_path = if mode == "apply" {
         let output_path = output_path
             .clone()
-            .ok_or_else(|| "claw.import apply mode requires payload.output_path".to_owned())?;
+            .ok_or_else(|| "claw.migrate apply mode requires payload.output_path".to_owned())?;
         let output_string = output_path.display().to_string();
         Some(config::write(Some(&output_string), &merged_config, force)?)
     } else {
@@ -387,7 +387,7 @@ fn apply_selection_result_payload(result: &migration::ApplyImportSelectionResult
 
 fn parse_source_hint(raw: &str) -> Result<Option<LegacyClawSource>, String> {
     let parsed = LegacyClawSource::from_id(raw).ok_or_else(|| {
-        format!("unsupported claw.import payload.source `{raw}`. supported: {SUPPORTED_SOURCES}")
+        format!("unsupported claw.migrate payload.source `{raw}`. supported: {SUPPORTED_SOURCES}")
     })?;
     if matches!(parsed, LegacyClawSource::Unknown) {
         Ok(None)

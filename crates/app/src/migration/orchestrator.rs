@@ -453,7 +453,7 @@ fn build_external_skills_apply_manifest(
     }
 }
 
-pub fn rollback_last_import(output_path: &Path) -> CliResult<PathBuf> {
+pub fn rollback_last_migration(output_path: &Path) -> CliResult<PathBuf> {
     let manifest_path = manifest_path_for_output(output_path, &migration_state_dir(output_path));
     let manifest_body = fs::read(&manifest_path).map_err(|error| {
         format!(
@@ -709,7 +709,7 @@ fn manifest_path_for_output(output_path: &Path, state_dir: &Path) -> PathBuf {
         .file_name()
         .map(|value| value.to_string_lossy().to_string())
         .unwrap_or_else(|| "loongclaw-config".to_owned());
-    state_dir.join(format!("{file_tag}.last-import.json"))
+    state_dir.join(format!("{file_tag}.last-migration.json"))
 }
 
 fn external_skills_manifest_path_for_output(output_path: &Path, state_dir: &Path) -> PathBuf {
@@ -1164,7 +1164,7 @@ mod tests {
     }
 
     #[test]
-    fn rollback_last_import_restores_previous_config() {
+    fn rollback_last_migration_restores_previous_config() {
         let root = unique_temp_dir("loongclaw-import-rollback");
         fs::create_dir_all(&root).expect("create fixture root");
 
@@ -1199,7 +1199,7 @@ mod tests {
         })
         .expect("apply should succeed");
 
-        rollback_last_import(&output_path).expect("rollback should succeed");
+        rollback_last_migration(&output_path).expect("rollback should succeed");
         assert_eq!(
             fs::read_to_string(&output_path).expect("read restored config"),
             original_body

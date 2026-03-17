@@ -43,8 +43,8 @@ mod cli_handoff;
 pub mod doctor_cli;
 pub mod feishu_cli;
 pub mod feishu_support;
-pub mod import_claw_cli;
 pub mod import_cli;
+pub mod migrate_cli;
 pub mod migration;
 pub mod next_actions;
 pub mod onboard_cli;
@@ -74,7 +74,7 @@ pub const CLI_COMMAND_NAME: &str = mvp::config::CLI_COMMAND_NAME;
 pub fn native_spec_tool_executor(
     request: ToolCoreRequest,
 ) -> Option<Result<ToolCoreOutcome, String>> {
-    if mvp::tools::canonical_tool_name(request.tool_name.as_str()) != "claw.import" {
+    if mvp::tools::canonical_tool_name(request.tool_name.as_str()) != "claw.migrate" {
         return None;
     }
     Some(mvp::tools::execute_tool_core(request))

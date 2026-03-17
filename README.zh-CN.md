@@ -229,26 +229,26 @@ LoongClaw 支持从旧 claw 工作区进行发现、规划、应用与回滚：
 - 应用 external-skills 计划时，会额外写入 `.loongclaw-migration/<config>.external-skills.json` 便于审计与回放。
 
 ```bash
-# 扫描并评分导入候选源
-loongclaw import-claw --mode discover --input ~/legacy-claws
+# 扫描并评分迁移候选源
+loongclaw migrate --mode discover --input ~/legacy-claws
 
 # 规划所有候选并给出推荐主源
-loongclaw import-claw --mode plan_many --input ~/legacy-claws
+loongclaw migrate --mode plan_many --input ~/legacy-claws
 
 # 预览外部 skills 映射工件与生成的 profile addendum
-loongclaw import-claw --mode map_external_skills --input ~/legacy-claws
+loongclaw migrate --mode map_external_skills --input ~/legacy-claws
 
 # 选择单一来源应用到目标配置
-loongclaw import-claw --mode apply_selected --input ~/legacy-claws \
+loongclaw migrate --mode apply_selected --input ~/legacy-claws \
   --source-id openclaw --output ~/.loongclaw/config.toml --force
 
 # 选择来源并附加外部 skills 映射结果
-loongclaw import-claw --mode apply_selected --input ~/legacy-claws \
+loongclaw migrate --mode apply_selected --input ~/legacy-claws \
   --source-id openclaw --output ~/.loongclaw/config.toml \
   --apply-external-skills-plan --force
 
-# 回滚最近一次 apply/import
-loongclaw import-claw --mode rollback_last_apply --output ~/.loongclaw/config.toml
+# 回滚最近一次迁移 apply
+loongclaw migrate --mode rollback_last_apply --output ~/.loongclaw/config.toml
 ```
 
 ## External Skills 运行时安全护栏

@@ -64,7 +64,7 @@ The primary daemon surfaces are:
 | `ask` | One-shot assistant answer and exit |
 | `chat` | Interactive CLI conversation |
 | `doctor` | Health diagnostics with optional safe repair |
-| `import-claw` | Power-user migration/import path |
+| `migrate` | Power-user migration path |
 | `telegram-serve` / `feishu-serve` | Service channels once the base setup is healthy |
 
 ## See Also

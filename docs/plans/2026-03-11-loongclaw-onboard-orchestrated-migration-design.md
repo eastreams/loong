@@ -75,8 +75,8 @@ The current v0.1 implementation already provides:
 
 - `plan_import_from_path(...)`
 - `apply_import_plan(...)`
-- daemon command `loongclawd import-claw`
-- app-native tool `claw.import`
+- daemon command `loongclawd migrate`
+- app-native tool `claw.migrate`
 - spec extension wrapper `claw-migration`
 
 What is missing is orchestration:
@@ -352,7 +352,7 @@ config path and records a rollback event in the manifest log.
 Rollback should be available to:
 
 - CLI
-- `claw.import`
+- `claw.migrate`
 - `claw-migration`
 
 ## Non-Interactive Policy

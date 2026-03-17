@@ -5182,7 +5182,7 @@ pub async fn run_spec_pressure_once(
     let requires_native_tool_executor = spec_requires_native_tool_executor(spec);
     if requires_native_tool_executor && native_tool_executor.is_none() {
         return Err(
-            "spec benchmark scenario requires a native tool executor; move this claw.import/claw-migration run to daemon composition root".to_owned(),
+            "spec benchmark scenario requires a native tool executor; move this claw.migrate/claw-migration run to daemon composition root".to_owned(),
         );
     }
     let report = execute_spec_with_native_tool_executor(spec, false, native_tool_executor).await;
@@ -5193,7 +5193,7 @@ pub async fn run_spec_pressure_once(
             .is_some_and(|reason| reason.contains("native tool executor"))
     {
         return Err(
-            "spec benchmark scenario requires a native tool executor that handles the requested native tool; move this claw.import/claw-migration run to daemon composition root".to_owned(),
+            "spec benchmark scenario requires a native tool executor that handles the requested native tool; move this claw.migrate/claw-migration run to daemon composition root".to_owned(),
         );
     }
     let blocked = report.operation_kind == "blocked" || report.blocked_reason.is_some();

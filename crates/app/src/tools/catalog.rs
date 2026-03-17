@@ -315,15 +315,15 @@ pub fn tool_catalog() -> ToolCatalog {
             provider_definition_builder: tool_invoke_definition,
         },
         ToolDescriptor {
-            name: "claw.import",
-            provider_name: "claw_import",
-            aliases: &["import_claw"],
-            description: "Import legacy Claw configs into native LoongClaw settings",
+            name: "claw.migrate",
+            provider_name: "claw_migrate",
+            aliases: &[],
+            description: "Migrate legacy Claw configs into native LoongClaw settings",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
-            provider_definition_builder: claw_import_definition,
+            provider_definition_builder: claw_migrate_definition,
         },
         ToolDescriptor {
             name: "external_skills.fetch",
@@ -1264,7 +1264,7 @@ fn tool_invoke_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
-fn claw_import_definition(descriptor: &ToolDescriptor) -> Value {
+fn claw_migrate_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
         "function": {
@@ -1275,7 +1275,7 @@ fn claw_import_definition(descriptor: &ToolDescriptor) -> Value {
                 "properties": {
                     "input_path": {
                         "type": "string",
-                        "description": "Path to the legacy Claw workspace, config root, or portable import file. Required for all modes except rollback_last_apply."
+                        "description": "Path to the legacy Claw workspace, config root, or portable migration file. Required for all modes except rollback_last_apply."
                     },
                     "mode": {
                         "type": "string",
@@ -2130,7 +2130,7 @@ fn tool_argument_hint(name: &str) -> &'static str {
     match name {
         "tool.search" => "query:string,limit?:integer",
         "tool.invoke" => "tool_id:string,lease:string,arguments:object",
-        "claw.import" => "input_path?:string,mode?:string,source?:string",
+        "claw.migrate" => "input_path?:string,mode?:string,source?:string",
         "external_skills.fetch" => {
             "url:string,approval_granted?:boolean,save_as?:string,max_bytes?:integer"
         }
@@ -2172,7 +2172,7 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("lease", "string"),
             ("arguments", "object"),
         ],
-        "claw.import" => &[
+        "claw.migrate" => &[
             ("input_path", "string"),
             ("mode", "string"),
             ("source", "string"),
@@ -2278,7 +2278,7 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
     match name {
         "tool.search" => &["core", "discover", "search"],
         "tool.invoke" => &["core", "dispatch", "invoke"],
-        "claw.import" => &["migration", "import", "config", "legacy"],
+        "claw.migrate" => &["migration", "migrate", "config", "legacy"],
         "external_skills.fetch" => &["skills", "download", "external", "fetch"],
         "external_skills.inspect" => &["skills", "inspect", "metadata"],
         "external_skills.install" => &["skills", "install", "package"],

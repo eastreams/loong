@@ -22,7 +22,7 @@ pub use orchestrator::{
     ApplyImportSelection, ApplyImportSelectionResult, DiscoveredImportSource, DiscoveryOptions,
     DiscoveryPlanSummary, DiscoveryReport, ImportSelectionMode, PlannedImportSource,
     PrimarySourceRecommendation, apply_import_selection, discover_import_sources,
-    merge_profile_sources, plan_import_sources, recommend_primary_source, rollback_last_import,
+    merge_profile_sources, plan_import_sources, recommend_primary_source, rollback_last_migration,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

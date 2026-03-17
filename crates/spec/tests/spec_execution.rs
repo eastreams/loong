@@ -8,7 +8,7 @@ use serde_json::json;
 #[test]
 fn spec_requires_native_tool_executor_detects_aliases_and_extension() {
     let alias_spec = make_runner_spec(OperationSpec::ToolCore {
-        tool_name: "claw_import".to_owned(),
+        tool_name: "claw_migrate".to_owned(),
         required_capabilities: BTreeSet::from([Capability::InvokeTool]),
         payload: json!({"mode": "plan"}),
         core: None,
@@ -35,7 +35,7 @@ fn spec_requires_native_tool_executor_detects_aliases_and_extension() {
 #[tokio::test]
 async fn execute_spec_blocks_native_tool_without_executor() {
     let spec = make_runner_spec(OperationSpec::ToolCore {
-        tool_name: "claw.import".to_owned(),
+        tool_name: "claw.migrate".to_owned(),
         required_capabilities: BTreeSet::from([Capability::InvokeTool]),
         payload: json!({"mode": "plan"}),
         core: None,

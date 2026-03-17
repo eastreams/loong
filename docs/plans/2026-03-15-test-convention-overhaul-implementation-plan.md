@@ -739,7 +739,7 @@ crates/daemon/tests/
 │   ├── doctor_feishu.rs
 │   ├── feishu_cli.rs
 │   ├── import_cli.rs
-│   ├── import_claw_cli.rs
+│   ├── migrate_cli.rs
 │   ├── migration.rs
 │   ├── onboard_cli.rs
 │   ├── programmatic.rs
