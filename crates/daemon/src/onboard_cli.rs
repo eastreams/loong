@@ -139,7 +139,7 @@ fn is_explicit_onboard_clear_input(raw: &str) -> bool {
 }
 
 fn is_explicit_onboard_cancel_input(raw: &str) -> bool {
-    matches!(raw.trim(), "\u{1b}") || raw.trim().eq_ignore_ascii_case("esc")
+    matches!(raw.trim(), "\u{1b}")
 }
 
 fn ensure_onboard_input_not_cancelled(raw: String) -> CliResult<String> {
@@ -1033,6 +1033,12 @@ fn resolve_model_selection(
     ui: &mut impl OnboardUi,
     context: &OnboardRuntimeContext,
 ) -> CliResult<String> {
+    if let Some(model) = options.model.as_deref()
+        && model.trim().is_empty()
+    {
+        return Err("model cannot be empty".to_owned());
+    }
+
     let default_model = resolve_onboarding_model_prompt_default(options, config);
     if options.non_interactive {
         return Ok(default_model);
@@ -1060,13 +1066,8 @@ fn resolve_onboarding_model_prompt_default(
     options: &OnboardCommandOptions,
     config: &mvp::config::LoongClawConfig,
 ) -> String {
-    if let Some(model) = options
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return model.to_owned();
+    if let Some(model) = options.model.as_deref() {
+        return model.trim().to_owned();
     }
 
     if let Some(model) = config.provider.explicit_model() {
@@ -5959,6 +5960,40 @@ mod tests {
     }
 
     #[test]
+    fn resolve_model_selection_rejects_blank_explicit_model_non_interactively() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Deepseek;
+        config.provider.model = "auto".to_owned();
+        let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let error = resolve_model_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: true,
+                accept_risk: true,
+                provider: None,
+                model: Some("   ".to_owned()),
+                api_key_env: None,
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            GuidedPromptPath::NativePromptPack,
+            &mut ui,
+            &context,
+        )
+        .expect_err(
+            "blank explicit --model should fail instead of falling back to a recommended model",
+        );
+
+        assert_eq!(error, "model cannot be empty");
+    }
+
+    #[test]
     fn prompt_onboard_shortcut_choice_cancels_on_escape_input() {
         let mut ui = TestOnboardUi::with_inputs(["\u{1b}"]);
 
@@ -5980,6 +6015,14 @@ mod tests {
             .expect("missing input should keep the configured default");
 
         assert_eq!(value, "\u{1b}");
+    }
+
+    #[test]
+    fn literal_esc_text_is_not_treated_as_cancel_input() {
+        let value = ensure_onboard_input_not_cancelled("esc".to_owned())
+            .expect("literal esc text should remain valid input");
+
+        assert_eq!(value, "esc");
     }
 
     #[test]

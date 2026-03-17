@@ -96,7 +96,7 @@ Cons:
 
 Choose Option B.
 
-The right fix is not "never maintain provider defaults". The right fix is to
+The right fix is not "never maintain provider defaults". A better approach is to
 keep those defaults in the onboarding/configuration layer where they are
 explicit and user-visible, while removing hidden runtime fallback defaults.
 

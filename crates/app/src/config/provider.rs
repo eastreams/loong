@@ -1951,7 +1951,7 @@ impl ProviderKind {
         } else if matches!(self, ProviderKind::Minimax) {
             Some("MiniMax-M2.5")
         } else {
-            self.default_model()
+            None
         }
     }
 }
@@ -3091,10 +3091,18 @@ mod tests {
     }
 
     #[test]
-    fn deepseek_provider_exposes_reviewed_onboarding_model() {
+    fn only_reviewed_providers_expose_onboarding_models() {
         assert_eq!(
             ProviderKind::Deepseek.recommended_onboarding_model(),
             Some("deepseek-chat")
+        );
+        assert_eq!(
+            ProviderKind::Minimax.recommended_onboarding_model(),
+            Some("MiniMax-M2.5")
+        );
+        assert_eq!(
+            ProviderKind::KimiCoding.recommended_onboarding_model(),
+            None
         );
         assert_eq!(ProviderKind::Openai.recommended_onboarding_model(), None);
     }
