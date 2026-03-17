@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Add failing tests for shell follow-up payload reduction
+## Task 1: Add failing tests for shell follow-up payload reduction
 
 **Files:**
 - Modify: `crates/app/src/conversation/turn_coordinator.rs`
@@ -38,7 +38,7 @@ Add focused tests proving turn-loop follow-up assembly also reduces shell payloa
 Run: `cargo test -p loongclaw-app append_tool_driven_followup_messages_reduces_shell_exec_payload_summary -- --exact --nocapture`
 Expected: FAIL because the turn-loop path currently only applies generic text truncation.
 
-### Task 2: Implement the reducer in shared follow-up assembly
+## Task 2: Implement the reducer in shared follow-up assembly
 
 **Files:**
 - Modify: `crates/app/src/conversation/turn_shared.rs`
@@ -71,7 +71,7 @@ Do not:
 - add new config surface in this slice
 - add reducer behavior for `file.read`, `web.fetch`, or `tool.search`
 
-### Task 3: Verify and document the slice
+## Task 3: Verify and document the slice
 
 **Files:**
 - Modify: `docs/plans/2026-03-16-shell-followup-payload-reducer-implementation-plan.md`
