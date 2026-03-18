@@ -4,6 +4,9 @@ use serde_json::{Value, json};
 #[cfg(feature = "tool-websearch")]
 use regex::Regex;
 
+#[cfg(feature = "tool-websearch")]
+const MAX_QUERY_LENGTH: usize = 500;
+
 pub(super) fn execute_web_search_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
@@ -43,6 +46,11 @@ fn execute_web_search_tool_enabled(
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .ok_or_else(|| "web.search requires payload.query".to_owned())?;
+    if query.len() > MAX_QUERY_LENGTH {
+        return Err(format!(
+            "web.search payload.query exceeds maximum length ({MAX_QUERY_LENGTH} characters)"
+        ));
+    }
 
     let provider_override = payload.get("provider").and_then(Value::as_str);
 
@@ -55,7 +63,7 @@ fn execute_web_search_tool_enabled(
 
     let provider = provider_override.unwrap_or(&config.web_search.default_provider);
 
-    let result = run_async(async {
+    let result = super::web_http::run_async(async {
         match provider {
             "duckduckgo" | "ddg" => {
                 search_duckduckgo(query, max_results, config.web_search.timeout_seconds).await
@@ -89,38 +97,6 @@ fn execute_web_search_tool_enabled(
         status: "ok".to_owned(),
         payload: result,
     })
-}
-
-#[cfg(feature = "tool-websearch")]
-fn run_async<F, T>(fut: F) -> Result<T, String>
-where
-    F: std::future::Future<Output = T> + Send,
-    T: Send,
-{
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
-            Ok(tokio::task::block_in_place(|| handle.block_on(fut)))
-        }
-        Ok(_) => std::thread::scope(|scope| {
-            scope
-                .spawn(|| {
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .map_err(|e| format!("failed to create tokio runtime: {e}"))?;
-                    Ok(rt.block_on(fut))
-                })
-                .join()
-                .map_err(|_panic| "async worker thread panicked".to_owned())?
-        }),
-        Err(_) => {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| format!("failed to create tokio runtime: {e}"))?;
-            Ok(rt.block_on(fut))
-        }
-    }
 }
 
 #[cfg(feature = "tool-websearch")]
@@ -158,12 +134,8 @@ async fn search_duckduckgo(
 
 #[cfg(feature = "tool-websearch")]
 fn parse_duckduckgo_html(html: &str, query: &str, max_results: usize) -> Result<Value, String> {
-    let link_regex =
-        Regex::new(r#"<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)</a>"#)
-            .map_err(|e| format!("Regex error: {e}"))?;
-
-    let snippet_regex = Regex::new(r#"<a class="result__snippet[^"]*"[^>]*>([\s\S]*?)</a>"#)
-        .map_err(|e| format!("Regex error: {e}"))?;
+    let link_regex = ddg_link_regex();
+    let snippet_regex = ddg_snippet_regex();
 
     let links: Vec<_> = link_regex
         .captures_iter(html)
@@ -220,21 +192,45 @@ fn decode_ddg_url(raw: &str) -> String {
 
 #[cfg(feature = "tool-websearch")]
 fn urlencoding_decode(s: &str) -> Result<String, String> {
-    let mut result = String::new();
+    let mut bytes = Vec::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '+' {
-            result.push(' ');
+            bytes.push(b' ');
         } else if c == '%' {
             let hex: String = chars.by_ref().take(2).collect();
+            if hex.len() != 2 {
+                return Err("Invalid percent encoding: truncated escape sequence".to_owned());
+            }
             let byte = u8::from_str_radix(&hex, 16)
                 .map_err(|e| format!("Invalid percent encoding: {e}"))?;
-            result.push(byte as char);
+            bytes.push(byte);
         } else {
-            result.push(c);
+            let mut buf = [0u8; 4];
+            bytes.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
         }
     }
-    Ok(result)
+    String::from_utf8(bytes).map_err(|e| format!("Invalid UTF-8 in decoded value: {e}"))
+}
+
+#[cfg(feature = "tool-websearch")]
+#[allow(clippy::expect_used)]
+fn ddg_link_regex() -> &'static Regex {
+    static LINK_REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    LINK_REGEX.get_or_init(|| {
+        Regex::new(r#"<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)</a>"#)
+            .expect("static regex should always compile")
+    })
+}
+
+#[cfg(feature = "tool-websearch")]
+#[allow(clippy::expect_used)]
+fn ddg_snippet_regex() -> &'static Regex {
+    static SNIPPET_REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    SNIPPET_REGEX.get_or_init(|| {
+        Regex::new(r#"<a class="result__snippet[^"]*"[^>]*>([\s\S]*?)</a>"#)
+            .expect("static regex should always compile")
+    })
 }
 
 #[cfg(feature = "tool-websearch")]
@@ -275,7 +271,7 @@ async fn search_brave(
         .header("X-Subscription-Token", api_key)
         .send()
         .await
-        .map_err(|e| format!("Brave request failed: {e}"))?;
+        .map_err(|error| format_request_error("Brave request failed", &error))?;
 
     if !response.status().is_success() {
         return Err(format!("Brave returned status {}", response.status()));
@@ -345,7 +341,7 @@ async fn search_tavily(
         }))
         .send()
         .await
-        .map_err(|e| format!("Tavily request failed: {e}"))?;
+        .map_err(|error| format_request_error("Tavily request failed", &error))?;
 
     if !response.status().is_success() {
         return Err(format!("Tavily returned status {}", response.status()));
@@ -383,6 +379,26 @@ fn parse_tavily_response(json: &Value, query: &str, max_results: usize) -> Resul
         "provider": "tavily",
         "results": results
     }))
+}
+
+#[cfg(feature = "tool-websearch")]
+fn format_request_error(prefix: &str, error: &reqwest::Error) -> String {
+    let kind = if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connect"
+    } else if error.is_request() {
+        "request"
+    } else if error.is_redirect() {
+        "redirect"
+    } else if error.is_decode() {
+        "decode"
+    } else if error.is_body() {
+        "body"
+    } else {
+        "unknown"
+    };
+    format!("{prefix} ({kind} error)")
 }
 
 #[cfg(all(test, feature = "tool-websearch"))]
@@ -435,6 +451,17 @@ mod tests {
     }
 
     #[test]
+    fn web_search_rejects_overlong_query() {
+        let long_query = "x".repeat(MAX_QUERY_LENGTH + 1);
+        let error = execute_web_search_tool_with_config(
+            request(json!({"query": long_query})),
+            &test_config(),
+        )
+        .expect_err("should reject too-long query");
+        assert!(error.contains("exceeds maximum length"));
+    }
+
+    #[test]
     fn parse_duckduckgo_html_extracts_results() {
         let html = r#"
             <a class="result__a" href="https://example.com">Example Title</a>
@@ -479,5 +506,17 @@ mod tests {
         let json = json!({"results": []});
         let result = parse_tavily_response(&json, "test", 5).unwrap();
         assert!(result["results"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn urlencoding_decode_handles_utf8_sequences() {
+        let decoded = urlencoding_decode("caf%C3%A9").expect("valid encoded utf8 should decode");
+        assert_eq!(decoded, "café");
+    }
+
+    #[test]
+    fn urlencoding_decode_rejects_truncated_escape() {
+        let error = urlencoding_decode("abc%").expect_err("truncated escape should fail");
+        assert!(error.contains("Invalid percent encoding"));
     }
 }

@@ -776,7 +776,7 @@ pub fn tool_catalog() -> ToolCatalog {
             name: "web.search",
             provider_name: "web_search",
             aliases: &[],
-            description: "Search the web for APIs, documentation, and error messages using DuckDuckGo or Brave Search",
+            description: "Search the web for APIs, documentation, and error messages using DuckDuckGo, Brave Search, or Tavily",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,

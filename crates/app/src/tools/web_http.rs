@@ -2,6 +2,48 @@
 /// Provides SSRF-safe DNS resolution and other common patterns.
 use std::sync::Arc;
 
+/// Bridge sync-to-async execution for web tools.
+///
+/// Cases handled:
+/// - Multi-thread runtime: use `block_in_place` + `block_on`
+/// - Current-thread runtime: run future on a dedicated worker thread
+/// - No runtime: create a temporary current-thread runtime
+#[cfg(any(feature = "tool-webfetch", feature = "tool-websearch"))]
+pub fn run_async<F>(fut: F) -> Result<F::Output, String>
+where
+    F: std::future::Future + Send,
+    F::Output: Send,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            Ok(tokio::task::block_in_place(|| handle.block_on(fut)))
+        }
+        Ok(_) => std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|error| {
+                            format!("failed to create tokio runtime for web tools: {error}")
+                        })?;
+                    Ok(rt.block_on(fut))
+                })
+                .join()
+                .map_err(|_panic| "web tools async worker thread panicked".to_owned())?
+        }),
+        Err(_) => {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| {
+                    format!("failed to create tokio runtime for web tools: {error}")
+                })?;
+            Ok(rt.block_on(fut))
+        }
+    }
+}
+
 /// Custom DNS resolver that rejects private/special-use IP addresses at
 /// connection time, eliminating the TOCTOU window between validation and
 /// the HTTP client's own DNS resolution.
@@ -72,7 +114,7 @@ pub fn build_ssrf_safe_client(
     feature = "tool-browser",
     feature = "tool-websearch"
 ))]
-fn is_private_or_special_ip(ip: std::net::IpAddr) -> bool {
+pub(crate) fn is_private_or_special_ip(ip: std::net::IpAddr) -> bool {
     use std::net::IpAddr;
 
     match ip {
@@ -86,7 +128,7 @@ fn is_private_or_special_ip(ip: std::net::IpAddr) -> bool {
     feature = "tool-browser",
     feature = "tool-websearch"
 ))]
-fn is_private_or_special_ipv4(ip: std::net::Ipv4Addr) -> bool {
+pub(crate) fn is_private_or_special_ipv4(ip: std::net::Ipv4Addr) -> bool {
     let octets = ip.octets();
     let first = octets[0];
     let second = octets[1];
@@ -113,7 +155,7 @@ fn is_private_or_special_ipv4(ip: std::net::Ipv4Addr) -> bool {
     feature = "tool-browser",
     feature = "tool-websearch"
 ))]
-fn is_private_or_special_ipv6(ip: std::net::Ipv6Addr) -> bool {
+pub(crate) fn is_private_or_special_ipv6(ip: std::net::Ipv6Addr) -> bool {
     if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
         return true;
     }
