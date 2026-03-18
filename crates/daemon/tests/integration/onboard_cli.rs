@@ -419,6 +419,7 @@ fn scripted_onboard_ui_select_one_accepts_slug_input() {
         "Personality",
         &options,
         Some(0),
+        loongclaw_daemon::onboard_cli::SelectInteractionMode::List,
     )
     .expect("scripted selection should accept slug input so integration tests stay aligned");
 
