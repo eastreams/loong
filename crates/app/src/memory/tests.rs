@@ -29,7 +29,8 @@ async fn mvp_memory_adapter_routes_through_kernel() {
         ExecutionRoute, HarnessKind, LoongClawKernel, StaticPolicyEngine, VerticalPackManifest,
     };
 
-    let mut kernel = LoongClawKernel::new(StaticPolicyEngine::default());
+    let (mut kernel, _audit) =
+        LoongClawKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
 
     kernel.register_core_memory_adapter(MvpMemoryAdapter::new());
     kernel

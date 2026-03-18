@@ -31,7 +31,7 @@ optional `scripts/pre-commit` hook mirrors these cargo gates locally.
 ## Kernel Invariants
 
 1. **Token authorization is fail-closed** — if the policy engine cannot determine authorization (e.g., mutex poisoned), the operation is denied.
-2. **Audit events are never silently dropped** — production-shaped CLI chat, Telegram, and Feishu bootstraps default to `audit.mode = "fanout"`, which appends `~/.loongclaw/audit/events.jsonl` and can retain in-memory snapshots for local diagnostics. Test-only helpers may still use `InMemoryAuditSink`, and `NoopAuditSink` remains reserved for cases that explicitly do not need audit.
+2. **Audit events are never silently dropped** — production-shaped CLI chat, Telegram, and Feishu bootstraps default to `audit.mode = "fanout"`, which appends `~/.loongclaw/audit/events.jsonl` and can retain in-memory snapshots for local diagnostics. `LoongClawKernel::new()` now defaults to `InMemoryAuditSink`, and `NoopAuditSink` remains reserved for callers that explicitly opt into `new_without_audit(...)` or wire a noop sink themselves.
 3. **Pack registration is idempotent-safe** — duplicate pack IDs return `DuplicatePack` error, never silently overwrite.
 4. **Generation-based revocation is monotonic** — the revocation threshold only increases, never decreases.
 5. **TaskState transitions are irreversible from terminal states** — `Completed` and `Faulted` states cannot transition.

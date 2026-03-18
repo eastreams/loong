@@ -8,7 +8,10 @@ use std::{
 };
 
 use crate::{
-    audit::{AuditEvent, AuditEventKind, AuditSink, ExecutionPlane, NoopAuditSink, PlaneTier},
+    audit::{
+        AuditEvent, AuditEventKind, AuditSink, ExecutionPlane, InMemoryAuditSink, NoopAuditSink,
+        PlaneTier,
+    },
     clock::{Clock, SystemClock},
     connector::{ConnectorExtensionAdapter, ConnectorPlane, CoreConnectorAdapter},
     contracts::{
@@ -84,8 +87,29 @@ pub struct Kernel<P: PolicyEngine> {
 }
 
 impl<P: PolicyEngine> LoongClawKernel<P> {
+    /// Safe convenience constructor for callers that do not need to customize
+    /// runtime components. This defaults to in-memory audit rather than silent
+    /// audit dropping.
     #[must_use]
     pub fn new(policy: P) -> Self {
+        Self::new_with_in_memory_audit(policy).0
+    }
+
+    /// Construct a kernel with the default system clock and an inspectable
+    /// in-memory audit sink.
+    #[must_use]
+    pub fn new_with_in_memory_audit(policy: P) -> (Self, Arc<InMemoryAuditSink>) {
+        let audit = Arc::new(InMemoryAuditSink::default());
+        let kernel = Self::with_runtime(policy, Arc::new(SystemClock), audit.clone());
+        (kernel, audit)
+    }
+
+    /// Construct a kernel that intentionally discards audit events.
+    ///
+    /// This is reserved for narrow fixture paths where callers explicitly do
+    /// not need audit assertions or evidence retention.
+    #[must_use]
+    pub fn new_without_audit(policy: P) -> Self {
         Self::with_runtime(policy, Arc::new(SystemClock), Arc::new(NoopAuditSink))
     }
 

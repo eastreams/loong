@@ -105,6 +105,37 @@ fn fanout_audit_sink_records_to_all_children() {
 }
 
 #[test]
+fn explicit_in_memory_kernel_constructor_records_token_audit_events() {
+    let (mut kernel, audit) =
+        LoongClawKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    kernel
+        .register_pack(sample_pack())
+        .expect("pack should register");
+
+    kernel
+        .issue_token("sales-intel", "agent-in-memory", 120)
+        .expect("token should issue");
+
+    let events = audit.snapshot();
+    assert_eq!(events.len(), 1, "expected one token-issued audit event");
+    assert!(matches!(events[0].kind, AuditEventKind::TokenIssued { .. }));
+}
+
+#[test]
+fn explicit_no_audit_kernel_constructor_keeps_side_effect_free_fixture_path() {
+    let mut kernel = LoongClawKernel::new_without_audit(StaticPolicyEngine::default());
+    kernel
+        .register_pack(sample_pack())
+        .expect("pack should register");
+
+    let token = kernel
+        .issue_token("sales-intel", "agent-no-audit", 120)
+        .expect("token should issue without wiring an audit sink");
+
+    assert_eq!(token.agent_id, "agent-no-audit");
+}
+
+#[test]
 fn jsonl_audit_sink_surfaces_io_errors() {
     let path = fresh_audit_temp_path("jsonl-dir");
     fs::create_dir(&path).expect("directory fixture should create");
@@ -191,7 +222,8 @@ proptest! {
         let pack_capabilities = capability_set_from_mask(pack_mask);
         let required_capabilities = capability_set_from_mask(required_mask);
 
-        let mut kernel = LoongClawKernel::new(StaticPolicyEngine::default());
+        let (mut kernel, _audit) =
+            LoongClawKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
         let mut pack = sample_pack();
         pack.granted_capabilities = pack_capabilities.clone();
         kernel
