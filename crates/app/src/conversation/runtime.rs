@@ -26,10 +26,12 @@ use super::context_engine_registry::{
 use super::runtime_binding::ConversationRuntimeBinding;
 use super::subagent::ConstrainedSubagentExecution;
 use super::turn_engine::ProviderTurn;
-use super::turn_middleware::{ConversationTurnMiddleware, TurnMiddlewareMetadata};
+use super::turn_middleware::{
+    ConversationTurnMiddleware, SystemPromptAdditionTurnMiddleware, TurnMiddlewareMetadata,
+};
 use super::turn_middleware_registry::{
-    describe_turn_middlewares, list_turn_middleware_metadata, resolve_turn_middlewares,
-    turn_middleware_ids_from_env,
+    default_turn_middleware_ids, describe_turn_middlewares, list_turn_middleware_metadata,
+    resolve_turn_middlewares, turn_middleware_ids_from_env,
 };
 
 #[cfg(feature = "memory-sqlite")]
@@ -302,26 +304,31 @@ pub fn resolve_context_engine_selection(config: &LoongClawConfig) -> ContextEngi
     }
 }
 
-pub fn resolve_turn_middleware_selection(config: &LoongClawConfig) -> TurnMiddlewareSelection {
-    if let Some(ids) = turn_middleware_ids_from_env() {
-        return TurnMiddlewareSelection {
-            ids,
+pub fn resolve_turn_middleware_selection(
+    config: &LoongClawConfig,
+) -> CliResult<TurnMiddlewareSelection> {
+    let mut ids = default_turn_middleware_ids()?;
+    if let Some(env_ids) = turn_middleware_ids_from_env() {
+        ids.extend(env_ids);
+        return Ok(TurnMiddlewareSelection {
+            ids: normalize_turn_middleware_ids(ids),
             source: TurnMiddlewareSelectionSource::Env,
-        };
+        });
     }
 
-    let ids = config.conversation.turn_middleware_ids();
-    if !ids.is_empty() {
-        return TurnMiddlewareSelection {
-            ids,
+    let configured_ids = config.conversation.turn_middleware_ids();
+    if !configured_ids.is_empty() {
+        ids.extend(configured_ids);
+        return Ok(TurnMiddlewareSelection {
+            ids: normalize_turn_middleware_ids(ids),
             source: TurnMiddlewareSelectionSource::Config,
-        };
+        });
     }
 
-    TurnMiddlewareSelection {
-        ids: Vec::new(),
+    Ok(TurnMiddlewareSelection {
+        ids: normalize_turn_middleware_ids(ids),
         source: TurnMiddlewareSelectionSource::Default,
-    }
+    })
 }
 
 pub fn collect_context_engine_runtime_snapshot(
@@ -330,7 +337,7 @@ pub fn collect_context_engine_runtime_snapshot(
     let selected = resolve_context_engine_selection(config);
     let selected_metadata = describe_context_engine(Some(selected.id.as_str()))?;
     let available = list_context_engine_metadata()?;
-    let turn_middleware_selection = resolve_turn_middleware_selection(config);
+    let turn_middleware_selection = resolve_turn_middleware_selection(config)?;
     let turn_middlewares = TurnMiddlewareRuntimeSnapshot {
         selected_metadata: describe_turn_middlewares(turn_middleware_selection.ids.as_slice())?,
         available: list_turn_middleware_metadata()?,
@@ -354,10 +361,7 @@ pub fn collect_context_engine_runtime_snapshot(
 
 impl Default for DefaultConversationRuntime<DefaultContextEngine> {
     fn default() -> Self {
-        Self {
-            context_engine: DefaultContextEngine,
-            turn_middlewares: Vec::new(),
-        }
+        Self::with_context_engine(DefaultContextEngine)
     }
 }
 
@@ -380,7 +384,7 @@ impl<E> DefaultConversationRuntime<E> {
     pub fn with_context_engine(context_engine: E) -> Self {
         Self {
             context_engine,
-            turn_middlewares: Vec::new(),
+            turn_middlewares: vec![Box::new(SystemPromptAdditionTurnMiddleware)],
         }
     }
 
@@ -525,15 +529,12 @@ where
 impl DefaultConversationRuntime<Box<dyn ConversationContextEngine>> {
     pub fn from_engine_id(engine_id: Option<&str>) -> CliResult<Self> {
         let context_engine = resolve_context_engine(engine_id)?;
-        Ok(Self {
-            context_engine,
-            turn_middlewares: Vec::new(),
-        })
+        Ok(Self::with_context_engine(context_engine))
     }
 
     pub fn from_config_or_env(config: &LoongClawConfig) -> CliResult<Self> {
         let selection = resolve_context_engine_selection(config);
-        let turn_middleware_selection = resolve_turn_middleware_selection(config);
+        let turn_middleware_selection = resolve_turn_middleware_selection(config)?;
         let context_engine = resolve_context_engine(Some(selection.id.as_str()))?;
         let turn_middlewares = resolve_turn_middlewares(turn_middleware_selection.ids.as_slice())?;
         Ok(Self {
@@ -836,7 +837,7 @@ where
         let delegate_runtime_contract = include_system_prompt
             .then(|| delegate_child_runtime_contract_prompt_summary(config, &session_context))
             .flatten();
-        let merged_system_prompt_addition = merge_system_prompt_additions(
+        assembled.system_prompt_addition = merge_system_prompt_additions(
             assembled.system_prompt_addition.as_deref(),
             delegate_runtime_contract.as_deref(),
         );
@@ -849,10 +850,6 @@ where
                 binding,
             )
             .await?;
-        apply_system_prompt_addition(
-            &mut assembled.messages,
-            merged_system_prompt_addition.as_deref(),
-        );
         if include_system_prompt {
             apply_tool_view_to_system_prompt_if_needed(
                 &mut assembled.messages,
@@ -1056,42 +1053,6 @@ fn merge_system_prompt_additions(existing: Option<&str>, extra: Option<&str>) ->
         (None, None) => None,
     }
 }
-
-fn apply_system_prompt_addition(messages: &mut Vec<Value>, addition: Option<&str>) {
-    let Some(addition) = addition
-        .map(str::trim)
-        .filter(|content| !content.is_empty())
-    else {
-        return;
-    };
-
-    for message in messages.iter_mut() {
-        let is_system = message.get("role").and_then(Value::as_str) == Some("system");
-        if !is_system {
-            continue;
-        }
-
-        if let Some(object) = message.as_object_mut() {
-            let merged_content = match object.get("content").and_then(Value::as_str) {
-                Some(existing) if !existing.trim().is_empty() => {
-                    format!("{addition}\n\n{}", existing.trim())
-                }
-                _ => addition.to_owned(),
-            };
-            object.insert("content".to_owned(), Value::String(merged_content));
-            return;
-        }
-    }
-
-    messages.insert(
-        0,
-        json!({
-            "role": "system",
-            "content": addition,
-        }),
-    );
-}
-
 fn apply_tool_view_to_system_prompt_if_needed(
     messages: &mut [Value],
     runtime_tool_view: &ToolView,
@@ -1133,6 +1094,17 @@ fn apply_tool_view_to_system_prompt(messages: &mut [Value], tool_view: &ToolView
         }
         return;
     }
+}
+
+fn normalize_turn_middleware_ids(ids: Vec<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut normalized = Vec::new();
+    for id in ids {
+        if seen.insert(id.clone()) {
+            normalized.push(id);
+        }
+    }
+    normalized
 }
 
 #[cfg(test)]

@@ -1511,6 +1511,138 @@ fn default_runtime_exposes_context_engine_metadata() {
 }
 
 #[tokio::test]
+async fn default_runtime_applies_turn_middlewares_in_declared_order() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let runtime = DefaultConversationRuntime::with_context_engine_and_turn_middlewares(
+        StubContextEngine,
+        vec![
+            Box::new(RecordingTransformTurnMiddleware::new(
+                "append-middle-b",
+                "middleware-b",
+                calls.clone(),
+            )),
+            Box::new(RecordingTransformTurnMiddleware::new(
+                "append-middle-a",
+                "middleware-a",
+                calls.clone(),
+            )),
+        ],
+    );
+    let binding = ConversationRuntimeBinding::direct();
+    let assembled = runtime
+        .build_context(
+            &test_config(),
+            "session-turn-middleware-order",
+            true,
+            binding,
+        )
+        .await
+        .expect("build context through turn middleware chain");
+
+    let contents = assembled
+        .messages
+        .iter()
+        .map(|message| {
+            message["content"]
+                .as_str()
+                .expect("message content should remain a string")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        contents,
+        vec![
+            "stub-context-engine".to_owned(),
+            "middleware-b".to_owned(),
+            "middleware-a".to_owned(),
+        ]
+    );
+    assert_eq!(
+        calls.lock().expect("turn middleware calls lock").clone(),
+        vec![
+            "transform:append-middle-b:session-turn-middleware-order".to_owned(),
+            "transform:append-middle-a:session-turn-middleware-order".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn resolve_turn_middleware_selection_includes_builtin_defaults_when_unset() {
+    let _env_lock = turn_middleware_env_lock().lock().expect("env lock");
+    super::turn_middleware_registry::clear_turn_middleware_env_override();
+
+    let selection = resolve_turn_middleware_selection(&test_config())
+        .expect("resolve turn middleware selection");
+    assert_eq!(
+        selection.ids,
+        vec![SYSTEM_PROMPT_ADDITION_TURN_MIDDLEWARE_ID.to_owned()]
+    );
+    assert_eq!(selection.source, TurnMiddlewareSelectionSource::Default);
+}
+
+#[test]
+fn default_runtime_with_context_engine_exposes_builtin_turn_middleware_metadata() {
+    let runtime = DefaultConversationRuntime::with_context_engine(StubSystemPromptAdditionEngine);
+    assert_eq!(
+        runtime
+            .turn_middleware_metadata()
+            .into_iter()
+            .map(|metadata| metadata.id)
+            .collect::<Vec<_>>(),
+        vec![SYSTEM_PROMPT_ADDITION_TURN_MIDDLEWARE_ID]
+    );
+}
+
+#[test]
+fn collect_context_engine_runtime_snapshot_reports_turn_middleware_selection() {
+    let _env_lock = turn_middleware_env_lock().lock().expect("env lock");
+    register_turn_middleware("snapshot-turn-a", || {
+        Box::new(NoopTurnMiddleware::new("snapshot-turn-a"))
+    })
+    .expect("register turn middleware");
+    let _scoped_env = ScopedEnvVar::set(TURN_MIDDLEWARE_ENV, "");
+    let mut config = test_config();
+    config.conversation.turn_middlewares = vec!["snapshot-turn-a".to_owned()];
+
+    let snapshot = collect_context_engine_runtime_snapshot(&config)
+        .expect("collect context engine runtime snapshot");
+    assert_eq!(
+        snapshot.turn_middlewares.selected.ids,
+        vec![
+            SYSTEM_PROMPT_ADDITION_TURN_MIDDLEWARE_ID.to_owned(),
+            "snapshot-turn-a".to_owned()
+        ]
+    );
+    assert_eq!(
+        snapshot.turn_middlewares.selected.source,
+        TurnMiddlewareSelectionSource::Config
+    );
+    assert_eq!(
+        snapshot
+            .turn_middlewares
+            .selected_metadata
+            .iter()
+            .map(|metadata| metadata.id)
+            .collect::<Vec<_>>(),
+        vec![SYSTEM_PROMPT_ADDITION_TURN_MIDDLEWARE_ID, "snapshot-turn-a"]
+    );
+    assert!(
+        snapshot
+            .turn_middlewares
+            .available
+            .iter()
+            .any(|metadata| metadata.id == SYSTEM_PROMPT_ADDITION_TURN_MIDDLEWARE_ID)
+    );
+    assert!(
+        snapshot
+            .turn_middlewares
+            .available
+            .iter()
+            .any(|metadata| metadata.id == "snapshot-turn-a")
+    );
+}
+
+#[tokio::test]
 async fn default_runtime_build_messages_respects_restricted_tool_view() {
     let runtime = DefaultConversationRuntime::default();
     let view = crate::tools::ToolView::from_tool_names(["file.read"]);

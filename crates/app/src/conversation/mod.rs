@@ -87,13 +87,13 @@ pub use turn_engine::{
 };
 pub use turn_loop::ConversationTurnLoop;
 pub use turn_middleware::{
-    ConversationTurnMiddleware, TURN_MIDDLEWARE_API_VERSION, TurnMiddlewareCapability,
-    TurnMiddlewareMetadata,
+    ConversationTurnMiddleware, SYSTEM_PROMPT_ADDITION_TURN_MIDDLEWARE_ID,
+    TURN_MIDDLEWARE_API_VERSION, TurnMiddlewareCapability, TurnMiddlewareMetadata,
 };
 pub use turn_middleware_registry::{
-    TURN_MIDDLEWARE_ENV, describe_turn_middlewares, list_turn_middleware_ids,
-    list_turn_middleware_metadata, register_turn_middleware, resolve_turn_middleware,
-    resolve_turn_middlewares, turn_middleware_ids_from_env,
+    TURN_MIDDLEWARE_ENV, default_turn_middleware_ids, describe_turn_middlewares,
+    list_turn_middleware_ids, list_turn_middleware_metadata, register_turn_middleware,
+    resolve_turn_middleware, resolve_turn_middlewares, turn_middleware_ids_from_env,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
