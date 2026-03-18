@@ -28,7 +28,7 @@ Build a layered Agentic OS kernel that is:
 
 ## Stage 0: Kernel Contract Freeze (Done)
 
-Status: complete  
+Status: complete
 Focus: create minimal but strong core boundaries.
 
 Delivered:
@@ -46,7 +46,7 @@ Exit criteria met:
 
 ## Stage 1: Baseline Security & Governance (In Progress)
 
-Status: in progress  
+Status: in progress
 Focus: medium-balanced defaults + hard stops for high-risk behavior.
 
 Delivered:
@@ -84,7 +84,7 @@ Exit criteria:
 
 ## Stage 2: Safe Hotplug Runtime (Next)
 
-Status: in progress  
+Status: in progress
 Focus: runtime-grade isolation for untrusted extension execution.
 
 Delivered in current baseline:
@@ -120,7 +120,7 @@ Acceptance criteria:
 
 ## Stage 3: Autonomous Integration Expansion (In Progress)
 
-Status: in progress  
+Status: in progress
 Focus: dynamic provider/channel integration without hardcoding.
 
 Delivered in current baseline:
@@ -196,7 +196,7 @@ Delivered in current baseline:
 - active `http_json` runtime execution lane (no longer plan-only):
   - timeout-controlled request execution
   - structured runtime evidence (`status_code`, `response_json`)
-- builtin-only memory-system foundation for `alpha-test`:
+- builtin-only memory-system foundation for `dev`:
   - typed memory-system metadata and registry seam
   - hydrated memory orchestration over LoongClaw-owned canonical history
   - operator diagnostics for selected system, capability set, and effective
@@ -223,7 +223,7 @@ Acceptance criteria:
 
 ## Stage 4: Community Plugin Supply Chain (Next)
 
-Status: planned  
+Status: planned
 Focus: open ecosystem without sacrificing trust boundaries.
 
 Planned deliverables:
@@ -244,7 +244,7 @@ Acceptance criteria:
 
 ## Stage 5: Vertical Pack Productization (Next)
 
-Status: planned  
+Status: planned
 Focus: 15-minute vertical customization workflow.
 
 Planned deliverables:
@@ -267,7 +267,7 @@ Acceptance criteria:
 
 ## Stage M: End-User MVP Product Layer (In Progress)
 
-Status: in progress  
+Status: in progress
 Focus: ship a low-friction daily-usable daemon entry for non-developers.
 
 Delivered in current baseline:
@@ -380,7 +380,7 @@ Approach: split `build_messages_for_session` into prompt construction + kernel-r
 
 Trade-off: improves audit coverage for memory reads, but requires splitting a tightly coupled function.
 
-Status (alpha-test): implemented.
+Status (`dev`): implemented.
 - Added `ConversationContextEngine` seam and default implementation.
 - `build_messages` now assembles through context engine and routes memory window reads via `kernel.execute_memory_core(..., Capability::MemoryRead, ...)` when kernel context is present.
 - Added registry/selection hooks (`register_context_engine`, `resolve_context_engine`, `LOONGCLAW_CONTEXT_ENGINE`) plus config-based selector (`[conversation].context_engine`) for future multi-engine evolution without invasive runtime refactors.
@@ -455,6 +455,6 @@ instead of preceding it.
 
 Execution package for this order:
 
-- `docs/plans/2026-03-17-alpha-test-internal-runtime-hardening-design.md`
-- `docs/plans/2026-03-17-alpha-test-internal-runtime-hardening-implementation-plan.md`
-- `docs/plans/2026-03-17-alpha-test-internal-runtime-hardening-github-backlog.md`
+- the 2026-03-17 internal runtime hardening design in `docs/plans/`
+- the 2026-03-17 internal runtime hardening implementation plan in `docs/plans/`
+- the 2026-03-17 internal runtime hardening GitHub backlog in `docs/plans/`

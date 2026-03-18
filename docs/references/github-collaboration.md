@@ -1,13 +1,21 @@
 # GitHub Collaboration Reference
 
-This document defines the active GitHub collaboration baseline for the `alpha-test` branch.
+This document defines the active GitHub collaboration baseline for the `dev` branch.
 
 ## Active Branch Model
 
-- `alpha-test` is the active integration branch for day-to-day OSS work.
-- Contributors should branch from `alpha-test` and target `alpha-test` with normal pull requests.
-- `main` is the promotion branch. Only reviewed `alpha-test` changes should move into `main`.
-- The current default branch setting still lags this collaboration model. Until the default branch changes, or the same `.github/ISSUE_TEMPLATE` content is mirrored into `dev`, treat the docs and templates on `alpha-test` as the review source of truth.
+- `dev` is the active integration branch for day-to-day OSS work.
+- Contributors should branch from `dev` and target `dev` with normal pull requests.
+- `main` is the stable promotion branch. Only reviewed `dev` changes should move into `main`.
+- Promotion pull requests into `main` should come from `dev` and stay focused on stabilised work,
+  not mixed feature development.
+
+## Promotion and Release Rhythm
+
+- Maintainers aim to promote a stable slice from `dev` into `main` on a regular cadence.
+- Exact timing depends on validation status, scope completion, and operational readiness.
+- Releases are published from stable promotion points when the shipped slice is complete enough to
+  support a tagged release. Not every `dev -> main` promotion must become a public release.
 
 ## Intake Routes
 
@@ -16,7 +24,8 @@ This document defines the active GitHub collaboration baseline for the `alpha-te
 | Reproducible runtime defect | Bug report form | Captures severity, regression status, repro, runtime context, and evidence. |
 | New capability or behavior change | Feature request form | Captures problem statement, acceptance criteria, rollout notes, and scope boundaries. |
 | Missing, wrong, or confusing docs | Documentation improvement form | Captures branch-model drift, workflow gaps, and concrete doc references. |
-| Setup question or general troubleshooting | GitHub Discussions / Discord | Keeps support traffic out of the issue queue. |
+| Setup question or general troubleshooting | GitHub Discussions, Discord, Telegram, or the community spaces you already use such as Feishu and WeChat | Keeps support traffic out of the issue queue and lets people ask where they already participate. |
+| Direct contributor introduction or “where could I help?” conversation | [contact@loongclaw.ai](mailto:contact@loongclaw.ai) | Works well for async introductions, timezone context, and matching contributors to work that fits their strengths. |
 | Security vulnerability | Private security advisory | Avoids publishing sensitive details in public issues. |
 
 ## Managed Labels
@@ -83,16 +92,17 @@ The collaboration baseline continues to use the existing general labels for issu
 
 ## Pull Request Expectations
 
+- External contributors should normally target `dev`.
+- Promotion pull requests into `main` should come from `dev` and stay focused on stabilised work,
+  not mixed feature development.
 - Link the tracking issue in the PR body and include an explicit closing clause when the PR is meant to resolve it.
 - Keep the PR scoped to one logical change stream.
 - Fill in the PR template with changed areas, risk track, validation commands, and reviewer focus.
 - If the change is Track B, include rollout and rollback notes directly in the PR body.
 
-## Current Limitation
+## Default Branch Notes
 
-GitHub serves public issue forms from the default branch. At the moment, the repository default branch is not aligned with the active `alpha-test` contribution flow. That means the improved forms in `alpha-test` will not become public until one of these happens:
-
-1. The repository default branch is changed to `alpha-test`.
-2. The `.github/ISSUE_TEMPLATE` changes are mirrored into `dev`.
-
-Until then, this document and [CONTRIBUTING.md](../../CONTRIBUTING.md) are the authoritative guidance for contributors and maintainers reviewing `alpha-test`.
+GitHub serves public issue forms from the default branch. In this repository, the default branch is
+`dev`, which is also the active collaboration baseline. Keep contributor-facing templates, contact
+links, and references aligned on `dev` so public intake stays consistent with the actual review
+flow.

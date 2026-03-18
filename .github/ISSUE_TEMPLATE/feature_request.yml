@@ -42,7 +42,7 @@ body:
     attributes:
       label: Problem statement
       description: What user or system problem are you trying to solve?
-      placeholder: Contributors cannot tell which branch or issue intake path is authoritative, so review and triage context arrives fragmented.
+      placeholder: Contributors cannot tell which work should land on `dev`, how stable promotions reach `main`, or when a release is expected.
     validations:
       required: true
 
@@ -51,7 +51,7 @@ body:
     attributes:
       label: Proposed solution
       description: Describe the preferred behavior, UX, API, or workflow.
-      placeholder: Add area-aware issue intake, lightweight path label automation, and explicit alpha-test contribution guidance.
+      placeholder: Add explicit `dev`-branch contribution guidance, narrow `dev -> main` promotion rules, and clearer release-readiness language.
     validations:
       required: true
 
@@ -75,9 +75,9 @@ body:
       label: Acceptance criteria
       description: What concrete outcomes would make this request complete?
       placeholder: |
-        - PRs get stable area labels automatically
-        - Bug reports capture runtime evidence consistently
-        - Contributor docs point external PRs at alpha-test
+        - Contributor docs point normal external PRs at `dev`
+        - Promotion PRs into `main` stay stabilization-focused
+        - Release guidance explains when a stable promotion becomes a tagged release
 
   - type: dropdown
     id: sensitivity

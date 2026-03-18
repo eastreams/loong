@@ -487,10 +487,9 @@ mod tests {
 
     #[test]
     fn presentation_version_line_is_traceable_for_dev_build() {
-        let build =
-            BuildVersionInfo::new_for_test("0.1.2", Some("alpha-test"), Some("1a2b3c4"), false);
+        let build = BuildVersionInfo::new_for_test("0.1.2", Some("dev"), Some("1a2b3c4"), false);
 
-        assert_eq!(build.render_version_line(), "v0.1.2 · alpha-test · 1a2b3c4");
+        assert_eq!(build.render_version_line(), "v0.1.2 · dev · 1a2b3c4");
     }
 
     #[test]
@@ -566,20 +565,18 @@ mod tests {
 
     #[test]
     fn presentation_compact_brand_header_keeps_brand_and_version_on_one_line() {
-        let build =
-            BuildVersionInfo::new_for_test("0.1.2", Some("alpha-test"), Some("1a2b3c4"), false);
+        let build = BuildVersionInfo::new_for_test("0.1.2", Some("dev"), Some("1a2b3c4"), false);
 
         let lines = render_compact_brand_header(80, &build, Some("choose model"));
 
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0].text, "LOONGCLAW  v0.1.2 · alpha-test · 1a2b3c4");
+        assert_eq!(lines[0].text, "LOONGCLAW  v0.1.2 · dev · 1a2b3c4");
         assert_eq!(lines[1].text, "choose model");
     }
 
     #[test]
     fn presentation_compact_brand_header_wraps_on_narrow_width() {
-        let build =
-            BuildVersionInfo::new_for_test("0.1.2", Some("alpha-test"), Some("1a2b3c4"), false);
+        let build = BuildVersionInfo::new_for_test("0.1.2", Some("dev"), Some("1a2b3c4"), false);
 
         let lines = render_compact_brand_header(22, &build, Some("choose credential env"));
 
@@ -596,8 +593,7 @@ mod tests {
 
     #[test]
     fn presentation_brand_header_wraps_version_and_subtitle_on_narrow_width() {
-        let build =
-            BuildVersionInfo::new_for_test("0.1.2", Some("alpha-test"), Some("1a2b3c4"), false);
+        let build = BuildVersionInfo::new_for_test("0.1.2", Some("dev"), Some("1a2b3c4"), false);
 
         let lines = render_brand_header(
             18,

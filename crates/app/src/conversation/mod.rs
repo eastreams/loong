@@ -62,7 +62,10 @@ pub use safe_lane_failure::{
 };
 pub use session_address::ConversationSessionAddress;
 pub use session_history::load_discovery_first_event_summary;
-pub use session_history::{load_safe_lane_event_summary, load_turn_checkpoint_event_summary};
+pub use session_history::{
+    load_fast_lane_tool_batch_event_summary, load_safe_lane_event_summary,
+    load_turn_checkpoint_event_summary,
+};
 pub use subagent::{
     ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentTerminalReason,
 };

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (required for manual runs, for example v0.1.0)"
+        description: "Tag to release (required for manual runs, for example v0.1.0 or v0.1.0-alpha.1)"
         required: true
 
 env:
@@ -157,10 +157,24 @@ jobs:
           cp scripts/install.sh dist/install.sh
           cp scripts/install.ps1 dist/install.ps1
 
+      - name: Resolve release channel
+        id: release_meta
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create GitHub release
-        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           generate_release_notes: true
           overwrite_files: true
+          prerelease: ${{ steps.release_meta.outputs.prerelease }}
           files: dist/*

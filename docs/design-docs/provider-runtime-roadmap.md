@@ -3,7 +3,7 @@
 ## Scope and Baseline
 
 - OpenClaw reference: `openclaw/openclaw` `main@936607c` (fetched on 2026-03-11).
-- LoongClaw baseline: `loongclaw-ai/loongclaw` `alpha-test@cd39c7a`.
+- LoongClaw baseline: `loongclaw-ai/loongclaw` `dev@cd39c7a`.
 - Current working track: `feat/provider-runtime-abstraction` (this branch, unmerged changes).
 
 This document captures architecture comparison, implemented hardening, and a durable roadmap for provider runtime evolution.
@@ -18,7 +18,7 @@ This document captures architecture comparison, implemented hardening, and a dur
 
 ## Comparative Architecture Snapshot
 
-| Dimension | OpenClaw (`main`) | LoongClaw (`alpha-test`) | Current branch (`feat/provider-runtime-abstraction`) |
+| Dimension | OpenClaw (`main`) | LoongClaw (`dev`) | Current branch (`feat/provider-runtime-abstraction`) |
 | --- | --- | --- | --- |
 | Provider capability abstraction | Dedicated capability matrix (`provider-capabilities`) and provider-family toggles (OpenAI/Anthropic/default) | Minimal kind-based branching in runtime path | Still lightweight kind-based flow, but transport mode abstraction and payload adaptation are centralized |
 | Model catalog runtime | Shared async catalog loader with cache poisoning protection and synthetic forward-compat entries | Per-request direct model-list fetch in auto mode | Added bounded model-catalog cache + stale-if-error fallback + singleflight dedupe |

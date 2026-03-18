@@ -10,7 +10,7 @@ fn non_release_build_prefers_git_branch_and_short_sha_when_not_overridden() {
         None,
         None,
         None,
-        Some("alpha-test"),
+        Some("dev"),
         Some("ec9ee5f0d57b9ef18110786407c3ccdb447bbcf7"),
     );
 
@@ -18,7 +18,7 @@ fn non_release_build_prefers_git_branch_and_short_sha_when_not_overridden() {
         metadata,
         BuildMetadata {
             release_build: false,
-            channel: Some("alpha-test".to_owned()),
+            channel: Some("dev".to_owned()),
             short_sha: Some("ec9ee5f".to_owned()),
         }
     );
@@ -30,7 +30,7 @@ fn explicit_compile_overrides_win_over_git_detection() {
         None,
         Some("custom-preview"),
         Some("1234567890abcdef"),
-        Some("alpha-test"),
+        Some("dev"),
         Some("ec9ee5f0d57b9ef18110786407c3ccdb447bbcf7"),
     );
 
@@ -70,9 +70,9 @@ fn git_rerun_hint_targets_handle_detached_head() {
 fn release_build_clears_non_release_trace_metadata() {
     let metadata = version_metadata::resolve_build_metadata(
         Some("1"),
-        Some("alpha-test"),
+        Some("dev"),
         Some("ec9ee5f0d57b9ef18110786407c3ccdb447bbcf7"),
-        Some("alpha-test"),
+        Some("dev"),
         Some("ec9ee5f0d57b9ef18110786407c3ccdb447bbcf7"),
     );
 

@@ -8,7 +8,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Use this template for documentation drift, missing guidance, broken workflows, or confusing contributor instructions.
+        Use this template for documentation drift, missing guidance, broken workflows, confusing
+        contributor instructions, or release-process wording that no longer matches reality.
 
   - type: dropdown
     id: area
@@ -41,7 +42,7 @@ body:
     attributes:
       label: Summary
       description: What is wrong or missing?
-      placeholder: CONTRIBUTING.md tells contributors to branch from main even though alpha-test is the actual integration branch.
+      placeholder: CONTRIBUTING.md still points contributors at `main` even though `dev` is the active integration branch.
     validations:
       required: true
 
@@ -70,8 +71,11 @@ body:
       description: Link the relevant files, PRs, workflows, or screenshots if available.
       placeholder: |
         - CONTRIBUTING.md
-        - .github/workflows/enforce-alpha-test-to-main.yml
-        - recent PRs targeting alpha-test
+        - docs/references/github-collaboration.md
+        - .github/ISSUE_TEMPLATE/config.yml
+        - .github/workflows/enforce-dev-to-main.yml
+        - .github/workflows/release.yml
+        - recent PRs targeting dev
 
   - type: textarea
     id: impact

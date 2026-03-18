@@ -77,6 +77,13 @@ EOF
     echo "expected version_is_greater to reject smaller version" >&2
     exit 1
   fi
+  version_is_greater "0.1.0-alpha.2" "0.1.0-alpha.1"
+  if version_is_greater "0.1.0-alpha.1" "0.1.0-alpha.2"; then
+    echo "expected version_is_greater to reject smaller prerelease version" >&2
+    exit 1
+  fi
+  version_is_greater "0.1.0" "0.1.0-alpha.9"
+  version_is_greater "0.2.0-alpha.1" "0.1.9"
 
   if release_target_for_platform "Linux" "ppc64le" >/dev/null 2>&1; then
     echo "expected release_target_for_platform to reject unsupported host arch" >&2
@@ -133,6 +140,19 @@ EOF
     echo "expected release_trace_path_matches_contract to reject symlink-backed trace path prefixes" >&2
     exit 1
   fi
+
+  cat >"$tmp_dir/CHANGELOG.md" <<'EOF'
+# Changelog
+
+## [0.1.0-alpha.2] - 2026-03-17
+
+## [0.1.0-alpha.1] - 2026-03-17
+EOF
+
+  versions="$(release_versions_from_changelog "$tmp_dir/CHANGELOG.md")"
+  assert_equals $'0.1.0-alpha.2\n0.1.0-alpha.1' "$versions"
+  assert_equals "v0.1.0-alpha.1" "$(release_tag_from_version "0.1.0-alpha.1")"
+  assert_equals ".docs/releases/v0.1.0-alpha.1-debug.md" "$(release_debug_doc_relpath "v0.1.0-alpha.1")"
 }
 
 run_release_artifact_lib_tests

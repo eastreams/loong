@@ -1,6 +1,8 @@
 # Contributing to LoongClaw
 
-Thanks for contributing. This guide defines the baseline workflow for external and internal contributors.
+Thanks for spending time on LoongClaw. This guide defines the baseline workflow for external and
+internal contributors. We care about clear ownership, thoughtful engineering, and kind
+collaboration.
 
 ## Prerequisites
 
@@ -68,13 +70,55 @@ If you are unsure which track applies, open an issue and ask maintainers for tri
 
 ## Branch Model
 
-- `alpha-test` is the active integration branch for normal OSS work.
-- `main` is the promotion branch and should only receive reviewed changes from `alpha-test`.
-- The repository default branch setting does not yet fully reflect this flow. Until that changes, treat the docs and workflow files on `alpha-test` as the authoritative contributor baseline.
+- `dev` is the active integration branch for day-to-day development.
+- Contributors should branch from `dev` and target `dev` with normal pull requests.
+- `main` is the stable promotion branch and should only receive reviewed changes from `dev`.
+- Maintainers aim to promote stable slices from `dev` into `main` on a regular cadence. Exact
+  timing depends on validation status, scope completion, and operational readiness.
+
+## Release Model
+
+- Tagged releases are published from stable promotion points rather than from arbitrary in-flight
+  commits.
+- Not every `dev -> main` promotion needs to become a public release.
+- Release readiness normally includes green CI, required validation, install flow sanity, and docs
+  or changelog updates for shipped user-facing changes.
 
 ## Where Do I Start?
 
 Use [Core Beliefs](docs/design-docs/core-beliefs.md) and [Layered Kernel Design](docs/design-docs/layered-kernel-design.md) for architecture principles and dependency boundaries.
+
+If you are unsure where your background fits, start with
+[Contribution Areas We Especially Welcome](docs/references/contribution-areas.md). We warmly
+welcome help across design, frontend work, hardware / robotics / embodied AI, systems engineering,
+cross-platform delivery, testing and operations, docs and i18n, and community care.
+
+## How to Join In
+
+- If you already know what you want to work on, open or join the relevant Issue and link your plan.
+- If you want to take on a large feature or architecture change, start with an Issue or Discussion
+  first so maintainers can help shape scope early.
+- If your strengths are design, docs, translation, QA, operations, support, or community work,
+  those are first-class contributions here, not second-tier work.
+- If you would rather start with a direct introduction, email
+  [contact@loongclaw.ai](mailto:contact@loongclaw.ai). A short note is enough. You do not need a
+  formal application.
+- If you are unsure where to begin, open a Discussion or send that introduction email and we will
+  help point you toward good starting areas.
+
+## A Short Introduction That Helps
+
+If you email us, it is especially helpful to include:
+
+- where you are based or what time zone you usually work in
+- your strongest skills or the kinds of problems you are best at
+- the area you would most like to own or help push forward
+- what you hope LoongClaw could become, or what part of the project excites you
+- roughly how much time or energy you expect to contribute
+- any links to GitHub, past work, writing, design, demos, or projects you want us to see
+
+That does not need to be long. A thoughtful, honest introduction is much more useful than a formal
+pitch.
 
 **Common contribution areas:**
 
@@ -133,10 +177,11 @@ cargo test --workspace --all-features
 ## Standard Workflow
 
 1. Fork the repository.
-2. Create a branch from `alpha-test`.
+2. Create a branch from `dev`.
 3. Make focused commits.
 4. Run required checks.
-5. Open a pull request against `alpha-test` using the PR template unless a maintainer explicitly asks for a promotion PR into `main`.
+5. Open a pull request against `dev` using the PR template unless a maintainer explicitly asks you
+   to help with a focused promotion PR from `dev` into `main`.
 6. Address review feedback and keep PR scope focused.
 
 ## Issue Intake
@@ -145,16 +190,44 @@ cargo test --workspace --all-features
 - Use the feature request form for new capabilities, behavior changes, or meaningful product/runtime improvements.
 - Use the documentation improvement form for contributor guide drift, missing references, or confusing review workflow docs.
 - Use GitHub Discussions for setup questions and general troubleshooting.
+- Use community channels such as Discord and Telegram. If you are already active in Feishu or
+  WeChat community spaces, those are also good places to ask.
+- If you want to introduce yourself directly or talk about where you could help most, email
+  [contact@loongclaw.ai](mailto:contact@loongclaw.ai).
 - Use the private security advisory flow for vulnerabilities instead of public issues.
 
-See [docs/references/github-collaboration.md](docs/references/github-collaboration.md) for the current label baseline, issue routing, and the default-branch visibility caveat for issue forms.
+See [docs/references/github-collaboration.md](docs/references/github-collaboration.md) for the
+current label baseline, issue routing, community paths, and review flow.
+
+## PRs We Are Unlikely to Merge
+
+The following pull requests are unlikely to be accepted unless maintainers have explicitly aligned
+on them in advance:
+
+1. AI-assisted changes that the author does not understand or cannot defend. We welcome AI tooling
+   as a force multiplier, but contributors are expected to understand every line they submit and to
+   take responsibility for its behavior, risks, and tradeoffs.
+2. Uncoordinated changes to core project identity or governance files. This includes brand assets,
+   licensing, pull request templates, `CODEOWNERS`, and similar repository-critical configuration.
+   These areas are maintained by the core team and may be closed without review if changed without
+   prior discussion.
+3. Large changes to core product architecture without prior maintainer discussion. If you want to
+   build a major feature or restructure key architecture, start with an Issue or Discussion, align
+   on the design, and wait for maintainer guidance before implementation.
+4. Ecosystem extensions outside the core product scope. Third-party plugins, external integrations,
+   and ecosystem-specific additions are usually better maintained in separate repositories instead
+   of being merged into the main repository.
 
 ## Commit and PR Expectations
 
 - Use clear, scoped commit messages.
 - Keep one logical change per PR when possible.
 - Link relevant issue IDs in PR description.
+- When a PR resolves a tracked issue, include an explicit closing clause such as `Closes #123` in
+  the PR body.
 - Include risk notes for Track B changes.
+- Promotion PRs from `dev` into `main` should stay narrow and focus on stabilization rather than
+  mixed feature development.
 
 ## Review Policy
 

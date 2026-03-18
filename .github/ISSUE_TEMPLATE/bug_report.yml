@@ -1,5 +1,5 @@
 name: Bug Report
-description: Report a reproducible defect in LoongClaw's active alpha-test runtime.
+description: Report a reproducible defect in LoongClaw's active `dev` branch or latest stable release.
 title: "[Bug]: "
 labels:
   - bug
@@ -10,6 +10,8 @@ body:
       value: |
         Thanks for filing a bug report.
         Please keep the report evidence-based, redact secrets, and provide the shortest reproducible path you can.
+        If you are still figuring out whether this is a bug or a setup problem, GitHub Discussions
+        or the community channels are also fine places to ask first.
 
   - type: dropdown
     id: area
@@ -98,7 +100,7 @@ body:
     attributes:
       label: Version / commit
       description: Release tag or exact branch/commit tested.
-      placeholder: alpha-test@ec9ee5f or v0.3.2
+      placeholder: dev@<commit> or v0.3.2
     validations:
       required: true
 
@@ -154,7 +156,7 @@ body:
     attributes:
       label: Pre-flight checks
       options:
-        - label: I reproduced this on the latest `alpha-test` branch tip or the latest published release.
+        - label: I reproduced this on the latest `dev` branch tip or the latest published release.
           required: true
         - label: I redacted secrets, tokens, and private endpoints from everything I attached.
           required: true

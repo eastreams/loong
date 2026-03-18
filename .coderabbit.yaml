@@ -4,4 +4,4 @@ reviews:
     enabled: true
     base_branches:
       - main
-      - alpha-test
+      - dev

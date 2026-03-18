@@ -13,7 +13,7 @@
     ],
     "metadata": {
       "owner": "loongclaw-ai",
-      "stage": "alpha-test"
+      "stage": "dev"
     }
   },
   "agent_id": "agent-migrate-legacy-claw",
