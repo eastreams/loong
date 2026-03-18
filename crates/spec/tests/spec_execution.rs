@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use kernel::Capability;
+use kernel::{AuditEventKind, Capability};
 use loongclaw_spec::test_support::make_runner_spec;
 use loongclaw_spec::{OperationSpec, execute_spec, spec_requires_native_tool_executor};
 use serde_json::json;
@@ -50,5 +50,49 @@ async fn execute_spec_blocks_native_tool_without_executor() {
             .as_deref()
             .expect("blocked reason should exist")
             .contains("native tool executor")
+    );
+}
+
+#[tokio::test]
+async fn execute_spec_returns_audit_snapshot_when_requested() {
+    let spec = make_runner_spec(OperationSpec::Task {
+        task_id: "spec-audit-task".to_owned(),
+        objective: "exercise spec audit snapshot capture".to_owned(),
+        required_capabilities: BTreeSet::new(),
+        payload: json!({"kind": "audit-contract-check"}),
+    });
+
+    let report = execute_spec(&spec, true).await;
+
+    let audit_events = report
+        .audit_events
+        .as_ref()
+        .expect("audit events should be present when explicitly requested");
+    assert!(
+        !audit_events.is_empty(),
+        "expected spec execution to retain at least one in-memory audit event"
+    );
+    assert!(
+        audit_events
+            .iter()
+            .any(|event| matches!(event.kind, AuditEventKind::TokenIssued { .. })),
+        "expected token issuance to be retained in the audit snapshot"
+    );
+}
+
+#[tokio::test]
+async fn execute_spec_suppresses_audit_snapshot_when_not_requested() {
+    let spec = make_runner_spec(OperationSpec::Task {
+        task_id: "spec-audit-task".to_owned(),
+        objective: "exercise spec audit snapshot suppression".to_owned(),
+        required_capabilities: BTreeSet::new(),
+        payload: json!({"kind": "audit-contract-check"}),
+    });
+
+    let report = execute_spec(&spec, false).await;
+
+    assert!(
+        report.audit_events.is_none(),
+        "audit snapshots should stay opt-in for spec execution reports"
     );
 }
