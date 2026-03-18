@@ -132,6 +132,226 @@ async fn provider_auth_ready_accepts_bedrock_sigv4_credentials() {
     assert!(provider_auth_ready(&config).await);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn fetch_available_models_rejects_missing_volcengine_credentials_before_network_request() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local provider listener");
+    let addr = listener.local_addr().expect("local addr");
+    let server = std::thread::spawn(move || {
+        listener
+            .set_nonblocking(true)
+            .expect("set listener nonblocking");
+        let deadline = Instant::now() + Duration::from_millis(250);
+        let mut requests = Vec::new();
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut request_buf = [0_u8; 8192];
+                    let len = stream.read(&mut request_buf).expect("read request");
+                    let request = String::from_utf8_lossy(&request_buf[..len]).to_string();
+                    requests.push(request);
+                    let body = r#"{"error":{"message":"unexpected request"}}"#;
+                    let response = format!(
+                        "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    stream
+                        .write_all(response.as_bytes())
+                        .expect("write response");
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::yield_now();
+                }
+                Err(error) => panic!("accept local provider request: {error}"),
+            }
+        }
+        requests
+    });
+
+    let config = test_config(ProviderConfig {
+        kind: ProviderKind::Volcengine,
+        base_url: format!("http://{addr}"),
+        model: "auto".to_owned(),
+        api_key: None,
+        api_key_env: None,
+        oauth_access_token: None,
+        oauth_access_token_env: None,
+        ..ProviderConfig::default()
+    });
+
+    let error = fetch_available_models(&config)
+        .await
+        .expect_err("missing volcengine credentials should fail before any network request");
+
+    assert!(
+        error.contains("provider credentials are missing"),
+        "unexpected error: {error}"
+    );
+    assert!(
+        error.contains("ARK_API_KEY"),
+        "missing-credential guidance should mention the Volcengine env binding: {error}"
+    );
+
+    let requests = server.join().expect("join local provider server");
+    assert!(
+        requests.is_empty(),
+        "missing managed credentials should not fall through to an anonymous model-list request: {requests:#?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn fetch_available_models_enriches_volcengine_auth_failures_with_ark_guidance() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local provider listener");
+    let addr = listener.local_addr().expect("local addr");
+    let server = std::thread::spawn(move || {
+        let mut requests = Vec::new();
+        let (mut stream, _) = listener.accept().expect("accept local provider request");
+        let mut request_buf = [0_u8; 8192];
+        let len = stream.read(&mut request_buf).expect("read request");
+        let request = String::from_utf8_lossy(&request_buf[..len]).to_string();
+        requests.push(request);
+
+        let body = r#"{"error":{"code":"AuthenticationError","message":"the API key or AK/SK in the request is missing or invalid","type":"Unauthorized"}}"#;
+        let response = format!(
+            "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .expect("write response");
+        requests
+    });
+
+    let config = test_config(ProviderConfig {
+        kind: ProviderKind::VolcengineCoding,
+        base_url: format!("http://{addr}"),
+        model: "auto".to_owned(),
+        api_key: Some("bad-ark-key".to_owned()),
+        api_key_env: None,
+        ..ProviderConfig::default()
+    });
+
+    let error = fetch_available_models(&config)
+        .await
+        .expect_err("volcengine auth failures should surface actionable guidance");
+
+    assert!(error.contains("status 401"), "unexpected error: {error}");
+    assert!(
+        error.contains("Authorization: Bearer <ARK_API_KEY>"),
+        "volcengine auth failures should explain the supported auth shape: {error}"
+    );
+    assert!(
+        error.contains("AK/SK request signing is not used"),
+        "volcengine auth failures should explain the unsupported auth path clearly: {error}"
+    );
+
+    let requests = server.join().expect("join local provider server");
+    assert!(
+        requests.iter().any(|request| {
+            let normalized = request.to_ascii_lowercase();
+            request.starts_with("GET /models ")
+                && normalized.contains("authorization: bearer bad-ark-key")
+        }),
+        "the catalog probe should still use the configured bearer secret when credentials exist: {requests:#?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn request_turn_auto_model_rejects_missing_volcengine_credentials_before_transport() {
+    let config = test_config(ProviderConfig {
+        kind: ProviderKind::VolcengineCoding,
+        base_url: "http://127.0.0.1:1".to_owned(),
+        model: "auto".to_owned(),
+        api_key: None,
+        api_key_env: None,
+        oauth_access_token: None,
+        oauth_access_token_env: None,
+        ..ProviderConfig::default()
+    });
+
+    let error = request_turn(
+        &config,
+        "session-provider-test",
+        "turn-provider-test",
+        &[json!({
+            "role": "user",
+            "content": "ping"
+        })],
+        ProviderRuntimeBinding::direct(),
+    )
+    .await
+    .expect_err("auto-model requests should fail on missing managed credentials before transport");
+
+    assert!(
+        error.contains("provider credentials are missing"),
+        "unexpected error: {error}"
+    );
+    assert!(
+        error.contains("ARK_API_KEY"),
+        "missing-credential request errors should preserve the provider env hint: {error}"
+    );
+    assert!(
+        !error.contains("Connection refused"),
+        "missing managed credentials should fail before a transport attempt: {error}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn fetch_available_models_rejects_missing_openai_credentials_before_transport() {
+    let mut env = ScopedEnv::new();
+    env.remove("OPENAI_CODEX_OAUTH_TOKEN");
+    env.remove("OPENAI_API_KEY");
+
+    let config = test_config(ProviderConfig {
+        kind: ProviderKind::Openai,
+        base_url: "http://127.0.0.1:1".to_owned(),
+        model: "auto".to_owned(),
+        api_key: None,
+        api_key_env: None,
+        oauth_access_token: None,
+        oauth_access_token_env: None,
+        ..ProviderConfig::default()
+    });
+
+    let error = fetch_available_models(&config)
+        .await
+        .expect_err("missing OpenAI credentials should fail before transport");
+
+    assert!(
+        error.contains("provider credentials are missing"),
+        "unexpected error: {error}"
+    );
+    assert!(
+        error.contains("OPENAI_CODEX_OAUTH_TOKEN"),
+        "openai guidance should preserve the oauth default hint: {error}"
+    );
+    assert!(
+        error.contains("OPENAI_API_KEY"),
+        "openai guidance should preserve the api key fallback hint: {error}"
+    );
+    assert!(
+        !error.contains("Connection refused"),
+        "missing managed credentials should fail before a transport attempt: {error}"
+    );
+}
+
+#[test]
+fn byteplus_auth_guidance_uses_byteplus_api_key_env() {
+    let provider = ProviderConfig {
+        kind: ProviderKind::ByteplusCoding,
+        ..ProviderConfig::default()
+    };
+
+    let hint = provider
+        .auth_guidance_hint()
+        .expect("byteplus coding should expose auth guidance");
+
+    assert!(hint.contains("BytePlus"));
+    assert!(hint.contains("BYTEPLUS_API_KEY"));
+    assert!(hint.contains("Authorization: Bearer <BYTEPLUS_API_KEY>"));
+}
+
 fn cleanup_sqlite_artifacts(path: &Path) {
     let _ = std::fs::remove_file(path);
     let wal = format!("{}-wal", path.display());

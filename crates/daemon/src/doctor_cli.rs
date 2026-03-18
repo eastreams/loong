@@ -1119,7 +1119,7 @@ fn provider_credentials_doctor_check(
     }
 
     let hints = crate::onboard_cli::provider_credential_env_hints(&config.provider);
-    let detail = if hints.is_empty() {
+    let mut detail = if hints.is_empty() {
         "provider credentials are missing".to_owned()
     } else {
         format!(
@@ -1127,6 +1127,10 @@ fn provider_credentials_doctor_check(
             hints.join(", ")
         )
     };
+    if let Some(hint) = config.provider.auth_guidance_hint() {
+        detail.push(' ');
+        detail.push_str(hint.as_str());
+    }
     DoctorCheck {
         name: "provider credentials".to_owned(),
         level: DoctorCheckLevel::Warn,
@@ -2757,6 +2761,23 @@ mod tests {
                 == "Re-run diagnostics: loongclaw doctor --config '/tmp/loongclaw.toml'"),
             "doctor should tell the operator how to confirm the repair path: {next_steps:#?}"
         );
+    }
+
+    #[test]
+    fn provider_credentials_doctor_check_adds_volcengine_auth_guidance() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Volcengine;
+        config.provider.api_key = None;
+        config.provider.api_key_env = None;
+        config.provider.oauth_access_token = None;
+        config.provider.oauth_access_token_env = None;
+
+        let check = provider_credentials_doctor_check(&config, false);
+
+        assert_eq!(check.name, "provider credentials");
+        assert_eq!(check.level, DoctorCheckLevel::Warn);
+        assert!(check.detail.contains("ARK_API_KEY"));
+        assert!(check.detail.contains("Authorization: Bearer <ARK_API_KEY>"));
     }
 
     #[test]

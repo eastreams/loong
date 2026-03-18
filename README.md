@@ -271,7 +271,7 @@ kind = "openai"
 api_key = "${PROVIDER_API_KEY}"
 ```
 
-Volcengine Coding Plan / ARK example:
+Volcengine / ARK example:
 
 ```bash
 export ARK_API_KEY=your-ark-api-key
@@ -285,6 +285,8 @@ api_key = "${ARK_API_KEY}"
 base_url = "https://ark.cn-beijing.volces.com"
 chat_completions_path = "/api/v3/chat/completions"
 ```
+
+Both `volcengine` and `volcengine_coding` use `api_key = "${ARK_API_KEY}"`. LoongClaw sends that value as `Authorization: Bearer <ARK_API_KEY>` on the OpenAI-compatible Volcengine path; AK/SK request signing is not used there.
 
 Feishu channel example:
 

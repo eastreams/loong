@@ -96,11 +96,15 @@ fn render_status_failure_message(
     let mut message = format!(
         "provider returned status {status_code} for model `{model}` on attempt {attempt}/{max_attempts}: {response_body}"
     );
-    if matches!(reason, ProviderFailoverReason::AuthRejected)
-        && let Some(hint) = provider.request_region_endpoint_failure_hint()
-    {
-        message.push(' ');
-        message.push_str(hint.as_str());
+    if matches!(reason, ProviderFailoverReason::AuthRejected) {
+        if let Some(hint) = provider.auth_guidance_hint() {
+            message.push(' ');
+            message.push_str(hint.as_str());
+        }
+        if let Some(hint) = provider.request_region_endpoint_failure_hint() {
+            message.push(' ');
+            message.push_str(hint.as_str());
+        }
     }
     message
 }

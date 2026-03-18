@@ -15,7 +15,8 @@ use super::profile_health_runtime::{
 use super::profile_state_backend::ensure_provider_profile_state_backend;
 use super::provider_keyspace::build_model_candidate_cooldown_namespace;
 use super::provider_validation_runtime::{
-    validate_provider_configuration, validate_provider_feature_gate,
+    validate_provider_auth_readiness, validate_provider_configuration,
+    validate_provider_feature_gate,
 };
 
 pub(super) struct ProviderRequestSession {
@@ -36,6 +37,7 @@ pub(super) async fn prepare_provider_request_session(
 ) -> CliResult<ProviderRequestSession> {
     validate_provider_configuration(config)?;
     validate_provider_feature_gate(config)?;
+    validate_provider_auth_readiness(config).await?;
     ensure_provider_profile_state_backend(config);
 
     let endpoint = config.provider.endpoint();

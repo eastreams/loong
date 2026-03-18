@@ -1060,6 +1060,59 @@ impl ProviderConfig {
         }
     }
 
+    pub fn auth_hint_env_names(&self) -> Vec<String> {
+        let mut env_names = Vec::new();
+        push_inline_env_reference(&mut env_names, self.oauth_access_token.as_deref());
+        push_inline_env_reference(&mut env_names, self.api_key.as_deref());
+        for env_name in self.credential_env_names() {
+            push_unique_env_key(&mut env_names, Some(env_name.as_str()));
+        }
+        env_names
+    }
+
+    pub fn requires_explicit_auth_configuration(&self) -> bool {
+        !self.auth_hint_env_names().is_empty()
+    }
+
+    pub fn auth_guidance_hint(&self) -> Option<String> {
+        if self.kind.feature_family() == ProviderFeatureFamily::Volcengine {
+            let provider_label = if matches!(
+                self.kind,
+                ProviderKind::Byteplus | ProviderKind::ByteplusCoding
+            ) {
+                "BytePlus"
+            } else {
+                "Volcengine"
+            };
+            let env_name = self
+                .kind
+                .default_api_key_env()
+                .unwrap_or("PROVIDER_API_KEY");
+            Some(format!(
+                "LoongClaw's {provider_label} OpenAI-compatible path uses `provider.api_key` / `{env_name}` and sends `Authorization: Bearer <{env_name}>`; AK/SK request signing is not used on this path"
+            ))
+        } else {
+            None
+        }
+    }
+
+    pub fn missing_auth_configuration_message(&self) -> String {
+        let env_names = self.auth_hint_env_names();
+        let mut message = if env_names.is_empty() {
+            "provider credentials are missing; configure provider credentials or add supported auth headers".to_owned()
+        } else {
+            format!(
+                "provider credentials are missing; configure provider credentials or set {} in env",
+                env_names.join(", ")
+            )
+        };
+        if let Some(hint) = self.auth_guidance_hint() {
+            message.push(' ');
+            message.push_str(hint.as_str());
+        }
+        message
+    }
+
     pub fn transport_policy(&self) -> ProviderTransportPolicy {
         let request_endpoint = self.endpoint();
         let models_endpoint = self.models_endpoint();
@@ -3143,6 +3196,13 @@ fn push_unique_env_key(keys: &mut Vec<String>, maybe_key: Option<&str>) {
         return;
     }
     keys.push(trimmed.to_owned());
+}
+
+fn push_inline_env_reference(keys: &mut Vec<String>, maybe_secret: Option<&str>) {
+    let Some(secret) = non_empty(maybe_secret) else {
+        return;
+    };
+    push_unique_env_key(keys, parse_explicit_env_reference(secret));
 }
 
 fn non_empty(value: Option<&str>) -> Option<&str> {

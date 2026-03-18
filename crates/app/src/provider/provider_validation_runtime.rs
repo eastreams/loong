@@ -67,6 +67,18 @@ pub(super) fn validate_provider_configuration(config: &LoongClawConfig) -> CliRe
     Ok(())
 }
 
+pub(super) async fn validate_provider_auth_readiness(config: &LoongClawConfig) -> CliResult<()> {
+    if !config.provider.requires_explicit_auth_configuration() {
+        return Ok(());
+    }
+
+    if super::provider_auth_ready(config).await {
+        return Ok(());
+    }
+
+    Err(config.provider.missing_auth_configuration_message())
+}
+
 fn provider_uses_kimi_coding_endpoint(provider: &ProviderConfig) -> bool {
     is_kimi_coding_endpoint(provider.endpoint().as_str())
         || provider

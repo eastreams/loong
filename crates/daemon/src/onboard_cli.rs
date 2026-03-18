@@ -2401,9 +2401,13 @@ pub fn provider_credential_check(config: &mvp::config::LoongClawConfig) -> Onboa
         };
     }
 
-    let detail = provider_credential_env_hint(provider)
+    let mut detail = provider_credential_env_hint(provider)
         .map(|env_name| format!("{env_name} is not set"))
         .unwrap_or_else(|| "provider credentials are not configured".to_owned());
+    if let Some(hint) = provider.auth_guidance_hint() {
+        detail.push(' ');
+        detail.push_str(hint.as_str());
+    }
     OnboardCheck {
         name: "provider credentials",
         level: OnboardCheckLevel::Warn,
@@ -6806,6 +6810,23 @@ mod tests {
             message.contains("provider.model"),
             "non-interactive onboarding should preserve the explicit remediation from the failing check: {message}"
         );
+    }
+
+    #[test]
+    fn provider_credential_check_adds_volcengine_auth_guidance_when_missing() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::VolcengineCoding;
+        config.provider.api_key = None;
+        config.provider.api_key_env = None;
+        config.provider.oauth_access_token = None;
+        config.provider.oauth_access_token_env = None;
+
+        let check = provider_credential_check(&config);
+
+        assert_eq!(check.name, "provider credentials");
+        assert_eq!(check.level, OnboardCheckLevel::Warn);
+        assert!(check.detail.contains("ARK_API_KEY"));
+        assert!(check.detail.contains("Authorization: Bearer <ARK_API_KEY>"));
     }
 
     #[test]

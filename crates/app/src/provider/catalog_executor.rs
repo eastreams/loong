@@ -26,6 +26,29 @@ enum CatalogStatusOutcome {
     Fail,
 }
 
+fn render_catalog_status_failure_message(
+    provider: &ProviderConfig,
+    status_code: u16,
+    attempt: usize,
+    max_attempts: usize,
+    response_body: &serde_json::Value,
+) -> String {
+    let mut message = format!(
+        "provider model-list returned status {status_code} on attempt {attempt}/{max_attempts}: {response_body}"
+    );
+    if matches!(status_code, 401 | 403) {
+        if let Some(hint) = provider.auth_guidance_hint() {
+            message.push(' ');
+            message.push_str(hint.as_str());
+        }
+        if let Some(hint) = provider.region_endpoint_failure_hint() {
+            message.push(' ');
+            message.push_str(hint.as_str());
+        }
+    }
+    message
+}
+
 fn plan_catalog_status_outcome(
     attempt: usize,
     request_policy: &ProviderRequestPolicy,
@@ -121,9 +144,12 @@ pub(super) async fn fetch_available_models_with_policy(
                     CatalogStatusOutcome::Fail => {}
                 }
 
-                return Err(format!(
-                    "provider model-list returned status {status_code} on attempt {attempt}/{max_attempts}: {response_body}",
-                    max_attempts = runtime.request_policy.max_attempts
+                return Err(render_catalog_status_failure_message(
+                    runtime.provider,
+                    status_code,
+                    attempt,
+                    runtime.request_policy.max_attempts,
+                    &response_body,
                 ));
             }
             Err(transport::RequestExecutionError::Transport(error)) => {
