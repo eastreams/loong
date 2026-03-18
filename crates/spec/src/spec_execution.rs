@@ -20,6 +20,7 @@ use kernel::{
 use serde_json::{Value, json};
 
 use crate::CliResult;
+use crate::kernel_bootstrap::default_in_memory_audit_sink;
 use crate::programmatic::execute_programmatic_tool_call;
 use crate::spec_runtime::*;
 
@@ -52,7 +53,7 @@ pub async fn execute_spec_with_native_tool_executor(
     native_tool_executor: Option<crate::NativeToolExecutor>,
 ) -> SpecRunReport {
     let mut pack = spec.pack.clone();
-    let audit_sink = Arc::new(InMemoryAuditSink::default());
+    let audit_sink = default_in_memory_audit_sink();
     let mut builder = crate::kernel_bootstrap::KernelBuilder::default()
         .clock(Arc::new(SystemClock) as Arc<dyn Clock>)
         .audit(audit_sink.clone());

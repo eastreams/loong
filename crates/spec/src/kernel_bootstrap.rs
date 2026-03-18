@@ -15,10 +15,17 @@ use crate::spec_runtime::{
     WebhookConnector,
 };
 
+/// The spec/bootstrap layer is a harness-facing surface, so its default audit
+/// sink stays explicitly in-memory unless a caller wires a different sink.
+pub fn default_in_memory_audit_sink() -> Arc<InMemoryAuditSink> {
+    Arc::new(InMemoryAuditSink::default())
+}
+
 /// Builder for constructing a fully configured `LoongClawKernel`.
 ///
-/// By default the builder uses `SystemClock` and `InMemoryAuditSink`.
-/// Override either with the corresponding setter before calling `build()`.
+/// By default the builder uses `SystemClock` and the spec layer's named
+/// in-memory audit helper. Override either with the corresponding setter before
+/// calling `build()`.
 #[derive(Default)]
 pub struct KernelBuilder {
     clock: Option<Arc<dyn Clock>>,
@@ -106,7 +113,7 @@ fn configured_builder(
         (Some(clock), None) => RuntimeKernelBuilder::with_runtime(
             StaticPolicyEngine::default(),
             clock,
-            Arc::new(InMemoryAuditSink::default()) as Arc<dyn AuditSink>,
+            default_in_memory_audit_sink() as Arc<dyn AuditSink>,
         ),
         (None, Some(audit)) => RuntimeKernelBuilder::with_runtime(
             StaticPolicyEngine::default(),
@@ -116,7 +123,7 @@ fn configured_builder(
         (None, None) => RuntimeKernelBuilder::with_runtime(
             StaticPolicyEngine::default(),
             Arc::new(SystemClock) as Arc<dyn Clock>,
-            Arc::new(InMemoryAuditSink::default()) as Arc<dyn AuditSink>,
+            default_in_memory_audit_sink() as Arc<dyn AuditSink>,
         ),
     };
     register_builtin_adapters(&mut kernel, native_tool_executor);
@@ -185,7 +192,7 @@ pub fn default_pack_manifest() -> VerticalPackManifest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kernel::{FixedClock, LoongClawKernel};
+    use kernel::{AuditEventKind, FixedClock, LoongClawKernel};
 
     #[test]
     fn builder_default_creates_kernel() {
@@ -207,6 +214,22 @@ mod tests {
             .issue_token(DEFAULT_PACK_ID, "test-agent", 60)
             .expect("token issue should succeed with custom clock/audit");
         assert!(!token.token_id.is_empty());
+    }
+
+    #[test]
+    fn builder_explicit_in_memory_audit_records_events() {
+        let audit = default_in_memory_audit_sink();
+        let kernel = KernelBuilder::default()
+            .audit(audit.clone() as Arc<dyn AuditSink>)
+            .build();
+
+        kernel
+            .issue_token(DEFAULT_PACK_ID, "spec-audit-builder", 60)
+            .expect("token issue should succeed with the named in-memory audit helper");
+
+        let events = audit.snapshot();
+        assert_eq!(events.len(), 1, "expected one token-issued audit event");
+        assert!(matches!(events[0].kind, AuditEventKind::TokenIssued { .. }));
     }
 
     #[test]

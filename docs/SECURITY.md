@@ -61,8 +61,9 @@ CapabilityToken → PolicyEngine → PolicyExtensionChain → Execution → Audi
 - Operators can inspect recent entries with standard tooling such as
   `tail -n 20 ~/.loongclaw/audit/events.jsonl`
 - No HMAC chain for tamper evidence (TD-007)
-- Spec/demo helpers and explicit test seams may still opt into in-memory-only audit when
-  side-effect-free execution is required
+- `spec` bootstrap and spec-execution helpers intentionally default to a named in-memory audit
+  helper so side-effect-free harness/demo runs can still surface audit snapshots in `SpecRunReport`
+- Explicit no-audit behavior remains opt-in only and should stay reserved for narrow fixture seams
 
 ### Compile-Time Constraints
 
