@@ -16,6 +16,7 @@ use crate::config::{
 mod adapter;
 mod payload;
 mod webhook;
+mod websocket;
 
 use adapter::FeishuAdapter;
 use payload::normalize_webhook_path;
@@ -74,6 +75,19 @@ pub(super) async fn run_feishu_channel(
     kernel_ctx: KernelContext,
     runtime: Arc<ChannelOperationRuntimeTracker>,
 ) -> CliResult<()> {
+    if resolved.mode == crate::config::FeishuChannelServeMode::Websocket {
+        return websocket::run_feishu_websocket_channel(
+            config,
+            resolved,
+            resolved_path,
+            selected_by_default,
+            default_account_source,
+            kernel_ctx,
+            runtime,
+        )
+        .await;
+    }
+
     let mut adapter = FeishuAdapter::new(resolved)?;
     adapter.refresh_tenant_token().await?;
 

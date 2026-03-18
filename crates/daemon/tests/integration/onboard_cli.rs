@@ -1815,10 +1815,10 @@ fn channel_preflight_checks_report_enabled_channels() {
     );
     assert!(
         checks.iter().any(|check| {
-            check.name == "feishu webhook verification"
+            check.name == "feishu inbound transport"
                 && check.level == loongclaw_daemon::onboard_cli::OnboardCheckLevel::Pass
         }),
-        "feishu verification should pass when a verification token is configured: {checks:#?}"
+        "feishu inbound transport should pass when a supported transport is configured: {checks:#?}"
     );
 }
 

@@ -14,7 +14,10 @@ pub use auth::{
     parse_token_exchange_response, summarize_doc_write_scope_status,
     summarize_message_write_scope_status,
 };
-pub use client::{FeishuClient, FeishuUserInfo, parse_user_info_response};
+pub use client::{
+    FeishuClient, FeishuUserInfo, FeishuWsEndpoint, FeishuWsEndpointClientConfig,
+    parse_user_info_response,
+};
 pub use error::FeishuApiError;
 pub use outbound::{
     FeishuOperatorOutboundMessageInput, parse_post_json_argument,

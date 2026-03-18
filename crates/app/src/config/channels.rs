@@ -378,6 +378,8 @@ pub struct FeishuAccountConfig {
     #[serde(default)]
     pub base_url: Option<String>,
     #[serde(default)]
+    pub mode: Option<FeishuChannelServeMode>,
+    #[serde(default)]
     pub receive_id_type: Option<String>,
     #[serde(default)]
     pub webhook_bind: Option<String>,
@@ -399,6 +401,23 @@ pub struct FeishuAccountConfig {
     pub acp: Option<ChannelAcpConfig>,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FeishuChannelServeMode {
+    #[default]
+    Webhook,
+    Websocket,
+}
+
+impl FeishuChannelServeMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Webhook => "webhook",
+            Self::Websocket => "websocket",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedFeishuChannelConfig {
     pub configured_account_id: String,
@@ -411,6 +430,7 @@ pub struct ResolvedFeishuChannelConfig {
     pub app_secret_env: Option<String>,
     pub domain: FeishuDomain,
     pub base_url: Option<String>,
+    pub mode: FeishuChannelServeMode,
     pub receive_id_type: String,
     pub webhook_bind: String,
     pub webhook_path: String,
@@ -530,6 +550,8 @@ pub struct FeishuChannelConfig {
     pub domain: FeishuDomain,
     #[serde(default)]
     pub base_url: Option<String>,
+    #[serde(default)]
+    pub mode: FeishuChannelServeMode,
     #[serde(default = "default_feishu_receive_id_type")]
     pub receive_id_type: String,
     #[serde(default = "default_feishu_webhook_bind")]
@@ -840,6 +862,7 @@ impl Default for FeishuChannelConfig {
             app_secret_env: Some(FEISHU_APP_SECRET_ENV.to_owned()),
             domain: FeishuDomain::Feishu,
             base_url: None,
+            mode: FeishuChannelServeMode::Webhook,
             receive_id_type: default_feishu_receive_id_type(),
             webhook_bind: default_feishu_webhook_bind(),
             webhook_path: default_feishu_webhook_path(),
@@ -1027,6 +1050,9 @@ impl FeishuChannelConfig {
             base_url: account_override
                 .and_then(|account| account.base_url.clone())
                 .or_else(|| self.base_url.clone()),
+            mode: account_override
+                .and_then(|account| account.mode)
+                .unwrap_or(self.mode),
             receive_id_type: account_override
                 .and_then(|account| account.receive_id_type.clone())
                 .unwrap_or_else(|| self.receive_id_type.clone()),
@@ -1073,6 +1099,7 @@ impl FeishuChannelConfig {
             app_secret_env: merged.app_secret_env,
             domain: merged.domain,
             base_url: merged.base_url,
+            mode: merged.mode,
             receive_id_type: merged.receive_id_type,
             webhook_bind: merged.webhook_bind,
             webhook_path: merged.webhook_path,
@@ -2102,6 +2129,7 @@ mod tests {
     fn feishu_multi_account_resolution_merges_base_and_account_overrides() {
         let config: FeishuChannelConfig = serde_json::from_value(json!({
             "enabled": true,
+            "mode": "webhook",
             "app_id_env": "BASE_FEISHU_APP_ID",
             "app_secret_env": "BASE_FEISHU_APP_SECRET",
             "verification_token_env": "BASE_FEISHU_VERIFY",
@@ -2160,6 +2188,7 @@ mod tests {
             Some(std::path::PathBuf::from("/workspace/lark-prod"))
         );
         assert_eq!(resolved.receive_id_type, "chat_id");
+        assert_eq!(resolved.mode, FeishuChannelServeMode::Webhook);
         assert_eq!(resolved.resolved_base_url(), "https://open.larksuite.com");
 
         let disabled = config
@@ -2176,6 +2205,48 @@ mod tests {
             disabled.acp.resolved_working_directory(),
             Some(std::path::PathBuf::from("/workspace/base"))
         );
+    }
+
+    #[test]
+    fn feishu_mode_defaults_to_webhook_when_not_configured() {
+        let config: FeishuChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "app_id": "cli_a1b2c3",
+            "app_secret": "secret"
+        }))
+        .expect("deserialize feishu config");
+
+        let resolved = config
+            .resolve_account(None)
+            .expect("resolve default feishu account");
+
+        assert_eq!(resolved.mode, FeishuChannelServeMode::Webhook);
+    }
+
+    #[test]
+    fn feishu_multi_account_resolution_allows_websocket_mode_override() {
+        let config: FeishuChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "mode": "webhook",
+            "app_id": "cli_base",
+            "app_secret": "base-secret",
+            "allowed_chat_ids": ["oc_base"],
+            "accounts": {
+                "Long Connection": {
+                    "mode": "websocket",
+                    "app_id": "cli_ws",
+                    "app_secret": "ws-secret"
+                }
+            }
+        }))
+        .expect("deserialize feishu config");
+
+        let resolved = config
+            .resolve_account(Some("Long Connection"))
+            .expect("resolve websocket feishu account");
+
+        assert_eq!(resolved.mode, FeishuChannelServeMode::Websocket);
+        assert_eq!(resolved.allowed_chat_ids, vec!["oc_base".to_owned()]);
     }
 
     #[test]

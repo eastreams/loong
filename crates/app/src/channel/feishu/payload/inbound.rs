@@ -31,20 +31,74 @@ const FEISHU_STRUCTURED_ONLY_MESSAGE_TYPES: &[&str] = &[
     "general_calendar",
 ];
 
-pub(in crate::channel::feishu) fn parse_feishu_webhook_payload(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::channel::feishu) enum FeishuTransportAuth<'a> {
+    Webhook {
+        verification_token: Option<&'a str>,
+        encrypt_key: Option<&'a str>,
+    },
+    Websocket,
+}
+
+impl<'a> FeishuTransportAuth<'a> {
+    pub(in crate::channel::feishu) fn webhook(
+        verification_token: Option<&'a str>,
+        encrypt_key: Option<&'a str>,
+    ) -> Self {
+        Self::Webhook {
+            verification_token,
+            encrypt_key,
+        }
+    }
+
+    pub(in crate::channel::feishu) fn websocket() -> Self {
+        Self::Websocket
+    }
+
+    fn verification_token(self) -> Option<&'a str> {
+        match self {
+            Self::Webhook {
+                verification_token, ..
+            } => verification_token,
+            Self::Websocket => None,
+        }
+    }
+
+    fn encrypt_key(self) -> Option<&'a str> {
+        match self {
+            Self::Webhook { encrypt_key, .. } => encrypt_key,
+            Self::Websocket => None,
+        }
+    }
+
+    fn should_verify_token(self) -> bool {
+        matches!(self, Self::Webhook { .. })
+    }
+
+    fn should_decrypt(self) -> bool {
+        matches!(self, Self::Webhook { .. })
+    }
+}
+
+pub(in crate::channel::feishu) fn parse_feishu_inbound_payload(
     payload: &Value,
-    verification_token: Option<&str>,
-    encrypt_key: Option<&str>,
+    transport_auth: FeishuTransportAuth<'_>,
     allowed_chat_ids: &BTreeSet<String>,
     ignore_bot_messages: bool,
     configured_account_id: &str,
     account_id: &str,
 ) -> CliResult<FeishuWebhookAction> {
-    let decrypted_payload = decrypt_payload_if_needed(payload, encrypt_key)?;
+    let decrypted_payload = if transport_auth.should_decrypt() {
+        decrypt_payload_if_needed(payload, transport_auth.encrypt_key())?
+    } else {
+        None
+    };
     let payload = decrypted_payload.as_ref().unwrap_or(payload);
 
     if payload.get("type").and_then(Value::as_str) == Some("url_verification") {
-        verify_feishu_token(payload, verification_token)?;
+        if transport_auth.should_verify_token() {
+            verify_feishu_token(payload, transport_auth.verification_token())?;
+        }
         let challenge = payload
             .get("challenge")
             .and_then(Value::as_str)
@@ -62,7 +116,9 @@ pub(in crate::channel::feishu) fn parse_feishu_webhook_payload(
         .and_then(Value::as_str)
         .unwrap_or_default();
     if event_type == "card.action.trigger" {
-        verify_feishu_token(payload, verification_token)?;
+        if transport_auth.should_verify_token() {
+            verify_feishu_token(payload, transport_auth.verification_token())?;
+        }
         return parse_feishu_card_callback_v2(
             payload,
             allowed_chat_ids,
@@ -71,7 +127,9 @@ pub(in crate::channel::feishu) fn parse_feishu_webhook_payload(
         );
     }
     if event_type == "card.action.trigger_v1" || looks_like_feishu_legacy_card_callback(payload) {
-        verify_feishu_token(payload, verification_token)?;
+        if transport_auth.should_verify_token() {
+            verify_feishu_token(payload, transport_auth.verification_token())?;
+        }
         return parse_feishu_card_callback_v1(
             payload,
             allowed_chat_ids,
@@ -83,7 +141,9 @@ pub(in crate::channel::feishu) fn parse_feishu_webhook_payload(
         return Ok(FeishuWebhookAction::Ignore);
     }
 
-    verify_feishu_token(payload, verification_token)?;
+    if transport_auth.should_verify_token() {
+        verify_feishu_token(payload, transport_auth.verification_token())?;
+    }
 
     let event = payload
         .get("event")
@@ -178,6 +238,25 @@ pub(in crate::channel::feishu) fn parse_feishu_webhook_payload(
         text,
         resources,
     }))
+}
+
+pub(in crate::channel::feishu) fn parse_feishu_webhook_payload(
+    payload: &Value,
+    verification_token: Option<&str>,
+    encrypt_key: Option<&str>,
+    allowed_chat_ids: &BTreeSet<String>,
+    ignore_bot_messages: bool,
+    configured_account_id: &str,
+    account_id: &str,
+) -> CliResult<FeishuWebhookAction> {
+    parse_feishu_inbound_payload(
+        payload,
+        FeishuTransportAuth::webhook(verification_token, encrypt_key),
+        allowed_chat_ids,
+        ignore_bot_messages,
+        configured_account_id,
+        account_id,
+    )
 }
 
 pub(in crate::channel::feishu) fn normalize_webhook_path(path: &str) -> String {

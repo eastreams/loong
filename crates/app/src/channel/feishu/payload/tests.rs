@@ -159,6 +159,50 @@ fn feishu_message_event_parses_text_payload() {
 }
 
 #[test]
+fn feishu_websocket_message_event_parses_without_verification_token() {
+    let payload = json!({
+        "header": {
+            "event_id": "evt_ws_1",
+            "event_type": "im.message.receive_v1"
+        },
+        "event": {
+            "sender": {
+                "sender_type": "user",
+                "sender_id": {
+                    "open_id": "ou_sender_ws_1"
+                }
+            },
+            "message": {
+                "chat_id": "oc_123",
+                "message_id": "om_ws_123",
+                "message_type": "text",
+                "content": "{\"text\":\"hello from websocket\"}"
+            }
+        }
+    });
+
+    let allowlist = BTreeSet::from([String::from("oc_123")]);
+    let action = parse_feishu_inbound_payload(
+        &payload,
+        FeishuTransportAuth::websocket(),
+        &allowlist,
+        true,
+        "work",
+        "feishu_cli_a1b2c3",
+    )
+    .expect("parse websocket feishu event");
+
+    let event = expect_inbound(action);
+    assert_eq!(event.event_id, "evt_ws_1");
+    assert_eq!(event.text, "hello from websocket");
+    assert_eq!(event.session.configured_account_id.as_deref(), Some("work"));
+    assert_eq!(
+        event.reply_target,
+        ChannelOutboundTarget::feishu_message_reply("om_ws_123")
+    );
+}
+
+#[test]
 fn feishu_message_event_uses_thread_id_and_sender_open_id_when_present() {
     let payload = json!({
         "token": "token-123",

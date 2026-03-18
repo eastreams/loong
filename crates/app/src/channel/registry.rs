@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::config::{
     ChannelDefaultAccountSelectionSource, FEISHU_APP_ID_ENV, FEISHU_APP_SECRET_ENV,
-    FEISHU_ENCRYPT_KEY_ENV, FEISHU_VERIFICATION_TOKEN_ENV, LoongClawConfig,
+    FEISHU_ENCRYPT_KEY_ENV, FEISHU_VERIFICATION_TOKEN_ENV, FeishuChannelServeMode, LoongClawConfig,
     MATRIX_ACCESS_TOKEN_ENV, ResolvedFeishuChannelConfig, ResolvedMatrixChannelConfig,
     ResolvedTelegramChannelConfig, TELEGRAM_BOT_TOKEN_ENV,
 };
@@ -451,7 +451,7 @@ const FEISHU_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
 
 const FEISHU_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
-    label: "webhook reply server",
+    label: "inbound reply service",
     command: "feishu-serve",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
@@ -511,10 +511,18 @@ const FEISHU_ALLOWED_CHAT_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
         env_pointer_paths: &[],
         default_env_var: None,
     };
+const FEISHU_MODE_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "mode",
+        label: "serve mode",
+        config_paths: &["feishu.mode", "feishu.accounts.<account>.mode"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
 const FEISHU_VERIFICATION_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
     ChannelCatalogOperationRequirement {
         id: "verification_token",
-        label: "verification token",
+        label: "verification token (webhook mode only)",
         config_paths: &[
             "feishu.verification_token",
             "feishu.accounts.<account>.verification_token",
@@ -528,7 +536,7 @@ const FEISHU_VERIFICATION_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement 
 const FEISHU_ENCRYPT_KEY_REQUIREMENT: ChannelCatalogOperationRequirement =
     ChannelCatalogOperationRequirement {
         id: "encrypt_key",
-        label: "encrypt key",
+        label: "encrypt key (webhook mode only)",
         config_paths: &[
             "feishu.encrypt_key",
             "feishu.accounts.<account>.encrypt_key",
@@ -548,6 +556,7 @@ const FEISHU_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
     FEISHU_ENABLED_REQUIREMENT,
     FEISHU_APP_ID_REQUIREMENT,
     FEISHU_APP_SECRET_REQUIREMENT,
+    FEISHU_MODE_REQUIREMENT,
     FEISHU_ALLOWED_CHAT_IDS_REQUIREMENT,
     FEISHU_VERIFICATION_TOKEN_REQUIREMENT,
     FEISHU_ENCRYPT_KEY_REQUIREMENT,
@@ -559,11 +568,11 @@ const FEISHU_SEND_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorChec
 }];
 const FEISHU_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[
     ChannelDoctorCheckSpec {
-        name: "feishu webhook verification",
+        name: "feishu inbound transport",
         trigger: ChannelDoctorCheckTrigger::OperationHealth,
     },
     ChannelDoctorCheckSpec {
-        name: "feishu webhook runtime",
+        name: "feishu serve runtime",
         trigger: ChannelDoctorCheckTrigger::ReadyRuntime,
     },
 ];
@@ -586,7 +595,7 @@ const FEISHU_CAPABILITIES: &[ChannelCapability] = &[
 ];
 const FEISHU_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure feishu or lark app credentials and webhook secrets in loongclaw.toml under feishu or feishu.accounts.<account>",
+    setup_hint: "configure feishu or lark app credentials, allowed chat ids, and either webhook secrets or mode = \"websocket\" in loongclaw.toml under feishu or feishu.accounts.<account>",
     status_command: "loongclaw doctor",
     repair_command: Some("loongclaw doctor --fix"),
 };
@@ -834,7 +843,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
         capabilities: FEISHU_CAPABILITIES,
         label: "Feishu/Lark",
         aliases: &["lark"],
-        transport: "feishu_openapi_webhook",
+        transport: "feishu_openapi_webhook_or_websocket",
         onboarding: FEISHU_ONBOARDING_DESCRIPTOR,
         operations: FEISHU_OPERATIONS,
     },
@@ -1387,11 +1396,13 @@ fn build_feishu_snapshot_for_account(
     {
         serve_issues.push("allowed_chat_ids is empty".to_owned());
     }
-    if resolved.verification_token().is_none() {
-        serve_issues.push("verification_token is missing".to_owned());
-    }
-    if resolved.encrypt_key().is_none() {
-        serve_issues.push("encrypt_key is missing".to_owned());
+    if resolved.mode == FeishuChannelServeMode::Webhook {
+        if resolved.verification_token().is_none() {
+            serve_issues.push("verification_token is missing".to_owned());
+        }
+        if resolved.encrypt_key().is_none() {
+            serve_issues.push("encrypt_key is missing".to_owned());
+        }
     }
 
     let send_operation = if !compiled {
@@ -1449,10 +1460,13 @@ fn build_feishu_snapshot_for_account(
         format!("configured_account={}", resolved.configured_account_label),
         format!("account_id={}", resolved.account.id),
         format!("account={}", resolved.account.label),
+        format!("mode={}", resolved.mode.as_str()),
         format!("receive_id_type={}", resolved.receive_id_type),
-        format!("webhook_bind={}", resolved.webhook_bind),
-        format!("webhook_path={}", resolved.webhook_path),
     ];
+    if resolved.mode == FeishuChannelServeMode::Webhook {
+        notes.push(format!("webhook_bind={}", resolved.webhook_bind));
+        notes.push(format!("webhook_path={}", resolved.webhook_path));
+    }
     if !resolved.acp.bootstrap_mcp_servers.is_empty() {
         notes.push(format!(
             "acp_bootstrap_mcp_servers={}",
@@ -2074,7 +2088,7 @@ mod tests {
                 .iter()
                 .map(|check| check.name)
                 .collect::<Vec<_>>(),
-            vec!["feishu webhook verification", "feishu webhook runtime"]
+            vec!["feishu inbound transport", "feishu serve runtime"]
         );
 
         let discord_send =
@@ -2198,11 +2212,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 (
-                    "feishu webhook verification",
+                    "feishu inbound transport",
                     ChannelDoctorCheckTrigger::OperationHealth,
                 ),
                 (
-                    "feishu webhook runtime",
+                    "feishu serve runtime",
                     ChannelDoctorCheckTrigger::ReadyRuntime,
                 ),
             ]
@@ -2429,17 +2443,18 @@ mod tests {
                 "enabled",
                 "app_id",
                 "app_secret",
+                "mode",
                 "allowed_chat_ids",
                 "verification_token",
                 "encrypt_key",
             ]
         );
         assert_eq!(
-            feishu.operations[1].requirements[4].default_env_var,
+            feishu.operations[1].requirements[5].default_env_var,
             Some("FEISHU_VERIFICATION_TOKEN")
         );
         assert_eq!(
-            feishu.operations[1].requirements[5].default_env_var,
+            feishu.operations[1].requirements[6].default_env_var,
             Some("FEISHU_ENCRYPT_KEY")
         );
 
@@ -2867,6 +2882,57 @@ mod tests {
         assert!(
             serve.issues.iter().any(|issue| issue.contains("user_id")),
             "serve issues should require user_id when ignore_self_messages is enabled"
+        );
+    }
+
+    #[test]
+    fn feishu_websocket_status_uses_websocket_requirements() {
+        let mut config = LoongClawConfig::default();
+        config.feishu.enabled = true;
+        config.feishu.app_id = Some("app-id".to_owned());
+        config.feishu.app_secret = Some("app-secret".to_owned());
+        config.feishu.mode = crate::config::FeishuChannelServeMode::Websocket;
+        config.feishu.allowed_chat_ids = vec!["oc_123".to_owned()];
+
+        let snapshots = channel_status_snapshots(&config);
+        let feishu = snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == "feishu")
+            .expect("feishu snapshot");
+        let serve = feishu.operation("serve").expect("feishu serve operation");
+
+        assert_eq!(serve.health, ChannelOperationHealth::Ready);
+        assert!(
+            serve
+                .issues
+                .iter()
+                .all(|issue| !issue.contains("verification_token")),
+            "websocket mode must not require a webhook verification token"
+        );
+        assert!(
+            serve
+                .issues
+                .iter()
+                .all(|issue| !issue.contains("encrypt_key")),
+            "websocket mode must not require a webhook encrypt key"
+        );
+        assert!(
+            feishu.notes.iter().any(|note| note == "mode=websocket"),
+            "status notes should surface the configured feishu serve mode"
+        );
+        assert!(
+            feishu
+                .notes
+                .iter()
+                .all(|note| !note.starts_with("webhook_bind=")),
+            "websocket mode notes should not imply a webhook bind address is active"
+        );
+        assert!(
+            feishu
+                .notes
+                .iter()
+                .all(|note| !note.starts_with("webhook_path=")),
+            "websocket mode notes should not imply a webhook callback path is active"
         );
     }
 

@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
+use crate::CliResult;
 use crate::KernelContext;
 use crate::channel::{
     ChannelAdapter, ChannelInboundMessage, ChannelOutboundMessage, ChannelOutboundTarget,
@@ -107,6 +108,27 @@ impl FeishuWebhookState {
             runtime,
         }
     }
+
+    pub(super) fn parse_websocket_payload(
+        &self,
+        payload: &Value,
+    ) -> CliResult<FeishuWebhookAction> {
+        super::payload::parse_feishu_inbound_payload(
+            payload,
+            super::payload::FeishuTransportAuth::websocket(),
+            &self.allowed_chat_ids,
+            self.ignore_bot_messages,
+            self.configured_account_id.as_str(),
+            self.account_id.as_str(),
+        )
+    }
+
+    pub(super) fn dispatch_deferred_updates(
+        &self,
+        updates: Vec<crate::tools::DeferredFeishuCardUpdate>,
+    ) {
+        dispatch_deferred_feishu_card_updates(self.config.clone(), updates);
+    }
 }
 
 struct RecentIdCache {
@@ -166,6 +188,13 @@ struct FeishuStructuredCallbackToast {
 }
 
 #[derive(Debug)]
+pub(super) struct FeishuParsedActionResponse {
+    pub(super) body: Value,
+    pub(super) websocket_body: Option<Value>,
+    pub(super) deferred_updates: Vec<crate::tools::DeferredFeishuCardUpdate>,
+}
+
+#[derive(Debug)]
 struct FeishuWebhookSuccessResponse {
     body: Value,
     post_response_dispatch: Option<FeishuWebhookPostResponseDispatch>,
@@ -211,10 +240,15 @@ impl FeishuCallbackResponse {
 }
 
 impl FeishuWebhookSuccessResponse {
-    fn immediate(body: Value) -> Self {
+    fn from_parsed_response(response: FeishuParsedActionResponse, config: LoongClawConfig) -> Self {
         Self {
-            body,
-            post_response_dispatch: None,
+            body: response.body,
+            post_response_dispatch: (!response.deferred_updates.is_empty()).then_some(
+                FeishuWebhookPostResponseDispatch {
+                    config,
+                    deferred_updates: response.deferred_updates,
+                },
+            ),
         }
     }
 
@@ -222,20 +256,25 @@ impl FeishuWebhookSuccessResponse {
     fn body(&self) -> &Value {
         &self.body
     }
+}
+
+impl FeishuParsedActionResponse {
+    fn immediate(body: Value) -> Self {
+        Self {
+            body,
+            websocket_body: None,
+            deferred_updates: Vec::new(),
+        }
+    }
 
     fn with_deferred_card_updates(
         body: Value,
-        config: LoongClawConfig,
         deferred_updates: Vec<crate::tools::DeferredFeishuCardUpdate>,
     ) -> Self {
         Self {
+            websocket_body: Some(body.clone()),
             body,
-            post_response_dispatch: (!deferred_updates.is_empty()).then_some(
-                FeishuWebhookPostResponseDispatch {
-                    config,
-                    deferred_updates,
-                },
-            ),
+            deferred_updates,
         }
     }
 }
@@ -426,11 +465,22 @@ async fn handle_feishu_webhook_payload(
     )
     .map_err(map_feishu_parse_error)?;
 
+    let response = handle_feishu_parsed_action(&state, parsed).await?;
+    Ok(FeishuWebhookSuccessResponse::from_parsed_response(
+        response,
+        state.config.clone(),
+    ))
+}
+
+pub(super) async fn handle_feishu_parsed_action(
+    state: &FeishuWebhookState,
+    parsed: FeishuWebhookAction,
+) -> Result<FeishuParsedActionResponse, (StatusCode, String)> {
     match parsed {
         FeishuWebhookAction::UrlVerification { challenge } => Ok(
-            FeishuWebhookSuccessResponse::immediate(json!({ "challenge": challenge })),
+            FeishuParsedActionResponse::immediate(json!({ "challenge": challenge })),
         ),
-        FeishuWebhookAction::Ignore => Ok(FeishuWebhookSuccessResponse::immediate(
+        FeishuWebhookAction::Ignore => Ok(FeishuParsedActionResponse::immediate(
             json!({"code": 0, "msg": "ignored"}),
         )),
         FeishuWebhookAction::CardCallback(event) => {
@@ -440,14 +490,14 @@ async fn handle_feishu_webhook_payload(
                     dedupe.begin_processing(&event.event_id),
                     RecentIdReservation::Accepted
                 ) {
-                    return Ok(FeishuWebhookSuccessResponse::immediate(
+                    return Ok(FeishuParsedActionResponse::immediate(
                         FeishuCallbackResponse::Noop.as_json(),
                     ));
                 }
             }
 
             let event_id = event.event_id.clone();
-            let response = handle_feishu_card_callback_event(&state, &event).await;
+            let response = handle_feishu_card_callback_event(state, &event).await;
 
             {
                 let mut dedupe = state.seen_events.lock().await;
@@ -463,85 +513,14 @@ async fn handle_feishu_webhook_payload(
                     dedupe.begin_processing(&event.event_id),
                     RecentIdReservation::Accepted
                 ) {
-                    return Ok(FeishuWebhookSuccessResponse::immediate(
+                    return Ok(FeishuParsedActionResponse::immediate(
                         json!({"code": 0, "msg": "duplicate_event"}),
                     ));
                 }
             }
 
             let event_id = event.event_id.clone();
-            let result = async {
-                state.runtime.mark_run_start().await.map_err(|error| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("channel runtime start failed: {error}"),
-                    )
-                })?;
-                let channel_message = ChannelInboundMessage {
-                    session: event.session,
-                    reply_target: event.reply_target,
-                    text: event.text,
-                    delivery: crate::channel::ChannelDelivery {
-                        ack_cursor: None,
-                        source_message_id: Some(event.message_id),
-                        sender_principal_key: event.principal.as_ref().map(|value| value.storage_key()),
-                        thread_root_id: event.root_id,
-                        parent_message_id: event.parent_id,
-                        resources: event.resources,
-                        feishu_callback: None,
-                    },
-                };
-                let reply = process_inbound_with_provider(
-                    &state.config,
-                    state.resolved_path.as_deref(),
-                    &channel_message,
-                    Some(state.kernel_ctx.as_ref()),
-                )
-                .await
-                .map_err(|error| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("provider processing failed: {error}"),
-                    )
-                })?;
-                let reply_target = channel_message.reply_target.clone();
-                let outbound = ChannelOutboundMessage::Text(reply);
-
-                let mut adapter = state.adapter.lock().await;
-                if let Err(first_error) = adapter.send_message(&reply_target, &outbound).await {
-                    adapter.refresh_tenant_token().await.map_err(|error| {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            format!(
-                                "feishu token refresh failed after send error `{first_error}`: {error}"
-                            ),
-                        )
-                    })?;
-                    adapter
-                        .send_message(&reply_target, &outbound)
-                        .await
-                        .map_err(|error| {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            format!("feishu reply failed after token refresh: {error}"),
-                        )
-                    })?;
-                }
-
-                Ok(FeishuWebhookSuccessResponse::immediate(
-                    json!({"code": 0, "msg": "ok"}),
-                ))
-            }
-            .await;
-            let runtime_end_result = state.runtime.mark_run_end().await;
-            let result = match (result, runtime_end_result) {
-                (Ok(reply), Ok(())) => Ok(reply),
-                (Err(error), _) => Err(error),
-                (Ok(_), Err(error)) => Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("channel runtime end failed: {error}"),
-                )),
-            };
+            let result = handle_feishu_inbound_event(state, event).await;
 
             {
                 let mut dedupe = state.seen_events.lock().await;
@@ -560,10 +539,10 @@ async fn handle_feishu_webhook_payload(
 async fn handle_feishu_card_callback_event(
     state: &FeishuWebhookState,
     event: &FeishuCardCallbackEvent,
-) -> FeishuWebhookSuccessResponse {
+) -> FeishuParsedActionResponse {
     if let Err(error) = state.runtime.mark_run_start().await {
         log_feishu_callback_warning("runtime start failed", &error);
-        return FeishuWebhookSuccessResponse::immediate(FeishuCallbackResponse::Noop.as_json());
+        return FeishuParsedActionResponse::immediate(FeishuCallbackResponse::Noop.as_json());
     }
 
     let inbound = build_feishu_card_callback_inbound_message(event);
@@ -589,11 +568,85 @@ async fn handle_feishu_card_callback_event(
         log_feishu_callback_warning("runtime end failed", &error);
     }
 
-    FeishuWebhookSuccessResponse::with_deferred_card_updates(
-        callback_response,
-        state.config.clone(),
-        deferred_updates,
-    )
+    FeishuParsedActionResponse::with_deferred_card_updates(callback_response, deferred_updates)
+}
+
+async fn handle_feishu_inbound_event(
+    state: &FeishuWebhookState,
+    event: super::payload::FeishuInboundEvent,
+) -> Result<FeishuParsedActionResponse, (StatusCode, String)> {
+    let result = async {
+        state.runtime.mark_run_start().await.map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("channel runtime start failed: {error}"),
+            )
+        })?;
+        let channel_message = ChannelInboundMessage {
+            session: event.session,
+            reply_target: event.reply_target,
+            text: event.text,
+            delivery: crate::channel::ChannelDelivery {
+                ack_cursor: None,
+                source_message_id: Some(event.message_id),
+                sender_principal_key: event.principal.as_ref().map(|value| value.storage_key()),
+                thread_root_id: event.root_id,
+                parent_message_id: event.parent_id,
+                resources: event.resources,
+                feishu_callback: None,
+            },
+        };
+        let reply = process_inbound_with_provider(
+            &state.config,
+            state.resolved_path.as_deref(),
+            &channel_message,
+            Some(state.kernel_ctx.as_ref()),
+        )
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("provider processing failed: {error}"),
+            )
+        })?;
+        let reply_target = channel_message.reply_target.clone();
+        let outbound = ChannelOutboundMessage::Text(reply);
+
+        let mut adapter = state.adapter.lock().await;
+        if let Err(first_error) = adapter.send_message(&reply_target, &outbound).await {
+            adapter.refresh_tenant_token().await.map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!(
+                        "feishu token refresh failed after send error `{first_error}`: {error}"
+                    ),
+                )
+            })?;
+            adapter
+                .send_message(&reply_target, &outbound)
+                .await
+                .map_err(|error| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("feishu reply failed after token refresh: {error}"),
+                    )
+                })?;
+        }
+
+        Ok(FeishuParsedActionResponse::immediate(
+            json!({"code": 0, "msg": "ok"}),
+        ))
+    }
+    .await;
+    let runtime_end_result = state.runtime.mark_run_end().await;
+    match (result, runtime_end_result) {
+        (Ok(reply), Ok(())) => Ok(reply),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("channel runtime end failed: {error}"),
+        )),
+    }
 }
 
 fn parse_feishu_structured_callback_response(text: &str) -> Option<FeishuCallbackResponse> {

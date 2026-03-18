@@ -53,7 +53,7 @@ pub enum FeishuCommand {
     Send(FeishuSendArgs),
     /// Reply to one Feishu message or thread with text, post, image, file, or card content
     Reply(FeishuReplyArgs),
-    /// Run Feishu webhook serve mode
+    /// Run Feishu serve mode (webhook or websocket)
     Serve(FeishuServeArgs),
 }
 
