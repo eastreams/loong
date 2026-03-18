@@ -1,8 +1,8 @@
 # Release Docs Convention
 
-Each released version in `CHANGELOG.md` (for example `## [0.1.0]`) must map to a canonical release process document:
+Each released version in `CHANGELOG.md` (for example `## [0.1.0]` or `## [0.1.0-alpha.1]`) must map to a canonical release process document:
 
-- `docs/releases/v0.1.0.md` (tracked, reviewed, shared)
+- `docs/releases/v0.1.0.md` or `docs/releases/v0.1.0-alpha.1.md` (tracked, reviewed, shared)
 
 Architecture governance may also emit monthly drift reports under the same directory:
 
@@ -10,13 +10,14 @@ Architecture governance may also emit monthly drift reports under the same direc
 
 Each release may also include a local-only agent debug log:
 
-- `.docs/releases/v0.1.0-debug.md` (ignored by git; stores intermediate retrieval/debug context)
+- `.docs/releases/v0.1.0-debug.md` or `.docs/releases/v0.1.0-alpha.1-debug.md` (ignored by git; stores intermediate retrieval/debug context)
 - `.docs/traces/index.jsonl` (ignored by git; append-only trace index)
 
 Required sections in each canonical release document:
 
-- `# Release vX.Y.Z`
+- `# Release vX.Y.Z` or `# Release vX.Y.Z-alpha.N`
 - `## Summary`
+- `## Highlights`
 - `## Process`
 - `## Artifacts`
 - `## Verification`
@@ -30,15 +31,15 @@ Required sections in each canonical release document:
 `## Summary` must include trace linkage fields (`Trace ID`, `Trace path`).
 `## Process` must include an explicit `Refactor budget item:` entry.
 `Trace directory` in `## Detail Links` must exactly match the `Trace path` summary field.
-`Local debug log` in `## Detail Links` must exactly match `.docs/releases/vX.Y.Z-debug.md` for the
+`Local debug log` in `## Detail Links` must exactly match `.docs/releases/<tag>-debug.md` for the
 same release tag.
 `Trace path` must stay under `.docs/traces/`, include `-post-release-`, and end with
-`-vX.Y.Z-<trace-id>` so the summary `Trace ID` and path basename cannot drift apart.
+`-<tag>-<trace-id>` so the summary `Trace ID` and path basename cannot drift apart.
 When local `.docs/` artifacts exist, they must exactly match the tracked release doc:
 
-- `.docs/releases/vX.Y.Z-debug.md` must keep the same `Trace ID` and `Trace path`
+- `.docs/releases/<tag>-debug.md` must keep the same `Trace ID` and `Trace path`
 - `.docs/traces/latest` must match the highest released `Trace path`
-- `.docs/traces/by-tag/vX.Y.Z/latest` must match that release's `Trace path`
+- `.docs/traces/by-tag/<tag>/latest` must match that release's `Trace path`
 - `.docs/traces/index.jsonl` must include an exact success record for the release doc
 - `${trace_path}/metadata.json` must mirror the same tag, trace id, trace path, command, status,
   and source release doc

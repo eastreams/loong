@@ -98,6 +98,7 @@ else
         fi
         required_sections=(
             "## Summary"
+            "## Highlights"
             "## Process"
             "## Artifacts"
             "## Verification"

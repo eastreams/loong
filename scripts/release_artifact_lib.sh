@@ -2,8 +2,8 @@
 
 release_versions_from_changelog() {
   local changelog_path="${1:?changelog_path is required}"
-  grep -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' "$changelog_path" | \
-    sed -E 's/^## \[([0-9]+\.[0-9]+\.[0-9]+)\]$/\1/'
+  grep -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?\]' "$changelog_path" | \
+    sed -E 's/^## \[([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?)\]$/\1/'
 }
 
 release_tag_from_version() {
@@ -104,18 +104,96 @@ release_debug_doc_relpath() {
   printf '.docs/releases/%s-debug.md\n' "$tag"
 }
 
+parse_release_version() {
+  local version="${1:?version is required}"
+  local matches
+  if [[ "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9A-Za-z]+(\.[0-9A-Za-z]+)*))?$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[5]}"
+    return 0
+  fi
+
+  echo "invalid release version: ${version}" >&2
+  return 1
+}
+
+is_numeric_identifier() {
+  local value="${1:?value is required}"
+  [[ "$value" =~ ^[0-9]+$ ]]
+}
+
+compare_prerelease_identifiers() {
+  local left="${1-}"
+  local right="${2-}"
+  local left_parts right_parts
+  local i left_part right_part
+
+  IFS='.' read -r -a left_parts <<< "$left"
+  IFS='.' read -r -a right_parts <<< "$right"
+
+  for (( i = 0; i < ${#left_parts[@]} || i < ${#right_parts[@]}; i++ )); do
+    left_part="${left_parts[i]-}"
+    right_part="${right_parts[i]-}"
+
+    if [[ -z "$left_part" && -n "$right_part" ]]; then
+      printf -- '-1\n'
+      return 0
+    fi
+    if [[ -n "$left_part" && -z "$right_part" ]]; then
+      printf '1\n'
+      return 0
+    fi
+
+    if is_numeric_identifier "$left_part" && is_numeric_identifier "$right_part"; then
+      if (( 10#$left_part > 10#$right_part )); then
+        printf '1\n'
+        return 0
+      fi
+      if (( 10#$left_part < 10#$right_part )); then
+        printf -- '-1\n'
+        return 0
+      fi
+      continue
+    fi
+
+    if is_numeric_identifier "$left_part" && ! is_numeric_identifier "$right_part"; then
+      printf -- '-1\n'
+      return 0
+    fi
+    if ! is_numeric_identifier "$left_part" && is_numeric_identifier "$right_part"; then
+      printf '1\n'
+      return 0
+    fi
+
+    if [[ "$left_part" > "$right_part" ]]; then
+      printf '1\n'
+      return 0
+    fi
+    if [[ "$left_part" < "$right_part" ]]; then
+      printf -- '-1\n'
+      return 0
+    fi
+  done
+
+  printf '0\n'
+}
+
 version_is_greater() {
   local left="${1:?left version is required}"
   local right="${2:?right version is required}"
-  local left_major left_minor left_patch
-  local right_major right_minor right_patch
+  local left_major left_minor left_patch left_prerelease
+  local right_major right_minor right_patch right_prerelease
+  local prerelease_cmp
 
-  IFS='.' read -r left_major left_minor left_patch <<EOF
-$left
-EOF
-  IFS='.' read -r right_major right_minor right_patch <<EOF
-$right
-EOF
+  mapfile -t left_parts < <(parse_release_version "$left")
+  mapfile -t right_parts < <(parse_release_version "$right")
+  left_major="${left_parts[0]}"
+  left_minor="${left_parts[1]}"
+  left_patch="${left_parts[2]}"
+  left_prerelease="${left_parts[3]}"
+  right_major="${right_parts[0]}"
+  right_minor="${right_parts[1]}"
+  right_patch="${right_parts[2]}"
+  right_prerelease="${right_parts[3]}"
 
   if (( left_major > right_major )); then
     return 0
@@ -130,6 +208,24 @@ EOF
     return 1
   fi
   if (( left_patch > right_patch )); then
+    return 0
+  fi
+  if (( left_patch < right_patch )); then
+    return 1
+  fi
+
+  if [[ -z "$left_prerelease" && -z "$right_prerelease" ]]; then
+    return 1
+  fi
+  if [[ -z "$left_prerelease" && -n "$right_prerelease" ]]; then
+    return 0
+  fi
+  if [[ -n "$left_prerelease" && -z "$right_prerelease" ]]; then
+    return 1
+  fi
+
+  prerelease_cmp="$(compare_prerelease_identifiers "$left_prerelease" "$right_prerelease")"
+  if (( prerelease_cmp > 0 )); then
     return 0
   fi
   return 1
