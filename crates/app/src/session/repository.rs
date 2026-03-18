@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::Value;
 
 use crate::memory;
@@ -358,49 +358,12 @@ impl SessionRepository {
         &self,
         request: CreateSessionWithEventRequest,
     ) -> Result<CreateSessionWithEventResult, String> {
-        let session_id = normalize_required_text(&request.session.session_id, "session_id")?;
-        let parent_session_id = normalize_optional_text(request.session.parent_session_id);
-        let label = normalize_optional_text(request.session.label);
-        let event_kind = normalize_required_text(&request.event_kind, "event_kind")?;
-        let actor_session_id = normalize_optional_text(request.actor_session_id);
-        let event_payload_json = request.event_payload_json;
-        let encoded_event_payload = serde_json::to_string(&event_payload_json)
-            .map_err(|error| format!("encode session event payload failed: {error}"))?;
-        let ts = unix_ts_now();
-
         let mut conn = self.open_connection()?;
         let tx = conn
             .transaction()
             .map_err(|error| format!("open session create transaction failed: {error}"))?;
-        tx.execute(
-            "INSERT INTO sessions(
-                session_id, kind, parent_session_id, label, state, created_at, updated_at, last_error
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
-            params![
-                session_id,
-                request.session.kind.as_str(),
-                parent_session_id,
-                label,
-                request.session.state.as_str(),
-                ts,
-                ts,
-            ],
-        )
-        .map_err(|error| format!("insert session row failed: {error}"))?;
-        tx.execute(
-            "INSERT INTO session_events(
-                session_id, event_kind, actor_session_id, payload_json, ts
-             ) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                session_id,
-                event_kind,
-                actor_session_id.as_deref(),
-                encoded_event_payload,
-                ts
-            ],
-        )
-        .map_err(|error| format!("insert session event failed: {error}"))?;
-        let event_id = tx.last_insert_rowid();
+        let event = Self::create_session_with_event_in_tx(&tx, request)?;
+        let session_id = event.session_id.clone();
         tx.commit()
             .map_err(|error| format!("commit session create transaction failed: {error}"))?;
 
@@ -408,17 +371,55 @@ impl SessionRepository {
             .load_session(&session_id)?
             .ok_or_else(|| format!("session `{session_id}` disappeared after insert"))?;
 
-        Ok(CreateSessionWithEventResult {
-            session,
-            event: SessionEventRecord {
-                id: event_id,
-                session_id,
-                event_kind,
-                actor_session_id,
-                payload_json: event_payload_json,
-                ts,
-            },
-        })
+        Ok(CreateSessionWithEventResult { session, event })
+    }
+
+    pub fn create_delegate_child_session_with_event_if_within_limit<T, F>(
+        &self,
+        parent_session_id: &str,
+        max_active_children: usize,
+        build_request: F,
+    ) -> Result<(CreateSessionWithEventResult, T), String>
+    where
+        F: FnOnce(usize) -> Result<(CreateSessionWithEventRequest, T), String>,
+    {
+        let parent_session_id = normalize_required_text(parent_session_id, "parent_session_id")?;
+        let mut conn = self.open_connection()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| format!("open delegate child create transaction failed: {error}"))?;
+        let active_children =
+            Self::count_active_direct_children_with_conn(&tx, &parent_session_id)?;
+        if active_children >= max_active_children {
+            return Err(format!(
+                "delegate_active_children_exceeded: active child count {active_children} reaches configured max_active_children {max_active_children}"
+            ));
+        }
+
+        let (request, sidecar) = build_request(active_children)?;
+        let request_parent_session_id = normalize_optional_text(
+            request.session.parent_session_id.clone(),
+        )
+        .ok_or_else(|| "delegate child create request requires parent_session_id".to_owned())?;
+        if request.session.kind != SessionKind::DelegateChild {
+            return Err("delegate child create request requires kind `delegate_child`".to_owned());
+        }
+        if request_parent_session_id != parent_session_id {
+            return Err(format!(
+                "delegate child create request parent mismatch: expected `{parent_session_id}`, got `{request_parent_session_id}`"
+            ));
+        }
+
+        let event = Self::create_session_with_event_in_tx(&tx, request)?;
+        let session_id = event.session_id.clone();
+        tx.commit()
+            .map_err(|error| format!("commit delegate child create transaction failed: {error}"))?;
+
+        let session = self
+            .load_session(&session_id)?
+            .ok_or_else(|| format!("session `{session_id}` disappeared after insert"))?;
+
+        Ok((CreateSessionWithEventResult { session, event }, sidecar))
     }
 
     pub fn load_session(&self, session_id: &str) -> Result<Option<SessionRecord>, String> {
@@ -802,6 +803,12 @@ impl SessionRepository {
         }
 
         Ok(depth)
+    }
+
+    pub fn count_active_direct_children(&self, parent_session_id: &str) -> Result<usize, String> {
+        let parent_session_id = normalize_required_text(parent_session_id, "parent_session_id")?;
+        let conn = self.open_connection()?;
+        Self::count_active_direct_children_with_conn(&conn, &parent_session_id)
     }
 
     pub fn lineage_root_session_id(&self, session_id: &str) -> Result<Option<String>, String> {
@@ -1495,6 +1502,77 @@ impl SessionRepository {
             .map_err(|error| format!("open session repository sqlite db failed: {error}"))
     }
 
+    fn create_session_with_event_in_tx(
+        tx: &Transaction<'_>,
+        request: CreateSessionWithEventRequest,
+    ) -> Result<SessionEventRecord, String> {
+        let session_id = normalize_required_text(&request.session.session_id, "session_id")?;
+        let parent_session_id = normalize_optional_text(request.session.parent_session_id);
+        let label = normalize_optional_text(request.session.label);
+        let event_kind = normalize_required_text(&request.event_kind, "event_kind")?;
+        let actor_session_id = normalize_optional_text(request.actor_session_id);
+        let event_payload_json = request.event_payload_json;
+        let encoded_event_payload = serde_json::to_string(&event_payload_json)
+            .map_err(|error| format!("encode session event payload failed: {error}"))?;
+        let ts = unix_ts_now();
+
+        tx.execute(
+            "INSERT INTO sessions(
+                session_id, kind, parent_session_id, label, state, created_at, updated_at, last_error
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
+            params![
+                session_id,
+                request.session.kind.as_str(),
+                parent_session_id,
+                label,
+                request.session.state.as_str(),
+                ts,
+                ts,
+            ],
+        )
+        .map_err(|error| format!("insert session row failed: {error}"))?;
+        tx.execute(
+            "INSERT INTO session_events(
+                session_id, event_kind, actor_session_id, payload_json, ts
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                session_id,
+                event_kind,
+                actor_session_id.as_deref(),
+                encoded_event_payload,
+                ts
+            ],
+        )
+        .map_err(|error| format!("insert session event failed: {error}"))?;
+
+        Ok(SessionEventRecord {
+            id: tx.last_insert_rowid(),
+            session_id,
+            event_kind,
+            actor_session_id,
+            payload_json: event_payload_json,
+            ts,
+        })
+    }
+
+    fn count_active_direct_children_with_conn(
+        conn: &Connection,
+        parent_session_id: &str,
+    ) -> Result<usize, String> {
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM sessions
+                 WHERE parent_session_id = ?1
+                   AND state IN ('ready', 'running')",
+                params![parent_session_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("count active direct child sessions failed: {error}"))?;
+        usize::try_from(count)
+            .map_err(|error| format!("active direct child count overflowed usize: {error}"))
+    }
+
     fn load_session_summary_with_conn(
         conn: &Connection,
         session_id: &str,
@@ -2022,6 +2100,9 @@ fn sort_session_summaries(sessions: &mut [SessionSummaryRecord]) {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
 
     use serde_json::json;
 
@@ -2338,6 +2419,92 @@ mod tests {
             repo.load_session("child-session")
                 .expect("load child after rollback")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn create_delegate_child_session_with_event_if_within_limit_serializes_capacity() {
+        let config = isolated_memory_config("delegate-child-limit-serialized");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+
+        let config = Arc::new(config);
+        let handles = ["child-session-a", "child-session-b"]
+            .into_iter()
+            .map(|child_session_id| {
+                let config = Arc::clone(&config);
+                thread::spawn(move || {
+                    let repo = SessionRepository::new(&config).expect("repository");
+                    repo.create_delegate_child_session_with_event_if_within_limit(
+                        "root-session",
+                        1,
+                        |active_children| {
+                            thread::park_timeout(Duration::from_millis(100));
+                            Ok((
+                                CreateSessionWithEventRequest {
+                                    session: NewSessionRecord {
+                                        session_id: child_session_id.to_owned(),
+                                        kind: SessionKind::DelegateChild,
+                                        parent_session_id: Some("root-session".to_owned()),
+                                        label: Some(child_session_id.to_owned()),
+                                        state: SessionState::Ready,
+                                    },
+                                    event_kind: "delegate_queued".to_owned(),
+                                    actor_session_id: Some("root-session".to_owned()),
+                                    event_payload_json: json!({
+                                        "task": child_session_id,
+                                        "active_children": active_children
+                                    }),
+                                },
+                                active_children,
+                            ))
+                        },
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut active_children_values = Vec::new();
+        let mut limit_errors = Vec::new();
+        for handle in handles {
+            match handle.join().expect("thread join") {
+                Ok((created, active_children)) => {
+                    active_children_values.push(active_children);
+                    assert_eq!(
+                        created.session.parent_session_id.as_deref(),
+                        Some("root-session")
+                    );
+                }
+                Err(error) => limit_errors.push(error),
+            }
+        }
+
+        assert_eq!(
+            active_children_values,
+            vec![0],
+            "only one child should be admitted before capacity is exhausted"
+        );
+        assert_eq!(
+            limit_errors.len(),
+            1,
+            "one concurrent admission should be rejected"
+        );
+        assert!(
+            limit_errors[0].contains("delegate_active_children_exceeded"),
+            "unexpected error: {}",
+            limit_errors[0]
+        );
+        assert_eq!(
+            repo.count_active_direct_children("root-session")
+                .expect("count active direct children after concurrent admissions"),
+            1
         );
     }
 

@@ -5,8 +5,9 @@
 **Goal:** Prevent duplicate active `serve` workers for the same channel account.
 
 **Architecture:** Reuse account-scoped runtime-state summaries before tracker
-startup and block `with_channel_serve_runtime(...)` when an active owner already
-holds the serve slot. Permit startup when prior state is stale.
+startup, prune inactive pid-scoped owner files during restart/takeover recovery,
+and block `with_channel_serve_runtime(...)` when an active owner already holds
+the serve slot. Permit startup when prior state is stale.
 
 **Tech Stack:** Rust, tokio, serde
 

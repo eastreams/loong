@@ -92,6 +92,9 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Ensure active toolchain target
+        run: rustup target add ${{ matrix.target }}
+
       - name: Cache Cargo Artifacts
         uses: Swatinem/rust-cache@c676846f29d98ff6b0106d3608c7ffd4048af17b
 

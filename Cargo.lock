@@ -452,9 +452,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-types"
-version = "1.4.6"
+version = "1.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2b1117b3b2bbe166d11199b540ceed0d0f7676e36e7b962b5a437a9971eac75"
+checksum = "9d73dbfbaa8e4bc57b9045137680b958d274823509a360abfd8e1d514d40c95c"
 dependencies = [
  "base64-simd",
  "bytes",
@@ -774,6 +774,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75984efb6ed102a0d42db99afb6c1948f0380d1d91808d5529916e6c08b49d8d"
 
 [[package]]
+name = "console"
+version = "0.16.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d64e8af5551369d19cf50138de61f1c42074ab970f74e99be916646777f8fc87"
+dependencies = [
+ "encode_unicode",
+ "libc",
+ "unicode-width",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1084,6 +1096,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dialoguer"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25f104b501bf2364e78d0d3974cbc774f738f5865306ed128e1e0d7499c0ad96"
+dependencies = [
+ "console",
+ "fuzzy-matcher",
+ "shell-words",
+ "tempfile",
+ "zeroize",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1182,6 +1207,12 @@ name = "embedded-io"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
+
+[[package]]
+name = "encode_unicode"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34aa73646ffb006b8f5147f3dc182bd4bcb190227ce861fc4a4844bf8e3cb2c0"
 
 [[package]]
 name = "equivalent"
@@ -1352,6 +1383,15 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "fuzzy-matcher"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54614a3312934d066701a80f20f15fa3b56d67ac7722b39eea5b4c9dd1d66c94"
+dependencies = [
+ "thread_local",
 ]
 
 [[package]]
@@ -1933,7 +1973,7 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "loongclaw-app"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "aes",
  "async-trait",
@@ -1966,7 +2006,7 @@ dependencies = [
 
 [[package]]
 name = "loongclaw-bench"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "loongclaw-app",
  "loongclaw-kernel",
@@ -1980,7 +2020,7 @@ dependencies = [
 
 [[package]]
 name = "loongclaw-contracts"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "semver",
  "serde",
@@ -1990,13 +2030,15 @@ dependencies = [
 
 [[package]]
 name = "loongclaw-daemon"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "axum",
  "base64",
  "chrono",
  "clap",
+ "dialoguer",
  "ed25519-dalek",
+ "libc",
  "loongclaw-app",
  "loongclaw-bench",
  "loongclaw-kernel",
@@ -2013,7 +2055,7 @@ dependencies = [
 
 [[package]]
 name = "loongclaw-kernel"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-trait",
  "loongclaw-contracts",
@@ -2027,7 +2069,7 @@ dependencies = [
 
 [[package]]
 name = "loongclaw-protocol"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-trait",
  "serde",
@@ -2038,7 +2080,7 @@ dependencies = [
 
 [[package]]
 name = "loongclaw-spec"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-trait",
  "base64",
@@ -3030,6 +3072,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "shell-words"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
+
+[[package]]
 name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3255,6 +3303,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "thread_local"
+version = "1.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
+dependencies = [
+ "cfg-if",
 ]
 
 [[package]]

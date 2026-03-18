@@ -411,6 +411,28 @@ pub struct DiscoveryFirstEventSummary {
     pub outcome_counts: BTreeMap<String, u32>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FastLaneToolBatchSegmentSnapshot {
+    pub segment_index: u32,
+    pub scheduling_class: String,
+    pub execution_mode: String,
+    pub intent_count: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FastLaneToolBatchEventSummary {
+    pub batch_events: u32,
+    pub latest_schema_version: Option<u32>,
+    pub latest_total_intents: Option<u32>,
+    pub latest_parallel_execution_enabled: Option<bool>,
+    pub latest_parallel_execution_max_in_flight: Option<u32>,
+    pub latest_parallel_safe_intents: Option<u32>,
+    pub latest_serial_only_intents: Option<u32>,
+    pub latest_parallel_segments: Option<u32>,
+    pub latest_sequential_segments: Option<u32>,
+    pub latest_segments: Vec<FastLaneToolBatchSegmentSnapshot>,
+}
+
 pub fn parse_conversation_event(content: &str) -> Option<ConversationEventRecord> {
     let parsed = serde_json::from_str::<Value>(content).ok()?;
     if parsed.get("type")?.as_str()? != "conversation_event" {
@@ -460,6 +482,22 @@ where
             continue;
         };
         fold_discovery_first_event_record(&record, &mut summary);
+    }
+
+    summary
+}
+
+pub fn summarize_fast_lane_tool_batch_events<'a, I>(contents: I) -> FastLaneToolBatchEventSummary
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut summary = FastLaneToolBatchEventSummary::default();
+
+    for content in contents {
+        let Some(record) = parse_conversation_event(content) else {
+            continue;
+        };
+        fold_fast_lane_tool_batch_event_record(&record, &mut summary);
     }
 
     summary
@@ -752,6 +790,30 @@ fn fold_discovery_first_event_record(
         }
         _ => {}
     }
+}
+
+fn fold_fast_lane_tool_batch_event_record(
+    record: &ConversationEventRecord,
+    summary: &mut FastLaneToolBatchEventSummary,
+) {
+    if record.event != "fast_lane_tool_batch" {
+        return;
+    }
+
+    summary.batch_events = summary.batch_events.saturating_add(1);
+    summary.latest_schema_version = read_u32_opt(&record.payload, "schema_version");
+    summary.latest_total_intents = read_u32_opt(&record.payload, "total_intents");
+    summary.latest_parallel_execution_enabled = record
+        .payload
+        .get("parallel_execution_enabled")
+        .and_then(Value::as_bool);
+    summary.latest_parallel_execution_max_in_flight =
+        read_u32_opt(&record.payload, "parallel_execution_max_in_flight");
+    summary.latest_parallel_safe_intents = read_u32_opt(&record.payload, "parallel_safe_intents");
+    summary.latest_serial_only_intents = read_u32_opt(&record.payload, "serial_only_intents");
+    summary.latest_parallel_segments = read_u32_opt(&record.payload, "parallel_segments");
+    summary.latest_sequential_segments = read_u32_opt(&record.payload, "sequential_segments");
+    summary.latest_segments = parse_fast_lane_tool_batch_segments(record.payload.get("segments"));
 }
 
 pub(crate) fn summarize_turn_checkpoint_history<'a, I>(
@@ -1309,6 +1371,33 @@ fn fold_session_governor_summary(
         read_u32_opt(governor, "recovery_success_streak_threshold");
 }
 
+fn parse_fast_lane_tool_batch_segments(
+    value: Option<&Value>,
+) -> Vec<FastLaneToolBatchSegmentSnapshot> {
+    value
+        .and_then(Value::as_array)
+        .map(|segments| {
+            segments
+                .iter()
+                .filter_map(|segment| {
+                    Some(FastLaneToolBatchSegmentSnapshot {
+                        segment_index: read_u32_opt(segment, "segment_index")?,
+                        scheduling_class: segment
+                            .get("scheduling_class")
+                            .and_then(Value::as_str)?
+                            .to_owned(),
+                        execution_mode: segment
+                            .get("execution_mode")
+                            .and_then(Value::as_str)?
+                            .to_owned(),
+                        intent_count: read_u32_opt(segment, "intent_count")?,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn read_u32_opt(value: &Value, key: &str) -> Option<u32> {
     value
         .get(key)
@@ -1337,6 +1426,137 @@ mod tests {
     fn parse_conversation_event_rejects_non_event_payloads() {
         assert!(parse_conversation_event("not-json").is_none());
         assert!(parse_conversation_event(r#"{"type":"tool_outcome"}"#).is_none());
+    }
+
+    #[test]
+    fn summarize_fast_lane_tool_batch_events_tracks_latest_batch_snapshot() {
+        let payloads = [
+            json!({
+                "type": "conversation_event",
+                "event": "fast_lane_tool_batch",
+                "payload": {
+                    "schema_version": 1,
+                    "total_intents": 2,
+                    "parallel_execution_enabled": true,
+                    "parallel_execution_max_in_flight": 2,
+                    "parallel_safe_intents": 2,
+                    "serial_only_intents": 0,
+                    "parallel_segments": 1,
+                    "sequential_segments": 0,
+                    "segments": [
+                        {
+                            "segment_index": 0,
+                            "scheduling_class": "parallel_safe",
+                            "execution_mode": "parallel",
+                            "intent_count": 2
+                        }
+                    ]
+                }
+            })
+            .to_string(),
+            json!({
+                "type": "conversation_event",
+                "event": "fast_lane_tool_batch",
+                "payload": {
+                    "schema_version": 1,
+                    "total_intents": 3,
+                    "parallel_execution_enabled": true,
+                    "parallel_execution_max_in_flight": 3,
+                    "parallel_safe_intents": 2,
+                    "serial_only_intents": 1,
+                    "parallel_segments": 1,
+                    "sequential_segments": 1,
+                    "segments": [
+                        {
+                            "segment_index": 0,
+                            "scheduling_class": "parallel_safe",
+                            "execution_mode": "parallel",
+                            "intent_count": 2
+                        },
+                        {
+                            "segment_index": 1,
+                            "scheduling_class": "serial_only",
+                            "execution_mode": "sequential",
+                            "intent_count": 1
+                        }
+                    ]
+                }
+            })
+            .to_string(),
+        ];
+
+        let summary = summarize_fast_lane_tool_batch_events(payloads.iter().map(String::as_str));
+
+        assert_eq!(summary.batch_events, 2);
+        assert_eq!(summary.latest_schema_version, Some(1));
+        assert_eq!(summary.latest_total_intents, Some(3));
+        assert_eq!(summary.latest_parallel_execution_enabled, Some(true));
+        assert_eq!(summary.latest_parallel_execution_max_in_flight, Some(3));
+        assert_eq!(summary.latest_parallel_safe_intents, Some(2));
+        assert_eq!(summary.latest_serial_only_intents, Some(1));
+        assert_eq!(summary.latest_parallel_segments, Some(1));
+        assert_eq!(summary.latest_sequential_segments, Some(1));
+        assert_eq!(
+            summary.latest_segments,
+            vec![
+                FastLaneToolBatchSegmentSnapshot {
+                    segment_index: 0,
+                    scheduling_class: "parallel_safe".to_owned(),
+                    execution_mode: "parallel".to_owned(),
+                    intent_count: 2,
+                },
+                FastLaneToolBatchSegmentSnapshot {
+                    segment_index: 1,
+                    scheduling_class: "serial_only".to_owned(),
+                    execution_mode: "sequential".to_owned(),
+                    intent_count: 1,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn summarize_fast_lane_tool_batch_events_ignores_malformed_segments() {
+        let payloads = [json!({
+            "type": "conversation_event",
+            "event": "fast_lane_tool_batch",
+            "payload": {
+                "schema_version": 1,
+                "total_intents": 2,
+                "parallel_execution_enabled": true,
+                "parallel_execution_max_in_flight": 2,
+                "parallel_safe_intents": 2,
+                "serial_only_intents": 0,
+                "parallel_segments": 1,
+                "sequential_segments": 0,
+                "segments": [
+                    null,
+                    [],
+                    {
+                        "segment_index": 99
+                    },
+                    {
+                        "segment_index": 1,
+                        "scheduling_class": "parallel_safe",
+                        "execution_mode": "parallel",
+                        "intent_count": 2
+                    }
+                ]
+            }
+        })
+        .to_string()];
+
+        let summary = summarize_fast_lane_tool_batch_events(payloads.iter().map(String::as_str));
+
+        assert_eq!(
+            summary.latest_segments,
+            vec![FastLaneToolBatchSegmentSnapshot {
+                segment_index: 1,
+                scheduling_class: "parallel_safe".to_owned(),
+                execution_mode: "parallel".to_owned(),
+                intent_count: 2,
+            }]
+        );
     }
 
     #[test]

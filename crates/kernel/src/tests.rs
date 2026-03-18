@@ -1,19 +1,163 @@
 use std::collections::BTreeSet;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use proptest::prelude::*;
 use serde_json::json;
 
-use crate::audit::{AuditEventKind, InMemoryAuditSink};
+use crate::audit::{
+    AuditEvent, AuditEventKind, AuditSink, FanoutAuditSink, InMemoryAuditSink, JsonlAuditSink,
+};
 use crate::clock::FixedClock;
 use crate::contracts::{Capability, HarnessOutcome, TaskIntent};
-use crate::errors::{KernelError, PolicyError};
+use crate::errors::{AuditError, KernelError, PolicyError};
 use crate::kernel::LoongClawKernel;
 use crate::policy::{PolicyEngine, StaticPolicyEngine};
 use crate::task_supervisor::TaskSupervisor;
+use crate::{ExecutionPlane, PlaneTier};
 use crate::{Fault, TaskState};
 
 use crate::test_support::*;
+
+fn fresh_audit_temp_path(label: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    std::env::temp_dir().join(format!(
+        "loongclaw-kernel-audit-{label}-{}-{nonce}",
+        std::process::id()
+    ))
+}
+
+fn sample_audit_event(event_id: &str, timestamp_epoch_s: u64) -> AuditEvent {
+    AuditEvent {
+        event_id: event_id.to_owned(),
+        timestamp_epoch_s,
+        agent_id: Some("agent-audit".to_owned()),
+        kind: AuditEventKind::PlaneInvoked {
+            pack_id: "sales-intel".to_owned(),
+            plane: ExecutionPlane::Tool,
+            tier: PlaneTier::Core,
+            primary_adapter: "mvp-tools".to_owned(),
+            delegated_core_adapter: None,
+            operation: "shell.exec".to_owned(),
+            required_capabilities: vec![Capability::InvokeTool],
+        },
+    }
+}
+
+#[test]
+fn jsonl_audit_sink_appends_one_json_line_per_event() {
+    let path = fresh_audit_temp_path("jsonl");
+    let sink = JsonlAuditSink::new(path.clone()).expect("jsonl sink should initialize");
+
+    sink.record(sample_audit_event("evt-1", 100))
+        .expect("first event should record");
+    sink.record(sample_audit_event("evt-2", 101))
+        .expect("second event should record");
+
+    let contents = fs::read_to_string(&path).expect("audit journal should exist");
+    let lines = contents.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2, "expected one JSON line per audit event");
+
+    let first: AuditEvent =
+        serde_json::from_str(lines[0]).expect("first JSON line should decode into AuditEvent");
+    let second: AuditEvent =
+        serde_json::from_str(lines[1]).expect("second JSON line should decode into AuditEvent");
+    assert_eq!(first.event_id, "evt-1");
+    assert_eq!(second.event_id, "evt-2");
+
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn fanout_audit_sink_records_to_all_children() {
+    let path = fresh_audit_temp_path("fanout");
+    let memory = Arc::new(InMemoryAuditSink::default());
+    let jsonl = Arc::new(JsonlAuditSink::new(path.clone()).expect("jsonl sink should initialize"));
+    let sink = FanoutAuditSink::new(vec![
+        memory.clone() as Arc<dyn AuditSink>,
+        jsonl as Arc<dyn AuditSink>,
+    ]);
+
+    sink.record(sample_audit_event("evt-fanout", 200))
+        .expect("fanout sink should record");
+
+    let memory_events = memory.snapshot();
+    assert_eq!(
+        memory_events.len(),
+        1,
+        "in-memory sink should receive event"
+    );
+
+    let contents = fs::read_to_string(&path).expect("jsonl fanout sink should write file");
+    assert_eq!(
+        contents.lines().count(),
+        1,
+        "jsonl child should receive event"
+    );
+
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn jsonl_audit_sink_surfaces_io_errors() {
+    let path = fresh_audit_temp_path("jsonl-dir");
+    fs::create_dir(&path).expect("directory fixture should create");
+
+    let error = JsonlAuditSink::new(path.clone()).expect_err("directory path should fail");
+    assert!(matches!(error, AuditError::Sink(_)));
+
+    let _ = fs::remove_dir_all(path);
+}
+
+#[test]
+fn jsonl_audit_sink_waits_for_existing_file_lock_before_appending() {
+    let path = fresh_audit_temp_path("jsonl-lock");
+    let sink = JsonlAuditSink::new(path.clone()).expect("jsonl sink should initialize");
+    let external_lock = fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .expect("open external audit journal handle");
+    external_lock
+        .lock()
+        .expect("hold external audit journal lock");
+
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let result = sink.record(sample_audit_event("evt-locked", 202));
+        tx.send(result).expect("send audit result");
+    });
+
+    match rx.recv_timeout(Duration::from_millis(100)) {
+        Err(mpsc::RecvTimeoutError::Timeout) => {}
+        Ok(result) => panic!("audit write should block on external file lock, got {result:?}"),
+        Err(error) => panic!("audit write channel closed unexpectedly: {error:?}"),
+    }
+
+    external_lock
+        .unlock()
+        .expect("release external audit journal lock");
+    rx.recv_timeout(Duration::from_secs(1))
+        .expect("audit write should complete after lock release")
+        .expect("audit write should succeed after lock release");
+    handle.join().expect("join audit writer thread");
+
+    let contents = fs::read_to_string(&path).expect("audit journal should exist");
+    assert_eq!(contents.lines().count(), 1);
+
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+#[should_panic(expected = "fanout audit sink requires at least one child")]
+fn fanout_audit_sink_rejects_empty_children() {
+    let _ = FanoutAuditSink::new(Vec::new());
+}
 
 #[test]
 fn pack_validation_rejects_invalid_semver() {

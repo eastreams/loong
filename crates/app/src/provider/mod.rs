@@ -48,6 +48,13 @@ pub use shape::{
     extract_provider_turn_with_scope_and_messages,
 };
 
+pub fn is_auth_style_failure_message(message: &str) -> bool {
+    matches!(
+        profile_health_policy::classify_profile_failure_reason_from_message(message),
+        ProviderFailoverReason::AuthRejected
+    )
+}
+
 #[cfg(test)]
 use auth_profile_runtime::{ProviderAuthProfile, resolve_provider_auth_profiles};
 use catalog_query_runtime::fetch_available_models_with_profiles;

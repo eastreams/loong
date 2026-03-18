@@ -1721,6 +1721,122 @@ requires_openai_auth = true
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn import_cli_applies_codex_source_and_imported_turn_falls_back_from_responses_gateway_502() {
+    let temp_root = unique_temp_dir("codex-turn-fallback-gateway-502");
+    let home = temp_root.join("home");
+    std::fs::create_dir_all(home.join(".codex")).expect("create fake home codex dir");
+    let output_path = temp_root.join("loongclaw-config.toml");
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local provider test listener");
+    let addr = listener.local_addr().expect("local addr");
+    let server = std::thread::spawn(move || {
+        let mut requests = Vec::new();
+        for _ in 0..4 {
+            let (mut stream, _) = listener.accept().expect("accept local provider request");
+            let mut request_buf = [0_u8; 8192];
+            let len = stream.read(&mut request_buf).expect("read request");
+            let request = String::from_utf8_lossy(&request_buf[..len]).to_string();
+            requests.push(request.clone());
+
+            let (status_line, body) = if request.starts_with("POST /v1/responses ") {
+                ("HTTP/1.1 502 Bad Gateway", "error code: 502".to_owned())
+            } else if request.starts_with("POST /v1/chat/completions ") {
+                (
+                    "HTTP/1.1 200 OK",
+                    r#"{"choices":[{"message":{"role":"assistant","content":"gateway fallback ok"}}]}"#
+                        .to_owned(),
+                )
+            } else {
+                (
+                    "HTTP/1.1 404 Not Found",
+                    r#"{"error":{"message":"unexpected request"}}"#.to_owned(),
+                )
+            };
+
+            let response = format!(
+                "{status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+        }
+        requests
+    });
+
+    std::fs::write(
+        home.join(".codex/config.toml"),
+        format!(
+            r#"
+model_provider = "sub2api"
+model = "openai/gpt-5.1-codex"
+
+[model_providers.sub2api]
+base_url = "http://{addr}"
+wire_api = "responses"
+requires_openai_auth = true
+"#
+        ),
+    )
+    .expect("write fake codex config");
+
+    let _env_guard = ImportEnvironmentGuard::set(&[
+        ("HOME", Some(home.to_string_lossy().as_ref())),
+        ("OPENAI_API_KEY", Some("test-openai-key")),
+    ]);
+
+    loongclaw_daemon::import_cli::run_import_cli(
+        loongclaw_daemon::import_cli::ImportCommandOptions {
+            output: Some(output_path.display().to_string()),
+            force: false,
+            preview: false,
+            apply: true,
+            json: false,
+            from: Some("codex".to_owned()),
+            source_path: None,
+            provider: None,
+            include: Vec::new(),
+            exclude: Vec::new(),
+        },
+    )
+    .await
+    .expect("codex import should apply cleanly");
+
+    let (_, imported) = mvp::config::load(Some(output_path.to_string_lossy().as_ref()))
+        .expect("load imported config");
+    let turn = mvp::provider::request_turn(
+        &imported,
+        "import-codex-session",
+        "import-codex-turn",
+        &[json!({
+            "role": "user",
+            "content": "ping"
+        })],
+        mvp::provider::ProviderRuntimeBinding::direct(),
+    )
+    .await
+    .expect(
+        "imported config should fallback from Responses to chat-completions when the compatibility endpoint rejects Responses behind a 502 shim",
+    );
+    assert_eq!(turn.assistant_text, "gateway fallback ok");
+
+    let requests = server.join().expect("join local provider server");
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.starts_with("POST /v1/responses ")),
+        "turn path should attempt the imported Responses endpoint before fallback: {requests:#?}"
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.starts_with("POST /v1/chat/completions ")),
+        "turn path should retry through the imported chat_completions endpoint after the 502 compatibility rejection: {requests:#?}"
+    );
+}
+
 #[test]
 fn import_cli_provider_selection_requires_explicit_choice_for_unresolved_recommended_plan() {
     let mut recommended = sample_import_candidate();

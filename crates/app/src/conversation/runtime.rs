@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use crate::CliResult;
 use crate::KernelContext;
+use crate::tools::runtime_config::ToolRuntimeNarrowing;
 use crate::tools::{
     ToolView, delegate_child_tool_view_for_config,
     delegate_child_tool_view_for_config_with_delegate,
@@ -23,6 +24,7 @@ use super::context_engine_registry::{
     list_context_engine_metadata, resolve_context_engine,
 };
 use super::runtime_binding::ConversationRuntimeBinding;
+use super::subagent::ConstrainedSubagentExecution;
 use super::turn_engine::ProviderTurn;
 
 #[cfg(feature = "memory-sqlite")]
@@ -37,6 +39,7 @@ pub struct SessionContext {
     pub session_id: String,
     pub parent_session_id: Option<String>,
     pub tool_view: ToolView,
+    pub runtime_narrowing: Option<ToolRuntimeNarrowing>,
 }
 
 impl SessionContext {
@@ -45,6 +48,7 @@ impl SessionContext {
             session_id: normalize_session_id(session_id.into()),
             parent_session_id: None,
             tool_view,
+            runtime_narrowing: None,
         }
     }
 
@@ -57,7 +61,16 @@ impl SessionContext {
             session_id: normalize_session_id(session_id.into()),
             parent_session_id: Some(normalize_session_id(parent_session_id.into())),
             tool_view,
+            runtime_narrowing: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_runtime_narrowing(mut self, runtime_narrowing: ToolRuntimeNarrowing) -> Self {
+        if !runtime_narrowing.is_empty() {
+            self.runtime_narrowing = Some(runtime_narrowing);
+        }
+        self
     }
 }
 
@@ -70,12 +83,34 @@ fn normalize_session_id(session_id: String) -> String {
     }
 }
 
+#[cfg(feature = "memory-sqlite")]
+fn load_delegate_runtime_narrowing(
+    repo: &SessionRepository,
+    session_id: &str,
+) -> Result<Option<ToolRuntimeNarrowing>, String> {
+    let events = repo.list_delegate_lifecycle_events(session_id)?;
+    let execution = events.into_iter().rev().find_map(|event| {
+        matches!(
+            event.event_kind.as_str(),
+            "delegate_queued" | "delegate_started"
+        )
+        .then(|| {
+            super::subagent::ConstrainedSubagentExecution::from_event_payload(&event.payload_json)
+        })
+        .flatten()
+    });
+    Ok(execution.and_then(|execution| {
+        (!execution.runtime_narrowing.is_empty()).then_some(execution.runtime_narrowing)
+    }))
+}
+
 #[derive(Clone)]
 pub struct AsyncDelegateSpawnRequest {
     pub child_session_id: String,
     pub parent_session_id: String,
     pub task: String,
     pub label: Option<String>,
+    pub execution: ConstrainedSubagentExecution,
     pub timeout_seconds: u64,
     pub kernel_context: Option<KernelContext>,
 }
@@ -104,45 +139,64 @@ impl DefaultAsyncDelegateSpawner {
 #[async_trait]
 impl AsyncDelegateSpawner for DefaultAsyncDelegateSpawner {
     async fn spawn(&self, request: AsyncDelegateSpawnRequest) -> Result<(), String> {
-        let repo = SessionRepository::new(&MemoryRuntimeConfig::from_memory_config(
-            &self.config.memory,
-        ))?;
-        let started = repo.transition_session_with_event_if_current(
-            &request.child_session_id,
-            TransitionSessionWithEventIfCurrentRequest {
-                expected_state: SessionState::Ready,
-                next_state: SessionState::Running,
-                last_error: None,
-                event_kind: "delegate_started".to_owned(),
-                actor_session_id: Some(request.parent_session_id.clone()),
-                event_payload_json: json!({
-                    "task": request.task.clone(),
-                    "label": request.label.clone(),
-                    "timeout_seconds": request.timeout_seconds,
-                }),
-            },
-        )?;
-        if started.is_none() {
+        let execution_timeout_seconds = request.execution.timeout_seconds;
+        if request.timeout_seconds != execution_timeout_seconds {
             return Err(format!(
-                "async_delegate_spawn_skipped: session `{}` was not in Ready state",
-                request.child_session_id,
+                "async_delegate_timeout_mismatch: request timeout {} != execution timeout {}",
+                request.timeout_seconds, execution_timeout_seconds
             ));
         }
 
+        let repo = SessionRepository::new(&MemoryRuntimeConfig::from_memory_config(
+            &self.config.memory,
+        ))?;
         let runtime = DefaultConversationRuntime::from_config_or_env(self.config.as_ref())?;
-        let _ = super::turn_coordinator::run_started_delegate_child_turn_with_runtime(
-            self.config.as_ref(),
+        super::turn_coordinator::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
             &runtime,
-            &request.child_session_id,
             &request.parent_session_id,
-            request.label,
-            &request.task,
-            request.timeout_seconds,
+            &request.child_session_id,
             ConversationRuntimeBinding::from_optional_kernel_context(
                 request.kernel_context.as_ref(),
             ),
+            || async {
+                let started = repo.transition_session_with_event_if_current(
+                    &request.child_session_id,
+                    TransitionSessionWithEventIfCurrentRequest {
+                        expected_state: SessionState::Ready,
+                        next_state: SessionState::Running,
+                        last_error: None,
+                        event_kind: "delegate_started".to_owned(),
+                        actor_session_id: Some(request.parent_session_id.clone()),
+                        event_payload_json: request
+                            .execution
+                            .spawn_payload(&request.task, request.label.as_deref()),
+                    },
+                )?;
+                if started.is_none() {
+                    return Err(format!(
+                        "async_delegate_spawn_skipped: session `{}` was not in Ready state",
+                        request.child_session_id
+                    ));
+                }
+
+                let _ = super::turn_coordinator::run_started_delegate_child_turn_with_runtime(
+                    self.config.as_ref(),
+                    &runtime,
+                    &request.child_session_id,
+                    &request.parent_session_id,
+                    request.label,
+                    &request.task,
+                    request.execution,
+                    execution_timeout_seconds,
+                    ConversationRuntimeBinding::from_optional_kernel_context(
+                        request.kernel_context.as_ref(),
+                    ),
+                )
+                .await;
+                Ok(())
+            },
         )
-        .await;
+        .await?;
         Ok(())
     }
 }
@@ -439,22 +493,26 @@ where
                     .map_err(|error| format!("load session context failed: {error}"))?
                 {
                     if let Some(parent_session_id) = session.parent_session_id {
+                        let runtime_narrowing = load_delegate_runtime_narrowing(&repo, session_id)?;
                         return Ok(SessionContext::child(
                             session.session_id,
                             parent_session_id,
                             tool_view,
-                        ));
+                        )
+                        .with_runtime_narrowing(runtime_narrowing.unwrap_or_default()));
                     }
                 } else if let Some(summary) = repo
                     .load_session_summary_with_legacy_fallback(session_id)
                     .map_err(|error| format!("load legacy session context failed: {error}"))?
                     && let Some(parent_session_id) = summary.parent_session_id
                 {
+                    let runtime_narrowing = load_delegate_runtime_narrowing(&repo, session_id)?;
                     return Ok(SessionContext::child(
                         summary.session_id,
                         parent_session_id,
                         tool_view,
-                    ));
+                    )
+                    .with_runtime_narrowing(runtime_narrowing.unwrap_or_default()));
                 }
             }
         }
@@ -591,14 +649,7 @@ where
         messages: &[Value],
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
-        provider::request_completion(
-            config,
-            messages,
-            provider::ProviderRuntimeBinding::from_optional_kernel_context(
-                binding.kernel_context(),
-            ),
-        )
-        .await
+        provider::request_completion(config, messages, provider_runtime_binding(binding)).await
     }
 
     async fn request_turn(
@@ -616,9 +667,7 @@ where
             turn_id,
             messages,
             tool_view,
-            provider::ProviderRuntimeBinding::from_optional_kernel_context(
-                binding.kernel_context(),
-            ),
+            provider_runtime_binding(binding),
         )
         .await
     }
@@ -713,6 +762,17 @@ where
     }
 }
 
+fn provider_runtime_binding(
+    binding: ConversationRuntimeBinding<'_>,
+) -> provider::ProviderRuntimeBinding<'_> {
+    match binding {
+        ConversationRuntimeBinding::Kernel(kernel_ctx) => {
+            provider::ProviderRuntimeBinding::kernel(kernel_ctx)
+        }
+        ConversationRuntimeBinding::Direct => provider::ProviderRuntimeBinding::direct(),
+    }
+}
+
 fn apply_system_prompt_addition(messages: &mut Vec<Value>, addition: Option<&str>) {
     let Some(addition) = addition
         .map(str::trim)
@@ -788,5 +848,30 @@ fn apply_tool_view_to_system_prompt(messages: &mut [Value], tool_view: &ToolView
             object.insert("content".to_owned(), Value::String(rewritten));
         }
         return;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TurnTestHarness;
+
+    #[test]
+    fn provider_runtime_binding_maps_direct_conversation_binding_to_direct() {
+        assert!(matches!(
+            provider_runtime_binding(ConversationRuntimeBinding::direct()),
+            provider::ProviderRuntimeBinding::Direct
+        ));
+    }
+
+    #[test]
+    fn provider_runtime_binding_maps_kernel_conversation_binding_to_kernel() {
+        let harness = TurnTestHarness::new();
+
+        assert!(matches!(
+            provider_runtime_binding(ConversationRuntimeBinding::kernel(&harness.kernel_ctx)),
+            provider::ProviderRuntimeBinding::Kernel(kernel_ctx)
+                if std::ptr::eq(kernel_ctx, &harness.kernel_ctx)
+        ));
     }
 }

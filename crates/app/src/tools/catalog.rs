@@ -19,6 +19,21 @@ pub enum ToolAvailability {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ToolSchedulingClass {
+    SerialOnly,
+    ParallelSafe,
+}
+
+impl ToolSchedulingClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SerialOnly => "serial_only",
+            Self::ParallelSafe => "parallel_safe",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ToolGovernanceScope {
     Routine,
     TopologyMutation,
@@ -103,6 +118,15 @@ pub fn governance_profile_for_descriptor(descriptor: &ToolDescriptor) -> ToolGov
     governance_profile_for_tool_name(descriptor.name)
 }
 
+pub fn scheduling_class_for_tool_name(tool_name: &str) -> ToolSchedulingClass {
+    match tool_name {
+        "tool.search" | "file.read" | "web.fetch" | "sessions_list" => {
+            ToolSchedulingClass::ParallelSafe
+        }
+        _ => ToolSchedulingClass::SerialOnly,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ToolExposureClass {
     ProviderCore,
@@ -166,6 +190,10 @@ impl ToolDescriptor {
     pub fn is_discoverable(&self) -> bool {
         self.exposure == ToolExposureClass::Discoverable
     }
+
+    pub fn scheduling_class(&self) -> ToolSchedulingClass {
+        scheduling_class_for_tool_name(self.name)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -180,6 +208,7 @@ pub struct ToolCatalogEntry {
     pub exposure: ToolExposureClass,
     pub execution_kind: ToolExecutionKind,
     pub availability: ToolAvailability,
+    pub scheduling_class: ToolSchedulingClass,
 }
 
 impl ToolCatalogEntry {
@@ -906,6 +935,7 @@ fn descriptor_to_entry(descriptor: &ToolDescriptor) -> ToolCatalogEntry {
         exposure: descriptor.exposure,
         execution_kind: descriptor.execution_kind,
         availability: descriptor.availability,
+        scheduling_class: descriptor.scheduling_class(),
     }
 }
 
@@ -2412,5 +2442,47 @@ mod tests {
         let child_view = delegate_child_tool_view_for_config(&config);
 
         assert!(!child_view.contains("web.fetch"));
+    }
+
+    #[test]
+    fn scheduling_class_marks_parallel_safe_subset() {
+        let catalog = tool_catalog();
+        assert_eq!(
+            catalog
+                .descriptor("tool.search")
+                .expect("tool.search descriptor")
+                .scheduling_class(),
+            ToolSchedulingClass::ParallelSafe
+        );
+        #[cfg(feature = "tool-file")]
+        assert_eq!(
+            catalog
+                .descriptor("file.read")
+                .expect("file.read descriptor")
+                .scheduling_class(),
+            ToolSchedulingClass::ParallelSafe
+        );
+        #[cfg(feature = "tool-webfetch")]
+        assert_eq!(
+            catalog
+                .descriptor("web.fetch")
+                .expect("web.fetch descriptor")
+                .scheduling_class(),
+            ToolSchedulingClass::ParallelSafe
+        );
+        assert_eq!(
+            catalog
+                .descriptor("sessions_list")
+                .expect("sessions_list descriptor")
+                .scheduling_class(),
+            ToolSchedulingClass::ParallelSafe
+        );
+        assert_eq!(
+            catalog
+                .descriptor("delegate_async")
+                .expect("delegate_async descriptor")
+                .scheduling_class(),
+            ToolSchedulingClass::SerialOnly
+        );
     }
 }

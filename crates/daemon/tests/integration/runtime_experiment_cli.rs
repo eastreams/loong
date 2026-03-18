@@ -791,6 +791,7 @@ fn runtime_experiment_compare_record_only_surfaces_decision_summary() {
                 run: run_path.display().to_string(),
                 baseline_snapshot: None,
                 result_snapshot: None,
+                recorded_snapshots: false,
                 json: true,
             },
         )
@@ -834,6 +835,7 @@ fn runtime_experiment_compare_with_snapshot_delta_reports_changed_runtime_surfac
                 run: run_path.display().to_string(),
                 baseline_snapshot: Some(baseline_snapshot_path.display().to_string()),
                 result_snapshot: Some(result_snapshot_path.display().to_string()),
+                recorded_snapshots: false,
                 json: true,
             },
         )
@@ -882,6 +884,53 @@ fn runtime_experiment_compare_with_snapshot_delta_reports_changed_runtime_surfac
 }
 
 #[test]
+fn runtime_experiment_compare_with_recorded_snapshots_reports_changed_runtime_surfaces() {
+    let root = unique_temp_dir("loongclaw-runtime-experiment-compare-recorded-snapshots");
+    let config_path = write_runtime_experiment_config(&root);
+    let (run_path, _baseline_snapshot_path, _result_snapshot_path, _) =
+        finish_runtime_experiment_with_compare_delta(&root, &config_path);
+
+    let report =
+        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
+            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
+                run: run_path.display().to_string(),
+                baseline_snapshot: None,
+                result_snapshot: None,
+                recorded_snapshots: true,
+                json: true,
+            },
+        )
+        .expect("recorded snapshot compare should succeed");
+
+    assert_eq!(
+        report.compare_mode,
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCompareMode::SnapshotDelta
+    );
+    let snapshot_delta = report
+        .snapshot_delta
+        .as_ref()
+        .expect("compare should include snapshot delta");
+    assert_eq!(
+        snapshot_delta.provider_active_profile.before.as_deref(),
+        Some("deepseek-lab")
+    );
+    assert_eq!(
+        snapshot_delta.provider_active_profile.after.as_deref(),
+        Some("openai-main")
+    );
+    assert!(
+        snapshot_delta.changed_surface_count >= 4,
+        "recorded snapshot compare should report runtime surface deltas"
+    );
+
+    let rendered =
+        loongclaw_daemon::runtime_experiment_cli::render_runtime_experiment_compare_text(&report);
+    assert!(rendered.contains("compare_mode=snapshot_delta"));
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn runtime_experiment_compare_requires_both_snapshot_paths_for_deep_compare() {
     let root = unique_temp_dir("loongclaw-runtime-experiment-compare-partial");
     let config_path = write_runtime_experiment_config(&root);
@@ -894,6 +943,7 @@ fn runtime_experiment_compare_requires_both_snapshot_paths_for_deep_compare() {
                 run: run_path.display().to_string(),
                 baseline_snapshot: Some(baseline_snapshot_path.display().to_string()),
                 result_snapshot: None,
+                recorded_snapshots: false,
                 json: false,
             },
         )
@@ -928,6 +978,7 @@ fn runtime_experiment_compare_rejects_snapshot_identity_mismatch() {
                 run: run_path.display().to_string(),
                 baseline_snapshot: Some(baseline_snapshot_path.display().to_string()),
                 result_snapshot: Some(other_result_snapshot_path.display().to_string()),
+                recorded_snapshots: false,
                 json: false,
             },
         )
@@ -952,6 +1003,7 @@ fn runtime_experiment_compare_treats_missing_snapshot_sections_as_absent() {
                 run: run_path.display().to_string(),
                 baseline_snapshot: Some(baseline_snapshot_path.display().to_string()),
                 result_snapshot: Some(result_snapshot_path.display().to_string()),
+                recorded_snapshots: false,
                 json: true,
             },
         )
@@ -968,6 +1020,95 @@ fn runtime_experiment_compare_treats_missing_snapshot_sections_as_absent() {
         snapshot_delta.changed_surface_count >= 3,
         "missing sections should still register as changed surfaces"
     );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_experiment_compare_recorded_snapshots_rejects_missing_recorded_result_path() {
+    let root = unique_temp_dir("loongclaw-runtime-experiment-compare-recorded-missing-path");
+    let config_path = write_runtime_experiment_config(&root);
+    let (run_path, _, _, _) = finish_runtime_experiment_with_compare_delta(&root, &config_path);
+    rewrite_json_file(&run_path, |payload| {
+        payload["result_snapshot"]
+            .as_object_mut()
+            .expect("result_snapshot should be an object")
+            .remove("artifact_path");
+    });
+
+    let error =
+        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
+            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
+                run: run_path.display().to_string(),
+                baseline_snapshot: None,
+                result_snapshot: None,
+                recorded_snapshots: true,
+                json: false,
+            },
+        )
+        .expect_err("recorded snapshot compare should reject missing recorded result path");
+
+    assert!(error.contains("missing recorded result snapshot path"));
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_experiment_compare_recorded_snapshots_rejects_unresolvable_result_path() {
+    let root = unique_temp_dir("loongclaw-runtime-experiment-compare-recorded-unresolvable-path");
+    let config_path = write_runtime_experiment_config(&root);
+    let (run_path, _, result_snapshot_path, _) =
+        finish_runtime_experiment_with_compare_delta(&root, &config_path);
+    fs::remove_file(&result_snapshot_path).expect("result snapshot fixture should be removable");
+
+    let error =
+        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
+            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
+                run: run_path.display().to_string(),
+                baseline_snapshot: None,
+                result_snapshot: None,
+                recorded_snapshots: true,
+                json: false,
+            },
+        )
+        .expect_err("recorded snapshot compare should reject an unresolvable result path");
+
+    assert!(error.contains("recorded result snapshot path"));
+    assert!(error.contains("cannot be resolved"));
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_experiment_compare_recorded_snapshots_rejects_unavailable_result_stage() {
+    let root = unique_temp_dir("loongclaw-runtime-experiment-compare-recorded-no-result");
+    let config_path = write_runtime_experiment_config(&root);
+    let (baseline_snapshot_path, _) = write_snapshot_artifact(
+        &root,
+        &config_path,
+        "artifacts/runtime-snapshot.json",
+        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+            created_at: "2026-03-16T12:00:00Z".to_owned(),
+            label: Some("baseline".to_owned()),
+            experiment_id: Some("exp-42".to_owned()),
+            parent_snapshot_id: Some("snapshot-parent".to_owned()),
+        },
+    );
+    let (run_path, _) = start_runtime_experiment(&root, &baseline_snapshot_path, None);
+
+    let error =
+        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
+            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
+                run: run_path.display().to_string(),
+                baseline_snapshot: None,
+                result_snapshot: None,
+                recorded_snapshots: true,
+                json: false,
+            },
+        )
+        .expect_err("planned run should not deep-compare recorded snapshots");
+
+    assert!(error.contains("has no result snapshot"));
 
     fs::remove_dir_all(&root).ok();
 }

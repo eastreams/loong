@@ -544,17 +544,21 @@ fn extract_error_string(error: &Value, field_names: &[&str]) -> Option<String> {
 }
 
 fn extract_error_message(error: &Value) -> Option<String> {
-    extract_error_string(error, &["message", "Message", "detail", "Detail"]).or_else(|| {
-        error
-            .get("details")
-            .and_then(Value::as_array)
-            .and_then(|details| {
-                details
-                    .iter()
-                    .filter_map(|detail| detail.get("message").and_then(value_to_trimmed_string))
-                    .find(|message| !message.is_empty())
-            })
-    })
+    extract_error_string(error, &["message", "Message", "detail", "Detail"])
+        .or_else(|| error.get("raw_body").and_then(value_to_trimmed_string))
+        .or_else(|| {
+            error
+                .get("details")
+                .and_then(Value::as_array)
+                .and_then(|details| {
+                    details
+                        .iter()
+                        .filter_map(|detail| {
+                            detail.get("message").and_then(value_to_trimmed_string)
+                        })
+                        .find(|message| !message.is_empty())
+                })
+        })
 }
 
 fn value_to_trimmed_string(value: &Value) -> Option<String> {
@@ -770,6 +774,7 @@ mod tests {
         ProviderConfig, ProviderKind, ProviderReasoningExtraBodyModeConfig,
         ProviderToolSchemaModeConfig,
     };
+    use serde_json::json;
 
     #[test]
     fn capability_contract_matrix_is_provider_scoped() {
@@ -994,5 +999,16 @@ mod tests {
                 "unexpected payload adaptation axis for case `{name}` with error={error:?}",
             );
         }
+    }
+
+    #[test]
+    fn parse_provider_api_error_uses_raw_body_when_structured_message_is_absent() {
+        let parsed = parse_provider_api_error(&json!({
+            "raw_body": "error code: 502"
+        }));
+
+        assert_eq!(parsed.message.as_deref(), Some("error code: 502"));
+        assert_eq!(parsed.code, None);
+        assert_eq!(parsed.param, None);
     }
 }

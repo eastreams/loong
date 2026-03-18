@@ -1,11 +1,11 @@
 # Architecture Drift Report 2026-03
 
 ## Summary
-- Generated at: 2026-03-16T03:46:17Z
+- Generated at: 2026-03-18T00:35:37Z
 - Report month: `2026-03`
 - Baseline report: none
 - Hotspots tracked: 4
-- Boundary checks tracked: 3
+- Boundary checks tracked: 4
 - SLO status: PASS
 
 ## Hotspot Metrics
@@ -13,7 +13,7 @@
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|
 | spec_runtime | `crates/spec/src/spec_runtime.rs` | 3020 | 3600 | 580 | 47 | 65 | 18 | n/a | n/a | N/A | n/a |
 | spec_execution | `crates/spec/src/spec_execution.rs` | 1478 | 3700 | 2222 | 23 | 80 | 57 | n/a | n/a | N/A | n/a |
-| provider_mod | `crates/app/src/provider/mod.rs` | 294 | 1000 | 706 | 7 | 20 | 13 | n/a | n/a | N/A | n/a |
+| provider_mod | `crates/app/src/provider/mod.rs` | 301 | 1000 | 699 | 8 | 20 | 12 | n/a | n/a | N/A | n/a |
 | memory_mod | `crates/app/src/memory/mod.rs` | 312 | 650 | 338 | 15 | 16 | 1 | n/a | n/a | N/A | n/a |
 
 ## Boundary Checks
@@ -21,6 +21,7 @@
 |---|---|---|---|
 | memory_literals | PASS | n/a | memory operation literals are centralized in crates/app/src/memory/* |
 | provider_mod_helper_definitions | PASS | n/a | provider/mod.rs keeps payload, parse, and recovery helper implementations outside the top-level module |
+| conversation_provider_optional_binding_roundtrip | PASS | n/a | conversation/runtime.rs translates explicit conversation bindings into provider bindings without optional-kernel roundtrips |
 | spec_app_dependency | PASS | n/a | spec crate remains detached from app crate at the Cargo dependency boundary |
 
 ## SLO Assessment
@@ -40,8 +41,9 @@
 
 <!-- arch-hotspot key=spec_runtime lines=3020 functions=47 -->
 <!-- arch-hotspot key=spec_execution lines=1478 functions=23 -->
-<!-- arch-hotspot key=provider_mod lines=294 functions=7 -->
+<!-- arch-hotspot key=provider_mod lines=301 functions=8 -->
 <!-- arch-hotspot key=memory_mod lines=312 functions=15 -->
 <!-- arch-boundary key=memory_literals status=PASS -->
 <!-- arch-boundary key=provider_mod_helper_definitions status=PASS -->
+<!-- arch-boundary key=conversation_provider_optional_binding_roundtrip status=PASS -->
 <!-- arch-boundary key=spec_app_dependency status=PASS -->

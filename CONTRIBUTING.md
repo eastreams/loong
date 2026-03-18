@@ -125,7 +125,7 @@ cargo test --workspace --all-features
 2. Implement the `ChannelAdapter` trait (`name`, `receive_batch`, `send_text`)
 3. Add a `run_your_channel()` function in `crates/app/src/channel/mod.rs` that:
    - Loads config
-   - Calls `bootstrap_kernel_context("channel-your-channel", DEFAULT_TOKEN_TTL_S)`
+   - Calls `bootstrap_kernel_context_with_config("channel-your-channel", DEFAULT_TOKEN_TTL_S, &config)`
    - Loops: receive messages → `process_inbound_with_provider(config, msg, Some(&ctx))` → send reply
 4. Wire the subcommand in `crates/daemon/src/main.rs`
 5. Add a feature flag in `crates/app/Cargo.toml`

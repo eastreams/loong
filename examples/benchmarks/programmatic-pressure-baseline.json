@@ -22,7 +22,7 @@
       "min_throughput_rps": 8.0,
       "min_peak_in_flight": 2.0,
       "max_circuit_open_error_ratio": 0.2,
-      "expected_schema_fingerprint": "multi:763385f453b8ac838ad23c766360ac8fd936d026411cc4302dac97d821590961",
+      "expected_schema_fingerprint": "73b2d6f1a265030e812da87835070198d2191104d0685c02cce03b1c301c33a3",
       "tolerance": {
         "max_ratio": 0.2,
         "min_ratio": 0.1,
@@ -36,7 +36,7 @@
       "min_throughput_rps": 6.0,
       "min_peak_in_flight": 1.0,
       "max_circuit_open_error_ratio": 0.9,
-      "expected_schema_fingerprint": "multi:3f947ee30687186432d505dd5eedf55555bbf18b97023906f3e8e3576d3dd8ff",
+      "expected_schema_fingerprint": "e01f8cbe85dc1d45a7369d18844930f2e6c3d33dd8e077cdc7d2c46e15eff66a",
       "tolerance": {
         "max_ratio": 0.2,
         "min_ratio": 0.1,

@@ -54,9 +54,15 @@ CapabilityToken → PolicyEngine → PolicyExtensionChain → Execution → Audi
 ### Audit System
 
 - 7 event kinds with atomic sequencing
-- In-memory only (TD-006) — lost on restart
+- Durable JSONL retention is available on production-shaped app bootstraps through `[audit]`
+  config (`in_memory`, `jsonl`, `fanout`)
+- CLI chat, Telegram, and Feishu runtime bootstraps now default to `fanout`, which appends
+  `~/.loongclaw/audit/events.jsonl` while retaining an in-memory snapshot lane for diagnostics
+- Operators can inspect recent entries with standard tooling such as
+  `tail -n 20 ~/.loongclaw/audit/events.jsonl`
 - No HMAC chain for tamper evidence (TD-007)
-- No persistent audit sink
+- Spec/demo helpers and explicit test seams may still opt into in-memory-only audit when
+  side-effect-free execution is required
 
 ### Compile-Time Constraints
 

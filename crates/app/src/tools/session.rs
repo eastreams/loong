@@ -10,6 +10,8 @@ use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::{Value, json};
 
 use crate::config::{SessionVisibility, ToolConfig};
+#[cfg(feature = "memory-sqlite")]
+use crate::conversation::ConstrainedSubagentExecution;
 use crate::memory;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
@@ -73,6 +75,7 @@ struct SessionDelegateLifecycleRecord {
     queued_at: Option<i64>,
     started_at: Option<i64>,
     timeout_seconds: Option<u64>,
+    execution: Option<ConstrainedSubagentExecution>,
     staleness: Option<SessionDelegateStalenessRecord>,
     cancellation: Option<SessionDelegateCancellationRecord>,
 }
@@ -1951,22 +1954,39 @@ fn session_delegate_lifecycle_at(
     let mut started_at = None;
     let mut queued_timeout_seconds = None;
     let mut started_timeout_seconds = None;
+    let mut execution = None;
     let mut cancellation = None;
     for event in recent_events {
         match event.event_kind.as_str() {
             "delegate_queued" => {
                 queued_at = Some(event.ts);
+                execution = execution.or_else(|| {
+                    ConstrainedSubagentExecution::from_event_payload(&event.payload_json)
+                });
                 queued_timeout_seconds = event
                     .payload_json
                     .get("timeout_seconds")
-                    .and_then(Value::as_u64);
+                    .and_then(Value::as_u64)
+                    .or_else(|| {
+                        execution
+                            .as_ref()
+                            .map(|execution| execution.timeout_seconds)
+                    });
             }
             "delegate_started" => {
                 started_at = Some(event.ts);
+                execution = execution.or_else(|| {
+                    ConstrainedSubagentExecution::from_event_payload(&event.payload_json)
+                });
                 started_timeout_seconds = event
                     .payload_json
                     .get("timeout_seconds")
-                    .and_then(Value::as_u64);
+                    .and_then(Value::as_u64)
+                    .or_else(|| {
+                        execution
+                            .as_ref()
+                            .map(|execution| execution.timeout_seconds)
+                    });
             }
             DELEGATE_CANCEL_REQUESTED_EVENT_KIND => {
                 let reason = event
@@ -2006,11 +2026,19 @@ fn session_delegate_lifecycle_at(
         SessionState::TimedOut => "timed_out",
     };
     let timeout_seconds = started_timeout_seconds.or(queued_timeout_seconds);
-    let mode = if queued_at.is_some() || matches!(session.state, SessionState::Ready) {
-        "async"
-    } else {
-        "inline"
-    };
+    let mode = execution
+        .as_ref()
+        .map(|execution| match execution.mode {
+            crate::conversation::ConstrainedSubagentMode::Async => "async",
+            crate::conversation::ConstrainedSubagentMode::Inline => "inline",
+        })
+        .unwrap_or_else(|| {
+            if queued_at.is_some() || matches!(session.state, SessionState::Ready) {
+                "async"
+            } else {
+                "inline"
+            }
+        });
     let staleness = match session.state {
         SessionState::Ready => {
             session_delegate_staleness_at("queued", queued_at, timeout_seconds, now_ts)
@@ -2034,6 +2062,7 @@ fn session_delegate_lifecycle_at(
         queued_at,
         started_at,
         timeout_seconds,
+        execution,
         staleness,
         cancellation: if session.state == SessionState::Running {
             cancellation
@@ -2077,6 +2106,7 @@ fn session_delegate_lifecycle_json(lifecycle: SessionDelegateLifecycleRecord) ->
         "queued_at": lifecycle.queued_at,
         "started_at": lifecycle.started_at,
         "timeout_seconds": lifecycle.timeout_seconds,
+        "execution": lifecycle.execution,
         "staleness": lifecycle.staleness.map(session_delegate_staleness_json),
         "cancellation": lifecycle
             .cancellation
@@ -4524,7 +4554,27 @@ mod tests {
             payload_json: json!({
                 "task": "research",
                 "label": "Child",
-                "timeout_seconds": 60
+                "timeout_seconds": 60,
+                "execution": {
+                    "mode": "async",
+                    "depth": 1,
+                    "max_depth": 2,
+                    "active_children": 0,
+                    "max_active_children": 3,
+                    "timeout_seconds": 60,
+                    "allow_shell_in_child": false,
+                    "child_tool_allowlist": ["file.read", "file.write"],
+                    "kernel_bound": false,
+                    "runtime_narrowing": {
+                        "web_fetch": {
+                            "allowed_domains": ["docs.example.com"],
+                            "allow_private_hosts": false
+                        },
+                        "browser": {
+                            "max_sessions": 1
+                        }
+                    }
+                }
             }),
         })
         .expect("append queued event");
@@ -4554,6 +4604,50 @@ mod tests {
         );
         assert!(outcome.payload["delegate_lifecycle"]["queued_at"].is_number());
         assert!(outcome.payload["delegate_lifecycle"]["started_at"].is_null());
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["execution"]["mode"],
+            "async"
+        );
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["execution"]["depth"],
+            1
+        );
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["execution"]["max_depth"],
+            2
+        );
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["execution"]["active_children"],
+            0
+        );
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["execution"]["max_active_children"],
+            3
+        );
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["execution"]["allow_shell_in_child"],
+            false
+        );
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["execution"]["child_tool_allowlist"],
+            json!(["file.read", "file.write"])
+        );
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["execution"]["kernel_bound"],
+            false
+        );
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["execution"]["runtime_narrowing"]["web_fetch"]["allowed_domains"],
+            json!(["docs.example.com"])
+        );
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["execution"]["runtime_narrowing"]["web_fetch"]["allow_private_hosts"],
+            false
+        );
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["execution"]["runtime_narrowing"]["browser"]["max_sessions"],
+            1
+        );
     }
 
     #[test]
@@ -4636,6 +4730,65 @@ mod tests {
             "overdue"
         );
         assert!(outcome.payload["delegate_lifecycle"]["started_at"].is_number());
+    }
+
+    #[test]
+    fn session_delegate_lifecycle_prefers_execution_mode_when_history_is_partial() {
+        let session = SessionSummaryRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Completed,
+            created_at: 100,
+            updated_at: 120,
+            archived_at: None,
+            turn_count: 1,
+            last_turn_at: Some(120),
+            last_error: None,
+        };
+        let events = vec![
+            SessionEventRecord {
+                id: 1,
+                session_id: "child-session".to_owned(),
+                event_kind: "delegate_started".to_owned(),
+                actor_session_id: Some("root-session".to_owned()),
+                payload_json: json!({
+                    "task": "research",
+                    "execution": {
+                        "mode": "async",
+                        "depth": 1,
+                        "max_depth": 2,
+                        "active_children": 0,
+                        "max_active_children": 3,
+                        "timeout_seconds": 60,
+                        "allow_shell_in_child": false,
+                        "child_tool_allowlist": ["file.read"],
+                        "kernel_bound": false
+                    }
+                }),
+                ts: 110,
+            },
+            SessionEventRecord {
+                id: 2,
+                session_id: "child-session".to_owned(),
+                event_kind: "delegate_completed".to_owned(),
+                actor_session_id: Some("root-session".to_owned()),
+                payload_json: json!({
+                    "terminal_reason": "completed"
+                }),
+                ts: 120,
+            },
+        ];
+
+        let lifecycle = super::session_delegate_lifecycle_at(&session, &events, 130)
+            .expect("delegate lifecycle");
+
+        assert_eq!(
+            lifecycle.mode, "async",
+            "persisted execution.mode should win when queued metadata is absent"
+        );
+        assert_eq!(lifecycle.phase, "completed");
     }
 
     #[test]

@@ -515,6 +515,7 @@ fn runtime_experiment_cli_parses_compare() {
                     options.result_snapshot.as_deref(),
                     Some("/tmp/runtime-snapshot-result.json")
                 );
+                assert!(!options.recorded_snapshots);
                 assert!(options.json);
             }
             other @ (loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCommands::Start(_)
@@ -522,6 +523,208 @@ fn runtime_experiment_cli_parses_compare() {
             | loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCommands::Show(_)
             | loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCommands::Restore(_)) => {
                 panic!("unexpected runtime-experiment subcommand parsed: {other:?}")
+            }
+        },
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn runtime_experiment_cli_parses_compare_with_recorded_snapshots() {
+    let compare = Cli::try_parse_from([
+        "loongclaw",
+        "runtime-experiment",
+        "compare",
+        "--run",
+        "/tmp/runtime-experiment.json",
+        "--recorded-snapshots",
+        "--json",
+    ])
+    .expect("`runtime-experiment compare --recorded-snapshots` should parse");
+
+    match compare.command {
+        Some(Commands::RuntimeExperiment { command }) => match command {
+            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCommands::Compare(
+                options,
+            ) => {
+                assert_eq!(options.run, "/tmp/runtime-experiment.json");
+                assert_eq!(options.baseline_snapshot, None);
+                assert_eq!(options.result_snapshot, None);
+                assert!(options.recorded_snapshots);
+                assert!(options.json);
+            }
+            other @ (loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCommands::Start(_)
+            | loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCommands::Finish(_)
+            | loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCommands::Show(_)
+            | loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCommands::Restore(_)) => {
+                panic!("unexpected runtime-experiment subcommand parsed: {other:?}")
+            }
+        },
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn runtime_experiment_cli_rejects_compare_recorded_snapshots_with_manual_paths() {
+    let error = Cli::try_parse_from([
+        "loongclaw",
+        "runtime-experiment",
+        "compare",
+        "--run",
+        "/tmp/runtime-experiment.json",
+        "--recorded-snapshots",
+        "--baseline-snapshot",
+        "/tmp/runtime-snapshot.json",
+        "--result-snapshot",
+        "/tmp/runtime-snapshot-result.json",
+    ])
+    .expect_err("manual snapshot paths should conflict with --recorded-snapshots");
+
+    assert!(error.to_string().contains("--recorded-snapshots"));
+}
+
+#[test]
+fn runtime_capability_cli_parses_propose_review_and_show() {
+    let propose = Cli::try_parse_from([
+        "loongclaw",
+        "runtime-capability",
+        "propose",
+        "--run",
+        "/tmp/runtime-experiment.json",
+        "--output",
+        "/tmp/runtime-capability.json",
+        "--target",
+        "managed-skill",
+        "--target-summary",
+        "Codify browser preview onboarding as a reusable managed skill",
+        "--bounded-scope",
+        "Browser preview onboarding and companion readiness checks only",
+        "--required-capability",
+        "invoke_tool",
+        "--required-capability",
+        "memory_read",
+        "--tag",
+        "browser",
+        "--tag",
+        "onboarding",
+        "--label",
+        "browser-preview-skill-candidate",
+        "--json",
+    ])
+    .expect("`runtime-capability propose` should parse");
+
+    match propose.command {
+        Some(Commands::RuntimeCapability { command }) => match command {
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Propose(
+                options,
+            ) => {
+                assert_eq!(options.run, "/tmp/runtime-experiment.json");
+                assert_eq!(options.output, "/tmp/runtime-capability.json");
+                assert_eq!(
+                    options.target,
+                    loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill
+                );
+                assert_eq!(
+                    options.target_summary,
+                    "Codify browser preview onboarding as a reusable managed skill"
+                );
+                assert_eq!(
+                    options.bounded_scope,
+                    "Browser preview onboarding and companion readiness checks only"
+                );
+                assert_eq!(
+                    options.required_capability,
+                    vec!["invoke_tool".to_owned(), "memory_read".to_owned()]
+                );
+                assert_eq!(
+                    options.tag,
+                    vec!["browser".to_owned(), "onboarding".to_owned()]
+                );
+                assert_eq!(
+                    options.label.as_deref(),
+                    Some("browser-preview-skill-candidate")
+                );
+                assert!(options.json);
+            }
+            other @ (loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Review(
+                _,
+            )
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Show(_)) => {
+                panic!("unexpected runtime-capability subcommand parsed: {other:?}")
+            }
+        },
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+
+    let review = Cli::try_parse_from([
+        "loongclaw",
+        "runtime-capability",
+        "review",
+        "--candidate",
+        "/tmp/runtime-capability.json",
+        "--decision",
+        "accepted",
+        "--review-summary",
+        "Promotion target is bounded and evidence supports manual codification",
+        "--warning",
+        "still requires manual implementation",
+        "--json",
+    ])
+    .expect("`runtime-capability review` should parse");
+
+    match review.command {
+        Some(Commands::RuntimeCapability { command }) => match command {
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Review(
+                options,
+            ) => {
+                assert_eq!(options.candidate, "/tmp/runtime-capability.json");
+                assert_eq!(
+                    options.decision,
+                    loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted
+                );
+                assert_eq!(
+                    options.review_summary,
+                    "Promotion target is bounded and evidence supports manual codification"
+                );
+                assert_eq!(
+                    options.warning,
+                    vec!["still requires manual implementation".to_owned()]
+                );
+                assert!(options.json);
+            }
+            other @ (loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Propose(
+                _,
+            )
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Show(_)) => {
+                panic!("unexpected runtime-capability subcommand parsed: {other:?}")
+            }
+        },
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+
+    let show = Cli::try_parse_from([
+        "loongclaw",
+        "runtime-capability",
+        "show",
+        "--candidate",
+        "/tmp/runtime-capability.json",
+        "--json",
+    ])
+    .expect("`runtime-capability show` should parse");
+
+    match show.command {
+        Some(Commands::RuntimeCapability { command }) => match command {
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Show(options) => {
+                assert_eq!(options.candidate, "/tmp/runtime-capability.json");
+                assert!(options.json);
+            }
+            other @ (loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Propose(
+                _,
+            )
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Review(
+                _,
+            )) => {
+                panic!("unexpected runtime-capability subcommand parsed: {other:?}")
             }
         },
         other => panic!("unexpected command parsed: {other:?}"),

@@ -8,13 +8,6 @@ pub enum ProviderRuntimeBinding<'a> {
 }
 
 impl<'a> ProviderRuntimeBinding<'a> {
-    pub fn from_optional_kernel_context(kernel_ctx: Option<&'a KernelContext>) -> Self {
-        match kernel_ctx {
-            Some(kernel_ctx) => Self::Kernel(kernel_ctx),
-            None => Self::Direct,
-        }
-    }
-
     pub fn kernel(kernel_ctx: &'a KernelContext) -> Self {
         Self::Kernel(kernel_ctx)
     }

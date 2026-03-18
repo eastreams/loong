@@ -45,7 +45,7 @@ mod web_fetch;
 
 pub use catalog::{
     ToolApprovalMode, ToolAvailability, ToolCatalog, ToolDescriptor, ToolExecutionKind,
-    ToolGovernanceProfile, ToolGovernanceScope, ToolRiskClass, ToolView,
+    ToolGovernanceProfile, ToolGovernanceScope, ToolRiskClass, ToolSchedulingClass, ToolView,
     delegate_child_tool_view_for_config, delegate_child_tool_view_for_config_with_delegate,
     governance_profile_for_descriptor, governance_profile_for_tool_name,
     planned_delegate_child_tool_view, planned_root_tool_view, runtime_tool_view,
@@ -64,6 +64,7 @@ pub const BROWSER_COMPANION_COMMAND: &str = bundled_skills::BROWSER_COMPANION_CO
 pub(crate) const LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY: &str = "_loongclaw";
 const LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY: &str = "tool_search";
 const LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY: &str = "visible_tool_ids";
+pub(crate) const LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY: &str = "runtime_narrowing";
 
 pub fn normalize_external_skills_domain_rule(raw: &str) -> Result<String, String> {
     external_skills::normalize_domain_rule(raw)
@@ -595,11 +596,60 @@ pub fn execute_tool_core_with_config(
         tool_name: canonical_name.to_owned(),
         payload: request.payload,
     };
+    let effective_config = trusted_runtime_narrowing_from_payload(&request.payload)?
+        .map(|narrowing| config.narrowed(&narrowing));
+    let config = effective_config.as_ref().unwrap_or(config);
     match canonical_name {
         "tool.search" => execute_tool_search_tool_with_config(request, config),
         "tool.invoke" => execute_tool_invoke_tool_with_config(request, config),
         _ => execute_discoverable_tool_core_with_config(request, config),
     }
+}
+
+fn trusted_runtime_narrowing_from_payload(
+    payload: &Value,
+) -> Result<Option<runtime_config::ToolRuntimeNarrowing>, String> {
+    if !trusted_internal_tool_payload_enabled() {
+        return Ok(None);
+    }
+
+    let Some(value) = payload
+        .get(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY)
+        .and_then(|body| body.get(LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY))
+        .cloned()
+    else {
+        return Ok(None);
+    };
+
+    serde_json::from_value(value)
+        .map(Some)
+        .map_err(|error| format!("invalid_internal_runtime_narrowing: {error}"))
+}
+
+fn merge_trusted_internal_tool_context_into_arguments(
+    arguments: &mut serde_json::Map<String, Value>,
+    internal_context: &Value,
+) -> Result<(), String> {
+    let trusted_context = internal_context.as_object().cloned().ok_or_else(|| {
+        format!("tool.invoke payload.{LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY} must be an object")
+    })?;
+    let merged_context = match arguments.remove(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY) {
+        None => Value::Object(trusted_context),
+        Some(Value::Object(mut existing_context)) => {
+            existing_context.extend(trusted_context);
+            Value::Object(existing_context)
+        }
+        Some(_) => {
+            return Err(format!(
+                "tool.invoke payload.arguments.{LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY} must be an object"
+            ));
+        }
+    };
+    arguments.insert(
+        LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
+        merged_context,
+    );
+    Ok(())
 }
 
 fn execute_discoverable_tool_core_with_config(
@@ -1131,12 +1181,17 @@ pub(crate) fn resolve_tool_invoke_request(
         .get("lease")
         .and_then(Value::as_str)
         .ok_or_else(|| "tool.invoke requires payload.lease".to_owned())?;
-    let arguments = payload
+    let mut arguments = payload
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    if !arguments.is_object() {
-        return Err("tool.invoke payload.arguments must be an object".to_owned());
+    {
+        let arguments_object = arguments
+            .as_object_mut()
+            .ok_or_else(|| "tool.invoke payload.arguments must be an object".to_owned())?;
+        if let Some(internal_context) = payload.get(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY) {
+            merge_trusted_internal_tool_context_into_arguments(arguments_object, internal_context)?;
+        }
     }
 
     let resolved = resolve_tool_execution(tool_id)
@@ -2784,6 +2839,152 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    #[cfg(feature = "tool-webfetch")]
+    #[test]
+    fn web_fetch_respects_runtime_narrowing_from_trusted_internal_payload() {
+        let root = std::env::temp_dir().join(format!(
+            "loongclaw-web-fetch-runtime-narrowing-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let mut config = test_tool_runtime_config(root.clone());
+        config.web_fetch.timeout_seconds = 1;
+        let error = execute_tool_core_with_test_context(
+            ToolCoreRequest {
+                tool_name: "web.fetch".to_owned(),
+                payload: json!({
+                    "url": "https://example.com/docs",
+                    "_loongclaw": {
+                        "runtime_narrowing": {
+                            "web_fetch": {
+                                "allowed_domains": ["docs.example.com"],
+                                "allow_private_hosts": false
+                            }
+                        }
+                    }
+                }),
+            },
+            &config,
+        )
+        .expect_err("runtime-narrowed child web.fetch should be denied before network access");
+
+        assert!(
+            error.contains("not in allowed_domains"),
+            "expected narrowed domain denial, got: {error}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-webfetch")]
+    #[test]
+    fn web_fetch_denies_disjoint_allowlists_when_runtime_narrowing_intersection_is_empty() {
+        let root = std::env::temp_dir().join(format!(
+            "loongclaw-web-fetch-runtime-narrowing-disjoint-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let mut config = test_tool_runtime_config(root.clone());
+        config
+            .web_fetch
+            .allowed_domains
+            .insert("api.example.com".to_owned());
+        let error = execute_tool_core_with_test_context(
+            ToolCoreRequest {
+                tool_name: "web.fetch".to_owned(),
+                payload: json!({
+                    "url": "https://api.example.com/docs",
+                    "_loongclaw": {
+                        "runtime_narrowing": {
+                            "web_fetch": {
+                                "allowed_domains": ["docs.example.com"]
+                            }
+                        }
+                    }
+                }),
+            },
+            &config,
+        )
+        .expect_err("disjoint allowlists should deny domains allowed by only one side");
+
+        assert!(
+            error.contains("not in allowed_domains"),
+            "expected empty-intersection allowlist denial, got: {error}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-webfetch")]
+    #[test]
+    fn web_fetch_fail_closes_malformed_trusted_runtime_narrowing() {
+        let root = std::env::temp_dir().join(format!(
+            "loongclaw-web-fetch-runtime-narrowing-malformed-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let error = execute_tool_core_with_test_context(
+            ToolCoreRequest {
+                tool_name: "web.fetch".to_owned(),
+                payload: json!({
+                    "url": "https://outside.invalid/docs",
+                    "_loongclaw": {
+                        "runtime_narrowing": "not-an-object"
+                    }
+                }),
+            },
+            &config,
+        )
+        .expect_err("malformed trusted runtime narrowing should fail closed");
+
+        assert!(
+            error.contains("invalid_internal_runtime_narrowing"),
+            "expected parse failure, got: {error}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-webfetch")]
+    #[test]
+    fn web_fetch_rejects_forged_runtime_narrowing_from_untrusted_payload() {
+        let root = std::env::temp_dir().join(format!(
+            "loongclaw-web-fetch-runtime-narrowing-forged-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "web.fetch".to_owned(),
+                payload: json!({
+                    "url": "https://example.com/docs",
+                    "_loongclaw": {
+                        "runtime_narrowing": {
+                            "web_fetch": {
+                                "allowed_domains": ["docs.example.com"]
+                            }
+                        }
+                    }
+                }),
+            },
+            &config,
+        )
+        .expect_err("untrusted runtime narrowing should be rejected");
+
+        assert!(
+            error.contains("payload._loongclaw is reserved for trusted internal tool context"),
+            "error={error}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     #[cfg(feature = "feishu-integration")]
     #[test]
     fn tool_search_includes_feishu_tools_when_runtime_configured() {
@@ -3027,6 +3228,53 @@ mod tests {
         .expect_err("replayed turn lease should fail");
 
         assert!(error.contains("turn mismatch"), "error: {error}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-webfetch")]
+    #[test]
+    fn tool_invoke_preserves_trusted_runtime_narrowing_for_inner_execution() {
+        let root = std::env::temp_dir().join(format!(
+            "loongclaw-tool-invoke-runtime-narrowing-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let mut config = test_tool_runtime_config(root.clone());
+        config
+            .web_fetch
+            .allowed_domains
+            .insert("outside.invalid".to_owned());
+
+        let (tool_name, mut payload) = bridge_provider_tool_call_with_scope(
+            "web.fetch",
+            json!({
+                "url": "https://outside.invalid/docs"
+            }),
+            None,
+            None,
+        );
+        let payload_object = payload.as_object_mut().expect("tool.invoke payload object");
+        payload_object.insert(
+            LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
+            json!({
+                LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY: {
+                    "web_fetch": {
+                        "allowed_domains": ["docs.example.com"]
+                    }
+                }
+            }),
+        );
+
+        let error =
+            execute_tool_core_with_test_context(ToolCoreRequest { tool_name, payload }, &config)
+                .expect_err("tool.invoke should preserve trusted narrowing for inner web.fetch");
+
+        assert!(
+            error.contains("not in allowed_domains"),
+            "expected inner web.fetch denial after narrowing, got: {error}"
+        );
+
         std::fs::remove_dir_all(&root).ok();
     }
 

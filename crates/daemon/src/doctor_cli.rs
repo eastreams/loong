@@ -8,6 +8,8 @@ use loongclaw_app as mvp;
 use loongclaw_spec::CliResult;
 use serde_json::json;
 
+const MODEL_CATALOG_PROBE_FAILED_MARKER: &str = "model catalog probe failed";
+
 #[derive(Debug, Clone)]
 pub struct DoctorCommandOptions {
     pub config: Option<String>,
@@ -988,26 +990,67 @@ fn provider_model_probe_failure_check(
     config: &mvp::config::LoongClawConfig,
     error: String,
 ) -> DoctorCheck {
-    if let Some(model) = config.provider.explicit_model() {
-        return DoctorCheck {
-            name: "provider model probe".to_owned(),
-            level: DoctorCheckLevel::Warn,
-            detail: format!(
-                "{}: model catalog probe failed ({error}); chat may still work because model `{model}` is explicitly configured",
-                crate::provider_presentation::active_provider_detail_label(config)
-            ),
-        };
-    }
+    let provider_prefix = crate::provider_presentation::active_provider_detail_label(config);
+    let auth_style_failure = mvp::provider::is_auth_style_failure_message(error.as_str());
+    let append_region_hint = |mut detail: String| {
+        if auth_style_failure && let Some(hint) = config.provider.region_endpoint_failure_hint() {
+            detail.push(' ');
+            detail.push_str(hint.as_str());
+        }
+        detail
+    };
+    let (level, detail) = match config.provider.model_catalog_probe_recovery() {
+        mvp::config::ModelCatalogProbeRecovery::ExplicitModel(model) => (
+            DoctorCheckLevel::Warn,
+            append_region_hint(format!(
+                "{provider_prefix}: {MODEL_CATALOG_PROBE_FAILED_MARKER} ({error}); chat may still work because model `{model}` is explicitly configured"
+            )),
+        ),
+        mvp::config::ModelCatalogProbeRecovery::ConfiguredPreferredModels(fallback_models) => (
+            DoctorCheckLevel::Warn,
+            append_region_hint(format!(
+                "{provider_prefix}: {MODEL_CATALOG_PROBE_FAILED_MARKER} ({error}); runtime will try configured preferred model fallback(s): {}",
+                fallback_models
+                    .iter()
+                    .map(|model| format!("`{model}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        ),
+        mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
+            recommended_onboarding_model,
+        } => (
+            DoctorCheckLevel::Fail,
+            append_region_hint(provider_model_probe_requires_explicit_model_detail(
+                provider_prefix.as_str(),
+                error.as_str(),
+                recommended_onboarding_model,
+            )),
+        ),
+    };
 
     DoctorCheck {
         name: "provider model probe".to_owned(),
-        level: DoctorCheckLevel::Fail,
-        detail: format!(
-            "{}: {error}",
-            crate::provider_presentation::active_provider_detail_label(config)
+        level,
+        detail,
+    }
+}
+
+fn provider_model_probe_requires_explicit_model_detail(
+    provider_prefix: &str,
+    error: &str,
+    recommended_onboarding_model: Option<&str>,
+) -> String {
+    match recommended_onboarding_model {
+        Some(model) => format!(
+            "{provider_prefix}: {MODEL_CATALOG_PROBE_FAILED_MARKER} ({error}); current config still uses `model = auto`; rerun onboarding and accept reviewed model `{model}`, or set `provider.model` / `preferred_models` explicitly"
+        ),
+        None => format!(
+            "{provider_prefix}: {MODEL_CATALOG_PROBE_FAILED_MARKER} ({error}); current config still uses `model = auto`; set `provider.model` explicitly or configure `preferred_models` before retrying"
         ),
     }
 }
+
 #[allow(dead_code)]
 fn collect_channel_doctor_checks(config: &mvp::config::LoongClawConfig) -> Vec<DoctorCheck> {
     crate::migration::channels::collect_channel_doctor_checks(config)
@@ -1148,6 +1191,8 @@ fn build_doctor_next_steps_with_path_env(
     let config_path_display = config_path.display().to_string();
     let rerun_command =
         crate::cli_handoff::format_subcommand_with_config("doctor", &config_path_display);
+    let rerun_onboard_command =
+        crate::cli_handoff::format_subcommand_with_config("onboard", &config_path_display);
 
     if !fix_requested
         && checks.iter().any(|check| {
@@ -1178,20 +1223,65 @@ fn build_doctor_next_steps_with_path_env(
         }
     }
 
-    if checks
-        .iter()
-        .any(|check| check.name == "provider model probe" && check.level == DoctorCheckLevel::Fail)
-    {
-        push_unique_step(
-            &mut steps,
-            format!("Retry provider probe only after credentials are ready: {rerun_command}"),
-        );
-        push_unique_step(
-            &mut steps,
-            format!(
-                "If your provider blocks model listing during setup, retry with: {rerun_command} --skip-model-probe"
-            ),
-        );
+    if checks.iter().any(|check| {
+        check.name == "provider model probe"
+            && check.level != DoctorCheckLevel::Pass
+            && check.detail.contains(MODEL_CATALOG_PROBE_FAILED_MARKER)
+    }) {
+        let provider_model_probe_auth_failure = checks.iter().any(|check| {
+            check.name == "provider model probe"
+                && check.level != DoctorCheckLevel::Pass
+                && check.detail.contains(MODEL_CATALOG_PROBE_FAILED_MARKER)
+                && mvp::provider::is_auth_style_failure_message(check.detail.as_str())
+        });
+        match config.provider.model_catalog_probe_recovery() {
+            mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
+                recommended_onboarding_model: Some(model),
+            } => {
+                push_unique_step(
+                    &mut steps,
+                    format!(
+                        "Rerun onboarding and accept reviewed model `{model}`: {rerun_onboard_command}"
+                    ),
+                );
+                push_unique_step(
+                    &mut steps,
+                    format!(
+                        "Or set `provider.model` / `preferred_models` explicitly, then re-run diagnostics: {rerun_command}"
+                    ),
+                );
+            }
+            mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
+                recommended_onboarding_model: None,
+            } => {
+                push_unique_step(
+                    &mut steps,
+                    format!(
+                        "Set `provider.model` / `preferred_models` explicitly, then re-run diagnostics: {rerun_command}"
+                    ),
+                );
+            }
+            mvp::config::ModelCatalogProbeRecovery::ExplicitModel(_)
+            | mvp::config::ModelCatalogProbeRecovery::ConfiguredPreferredModels(_) => {
+                push_unique_step(
+                    &mut steps,
+                    format!(
+                        "Retry provider probe only after credentials are ready: {rerun_command}"
+                    ),
+                );
+                push_unique_step(
+                    &mut steps,
+                    format!(
+                        "If your provider blocks model listing during setup, retry with: {rerun_command} --skip-model-probe"
+                    ),
+                );
+            }
+        }
+        if provider_model_probe_auth_failure
+            && let Some(hint) = config.provider.region_endpoint_failure_hint()
+        {
+            push_unique_step(&mut steps, hint);
+        }
     }
 
     if checks.iter().any(|check| {
@@ -1672,6 +1762,171 @@ mod tests {
         assert!(
             check.detail.contains("OpenAI [openai]"),
             "doctor failures should still identify the active provider context: {check:#?}"
+        );
+        assert!(
+            check.detail.contains("model = auto"),
+            "doctor failures should explain why runtime cannot rely on an unresolved automatic model: {check:#?}"
+        );
+        assert!(
+            check.detail.contains("provider.model"),
+            "doctor failures should point users to an explicit provider.model remediation path: {check:#?}"
+        );
+        assert!(
+            check.detail.contains("preferred_models"),
+            "doctor failures should point users to preferred_models when catalog probing is unavailable: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn provider_model_probe_failure_warns_for_preferred_model_fallbacks() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Minimax;
+        config.provider.model = "auto".to_owned();
+        config.provider.preferred_models = vec!["MiniMax-M1".to_owned()];
+
+        let check = provider_model_probe_failure_check(
+            &config,
+            "provider rejected the model list".to_owned(),
+        );
+
+        assert_eq!(check.name, "provider model probe");
+        assert_eq!(check.level, DoctorCheckLevel::Warn);
+        assert!(
+            check.detail.contains("configured preferred"),
+            "doctor should only advertise fallback continuation for explicitly configured preferred models: {check:#?}"
+        );
+        assert!(
+            check.detail.contains("MiniMax-M1"),
+            "doctor warning should surface the fallback candidate to keep remediation concrete: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn provider_model_probe_failure_guides_reviewed_default_for_auto_model() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Deepseek;
+        config.provider.model = "auto".to_owned();
+
+        let check = provider_model_probe_failure_check(
+            &config,
+            "provider rejected the model list".to_owned(),
+        );
+
+        assert_eq!(check.name, "provider model probe");
+        assert_eq!(check.level, DoctorCheckLevel::Fail);
+        assert!(
+            check.detail.contains("deepseek-chat"),
+            "reviewed providers should point users to the reviewed onboarding default when doctor cannot list models: {check:#?}"
+        );
+        assert!(
+            check.detail.contains("rerun onboarding"),
+            "doctor should suggest rerunning onboarding to accept the reviewed model instead of leaving recovery implicit: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn provider_model_probe_failure_includes_region_hint_for_zhipu() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Zhipu;
+        config.provider.model = "auto".to_owned();
+
+        let check =
+            provider_model_probe_failure_check(&config, "provider returned status 401".to_owned());
+
+        assert_eq!(check.name, "provider model probe");
+        assert_eq!(check.level, DoctorCheckLevel::Fail);
+        assert!(
+            check.detail.contains("https://api.z.ai"),
+            "doctor probe failures should surface the alternate regional endpoint when auth can be region-bound: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn provider_model_probe_failure_skips_region_hint_for_non_auth_errors() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Zhipu;
+        config.provider.model = "auto".to_owned();
+
+        let check =
+            provider_model_probe_failure_check(&config, "provider returned status 503".to_owned());
+
+        assert_eq!(check.name, "provider model probe");
+        assert_eq!(check.level, DoctorCheckLevel::Fail);
+        assert!(
+            !check.detail.contains("provider.base_url"),
+            "non-auth doctor probe failures should not steer operators toward region endpoint changes: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn build_doctor_next_steps_includes_region_endpoint_step_for_minimax_probe_failures() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Minimax;
+        let checks = vec![
+            DoctorCheck {
+                name: "provider credentials".to_owned(),
+                level: DoctorCheckLevel::Pass,
+                detail: "provider credentials are available".to_owned(),
+            },
+            DoctorCheck {
+                name: "provider model probe".to_owned(),
+                level: DoctorCheckLevel::Fail,
+                detail:
+                    "MiniMax [minimax]: model catalog probe failed (provider returned status 401)"
+                        .to_owned(),
+            },
+        ];
+
+        let next_steps = build_doctor_next_steps_with_path_env(
+            &checks,
+            Path::new("/tmp/loongclaw.toml"),
+            &config,
+            false,
+            Some(std::ffi::OsStr::new("")),
+        );
+
+        assert!(
+            next_steps.iter().any(|step| {
+                step.contains("provider.base_url")
+                    && step.contains("https://api.minimax.io")
+                    && step.contains("https://api.minimaxi.com")
+            }),
+            "doctor next steps should include a concrete region endpoint adjustment for MiniMax auth/probe failures: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn build_doctor_next_steps_skips_region_endpoint_step_for_non_auth_probe_failures() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Minimax;
+        let checks = vec![
+            DoctorCheck {
+                name: "provider credentials".to_owned(),
+                level: DoctorCheckLevel::Pass,
+                detail: "provider credentials are available".to_owned(),
+            },
+            DoctorCheck {
+                name: "provider model probe".to_owned(),
+                level: DoctorCheckLevel::Fail,
+                detail:
+                    "MiniMax [minimax]: model catalog probe failed (provider returned status 503)"
+                        .to_owned(),
+            },
+        ];
+
+        let next_steps = build_doctor_next_steps_with_path_env(
+            &checks,
+            Path::new("/tmp/loongclaw.toml"),
+            &config,
+            false,
+            Some(std::ffi::OsStr::new("")),
+        );
+
+        assert!(
+            !next_steps
+                .iter()
+                .any(|step| step.contains("provider.base_url")),
+            "doctor next steps should not include a region endpoint adjustment for non-auth probe failures: {next_steps:#?}"
         );
     }
 
@@ -2364,6 +2619,126 @@ mod tests {
                     && check.detail.contains("runtime is ready")
             }),
             "doctor should mark the runtime gate healthy when the companion lane is opened: {checks:#?}"
+        );
+    }
+
+    #[test]
+    fn build_doctor_next_steps_guides_reviewed_onboarding_default_for_auto_model_probe_failures() {
+        let checks = vec![DoctorCheck {
+            name: "provider model probe".to_owned(),
+            level: DoctorCheckLevel::Fail,
+            detail: "DeepSeek [deepseek]: model catalog probe failed (401 Unauthorized); current config still uses `model = auto`; rerun onboarding and accept reviewed model `deepseek-chat`, or set `provider.model` / `preferred_models` explicitly".to_owned(),
+        }];
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Deepseek;
+        config.provider.model = "auto".to_owned();
+
+        let next_steps =
+            build_doctor_next_steps(&checks, Path::new("/tmp/loongclaw.toml"), &config, false);
+
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Rerun onboarding and accept reviewed model `deepseek-chat`: loongclaw onboard --config '/tmp/loongclaw.toml'"
+            }),
+            "doctor should point reviewed providers back to onboarding when auto-model recovery needs an explicit reviewed default: {next_steps:#?}"
+        );
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Or set `provider.model` / `preferred_models` explicitly, then re-run diagnostics: loongclaw doctor --config '/tmp/loongclaw.toml'"
+            }),
+            "doctor should also keep the manual remediation path explicit for operators who do not want to rerun onboarding: {next_steps:#?}"
+        );
+        assert!(
+            next_steps
+                .iter()
+                .all(|step| !step.contains("--skip-model-probe")),
+            "doctor should not suggest --skip-model-probe when the real blocker is still `model = auto` without explicit recovery candidates: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn build_doctor_next_steps_guides_warn_level_explicit_model_probe_recovery() {
+        let checks = vec![DoctorCheck {
+            name: "provider model probe".to_owned(),
+            level: DoctorCheckLevel::Warn,
+            detail: "DeepSeek [deepseek]: model catalog probe failed (401 Unauthorized); chat may still work because model `deepseek-chat` is explicitly configured".to_owned(),
+        }];
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Deepseek;
+        config.provider.model = "deepseek-chat".to_owned();
+
+        let next_steps =
+            build_doctor_next_steps(&checks, Path::new("/tmp/loongclaw.toml"), &config, false);
+
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Retry provider probe only after credentials are ready: loongclaw doctor --config '/tmp/loongclaw.toml'"
+            }),
+            "warn-level explicit model recovery should still tell operators how to retry diagnostics: {next_steps:#?}"
+        );
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "If your provider blocks model listing during setup, retry with: loongclaw doctor --config '/tmp/loongclaw.toml' --skip-model-probe"
+            }),
+            "warn-level explicit model recovery should still keep the skip-model-probe escape hatch visible: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn build_doctor_next_steps_guides_warn_level_preferred_model_probe_recovery() {
+        let checks = vec![DoctorCheck {
+            name: "provider model probe".to_owned(),
+            level: DoctorCheckLevel::Warn,
+            detail: "DeepSeek [deepseek]: model catalog probe failed (401 Unauthorized); runtime will try configured preferred model fallback(s): `deepseek-chat`, `deepseek-reasoner`".to_owned(),
+        }];
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Deepseek;
+        config.provider.model = "auto".to_owned();
+        config.provider.preferred_models =
+            vec!["deepseek-chat".to_owned(), "deepseek-reasoner".to_owned()];
+
+        let next_steps =
+            build_doctor_next_steps(&checks, Path::new("/tmp/loongclaw.toml"), &config, false);
+
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Retry provider probe only after credentials are ready: loongclaw doctor --config '/tmp/loongclaw.toml'"
+            }),
+            "warn-level preferred-model recovery should still tell operators how to retry diagnostics: {next_steps:#?}"
+        );
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "If your provider blocks model listing during setup, retry with: loongclaw doctor --config '/tmp/loongclaw.toml' --skip-model-probe"
+            }),
+            "warn-level preferred-model recovery should still keep the skip-model-probe escape hatch visible: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn build_doctor_next_steps_ignores_non_failure_model_probe_warnings() {
+        let checks = vec![DoctorCheck {
+            name: "provider model probe".to_owned(),
+            level: DoctorCheckLevel::Warn,
+            detail: "skipped because credentials are missing".to_owned(),
+        }];
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Deepseek;
+        config.provider.model = "deepseek-chat".to_owned();
+
+        let next_steps =
+            build_doctor_next_steps(&checks, Path::new("/tmp/loongclaw.toml"), &config, false);
+
+        assert!(
+            next_steps
+                .iter()
+                .all(|step| !step.contains("Retry provider probe only after credentials are ready")),
+            "skipped probe warnings should not look like real model catalog failures: {next_steps:#?}"
+        );
+        assert!(
+            next_steps
+                .iter()
+                .all(|step| !step.contains("--skip-model-probe")),
+            "skipped probe warnings should not advertise the skip-model-probe recovery branch: {next_steps:#?}"
         );
     }
 

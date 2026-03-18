@@ -3,10 +3,72 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+use serde::{Deserialize, Serialize};
+
 use super::shell_policy_ext::ShellPolicyDefault;
 use crate::config::LoongClawConfig;
 #[cfg(feature = "feishu-integration")]
 use crate::config::{FeishuChannelConfig, FeishuIntegrationConfig};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct BrowserRuntimeNarrowing {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_sessions: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_links: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_text_chars: Option<usize>,
+}
+
+impl BrowserRuntimeNarrowing {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.max_sessions.is_none() && self.max_links.is_none() && self.max_text_chars.is_none()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct WebFetchRuntimeNarrowing {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_private_hosts: Option<bool>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub allowed_domains: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub blocked_domains: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_redirects: Option<usize>,
+}
+
+impl WebFetchRuntimeNarrowing {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.allow_private_hosts.is_none()
+            && self.allowed_domains.is_empty()
+            && self.blocked_domains.is_empty()
+            && self.timeout_seconds.is_none()
+            && self.max_bytes.is_none()
+            && self.max_redirects.is_none()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ToolRuntimeNarrowing {
+    #[serde(default)]
+    pub browser: BrowserRuntimeNarrowing,
+    #[serde(default)]
+    pub web_fetch: WebFetchRuntimeNarrowing,
+}
+
+impl ToolRuntimeNarrowing {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.browser.is_empty() && self.web_fetch.is_empty()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalSkillsRuntimePolicy {
@@ -82,6 +144,7 @@ impl BrowserCompanionRuntimePolicy {
 pub struct WebFetchRuntimePolicy {
     pub enabled: bool,
     pub allow_private_hosts: bool,
+    pub enforce_allowed_domains: bool,
     pub allowed_domains: BTreeSet<String>,
     pub blocked_domains: BTreeSet<String>,
     pub timeout_seconds: u64,
@@ -94,6 +157,7 @@ impl Default for WebFetchRuntimePolicy {
         Self {
             enabled: true,
             allow_private_hosts: false,
+            enforce_allowed_domains: false,
             allowed_domains: BTreeSet::new(),
             blocked_domains: BTreeSet::new(),
             timeout_seconds: crate::config::DEFAULT_WEB_FETCH_TIMEOUT_SECONDS,
@@ -178,6 +242,8 @@ impl Default for ToolRuntimeConfig {
 
 impl ToolRuntimeConfig {
     pub fn from_loongclaw_config(config: &LoongClawConfig, config_path: Option<&Path>) -> Self {
+        let web_fetch_allowed_domains = config.tools.web.normalized_allowed_domains();
+        let web_fetch_enforce_allowed_domains = !web_fetch_allowed_domains.is_empty();
         Self {
             file_root: Some(config.tools.resolved_file_root()),
             shell_allow: config
@@ -213,12 +279,8 @@ impl ToolRuntimeConfig {
             web_fetch: WebFetchRuntimePolicy {
                 enabled: config.tools.web.enabled,
                 allow_private_hosts: config.tools.web.allow_private_hosts,
-                allowed_domains: config
-                    .tools
-                    .web
-                    .normalized_allowed_domains()
-                    .into_iter()
-                    .collect(),
+                enforce_allowed_domains: web_fetch_enforce_allowed_domains,
+                allowed_domains: web_fetch_allowed_domains.into_iter().collect(),
                 blocked_domains: config
                     .tools
                     .web
@@ -325,6 +387,7 @@ impl ToolRuntimeConfig {
             web_fetch: WebFetchRuntimePolicy {
                 enabled: web_fetch_enabled,
                 allow_private_hosts: web_fetch_allow_private_hosts,
+                enforce_allowed_domains: !web_fetch_allowed_domains.is_empty(),
                 allowed_domains: web_fetch_allowed_domains,
                 blocked_domains: web_fetch_blocked_domains,
                 timeout_seconds: web_fetch_timeout_seconds,
@@ -350,6 +413,70 @@ impl ToolRuntimeConfig {
             self.feishu = FeishuToolRuntimeConfig::from_env();
         }
         self
+    }
+
+    #[must_use]
+    pub fn narrowed(&self, narrowing: &ToolRuntimeNarrowing) -> Self {
+        if narrowing.is_empty() {
+            return self.clone();
+        }
+
+        let mut narrowed = self.clone();
+
+        if let Some(max_sessions) = narrowing.browser.max_sessions {
+            narrowed.browser.max_sessions = narrowed.browser.max_sessions.min(max_sessions.max(1));
+        }
+        if let Some(max_links) = narrowing.browser.max_links {
+            narrowed.browser.max_links = narrowed.browser.max_links.min(max_links.max(1));
+        }
+        if let Some(max_text_chars) = narrowing.browser.max_text_chars {
+            narrowed.browser.max_text_chars =
+                narrowed.browser.max_text_chars.min(max_text_chars.max(1));
+        }
+
+        narrowed.web_fetch.allow_private_hosts = match narrowing.web_fetch.allow_private_hosts {
+            Some(false) => false,
+            Some(true) => narrowed.web_fetch.allow_private_hosts,
+            None => narrowed.web_fetch.allow_private_hosts,
+        };
+
+        let preserve_deny_all = narrowed.web_fetch.enforce_allowed_domains
+            && narrowed.web_fetch.allowed_domains.is_empty();
+        if !narrowing.web_fetch.allowed_domains.is_empty() {
+            narrowed.web_fetch.enforce_allowed_domains = true;
+            if !preserve_deny_all {
+                narrowed.web_fetch.allowed_domains =
+                    if narrowed.web_fetch.allowed_domains.is_empty() {
+                        narrowing.web_fetch.allowed_domains.clone()
+                    } else {
+                        narrowed
+                            .web_fetch
+                            .allowed_domains
+                            .intersection(&narrowing.web_fetch.allowed_domains)
+                            .cloned()
+                            .collect()
+                    };
+            }
+        }
+        narrowed
+            .web_fetch
+            .blocked_domains
+            .extend(narrowing.web_fetch.blocked_domains.iter().cloned());
+
+        if let Some(timeout_seconds) = narrowing.web_fetch.timeout_seconds {
+            narrowed.web_fetch.timeout_seconds = narrowed
+                .web_fetch
+                .timeout_seconds
+                .min(timeout_seconds.max(1));
+        }
+        if let Some(max_bytes) = narrowing.web_fetch.max_bytes {
+            narrowed.web_fetch.max_bytes = narrowed.web_fetch.max_bytes.min(max_bytes.max(1));
+        }
+        if let Some(max_redirects) = narrowing.web_fetch.max_redirects {
+            narrowed.web_fetch.max_redirects = narrowed.web_fetch.max_redirects.min(max_redirects);
+        }
+
+        narrowed
     }
 }
 
@@ -643,6 +770,7 @@ mod tests {
             web_fetch: WebFetchRuntimePolicy {
                 enabled: false,
                 allow_private_hosts: true,
+                enforce_allowed_domains: true,
                 allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
                 blocked_domains: BTreeSet::from(["internal.example".to_owned()]),
                 timeout_seconds: 9,
@@ -995,6 +1123,7 @@ mod tests {
         let policy = WebFetchRuntimePolicy {
             enabled: false,
             allow_private_hosts: true,
+            enforce_allowed_domains: true,
             allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
             blocked_domains: BTreeSet::from(["internal.example".to_owned()]),
             timeout_seconds: 9,
@@ -1004,11 +1133,175 @@ mod tests {
 
         assert!(!policy.enabled);
         assert!(policy.allow_private_hosts);
+        assert!(policy.enforce_allowed_domains);
         assert!(policy.allowed_domains.contains("docs.example.com"));
         assert!(policy.blocked_domains.contains("internal.example"));
         assert_eq!(policy.timeout_seconds, 9);
         assert_eq!(policy.max_bytes, 262_144);
         assert_eq!(policy.max_redirects, 1);
+    }
+
+    #[test]
+    fn tool_runtime_config_narrowed_intersects_web_domains_and_clamps_browser_limits() {
+        let base = ToolRuntimeConfig {
+            browser: BrowserRuntimePolicy {
+                enabled: true,
+                max_sessions: 4,
+                max_links: 12,
+                max_text_chars: 2_048,
+            },
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: true,
+                allow_private_hosts: true,
+                enforce_allowed_domains: true,
+                allowed_domains: BTreeSet::from([
+                    "docs.example.com".to_owned(),
+                    "api.example.com".to_owned(),
+                ]),
+                blocked_domains: BTreeSet::from(["blocked.example.com".to_owned()]),
+                timeout_seconds: 15,
+                max_bytes: 8_192,
+                max_redirects: 4,
+            },
+            ..ToolRuntimeConfig::default()
+        };
+        let narrowing = ToolRuntimeNarrowing {
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(1),
+                max_links: Some(6),
+                max_text_chars: Some(512),
+            },
+            web_fetch: WebFetchRuntimeNarrowing {
+                allow_private_hosts: Some(false),
+                allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+                blocked_domains: BTreeSet::from(["deny.example.com".to_owned()]),
+                timeout_seconds: Some(5),
+                max_bytes: Some(4_096),
+                max_redirects: Some(2),
+            },
+        };
+
+        let effective = base.narrowed(&narrowing);
+
+        assert_eq!(effective.browser.max_sessions, 1);
+        assert_eq!(effective.browser.max_links, 6);
+        assert_eq!(effective.browser.max_text_chars, 512);
+        assert!(!effective.web_fetch.allow_private_hosts);
+        assert_eq!(
+            effective.web_fetch.allowed_domains,
+            BTreeSet::from(["docs.example.com".to_owned()])
+        );
+        assert!(effective.web_fetch.enforce_allowed_domains);
+        assert_eq!(
+            effective.web_fetch.blocked_domains,
+            BTreeSet::from([
+                "blocked.example.com".to_owned(),
+                "deny.example.com".to_owned(),
+            ])
+        );
+        assert_eq!(effective.web_fetch.timeout_seconds, 5);
+        assert_eq!(effective.web_fetch.max_bytes, 4_096);
+        assert_eq!(effective.web_fetch.max_redirects, 2);
+    }
+
+    #[test]
+    fn tool_runtime_config_narrowed_uses_child_allowlist_when_parent_has_none() {
+        let base = ToolRuntimeConfig {
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: true,
+                allow_private_hosts: false,
+                enforce_allowed_domains: false,
+                allowed_domains: BTreeSet::new(),
+                blocked_domains: BTreeSet::new(),
+                timeout_seconds: 15,
+                max_bytes: 8_192,
+                max_redirects: 4,
+            },
+            ..ToolRuntimeConfig::default()
+        };
+        let narrowing = ToolRuntimeNarrowing {
+            web_fetch: WebFetchRuntimeNarrowing {
+                allow_private_hosts: None,
+                allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+                blocked_domains: BTreeSet::new(),
+                timeout_seconds: None,
+                max_bytes: None,
+                max_redirects: None,
+            },
+            ..ToolRuntimeNarrowing::default()
+        };
+
+        let effective = base.narrowed(&narrowing);
+
+        assert_eq!(
+            effective.web_fetch.allowed_domains,
+            BTreeSet::from(["docs.example.com".to_owned()])
+        );
+        assert!(effective.web_fetch.enforce_allowed_domains);
+    }
+
+    #[test]
+    fn tool_runtime_config_narrowed_fail_closes_disjoint_allowlists() {
+        let base = ToolRuntimeConfig {
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: true,
+                allow_private_hosts: false,
+                enforce_allowed_domains: true,
+                allowed_domains: BTreeSet::from(["api.example.com".to_owned()]),
+                blocked_domains: BTreeSet::new(),
+                timeout_seconds: 15,
+                max_bytes: 8_192,
+                max_redirects: 4,
+            },
+            ..ToolRuntimeConfig::default()
+        };
+        let narrowing = ToolRuntimeNarrowing {
+            web_fetch: WebFetchRuntimeNarrowing {
+                allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+                ..WebFetchRuntimeNarrowing::default()
+            },
+            ..ToolRuntimeNarrowing::default()
+        };
+
+        let effective = base.narrowed(&narrowing);
+
+        assert!(effective.web_fetch.enforce_allowed_domains);
+        assert!(
+            effective.web_fetch.allowed_domains.is_empty(),
+            "disjoint allowlists should preserve an enforced empty intersection"
+        );
+    }
+
+    #[test]
+    fn tool_runtime_config_narrowed_preserves_existing_deny_all_allowlist() {
+        let base = ToolRuntimeConfig {
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: true,
+                allow_private_hosts: false,
+                enforce_allowed_domains: true,
+                allowed_domains: BTreeSet::new(),
+                blocked_domains: BTreeSet::new(),
+                timeout_seconds: 15,
+                max_bytes: 8_192,
+                max_redirects: 4,
+            },
+            ..ToolRuntimeConfig::default()
+        };
+        let narrowing = ToolRuntimeNarrowing {
+            web_fetch: WebFetchRuntimeNarrowing {
+                allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+                ..WebFetchRuntimeNarrowing::default()
+            },
+            ..ToolRuntimeNarrowing::default()
+        };
+
+        let effective = base.narrowed(&narrowing);
+
+        assert!(effective.web_fetch.enforce_allowed_domains);
+        assert!(
+            effective.web_fetch.allowed_domains.is_empty(),
+            "an existing fail-closed allowlist should not be widened by later narrowing"
+        );
     }
 
     #[cfg(feature = "feishu-integration")]

@@ -1,3 +1,4 @@
+mod audit;
 mod channels;
 mod conversation;
 mod feishu_integration;
@@ -7,6 +8,8 @@ mod runtime;
 mod shared;
 mod tools;
 
+#[allow(unused_imports)]
+pub use audit::{AuditConfig, AuditMode};
 #[allow(unused_imports)]
 pub use channels::{
     ChannelAcpConfig, ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource,
@@ -29,11 +32,12 @@ pub use memory::{
 };
 #[allow(unused_imports)]
 pub use provider::{
-    ProviderAuthScheme, ProviderConfig, ProviderFeatureFamily, ProviderKind, ProviderProfileConfig,
-    ProviderProfileHealthModeConfig, ProviderProfileStateBackendKind, ProviderProtocolFamily,
-    ProviderReasoningExtraBodyModeConfig, ProviderToolSchemaModeConfig, ProviderTransportFallback,
-    ProviderTransportPolicy, ProviderTransportReadiness, ProviderTransportReadinessLevel,
-    ProviderWireApi, ReasoningEffort, parse_provider_kind_id,
+    ModelCatalogProbeRecovery, ProviderAuthScheme, ProviderConfig, ProviderFeatureFamily,
+    ProviderKind, ProviderProfileConfig, ProviderProfileHealthModeConfig,
+    ProviderProfileStateBackendKind, ProviderProtocolFamily, ProviderReasoningExtraBodyModeConfig,
+    ProviderToolSchemaModeConfig, ProviderTransportFallback, ProviderTransportPolicy,
+    ProviderTransportReadiness, ProviderTransportReadinessLevel, ProviderWireApi, ReasoningEffort,
+    parse_provider_kind_id,
 };
 #[allow(unused_imports)]
 pub use runtime::{
@@ -625,17 +629,14 @@ mod tests {
     }
 
     #[test]
-    fn volcengine_coding_plan_oauth_can_override_api_key_auth() {
+    fn volcengine_coding_plan_has_no_default_oauth_env_but_accepts_explicit_oauth_token() {
         let config = ProviderConfig {
             kind: ProviderKind::VolcengineCoding,
             oauth_access_token: Some("vc-oauth-token".to_owned()),
             api_key: Some("api-key-should-not-win".to_owned()),
             ..ProviderConfig::default()
         };
-        assert_eq!(
-            config.default_oauth_access_token_env().as_deref(),
-            Some("VOLCENGINE_CODING_PLAN_OAUTH_TOKEN")
-        );
+        assert_eq!(config.default_oauth_access_token_env().as_deref(), None);
         assert_eq!(
             config.authorization_header(),
             Some("Bearer vc-oauth-token".to_owned())
@@ -862,7 +863,7 @@ kind = "volcengine_coding"
         );
         assert_eq!(
             parsed.provider.default_oauth_access_token_env().as_deref(),
-            Some("VOLCENGINE_CODING_PLAN_OAUTH_TOKEN")
+            None
         );
     }
 
@@ -915,6 +916,116 @@ kind = "volcengine_coding"
             config.default_api_key_env().as_deref(),
             Some("AWS_BEARER_TOKEN_BEDROCK")
         );
+    }
+
+    #[test]
+    fn minimax_region_endpoint_note_points_to_global_alternative() {
+        let config = ProviderConfig {
+            kind: ProviderKind::Minimax,
+            ..ProviderConfig::default()
+        };
+
+        let note = config
+            .region_endpoint_note()
+            .expect("minimax should surface region endpoint guidance");
+        assert!(note.contains("CN default"));
+        assert!(note.contains("https://api.minimaxi.com"));
+        assert!(note.contains("https://api.minimax.io"));
+    }
+
+    #[test]
+    fn kimi_region_endpoint_note_respects_explicit_global_override() {
+        let config = ProviderConfig {
+            kind: ProviderKind::Kimi,
+            base_url: "https://api.moonshot.ai".to_owned(),
+            ..ProviderConfig::default()
+        };
+
+        let note = config
+            .region_endpoint_note()
+            .expect("kimi should surface region endpoint guidance");
+        assert!(note.contains("using Global"));
+        assert!(note.contains("https://api.moonshot.ai"));
+        assert!(note.contains("https://api.moonshot.cn"));
+    }
+
+    #[test]
+    fn zhipu_region_endpoint_failure_hint_points_to_global_zai_endpoint() {
+        let config = ProviderConfig {
+            kind: ProviderKind::Zhipu,
+            ..ProviderConfig::default()
+        };
+
+        let hint = config
+            .region_endpoint_failure_hint()
+            .expect("zhipu should surface a region retry hint");
+        assert!(hint.contains("provider.base_url"));
+        assert!(hint.contains("https://open.bigmodel.cn"));
+        assert!(hint.contains("https://api.z.ai"));
+    }
+
+    #[test]
+    fn minimax_region_endpoint_hint_respects_explicit_endpoint_override() {
+        let mut config = ProviderConfig {
+            kind: ProviderKind::Minimax,
+            ..ProviderConfig::default()
+        };
+        config.set_endpoint(Some(
+            "https://api.minimax.io/v1/chat/completions".to_owned(),
+        ));
+
+        let note = config
+            .region_endpoint_note()
+            .expect("minimax should surface explicit endpoint override guidance");
+        assert!(note.contains("provider.endpoint"));
+        assert!(note.contains("https://api.minimax.io/v1/chat/completions"));
+
+        let hint = config
+            .region_endpoint_failure_hint()
+            .expect("minimax should surface explicit endpoint override failure guidance");
+        assert!(hint.contains("provider.endpoint"));
+        assert!(hint.contains("Changing `provider.base_url` alone will not affect"));
+    }
+
+    #[test]
+    fn zai_region_endpoint_hint_respects_explicit_models_endpoint_override() {
+        let mut config = ProviderConfig {
+            kind: ProviderKind::Zai,
+            ..ProviderConfig::default()
+        };
+        config.set_models_endpoint(Some("https://open.bigmodel.cn/v1/models".to_owned()));
+
+        let note = config
+            .region_endpoint_note()
+            .expect("zai should surface explicit models endpoint override guidance");
+        assert!(note.contains("provider.models_endpoint"));
+        assert!(note.contains("https://open.bigmodel.cn/v1/models"));
+
+        let hint = config
+            .region_endpoint_failure_hint()
+            .expect("zai should surface explicit models endpoint override failure guidance");
+        assert!(hint.contains("provider.models_endpoint"));
+        assert!(hint.contains("Changing `provider.base_url` alone will not affect"));
+    }
+
+    #[test]
+    fn minimax_region_endpoint_note_for_custom_explicit_endpoint_labels_official_hosts_correctly() {
+        let mut config = ProviderConfig {
+            kind: ProviderKind::Minimax,
+            ..ProviderConfig::default()
+        };
+        config.set_endpoint(Some(
+            "https://proxy.example.test/v1/chat/completions".to_owned(),
+        ));
+
+        let note = config
+            .region_endpoint_note()
+            .expect("minimax should surface explicit endpoint override guidance");
+
+        assert!(note.contains("provider.endpoint"));
+        assert!(note.contains("https://proxy.example.test/v1/chat/completions"));
+        assert!(note.contains("official CN endpoint `https://api.minimaxi.com`"));
+        assert!(note.contains("official Global endpoint `https://api.minimax.io`"));
     }
 
     #[test]
@@ -1673,6 +1784,35 @@ tool_result_payload_summary_limit_chars = 4096
 
     #[test]
     #[cfg(feature = "config-toml")]
+    fn conversation_fast_lane_parallel_tool_execution_can_be_overridden_from_toml() {
+        let raw = r#"
+[conversation]
+fast_lane_parallel_tool_execution_enabled = true
+fast_lane_parallel_tool_execution_max_in_flight = 7
+"#;
+        let parsed =
+            toml::from_str::<LoongClawConfig>(raw).expect("parse conversation config should pass");
+        assert!(
+            parsed
+                .conversation
+                .fast_lane_parallel_tool_execution_enabled
+        );
+        assert_eq!(
+            parsed
+                .conversation
+                .fast_lane_parallel_tool_execution_max_in_flight,
+            7
+        );
+        assert_eq!(
+            parsed
+                .conversation
+                .fast_lane_parallel_tool_execution_max_in_flight(),
+            7
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
     fn conversation_health_thresholds_can_be_overridden_from_toml() {
         let raw = r#"
 [conversation]
@@ -1725,6 +1865,8 @@ safe_lane_health_replan_warn_threshold = 0.55
         assert!(config.hybrid_lane_enabled);
         assert!(!config.safe_lane_plan_execution_enabled);
         assert_eq!(config.fast_lane_max_tool_steps_per_turn, 1);
+        assert!(!config.fast_lane_parallel_tool_execution_enabled);
+        assert_eq!(config.fast_lane_parallel_tool_execution_max_in_flight, 4);
         assert_eq!(config.safe_lane_max_tool_steps_per_turn, 1);
         assert_eq!(config.safe_lane_node_max_attempts, 2);
         assert_eq!(config.safe_lane_plan_max_wall_time_ms, 30_000);

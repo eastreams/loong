@@ -11,7 +11,7 @@ use crate::acp::{
     AcpConversationTurnOptions, AcpTurnEventSink, JsonlAcpTurnEventSink,
     resolve_acp_backend_selection,
 };
-use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context};
+use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 
 use super::config::{self, ConversationConfig, LoongClawConfig};
 #[cfg(feature = "memory-sqlite")]
@@ -289,7 +289,8 @@ async fn initialize_cli_turn_runtime(
     }
 
     crate::runtime_env::initialize_runtime_environment(&config, Some(&resolved_path));
-    let kernel_ctx = bootstrap_kernel_context(kernel_scope, DEFAULT_TOKEN_TTL_S)?;
+    let kernel_ctx =
+        bootstrap_kernel_context_with_config(kernel_scope, DEFAULT_TOKEN_TTL_S, &config)?;
     let explicit_acp_request = options.requests_explicit_acp();
     let effective_bootstrap_mcp_servers = config
         .acp

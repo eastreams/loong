@@ -150,11 +150,9 @@ pub fn import_option_detail(
     }
 
     if detected_source_count == 1 {
-        "1 reusable source was detected for provider, channels, or workspace guidance.".to_owned()
+        "1 reusable source was detected for provider, channels, or guidance.".to_owned()
     } else {
-        format!(
-            "{reusable_source_phrase} were detected for provider, channels, or workspace guidance."
-        )
+        format!("{reusable_source_phrase} were detected for provider, channels, or guidance.")
     }
 }
 
@@ -229,6 +227,14 @@ pub const fn preflight_green_summary_line() -> &'static str {
 
 pub const fn preflight_probe_rerun_hint() -> &'static str {
     "- rerun with --skip-model-probe if your provider blocks model listing during setup"
+}
+
+pub const fn preflight_explicit_model_rerun_hint() -> &'static str {
+    "- rerun onboarding to choose a reviewed model, or set provider.model / preferred_models explicitly"
+}
+
+pub const fn preflight_explicit_model_only_rerun_hint() -> &'static str {
+    "- set provider.model / preferred_models explicitly before retrying"
 }
 
 pub const fn preflight_continue_label() -> &'static str {

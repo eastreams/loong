@@ -24,7 +24,7 @@ use crate::KernelContext;
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
 use crate::acp::{AcpConversationTurnOptions, AcpTurnProvenance};
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
-use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context};
+use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 
 #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
 use super::config::{
@@ -843,12 +843,20 @@ fn ensure_channel_operation_runtime_slot_available_in_dir(
     runtime_dir: &std::path::Path,
     spec: ChannelServeRuntimeSpec<'_>,
 ) -> CliResult<()> {
+    let now = channel_runtime_now_ms();
+    runtime_state::prune_inactive_channel_operation_runtime_files_for_account_from_dir(
+        runtime_dir,
+        spec.platform,
+        spec.operation_id,
+        Some(spec.account_id),
+        now,
+    )?;
     let Some(runtime) = runtime_state::load_channel_operation_runtime_for_account_from_dir(
         runtime_dir,
         spec.platform,
         spec.operation_id,
         spec.account_id,
-        channel_runtime_now_ms(),
+        now,
     ) else {
         return Ok(());
     };
@@ -924,9 +932,10 @@ where
         &context.config,
         Some(context.resolved_path.as_path()),
     );
-    let kernel_ctx = bootstrap_kernel_context(
+    let kernel_ctx = bootstrap_kernel_context_with_config(
         spec.family.runtime.serve_bootstrap_agent_id,
         DEFAULT_TOKEN_TTL_S,
+        &context.config,
     )?;
     let runtime_account_id = context.resolved.runtime_account_id().to_owned();
     let runtime_account_label = context.resolved.runtime_account_label().to_owned();
@@ -1003,7 +1012,11 @@ pub async fn run_telegram_channel(
             &context.config,
             Some(context.resolved_path.as_path()),
         );
-        let kernel_ctx = bootstrap_kernel_context("channel-telegram", DEFAULT_TOKEN_TTL_S)?;
+        let kernel_ctx = bootstrap_kernel_context_with_config(
+            "channel-telegram",
+            DEFAULT_TOKEN_TTL_S,
+            &context.config,
+        )?;
         let token = context.resolved.bot_token().ok_or_else(|| {
             "telegram bot token missing (set telegram.bot_token or env)".to_owned()
         })?;
@@ -2392,6 +2405,71 @@ mod tests {
         )
         .expect("runtime should remain readable after takeover");
         assert_eq!(runtime.pid, Some(9191));
+        assert_eq!(runtime.instance_count, 1);
+        assert_eq!(runtime.running_instances, 0);
+        assert_eq!(runtime.stale_instances, 0);
+        let entries = std::fs::read_dir(runtime_dir.as_path())
+            .expect("list runtime dir after stale takeover")
+            .map(|entry| {
+                entry
+                    .expect("runtime entry after stale takeover")
+                    .file_name()
+                    .into_string()
+                    .expect("utf-8 runtime file name after stale takeover")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[cfg(any(feature = "channel-telegram", feature = "channel-feishu"))]
+    #[tokio::test]
+    async fn with_channel_serve_runtime_rejects_active_legacy_owner_after_inactive_account_prune() {
+        let runtime_dir = temp_runtime_dir("serve-runtime-legacy-owner");
+        let now = now_ms_for_test();
+        runtime_state::write_runtime_state_for_test_with_account_and_pid(
+            runtime_dir.as_path(),
+            ChannelPlatform::Telegram,
+            "serve",
+            "bot_123456",
+            7001,
+            false,
+            false,
+            0,
+            Some(now.saturating_sub(5_000)),
+            Some(now.saturating_sub(5_000)),
+            Some(7001),
+        )
+        .expect("seed inactive account-scoped runtime state");
+        runtime_state::write_runtime_state_for_test_with_pid(
+            runtime_dir.as_path(),
+            ChannelPlatform::Telegram,
+            "serve",
+            8118,
+            true,
+            true,
+            1,
+            Some(now),
+            Some(now),
+            Some(8118),
+        )
+        .expect("seed active legacy runtime state");
+
+        let error = with_channel_serve_runtime_in_dir(
+            runtime_dir.as_path(),
+            9191,
+            ChannelServeRuntimeSpec {
+                platform: ChannelPlatform::Telegram,
+                operation_id: CHANNEL_OPERATION_SERVE_ID,
+                account_id: "bot_123456",
+                account_label: "bot:123456",
+            },
+            |_runtime| async move { Ok::<_, String>("ok".to_owned()) },
+        )
+        .await
+        .expect_err("active legacy owner should still block startup");
+
+        assert!(error.contains("already has an active serve runtime"));
+        assert!(error.contains("8118"));
     }
 
     #[cfg(feature = "channel-telegram")]

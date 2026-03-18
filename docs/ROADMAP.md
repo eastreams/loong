@@ -1,6 +1,6 @@
 # LoongClaw Roadmap
 
-Last updated: 2026-03-16
+Last updated: 2026-03-17
 
 This roadmap is execution-focused. Every stage has:
 
@@ -289,6 +289,7 @@ Delivered in current baseline:
   - `runtime-snapshot` persists lineage-aware runtime checkpoint artifacts
   - `runtime-restore` replays a persisted checkpoint as a dry-run or apply plan
   - `runtime-experiment start|finish|show|compare` records baseline snapshot, mutation summary, result snapshot, evaluation metrics, warnings, final decision, and optional snapshot-backed runtime deltas for operator review
+  - `runtime-capability propose|review|show` records one run-derived capability candidate, bounded scope, required capabilities, and explicit operator review without mutating live runtime state
 - modular channel/provider architecture for extension-safe evolution:
   - `app/channel/feishu/*` split into adapter/payload/webhook layers
   - Feishu encrypted webhook payload decrypt lane with signature verification
@@ -307,7 +308,7 @@ Remaining deliverables:
   - sustain tagged release publishing across macOS/Linux/Windows
   - expand beyond installer scripts into package-manager distribution only after release adoption is stable
 - experiment-state operator surface follow-through:
-  - use the shipped snapshot/restore/experiment record layer as the prerequisite for later evaluator pipelines and automated skill-optimization loops
+  - use the shipped snapshot/restore/experiment/capability record layer as the prerequisite for later evaluator pipelines and automated skill-optimization loops
 - managed browser automation companion:
   - keep `browser.open`, `browser.extract`, and `browser.click` as the shipped safe browser lane
   - partial governed adapter skeleton now exists for richer page actions:
@@ -405,8 +406,55 @@ Options:
 
 Trade-off: if D2 lands, this becomes test-only infrastructure. May not be worth optimizing independently.
 
+### D6: Retire governed/direct runtime drift
+
+`ConversationRuntimeBinding` and `ProviderRuntimeBinding` make governance explicit, but `Direct`
+still survives as a compatibility lane deeper in the runtime than the long-term architecture wants.
+The next kernel-first closure track should push direct behavior back toward ingress, compatibility
+wrappers, and tests, while keeping governed reads and governed side effects fail-closed where
+possible.
+
+Trade-off: improves architecture truthfulness and future maintainability, but must be executed in
+small bounded slices instead of one repo-wide kernelization patch.
+
+### D7: ACP control-plane hardening and recovery
+
+ACP is now a real control plane rather than an experiment, but too much lifecycle, observability,
+and backend transport behavior still concentrates in a few large hotspots. The next ACP work should
+focus on decomposition, stuck-turn recovery, cancel/close repair, and clearer observability before
+adding more surface breadth.
+
+Trade-off: lowers merge risk and control-plane debt, but requires disciplined ownership extraction
+instead of feature-driven growth inside large files.
+
+### D8: Shared execution security tiers
+
+The roadmap already names process sandbox profile tiers, but the wider runtime still needs one
+shared execution-tier vocabulary across process, browser, and WASM lanes. Without that, each lane
+risks growing its own security semantics and evidence model.
+
+Trade-off: the first slice should standardize the contract, not attempt a giant all-lane sandbox
+rewrite.
+
+### D9: First-party workflow packs on hardened primitives
+
+Once the runtime base is harder, LoongClaw should turn that into a small set of first-party
+workflow packs that prove the kernel's value in operator-facing tasks such as release/review work,
+issue triage, or channel support.
+
+Trade-off: this is the right productization direction, but it should follow runtime hardening
+instead of preceding it.
+
 ## Current Priority Order
 
-1. Stage 2 hardening: memory/timeout isolation + sandbox tiers
-2. Stage 2 hot-reload reliability: pre/post checks + rollback contract
-3. Stage 3 baseline: connector contract versioning and idempotent reconciliation
+1. Kernel-first runtime closure and direct-path retirement
+2. Persistent audit sink and query baseline
+3. ACP control-plane hardening and recovery
+4. Shared execution security tiers across process/browser/WASM lanes
+5. First-party workflow packs on hardened runtime primitives
+
+Execution package for this order:
+
+- `docs/plans/2026-03-17-alpha-test-internal-runtime-hardening-design.md`
+- `docs/plans/2026-03-17-alpha-test-internal-runtime-hardening-implementation-plan.md`
+- `docs/plans/2026-03-17-alpha-test-internal-runtime-hardening-github-backlog.md`

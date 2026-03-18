@@ -1958,6 +1958,73 @@ async fn responses_turn_falls_back_to_chat_completions_for_compatible_endpoints(
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn responses_turn_does_not_fallback_for_generic_gateway_failures() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local provider listener");
+    let addr = listener.local_addr().expect("local addr");
+    let server = std::thread::spawn(move || {
+        let mut requests = Vec::new();
+        for _ in 0..3 {
+            let (mut stream, _) = listener.accept().expect("accept local provider request");
+            let mut request_buf = [0_u8; 8192];
+            let len = stream.read(&mut request_buf).expect("read request");
+            let request = String::from_utf8_lossy(&request_buf[..len]).to_string();
+            requests.push(request.clone());
+
+            let body =
+                r#"{"error":{"message":"temporary backend outage while handling the request"}}"#;
+            let response = format!(
+                "HTTP/1.1 502 Bad Gateway\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+        }
+        requests
+    });
+
+    let config = test_config(ProviderConfig {
+        kind: ProviderKind::Deepseek,
+        base_url: format!("http://{addr}"),
+        model: "deepseek-chat".to_owned(),
+        wire_api: crate::config::ProviderWireApi::Responses,
+        api_key: Some("deepseek-test-key".to_owned()),
+        ..ProviderConfig::default()
+    });
+
+    let error = request_turn(
+        &config,
+        "session-provider-test",
+        "turn-provider-test",
+        &[json!({
+            "role": "user",
+            "content": "turn ping"
+        })],
+        ProviderRuntimeBinding::direct(),
+    )
+    .await
+    .expect_err("generic gateway failures should stay on the same transport and eventually fail");
+
+    assert!(
+        error.contains("status 502"),
+        "the surfaced error should still report the gateway failure: {error}"
+    );
+
+    let requests = server.join().expect("join local provider server");
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.starts_with("POST /v1/responses ")),
+        "generic gateway failures should not trigger chat-completions fallback: {requests:#?}"
+    );
+    assert!(
+        !requests.is_empty(),
+        "the test server should observe at least the initial responses request"
+    );
+}
+
 #[test]
 fn model_request_error_includes_parseable_failover_snapshot_payload() {
     let error = build_model_request_error(

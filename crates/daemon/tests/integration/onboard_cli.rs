@@ -46,6 +46,21 @@ fn unique_temp_path(label: &str) -> PathBuf {
     ))
 }
 
+fn provider_choice_input(kind: mvp::config::ProviderKind) -> String {
+    let index = mvp::config::ProviderKind::all_sorted()
+        .iter()
+        .position(|candidate| *candidate == kind)
+        .expect("provider kind should exist in the interactive onboarding order");
+    (index + 1).to_string()
+}
+
+fn scripted_input_not_cancelled(raw: String) -> loongclaw_daemon::CliResult<String> {
+    if raw.trim() == "\u{1b}" {
+        return Err("onboarding cancelled: escape input received".to_owned());
+    }
+    Ok(raw)
+}
+
 struct DetectedEnvironmentGuard {
     _lock: MutexGuard<'static, ()>,
     saved: Vec<(String, Option<OsString>)>,
@@ -192,7 +207,8 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
         label: &str,
         default: &str,
     ) -> loongclaw_daemon::CliResult<String> {
-        self.outputs.push(format!("PROMPT {label} [{default}]"));
+        self.outputs
+            .push(format!("PROMPT {label} (default: {default})"));
         let value = self.next_input(label)?;
         if value.trim().is_empty() {
             return Ok(default.to_owned());
@@ -220,6 +236,45 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
             return Ok(default);
         }
         Ok(matches!(trimmed.as_str(), "y" | "yes"))
+    }
+
+    fn select_one(
+        &mut self,
+        label: &str,
+        options: &[loongclaw_daemon::onboard_cli::SelectOption],
+        default: Option<usize>,
+        _interaction_mode: loongclaw_daemon::onboard_cli::SelectInteractionMode,
+    ) -> loongclaw_daemon::CliResult<usize> {
+        if options.is_empty() {
+            return Err("no selection options available".to_owned());
+        }
+        if let Some(idx) = default
+            && idx >= options.len()
+        {
+            return Err(format!(
+                "default selection index {idx} out of range 0..{}",
+                options.len() - 1
+            ));
+        }
+        self.outputs.push(format!("SELECT {label}"));
+        let value = scripted_input_not_cancelled(self.next_input(label)?)?;
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return default.ok_or_else(|| "no default for required selection".to_owned());
+        }
+        if let Ok(n) = trimmed.parse::<usize>() {
+            if n >= 1 && n <= options.len() {
+                return Ok(n - 1);
+            }
+            return Err(format!(
+                "scripted selection {n} out of range 1..={}",
+                options.len()
+            ));
+        }
+        options
+            .iter()
+            .position(|option| option.slug.eq_ignore_ascii_case(trimmed))
+            .ok_or_else(|| format!("invalid scripted selection input: {trimmed}"))
     }
 }
 
@@ -339,6 +394,37 @@ fn default_non_interactive_onboard_options(
         system_prompt: None,
         skip_model_probe: false,
     }
+}
+
+#[test]
+fn scripted_onboard_ui_select_one_accepts_slug_input() {
+    let mut ui = ScriptedOnboardUi::new(["friendly_collab"]);
+    let options = vec![
+        loongclaw_daemon::onboard_cli::SelectOption {
+            label: "calm engineering".to_owned(),
+            slug: "calm_engineering".to_owned(),
+            description: String::new(),
+            recommended: true,
+        },
+        loongclaw_daemon::onboard_cli::SelectOption {
+            label: "friendly collab".to_owned(),
+            slug: "friendly_collab".to_owned(),
+            description: String::new(),
+            recommended: false,
+        },
+    ];
+
+    let index = loongclaw_daemon::onboard_cli::OnboardUi::select_one(
+        &mut ui,
+        "Personality",
+        &options,
+        Some(0),
+        loongclaw_daemon::onboard_cli::SelectInteractionMode::List,
+    )
+    .expect("scripted selection should accept slug input so integration tests stay aligned");
+
+    assert_eq!(index, 1);
+    assert_eq!(ui.transcript(), vec!["SELECT Personality".to_owned()]);
 }
 
 #[test]
@@ -747,8 +833,12 @@ async fn non_interactive_onboard_allows_explicit_skip_model_probe_warning() {
 
     let raw = std::fs::read_to_string(&output).expect("read written onboarding config");
     assert!(
-        raw.contains("api_key = \"${OPENAI_API_KEY}\""),
-        "onboarding should persist the default provider credential as a canonical env reference: {raw}"
+        raw.contains("oauth_access_token = \"${OPENAI_CODEX_OAUTH_TOKEN}\""),
+        "onboarding should persist the openai oauth binding as the canonical env reference after provider-aligned credential routing: {raw}"
+    );
+    assert!(
+        !raw.contains("api_key = "),
+        "provider-aligned onboarding should not fall back to the legacy api_key field for the openai oauth route: {raw}"
     );
     assert!(
         !raw.contains("api_key_env"),
@@ -759,13 +849,53 @@ async fn non_interactive_onboard_allows_explicit_skip_model_probe_warning() {
         .expect("load written onboarding config");
     assert_eq!(config.provider.model, "openai/gpt-5.1-codex");
     assert_eq!(
-        config.provider.api_key.as_deref(),
-        Some("${OPENAI_API_KEY}")
+        config.provider.oauth_access_token.as_deref(),
+        Some("${OPENAI_CODEX_OAUTH_TOKEN}"),
+        "reloaded config should keep the canonical oauth credential source after provider-aligned routing"
     );
     assert_eq!(
-        config.provider.api_key(),
-        Some("test-openai-key".to_owned()),
-        "loaded config should still resolve the canonical env reference at runtime"
+        config.provider.api_key, None,
+        "reloaded config should not repopulate the legacy api_key field for the oauth-backed openai route"
+    );
+    assert_eq!(
+        config.provider.authorization_header(),
+        Some("Bearer test-openai-key".to_owned()),
+        "runtime auth resolution should still fall back to OPENAI_API_KEY when the oauth env is unset"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn non_interactive_onboard_preserves_reviewed_auto_when_probe_is_skipped() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let root = unique_temp_path("non-interactive-reviewed-auto-skip-root");
+    std::fs::create_dir_all(&root).expect("create test root");
+    let output = root.join("loongclaw.toml");
+    unsafe {
+        std::env::set_var("DEEPSEEK_API_KEY", "test-deepseek-key");
+    }
+
+    let mut options = default_non_interactive_onboard_options(&output);
+    options.provider = Some("deepseek".to_owned());
+    options.skip_model_probe = true;
+
+    let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
+    let context =
+        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+        .await
+        .expect("skip-model-probe should allow non-interactive onboarding to keep reviewed auto providers on auto");
+
+    let raw = std::fs::read_to_string(&output).expect("read written onboarding config");
+    let (_, config) = mvp::config::load(Some(output.to_string_lossy().as_ref()))
+        .expect("load written onboarding config");
+    assert_eq!(config.provider.kind, mvp::config::ProviderKind::Deepseek);
+    assert_eq!(
+        config.provider.model, "auto",
+        "non-interactive onboarding should preserve model = auto when the operator did not explicitly pin a reviewed provider model"
+    );
+    assert!(
+        !raw.contains("model = \"deepseek-chat\""),
+        "skip-model-probe onboarding should not silently rewrite reviewed providers to the reviewed model: {raw}"
     );
 }
 
@@ -807,6 +937,61 @@ async fn non_interactive_onboard_allows_explicit_model_probe_warning() {
                 && normalized.contains("authorization: bearer test-openai-key")
         }),
         "explicit-model warning path should still perform the model probe with resolved auth before allowing onboarding to continue: {requests:#?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn non_interactive_onboard_reports_reviewed_auto_probe_failure_without_rewriting_config() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let root = unique_temp_path("non-interactive-reviewed-auto-failure-root");
+    std::fs::create_dir_all(&root).expect("create test root");
+    let output = root.join("loongclaw.toml");
+
+    let (addr, server) = start_local_model_probe_server_with_models_response(
+        1,
+        "HTTP/1.1 401 Unauthorized",
+        r#"{"error":{"message":"No cookie auth credentials found"}}"#,
+    );
+
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.kind = mvp::config::ProviderKind::Deepseek;
+    config.provider.base_url = format!("http://{addr}");
+    config.provider.model = "auto".to_owned();
+    config.provider.api_key = Some("test-deepseek-key".to_owned());
+    mvp::config::write(Some(output.to_string_lossy().as_ref()), &config, true)
+        .expect("write existing config");
+    let original_body = std::fs::read_to_string(&output).expect("read original config");
+
+    let mut options = default_non_interactive_onboard_options(&output);
+    options.force = true;
+    options.system_prompt = Some("force a pending write".to_owned());
+
+    let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
+    let context = crate::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    let error = crate::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+        .await
+        .expect_err("reviewed auto-model probe failures should block non-interactive onboarding until the model is pinned explicitly");
+
+    assert!(
+        error.contains("accept reviewed model `deepseek-chat`")
+            && error.contains("provider.model")
+            && error.contains("preferred_models"),
+        "reviewed auto-model probe failures should surface the actionable explicit-model remediation instead of a generic rerun hint: {error}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&output).expect("read config after blocked onboard"),
+        original_body,
+        "blocking reviewed auto-model probe failures should leave the existing auto config untouched"
+    );
+
+    let requests = server.join().expect("join local provider server");
+    assert!(
+        requests.iter().any(|request| {
+            let normalized = request.to_ascii_lowercase();
+            request.starts_with("GET /v1/models ")
+                && normalized.contains("authorization: bearer test-deepseek-key")
+        }),
+        "reviewed auto-model failures should still attempt the provider model probe before surfacing the actionable remediation: {requests:#?}"
     );
 }
 
@@ -1010,14 +1195,34 @@ async fn interactive_onboard_clear_token_keeps_inline_provider_credential() {
             system_prompt: None,
             skip_model_probe: true,
         },
-        [
-            "1", "2", "openai", "gpt-4.1", ":clear", "", "", "", "y", "y", "o",
+        vec![
+            "1".to_owned(),
+            "2".to_owned(),
+            provider_choice_input(mvp::config::ProviderKind::Openai),
+            "gpt-4.1".to_owned(),
+            ":clear".to_owned(),
+            String::new(),
+            String::new(),
+            String::new(),
+            "y".to_owned(),
+            "y".to_owned(),
+            "o".to_owned(),
         ],
         None,
         None,
     )
     .await
     .expect("run scripted onboarding with explicit credential clear token");
+
+    let joined = transcript.join("\n");
+    assert!(
+        joined.contains("SELECT Provider"),
+        "provider fallback should use numbered selection even without detected provider choices: {transcript:#?}"
+    );
+    assert!(
+        !joined.contains("PROMPT Provider"),
+        "provider fallback should no longer ask for free-form provider text input: {transcript:#?}"
+    );
 
     let raw = std::fs::read_to_string(&output_path).expect("read written onboarding config");
     assert!(
@@ -1045,7 +1250,20 @@ async fn interactive_onboard_clear_token_restores_builtin_system_prompt() {
     existing.cli.system_prompt = "custom review prompt".to_owned();
     mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
 
-    run_scripted_onboard_flow(
+    let mut ui = ScriptedOnboardUi::new(vec![
+        "1".to_owned(),
+        provider_choice_input(mvp::config::ProviderKind::Openai),
+        "gpt-4.1".to_owned(),
+        String::new(),
+        ":clear".to_owned(),
+        String::new(),
+        "y".to_owned(),
+        "y".to_owned(),
+        "o".to_owned(),
+    ]);
+    let context =
+        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(
         loongclaw_daemon::onboard_cli::OnboardCommandOptions {
             output: output_path.to_str().map(str::to_owned),
             force: false,
@@ -1059,14 +1277,16 @@ async fn interactive_onboard_clear_token_restores_builtin_system_prompt() {
             system_prompt: Some(existing.cli.system_prompt.clone()),
             skip_model_probe: true,
         },
-        [
-            "1", "2", "openai", "gpt-4.1", "", ":clear", "", "y", "y", "o",
-        ],
-        None,
-        None,
+        &mut ui,
+        &context,
     )
     .await
-    .expect("run scripted onboarding with explicit system-prompt clear token");
+    .unwrap_or_else(|error| {
+        panic!(
+            "run scripted onboarding with explicit system-prompt clear token: {error}; transcript: {:#?}",
+            ui.transcript()
+        )
+    });
 
     let (_, config) =
         mvp::config::load(output_path.to_str()).expect("load interactive onboarding config");
@@ -1074,6 +1294,62 @@ async fn interactive_onboard_clear_token_restores_builtin_system_prompt() {
         config.cli.system_prompt,
         mvp::config::CliChannelConfig::default().system_prompt,
         "explicit :clear should restore the built-in CLI system prompt"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn interactive_onboard_only_shows_large_logo_on_the_initial_screen() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    unsafe {
+        std::env::set_var("OPENAI_API_KEY", "openai-test-token");
+    }
+
+    let output_path = unique_temp_path("interactive-single-banner.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        crate::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: false,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        ["y", "1", "2", "", "", "", "", "", "", "y"],
+        None,
+        None,
+    )
+    .await
+    .expect("run interactive onboarding with the risk gate enabled");
+
+    assert_eq!(
+        transcript
+            .iter()
+            .filter(|line| line.contains("██╗      ██████╗"))
+            .count(),
+        1,
+        "interactive onboarding should show the large LOONGCLAW banner only once, on the initial risk screen: {transcript:#?}"
+    );
+    assert!(
+        transcript
+            .iter()
+            .filter(|line| line.contains("LOONGCLAW"))
+            .count()
+            >= 3,
+        "follow-up screens should keep using the compact LOONGCLAW header instead of dropping branding entirely: {transcript:#?}"
+    );
+    assert!(
+        transcript.iter().any(|line| line == "choose personality"),
+        "regression flow should still reach the later onboarding steps where repeated banner reports came from: {transcript:#?}"
     );
 }
 
@@ -1358,6 +1634,23 @@ fn preferred_api_key_env_default_stays_blank_when_provider_has_no_default_env() 
 }
 
 #[test]
+fn preferred_api_key_env_default_prefers_oauth_default_for_fresh_openai() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.kind = mvp::config::ProviderKind::Openai;
+    config.provider.api_key = None;
+    config.provider.api_key_env = None;
+    config.provider.oauth_access_token = None;
+    config.provider.oauth_access_token_env = None;
+
+    let value = loongclaw_daemon::onboard_cli::preferred_api_key_env_default(&config);
+
+    assert_eq!(
+        value, "OPENAI_CODEX_OAUTH_TOKEN",
+        "fresh OpenAI onboarding should surface the provider-preferred oauth env before the api-key fallback: {value:?}"
+    );
+}
+
+#[test]
 fn directory_preflight_check_has_no_filesystem_side_effects() {
     let base = unique_temp_path("preflight-root");
     let target = base.join("nested").join("tool-root");
@@ -1399,13 +1692,19 @@ fn backup_existing_config_copies_without_removing_original() {
 }
 
 #[test]
-fn onboard_risk_screen_uses_compact_header_and_continue_cancel_options() {
+fn onboard_risk_screen_uses_brand_header_and_continue_cancel_options() {
     let lines = loongclaw_daemon::onboard_cli::render_onboarding_risk_screen_lines(80);
 
-    assert_compact_loongclaw_header(&lines, "risk screen");
     assert!(
-        !lines[0].starts_with("██╗"),
-        "risk screen should avoid the oversized block-logo banner on the guard screen: {lines:#?}"
+        lines[0].starts_with("██╗"),
+        "risk screen should keep the oversized LOONGCLAW brand banner on the initial guard screen: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .take_while(|line| !line.is_empty())
+            .any(|line| line.contains(concat!("v", env!("CARGO_PKG_VERSION")))),
+        "risk screen should keep the current build version visible under the brand banner: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "security check"),
@@ -1420,17 +1719,17 @@ fn onboard_risk_screen_uses_compact_header_and_continue_cancel_options() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("[y] Continue onboarding")),
+            .any(|line| line.contains("y) Continue onboarding")),
         "risk screen should show the affirmative path explicitly: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line.contains("[n] Cancel")),
+        lines.iter().any(|line| line.contains("n) Cancel")),
         "risk screen should keep cancellation explicit: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use [n], cancel"),
+            .any(|line| line == "press Enter to use default n, cancel"),
         "risk screen should make the safe default explicit on the screen itself: {lines:#?}"
     );
 }
@@ -2032,8 +2331,12 @@ fn onboard_presentation_entry_and_digest_copy_stays_canonical() {
         "A suggested starting point is ready, built from 2 reusable sources."
     );
     assert_eq!(
+        loongclaw_daemon::onboard_presentation::import_option_detail(false, false, 1),
+        "1 reusable source was detected for provider, channels, or guidance."
+    );
+    assert_eq!(
         loongclaw_daemon::onboard_presentation::import_option_detail(false, false, 2),
-        "2 reusable sources were detected for provider, channels, or workspace guidance."
+        "2 reusable sources were detected for provider, channels, or guidance."
     );
     assert_eq!(
         loongclaw_daemon::onboard_presentation::detected_coverage_prefix(true),
@@ -2140,6 +2443,14 @@ fn onboard_presentation_risk_preflight_and_write_copy_stays_canonical() {
     assert_eq!(
         loongclaw_daemon::onboard_presentation::preflight_probe_rerun_hint(),
         "- rerun with --skip-model-probe if your provider blocks model listing during setup"
+    );
+    assert_eq!(
+        loongclaw_daemon::onboard_presentation::preflight_explicit_model_rerun_hint(),
+        "- rerun onboarding to choose a reviewed model, or set provider.model / preferred_models explicitly"
+    );
+    assert_eq!(
+        loongclaw_daemon::onboard_presentation::preflight_explicit_model_only_rerun_hint(),
+        "- set provider.model / preferred_models explicitly before retrying"
     );
     assert_eq!(
         loongclaw_daemon::onboard_presentation::preflight_continue_label(),
@@ -2288,7 +2599,7 @@ fn onboard_entry_import_option_explains_detected_additions_when_current_setup_ex
 }
 
 #[test]
-fn onboard_entry_screen_includes_brand_block_and_detected_setup_digest() {
+fn onboard_entry_screen_uses_compact_header_and_detected_setup_digest() {
     let current = import_candidate_with_kind(
         loongclaw_daemon::migration::types::ImportSourceKind::ExistingLoongClawConfig,
         "existing config at ~/.config/loongclaw/config.toml",
@@ -2338,13 +2649,10 @@ fn onboard_entry_screen_includes_brand_block_and_detected_setup_digest() {
         80,
     );
 
+    assert_compact_loongclaw_header(&lines, "entry screen");
     assert!(
-        lines[0].starts_with("██╗"),
-        "entry screen should start with the shared LOONGCLAW brand block: {lines:#?}"
-    );
-    assert!(
-        lines.iter().any(|line| line.starts_with('v')),
-        "entry screen should include a build/version line under the banner: {lines:#?}"
+        lines.iter().all(|line| !line.starts_with("██╗")),
+        "entry screen should not repeat the large LOONGCLAW banner after the first screen: {lines:#?}"
     );
     assert!(
         lines
@@ -2382,13 +2690,13 @@ fn onboard_entry_screen_includes_brand_block_and_detected_setup_digest() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("[2] Use detected starting point (recommended)")),
+            .any(|line| line.contains("2) Use detected starting point (recommended)")),
         "entry screen should keep the detected-setup path visible and recommended: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use [2], the detected starting point"),
+            .any(|line| line == "press Enter to use default 2, the detected starting point"),
         "entry screen should make the recommended default path explicit instead of hiding it only in the prompt default: {lines:#?}"
     );
 }
@@ -2415,7 +2723,7 @@ fn onboard_entry_screen_compacts_to_plain_wordmark_on_narrow_width() {
         40,
     );
 
-    assert_eq!(lines[0], "LOONGCLAW");
+    assert_compact_loongclaw_header(&lines, "narrow entry screen");
     assert!(
         lines.iter().any(|line| line == "Detected settings"),
         "narrow layout should retain the detected-settings section heading: {lines:#?}"
@@ -2423,11 +2731,11 @@ fn onboard_entry_screen_compacts_to_plain_wordmark_on_narrow_width() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "[1] Use detected starting point"),
+            .any(|line| line == "1) Use detected starting point"),
         "narrow layout should keep the primary entry choice readable: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line == "    (recommended)"),
+        lines.iter().any(|line| line == "   (recommended)"),
         "narrow layout should still surface the recommendation marker when the longer label wraps: {lines:#?}"
     );
 }
@@ -2635,9 +2943,10 @@ fn onboard_provider_selection_screen_includes_focus_title_and_choices() {
 
     let lines = loongclaw_daemon::onboard_cli::render_provider_selection_screen_lines(&plan, 80);
 
+    assert_compact_loongclaw_header(&lines, "provider choice screen");
     assert!(
-        lines[0].starts_with("██╗"),
-        "provider choice screen should start with the shared LOONGCLAW brand block: {lines:#?}"
+        lines.iter().all(|line| !line.starts_with("██╗")),
+        "provider choice screen should not re-render the large LOONGCLAW banner mid-onboarding: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "choose active provider"),
@@ -2719,7 +3028,7 @@ fn onboard_provider_selection_screen_shows_default_enter_choice_when_provider_is
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use [openai], the OpenAI provider"),
+            .any(|line| line == "press Enter to use default openai, the OpenAI provider"),
         "provider choice screen should make the resolved default provider explicit instead of relying only on the prompt default: {lines:#?}"
     );
 }
@@ -2761,13 +3070,13 @@ fn onboard_provider_selection_screen_uses_profile_ids_for_same_kind_choices() {
     let lines = loongclaw_daemon::onboard_cli::render_provider_selection_screen_lines(&plan, 80);
 
     assert!(
-        lines.iter().any(|line| line == "[openai-gpt-5] OpenAI"),
+        lines.iter().any(|line| line == "openai-gpt-5) OpenAI"),
         "same-kind provider choices should expose the stable profile id instead of only the provider kind: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "[openai-o4-mini] OpenAI (recommended)"),
+            .any(|line| line == "openai-o4-mini) OpenAI (recommended)"),
         "only the resolved default profile should be marked recommended when same-kind choices coexist: {lines:#?}"
     );
     assert!(
@@ -2785,7 +3094,7 @@ fn onboard_provider_selection_screen_uses_profile_ids_for_same_kind_choices() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use [openai-o4-mini], the OpenAI provider"),
+            .any(|line| line == "press Enter to use default openai-o4-mini, the OpenAI provider"),
         "the Enter shortcut should point at the concrete default profile id, not only the provider kind: {lines:#?}"
     );
     assert!(
@@ -3021,10 +3330,7 @@ fn onboard_current_setup_shortcut_screen_summarizes_existing_setup_and_choices()
     let lines =
         loongclaw_daemon::onboard_cli::render_continue_current_setup_screen_lines(&config, 80);
 
-    assert!(
-        lines[0].starts_with("██╗"),
-        "current-setup shortcut should start with the shared LOONGCLAW brand block: {lines:#?}"
-    );
+    assert_compact_loongclaw_header(&lines, "current-setup shortcut");
     assert!(
         lines.iter().any(|line| line == "continue current setup"),
         "current-setup shortcut should use a focused title: {lines:#?}"
@@ -3046,19 +3352,17 @@ fn onboard_current_setup_shortcut_screen_summarizes_existing_setup_and_choices()
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("[1] Keep current setup (recommended)")),
+            .any(|line| line.contains("1) Keep current setup (recommended)")),
         "current-setup shortcut should make the keep-as-is path primary: {lines:#?}"
     );
     assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("[2] Adjust settings")),
+        lines.iter().any(|line| line.contains("2) Adjust settings")),
         "current-setup shortcut should keep an explicit path into detailed edits: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use [1], keep current setup"),
+            .any(|line| line == "press Enter to use default 1, keep current setup"),
         "current-setup shortcut should make the fast-lane default explicit on the screen: {lines:#?}"
     );
 }
@@ -3121,10 +3425,7 @@ fn onboard_detected_setup_shortcut_screen_summarizes_starting_point_and_choices(
         80,
     );
 
-    assert!(
-        lines[0].starts_with("██╗"),
-        "detected-setup shortcut should start with the shared LOONGCLAW brand block: {lines:#?}"
-    );
+    assert_compact_loongclaw_header(&lines, "detected-setup shortcut");
     assert!(
         lines
             .iter()
@@ -3154,7 +3455,7 @@ fn onboard_detected_setup_shortcut_screen_summarizes_starting_point_and_choices(
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("[1] Use detected starting point (recommended)")),
+            .any(|line| line.contains("1) Use detected starting point (recommended)")),
         "detected-setup shortcut should make the detected fast lane primary: {lines:#?}"
     );
     assert!(
@@ -3170,15 +3471,13 @@ fn onboard_detected_setup_shortcut_screen_summarizes_starting_point_and_choices(
         "detected-setup shortcut should not imply that review is skipped entirely: {lines:#?}"
     );
     assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("[2] Adjust settings")),
+        lines.iter().any(|line| line.contains("2) Adjust settings")),
         "detected-setup shortcut should keep an explicit path into detailed edits: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use [1], the detected starting point"),
+            .any(|line| line == "press Enter to use default 1, the detected starting point"),
         "detected-setup shortcut should make the fast-lane default explicit on the screen: {lines:#?}"
     );
 }
@@ -3252,7 +3551,7 @@ fn onboard_detected_setup_shortcut_is_limited_to_interactive_import_flow_with_de
 }
 
 #[test]
-fn onboard_starting_point_selection_screen_includes_brand_header_and_detected_options() {
+fn onboard_starting_point_selection_screen_uses_compact_header_and_detected_options() {
     let mut recommended = import_candidate_with_provider(
         loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
         "recommended import plan",
@@ -3282,10 +3581,7 @@ fn onboard_starting_point_selection_screen_includes_brand_header_and_detected_op
         80,
     );
 
-    assert!(
-        lines[0].starts_with("██╗"),
-        "starting-point screen should start with the shared LOONGCLAW brand block: {lines:#?}"
-    );
+    assert_compact_loongclaw_header(&lines, "starting-point screen");
     assert!(
         lines
             .iter()
@@ -3295,7 +3591,7 @@ fn onboard_starting_point_selection_screen_includes_brand_header_and_detected_op
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("[1] suggested starting point (recommended)")),
+            .any(|line| line.contains("1) suggested starting point (recommended)")),
         "starting-point screen should promote the suggested starting point first: {lines:#?}"
     );
     assert!(
@@ -3311,7 +3607,7 @@ fn onboard_starting_point_selection_screen_includes_brand_header_and_detected_op
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use [1], the suggested starting point"),
+            .any(|line| line == "press Enter to use default 1, the suggested starting point"),
         "starting-point screen should make the default Enter behavior explicit when a suggested starting point is available: {lines:#?}"
     );
 }
@@ -3437,7 +3733,7 @@ fn onboard_starting_point_selection_screen_summarizes_multi_source_origin() {
 }
 
 #[test]
-fn onboard_single_detected_setup_preview_screen_uses_branded_preview_layout() {
+fn onboard_single_detected_setup_preview_screen_uses_compact_follow_up_layout() {
     let candidate = import_candidate_with_provider(
         loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
         "Codex config at ~/.codex/config.toml",
@@ -3452,10 +3748,7 @@ fn onboard_single_detected_setup_preview_screen_uses_branded_preview_layout() {
         80,
     );
 
-    assert!(
-        lines[0].starts_with("██╗"),
-        "single detected-setup preview should start with the shared LOONGCLAW brand block: {lines:#?}"
-    );
+    assert_compact_loongclaw_header(&lines, "single detected-setup preview");
     assert!(
         lines
             .iter()
@@ -3741,10 +4034,10 @@ fn onboard_starting_point_selection_screen_prioritizes_richer_direct_sources() {
     .join("\n");
 
     let environment_index = joined
-        .find("[1] your current environment")
+        .find("1) your current environment")
         .expect("environment option should render first when it covers more setup domains");
     let codex_index = joined
-        .find("[2] Codex config at ~/.codex/config.toml")
+        .find("2) Codex config at ~/.codex/config.toml")
         .expect("codex option should render after the richer environment candidate");
 
     assert!(
@@ -3777,10 +4070,10 @@ fn onboard_starting_point_selection_screen_prefers_explicit_config_sources_when_
     .join("\n");
 
     let codex_index = joined
-        .find("[1] Codex config at ~/.codex/config.toml")
+        .find("1) Codex config at ~/.codex/config.toml")
         .expect("codex option should render first when direct-source coverage is tied");
     let environment_index = joined
-        .find("[2] your current environment")
+        .find("2) your current environment")
         .expect("environment option should render after codex when coverage is tied");
 
     assert!(
@@ -3805,13 +4098,13 @@ fn onboard_starting_point_selection_screen_wraps_long_option_labels_and_details(
         loongclaw_daemon::onboard_cli::render_starting_point_selection_screen_lines(&[codex], 48);
 
     assert!(
-        lines.iter().any(|line| line == "[1] Codex config at"),
+        lines.iter().any(|line| line == "1) Codex config at"),
         "starting-point screen should wrap long option labels instead of overflowing them: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "    ~/.codex/agents/loongclaw/config.toml"),
+            .any(|line| line == "   ~/.codex/agents/loongclaw/config.toml"),
         "starting-point screen should continue long option labels on an indented line: {lines:#?}"
     );
     assert!(
@@ -3986,6 +4279,12 @@ fn onboard_api_key_env_screen_explains_suggested_env_and_blank_behavior() {
     assert!(
         lines
             .iter()
+            .any(|line| line.contains("- current source: ${OPENAI_CODEX_OAUTH_TOKEN}")),
+        "credential-env screen should show the active oauth credential source instead of hiding it behind api-key-only rendering: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
             .any(|line| line.contains("- suggested source: ${OPENAI_API_KEY}")),
         "credential-env screen should surface the suggested env var name: {lines:#?}"
     );
@@ -3998,8 +4297,8 @@ fn onboard_api_key_env_screen_explains_suggested_env_and_blank_behavior() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "- type :clear to keep inline or oauth credentials"),
-        "credential-env screen should explain the explicit clear token when Enter uses a non-empty default: {lines:#?}"
+            .any(|line| line == "- type :clear to clear the configured credential env"),
+        "credential-env screen should explain the explicit clear token when another credential env is already configured: {lines:#?}"
     );
 }
 
@@ -4176,6 +4475,11 @@ fn onboard_personality_selection_screen_shows_native_personality_choices() {
 
     let lines = crate::onboard_cli::render_personality_selection_screen_lines(&config, 80);
 
+    assert_compact_loongclaw_header(&lines, "personality screen");
+    assert!(
+        lines.iter().all(|line| !line.starts_with("██╗")),
+        "personality screen should not repeat the large LOONGCLAW banner mid-onboarding: {lines:#?}"
+    );
     assert!(
         lines.iter().any(|line| line == "choose personality"),
         "personality screen should use a focused title: {lines:#?}"
@@ -4185,8 +4489,12 @@ fn onboard_personality_selection_screen_shows_native_personality_choices() {
         "personality screen should surface the native prompt-pack progress step: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line.contains("[friendly_collab]")),
-        "personality screen should show the canonical friendly_collab selector: {lines:#?}"
+        lines.iter().any(|line| line.contains("friendly_collab)")),
+        "personality screen should keep the canonical friendly_collab selector visible without bracket syntax: {lines:#?}"
+    );
+    assert!(
+        lines.iter().all(|line| !line.contains("[friendly_collab]")),
+        "personality screen should not imply that brackets are part of the expected selector syntax: {lines:#?}"
     );
 }
 
@@ -4228,6 +4536,7 @@ fn onboard_memory_profile_screen_shows_supported_profiles() {
 
     let lines = crate::onboard_cli::render_memory_profile_selection_screen_lines(&config, 80);
 
+    assert_compact_loongclaw_header(&lines, "memory-profile screen");
     assert!(
         lines.iter().any(|line| line == "choose memory profile"),
         "memory-profile screen should use a focused title: {lines:#?}"
@@ -4241,8 +4550,14 @@ fn onboard_memory_profile_screen_shows_supported_profiles() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("[profile_plus_window]")),
-        "memory-profile screen should show the canonical profile_plus_window selector: {lines:#?}"
+            .any(|line| line.contains("profile_plus_window)")),
+        "memory-profile screen should keep the canonical profile_plus_window selector visible without bracket syntax: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("[profile_plus_window]")),
+        "memory-profile screen should not imply that brackets are part of the expected selector syntax: {lines:#?}"
     );
 }
 
@@ -4416,8 +4731,8 @@ fn onboard_existing_config_write_screen_offers_replace_backup_and_cancel() {
 
     assert_compact_loongclaw_header(&lines, "existing-config write screen");
     assert!(
-        !lines[0].starts_with("██╗"),
-        "existing-config write screen should avoid the oversized block-logo banner on the write guard screen: {lines:#?}"
+        lines.iter().all(|line| !line.starts_with("██╗")),
+        "existing-config write screen should not repeat the large LOONGCLAW banner after the first screen: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "existing config found"),
@@ -4432,23 +4747,23 @@ fn onboard_existing_config_write_screen_offers_replace_backup_and_cancel() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("[o] Replace existing config")),
+            .any(|line| line.contains("o) Replace existing config")),
         "existing-config write screen should keep the replace path visible: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("[b] Create backup and replace")),
+            .any(|line| line.contains("b) Create backup and replace")),
         "existing-config write screen should keep the safer backup path visible: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line.contains("[c] Cancel")),
+        lines.iter().any(|line| line.contains("c) Cancel")),
         "existing-config write screen should keep cancellation explicit: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use [c], cancel"),
+            .any(|line| line == "press Enter to use default c, cancel"),
         "existing-config write screen should make the safe default explicit on the screen itself: {lines:#?}"
     );
 }
@@ -4509,20 +4824,24 @@ fn onboard_preflight_screen_summarizes_status_counts_and_guidance() {
         "preflight screen should explain the decision context when warnings or failures exist: {lines:#?}"
     );
     assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("[y] Continue anyway")),
+        lines.iter().any(|line| line.contains("y) Continue anyway")),
         "preflight screen should show the continue path explicitly when attention is still required: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line.contains("[n] Cancel")),
+        lines.iter().any(|line| line.contains("n) Cancel")),
         "preflight screen should keep the cancel path explicit when checks are not green: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use [n], cancel"),
+            .any(|line| line == "press Enter to use default n, cancel"),
         "preflight screen should make the safe default explicit when attention is still required: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("--skip-model-probe")),
+        "generic failing preflight checks should not suggest --skip-model-probe unless the underlying recovery policy explicitly allows it: {lines:#?}"
     );
 }
 
@@ -4541,17 +4860,17 @@ fn onboard_preflight_screen_omits_continue_cancel_choices_when_all_checks_are_gr
     assert!(
         lines
             .iter()
-            .all(|line| !line.contains("[y] Continue anyway")),
+            .all(|line| !line.contains("y) Continue anyway")),
         "fully green preflight should not render a continue-anyway choice that will never be asked: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| !line.contains("[n] Cancel")),
+        lines.iter().all(|line| !line.contains("n) Cancel")),
         "fully green preflight should not render a cancellation choice that does not apply on this screen: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .all(|line| line.as_str() != "press Enter to use [n], cancel"),
+            .all(|line| line.as_str() != "press Enter to use default n, cancel"),
         "fully green preflight should not show a default-cancel hint when the flow proceeds automatically: {lines:#?}"
     );
 }
@@ -4661,13 +4980,13 @@ fn onboard_write_confirmation_screen_shows_target_path_and_write_choice() {
         "write-confirm screen should remind users when they are writing despite warnings: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line.contains("[y] Write config")),
+        lines.iter().any(|line| line.contains("y) Write config")),
         "write-confirm screen should show the affirmative path explicitly: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use [y], write config"),
+            .any(|line| line == "press Enter to use default y, write config"),
         "write-confirm screen should make the default write action explicit instead of relying only on the prompt suffix: {lines:#?}"
     );
 }
@@ -4960,7 +5279,7 @@ requires_openai_auth = true
 
     let joined = transcript.join("\n");
     assert!(
-        joined.contains("[2] Codex config at"),
+        joined.contains("2) Codex config at"),
         "the Codex candidate should remain selectable by the same index it shows on screen: {transcript:#?}"
     );
     assert!(
@@ -5058,18 +5377,18 @@ async fn onboard_current_setup_adjustments_preserve_unchanged_domain_actions_in_
             system_prompt: None,
             skip_model_probe: true,
         },
-        [
-            "1",
-            "2",
-            "openai",
-            "gpt-4.1",
-            "OPENAI_API_KEY",
-            "",
-            "custom review prompt",
-            "",
-            "y",
-            "y",
-            "o",
+        vec![
+            "1".to_owned(),
+            "2".to_owned(),
+            provider_choice_input(mvp::config::ProviderKind::Openai),
+            "gpt-4.1".to_owned(),
+            "OPENAI_API_KEY".to_owned(),
+            String::new(),
+            "custom review prompt".to_owned(),
+            String::new(),
+            "y".to_owned(),
+            "y".to_owned(),
+            "o".to_owned(),
         ],
         Some(workspace_root),
         None,
@@ -5157,18 +5476,18 @@ async fn onboard_current_setup_adjustments_capture_personality_and_memory_profil
             system_prompt: None,
             skip_model_probe: true,
         },
-        [
-            "1",
-            "2",
-            "openai",
-            "gpt-4.1",
-            "OPENAI_API_KEY",
-            "friendly_collab",
-            "",
-            "profile_plus_window",
-            "y",
-            "y",
-            "o",
+        vec![
+            "1".to_owned(),
+            "2".to_owned(),
+            provider_choice_input(mvp::config::ProviderKind::Openai),
+            "gpt-4.1".to_owned(),
+            "OPENAI_API_KEY".to_owned(),
+            "2".to_owned(),
+            String::new(),
+            "3".to_owned(),
+            "y".to_owned(),
+            "y".to_owned(),
+            "o".to_owned(),
         ],
         Some(workspace_root),
         None,
@@ -5274,7 +5593,7 @@ requires_openai_auth = true
             "1",
             "1",
             "2",
-            "openai",
+            "1",
             "openai/gpt-5.1-codex-preview",
             "OPENAI_API_KEY",
             "",
@@ -5370,7 +5689,7 @@ fn onboard_review_lines_include_starting_point_and_domain_preview() {
 }
 
 #[test]
-fn onboard_review_lines_include_brand_header() {
+fn onboard_review_lines_use_compact_header() {
     let lines = loongclaw_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
         &mvp::config::LoongClawConfig::default(),
         None,
@@ -5378,13 +5697,10 @@ fn onboard_review_lines_include_brand_header() {
         80,
     );
 
+    assert_compact_loongclaw_header(&lines, "review screen");
     assert!(
-        lines[0].starts_with("██╗"),
-        "review screen should start with the shared LOONGCLAW brand block: {lines:#?}"
-    );
-    assert!(
-        lines.iter().any(|line| line.starts_with('v')),
-        "review screen should include a version line: {lines:#?}"
+        lines.iter().all(|line| !line.starts_with("██╗")),
+        "review screen should not repeat the large LOONGCLAW banner: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "review setup"),
@@ -5416,8 +5732,8 @@ fn onboard_review_lines_include_core_setup_summary_for_fresh_setup() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("- credential source: ${OPENAI_API_KEY}")),
-        "review should keep the suggested credential env visible for fresh setup flows: {lines:#?}"
+            .any(|line| line.contains("- credential source: ${OPENAI_CODEX_OAUTH_TOKEN}")),
+        "review should keep the provider-preferred credential env visible for fresh setup flows: {lines:#?}"
     );
     assert!(
         lines
@@ -5733,7 +6049,7 @@ fn onboarding_success_summary_uses_starting_point_language() {
 }
 
 #[test]
-fn onboarding_success_summary_includes_brand_header() {
+fn onboarding_success_summary_uses_compact_header() {
     let path = PathBuf::from("/tmp/loongclaw-config.toml");
     let summary = loongclaw_daemon::onboard_cli::build_onboarding_success_summary(
         &path,
@@ -5743,13 +6059,10 @@ fn onboarding_success_summary_includes_brand_header() {
 
     let lines =
         loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+    assert_compact_loongclaw_header(&lines, "success summary");
     assert!(
-        lines[0].starts_with("██╗"),
-        "success summary should start with the shared LOONGCLAW brand block: {lines:#?}"
-    );
-    assert!(
-        lines.iter().any(|line| line.starts_with('v')),
-        "success summary should include a version line under the banner: {lines:#?}"
+        lines.iter().all(|line| !line.starts_with("██╗")),
+        "success summary should not repeat the large LOONGCLAW banner after onboarding has already started: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "onboarding complete"),
@@ -5843,6 +6156,7 @@ fn onboarding_success_summary_reports_existing_config_kept() {
         saved_provider_profiles: Vec::new(),
         model: "auto".to_owned(),
         transport: "chat_completions compatibility mode".to_owned(),
+        provider_endpoint: None,
         credential: Some(loongclaw_daemon::onboard_cli::OnboardingCredentialSummary {
             label: "credential source",
             value: "${OPENAI_API_KEY}".to_owned(),
@@ -5920,6 +6234,7 @@ fn onboarding_success_summary_groups_domain_outcomes_by_decision() {
         saved_provider_profiles: Vec::new(),
         model: "openai/gpt-5.1-codex".to_owned(),
         transport: "chat_completions compatibility mode".to_owned(),
+        provider_endpoint: None,
         credential: Some(loongclaw_daemon::onboard_cli::OnboardingCredentialSummary {
             label: "credential source",
             value: "${OPENAI_API_KEY}".to_owned(),
@@ -5984,6 +6299,7 @@ fn onboarding_success_summary_wraps_domain_outcomes_for_narrow_width() {
         saved_provider_profiles: Vec::new(),
         model: "openai/gpt-5.1-codex".to_owned(),
         transport: "chat_completions compatibility mode".to_owned(),
+        provider_endpoint: None,
         credential: Some(loongclaw_daemon::onboard_cli::OnboardingCredentialSummary {
             label: "credential source",
             value: "${OPENAI_API_KEY}".to_owned(),
@@ -6154,6 +6470,25 @@ fn onboard_review_lines_surface_transport_summary_for_responses_compatibility_mo
 }
 
 #[test]
+fn onboard_review_lines_surface_region_endpoint_note_for_minimax() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.kind = mvp::config::ProviderKind::Minimax;
+
+    let lines = loongclaw_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
+        &config,
+        None,
+        &[],
+        80,
+    );
+
+    assert!(
+        lines.iter().any(|line| line.contains("api.minimaxi.com"))
+            && lines.iter().any(|line| line.contains("api.minimax.io")),
+        "review screen should show the current and alternate MiniMax regional endpoints: {lines:#?}"
+    );
+}
+
+#[test]
 fn onboarding_success_summary_surfaces_transport_summary() {
     let mut config = mvp::config::LoongClawConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Deepseek;
@@ -6171,6 +6506,24 @@ fn onboarding_success_summary_surfaces_transport_summary() {
             .iter()
             .any(|line| { line == "- transport: responses compatibility mode with chat fallback" }),
         "success summary should preserve the transport mode so imported Responses configs stay explainable: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_surfaces_region_endpoint_note_for_zhipu() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.kind = mvp::config::ProviderKind::Zhipu;
+
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary =
+        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let lines =
+        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+
+    let rendered = lines.join("\n");
+    assert!(
+        rendered.contains("open.bigmodel.cn") && rendered.contains("api.z.ai"),
+        "success summary should preserve region endpoint guidance for region-sensitive providers: {lines:#?}"
     );
 }
 

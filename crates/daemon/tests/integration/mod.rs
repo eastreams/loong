@@ -32,6 +32,7 @@ mod migrate_cli;
 mod migration;
 mod onboard_cli;
 mod programmatic;
+mod runtime_capability_cli;
 mod runtime_experiment_cli;
 mod runtime_restore_cli;
 mod runtime_snapshot_cli;

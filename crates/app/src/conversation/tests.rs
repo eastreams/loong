@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use async_trait::async_trait;
 use loongclaw_contracts::{
-    Capability, ExecutionRoute, HarnessKind, MemoryPlaneError, ToolCoreRequest,
+    Capability, ExecutionRoute, HarnessKind, MemoryPlaneError, ToolCoreOutcome, ToolCoreRequest,
 };
 use loongclaw_kernel::{
     CoreMemoryAdapter, FixedClock, InMemoryAuditSink, LoongClawKernel, MemoryCoreOutcome,
@@ -31,6 +31,8 @@ use crate::acp::{
 use crate::memory::MEMORY_OP_WINDOW;
 #[cfg(feature = "memory-sqlite")]
 use crate::memory::runtime_config::MemoryRuntimeConfig;
+#[cfg(feature = "memory-sqlite")]
+use crate::session::repository::{NewSessionRecord, SessionKind, SessionRepository, SessionState};
 
 struct FakeRuntime {
     seed_messages: Vec<Value>,
@@ -60,6 +62,10 @@ struct FakeRuntime {
     turn_calls: Mutex<usize>,
     after_turn_calls: Mutex<Vec<(String, String, String, usize)>>,
     compact_calls: Mutex<Vec<(String, usize)>>,
+    persist_failure: Option<(String, String)>,
+    prepare_subagent_spawn_result: Result<(), String>,
+    on_subagent_ended_result: Result<(), String>,
+    subagent_lifecycle_calls: Mutex<Vec<String>>,
 }
 
 enum FakeTurnResponse {
@@ -154,6 +160,35 @@ impl crate::conversation::AsyncDelegateSpawner for PanicAsyncDelegateSpawner {
 }
 
 #[cfg(feature = "memory-sqlite")]
+struct PostPrepareFailingAsyncDelegateSpawner {
+    runtime: Arc<OnceLock<Arc<FakeRuntime>>>,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[async_trait]
+impl crate::conversation::AsyncDelegateSpawner for PostPrepareFailingAsyncDelegateSpawner {
+    async fn spawn(
+        &self,
+        request: crate::conversation::AsyncDelegateSpawnRequest,
+    ) -> Result<(), String> {
+        let runtime = self
+            .runtime
+            .get()
+            .ok_or_else(|| "test_post_prepare_runtime_missing".to_owned())?;
+        super::turn_coordinator::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
+            runtime.as_ref(),
+            &request.parent_session_id,
+            &request.child_session_id,
+            ConversationRuntimeBinding::from_optional_kernel_context(
+                request.kernel_context.as_ref(),
+            ),
+            || async { Err("synthetic_post_prepare_async_spawn_failure".to_owned()) },
+        )
+        .await
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
 struct LocalChildRuntimeAsyncDelegateSpawner {
     config: LoongClawConfig,
     runtime: Arc<OnceLock<Arc<FakeRuntime>>>,
@@ -168,42 +203,55 @@ impl crate::conversation::AsyncDelegateSpawner for LocalChildRuntimeAsyncDelegat
     ) -> Result<(), String> {
         let memory_config = MemoryRuntimeConfig::from_memory_config(&self.config.memory);
         let repo = crate::session::repository::SessionRepository::new(&memory_config)?;
-        let started = repo.transition_session_with_event_if_current(
-            &request.child_session_id,
-            crate::session::repository::TransitionSessionWithEventIfCurrentRequest {
-                expected_state: crate::session::repository::SessionState::Ready,
-                next_state: crate::session::repository::SessionState::Running,
-                last_error: None,
-                event_kind: "delegate_started".to_owned(),
-                actor_session_id: Some(request.parent_session_id.clone()),
-                event_payload_json: json!({
-                    "task": request.task,
-                    "label": request.label,
-                    "timeout_seconds": request.timeout_seconds,
-                }),
-            },
-        )?;
-        if started.is_none() {
-            return Ok(());
-        }
-
         let runtime = self
             .runtime
             .get()
             .ok_or_else(|| "test_local_delegate_runtime_missing".to_owned())?;
-        let _ = super::turn_coordinator::run_started_delegate_child_turn_with_runtime(
-            &self.config,
+        super::turn_coordinator::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
             runtime.as_ref(),
-            &request.child_session_id,
             &request.parent_session_id,
-            request.label,
-            &request.task,
-            request.timeout_seconds,
+            &request.child_session_id,
             ConversationRuntimeBinding::from_optional_kernel_context(
                 request.kernel_context.as_ref(),
             ),
+            || async {
+                let started = repo.transition_session_with_event_if_current(
+                    &request.child_session_id,
+                    crate::session::repository::TransitionSessionWithEventIfCurrentRequest {
+                        expected_state: crate::session::repository::SessionState::Ready,
+                        next_state: crate::session::repository::SessionState::Running,
+                        last_error: None,
+                        event_kind: "delegate_started".to_owned(),
+                        actor_session_id: Some(request.parent_session_id.clone()),
+                        event_payload_json: json!({
+                            "task": request.task,
+                            "label": request.label,
+                            "timeout_seconds": request.timeout_seconds,
+                        }),
+                    },
+                )?;
+                if started.is_none() {
+                    return Ok(());
+                }
+
+                let _ = super::turn_coordinator::run_started_delegate_child_turn_with_runtime(
+                    &self.config,
+                    runtime.as_ref(),
+                    &request.child_session_id,
+                    &request.parent_session_id,
+                    request.label,
+                    &request.task,
+                    request.execution,
+                    request.timeout_seconds,
+                    ConversationRuntimeBinding::from_optional_kernel_context(
+                        request.kernel_context.as_ref(),
+                    ),
+                )
+                .await;
+                Ok(())
+            },
         )
-        .await;
+        .await?;
         Ok(())
     }
 }
@@ -572,6 +620,10 @@ impl FakeRuntime {
             turn_calls: Mutex::new(0),
             after_turn_calls: Mutex::new(Vec::new()),
             compact_calls: Mutex::new(Vec::new()),
+            persist_failure: None,
+            prepare_subagent_spawn_result: Ok(()),
+            on_subagent_ended_result: Ok(()),
+            subagent_lifecycle_calls: Mutex::new(Vec::new()),
         }
     }
 
@@ -603,6 +655,21 @@ impl FakeRuntime {
 
     fn with_compact_result(mut self, result: Result<(), String>) -> Self {
         self.compact_result = result;
+        self
+    }
+
+    fn with_persist_failure_on_substring(mut self, needle: &str, error: &str) -> Self {
+        self.persist_failure = Some((needle.to_owned(), error.to_owned()));
+        self
+    }
+
+    fn with_prepare_subagent_spawn_result(mut self, result: Result<(), String>) -> Self {
+        self.prepare_subagent_spawn_result = result;
+        self
+    }
+
+    fn with_on_subagent_ended_result(mut self, result: Result<(), String>) -> Self {
+        self.on_subagent_ended_result = result;
         self
     }
 
@@ -1114,6 +1181,11 @@ impl ConversationRuntime for FakeRuntime {
         content: &str,
         _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<()> {
+        if let Some((needle, error)) = self.persist_failure.as_ref()
+            && content.contains(needle)
+        {
+            return Err(error.clone());
+        }
         #[cfg(feature = "memory-sqlite")]
         if let Some(config) = self.durable_memory_config.as_ref() {
             crate::memory::append_turn_direct(session_id, role, content, config)
@@ -1160,6 +1232,36 @@ impl ConversationRuntime for FakeRuntime {
             .push((session_id.to_owned(), messages.len()));
         self.compact_result.clone()
     }
+
+    async fn prepare_subagent_spawn(
+        &self,
+        parent_session_id: &str,
+        subagent_session_id: &str,
+        _kernel_ctx: &KernelContext,
+    ) -> CliResult<()> {
+        self.subagent_lifecycle_calls
+            .lock()
+            .expect("subagent lifecycle calls lock")
+            .push(format!(
+                "prepare_subagent_spawn:{parent_session_id}:{subagent_session_id}"
+            ));
+        self.prepare_subagent_spawn_result.clone()
+    }
+
+    async fn on_subagent_ended(
+        &self,
+        parent_session_id: &str,
+        subagent_session_id: &str,
+        _kernel_ctx: &KernelContext,
+    ) -> CliResult<()> {
+        self.subagent_lifecycle_calls
+            .lock()
+            .expect("subagent lifecycle calls lock")
+            .push(format!(
+                "on_subagent_ended:{parent_session_id}:{subagent_session_id}"
+            ));
+        self.on_subagent_ended_result.clone()
+    }
 }
 
 fn test_config() -> LoongClawConfig {
@@ -1170,7 +1272,8 @@ fn test_config() -> LoongClawConfig {
 }
 
 fn test_kernel_context(agent_id: &str) -> KernelContext {
-    crate::context::bootstrap_kernel_context(agent_id, 60).expect("bootstrap test kernel context")
+    crate::context::bootstrap_test_kernel_context(agent_id, 60)
+        .expect("bootstrap test kernel context")
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -1494,7 +1597,7 @@ async fn default_runtime_delegates_bootstrap_and_ingest_to_context_engine_with_k
         DefaultConversationRuntime::with_context_engine(RecordingLifecycleContextEngine {
             calls: calls.clone(),
         });
-    let kernel_ctx = crate::context::bootstrap_kernel_context("test-runtime-lifecycle", 60)
+    let kernel_ctx = crate::context::bootstrap_test_kernel_context("test-runtime-lifecycle", 60)
         .expect("bootstrap kernel context");
 
     let bootstrap = runtime
@@ -1531,7 +1634,7 @@ async fn default_runtime_delegates_subagent_lifecycle_to_context_engine_with_ker
         DefaultConversationRuntime::with_context_engine(RecordingLifecycleContextEngine {
             calls: calls.clone(),
         });
-    let kernel_ctx = crate::context::bootstrap_kernel_context("test-runtime-subagent", 60)
+    let kernel_ctx = crate::context::bootstrap_test_kernel_context("test-runtime-subagent", 60)
         .expect("bootstrap kernel context");
 
     runtime
@@ -1859,7 +1962,7 @@ async fn handle_turn_with_runtime_success_with_kernel_runs_lifecycle_hooks() {
         Ok("assistant-reply".to_owned()),
     );
     let coordinator = ConversationTurnCoordinator::new();
-    let kernel_ctx = crate::context::bootstrap_kernel_context("test-handle-turn-success", 60)
+    let kernel_ctx = crate::context::bootstrap_test_kernel_context("test-handle-turn-success", 60)
         .expect("bootstrap kernel context");
     let reply = coordinator
         .handle_turn_with_runtime(
@@ -4776,6 +4879,250 @@ async fn handle_turn_with_runtime_honors_configured_tool_result_summary_limit_on
     );
 }
 
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_persists_fast_lane_tool_batch_event_for_mixed_segments() {
+    let mut config = test_config();
+    config.conversation.fast_lane_max_tool_steps_per_turn = 5;
+    config
+        .conversation
+        .fast_lane_parallel_tool_execution_enabled = true;
+    config
+        .conversation
+        .fast_lane_parallel_tool_execution_max_in_flight = 2;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    crate::memory::append_turn_direct(
+        "session-fast-lane-batch-event",
+        "user",
+        "hello",
+        &memory_config,
+    )
+    .expect("append user turn");
+    crate::memory::append_turn_direct(
+        "session-fast-lane-batch-event",
+        "assistant",
+        "done",
+        &memory_config,
+    )
+    .expect("append assistant turn");
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Inspecting session state.".to_owned(),
+            tool_intents: vec![
+                provider_tool_intent(
+                    "sessions_list",
+                    json!({}),
+                    "session-fast-lane-batch-event",
+                    "turn-fast-lane-batch-event",
+                    "call-fast-lane-batch-event-1",
+                ),
+                provider_tool_intent(
+                    "sessions_list",
+                    json!({}),
+                    "session-fast-lane-batch-event",
+                    "turn-fast-lane-batch-event",
+                    "call-fast-lane-batch-event-2",
+                ),
+                provider_tool_intent(
+                    "session_status",
+                    json!({
+                        "session_id": "session-fast-lane-batch-event",
+                    }),
+                    "session-fast-lane-batch-event",
+                    "turn-fast-lane-batch-event",
+                    "call-fast-lane-batch-event-3",
+                ),
+                provider_tool_intent(
+                    "sessions_list",
+                    json!({}),
+                    "session-fast-lane-batch-event",
+                    "turn-fast-lane-batch-event",
+                    "call-fast-lane-batch-event-4",
+                ),
+                provider_tool_intent(
+                    "sessions_list",
+                    json!({}),
+                    "session-fast-lane-batch-event",
+                    "turn-fast-lane-batch-event",
+                    "call-fast-lane-batch-event-5",
+                ),
+            ],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-fast-lane-batch-event",
+            "inspect the session state and show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("mixed fast-lane batch turn should succeed");
+
+    assert!(
+        reply.contains("[ok] "),
+        "raw tool output request should preserve tool output, got: {reply}"
+    );
+
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    let payloads =
+        persisted_conversation_event_payloads_by_name(&persisted, "fast_lane_tool_batch");
+    assert_eq!(payloads.len(), 1, "expected one fast-lane batch event");
+
+    let payload = &payloads[0];
+    assert_eq!(payload["schema_version"], 1);
+    assert_eq!(payload["total_intents"], 5);
+    assert_eq!(payload["parallel_execution_enabled"], true);
+    assert_eq!(payload["parallel_execution_max_in_flight"], 2);
+    assert_eq!(payload["parallel_safe_intents"], 4);
+    assert_eq!(payload["serial_only_intents"], 1);
+    assert_eq!(payload["parallel_segments"], 2);
+    assert_eq!(payload["sequential_segments"], 1);
+
+    let segments = payload["segments"].as_array().expect("segments array");
+    assert_eq!(
+        segments.len(),
+        3,
+        "expected contiguous mixed-batch segments"
+    );
+    assert_eq!(segments[0]["segment_index"], 0);
+    assert_eq!(segments[0]["scheduling_class"], "parallel_safe");
+    assert_eq!(segments[0]["execution_mode"], "parallel");
+    assert_eq!(segments[0]["intent_count"], 2);
+    assert_eq!(segments[1]["segment_index"], 1);
+    assert_eq!(segments[1]["scheduling_class"], "serial_only");
+    assert_eq!(segments[1]["execution_mode"], "sequential");
+    assert_eq!(segments[1]["intent_count"], 1);
+    assert_eq!(segments[2]["segment_index"], 2);
+    assert_eq!(segments[2]["scheduling_class"], "parallel_safe");
+    assert_eq!(segments[2]["execution_mode"], "parallel");
+    assert_eq!(segments[2]["intent_count"], 2);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_fast_lane_batch_persist_failure_surfaces_runtime_audit() {
+    let mut config = test_config();
+    config.conversation.fast_lane_max_tool_steps_per_turn = 5;
+    config
+        .conversation
+        .fast_lane_parallel_tool_execution_enabled = true;
+    config
+        .conversation
+        .fast_lane_parallel_tool_execution_max_in_flight = 2;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    crate::memory::append_turn_direct(
+        "session-fast-lane-batch-persist-failure",
+        "user",
+        "hello",
+        &memory_config,
+    )
+    .expect("append user turn");
+    crate::memory::append_turn_direct(
+        "session-fast-lane-batch-persist-failure",
+        "assistant",
+        "done",
+        &memory_config,
+    )
+    .expect("append assistant turn");
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Inspecting session state.".to_owned(),
+            tool_intents: vec![
+                provider_tool_intent(
+                    "sessions_list",
+                    json!({}),
+                    "session-fast-lane-batch-persist-failure",
+                    "turn-fast-lane-batch-persist-failure",
+                    "call-fast-lane-batch-persist-failure-1",
+                ),
+                provider_tool_intent(
+                    "session_status",
+                    json!({
+                        "session_id": "session-fast-lane-batch-persist-failure",
+                    }),
+                    "session-fast-lane-batch-persist-failure",
+                    "turn-fast-lane-batch-persist-failure",
+                    "call-fast-lane-batch-persist-failure-2",
+                ),
+            ],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    )
+    .with_persist_failure_on_substring(
+        "\"event\":\"fast_lane_tool_batch\"",
+        "fast-lane batch persist failed",
+    );
+
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let (kernel_ctx, _invocations) = build_kernel_context(audit.clone());
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-fast-lane-batch-persist-failure",
+            "inspect the session state and show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("fast-lane turn should still succeed when batch event persistence fails");
+
+    assert!(
+        reply.contains("[ok] "),
+        "raw tool output request should preserve tool output, got: {reply}"
+    );
+
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    let payloads =
+        persisted_conversation_event_payloads_by_name(&persisted, "fast_lane_tool_batch");
+    assert!(
+        payloads.is_empty(),
+        "failed fast-lane batch persistence should not leave a partial event"
+    );
+
+    let runtime_ops = audit
+        .snapshot()
+        .iter()
+        .filter_map(|event| {
+            if let loongclaw_kernel::AuditEventKind::PlaneInvoked {
+                plane,
+                primary_adapter,
+                operation,
+                ..
+            } = &event.kind
+                && *plane == loongclaw_contracts::ExecutionPlane::Runtime
+            {
+                Some((primary_adapter.to_owned(), operation.to_owned()))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        runtime_ops.iter().any(|(adapter, operation)| {
+            adapter == "conversation.fast_lane"
+                && operation == "conversation.fast_lane.fast_lane_tool_batch_persist_failed"
+        }),
+        "expected fast-lane batch persistence failure audit event, got: {runtime_ops:?}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_honors_configured_tool_result_summary_limit_on_safe_lane_plan() {
     use crate::test_support::TurnTestHarness;
@@ -4898,6 +5245,150 @@ async fn handle_turn_with_runtime_safe_lane_honors_configured_tool_step_budget()
     assert!(
         !reply.contains("max_tool_steps_exceeded"),
         "safe lane should not hit max_tool_steps after config override, got: {reply}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_safe_lane_does_not_parallelize_fast_lane_batches_when_plan_path_is_disabled()
+ {
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+    use loongclaw_kernel::CoreToolAdapter;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use tokio::time::Duration;
+
+    struct OverlapDetectingToolAdapter {
+        in_flight: Arc<AtomicUsize>,
+        overlap_observed: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl CoreToolAdapter for OverlapDetectingToolAdapter {
+        fn name(&self) -> &str {
+            "overlap-detecting-tools"
+        }
+
+        async fn execute_core_tool(
+            &self,
+            request: ToolCoreRequest,
+        ) -> Result<ToolCoreOutcome, loongclaw_contracts::ToolPlaneError> {
+            let active = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            if active > 1 {
+                self.overlap_observed.store(true, Ordering::SeqCst);
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "path": request.payload.get("path").cloned().unwrap_or(Value::Null),
+                }),
+            })
+        }
+    }
+
+    let overlap_observed = Arc::new(AtomicBool::new(false));
+    let in_flight = Arc::new(AtomicUsize::new(0));
+
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongClawKernel::with_runtime(
+        StaticPolicyEngine::default(),
+        clock,
+        Arc::new(InMemoryAuditSink::default()),
+    );
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+    kernel.register_core_tool_adapter(OverlapDetectingToolAdapter {
+        in_flight: in_flight.clone(),
+        overlap_observed: overlap_observed.clone(),
+    });
+    kernel
+        .set_default_core_tool_adapter("overlap-detecting-tools")
+        .expect("set default core tool adapter");
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+    let kernel_ctx = KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Executing deployment checks.".to_owned(),
+            tool_intents: vec![
+                provider_tool_intent(
+                    "file.read",
+                    json!({"path": "first.md"}),
+                    "session-safe-fast-lane-gating",
+                    "turn-safe-fast-lane-gating",
+                    "call-safe-fast-lane-gating-1",
+                ),
+                provider_tool_intent(
+                    "file.read",
+                    json!({"path": "second.md"}),
+                    "session-safe-fast-lane-gating",
+                    "turn-safe-fast-lane-gating",
+                    "call-safe-fast-lane-gating-2",
+                ),
+            ],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+
+    let mut config = test_config();
+    config.conversation.safe_lane_plan_execution_enabled = false;
+    config.conversation.safe_lane_max_tool_steps_per_turn = 2;
+    config
+        .conversation
+        .fast_lane_parallel_tool_execution_enabled = true;
+    config
+        .conversation
+        .fast_lane_parallel_tool_execution_max_in_flight = 2;
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-safe-fast-lane-gating",
+            "deploy to production with secret token and show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("safe lane turn should complete without fast-lane parallel execution");
+
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    let checkpoint_payloads =
+        persisted_conversation_event_payloads_by_name(&persisted, "turn_checkpoint");
+    assert_eq!(
+        checkpoint_payloads.last().expect("turn_checkpoint payload")["checkpoint"]["lane"]["lane"],
+        "safe"
+    );
+    assert!(
+        reply
+            .lines()
+            .filter(|line| line.starts_with("[ok] "))
+            .count()
+            == 2,
+        "expected raw tool output for both tool calls, got: {reply}"
+    );
+    assert!(
+        !overlap_observed.load(Ordering::SeqCst),
+        "safe lane should not reuse fast-lane parallel execution"
     );
 }
 
@@ -7245,6 +7736,690 @@ async fn turn_engine_routes_direct_binding_to_app_dispatcher() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_engine_fails_closed_before_governed_approval_for_later_app_intent() {
+    use async_trait::async_trait;
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+
+    #[derive(Default)]
+    struct ApprovalBarrierDispatcher {
+        executed: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl crate::conversation::AppToolDispatcher for ApprovalBarrierDispatcher {
+        async fn maybe_require_approval(
+            &self,
+            _session_context: &crate::conversation::SessionContext,
+            _intent: &crate::conversation::ToolIntent,
+            descriptor: &crate::tools::ToolDescriptor,
+            _kernel_ctx: Option<&crate::KernelContext>,
+        ) -> Result<Option<crate::conversation::turn_engine::ApprovalRequirement>, String> {
+            if descriptor.name == "delegate_async" {
+                return Ok(Some(
+                    crate::conversation::turn_engine::ApprovalRequirement {
+                        kind:
+                            crate::conversation::turn_engine::ApprovalRequirementKind::GovernedTool,
+                        reason: "operator approval required before running `delegate_async`"
+                            .to_owned(),
+                        rule_id: "governed_tool_requires_approval".to_owned(),
+                        tool_name: Some("delegate_async".to_owned()),
+                        approval_key: Some("tool:delegate_async".to_owned()),
+                        approval_request_id: Some("apr-test-approval-barrier".to_owned()),
+                    },
+                ));
+            }
+            Ok(None)
+        }
+
+        async fn execute_app_tool(
+            &self,
+            _session_context: &crate::conversation::SessionContext,
+            request: ToolCoreRequest,
+            _binding: crate::conversation::ConversationRuntimeBinding<'_>,
+        ) -> Result<ToolCoreOutcome, String> {
+            self.executed
+                .lock()
+                .expect("dispatcher executed lock")
+                .push(request.tool_name.clone());
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "tool_name": request.tool_name,
+                }),
+            })
+        }
+    }
+
+    let dispatcher = ApprovalBarrierDispatcher::default();
+    let engine = TurnEngine::new(2);
+    let turn = ProviderTurn {
+        assistant_text: "".to_owned(),
+        tool_intents: vec![
+            provider_tool_intent(
+                "sessions_list",
+                json!({}),
+                "root-session",
+                "turn-approval-barrier",
+                "call-approval-barrier-1",
+            ),
+            provider_tool_intent(
+                "delegate_async",
+                json!({
+                    "task": "inspect child task"
+                }),
+                "root-session",
+                "turn-approval-barrier",
+                "call-approval-barrier-2",
+            ),
+        ],
+        raw_meta: Value::Null,
+    };
+    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
+
+    let result = engine
+        .execute_turn_in_context(
+            &turn,
+            &session_context,
+            &dispatcher,
+            crate::conversation::ConversationRuntimeBinding::direct(),
+            None,
+        )
+        .await;
+
+    match result {
+        TurnResult::NeedsApproval(requirement) => {
+            assert_eq!(requirement.tool_name.as_deref(), Some("delegate_async"));
+            assert_eq!(
+                requirement.approval_request_id.as_deref(),
+                Some("apr-test-approval-barrier")
+            );
+        }
+        other @ TurnResult::FinalText(_)
+        | other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected NeedsApproval, got: {other:?}")
+        }
+    }
+
+    assert!(
+        dispatcher
+            .executed
+            .lock()
+            .expect("dispatcher executed lock")
+            .is_empty(),
+        "batch should fail closed before any earlier app tool executes"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_engine_fails_closed_before_kernel_binding_error_for_later_core_intent() {
+    use async_trait::async_trait;
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+
+    #[derive(Default)]
+    struct KernelBarrierDispatcher {
+        executed: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl crate::conversation::AppToolDispatcher for KernelBarrierDispatcher {
+        async fn execute_app_tool(
+            &self,
+            _session_context: &crate::conversation::SessionContext,
+            request: ToolCoreRequest,
+            _binding: crate::conversation::ConversationRuntimeBinding<'_>,
+        ) -> Result<ToolCoreOutcome, String> {
+            self.executed
+                .lock()
+                .expect("dispatcher executed lock")
+                .push(request.tool_name.clone());
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "tool_name": request.tool_name,
+                }),
+            })
+        }
+    }
+
+    let dispatcher = KernelBarrierDispatcher::default();
+    let engine = TurnEngine::new(2);
+    let turn = ProviderTurn {
+        assistant_text: "".to_owned(),
+        tool_intents: vec![
+            provider_tool_intent(
+                "sessions_list",
+                json!({}),
+                "root-session",
+                "turn-kernel-barrier",
+                "call-kernel-barrier-1",
+            ),
+            provider_tool_intent(
+                "file.read",
+                json!({
+                    "path": "README.md"
+                }),
+                "root-session",
+                "turn-kernel-barrier",
+                "call-kernel-barrier-2",
+            ),
+        ],
+        raw_meta: Value::Null,
+    };
+    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
+
+    let result = engine
+        .execute_turn_in_context(
+            &turn,
+            &session_context,
+            &dispatcher,
+            crate::conversation::ConversationRuntimeBinding::direct(),
+            None,
+        )
+        .await;
+
+    match result {
+        TurnResult::ToolDenied(failure) => {
+            assert_eq!(failure.code.as_str(), "no_kernel_context");
+            assert_eq!(failure.reason.as_str(), "no_kernel_context");
+        }
+        other @ TurnResult::FinalText(_)
+        | other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected ToolDenied(no_kernel_context), got: {other:?}")
+        }
+    }
+
+    assert!(
+        dispatcher
+            .executed
+            .lock()
+            .expect("dispatcher executed lock")
+            .is_empty(),
+        "batch should fail closed before any earlier app tool executes"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_engine_parallel_safe_app_batch_executes_concurrently_in_source_order() {
+    use async_trait::async_trait;
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use tokio::time::Duration;
+
+    #[derive(Default)]
+    struct ParallelSafeDispatcher {
+        overlap_observed: AtomicBool,
+        in_flight: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl crate::conversation::AppToolDispatcher for ParallelSafeDispatcher {
+        async fn execute_app_tool(
+            &self,
+            _session_context: &crate::conversation::SessionContext,
+            request: ToolCoreRequest,
+            _binding: crate::conversation::ConversationRuntimeBinding<'_>,
+        ) -> Result<ToolCoreOutcome, String> {
+            let marker = request
+                .payload
+                .get("marker")
+                .and_then(Value::as_str)
+                .expect("marker should be present");
+
+            let active = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            if active > 1 {
+                self.overlap_observed.store(true, Ordering::SeqCst);
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "marker": marker,
+                    "tool_name": request.tool_name,
+                }),
+            })
+        }
+    }
+
+    let dispatcher = ParallelSafeDispatcher::default();
+    let engine = TurnEngine::with_parallel_tool_execution(2, 2_048, true, 2);
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![
+            provider_tool_intent(
+                "sessions_list",
+                json!({
+                    "marker": "first",
+                }),
+                "root-session",
+                "turn-parallel-safe-batch",
+                "call-parallel-safe-batch-1",
+            ),
+            provider_tool_intent(
+                "sessions_list",
+                json!({
+                    "marker": "second",
+                }),
+                "root-session",
+                "turn-parallel-safe-batch",
+                "call-parallel-safe-batch-2",
+            ),
+        ],
+        raw_meta: Value::Null,
+    };
+    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
+
+    let result = engine
+        .execute_turn_in_context(
+            &turn,
+            &session_context,
+            &dispatcher,
+            crate::conversation::ConversationRuntimeBinding::direct(),
+            None,
+        )
+        .await;
+
+    match result {
+        TurnResult::FinalText(text) => {
+            let lines = text.lines().collect::<Vec<_>>();
+            assert_eq!(lines.len(), 2, "expected one line per tool result");
+
+            let first_envelope = lines[0]
+                .strip_prefix("[ok] ")
+                .map(|payload| {
+                    serde_json::from_str::<Value>(payload)
+                        .expect("first tool result envelope should be json")
+                })
+                .expect("first line should keep [ok] prefix");
+            let second_envelope = lines[1]
+                .strip_prefix("[ok] ")
+                .map(|payload| {
+                    serde_json::from_str::<Value>(payload)
+                        .expect("second tool result envelope should be json")
+                })
+                .expect("second line should keep [ok] prefix");
+
+            assert!(
+                first_envelope["payload_summary"]
+                    .as_str()
+                    .expect("first payload summary should be text")
+                    .contains("\"marker\":\"first\""),
+                "expected first output to stay in source order, got: {text}"
+            );
+            assert!(
+                second_envelope["payload_summary"]
+                    .as_str()
+                    .expect("second payload summary should be text")
+                    .contains("\"marker\":\"second\""),
+                "expected second output to stay in source order, got: {text}"
+            );
+        }
+        other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected FinalText, got: {other:?}")
+        }
+    }
+
+    assert!(
+        dispatcher.overlap_observed.load(Ordering::SeqCst),
+        "parallel-safe batch should overlap execution before finalizing source-ordered output"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_engine_parallel_safe_app_batch_returns_failure_without_waiting_for_in_flight_work() {
+    use async_trait::async_trait;
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use tokio::time::Duration;
+
+    #[derive(Default)]
+    struct ParallelFailureDispatcher {
+        slow_completed: AtomicBool,
+        slow_started: AtomicBool,
+        in_flight: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl crate::conversation::AppToolDispatcher for ParallelFailureDispatcher {
+        async fn execute_app_tool(
+            &self,
+            _session_context: &crate::conversation::SessionContext,
+            request: ToolCoreRequest,
+            _binding: crate::conversation::ConversationRuntimeBinding<'_>,
+        ) -> Result<ToolCoreOutcome, String> {
+            let marker = request
+                .payload
+                .get("marker")
+                .and_then(Value::as_str)
+                .expect("marker should be present");
+
+            match marker {
+                "slow" => {
+                    self.slow_started.store(true, Ordering::SeqCst);
+                    self.in_flight.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    self.slow_completed.store(true, Ordering::SeqCst);
+                    Ok(ToolCoreOutcome {
+                        status: "ok".to_owned(),
+                        payload: json!({
+                            "marker": marker,
+                            "tool_name": request.tool_name,
+                        }),
+                    })
+                }
+                "fail" => {
+                    while !self.slow_started.load(Ordering::SeqCst) {
+                        tokio::task::yield_now().await;
+                    }
+                    Err("parallel batch failure".to_owned())
+                }
+                other => panic!("unexpected marker `{other}`"),
+            }
+        }
+    }
+
+    let dispatcher = ParallelFailureDispatcher::default();
+    let engine = TurnEngine::with_parallel_tool_execution(2, 2_048, true, 2);
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![
+            provider_tool_intent(
+                "sessions_list",
+                json!({
+                    "marker": "slow",
+                }),
+                "root-session",
+                "turn-parallel-safe-batch-failure",
+                "call-parallel-safe-batch-failure-1",
+            ),
+            provider_tool_intent(
+                "sessions_list",
+                json!({
+                    "marker": "fail",
+                }),
+                "root-session",
+                "turn-parallel-safe-batch-failure",
+                "call-parallel-safe-batch-failure-2",
+            ),
+        ],
+        raw_meta: Value::Null,
+    };
+    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
+
+    let result = engine
+        .execute_turn_in_context(
+            &turn,
+            &session_context,
+            &dispatcher,
+            crate::conversation::ConversationRuntimeBinding::direct(),
+            None,
+        )
+        .await;
+
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    match result {
+        TurnResult::ToolError(failure) => {
+            assert_eq!(failure.code.as_str(), "app_tool_execution_failed");
+            assert!(
+                failure.reason.contains("parallel batch failure"),
+                "unexpected failure reason: {:?}",
+                failure.reason
+            );
+        }
+        other @ TurnResult::FinalText(_)
+        | other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected ToolError(app_tool_execution_failed), got: {other:?}")
+        }
+    }
+
+    assert!(
+        !dispatcher.slow_completed.load(Ordering::SeqCst),
+        "parallel batch should cancel in-flight work once a deterministic failure is known"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_engine_mixed_batch_parallelizes_parallel_safe_segments_without_crossing_serial_only_boundaries()
+ {
+    use async_trait::async_trait;
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use tokio::time::Duration;
+
+    #[derive(Default)]
+    struct SegmentedParallelDispatcher {
+        first_segment_overlap: AtomicBool,
+        second_segment_overlap: AtomicBool,
+        serial_started_before_first_segment_completed: AtomicBool,
+        second_segment_started_before_serial_completed: AtomicBool,
+        first_segment_completed: AtomicUsize,
+        serial_completed: AtomicBool,
+        first_segment_in_flight: AtomicUsize,
+        second_segment_in_flight: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl crate::conversation::AppToolDispatcher for SegmentedParallelDispatcher {
+        async fn execute_app_tool(
+            &self,
+            _session_context: &crate::conversation::SessionContext,
+            request: ToolCoreRequest,
+            _binding: crate::conversation::ConversationRuntimeBinding<'_>,
+        ) -> Result<ToolCoreOutcome, String> {
+            let marker = request
+                .payload
+                .get("marker")
+                .and_then(Value::as_str)
+                .expect("marker should be present");
+
+            match marker {
+                "p1a" => {
+                    let active = self.first_segment_in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    if active > 1 {
+                        self.first_segment_overlap.store(true, Ordering::SeqCst);
+                    }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                    self.first_segment_in_flight.fetch_sub(1, Ordering::SeqCst);
+                    self.first_segment_completed.fetch_add(1, Ordering::SeqCst);
+                }
+                "p1b" => {
+                    let active = self.first_segment_in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    if active > 1 {
+                        self.first_segment_overlap.store(true, Ordering::SeqCst);
+                    }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                    self.first_segment_in_flight.fetch_sub(1, Ordering::SeqCst);
+                    self.first_segment_completed.fetch_add(1, Ordering::SeqCst);
+                }
+                "serial" => {
+                    if self.first_segment_completed.load(Ordering::SeqCst) < 2 {
+                        self.serial_started_before_first_segment_completed
+                            .store(true, Ordering::SeqCst);
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    self.serial_completed.store(true, Ordering::SeqCst);
+                }
+                "p2a" => {
+                    if !self.serial_completed.load(Ordering::SeqCst) {
+                        self.second_segment_started_before_serial_completed
+                            .store(true, Ordering::SeqCst);
+                    }
+                    let active = self.second_segment_in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    if active > 1 {
+                        self.second_segment_overlap.store(true, Ordering::SeqCst);
+                    }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                    self.second_segment_in_flight.fetch_sub(1, Ordering::SeqCst);
+                }
+                "p2b" => {
+                    if !self.serial_completed.load(Ordering::SeqCst) {
+                        self.second_segment_started_before_serial_completed
+                            .store(true, Ordering::SeqCst);
+                    }
+                    let active = self.second_segment_in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    if active > 1 {
+                        self.second_segment_overlap.store(true, Ordering::SeqCst);
+                    }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                    self.second_segment_in_flight.fetch_sub(1, Ordering::SeqCst);
+                }
+                other => panic!("unexpected marker `{other}`"),
+            }
+
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "marker": marker,
+                    "tool_name": request.tool_name,
+                }),
+            })
+        }
+    }
+
+    let dispatcher = SegmentedParallelDispatcher::default();
+    let engine = TurnEngine::with_parallel_tool_execution(5, 2_048, true, 2);
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![
+            provider_tool_intent(
+                "sessions_list",
+                json!({
+                    "marker": "p1a",
+                }),
+                "root-session",
+                "turn-segmented-parallel-batch",
+                "call-segmented-parallel-batch-1",
+            ),
+            provider_tool_intent(
+                "sessions_list",
+                json!({
+                    "marker": "p1b",
+                }),
+                "root-session",
+                "turn-segmented-parallel-batch",
+                "call-segmented-parallel-batch-2",
+            ),
+            provider_tool_intent(
+                "session_status",
+                json!({
+                    "session_id": "root-session",
+                    "marker": "serial",
+                }),
+                "root-session",
+                "turn-segmented-parallel-batch",
+                "call-segmented-parallel-batch-3",
+            ),
+            provider_tool_intent(
+                "sessions_list",
+                json!({
+                    "marker": "p2a",
+                }),
+                "root-session",
+                "turn-segmented-parallel-batch",
+                "call-segmented-parallel-batch-4",
+            ),
+            provider_tool_intent(
+                "sessions_list",
+                json!({
+                    "marker": "p2b",
+                }),
+                "root-session",
+                "turn-segmented-parallel-batch",
+                "call-segmented-parallel-batch-5",
+            ),
+        ],
+        raw_meta: Value::Null,
+    };
+    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
+
+    let result = engine
+        .execute_turn_in_context(
+            &turn,
+            &session_context,
+            &dispatcher,
+            crate::conversation::ConversationRuntimeBinding::direct(),
+            None,
+        )
+        .await;
+
+    match result {
+        TurnResult::FinalText(text) => {
+            let lines = text.lines().collect::<Vec<_>>();
+            assert_eq!(lines.len(), 5, "expected one line per tool result");
+            for (line, marker) in lines.iter().zip(["p1a", "p1b", "serial", "p2a", "p2b"]) {
+                let envelope = line
+                    .strip_prefix("[ok] ")
+                    .map(|payload| {
+                        serde_json::from_str::<Value>(payload)
+                            .expect("tool result envelope should be json")
+                    })
+                    .expect("line should keep [ok] prefix");
+                assert!(
+                    envelope["payload_summary"]
+                        .as_str()
+                        .expect("payload summary should be text")
+                        .contains(&format!("\"marker\":\"{marker}\"")),
+                    "expected output to stay in source order, got: {text}"
+                );
+            }
+        }
+        other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected FinalText, got: {other:?}")
+        }
+    }
+
+    assert!(
+        dispatcher.first_segment_overlap.load(Ordering::SeqCst),
+        "first parallel-safe segment should overlap instead of falling back to whole-batch serial execution"
+    );
+    assert!(
+        dispatcher.second_segment_overlap.load(Ordering::SeqCst),
+        "second parallel-safe segment should overlap instead of falling back to whole-batch serial execution"
+    );
+    assert!(
+        !dispatcher
+            .serial_started_before_first_segment_completed
+            .load(Ordering::SeqCst),
+        "serial-only intent should not start before the preceding parallel-safe segment fully completes"
+    );
+    assert!(
+        !dispatcher
+            .second_segment_started_before_serial_completed
+            .load(Ordering::SeqCst),
+        "parallel-safe segment after a serial-only intent should not start before that serial-only intent completes"
+    );
+}
+
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn default_app_tool_dispatcher_executes_session_wait_for_visible_terminal_child_session() {
@@ -9197,7 +10372,7 @@ async fn load_discovery_first_event_summary_preserves_public_kernel_context_sign
 #[cfg(not(feature = "memory-sqlite"))]
 #[tokio::test]
 async fn persist_turn_without_memory_sqlite_is_noop_with_kernel_context() {
-    let ctx = crate::context::bootstrap_kernel_context("test-agent-no-memory", 60)
+    let ctx = crate::context::bootstrap_test_kernel_context("test-agent-no-memory", 60)
         .expect("bootstrap kernel context without memory-sqlite");
     let runtime = DefaultConversationRuntime::default();
     runtime
@@ -11035,6 +12210,285 @@ async fn handle_turn_with_runtime_passes_restricted_tool_view_into_provider_requ
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
+async fn handle_turn_with_runtime_child_session_injects_runtime_narrowing_into_kernel_payload() {
+    struct EchoToolAdapter;
+
+    #[async_trait::async_trait]
+    impl loongclaw_kernel::CoreToolAdapter for EchoToolAdapter {
+        fn name(&self) -> &str {
+            "echo-tools"
+        }
+
+        async fn execute_core_tool(
+            &self,
+            request: ToolCoreRequest,
+        ) -> Result<ToolCoreOutcome, loongclaw_contracts::ToolPlaneError> {
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "tool": request.tool_name,
+                    "payload": request.payload,
+                }),
+            })
+        }
+    }
+
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-delegate-runtime", "payload-context")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.tools.delegate.child_tool_allowlist = vec!["web.fetch".to_owned()];
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    repo.create_session(NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: SessionState::Running,
+    })
+    .expect("create child session");
+    repo.append_event(crate::session::repository::NewSessionEvent {
+        session_id: "child-session".to_owned(),
+        event_kind: "delegate_started".to_owned(),
+        actor_session_id: Some("root-session".to_owned()),
+        payload_json: json!({
+            "task": "fetch docs",
+            "label": "Child",
+            "execution": {
+                "mode": "inline",
+                "depth": 1,
+                "max_depth": 2,
+                "active_children": 0,
+                "max_active_children": 3,
+                "timeout_seconds": 60,
+                "allow_shell_in_child": false,
+                "child_tool_allowlist": ["web.fetch"],
+                "kernel_bound": true,
+                "runtime_narrowing": {
+                    "web_fetch": {
+                        "allowed_domains": ["docs.example.com"],
+                        "allow_private_hosts": false
+                    },
+                    "browser": {
+                        "max_sessions": 1,
+                        "max_links": 8,
+                        "max_text_chars": 512
+                    }
+                }
+            }
+        }),
+    })
+    .expect("append delegate_started event");
+
+    let runtime = DefaultConversationRuntime::default();
+    let session_context = runtime
+        .session_context(
+            &config,
+            "child-session",
+            ConversationRuntimeBinding::direct(),
+        )
+        .expect("load child session context");
+    assert_eq!(
+        session_context
+            .runtime_narrowing
+            .as_ref()
+            .and_then(|narrowing| { narrowing.web_fetch.allowed_domains.iter().next().cloned() }),
+        Some("docs.example.com".to_owned())
+    );
+
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+    kernel.register_core_tool_adapter(EchoToolAdapter);
+    kernel
+        .set_default_core_tool_adapter("echo-tools")
+        .expect("set default tool adapter");
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+    let kernel_ctx = KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![provider_tool_intent(
+            "web.fetch",
+            json!({
+                "url": "https://outside.invalid/docs"
+            }),
+            "child-session",
+            "turn-child-runtime",
+            "call-child-runtime",
+        )],
+        raw_meta: Value::Null,
+    };
+
+    let result = TurnEngine::new(5)
+        .execute_turn_in_context(
+            &turn,
+            &session_context,
+            &DefaultAppToolDispatcher::runtime(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            None,
+        )
+        .await;
+
+    match result {
+        TurnResult::FinalText(text) => {
+            let line = text.lines().next().expect("tool result line should exist");
+            let payload = line
+                .strip_prefix("[ok] ")
+                .expect("tool result line should keep [ok] prefix");
+            let envelope: Value =
+                serde_json::from_str(payload).expect("tool result envelope should be json");
+            let payload_summary = envelope["payload_summary"]
+                .as_str()
+                .expect("payload summary should be text");
+            assert!(
+                payload_summary.contains("\"runtime_narrowing\""),
+                "expected runtime_narrowing in payload summary, got: {payload_summary}"
+            );
+            assert!(
+                payload_summary.contains("docs.example.com"),
+                "expected narrowed domain in payload summary, got: {payload_summary}"
+            );
+            assert!(
+                payload_summary.contains("\"max_sessions\":1"),
+                "expected browser max_sessions narrowing in payload summary, got: {payload_summary}"
+            );
+        }
+        other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected final text tool output, got: {other:?}")
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn session_context_preserves_child_runtime_narrowing_after_many_later_events() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-delegate-runtime", "history-retention")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    repo.create_session(NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: SessionState::Running,
+    })
+    .expect("create child session");
+    repo.append_event(crate::session::repository::NewSessionEvent {
+        session_id: "child-session".to_owned(),
+        event_kind: "delegate_started".to_owned(),
+        actor_session_id: Some("root-session".to_owned()),
+        payload_json: json!({
+            "task": "fetch docs",
+            "label": "Child",
+            "execution": {
+                "mode": "inline",
+                "depth": 1,
+                "max_depth": 2,
+                "active_children": 0,
+                "max_active_children": 3,
+                "timeout_seconds": 60,
+                "allow_shell_in_child": false,
+                "child_tool_allowlist": ["web.fetch"],
+                "kernel_bound": true,
+                "runtime_narrowing": {
+                    "web_fetch": {
+                        "allowed_domains": ["docs.example.com"],
+                        "allow_private_hosts": false
+                    },
+                    "browser": {
+                        "max_sessions": 1
+                    }
+                }
+            }
+        }),
+    })
+    .expect("append delegate_started event");
+
+    for index in 0..24 {
+        repo.append_event(crate::session::repository::NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: format!("child_progress_{index}"),
+            actor_session_id: Some("child-session".to_owned()),
+            payload_json: json!({
+                "index": index,
+            }),
+        })
+        .expect("append later child event");
+    }
+
+    let runtime = DefaultConversationRuntime::default();
+    let session_context = runtime
+        .session_context(
+            &config,
+            "child-session",
+            ConversationRuntimeBinding::direct(),
+        )
+        .expect("load child session context");
+
+    let runtime_narrowing = session_context
+        .runtime_narrowing
+        .expect("child runtime narrowing should survive later events");
+    assert_eq!(
+        runtime_narrowing.web_fetch.allowed_domains,
+        BTreeSet::from(["docs.example.com".to_owned()])
+    );
+    assert_eq!(runtime_narrowing.browser.max_sessions, Some(1));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
 async fn handle_turn_with_runtime_executes_session_tools_via_default_dispatcher() {
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
@@ -11453,6 +12907,293 @@ async fn handle_turn_with_runtime_executes_delegate_via_coordinator() {
     assert_eq!(requested.len(), 2);
     assert!(requested[0].contains("delegate"));
     assert!(!requested[1].contains("delegate"));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_kernel_delegate_calls_subagent_lifecycle_hooks() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-delegate", "kernel-lifecycle")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "Delegating.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "delegate",
+                    json!({
+                        "task": "child task",
+                        "label": "research-subtask"
+                    }),
+                    "root-session",
+                    "turn-delegate-parent",
+                    "call-delegate-parent",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Child final output".to_owned(),
+                tool_intents: vec![],
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    )
+    .with_durable_memory_config(memory_config.clone());
+    let kernel_ctx = test_kernel_context("conversation-delegate-kernel-lifecycle");
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("delegate handle turn success");
+
+    assert!(
+        reply.contains("\"tool\":\"delegate\""),
+        "expected raw delegate tool output, got: {reply}"
+    );
+
+    let child = repo
+        .list_visible_sessions("root-session")
+        .expect("list visible sessions")
+        .into_iter()
+        .find(|session| session.parent_session_id.as_deref() == Some("root-session"))
+        .expect("child session summary");
+    assert_eq!(
+        child.state,
+        crate::session::repository::SessionState::Completed
+    );
+
+    assert_eq!(
+        runtime
+            .subagent_lifecycle_calls
+            .lock()
+            .expect("subagent lifecycle calls lock")
+            .clone(),
+        vec![
+            format!("prepare_subagent_spawn:root-session:{}", child.session_id),
+            format!("on_subagent_ended:root-session:{}", child.session_id),
+        ]
+    );
+
+    let bootstrap_calls = runtime
+        .bootstrap_calls
+        .lock()
+        .expect("bootstrap calls lock")
+        .clone();
+    assert!(
+        bootstrap_calls.contains(&child.session_id),
+        "expected child kernel bootstrap call, got: {bootstrap_calls:?}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_delegate_rejects_spawn_when_prepare_subagent_spawn_fails() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-delegate", "prepare-failure")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![Ok(ProviderTurn {
+            assistant_text: "Delegating.".to_owned(),
+            tool_intents: vec![provider_tool_intent(
+                "delegate",
+                json!({
+                    "task": "child task",
+                    "label": "research-subtask"
+                }),
+                "root-session",
+                "turn-delegate-parent",
+                "call-delegate-parent",
+            )],
+            raw_meta: Value::Null,
+        })],
+        vec![],
+    )
+    .with_prepare_subagent_spawn_result(Err("synthetic_prepare_subagent_spawn_failure".to_owned()))
+    .with_durable_memory_config(memory_config.clone());
+    let kernel_ctx = test_kernel_context("conversation-delegate-prepare-failure");
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("delegate handle turn reply");
+
+    assert!(
+        reply.contains("synthetic_prepare_subagent_spawn_failure"),
+        "expected prepare_subagent_spawn failure in reply, got: {reply}"
+    );
+    assert_eq!(
+        repo.list_sessions().expect("list sessions").len(),
+        1,
+        "failed prepare_subagent_spawn should not create a child session"
+    );
+
+    let calls = runtime
+        .subagent_lifecycle_calls
+        .lock()
+        .expect("subagent lifecycle calls lock")
+        .clone();
+    assert_eq!(calls.len(), 1);
+    assert!(
+        calls[0].starts_with("prepare_subagent_spawn:root-session:delegate:"),
+        "unexpected lifecycle calls: {calls:?}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_delegate_reports_end_hook_failure_after_child_completion() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-delegate", "end-hook-failure")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "Delegating.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "delegate",
+                    json!({
+                        "task": "child task",
+                        "label": "research-subtask"
+                    }),
+                    "root-session",
+                    "turn-delegate-parent",
+                    "call-delegate-parent",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Child final output".to_owned(),
+                tool_intents: vec![],
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    )
+    .with_on_subagent_ended_result(Err("synthetic_on_subagent_ended_failure".to_owned()))
+    .with_durable_memory_config(memory_config.clone());
+    let kernel_ctx = test_kernel_context("conversation-delegate-end-hook-failure");
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("delegate handle turn reply");
+
+    assert!(
+        reply.contains("delegate_subagent_end_hook_failed: synthetic_on_subagent_ended_failure"),
+        "expected on_subagent_ended failure in reply, got: {reply}"
+    );
+
+    let child = repo
+        .list_visible_sessions("root-session")
+        .expect("list visible sessions")
+        .into_iter()
+        .find(|session| session.parent_session_id.as_deref() == Some("root-session"))
+        .expect("child session summary");
+    assert_eq!(
+        child.state,
+        crate::session::repository::SessionState::Completed
+    );
+
+    let terminal_outcome = repo
+        .load_terminal_outcome(&child.session_id)
+        .expect("load terminal outcome")
+        .expect("terminal outcome row");
+    assert_eq!(terminal_outcome.status, "ok");
+    assert_eq!(
+        terminal_outcome.payload_json["final_output"],
+        "Child final output"
+    );
+
+    assert_eq!(
+        runtime
+            .subagent_lifecycle_calls
+            .lock()
+            .expect("subagent lifecycle calls lock")
+            .clone(),
+        vec![
+            format!("prepare_subagent_spawn:root-session:{}", child.session_id),
+            format!("on_subagent_ended:root-session:{}", child.session_id),
+        ]
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -11991,6 +13732,97 @@ async fn handle_turn_with_runtime_delegate_async_queue_failure_rolls_back_child_
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
+async fn handle_turn_with_runtime_delegate_async_rejects_when_active_child_limit_is_exhausted() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-delegate-async", "active-child-limit")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.tools.delegate.max_active_children = 1;
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "child-session-existing".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Existing".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create existing child session");
+
+    let spawner = Arc::new(FakeAsyncDelegateSpawner::default());
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![Ok(ProviderTurn {
+            assistant_text: "Delegating async.".to_owned(),
+            tool_intents: vec![provider_tool_intent(
+                "delegate_async",
+                json!({
+                    "task": "child async task",
+                    "label": "async-child"
+                }),
+                "root-session",
+                "turn-delegate-async-parent",
+                "call-delegate-async-parent",
+            )],
+            raw_meta: Value::Null,
+        })],
+        vec![],
+    )
+    .with_async_delegate_spawner(spawner.clone())
+    .with_durable_memory_config(memory_config.clone());
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("delegate_async reply");
+
+    assert!(
+        reply.contains("delegate_active_children_exceeded"),
+        "expected active-child limit rejection, got: {reply}"
+    );
+    assert_eq!(
+        repo.list_visible_sessions("root-session")
+            .expect("list visible sessions")
+            .into_iter()
+            .filter(|session| session.parent_session_id.as_deref() == Some("root-session"))
+            .count(),
+        1,
+        "active-child limit rejection should not create another child session"
+    );
+    assert_eq!(
+        spawner
+            .requests
+            .lock()
+            .expect("async delegate requests lock")
+            .len(),
+        0,
+        "active-child limit rejection should happen before dispatching the async spawner"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
 async fn handle_turn_with_runtime_executes_delegate_async_via_coordinator_without_waiting() {
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
@@ -12337,6 +14169,111 @@ async fn handle_turn_with_runtime_delegate_async_spawn_failure_is_observable_aft
         .collect();
     assert!(event_kinds.contains(&"delegate_queued"));
     assert!(event_kinds.contains(&"delegate_spawn_failed"));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_kernel_delegate_async_spawn_failure_closes_lifecycle() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-delegate-async", "kernel-spawn-failed")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+
+    let runtime_ref = Arc::new(OnceLock::new());
+    let runtime = Arc::new(
+        FakeRuntime::with_turns_and_completions(
+            vec![],
+            vec![Ok(ProviderTurn {
+                assistant_text: "Delegating async.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "delegate_async",
+                    json!({
+                        "task": "child async task",
+                        "label": "async-child"
+                    }),
+                    "root-session",
+                    "turn-delegate-async-parent",
+                    "call-delegate-async-parent",
+                )],
+                raw_meta: Value::Null,
+            })],
+            vec![],
+        )
+        .with_async_delegate_spawner(Arc::new(PostPrepareFailingAsyncDelegateSpawner {
+            runtime: runtime_ref.clone(),
+        }))
+        .with_durable_memory_config(memory_config.clone()),
+    );
+    assert!(
+        runtime_ref.set(runtime.clone()).is_ok(),
+        "install runtime ref for post-prepare spawner"
+    );
+    let kernel_ctx = test_kernel_context("conversation-delegate-async-kernel-spawn-failure");
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "show raw json tool output",
+            ProviderErrorMode::Propagate,
+            runtime.as_ref(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("delegate_async reply");
+
+    assert!(
+        reply.contains("\"tool\":\"delegate_async\""),
+        "expected raw delegate_async tool output, got: {reply}"
+    );
+
+    let child = tokio::time::timeout(std::time::Duration::from_millis(500), async {
+        loop {
+            let maybe_child = repo
+                .list_visible_sessions("root-session")
+                .expect("list visible sessions")
+                .into_iter()
+                .find(|session| session.parent_session_id.as_deref() == Some("root-session"));
+            if let Some(child) = maybe_child
+                && child.state == crate::session::repository::SessionState::Failed
+            {
+                break child;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("queued delegate child should fail after spawn failure");
+
+    let calls = runtime
+        .subagent_lifecycle_calls
+        .lock()
+        .expect("subagent lifecycle calls lock")
+        .clone();
+    assert_eq!(
+        calls,
+        vec![
+            format!("prepare_subagent_spawn:root-session:{}", child.session_id),
+            format!("on_subagent_ended:root-session:{}", child.session_id),
+        ],
+        "kernel-bound async post-prepare failure should still close the prepared lifecycle"
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]
