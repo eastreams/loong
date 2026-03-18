@@ -440,18 +440,23 @@ impl ToolRuntimeConfig {
             None => narrowed.web_fetch.allow_private_hosts,
         };
 
+        let preserve_deny_all = narrowed.web_fetch.enforce_allowed_domains
+            && narrowed.web_fetch.allowed_domains.is_empty();
         if !narrowing.web_fetch.allowed_domains.is_empty() {
             narrowed.web_fetch.enforce_allowed_domains = true;
-            narrowed.web_fetch.allowed_domains = if narrowed.web_fetch.allowed_domains.is_empty() {
-                narrowing.web_fetch.allowed_domains.clone()
-            } else {
-                narrowed
-                    .web_fetch
-                    .allowed_domains
-                    .intersection(&narrowing.web_fetch.allowed_domains)
-                    .cloned()
-                    .collect()
-            };
+            if !preserve_deny_all {
+                narrowed.web_fetch.allowed_domains =
+                    if narrowed.web_fetch.allowed_domains.is_empty() {
+                        narrowing.web_fetch.allowed_domains.clone()
+                    } else {
+                        narrowed
+                            .web_fetch
+                            .allowed_domains
+                            .intersection(&narrowing.web_fetch.allowed_domains)
+                            .cloned()
+                            .collect()
+                    };
+            }
         }
         narrowed
             .web_fetch
@@ -1264,6 +1269,38 @@ mod tests {
         assert!(
             effective.web_fetch.allowed_domains.is_empty(),
             "disjoint allowlists should preserve an enforced empty intersection"
+        );
+    }
+
+    #[test]
+    fn tool_runtime_config_narrowed_preserves_existing_deny_all_allowlist() {
+        let base = ToolRuntimeConfig {
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: true,
+                allow_private_hosts: false,
+                enforce_allowed_domains: true,
+                allowed_domains: BTreeSet::new(),
+                blocked_domains: BTreeSet::new(),
+                timeout_seconds: 15,
+                max_bytes: 8_192,
+                max_redirects: 4,
+            },
+            ..ToolRuntimeConfig::default()
+        };
+        let narrowing = ToolRuntimeNarrowing {
+            web_fetch: WebFetchRuntimeNarrowing {
+                allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+                ..WebFetchRuntimeNarrowing::default()
+            },
+            ..ToolRuntimeNarrowing::default()
+        };
+
+        let effective = base.narrowed(&narrowing);
+
+        assert!(effective.web_fetch.enforce_allowed_domains);
+        assert!(
+            effective.web_fetch.allowed_domains.is_empty(),
+            "an existing fail-closed allowlist should not be widened by later narrowing"
         );
     }
 

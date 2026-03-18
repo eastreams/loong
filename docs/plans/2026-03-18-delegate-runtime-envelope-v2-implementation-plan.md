@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Add red tests for runtime-narrowed child execution
+## Task 1: Add red tests for runtime-narrowed child execution
 
 **Files:**
 - Modify: `crates/app/src/conversation/tests.rs`
@@ -43,7 +43,7 @@ payloads to self-escalate or spoof child posture.
 Run a focused delegate-runtime test and confirm it fails for the expected reason before any
 production changes.
 
-### Task 2: Implement the typed runtime-narrowing contract
+## Task 2: Implement the typed runtime-narrowing contract
 
 **Files:**
 - Modify: `crates/app/src/config/tools.rs`
@@ -76,7 +76,7 @@ The merge must be monotonic:
 
 Persist the runtime-narrowing snapshot on `ConstrainedSubagentExecution`.
 
-### Task 3: Carry child runtime narrowing into actual core-tool execution
+## Task 3: Carry child runtime narrowing into actual core-tool execution
 
 **Files:**
 - Modify: `crates/app/src/conversation/runtime.rs`
@@ -102,7 +102,7 @@ Update `execute_tool_core_with_config(...)` to derive an effective runtime confi
 
 Keep untrusted `_loongclaw` rejection behavior intact.
 
-### Task 4: Reuse the persisted contract in inspection and docs
+## Task 4: Reuse the persisted contract in inspection and docs
 
 **Files:**
 - Modify: `crates/app/src/tools/session.rs`
@@ -117,7 +117,7 @@ Update `session_status` / delegate lifecycle extraction to expose the persisted 
 
 Adjust the design or plan if testing reveals a smaller safe seam than the initial draft.
 
-### Task 5: Verify and ship
+## Task 5: Verify and ship
 
 **Files:**
 - Modify: GitHub issue / PR artifacts after code lands

@@ -139,6 +139,14 @@ impl DefaultAsyncDelegateSpawner {
 #[async_trait]
 impl AsyncDelegateSpawner for DefaultAsyncDelegateSpawner {
     async fn spawn(&self, request: AsyncDelegateSpawnRequest) -> Result<(), String> {
+        let execution_timeout_seconds = request.execution.timeout_seconds;
+        if request.timeout_seconds != execution_timeout_seconds {
+            return Err(format!(
+                "async_delegate_timeout_mismatch: request timeout {} != execution timeout {}",
+                request.timeout_seconds, execution_timeout_seconds
+            ));
+        }
+
         let repo = SessionRepository::new(&MemoryRuntimeConfig::from_memory_config(
             &self.config.memory,
         ))?;
@@ -179,7 +187,7 @@ impl AsyncDelegateSpawner for DefaultAsyncDelegateSpawner {
                     request.label,
                     &request.task,
                     request.execution,
-                    request.timeout_seconds,
+                    execution_timeout_seconds,
                     ConversationRuntimeBinding::from_optional_kernel_context(
                         request.kernel_context.as_ref(),
                     ),
