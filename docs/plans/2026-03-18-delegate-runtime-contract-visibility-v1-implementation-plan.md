@@ -1,7 +1,5 @@
 # Delegate Runtime Contract Visibility V1 Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
 **Goal:** Surface the effective delegate child runtime contract in child planning prompts without changing provider tool schema or runtime enforcement behavior.
 
 **Architecture:** Format a deterministic prompt block directly from `ToolRuntimeNarrowing`, then inject it through the existing system-prompt addition path inside `DefaultConversationRuntime::build_context(...)` only for child sessions with non-empty persisted runtime narrowing.
@@ -10,7 +8,7 @@
 
 ---
 
-### Task 1: Add failing tests for prompt contract visibility
+## Task 1: Add failing tests for prompt contract visibility
 
 **Files:**
 - Modify: `crates/app/src/conversation/tests.rs`
@@ -42,7 +40,7 @@ contains configured narrowing fields.
 Run only the new conversation/runtime and runtime-config tests and confirm they fail for the missing
 prompt-summary behavior before implementing production code.
 
-### Task 2: Implement the prompt-summary formatter
+## Task 2: Implement the prompt-summary formatter
 
 **Files:**
 - Modify: `crates/app/src/tools/runtime_config.rs`
@@ -70,7 +68,7 @@ Emit only fields that are actually narrowed:
 
 Use fixed line ordering and sorted set iteration so tests and prompt behavior stay stable.
 
-### Task 3: Inject the child contract through existing prompt rewrite logic
+## Task 3: Inject the child contract through existing prompt rewrite logic
 
 **Files:**
 - Modify: `crates/app/src/conversation/runtime.rs`
@@ -89,7 +87,7 @@ existing addition behavior remains intact.
 
 Keep the system prompt injection path unchanged apart from feeding it the merged addition text.
 
-### Task 4: Verify locally and prepare GitHub delivery
+## Task 4: Verify locally and prepare delivery
 
 **Files:**
 - Modify: GitHub issue / PR artifacts after code lands
@@ -107,7 +105,7 @@ Run:
 - `cargo test --workspace --locked`
 - `cargo test --workspace --all-features --locked`
 
-**Step 3: Prepare stacked delivery**
+**Step 3: Prepare delivery artifacts**
 
-Commit only this slice, push `feat/delegate-runtime-contract-visibility-v1`, and open a stacked PR
-against the current delegate-runtime branch with `Closes #282` in the PR body.
+Commit only this slice, push the review branch, and link the tracking issue in the PR body or
+handoff notes that deliver the change.

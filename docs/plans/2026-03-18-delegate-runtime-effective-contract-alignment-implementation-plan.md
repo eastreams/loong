@@ -1,7 +1,5 @@
 # Delegate Runtime Effective Contract Alignment Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
 **Goal:** Align delegate child prompt visibility with the same effective runtime contract that child
 tool execution enforces.
 
@@ -89,7 +87,7 @@ Preserve existing `system_prompt_addition` merging and child-only gating.
 Only replace the summary source of truth. Do not add new prompt channels or rewrite tool-view
 projection.
 
-## Task 4: Verify locally and repair GitHub delivery
+## Task 4: Verify locally and prepare delivery
 
 **Files:**
 - Modify: current branch / PR artifacts as needed
@@ -110,13 +108,8 @@ Run:
 - `./scripts/check_dep_graph.sh`
 - `diff -u CLAUDE.md AGENTS.md`
 
-**Step 3: Repair the GitHub delivery state**
+**Step 3: Prepare delivery artifacts**
 
-Because PR `#289` is closed while issue `#282` remains open:
-
-- update the current branch with the fix
-- either reopen `#289` if the branch relationship still makes sense, or create a clean replacement
-  PR with explicit traceability to `#289`
-- keep `#282` as the tracking issue
-- reflect the real verification state, including the local `check:conventions` prerequisite gap if
-  it still exists
+- update the active branch or PR with the verified fix
+- keep the tracking issue link in the delivery artifact that lands the change
+- reflect the real verification state, including any remaining prerequisites or known gaps

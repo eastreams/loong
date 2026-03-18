@@ -1885,6 +1885,7 @@ async fn default_runtime_build_context_skips_delegate_runtime_contract_for_empty
 #[tokio::test]
 async fn default_runtime_build_context_uses_effective_private_host_policy_in_delegate_contract() {
     let mut config = test_config();
+    config.tools.web.allow_private_hosts = false;
     let child_session_id = seed_delegate_child_session_with_runtime_narrowing(
         &mut config,
         "effective-private-hosts",
