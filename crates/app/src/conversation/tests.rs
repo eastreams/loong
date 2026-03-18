@@ -583,25 +583,57 @@ fn context_engine_env_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+fn turn_middleware_env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+enum ScopedEnvPrevious {
+    ContextEngine(Option<String>),
+    TurnMiddleware(Option<String>),
+}
+
 struct ScopedEnvVar {
-    previous: Option<Option<String>>,
+    previous: ScopedEnvPrevious,
 }
 
 impl ScopedEnvVar {
     fn set(key: &'static str, value: &str) -> Self {
-        assert_eq!(key, CONTEXT_ENGINE_ENV, "unexpected scoped env key");
-        let previous = Some(super::context_engine_registry::context_engine_id_from_env());
-        super::context_engine_registry::set_context_engine_env_override(Some(value));
+        let previous = match key {
+            CONTEXT_ENGINE_ENV => {
+                let previous = super::context_engine_registry::context_engine_id_from_env();
+                super::context_engine_registry::set_context_engine_env_override(Some(value));
+                ScopedEnvPrevious::ContextEngine(previous)
+            }
+            TURN_MIDDLEWARE_ENV => {
+                let previous = super::turn_middleware_registry::turn_middleware_ids_from_env()
+                    .map(|ids| ids.join(","));
+                super::turn_middleware_registry::set_turn_middleware_env_override(Some(value));
+                ScopedEnvPrevious::TurnMiddleware(previous)
+            }
+            _ => panic!("unexpected scoped env key: {key}"),
+        };
         Self { previous }
     }
 }
 
 impl Drop for ScopedEnvVar {
     fn drop(&mut self) {
-        if let Some(previous) = self.previous.as_ref() {
-            super::context_engine_registry::set_context_engine_env_override(previous.as_deref());
-        } else {
-            super::context_engine_registry::clear_context_engine_env_override();
+        match &self.previous {
+            ScopedEnvPrevious::ContextEngine(previous) => match previous {
+                Some(previous) => super::context_engine_registry::set_context_engine_env_override(
+                    Some(previous.as_str()),
+                ),
+                None => super::context_engine_registry::clear_context_engine_env_override(),
+            },
+            ScopedEnvPrevious::TurnMiddleware(previous) => match previous {
+                Some(previous) => {
+                    super::turn_middleware_registry::set_turn_middleware_env_override(Some(
+                        previous.as_str(),
+                    ))
+                }
+                None => super::turn_middleware_registry::clear_turn_middleware_env_override(),
+            },
         }
     }
 }
