@@ -1,24 +1,33 @@
-<!-- logo placeholder: replace with actual logo when available -->
-<!-- <p align="center"><img src="logo.png" alt="LoongClaw" width="200"/></p> -->
-
-<h1 align="center">LoongClaw</h1>
+# 🐉 LoongClaw - 面向垂域智能体的安全基座
 
 <p align="center">
-  <strong>Rust 优先的私有助手运行时：在稳定 Agentic OS 基座之上，提供引导式 onboarding、一次性 ask、修复优先的 doctor，以及安全可扩展的工具能力。</strong>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/loongclaw-logo-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/logo/loongclaw-logo-light.png" />
+    <img src="assets/logo/loongclaw-logo-light.png" alt="LoongClaw" width="800" />
+  </picture>
+</p>
+<h3 align="center"><em>“发轫于东，以会群友”</em></h3>
+
+<p align="center">
+  <strong>LoongClaw 是一套基于 Rust 构建的安全、可扩展、可持续演进的 Claw 基座。</strong><br/>
+  它以助手能力为起点，但目标并不停留于通用助手，而是逐步成长为面向团队的垂域智能体基础层，让人与 AI 能在真实场景中持续协作、共同进化。
 </p>
 
 <p align="center">
-  <a href="https://github.com/loongclaw-ai/loongclaw/actions/workflows/ci.yml"><img src="https://github.com/loongclaw-ai/loongclaw/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
-  <img src="https://img.shields.io/badge/rust-edition%202024-orange.svg" alt="Rust Edition 2024" />
-  <img src="https://img.shields.io/badge/version-0.1.2-yellow.svg" alt="Version: 0.1.2" />
-</p>
-
-<p align="center">
-  <a href="https://x.com/loongclawai"><img src="https://img.shields.io/badge/Follow-loongclawai-000000?logo=x&logoColor=white" alt="X" /></a>
-  <a href="https://t.me/loongclaw"><img src="https://img.shields.io/badge/Telegram-loongclaw-26A5E4?logo=telegram&logoColor=white" alt="Telegram" /></a>
-  <a href="https://discord.gg/7kSTX9mca"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white" alt="Discord" /></a>
-  <a href="https://www.reddit.com/r/LoongClaw"><img src="https://img.shields.io/badge/Reddit-r%2Floongclaw-FF4500?logo=reddit&logoColor=white" alt="Reddit" /></a>
+  <a href="https://github.com/loongclaw-ai/loongclaw/actions/workflows/ci.yml?branch=dev"><img src="https://img.shields.io/github/actions/workflow/status/loongclaw-ai/loongclaw/ci.yml?branch=dev&label=build&style=flat-square" alt="Build" /></a>
+  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License: MIT" /></a>
+  <img src="https://img.shields.io/badge/rust-edition%202024-orange.svg?style=flat-square" alt="Rust Edition 2024" />
+  <a href="https://github.com/loongclaw-ai/loongclaw/releases"><img src="https://img.shields.io/github/v/release/loongclaw-ai/loongclaw?label=version&color=yellow&include_prereleases&style=flat-square" alt="Version" /></a>
+  </br>
+  <a href="https://x.com/loongclawai"><img src="https://img.shields.io/badge/Follow-loongclawai-000000?logo=x&logoColor=white&style=flat-square" alt="X" /></a>
+  <a href="https://t.me/loongclaw"><img src="https://img.shields.io/badge/Telegram-loongclaw-26A5E4?logo=telegram&logoColor=white&style=flat-square" alt="Telegram" /></a>
+  <a href="https://discord.gg/7kSTX9mca"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white&style=flat-square" alt="Discord" /></a>
+  <a href="https://www.reddit.com/r/LoongClaw"><img src="https://img.shields.io/badge/Reddit-r%2Floongclaw-FF4500?logo=reddit&logoColor=white&style=flat-square" alt="Reddit" /></a>
+  <br/>
+  <a href="https://xhslink.com/m/1dqFqF1IKDk"><img src="https://img.shields.io/badge/Xiaohongshu-follow-FF2442?logo=xiaohongshu&logoColor=white&style=flat-square" alt="Xiaohongshu" /></a>
+  <a href="https://loongclaw.ai/feishu.jpg"><img src="https://img.shields.io/badge/Feishu-QR-3370FF?logo=lark&logoColor=white&style=flat-square" alt="Feishu QR" /></a>
+  <a href="https://loongclaw.ai/wechat.jpg"><img src="https://img.shields.io/badge/WeChat-QR-07C160?logo=wechat&logoColor=white&style=flat-square" alt="WeChat QR" /></a>
 </p>
 
 <p align="center">
@@ -27,47 +36,107 @@
 </p>
 
 <p align="center">
-  <a href="#什么是-loongclaw">简介</a> •
-  <a href="#快速开始">快速开始</a> •
-  <a href="#核心功能">功能</a> •
-  <a href="#架构概览">架构</a> •
-  <a href="#贡献">贡献</a>
+  <a href="#why-loong">为什么选择 Loong</a> •
+  <a href="#product-positioning">产品定位</a> •
+  <a href="#why-teams-build-on-loongclaw">优势</a> •
+  <a href="#quick-start">快速开始</a> •
+  <a href="#migrate-existing-setup">迁移</a> •
+  <a href="#core-capabilities">核心能力</a> •
+  <a href="#architecture-overview">架构</a> •
+  <a href="#documentation">文档</a>
 </p>
 
 ---
 
-## 什么是 LoongClaw？
+<a id="why-loong"></a>
+## 为什么选择 Loong
 
-LoongClaw 是一个基于 Rust 构建的 Agentic OS 运行时，目标是先成为一个可信、可本地运行的私有助手，再成为一个可扩展的平台。核心与业务能力保持严格分离：
+我们没有直接用“dragon”，而是选择了 **Loong**。
 
-- **内核精简稳定** -- 只负责策略、安全和审计，不包含任何额外的业务逻辑，力图保持体积精简，足以在边缘设备上运行
-- **安全边界不可逾越** -- 每个工具调用、内存操作和连接器调用都经过策略引擎管控；高风险操作需要显式人工授权
-- **业务逻辑扩展** -- provider、工具、通道、内存后端都是可替换的适配器扩展，不侵入内核
-- **多语言插件** -- 支持 Rust、WASM及任意语言的进程插件，社区可自由扩展
-- **双向可集成** -- 既能作为内核被其他系统嵌入，也能通过适配器对接外部服务
-- **面向产品的用户入口** -- `onboard`、`ask`、`chat`、`doctor`、人格、记忆档与导入能力都属于一等运行时能力
+Loong 指向的是中文语境里的“龙”。在我们的理解里，它不是一个强调征服和对抗的形象，更像是一种温和但有力量的存在：有生命力，也有分寸；有想象力，也懂得协同；愿意向上生长，也愿意与万物共处。这种气质，和我们想做的 LoongClaw 很接近。
+
+LoongClaw 不想只是做一个“更会聊天的通用 Claw”。我们更希望它能陪着个体和团队在具体场景中一起成长，慢慢成为一个真正可靠、可塑、可持续演进的智能体基座。对我们来说，Loong 不只是一个名字，也对应着一种我们希望长期坚持的做事方式：尊重差异、保持开放、平等互惠、看重长期、脚踏实地。
+
+我们希望围绕 LoongClaw 形成的社区也能保有这样的气质：少一点喧哗和姿态，多一点围绕真实问题的合作；让贡献者、用户和伙伴能够彼此信任、一起共创，把事情一件件做好。
 
 ## 赞助商
 
 <p align="center">
-  <a href="https://www.volcengine.com">
+  <a href="https://www.volcengine.com/activity/codingplan?utm_campaign=loongclaw&utm_content=loongclaw&utm_medium=devrel&utm_source=OWO&utm_term=loongclaw">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="assets/sponsors_logo/volcengine-logo-dark.png"/>
-      <img src="assets/sponsors_logo/volcengine-logo-light.png" alt="火山引擎" height="48"/>
+      <source media="(prefers-color-scheme: dark)" srcset="assets/sponsors_logo/volcengine/volcengine-logo-dark-zh.png"/>
+      <img src="assets/sponsors_logo/volcengine/volcengine-logo-light-zh.png" alt="火山引擎" height="44"/>
     </picture>
   </a>
-  <br/><br/>
-  感谢<a href="https://www.volcengine.com">火山引擎</a>对本项目的赞助支持。
+  <span>&emsp;&emsp;&emsp;</span>
+  <a href="https://www.feishu.cn">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="assets/sponsors_logo/feishu/feishu-logo-dark-zh.png"/>
+      <img src="assets/sponsors_logo/feishu/feishu-logo-light-zh.png" alt="飞书" height="44"/>
+    </picture>
+  </a>
 </p>
 
+<a id="product-positioning"></a>
+
+## 产品定位
+
+<p align="center">
+  <img src="assets/readme/loongclaw-positioning-map.svg" alt="LoongClaw 定位图" width="100%" />
+</p>
+
+### LoongClaw 今天是什么
+
+今天的 LoongClaw，已经不是一个“把模型接进 CLI”的薄壳，而是一套**基于 Rust 构建、边界清晰、可继续塑形的 Claw 基础底座**。如果只看 `onboard`、`ask`、`chat` 这些入口命令，很容易低估它；但从代码结构看，LoongClaw 已经具备了团队真正关心的多项基础能力。
+
+| 核心能力 | 当前已具备 | 为什么这件事重要 |
+|----------|--------------|------------------|
+| 治理内建 | 能力令牌、策略判定、审批请求和审计事件已经进入关键执行路径 | 更适合进入真实团队流程，而不只是单机 demo |
+| 独立执行层 | `connector`、`runtime`、`tool`、`memory` 在 kernel 内分成独立执行层，核心与扩展适配器采用统一的注册方式 | 做垂直领域能力时可以替换单个执行层，而不是反复改内核 |
+| 控制层分离 | ACP 已经是独立控制层，覆盖 backend、binding、registry、runtime、analytics、store 等模块 | 更适合承接后续路由、协作和更复杂的智能体生命周期 |
+| 上下文可定制 | context engine 已具备 `bootstrap`、`ingest`、`after_turn`、`compact_context` 和 subagent hooks | 上下文与记忆不是写死在一段段拼装的 prompt 中 |
+| 工具能力与运行时状态一致 | tool catalog 自带风险等级、审批模式和 `Runtime / Planned` 可见性 | 用户看到的能力，更接近系统此刻真的能做什么 |
+| 启动时自动探测迁移 | `onboard` 会探测 current setup、Codex config、environment 和 workspace guidance；公开迁移入口已统一为 `loongclaw migrate` | 团队不必从零开始重搭配置与长期偏好 |
+| 多通道交付 | CLI、Telegram、飞书 / Lark 都已经有类型化配置、路由和安全校验 | 它更像一个正在成型的团队产品，而不是只存在于本地终端的实验品 |
+
+这也是我们更愿意把 LoongClaw 看成“垂域智能体基础层雏形”的原因。它不是等愿景成熟之后再回头补系统骨架的临时产物，而是自诞生之日起就已经有治理边界、扩展边界和交付边界的完整产品。
+
+### 我们的愿景
+
+LoongClaw 的目标不只是个人助手。
+
+我们的愿景，是把 LoongClaw 塑造成一个**面向垂域智能体的基础层**：比通用助手更聚焦、更可控，也更适合进入真实场景和具体流程。我们希望团队能够基于稳定内核与清晰的扩展接口，通过低代码 / 零代码的方式，更快构建并持续演进自己的垂域智能体，而不是每次都从头搭系统。
+
+这个方向也不只停留在软件工作流里。再往后看，我们也关心硬件、机器人以及具身智能相关的延展空间。对我们来说，LoongClaw 的价值不单单是把模型接进聊天界面，而是逐步长成一个能够连接数字世界与真实行动的基础层。
+
+<a id="why-teams-build-on-loongclaw"></a>
+
+## 为什么团队会选择 LoongClaw
+
+如果把 LoongClaw 放到常见的 AI agent 产品中来看，它兼顾了”开箱即用的助手基座”和”可治理的垂直领域底座”两种优势，并从一开始就将两者发展过程供真正会遇到的问题提前纳入系统设计。
+
+### 设计取向横向对比
+
+| 设计取向 | 助手型产品常见做法 | 框架型产品常见做法 | LoongClaw 的选择 |
+|----------|--------------------|--------------------|------------------|
+| 起点 | 先优化单人对话体验 | 先提供高度灵活但偏空的搭建框架 | 先给出可运行的基础版本，同时提前引入团队协作所需的治理边界 |
+| 治理 | 往往依赖外围系统补策略、审批、审计 | 可以做，但通常需要二次集成 | 把 policy、approval、audit 放进关键执行路径 |
+| 扩展方式 | 常靠插件或脚本后补 | 自由度高，但容易每个团队重搭一套 | 用 plane、adapter、pack 和 channel 去做有边界的扩展 |
+| 接入方式 | 多停留在 CLI 或单一聊天入口 | 更像底层框架，本身接入方式较少 | CLI、Telegram、飞书 / Lark 已是实际可用的接入方式 |
+| 垂域演进 | 容易停在“更会聊天” | 容易停在“能搭，但要自己补很多” | 目标是在稳定 Rust 底座上持续塑造垂域智能体 |
+| 长线方向 | 以软件助手为主 | 以 orchestration 为主 | 同时为硬件、机器人与具身智能预留延展空间 |
+
+<p align="center">
+  <img src="assets/readme/loongclaw-foundation-diagram.svg" alt="LoongClaw 基座图" width="100%" />
+</p>
+
+<a id="quick-start"></a>
 ## 快速开始
 
-### 安装脚本（有 Release 时优先走预编译）
+### 安装脚本
 
-bootstrap installer 直接从仓库拉取。它会优先下载当前平台对应的 GitHub Release 预编译二进制，
-校验 SHA256，再安装 `loongclaw`，也可以直接把你带进 guided onboarding。
-
-如果仓库还没有发布第一个 release，这个安装脚本会直接给出明确提示。这种情况下请使用下面的源码安装路径。
+安装脚本会优先下载与当前平台匹配的 GitHub Release 二进制，校验 SHA256，
+安装 `loongclaw`，并在需要时直接进入引导式初始化。
 
 <details>
 <summary>Linux / macOS</summary>
@@ -87,47 +156,25 @@ pwsh $script -Onboard
 ```
 </details>
 
-可用安装参数：
-
-- `--onboard` / `-Onboard` 安装完成后直接运行 `loongclaw onboard`
-- `--version <tag>` / `-Version <tag>` 安装指定 release，而不是 `latest`
-- `--source` / `-Source` 改为从本地仓库源码构建
-- `--prefix <dir>` / `-Prefix <dir>` 指定安装目录
-
 ### 从源码构建
 
-前置条件：
-
-- Rust 稳定工具链（edition 2024）
-- `cargo` 在 PATH 中可用
-
 <details>
-<summary>Linux / macOS</summary>
+<summary>源码安装</summary>
 
 ```bash
 bash scripts/install.sh --source --onboard
 ```
-</details>
-
-<details>
-<summary>Windows (PowerShell)</summary>
 
 ```powershell
 pwsh ./scripts/install.ps1 -Source -Onboard
 ```
-</details>
-
-<details>
-<summary>手动安装 (Cargo)</summary>
 
 ```bash
 cargo install --path crates/daemon
 ```
 </details>
 
-`--onboard` 现在调用的是不带 `--force` 的 `loongclaw onboard`，因此重复执行这条 quickstart 时会先停止，而不会直接覆盖已有配置。
-
-### 5 分钟内拿到第一次回答
+### 第一次成功路径
 
 1. 运行引导式首次配置：
 
@@ -135,346 +182,49 @@ cargo install --path crates/daemon
    loongclaw onboard
    ```
 
-   当前引导流程会依次带你完成 provider、原生 prompt personality、可选 prompt
-   addendum，以及 memory profile 的选择。只有在你明确想放弃原生 prompt pack
-   时，才建议改用 `--system-prompt` 做完整的 inline override。
-   对于 MiniMax、DeepSeek 这类已经审查过默认模型的 provider，onboarding 现在会
-   预填一个显式推荐模型，而不是依赖隐藏的 runtime fallback。
-   如果模型目录探测失败且当前配置仍然使用 `model = auto`，onboarding 现在会明确
-   提示你重新运行 onboarding 并接受审查过的模型，或者显式设置
-   `provider.model` / `preferred_models`。
-   在任意 onboarding 提示处按 `Esc` 再按 `Enter`，即可在落盘前退出。
-
-   WSL 说明：CLI onboarding 可以直接在 WSL 中运行。如果你还需要依赖 `systemd`
-   的服务型流程或 Linux daemon，请使用 `0.67.6+` 的 WSL；通过 `wsl --install`
-   安装的 Ubuntu 现在默认启用 `systemd`，其他发行版则可能仍需要在
-   `/etc/wsl.conf` 中设置 `[boot] systemd=true`。
-
-2. 按 onboarding 选中的环境变量名设置 provider 凭据：
-
-   对于 OpenAI Codex 账号登录，这通常会是 `OPENAI_CODEX_OAUTH_TOKEN`；对于
-   走 API key 的 provider，则通常会是 `ARK_API_KEY` 这类 `*_API_KEY` 环境变量。
+2. 设置初始化时选中的 provider 凭据：
 
    ```bash
-   export <ENV_NAME>=...
+   export PROVIDER_API_KEY=sk-...
    ```
 
-3. 先拿到一次性回答：
+   如果你使用 Volcengine，可以直接参考下文“配置”里的示例。
+
+3. 先拿到一次回答：
 
    ```bash
    loongclaw ask --message "总结这个仓库，并告诉我最值得先做的下一步。"
    ```
 
-   在健康配置下，onboarding 和 `doctor` 现在都会直接打印这种 ask 示例，不需要先翻文档再找第一条命令。
-
-4. 需要持续会话时，再进入交互式聊天：
+4. 需要持续会话时进入：
 
    ```bash
    loongclaw chat
    ```
 
-   如果你希望这次 CLI chat 显式走 ACP，可以使用 `loongclaw chat --acp`。没有 `--acp`
-   或其他 ACP 专用 chat 参数时，普通聊天仍然保持默认的 provider/context-engine 路径。
-   现在 chat 启动页也会先给出一条具体的首个 prompt，同时把 ACP/runtime 信息压缩到更紧凑的诊断区块里。
+5. 本地健康有问题时执行：
 
-如果 onboarding / ask / chat 遇到本地健康问题，请运行 `loongclaw doctor --fix`。
-`doctor` 现在会输出下一步动作，例如凭据环境变量提示、安全修复命令，以及 ask/chat 跟进命令，而不只是状态描述。
+   ```bash
+   loongclaw doctor --fix
+   ```
 
-### 运行测试
-
-```bash
-cargo test --workspace --all-features
-```
-
-## Prompt 与 Personality
-
-LoongClaw 内置了一个原生 prompt pack，并提供三个默认 personality。它们共享同一
-套安全优先边界，只会调整语气、主动性、确认阈值和回答密度：
-
-- `calm_engineering`：严谨、直接、技术导向
-- `friendly_collab`：更友好、更协作，在有帮助时会多解释一点
-- `autonomous_executor`：更果断、主动性更高、偏执行导向
-
-交互式 onboarding 默认会先走 personality 选择；如果你确实需要完全改写 system
-prompt，可以显式传 `--system-prompt` 进入 inline override 路径。保留原生 prompt
-pack 时，还可以在 onboarding 里填写一个可选的 prompt addendum，做轻量定制而不
-必放弃内置 prompt。
-
-## Memory Profiles
-
-LoongClaw 把记忆行为和存储后端解耦。当前后端仍然是 SQLite，但 operator 已经可以
-在 onboarding 中选择三种 context injection 模式：
-
-- `window_only`：只加载最近的 sliding window
-- `window_plus_summary`：在最近窗口前加入更早轮次的摘要块
-- `profile_plus_window`：在最近窗口前注入 durable `profile_note`
-
-`profile_note` 是当前 alpha-test 中最适合迁移旧 claw 身份、长期偏好和稳定操作习惯
-的持久记忆通道，不需要再把所有长期设定都硬塞进 system prompt。
-
-## 记忆配置与记忆系统
-
-LoongClaw 现在把 `memory.system` 作为稳定的选择缝预留出来，但当前 alpha-test
-运行面仍然刻意保持 builtin-only：
-
-- `builtin` 继续由 LoongClaw 自己掌管 canonical 原始会话历史、typed canonical
-  records 和确定性的 prompt hydration。
-- 未来接入外部记忆体系时，它们会落在派生/检索层，而不是直接接管最终 prompt
-  组装权。
-- 记忆系统异常默认按 fail-open 处理，优先保住最近窗口对话体验，而不是让记忆层
-  变成隐藏的单点依赖。
-
-可用下面的运行时诊断命令查看当前选中的 system、capabilities、memory profile、
-ingest mode 以及生效中的 fail-open policy：
-
-```bash
-loongclaw list-memory-systems --json
-```
-
-## 迁移与导入
-
-LoongClaw 支持从旧 claw 工作区进行发现、规划、应用与回滚：
-
-- 不传 `--mode` 时默认使用 `plan`（仅预览，不落盘）。
-- `apply_selected` 同时兼容 `--source-id` 与别名 `--selection-id`。
-- 安全合并同样兼容 `--primary-source-id` 与别名 `--primary-selection-id`。
-- `map_external_skills` 可生成可审计、可复现的外部 skills 映射计划。
-- `apply_selected` 配合 `--apply-external-skills-plan` 可把映射结果附加到 `profile_note`。
-- 应用 external-skills 计划时，会额外写入 `.loongclaw-migration/<config>.external-skills.json` 便于审计与回放。
-
-```bash
-# 扫描并评分迁移候选源
-loongclaw migrate --mode discover --input ~/legacy-claws
-
-# 规划所有候选并给出推荐主源
-loongclaw migrate --mode plan_many --input ~/legacy-claws
-
-# 预览外部 skills 映射工件与生成的 profile addendum
-loongclaw migrate --mode map_external_skills --input ~/legacy-claws
-
-# 选择单一来源应用到目标配置
-loongclaw migrate --mode apply_selected --input ~/legacy-claws \
-  --source-id openclaw --output ~/.loongclaw/config.toml --force
-
-# 选择来源并附加外部 skills 映射结果
-loongclaw migrate --mode apply_selected --input ~/legacy-claws \
-  --source-id openclaw --output ~/.loongclaw/config.toml \
-  --apply-external-skills-plan --force
-
-# 回滚最近一次迁移 apply
-loongclaw migrate --mode rollback_last_apply --output ~/.loongclaw/config.toml
-```
-
-## External Skills 运行时安全护栏
-
-external skills 运行时采用默认安全关闭策略，必须显式开启：
-
-- `external_skills.enabled = false`（默认禁用下载/挂载）。
-- `external_skills.require_download_approval = true`（默认每次下载都需授权）。
-- 域名黑名单优先级最高，命中即拒绝。
-- 当 `allowed_domains` 非空时，仅允许白名单域名下载。
-- `external_skills.fetch` 默认拒绝 HTTP 重定向，避免静默跨域跳转。
-
-推荐配置基线：
-
-```toml
-[external_skills]
-enabled = true
-require_download_approval = true
-allowed_domains = ["skills.sh", "clawhub.io"]
-blocked_domains = ["*.evil.example"]
-auto_expose_installed = true
-```
-
-面向 agent 的工具：
-
-- `external_skills_policy`
-  - `action=get`：读取当前生效策略。
-  - `action=set`：在运行时更新开关、授权门禁、域名白/黑名单（必须带 `policy_update_approved=true`）。
-  - `action=reset`：清除运行时覆盖，回到配置文件默认值（必须带 `policy_update_approved=true`）。
-- `external_skills_fetch`
-  - 必填 `url`。
-  - 当授权门禁开启时必须传 `approval_granted=true`。
-  - 下载文件落在 `<tools.file_root>/external-skills-downloads/`。
-  - 下载前强制执行白/黑名单校验。
-- `external_skills_install`
-  - 必填本地 `path`。
-  - 支持包含 `SKILL.md` 的目录，或本地 `.tgz` / `.tar.gz` 压缩包。
-  - 默认安装到 `<tools.file_root>/external-skills-installed/`。
-- `external_skills_list`
-  - 列出当前可调用的受管 skills。
-- `external_skills_inspect`
-  - 返回已安装 skill 的元数据与预览。
-- `external_skills_invoke`
-  - 把已安装 skill 的 `SKILL.md` 指令加载进对话流程。
-- `external_skills_remove`
-  - 删除受管 skill 并更新本地索引。
-
-推荐运行时流程：
-
-1. 先用 `external_skills.fetch` 下载
-2. 再用 `external_skills.install` 安装
-3. 用 `external_skills.list` 查看
-4. 用 `external_skills.invoke` 加载指令
-
-## 核心功能
-
-**内核与安全**
-- 基于capability的策略引擎，支持令牌生命周期（发放、撤销、授权）
-- 人工审批方式：逐次授权或一次性全权模式
-- 插件安全扫描，`block_on_high` 强制拦截高风险操作
-- WASM 静态分析（文件路径、模块大小、哈希锁定、导入策略）
-- 外部配置文件完整性：校验和锁定 + ed25519 签名验证
-- JSONL SIEM 导出通道，故障时可自动阻断
-- 拒绝列表优先于所有授权
-
-**运行时与执行**
-- Core/Extension 适配器模式，四大模块（runtime、tool、memory、connector）均采用核心 + 扩展分层设计，扩展不可绕过核心
-- 基于 Wasmtime 的 WASM 运行时执行，策略驱动的资源限制
-- 进程标准 I/O 与 HTTP-JSON 桥接通道，均受协议授权保护
-- 可编程的工具编排：批处理、重试、熔断器、自适应并发
-- 自动发现 provider 和已扫描插件中的可用工具
-
-**MVP 产品层**
-- `onboard` -- 引导式首次运行，带预检诊断
-- `ask` -- 一次性助手回答后退出
-- `doctor` -- 诊断工具，可选安全修复 (`--fix`) 和机器可读输出 (`--json`)
-- `chat` -- 交互式 CLI，滑动窗口对话记忆
-- 默认可见工具：`browser.open`、`browser.extract`、`browser.click`、`web.fetch`、`shell.exec`、`file.read`、`file.write`、`external_skills_policy`
-- external-skills 生命周期工具（`external_skills.fetch/install/list/inspect/invoke/remove`）只会在 external-skills runtime 启用时对助手暴露
-- Provider：OpenAI 兼容、火山引擎自定义端点
-- 通道：CLI、Telegram 轮询、飞书加密 webhook
-- ACP 现在作为独立 control plane 建模，不再混入 provider 或 context engine
-- ACP agent 选择支持显式策略配置：
-  - `[acp] default_agent = "codex"`
-  - `[acp] allowed_agents = ["codex", "claude"]`
-  - 非 agent 前缀的会话会派生为 `agent:<selected_agent>:<session_id>`，非法 agent 前缀会被提前拒绝
-- ACP dispatch 现在也独立成策略层，而不是继续复用 `[acp].enabled`：
-  - `[acp.dispatch] enabled = true`
-  - `[acp.dispatch] conversation_routing = "all"|"agent_prefixed_only"`
-  - `[acp.dispatch] allowed_channels = ["telegram", "feishu"]`
-  - `[acp.dispatch] allowed_account_ids = ["work-bot", "lark-prod"]`
-  - `[acp.dispatch] thread_routing = "all"|"thread_only"|"root_only"`
-  - 这样可以把“ACP control plane 已启用”和“哪些普通会话默认进入 ACP”分开，后续做 mixed provider/ACP、thread binding、显式 agent 路由时不需要重写 turn 入口
-  - channel 过滤会基于底层 conversation route 计算，即使 session 已经是 `agent:<id>:` 前缀形式也不会把 `agent` 误判成 channel
-  - account 过滤和 thread/root 过滤会优先基于结构化会话地址（`channel/account/conversation/thread`）计算，再回退到兼容性的 `session_id` 解析
-- 来自 channel 的 turn 现在会先传入一个结构化会话地址（`channel/account/conversation/thread`），ACP dispatch
-  优先消费这层 typed scope，再回退到兼容性的 `session_id` 字符串解析，后续加 account/thread 级绑定策略时不需要再改 conversation/runtime 对外接口
-- ACP session 绑定现在除了 legacy `conversation_id`，还会持久化 typed
-  `binding_route_session_id`，后续做 account/thread 级 ACP 复用时不再依赖 opaque alias
-- ACP bootstrap 现在也会显式携带 typed binding scope 进入 control plane，session 复用不再只靠
-  metadata 反推
-- 当 `[acp].emit_runtime_events = true` 时，持久化的 ACP runtime 事件现在也会显式带上
-  `agent_id`，后续做按 agent 维度的观测、绑定诊断和审计时，不需要再只靠 `session_key`
-  反推 identity。同时这些事件还会保留 `routing_intent` / `routing_origin`，而 ACP session
-  状态面会保留 `activation_origin`，这样运维侧可以区分“显式请求进入 ACP”和“自动路由进入 ACP”。
-- `acp-dispatch` 现在除了给出“是否允许自动进入 ACP”的结论，还会给出允许时的自动路由来源
-  （`automatic_agent_prefixed` 或 `automatic_dispatch`），避免 operator 再去读 route 细节反推。
-
-**协议基础**
-- 类型化的传输协议与方法路由
-- 用于 stdio/pipe 集成的 JSON-line 流传输
-- 内存通道传输，支持有界队列与背压控制
-- 请求分发到处理函数前先经过授权校验
-
-**开发者体验**
-- 7 crate DAG，零循环，严格依赖方向
-- 370+ 测试，每次提交都有严格的 lint/fmt CI 检查
-- Cargo feature flags 支持模块化构建
-- 基于 spec 的确定性测试执行
-- 编程压力测试与 WASM 缓存性能的基准验收
-
-## 架构概览
-
-LoongClaw 组织为 7 个 crate 的工作空间，具有严格的依赖 DAG：
-
-```text
-contracts (leaf -- 零内部依赖)
-├── kernel --> contracts
-├── protocol (独立 leaf)
-├── app --> contracts, kernel
-├── spec --> contracts, kernel, protocol
-├── bench --> contracts, kernel, spec
-└── daemon (二进制) --> 以上全部
-```
-
-| Crate | 职责 |
-|-------|------|
-| `contracts` | 共享类型、能力模型。零依赖 -- 稳定的 ABI 接口。 |
-| `kernel` | 策略引擎、审计事件追踪、能力令牌、插件系统、集成目录、pack 边界。 |
-| `protocol` | 传输契约、类型化路由。独立 leaf crate。 |
-| `app` | Provider、工具、通道、内存、配置、对话引擎。 |
-| `spec` | 确定性测试场景执行器。 |
-| `bench` | 基准测试框架和验收执行。 |
-| `daemon` | CLI 二进制 (`loongclaw`)。将所有 crate 连接为可运行的命令。 |
-
-完整的分层执行模型（L0-L9），请参见 [ARCHITECTURE.md](ARCHITECTURE.md)。
-
-## Feature Flags
-
-所有 flag 默认通过 `mvp` 启用。你可以禁用默认值，只启用所需的模块以实现最小构建。
-
-| Flag | 描述 |
-|------|------|
-| `config-toml` | TOML 配置加载器 |
-| `memory-sqlite` | SQLite 对话记忆 |
-| `tool-browser` | `browser.open` / `browser.extract` / `browser.click` 工具 |
-| `tool-shell` | `shell.exec` 工具 |
-| `tool-file` | `file.read` / `file.write` 工具 |
-| `tool-webfetch` | `web.fetch` 工具 |
-| `channel-cli` | 交互式 CLI 通道 |
-| `channel-telegram` | Telegram 轮询适配器 |
-| `channel-feishu` | 飞书加密 webhook 适配器 |
-| `provider-openai` | OpenAI 兼容 provider |
-| `provider-volcengine` | 火山引擎自定义端点 |
-
-最小构建示例：
-
-```bash
-cargo build -p loongclaw-daemon --no-default-features --features "channel-cli,provider-openai,config-toml,memory-sqlite"
-```
-
-## 设计原则
-
-1. **内核优先** -- 所有执行路径都经过内核的能力/策略/审计系统。不存在绕过内核的隐藏路径。
-2. **不做破坏性变更** -- 新增功能只做加法，现有公开 API 签名保持不变。
-3. **默认能力管控** -- 每个操作都需要有效的 `CapabilityToken` 并匹配对应能力。
-4. **审计一切安全关键操作** -- 策略拒绝、令牌生命周期事件、模块调用都发出结构化事件。
-5. **7 crate DAG，零循环** -- 依赖方向不可协商。
-6. **测试优先** -- 没有测试覆盖的行为，视为不存在。
-7. **优先选用成熟稳定的技术** -- 选择经过验证的、可组合的依赖，而不是不透明的包。
-8. **仓库是唯一真实来源** -- 如果不在仓库里，对 agent 来说它就不存在。
-9. **自动化优先** -- 用 linter、CI 检查和 pre-commit hook，而非代码审查评论。
-10. **严格克制过度设计** -- 当前任务所需的最小复杂度就是正确的设计方向。
-
-## 文档
-
-| 文档 | 描述 |
-|------|------|
-| [架构](ARCHITECTURE.md) | Crate 结构和分层执行模型 |
-| [核心信念](docs/design-docs/core-beliefs.md) | 10 条核心工程原则 |
-| [分层内核设计](docs/design-docs/layered-kernel-design.md) | 完整 L0-L9 层规格 |
-| [路线图](docs/ROADMAP.md) | 阶段里程碑和验收标准 |
-| [产品感知](docs/PRODUCT_SENSE.md) | 当前 MVP 用户旅程和产品原则 |
-| [可靠性](docs/RELIABILITY.md) | 构建和内核不变量 |
-| [示例](examples/README.md) | Spec 文件、插件示例、基准测试 |
-| [产品规格](docs/product-specs/index.md) | onboarding、ask、doctor、渠道和 WebChat 预期等面向用户的要求 |
-| [变更日志](CHANGELOG.md) | 发布历史 |
+先把 CLI 这条基础路径走通，再继续配置其他通道。
 
 ## 配置
 
-`loongclaw onboard` 默认通过 `provider.api_key` 引用 provider 凭据，这样密钥不会直接落在配置文件里：
+`loongclaw onboard` 默认通过 `provider.api_key` 引用 provider 凭据，让密钥不直接写进配置文件：
 
 ```toml
 [provider]
 kind = "openai"
-api_key = "${PROVIDER_API_KEY}"    # 推荐的显式环境变量引用写法
+api_key = "${PROVIDER_API_KEY}"
 ```
 
-`provider.api_key` 也兼容 `$PROVIDER_API_KEY`、`env:PROVIDER_API_KEY`、`%PROVIDER_API_KEY%`，以及直接字面量写法 `api_key = "sk-..."`。
-旧格式 `api_key_env = "PROVIDER_API_KEY"` 仍然兼容，但新配置建议优先使用 `provider.api_key`。
+Volcengine Coding Plan / ARK 示例：
 
-火山 Coding Plan / ARK 示例：
+```bash
+export ARK_API_KEY=your-ark-api-key
+```
 
 ```toml
 [provider]
@@ -485,49 +235,176 @@ base_url = "https://ark.cn-beijing.volces.com"
 chat_completions_path = "/api/v3/chat/completions"
 ```
 
-`kind = "volcengine"` 已经内置了上面的火山默认 endpoint，所以只有在你希望把这些值明确写进配置时，才需要额外保留 `base_url` 和 `chat_completions_path`。
+飞书通道示例：
 
-### 工具策略
+```bash
+export FEISHU_APP_ID=cli_your_app_id
+export FEISHU_APP_SECRET=your_app_secret
+export FEISHU_VERIFICATION_TOKEN=your_verification_token
+export FEISHU_ENCRYPT_KEY=your_encrypt_key
+```
 
-Shell 执行默认采用**未知命令拒绝**策略——只有明确列入允许名单的命令才能运行。
-文件访问默认沙箱为进程工作目录。`web.fetch` 和受限 browser 工具共用同一套 SSRF 安全策略，
-仍会默认阻断 localhost、私网和特殊用途地址，除非 operator 显式放宽策略。运行时对外广告的工具列表
-也会跟随当前配置：被禁用的 browser/web/external-skills 能力不会继续出现在助手工具目录里。
+```toml
+[feishu]
+enabled = true
+receive_id_type = "chat_id"
+webhook_bind = "127.0.0.1:8080"
+webhook_path = "/feishu/events"
+allowed_chat_ids = ["oc_your_chat_id"]
+```
+
+```bash
+loongclaw feishu-serve --config ~/.loongclaw/config.toml
+```
+
+默认会读取 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_VERIFICATION_TOKEN` 和 `FEISHU_ENCRYPT_KEY`。如果你接的是 Lark，可以再加上 `domain = "lark"`。
+
+工具策略需要明确配置：
 
 ```toml
 [tools]
-shell_default_mode = "deny"                          # "deny" | "allow"
-shell_allow = ["echo", "ls", "git", "cargo"]         # 允许的命令
-shell_deny = []                                      # 硬拒绝的命令
-# file_root = "/home/user/project"                   # 默认为 CWD
+shell_default_mode = "deny"
+shell_allow = ["echo", "ls", "git", "cargo"]
 
 [tools.browser]
 enabled = true
 max_sessions = 8
-max_links = 40
-max_text_chars = 6000
 
 [tools.web]
 enabled = true
 allowed_domains = ["docs.example.com"]
 blocked_domains = ["*.internal.example"]
-max_bytes = 1048576
-timeout_seconds = 15
-max_redirects = 3
 ```
 
-验证配置：
+进一步参考：
+
+- [工具策略配置](docs/configuration/tool-policy.md)
+- [产品规格](docs/product-specs/index.md)
+- `loongclaw validate-config --config ~/.loongclaw/config.toml --json`
+
+<a id="migrate-existing-setup"></a>
+
+## 从其他 Claws 或 Agents 迁移已有设置
+
+LoongClaw 不要求用户从零开始重新配置。
+
+当前实现里，迁移有两条路径：
+
+- `onboard` 会把 current setup、Codex config、环境变量和 workspace guidance 一起纳入 starting point 探测，并给出建议起点。
+- 当你需要更明确的控制时，公开迁移入口已经统一为 `loongclaw migrate`，用于扫描、规划、选择性应用和回滚迁移结果。
+
+它的价值不只是“搬一份 config”。LoongClaw 会区分 source、给出推荐主源，并把迁移拆成 prompt、profile、external skills 等更细的 lane，而不是把历史状态整块硬覆盖到新系统里。
 
 ```bash
-loongclaw validate-config --config ~/.loongclaw/config.toml --json
+# 扫描候选迁移来源
+loongclaw migrate --mode discover --input ~/legacy-claws
+
+# 规划所有来源并给出推荐主源
+loongclaw migrate --mode plan_many --input ~/legacy-claws
+
+# 选择单一来源应用到目标配置
+loongclaw migrate --mode apply_selected --input ~/legacy-claws \
+  --source-id openclaw --output ~/.loongclaw/config.toml --force
+
+# 回滚最近一次迁移
+loongclaw migrate --mode rollback_last_apply --output ~/.loongclaw/config.toml
 ```
+
+更深一层的迁移模式还包括 `merge_profiles` 和 `map_external_skills`，分别用于多来源 profile 合并和外部 skills 工件映射。
+
+<a id="core-capabilities"></a>
+## 核心能力
+
+### 治理与受控执行
+
+- kernel 内已经有能力令牌、授权、撤销和审计事件这些治理原语
+- 工具目录自带风险等级、审批模式和运行时可见性，高风险动作可以进入审批流
+- `browser` 与 `web` 工具复用同一套受控网络边界，外部技能也默认走显式策略
+
+### 执行层与扩展接口
+
+- kernel 明确拆分 `connector`、`runtime`、`tool`、`memory` 四个 execution planes
+- 各 plane 都提供 core / extension adapter 组织方式，扩展走正门，而不是直接侵入内核
+- provider、tool、memory、channel 与 pack 可以在清晰边界上持续演化
+
+### 上下文、记忆与控制面
+
+- context engine 拥有 `bootstrap`、`ingest`、`after_turn`、`compact_context` 和 subagent lifecycle hooks
+- ACP 作为独立控制面承担 backend、binding、registry、runtime 等协同职责
+- profiles、summaries、migration 与 canonical history 一起承接长期上下文
+
+### 接入方式
+
+- CLI 是当前的主要入口，但并不是唯一的接入方式
+- Telegram 轮询与飞书 / Lark webhook 已有实际通道实现与安全校验
+- `browser`、`file`、`shell`、`web` 等工具通过运行时策略暴露，而不是散在外围脚本里
+
+## 架构概览
+
+LoongClaw 采用严格 DAG 的 7-crate Rust workspace：
+
+```text
+contracts (leaf -- zero internal deps)
+├── kernel --> contracts
+├── protocol (independent leaf)
+├── app --> contracts, kernel
+├── spec --> contracts, kernel, protocol
+├── bench --> contracts, kernel, spec
+└── daemon (binary) --> all of the above
+```
+
+| Crate | 角色 |
+|-------|------|
+| `contracts` | 稳定共享 ABI 接口 |
+| `kernel` | 策略、审计、能力、pack 与治理核心 |
+| `protocol` | 类型化传输与路由契约 |
+| `app` | 模型提供方、工具、通道、记忆与对话运行时 |
+| `spec` | 确定性执行规格 |
+| `bench` | 基准测试与门禁 |
+| `daemon` | 可运行 CLI 二进制与面向操作者的命令入口 |
+
+最重要的三条原则：
+
+- **治理优先**：策略、审批与审计原本就是架构设计的一部分，位于关键执行路径中
+- **加法式演进**：公开契约只做增量演进，保持已有集成的兼容性
+- **小内核，丰富且清晰的扩展接口**：垂直化应该发生在 adapters、packs 和产品层，而不是每次都直接改 kernel
+
+### 可插拔设计与当前落地
+
+- **小内核、强边界**：`contracts`、`kernel`、`protocol`、`app` 分层，让传输、策略、运行时和产品层逻辑各自演进，而不是彼此缠死。
+- **Core / Extension 思路**：运行时、工具、记忆、连接器都按“核心适配器 + 扩展适配器”的方向组织，扩展走正门，而不是绕过内核。
+- **控制层与执行层分离**：模型轮次、上下文组装、通道路由与 ACP 控制层分开建模，后续做更复杂的协作、路由和调度时，不必推倒对话核心重写。
+- **治理不是后补丁**：能力、策略、审批与审计从一开始就被放进关键调用路径里，而不是等接近上线时再补外围约束。
+- **今天已经可用的产品层**：`onboard`、`ask`、`chat`、`doctor`、CLI 主入口、Telegram / 飞书通道、`browser` / `file` / `shell` / `web` 工具，以及可配置的模型提供方、记忆与工具策略默认配置。
+
+更长线的插件生态与集成控制能力，确实是我们关心的方向；但在 README 里，我们更愿意把它表述成正在展开的架构能力，而不是已经完全成熟的产品现实。
+
+完整分层模型见 [ARCHITECTURE.md](ARCHITECTURE.md) 与 [Layered Kernel Design](docs/design-docs/layered-kernel-design.md)。
+
+<a id="documentation"></a>
+## 文档
+
+| 文档 | 描述 |
+|------|------|
+| [架构](ARCHITECTURE.md) | crate 地图与分层执行概览 |
+| [核心信念](docs/design-docs/core-beliefs.md) | 核心工程原则 |
+| [路线图](docs/ROADMAP.md) | 阶段里程碑与演进方向 |
+| [产品感知](docs/PRODUCT_SENSE.md) | 当前产品契约与用户路径 |
+| [产品规格](docs/product-specs/index.md) | `onboard`、`ask`、`doctor`、通道、记忆等用户侧要求 |
+| [贡献重点方向](docs/references/contribution-areas.zh-CN.md) | 当前最需要的设计、工程、文档与社区协作方向 |
+| [可靠性](docs/RELIABILITY.md) | 构建与内核不变量 |
+| [安全策略](SECURITY.md) | 安全政策与披露路径 |
+| [变更日志](CHANGELOG.md) | 发布历史 |
 
 ## 贡献
 
-欢迎贡献。完整的工作流请参见 [CONTRIBUTING.md](CONTRIBUTING.md)，
-包括贡献流程（常规 vs. 高风险变更）和添加 provider、工具、通道的指南。
+欢迎贡献。完整工作流请见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+如果你想先了解当前最需要帮助的方向，可以先看
+[Contribution Areas We Especially Welcome](docs/references/contribution-areas.zh-CN.md)。
 
 - [贡献指南](CONTRIBUTING.md)
+- [贡献重点方向](docs/references/contribution-areas.zh-CN.md)
 - [行为准则](CODE_OF_CONDUCT.md)
 - [安全政策](SECURITY.md)
 

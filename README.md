@@ -1,24 +1,33 @@
-<!-- logo placeholder: replace with actual logo when available -->
-<!-- <p align="center"><img src="logo.png" alt="LoongClaw" width="200"/></p> -->
-
-<h1 align="center">LoongClaw</h1>
+# 🐉 LoongClaw - Foundation for Vertical AI Agents
 
 <p align="center">
-  <strong>A Rust-first private assistant runtime: guided onboarding, one-shot ask, repair-first diagnostics, and safe extensible tools on top of a stable Agentic OS foundation.</strong>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/loongclaw-logo-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/logo/loongclaw-logo-light.png" />
+    <img src="assets/logo/loongclaw-logo-light.png" alt="LoongClaw" width="800" />
+  </picture>
+</p>
+<h3 align="center"><em>"Originated from the East, here to benefit the world"</em></h3>
+
+<p align="center">
+  <strong>LoongClaw is a secure, extensible, and evolvable claw baseline built in Rust.</strong><br/>
+  It starts from assistant capabilities, but it is not meant to stop at being a general assistant. Over time, it is designed to grow into a foundation for team-facing vertical agents, where people and AI can keep collaborating and evolving together.
 </p>
 
 <p align="center">
-  <a href="https://github.com/loongclaw-ai/loongclaw/actions/workflows/ci.yml"><img src="https://github.com/loongclaw-ai/loongclaw/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
-  <img src="https://img.shields.io/badge/rust-edition%202024-orange.svg" alt="Rust Edition 2024" />
-  <img src="https://img.shields.io/badge/version-0.1.2-yellow.svg" alt="Version: 0.1.2" />
-</p>
-
-<p align="center">
-  <a href="https://x.com/loongclawai"><img src="https://img.shields.io/badge/Follow-loongclawai-000000?logo=x&logoColor=white" alt="X" /></a>
-  <a href="https://t.me/loongclaw"><img src="https://img.shields.io/badge/Telegram-loongclaw-26A5E4?logo=telegram&logoColor=white" alt="Telegram" /></a>
-  <a href="https://discord.gg/7kSTX9mca"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white" alt="Discord" /></a>
-  <a href="https://www.reddit.com/r/LoongClaw"><img src="https://img.shields.io/badge/Reddit-r%2Floongclaw-FF4500?logo=reddit&logoColor=white" alt="Reddit" /></a>
+  <a href="https://github.com/loongclaw-ai/loongclaw/actions/workflows/ci.yml?branch=dev"><img src="https://img.shields.io/github/actions/workflow/status/loongclaw-ai/loongclaw/ci.yml?branch=dev&label=build&style=flat-square" alt="Build" /></a>
+  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License: MIT" /></a>
+  <img src="https://img.shields.io/badge/rust-edition%202024-orange.svg?style=flat-square" alt="Rust Edition 2024" />
+  <a href="https://github.com/loongclaw-ai/loongclaw/releases"><img src="https://img.shields.io/github/v/release/loongclaw-ai/loongclaw?label=version&color=yellow&include_prereleases&style=flat-square" alt="Version" /></a>
+  <br/>
+  <a href="https://x.com/loongclawai"><img src="https://img.shields.io/badge/Follow-loongclawai-000000?logo=x&logoColor=white&style=flat-square" alt="X" /></a>
+  <a href="https://t.me/loongclaw"><img src="https://img.shields.io/badge/Telegram-loongclaw-26A5E4?logo=telegram&logoColor=white&style=flat-square" alt="Telegram" /></a>
+  <a href="https://discord.gg/7kSTX9mca"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white&style=flat-square" alt="Discord" /></a>
+  <a href="https://www.reddit.com/r/LoongClaw"><img src="https://img.shields.io/badge/Reddit-r%2Floongclaw-FF4500?logo=reddit&logoColor=white&style=flat-square" alt="Reddit" /></a>
+  <br/>
+  <a href="https://xhslink.com/m/1dqFqF1IKDk"><img src="https://img.shields.io/badge/Xiaohongshu-follow-FF2442?logo=xiaohongshu&logoColor=white&style=flat-square" alt="Xiaohongshu" /></a>
+  <a href="https://loongclaw.ai/feishu.jpg"><img src="https://img.shields.io/badge/Feishu-QR-3370FF?logo=lark&logoColor=white&style=flat-square" alt="Feishu QR" /></a>
+  <a href="https://loongclaw.ai/wechat.jpg"><img src="https://img.shields.io/badge/WeChat-QR-07C160?logo=wechat&logoColor=white&style=flat-square" alt="WeChat QR" /></a>
 </p>
 
 <p align="center">
@@ -27,164 +36,124 @@
 </p>
 
 <p align="center">
-  <a href="#why-loongclaw">Why LoongClaw?</a> •
+  <a href="#why-loong">Why Loong</a> •
+  <a href="#product-positioning">Positioning</a> •
+  <a href="#why-teams-build-on-loongclaw">Advantages</a> •
   <a href="#quick-start">Quick Start</a> •
-  <a href="#key-features">Features</a> •
+  <a href="#migrate-existing-setup">Migration</a> •
+  <a href="#core-capabilities">Capabilities</a> •
   <a href="#architecture-overview">Architecture</a> •
-  <a href="#contributing">Contributing</a>
+  <a href="#documentation">Docs</a>
 </p>
 
 ---
 
-## Why LoongClaw?
+<a id="why-loong"></a>
+## Why Loong
 
-LoongClaw is a layered Agentic OS runtime built to feel like a trustworthy private assistant first and an extensible platform second. Core and business logic are strictly separated:
+We chose **Loong** deliberately.
 
-- **Minimal, stable core** -- handles only policy, security, and audit. No business logic in the kernel.
-- **Security cannot be bypassed** -- every tool call, memory operation, and connector invocation is gated by the policy engine. High-risk actions require explicit human authorization.
-- **Business logic lives in extension planes** -- providers, tools, channels, and memory backends are all replaceable adapters that never touch the kernel.
-- **Multi-language plugins** -- supports Rust, WASM, and process plugins in any language. The community can extend freely.
-- **Bidirectional integration** -- can be embedded as a kernel into other systems, or connect to external services via adapters.
-- **Operator-ready product layer** -- `onboard`, `ask`, `chat`, `doctor`, personalities, memory profiles, and legacy claw import are first-class runtime capabilities.
+Loong refers to the Chinese dragon. In our context, it is less about conquest or aggression and
+closer to a form of strength shaped by vitality, balance, imagination, and coexistence. That feels
+much closer to the spirit we want LoongClaw to carry.
+
+LoongClaw is not meant to stop at being another generic claw. We want it to grow with people,
+teams, and real working contexts, and over time become a reliable foundation for vertical agents.
+For us, Loong is not only a name. It also reflects the way we want to work: respect differences,
+stay open, practice reciprocity, think long-term, and stay grounded.
+
+We want the community around LoongClaw to carry the same feeling: less noise, less posturing, and
+more cooperation around real problems. If contributors, users, and partners can trust one another
+and build useful things together, that matters more to us.
 
 ## Sponsors
 
 <p align="center">
-  <a href="https://www.volcengine.com">
+  <a href="https://www.byteplus.com/en/activity/codingplan?utm_campaign=loongclaw&utm_content=loongclaw&utm_medium=devrel&utm_source=OWO&utm_term=loongclaw">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="assets/sponsors_logo/volcengine-logo-dark.png"/>
-      <img src="assets/sponsors_logo/volcengine-logo-light.png" alt="Volcengine" height="48"/>
+      <source media="(prefers-color-scheme: dark)" srcset="assets/sponsors_logo/volcengine/volcengine-logo-dark-en.png"/>
+      <img src="assets/sponsors_logo/volcengine/volcengine-logo-light-en.png" alt="Volcengine" height="44"/>
     </picture>
   </a>
-  <br/><br/>
-  Thanks to <a href="https://www.volcengine.com">Volcengine</a> for sponsoring this project.
+  <span>&emsp;&emsp;&emsp;</span>
+  <a href="https://www.feishu.cn">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="assets/sponsors_logo/feishu/feishu-logo-dark-en.png"/>
+      <img src="assets/sponsors_logo/feishu/feishu-logo-light-en.png" alt="Feishu" height="44"/>
+    </picture>
+  </a>
 </p>
 
-## Alpha-Test Highlights
+<a id="product-positioning"></a>
+## Product Positioning
 
-- `onboard` is the default first-run flow for provider, memory, and channel-ready setup.
-- `ask` gives users a one-shot assistant command for first success without entering a REPL.
-- `chat` provides an interactive CLI channel with sliding-window conversation memory.
-- `doctor` and `doctor --fix` are the explicit repair path when the local runtime is unhealthy.
-- Core tool runtime now ships bounded browser automation (`browser.open`, `browser.extract`, `browser.click`) plus `web.fetch`, `shell.exec`, `file.read`, and `file.write`.
-- Runtime tool catalogs now stay truthful to the active config: browser/web tools disappear when disabled, and external-skills lifecycle tools are only advertised when that runtime is enabled.
-- Shipped assistant surfaces today are CLI first, with Telegram polling and Feishu webhook as optional channels after the base setup is healthy.
-- Memory-system selection is now a stable builtin-only seam:
-  - config: `[memory] system = "builtin"`
-  - env: `LOONGCLAW_MEMORY_SYSTEM=builtin`
-  - the runtime keeps LoongClaw-owned canonical history and reserves concrete external adapters for
-    later dedicated tracks
-- Conversation runtime now exposes a pluggable `context engine` seam with explicit lifecycle hooks
-  (`bootstrap`, `ingest`, `assemble`, `after_turn`, `compact_context`) plus reserved subagent
-  hooks for future multi-agent orchestration.
-- Context assembly now carries richer metadata (`messages`, optional `estimated_tokens`, optional
-  `system_prompt_addition`) so policy-driven prompt shaping and compaction can evolve without
-  breaking the trait surface.
-- Context engine selection supports config and env override:
-  - config: `[conversation] context_engine = "default|legacy|<custom_id>"`
-  - env: `LOONGCLAW_CONTEXT_ENGINE=<engine_id>`
-- ACP is modeled as a separate control plane instead of being folded into provider turns or context
-  assembly.
-- Built-in `acpx` backend now supports session lifecycle, turn execution, cancellation, status
-  inspection, config patching, doctor diagnostics, and backend-local MCP server injection.
-- ACP agent selection is now an explicit control-plane policy instead of a backend heuristic:
-  - config: `[acp] default_agent = "codex"`
-  - config: `[acp] allowed_agents = ["codex", "claude"]`
-  - conversation routes now derive `session_key = agent:<selected_agent>:<session_id>` and reject
-    disallowed agent prefixes early.
-- ACP dispatch is now a separate policy seam instead of being implied by `[acp].enabled`:
-  - config: `[acp.dispatch] enabled = true`
-  - config: `[acp.dispatch] conversation_routing = "all"|"agent_prefixed_only"`
-  - config: `[acp.dispatch] allowed_channels = ["telegram", "feishu"]`
-  - config: `[acp.dispatch] allowed_account_ids = ["work-bot", "lark-prod"]`
-  - config: `[acp.dispatch] thread_routing = "all"|"thread_only"|"root_only"`
-  - this keeps “ACP control plane exists” separate from “which conversation turns default into ACP”
-    so mixed provider/ACP operation and future thread binding do not require a route-layer rewrite.
-  - channel filtering is evaluated against the underlying conversation route, even when the session
-    is already agent-prefixed.
-  - account filtering and thread/root filtering are evaluated against the typed conversation
-    address (`channel/account/conversation/thread`) when available, then fall back to legacy
-    `session_id` parsing for compatibility.
-- Channel-originated turns now pass a typed session address (`channel/account/conversation/thread`)
-  into ACP dispatch before any legacy `session_id` parsing, pre-embedding future account/thread
-  binding rules without changing the public conversation/runtime seams again.
-- ACP session bindings now persist a typed `binding_route_session_id` in addition to legacy
-  `conversation_id`, so future account/thread-scoped ACP reuse does not depend on opaque aliases.
-- ACP bootstrap now also carries an explicit typed binding scope into the control plane, so session
-  reuse does not depend on re-parsing metadata alone.
-- When `[acp].enabled = true` and ACP dispatch allows the session, CLI/channel turns route through
-  the ACP manager with stable `conversation_id` and derived `session_key`, pre-wiring future
-  persistent bindings and per-channel ACP routing without a conversation-runtime rewrite.
-- When `[acp].emit_runtime_events = true`, ACP-routed turns persist structured
-  `acp_turn_event` / `acp_turn_final` records into conversation history so daemon-side summaries
-  and future OpenClaw-style streaming or telemetry surfaces can evolve without changing the ACP
-  manager/backend seam again. Those persisted records now also carry explicit `agent_id`, so
-  observability does not need to reverse-engineer identity only from `session_key`. They also keep
-  `routing_intent` / `routing_origin`, while ACP session status surfaces keep
-  `activation_origin`, so operators can distinguish explicit ACP entry from automatic ACP routing.
-- The daemon now exposes operator-facing diagnostics for:
-  - `list-context-engines`
-  - `list-memory-systems`
-  - `list-acp-backends`
-  - `list-acp-sessions`
-  - `acp-doctor`
-  - `acp-dispatch`
-  - `acp-event-summary`
-  - `acp-status`
-  - `acp-observability`
+<p align="center">
+  <img src="assets/readme/loongclaw-positioning-map.svg" alt="LoongClaw positioning map" width="100%" />
+</p>
 
-  `acp-dispatch` now reports not only whether automatic ACP routing is allowed, but also the
-  predicted automatic routing origin (`automatic_agent_prefixed` vs `automatic_dispatch`) when the
-  session would enter ACP.
+### What LoongClaw Is Today
 
-### Runtime Introspection Commands
+LoongClaw today is no longer just a thin shell around a model endpoint. It is a **Rust-built claw
+baseline with explicit boundaries and room to keep taking shape**. If you only look at entry
+commands like `onboard`, `ask`, or `chat`, you miss the more important story: the codebase already
+contains several layers that matter to teams.
 
-```bash
-cargo run -p loongclaw-daemon --bin loongclawd -- list-models --json
-cargo run -p loongclaw-daemon --bin loongclawd -- list-context-engines --json
-cargo run -p loongclaw-daemon --bin loongclawd -- list-memory-systems --json
-cargo run -p loongclaw-daemon --bin loongclawd -- list-acp-backends --json
-cargo run -p loongclaw-daemon --bin loongclawd -- list-acp-sessions --json
-cargo run -p loongclaw-daemon --bin loongclawd -- acp-doctor --backend acpx --json
-cargo run -p loongclaw-daemon --bin loongclawd -- acp-dispatch --session opaque-session --channel feishu --conversation-id oc_123 --account-id lark-prod --thread-id om_thread_1 --json
-cargo run -p loongclaw-daemon --bin loongclawd -- acp-event-summary --session default --json
-cargo run -p loongclaw-daemon --bin loongclawd -- acp-observability --json
-# if an ACP session already exists:
-# cargo run -p loongclaw-daemon --bin loongclawd -- acp-status --conversation-id telegram:42 --json
-# cargo run -p loongclaw-daemon --bin loongclawd -- acp-status --route-session-id feishu:lark-prod:oc_123:om_thread_1 --json
-# optional ACP runtime-event persistence for summaries / future streaming:
-# [acp]
-# enabled = true
-# default_agent = "codex"
-# allowed_agents = ["codex", "claude"]
-# emit_runtime_events = true
-# [acp.dispatch]
-# enabled = true
-# conversation_routing = "all"
-# allowed_channels = ["telegram"]
-# allowed_account_ids = ["work-bot"]
-# thread_routing = "all"
-# optional env override demo:
-# LOONGCLAW_CONTEXT_ENGINE=legacy cargo run -p loongclaw-daemon --bin loongclawd -- list-context-engines --json
-```
+| Core capability | What is already real | Why it matters |
+|-----------------|----------------------|----------------|
+| Governance-native execution | capability tokens, policy decisions, approval requests, and audit events already sit in critical execution paths | this is much closer to a team system than to a single-user demo |
+| Explicit execution planes | `connector`, `runtime`, `tool`, and `memory` are separate kernel planes with symmetric core / extension registration | vertical shaping can replace planes instead of repeatedly rewriting the kernel |
+| Separate control plane | ACP already exists as its own control plane across backend, binding, registry, runtime, analytics, and store modules | future routing, collaboration, and richer agent lifecycle work have a place to live |
+| Shapeable context | the context engine already has `bootstrap`, `ingest`, `after_turn`, `compact_context`, and subagent hooks | context and memory are not hardcoded into a single prompt builder |
+| Runtime-truthful tool surface | the tool catalog carries risk classes, approval modes, and `Runtime / Planned` visibility | what users see is closer to what the system can actually do right now |
+| Migration-aware setup | `onboard` can detect current setup, Codex config, environment, and workspace guidance; the public migration CLI is now `loongclaw migrate` | teams do not have to rebuild configuration and long-lived context from scratch |
+| Multi-surface delivery | beyond CLI, Telegram and Feishu / Lark already exist as runtime-backed surfaces with typed config, routing, and security validation | the product already reaches beyond a local terminal-only experiment |
 
+That is why we increasingly describe LoongClaw as an early foundation for vertical agents. The
+governance boundary, extension boundary, and delivery boundary are already visible today.
+
+### Our Vision
+
+The vision goes well beyond a personal assistant.
+
+Our vision is to make LoongClaw a **foundation for vertical agents**: more focused than a general
+assistant, more controllable, and better suited for real team workflows. We want teams to build
+and evolve those agents faster through low-code or zero-code workflows on top of a stable core and
+explicit extension seams, instead of rebuilding the system from scratch each time.
+
+That direction does not stop at software-only agent workflows. Over time, we also care about
+hardware, robotics, and embodied intelligence as natural extensions of the same foundation. The
+goal is not only to connect models to chat surfaces, but to grow a base layer that can eventually
+bridge digital systems and real-world action.
+
+<a id="why-teams-build-on-loongclaw"></a>
+## Why Teams Build On LoongClaw
+
+If you place LoongClaw against a few common AI-agent product shapes, it sits between a runnable
+assistant baseline and a governed vertical-agent base. The important difference is that it starts
+solving team problems earlier instead of postponing them.
+
+### Design-Orientation Comparison
+
+| Design orientation | Assistant-first products | Framework-first products | LoongClaw |
+|--------------------|--------------------------|--------------------------|-----------|
+| Starting point | optimize single-user chat experience first | offer a flexible but relatively empty builder layer first | ship a runnable baseline while bringing in team-facing boundaries early |
+| Governance | often added through perimeter systems later | possible, but usually requires extra integration work | policy, approval, and audit are modeled inside critical execution paths |
+| Extension model | often grows through plugins and scripts later | highly flexible, but each team may rebuild its own stack | extend through planes, adapters, packs, and channels with clearer boundaries |
+| Delivery surfaces | often stop at CLI or a single chat UI | often thin on built-in delivery surfaces | CLI, Telegram, and Feishu / Lark are already real delivery surfaces |
+| Vertical evolution | can stall at being "a better assistant" | can stall at "you can build it yourself" | aims to keep shaping vertical agents on top of a stable Rust base |
+| Long-term edge | usually software-assistant-centric | usually orchestration-centric | leaves room for hardware, robotics, and embodied intelligence over time |
+
+<p align="center">
+  <img src="assets/readme/loongclaw-foundation-diagram.svg" alt="LoongClaw foundation diagram" width="100%" />
+</p>
+
+<a id="quick-start"></a>
 ## Quick Start
 
-### Install Script (Release-First When Available)
+### Install Script
 
-The bootstrap installer is fetched directly from the repository. It prefers the matching GitHub
-Release binary, verifies its SHA256 checksum, installs `loongclaw`, and can immediately hand you
-into guided onboarding.
-
-If the repository has not published a public release yet, the installer exits with an explicit
-source-install fallback instead of constructing a broken download URL. Until the first public
-release is shipped, expect the source path below to be the fast path:
-
-```bash
-git clone https://github.com/loongclaw-ai/loongclaw.git
-cd loongclaw
-bash scripts/install.sh --source --onboard
-```
+The install script prefers the matching GitHub Release binary, verifies its SHA256 checksum,
+installs `loongclaw`, and can drop you straight into guided onboarding.
 
 <details>
 <summary>Linux / macOS</summary>
@@ -204,47 +173,25 @@ pwsh $script -Onboard
 ```
 </details>
 
-Available installer options:
-
-- `--onboard` / `-Onboard` runs `loongclaw onboard` after install.
-- `--version <tag>` / `-Version <tag>` installs a specific release instead of `latest`.
-- `--source` / `-Source` falls back to building from a local repository checkout.
-- `--prefix <dir>` / `-Prefix <dir>` changes the install directory.
-
-### Build from Source
-
-Prerequisites:
-
-- Rust stable toolchain (edition 2024)
-- `cargo` available in your PATH
+### Build From Source
 
 <details>
-<summary>Linux / macOS</summary>
+<summary>Source install</summary>
 
 ```bash
 bash scripts/install.sh --source --onboard
 ```
-</details>
-
-<details>
-<summary>Windows (PowerShell)</summary>
 
 ```powershell
 pwsh ./scripts/install.ps1 -Source -Onboard
 ```
-</details>
-
-<details>
-<summary>Manual (Cargo)</summary>
 
 ```bash
 cargo install --path crates/daemon
 ```
 </details>
 
-`--onboard` runs `loongclaw onboard` without `--force`, so rerunning this quickstart will stop before overwriting an existing config.
-
-### First Answer in Under 5 Minutes
+### First Success Path
 
 1. Run guided onboarding:
 
@@ -252,311 +199,174 @@ cargo install --path crates/daemon
    loongclaw onboard
    ```
 
-   Guided onboarding now walks through provider setup, native prompt
-   personality, optional prompt addendum, and memory profile selection. Use
-   `--system-prompt` only when you want to replace the native prompt pack with a
-   full inline override.
-   For providers with a reviewed onboarding default model, such as MiniMax and
-   DeepSeek, onboarding now prefills an explicit recommended model instead of
-   relying on a hidden runtime fallback.
-   If model catalog discovery fails while the config still uses `model = auto`,
-   onboarding now tells you to rerun onboarding and accept the reviewed model,
-   or set `provider.model` / `preferred_models` explicitly.
-   Press `Esc`, then `Enter`, at any onboarding prompt to cancel before writing config.
-
-   WSL note: CLI onboarding works in WSL. If you want service-style workflows or Linux daemons
-   that depend on `systemd`, use WSL `0.67.6+`; Ubuntu installed via `wsl --install` now defaults
-   to `systemd`, while other distros may still need `[boot] systemd=true` in `/etc/wsl.conf`.
-
-2. Set your provider credential in the env that onboarding selected:
-
-   For OpenAI Codex account auth this will usually be `OPENAI_CODEX_OAUTH_TOKEN`; for
-   API-key providers it will usually be a `*_API_KEY` env such as `ARK_API_KEY`.
+2. Set the provider credential that onboarding selected:
 
    ```bash
-   export <ENV_NAME>=...
+   export PROVIDER_API_KEY=sk-...
    ```
 
-3. Get a first one-shot answer:
+   If you are using Volcengine, follow the example in the
+   [Configuration](#configuration) section below.
+
+3. Get a first answer:
 
    ```bash
    loongclaw ask --message "Summarize this repository and suggest the best next step."
    ```
 
-   On a healthy setup, onboarding and `doctor` now print this style of first-answer handoff
-   directly, so the first success path is visible before secondary setup details.
-
-4. Continue with interactive chat when you want to stay in session:
+4. Continue in session when you need follow-up work:
 
    ```bash
    loongclaw chat
    ```
 
-   Use `loongclaw chat --acp` when you want this chat session to route turns through ACP
-   explicitly. Without `--acp` or other ACP-specific chat flags, normal chat stays on the default
-   provider/context-engine path. The chat banner now starts with a concrete first prompt and keeps
-   session/runtime context in secondary detail sections.
+5. Repair local health issues when needed:
 
-Run `loongclaw doctor --fix` if anything goes wrong, or when onboarding / ask / chat reports a
-local health issue. `doctor` now prints next actions such as credential env hints, safe repair
-commands, and clear first-answer/chat follow-ups instead of only raw status lines.
+   ```bash
+   loongclaw doctor --fix
+   ```
 
-### Run Tests
+Channel setup comes after the base CLI path is healthy.
 
-```bash
-cargo test --workspace --all-features
+## Configuration
+
+`loongclaw onboard` uses `provider.api_key` to reference provider credentials, so secrets stay
+outside the config file:
+
+```toml
+[provider]
+kind = "openai"
+api_key = "${PROVIDER_API_KEY}"
 ```
 
-## Prompt And Personality
-
-LoongClaw ships with a native prompt pack and three default personalities. All
-three personalities keep the same security-first boundaries; they only change
-tone, initiative, confirmation style, and response density.
-
-- `calm_engineering`: rigorous, direct, and technically grounded
-- `friendly_collab`: warm, cooperative, and explanatory when helpful
-- `autonomous_executor`: decisive, high-initiative, and execution-oriented
-
-Interactive onboarding now defaults to personality selection, while advanced
-operators can still pass `--system-prompt` for a full inline override. The same
-flow also keeps an optional native prompt addendum for lightweight operator
-tuning without abandoning the built-in prompt pack.
-
-## Memory Profiles
-
-LoongClaw separates memory behavior from the storage backend. The current
-backend is SQLite, with three operator-selectable context injection modes:
-
-- `window_only`: only the recent sliding window is loaded
-- `window_plus_summary`: earlier turns are condensed into a summary block
-- `profile_plus_window`: a durable `profile_note` block is injected before the recent window
-
-`profile_note` is the first migration-friendly durable memory lane. It is meant
-to carry imported claw identity, stable preferences, or long-lived operator
-tuning without forcing everything into the system prompt.
-
-## Memory Systems
-
-LoongClaw now treats `memory.system` as a stable selection seam, but the current
-runtime surface remains intentionally builtin-only:
-
-- `builtin` keeps canonical raw conversation history, typed canonical records,
-  and deterministic prompt hydration inside LoongClaw.
-- Future external memory systems are expected to plug in below final prompt
-  projection, not replace LoongClaw's context authority.
-- Memory-system failures are designed to fail open, preserving the baseline
-  recent-window chat experience instead of turning memory into a hidden
-  availability dependency.
-
-Use the runtime diagnostics command below to inspect the selected system,
-capability set, memory profile, ingest mode, and effective fail-open policy:
+Volcengine Coding Plan / ARK example:
 
 ```bash
-loongclaw list-memory-systems --json
+export ARK_API_KEY=your-ark-api-key
 ```
 
-## Migration And Import
+```toml
+[provider]
+kind = "volcengine"
+model = "your-coding-plan-model-id"
+api_key = "${ARK_API_KEY}"
+base_url = "https://ark.cn-beijing.volces.com"
+chat_completions_path = "/api/v3/chat/completions"
+```
 
-LoongClaw can discover legacy claw homes during onboarding and offer an import
-before the rest of onboarding continues.
-
-- Recommended path: import a single highest-confidence source.
-- Advanced path: plan multiple sources, merge only the profile lane, and keep prompt/system identity single-source.
-- Safety defaults: secrets are not migrated, imported runtime identity is normalized to `LoongClaw`, and every apply creates a backup manifest with rollback support.
-
-CLI migration workflow:
-
-- Default mode is now `plan` (safe preview, no file write) when `--mode` is omitted.
-- `apply_selected` accepts both `--source-id` and alias `--selection-id`.
-- Safe merge accepts both `--primary-source-id` and alias `--primary-selection-id`.
-- `map_external_skills` builds a deterministic external-skills mapping plan.
-- `--apply-external-skills-plan` can attach that mapping into `profile_note` during `apply_selected`.
-- applying external-skills plan also writes `.loongclaw-migration/<config>.external-skills.json` for audit and replay.
+Feishu channel example:
 
 ```bash
-# Discover and score migration candidates under a root
+export FEISHU_APP_ID=cli_your_app_id
+export FEISHU_APP_SECRET=your_app_secret
+export FEISHU_VERIFICATION_TOKEN=your_verification_token
+export FEISHU_ENCRYPT_KEY=your_encrypt_key
+```
+
+```toml
+[feishu]
+enabled = true
+receive_id_type = "chat_id"
+webhook_bind = "127.0.0.1:8080"
+webhook_path = "/feishu/events"
+allowed_chat_ids = ["oc_your_chat_id"]
+```
+
+```bash
+loongclaw feishu-serve --config ~/.loongclaw/config.toml
+```
+
+By default, LoongClaw reads `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_VERIFICATION_TOKEN`, and `FEISHU_ENCRYPT_KEY`. If you are targeting Lark instead of Feishu, add `domain = "lark"`.
+
+Tool policy stays explicit:
+
+```toml
+[tools]
+shell_default_mode = "deny"
+shell_allow = ["echo", "ls", "git", "cargo"]
+
+[tools.browser]
+enabled = true
+max_sessions = 8
+
+[tools.web]
+enabled = true
+allowed_domains = ["docs.example.com"]
+blocked_domains = ["*.internal.example"]
+```
+
+Further references:
+
+- [Tool Policy Configuration](docs/configuration/tool-policy.md)
+- [Product Specs](docs/product-specs/index.md)
+- `loongclaw validate-config --config ~/.loongclaw/config.toml --json`
+
+<a id="migrate-existing-setup"></a>
+## Migrate Existing Setup from Other Claws or Agents
+
+LoongClaw does not assume teams should start from zero.
+
+Today there are two migration-facing paths:
+
+- `onboard` already folds current setup, Codex config, environment settings, and workspace guidance into starting-point detection, then suggests a reusable starting point.
+- when you want explicit control, the public migration entrypoint is now `loongclaw migrate`, which handles discovery, planning, selective apply, and rollback.
+
+Its value is broader than copying a config file. LoongClaw distinguishes sources, recommends a primary source, and keeps migration split into narrower lanes such as prompt, profile, and external-skills state instead of blindly overwriting everything at once.
+
+```bash
+# Discover migration candidates under a root
 loongclaw migrate --mode discover --input ~/legacy-claws
 
-# Plan all candidates and print recommendation
+# Plan all sources and print a recommended primary source
 loongclaw migrate --mode plan_many --input ~/legacy-claws
-
-# Preview external skills mapping artifacts and generated profile addendum
-loongclaw migrate --mode map_external_skills --input ~/legacy-claws
 
 # Apply one selected source to a target config
 loongclaw migrate --mode apply_selected --input ~/legacy-claws \
   --source-id openclaw --output ~/.loongclaw/config.toml --force
 
-# Apply selected source and also attach external-skills mapping addendum
-loongclaw migrate --mode apply_selected --input ~/legacy-claws \
-  --source-id openclaw --output ~/.loongclaw/config.toml \
-  --apply-external-skills-plan --force
-
-# Roll back the last apply_selected migration for this output config
+# Roll back the most recent migration
 loongclaw migrate --mode rollback_last_apply --output ~/.loongclaw/config.toml
 ```
 
-## External Skills Runtime Guardrails
+Deeper migration modes also exist, including `merge_profiles` for multi-source profile merging and `map_external_skills` for external-skills artifact mapping.
 
-External skills runtime is now safety-first by default and explicitly opt-in:
+<a id="core-capabilities"></a>
+## Core Capabilities
 
-- `external_skills.enabled = false` by default (downloads/runtime disabled).
-- `external_skills.require_download_approval = true` by default.
-- Domain blocklist has priority over every other rule.
-- If `allowed_domains` is non-empty, only allowlisted domains can be downloaded.
-- `external_skills.fetch` blocks redirects to avoid silent cross-domain hops.
+### Governance And Controlled Execution
 
-Recommended config baseline:
+- the kernel already carries governance primitives such as capability tokens, authorization,
+  revocation, and audit events
+- the tool catalog has built-in risk classes, approval modes, and runtime visibility, so higher-risk
+  actions can move through an approval path
+- browser and web tooling share the same controlled network boundary, and external skills stay
+  opt-in under explicit policy
 
-```toml
-[external_skills]
-enabled = true
-require_download_approval = true
-allowed_domains = ["skills.sh", "clawhub.io"]
-blocked_domains = ["*.evil.example"]
-auto_expose_installed = true
-```
+### Execution Planes And Extension Seams
 
-Agent-facing tools:
+- the kernel is split into four execution planes: `connector`, `runtime`, `tool`, and `memory`
+- each plane supports a core / extension adapter structure, so specialization goes through explicit
+  seams instead of ad-hoc kernel edits
+- providers, tools, memory, channels, and packs can evolve on top of those boundaries
 
-- `external_skills_policy`
-  - `action=get` reads effective runtime policy.
-  - `action=set` updates enable/approval/domain policy at runtime (requires `policy_update_approved=true`).
-  - `action=reset` clears runtime overrides back to config defaults (requires `policy_update_approved=true`).
-- `external_skills_fetch`
-  - Requires `url`.
-  - Requires `approval_granted=true` when approval guard is enabled.
-  - Saves artifact under `<tools.file_root>/external-skills-downloads/`.
-  - Enforces allowlist/blocklist before network download.
-- `external_skills_install`
-  - Requires either a local `path` or a first-party `bundled_skill_id`.
-  - Accepts a directory containing `SKILL.md`, a local `.tgz` / `.tar.gz` archive, or a first-party `bundled_skill_id`.
-  - Installs the skill under `<tools.file_root>/external-skills-installed/` by default.
-- `external_skills_list`
-  - Lists resolved external skills across `managed`, `user`, and `project` scopes.
-  - Reports lower-priority duplicates under `shadowed_skills` so operators can debug precedence.
-- `external_skills_inspect`
-  - Returns metadata and a short preview for the resolved skill plus any shadowed duplicates with the same `skill_id`.
-- `external_skills_invoke`
-  - Loads the resolved skill's `SKILL.md` instructions into the conversation loop.
-- `external_skills_remove`
-  - Removes a managed installed skill and updates the local index.
+### Context, Memory, And Control Plane
 
-Operator-facing CLI:
+- the context engine includes `bootstrap`, `ingest`, `after_turn`, `compact_context`, and subagent
+  lifecycle hooks
+- ACP acts as a separate control plane for backend, binding, registry, runtime, and related
+  coordination work
+- profiles, summaries, migration, and canonical history together support long-lived context
 
-- `loongclaw skills list [--config PATH] [--json]`
-  - Lists resolved external skills across `managed`, `user`, and `project` scopes using the current config/runtime guardrails.
-  - Includes `shadowed skills` in text output and `shadowed_skills` in JSON output when duplicate ids are hidden by precedence.
-- `loongclaw skills info <skill-id> [--config PATH] [--json]`
-  - Shows structured metadata plus a short `SKILL.md` preview for one resolved skill.
-  - Includes any lower-priority duplicates that were shadowed by the selected skill.
-- `loongclaw skills install <path> [--skill-id ID] [--replace] [--config PATH] [--json]`
-  - Installs a local skill directory or `.tgz` / `.tar.gz` archive through the same managed runtime path as `external_skills.install`.
-- `loongclaw skills install-bundled <skill-id> [--replace] [--config PATH] [--json]`
-  - Installs a first-party bundled skill such as `browser-companion-preview` without requiring a local archive path.
-- `loongclaw skills enable-browser-preview [--replace] [--config PATH] [--json]`
-  - Globally enables the external-skills runtime for this config, turns on installed-skill auto exposure, allows `agent-browser` through shell policy when needed, and installs the bundled `browser-companion-preview` skill.
-  - Refuses explicit `[tools].shell_deny` conflicts for `agent-browser`; remove that entry or adjust policy before running the command.
-- `loongclaw skills remove <skill-id> [--config PATH] [--json]`
-  - Removes one managed installed skill from the local index.
-- `loongclaw skills policy get|set|reset [--config PATH] [--json]`
-  - Reads or updates the config-backed external-skills runtime policy with the same policy fields exposed by `external_skills.policy`.
-  - Mutating `set` and `reset` calls require `--approve-policy-update`.
+### Delivery Surfaces
 
-Recommended runtime flow:
-
-1. Download with `external_skills.fetch`
-2. Install with `external_skills.install` or `loongclaw skills install`
-3. Discover with `external_skills.list` or `loongclaw skills list`
-   - Resolution order is `managed > user > project`
-   - If a config path is loaded, project discovery anchors to that config directory; otherwise it falls back to the configured tool file root or the current working directory
-   - Within the active project root, project discovery probes the current working directory and each ancestor up to the project root
-   - Project discovery probes `.agents/skills`, `.codex/skills`, `.claude/skills`, and `skills/`
-   - User discovery probes `~/.agents/skills`, `~/.codex/skills`, and `~/.claude/skills`
-   - User and project discovery follow directory symlinks inside those skill roots; managed installs still reject symlinked sources
-4. Inspect with `external_skills.inspect` or `loongclaw skills info`
-5. Load instructions with `external_skills.invoke`
-
-Browser preview fast path:
-
-This preview keeps the shipped safe browser lane (`browser.open`,
-`browser.extract`, `browser.click`) as the default. Today it is still a managed
-`external_skills.invoke` lane that uses `shell.exec` against `agent-browser`, so
-it does not yet provide the same bounded, profile-isolated browser safety model
-as the built-in browser tools.
-
-```bash
-loongclaw skills enable-browser-preview --config ~/.loongclaw/config.toml
-npm install -g agent-browser && agent-browser install
-loongclaw doctor --config ~/.loongclaw/config.toml
-loongclaw ask --config ~/.loongclaw/config.toml --message 'Use the browser companion preview to open https://example.com, snapshot the page, and summarize what is visible.'
-```
-
-It adds a first-party managed helper skill that can route richer multi-step page
-work through `agent-browser` when the runtime, shell policy, and local binary
-are all ready. `loongclaw skills enable-browser-preview` now turns on the needed
-LoongClaw config, installs the bundled helper skill, and prints concrete next
-steps plus ready-to-run recipes. LoongClaw still does not install or manage the
-`agent-browser` runtime for you, so the intended flow is:
-
-1. Enable the preview with `loongclaw skills enable-browser-preview`.
-2. Install the runtime with `npm install -g agent-browser && agent-browser install`.
-3. Verify the runtime with `agent-browser open example.com` or rerun `loongclaw doctor`.
-4. Try one of the generated recipes, such as:
-   - summarize a page
-   - extract page text
-   - follow a link and summarize the destination
-
-A healthy `doctor` run should then keep the browser preview in the suggested
-next actions instead of dropping the user into low-level runtime wording.
-If you have disabled the CLI surface with `cli.enabled=false`, LoongClaw will
-stop short of printing the ask-based browser preview recipes until you re-enable
-the CLI.
-
-## Key Features
-
-**Kernel and Security**
-- Capability-based policy engine with token lifecycle (issue, revoke, authorize)
-- Human approval gates: per-call authorization or one-time full-access mode
-- Plugin security scanning with `block_on_high` hard gate
-- WASM static analysis (artifact paths, module size, hash pin, import policy)
-- External profile integrity: checksum pinning + ed25519 signature verification
-- JSONL SIEM export lane with optional fail-closed mode
-- Denylist precedence over all grants
-
-**Runtime and Execution**
-- Core/Extension adapter pattern for runtime, tool, memory, and connector planes
-- WASM runtime execution via Wasmtime with policy-driven resource limits
-- Process-stdio and HTTP-JSON bridge lanes with protocol authorization
-- Programmatic tool orchestration with batching, retry, circuit breakers, and adaptive concurrency
-- Tool discovery across providers and scanned plugin descriptors
-
-**MVP Product Layer**
-- `onboard` -- guided first-run with preflight diagnostics
-- `ask` -- one-shot assistant answer and exit
-- `doctor` -- diagnostics with optional safe fixes (`--fix`) and machine-readable output (`--json`)
-- `chat` -- interactive CLI with sliding-window conversation memory
-- Default-visible tools: `browser.open`, `browser.extract`, `browser.click`, `web.fetch`, `shell.exec`, `file.read`, `file.write`, `external_skills_policy`
-- External-skills lifecycle tools (`external_skills.fetch/install/list/inspect/invoke/remove`) are advertised only when the external-skills runtime is enabled
-- Providers: OpenAI-compatible, Volcengine custom endpoint
-- Channels: CLI, Telegram polling, Feishu encrypted webhook
-
-**Protocol Foundation**
-- Typed transport contracts and protocol method routing
-- JSON-line stream transport for stdio/pipe integration
-- Linked in-memory channel transport with bounded backpressure
-- Route authorization gates before handler dispatch
-
-**Developer Experience**
-- 7-crate DAG with zero cycles and strict dependency direction
-- 370+ tests with strict lint/fmt CI gates at every commit
-- Cargo feature flags for modular builds
-- Spec-driven deterministic test execution
-- Benchmark gates for programmatic pressure and WASM cache performance
+- CLI is first-class today, but it is no longer the only surface
+- Telegram and Feishu / Lark already exist as real channel surfaces with runtime state and security validation
+- browser, file, shell, and web tools are exposed through runtime policy rather than left in
+  scattered helper scripts
 
 ## Architecture Overview
 
-LoongClaw is organized as a 7-crate workspace with a strict dependency DAG:
+LoongClaw is organized as a 7-crate Rust workspace with a strict dependency DAG:
 
 ```text
 contracts (leaf -- zero internal deps)
@@ -570,175 +380,57 @@ contracts (leaf -- zero internal deps)
 
 | Crate | Role |
 |-------|------|
-| `contracts` | Shared types, capability model. Zero deps -- the stable ABI surface. |
-| `kernel` | Policy engine, audit timeline, capability tokens, plugin system, integration catalog, pack boundaries. |
-| `protocol` | Transport contracts, typed routing. Independent leaf. |
-| `app` | Providers, tools, channels, memory, configuration, conversation engine. |
-| `spec` | Execution spec runner for deterministic test scenarios. |
-| `bench` | Benchmark harness and gate enforcement. |
-| `daemon` | CLI binary (`loongclaw`). Wires everything into runnable commands. |
+| `contracts` | Stable shared ABI surface |
+| `kernel` | Policy, audit, capability, pack, and governance core |
+| `protocol` | Typed transport and routing contracts |
+| `app` | Providers, tools, channels, memory, and conversation runtime |
+| `spec` | Deterministic execution specs |
+| `bench` | Benchmark harness and gates |
+| `daemon` | Runnable CLI binary and operator-facing commands |
 
-For the full layered execution model (L0-L9), see [ARCHITECTURE.md](ARCHITECTURE.md).
+Three design rules matter most:
 
-## Feature Flags
+- **governance-first**: policy, approvals, and audit are modeled in critical execution paths rather
+  than bolted on later
+- **additive evolution**: public contracts grow without breaking existing integrations
+- **small core, rich seams**: specialization should happen through adapters and packs, not by mutating the kernel every time
 
-All flags are enabled by default via the `mvp` meta-feature. You can disable defaults and
-enable only what you need for minimal builds.
+### Pluggable Design, Grounded In What Exists
 
-| Flag | Description |
-|------|-------------|
-| `config-toml` | TOML configuration loader |
-| `memory-sqlite` | SQLite conversation memory |
-| `tool-browser` | `browser.open` / `browser.extract` / `browser.click` tools |
-| `tool-shell` | `shell.exec` tool |
-| `tool-file` | `file.read` / `file.write` tools |
-| `tool-webfetch` | `web.fetch` tool |
-| `channel-cli` | Interactive CLI channel |
-| `channel-telegram` | Telegram polling adapter |
-| `channel-feishu` | Feishu encrypted webhook adapter |
-| `provider-openai` | OpenAI-compatible provider |
-| `provider-volcengine` | Volcengine custom endpoint |
+- **Small kernel, explicit boundaries**: `contracts`, `kernel`, `protocol`, and `app` are separated so transport, policy, runtime, and product surfaces can evolve without tangling the core.
+- **Core / Extension approach**: runtime, tool, memory, and connector surfaces are organized around trusted cores with richer extension layers, so specialization goes through adapters instead of kernel forks.
+- **Control planes stay distinct**: provider turns, context assembly, channel routing, and ACP control behavior are modeled as separate concerns, which keeps future collaboration and routing upgrades from forcing a rewrite of the conversation core.
+- **Governance is not an afterthought**: capability checks, policy gates, approvals, and audit trails are part of the main execution path rather than a perimeter feature added later.
+- **The product layer is already concrete**: a CLI-first entry path, Telegram / Feishu channels, browser / file / shell / web tools, and configurable provider / memory / tool-policy baselines already form a real path through the current system.
 
-Example minimal build:
+Some ecosystem pieces are still better described as architecture direction than as finished product surfaces, and we prefer to say that plainly in the README.
 
-```bash
-cargo build -p loongclaw-daemon --no-default-features --features "channel-cli,provider-openai,config-toml,memory-sqlite"
-```
+For the full layered execution model, see [ARCHITECTURE.md](ARCHITECTURE.md) and [Layered Kernel Design](docs/design-docs/layered-kernel-design.md).
 
-## Design Principles
-
-1. **Kernel-first** -- all execution paths route through the kernel's capability, policy, and audit system. No shadow paths.
-2. **No breaking changes** -- new features are additive only. Existing public API signatures stay unchanged.
-3. **Capability-gated by default** -- every operation requires a valid `CapabilityToken` with matching capabilities.
-4. **Audit everything security-critical** -- policy denials, token lifecycle events, and module invocations all emit structured events.
-5. **7-crate DAG, no cycles** -- dependency direction is non-negotiable.
-6. **Tests first** -- if a behavior isn't tested, it doesn't exist.
-7. **Proven technology preferred** -- choose well-understood, composable dependencies over opaque packages.
-8. **Repository is the system of record** -- if it's not in the repo, it doesn't exist for agents.
-9. **Automate first** -- linters, CI gates, and pre-commit hooks over code review comments.
-10. **Strictly avoid over-engineering** -- minimum complexity for the current task is the right amount.
-
+<a id="documentation"></a>
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [Architecture](ARCHITECTURE.md) | Crate structure and layered execution model |
-| [Core Beliefs](docs/design-docs/core-beliefs.md) | 10 core engineering principles |
-| [Layered Kernel Design](docs/design-docs/layered-kernel-design.md) | Full L0-L9 layer specification |
-| [Roadmap](docs/ROADMAP.md) | Stage-based milestones and acceptance criteria |
-| [Product Sense](docs/PRODUCT_SENSE.md) | Current MVP journey and user-facing product principles |
+| [Architecture](ARCHITECTURE.md) | Crate map and layered execution overview |
+| [Core Beliefs](docs/design-docs/core-beliefs.md) | Core engineering principles |
+| [Roadmap](docs/ROADMAP.md) | Stage-based milestones and direction |
+| [Product Sense](docs/PRODUCT_SENSE.md) | Current product contract and user journey |
+| [Product Specs](docs/product-specs/index.md) | User-facing requirements for onboarding, ask, doctor, channels, and memory |
+| [Contribution Areas](docs/references/contribution-areas.md) | The kinds of design, engineering, docs, and community help that would make the biggest difference right now |
 | [Reliability](docs/RELIABILITY.md) | Build and kernel invariants |
-| [Examples](examples/README.md) | Spec files, plugin samples, benchmarks |
-| [Product Specs](docs/product-specs/index.md) | User-facing requirements for onboarding, ask, doctor, channels, and WebChat expectations |
-| [Skills](skills/) | Agent skills (`update-harness.skill`, `browser-companion-preview/`) |
+| [Security](SECURITY.md) | Security policy and disclosure path |
 | [Changelog](CHANGELOG.md) | Release history |
-
-## Configuration
-
-`loongclaw onboard` defaults to referencing provider credentials through `provider.api_key`, so secrets stay outside the config file:
-
-```toml
-[provider]
-kind = "openai"
-api_key = "${PROVIDER_API_KEY}"    # preferred explicit env reference
-```
-
-`provider.api_key` also accepts `$PROVIDER_API_KEY`, `env:PROVIDER_API_KEY`, `%PROVIDER_API_KEY%`, or a direct literal like `api_key = "sk-..."`.
-Legacy `api_key_env = "PROVIDER_API_KEY"` remains supported for compatibility, but new configs should prefer `provider.api_key`.
-
-Volcengine Coding Plan / ARK demo:
-
-```toml
-[provider]
-kind = "volcengine"
-model = "your-coding-plan-model-id"
-api_key = "${ARK_API_KEY}"
-base_url = "https://ark.cn-beijing.volces.com"
-chat_completions_path = "/api/v3/chat/completions"
-```
-
-`kind = "volcengine"` already applies the Volcengine defaults above, so `base_url` and `chat_completions_path` are only needed when you want the config to spell them out explicitly.
-
-### Tool policy
-
-Shell execution defaults to **deny-unknown** — only explicitly allowed commands run.
-File access is sandboxed to the working directory by default. `web.fetch` and the bounded browser
-tools reuse the same SSRF-safe network policy and still block localhost, private hosts, and
-special-use destinations unless the operator explicitly relaxes that policy. Runtime tool
-advertising follows the active config, so disabled browser/web/external-skills surfaces disappear
-from the exposed assistant tool catalog instead of drifting from reality.
-
-```toml
-[tools]
-shell_default_mode = "deny"                          # "deny" | "allow"
-shell_allow = ["echo", "ls", "git", "cargo"]         # permitted commands
-shell_deny = []                                      # hard-blocked commands
-# file_root = "/home/user/project"                   # defaults to CWD
-
-[tools.browser]
-enabled = true
-max_sessions = 8
-max_links = 40
-max_text_chars = 6000
-
-[tools.web]
-enabled = true
-allowed_domains = ["docs.example.com"]
-blocked_domains = ["*.internal.example"]
-max_bytes = 1048576
-timeout_seconds = 15
-max_redirects = 3
-```
-
-See [Tool Policy Configuration](docs/configuration/tool-policy.md) for the full reference.
-
-Provider model-catalog cache tuning:
-
-```toml
-[provider]
-model = "auto"
-# Fresh cache window for /v1/models (default: 30000, max: 300000; set 0 to disable cache)
-model_catalog_cache_ttl_ms = 30000
-# Extra stale window used only when model-list fetch fails (default: 120000, max: 600000)
-model_catalog_stale_if_error_ms = 120000
-# Cache entry capacity for model catalogs (default: 32, range: 1-256)
-model_catalog_cache_max_entries = 32
-# Base cooldown window for model candidates rejected as incompatible (default: 300000, max: 3600000; set 0 to disable)
-model_candidate_cooldown_ms = 300000
-# Exponential backoff cap for repeated candidate failures (default: 3600000, max: 86400000)
-model_candidate_cooldown_max_ms = 3600000
-# Cache entry capacity for model candidate cooldown state (default: 64, range: 1-512)
-model_candidate_cooldown_max_entries = 64
-# Base cooldown for auth profiles after transient failures (default: 60000, max: 3600000; set 0 to disable)
-profile_cooldown_ms = 60000
-# Max cooldown cap for repeated profile failures (default: 3600000, max: 86400000)
-profile_cooldown_max_ms = 3600000
-# Disable window for auth-rejected profiles (default: 21600000, range: 60000-604800000)
-profile_auth_reject_disable_ms = 21600000
-# In-memory profile-state capacity per runtime namespace (default: 256, range: 1-1024)
-profile_state_max_entries = 256
-# Profile-state persistence backend ("file" or "sqlite", default: "file")
-profile_state_backend = "file"
-# Profile health enforcement mode ("provider_default", "enforce", "observe_only"; default: "provider_default")
-# provider_default currently maps openrouter -> observe_only, others -> enforce
-profile_health_mode = "provider_default"
-# Optional sqlite file path when backend = "sqlite" (defaults to ~/.loongclaw/provider-profile-state.sqlite3)
-profile_state_sqlite_path = "~/.loongclaw/provider-profile-state.sqlite3"
-```
-
-Validate your config:
-
-```bash
-loongclaw validate-config --config ~/.loongclaw/config.toml --json
-```
 
 ## Contributing
 
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow,
-including the active `alpha-test` contribution branch, issue intake routes, validation
-expectations, and recipes for adding providers, tools, and channels.
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.
+
+If you want to see the areas where help is especially welcome, start with
+[Contribution Areas We Especially Welcome](docs/references/contribution-areas.md).
 
 - [Contributing Guide](CONTRIBUTING.md)
+- [Contribution Areas We Especially Welcome](docs/references/contribution-areas.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
 - [Security Policy](SECURITY.md)
 
