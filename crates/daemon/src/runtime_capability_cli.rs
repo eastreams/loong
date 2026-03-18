@@ -1,3 +1,4 @@
+use crate::Capability;
 use crate::runtime_experiment_cli::{
     RuntimeExperimentArtifactDocument, RuntimeExperimentDecision,
     RuntimeExperimentShowCommandOptions, RuntimeExperimentStatus,
@@ -362,7 +363,7 @@ fn required_trimmed_arg(name: &str, raw: &str) -> CliResult<String> {
 }
 
 fn normalize_repeated_values(values: &[String]) -> Vec<String> {
-    let mut normalized = values
+    values
         .iter()
         .map(String::as_str)
         .map(str::trim)
@@ -370,9 +371,7 @@ fn normalize_repeated_values(values: &[String]) -> Vec<String> {
         .map(str::to_owned)
         .collect::<BTreeSet<_>>()
         .into_iter()
-        .collect::<Vec<_>>();
-    normalized.sort();
-    normalized
+        .collect()
 }
 
 fn parse_required_capabilities(values: &[String]) -> CliResult<Vec<String>> {
@@ -385,25 +384,14 @@ fn parse_required_capabilities(values: &[String]) -> CliResult<Vec<String>> {
 }
 
 fn normalize_required_capability(raw: &str) -> CliResult<String> {
-    let normalized = raw.trim().replace('-', "_").to_ascii_lowercase();
-    let canonical = match normalized.as_str() {
-        "invoke_tool" => "invoke_tool",
-        "invoke_connector" => "invoke_connector",
-        "memory_read" => "memory_read",
-        "memory_write" => "memory_write",
-        "filesystem_read" => "filesystem_read",
-        "filesystem_write" => "filesystem_write",
-        "network_egress" => "network_egress",
-        "schedule_task" => "schedule_task",
-        "observe_telemetry" => "observe_telemetry",
-        _ => {
-            return Err(format!(
+    Capability::parse(raw)
+        .map(|capability| capability.as_str().to_owned())
+        .ok_or_else(|| {
+            format!(
                 "runtime capability required capability `{}` is unknown",
                 raw.trim()
-            ));
-        }
-    };
-    Ok(canonical.to_owned())
+            )
+        })
 }
 
 fn compute_candidate_id(

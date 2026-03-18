@@ -1,4 +1,3 @@
-#![allow(unsafe_code)]
 #![allow(
     clippy::disallowed_methods,
     clippy::multiple_unsafe_ops_per_block,
