@@ -1,7 +1,18 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Panel } from "../../../components/surfaces/Panel";
-import { dashboardApi, type DashboardProviderItem, type DashboardSummary } from "../api";
+import { ApiRequestError } from "../../../lib/api/client";
+import { useWebConnection } from "../../../hooks/useWebConnection";
+import {
+  dashboardApi,
+  type DashboardConnectivity,
+  type DashboardConfigSnapshot,
+  type DashboardProviderItem,
+  type DashboardRuntime,
+  type DashboardSummary,
+  type DashboardToolItem,
+  type DashboardTools,
+} from "../api";
 
 type Tone = "good" | "warn" | "muted";
 
@@ -13,30 +24,167 @@ interface SummaryCard {
   items: Array<{ label: string; value: string }>;
 }
 
+interface ConnectivityPresentation {
+  summary: string;
+  recommendation: string;
+  probe: string;
+}
+
+function formatApprovalMode(
+  approvalMode: string | null | undefined,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  if (!approvalMode) {
+    return t("dashboard.values.notSet");
+  }
+
+  switch (approvalMode) {
+    case "disabled":
+      return t("dashboard.values.approvalOff");
+    case "manual":
+      return t("dashboard.values.approvalManual");
+    case "auto":
+      return t("dashboard.values.approvalAuto");
+    default:
+      return approvalMode;
+  }
+}
+
+function formatShellPolicy(
+  shellPolicy: string | null | undefined,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  if (!shellPolicy) {
+    return t("dashboard.values.notSet");
+  }
+
+  switch (shellPolicy) {
+    case "deny":
+      return t("dashboard.values.denyByDefault");
+    case "allow":
+      return t("dashboard.values.allowByDefault");
+    default:
+      return shellPolicy;
+  }
+}
+
+function readDashboardError(
+  error: unknown,
+  t: ReturnType<typeof useTranslation>["t"],
+  markUnauthorized: () => void,
+): string {
+  if (error instanceof ApiRequestError && error.status === 401) {
+    markUnauthorized();
+    return t("auth.invalidBody");
+  }
+
+  return error instanceof Error ? error.message : "Failed to load dashboard";
+}
+
+function buildConnectivityCopy(
+  connectivity: DashboardConnectivity | null,
+  t: ReturnType<typeof useTranslation>["t"],
+): ConnectivityPresentation {
+  if (!connectivity) {
+    return {
+      summary: t("dashboard.connectivity.loading"),
+      recommendation: t("dashboard.connectivity.noRecommendation"),
+      probe: t("dashboard.values.notSet"),
+    };
+  }
+
+  let summary = t("dashboard.connectivity.healthySummary");
+  let recommendation = t("dashboard.connectivity.noRecommendation");
+
+  if (connectivity.fakeIpDetected) {
+    summary = t("dashboard.connectivity.fakeIpSummary");
+    recommendation = t("dashboard.connectivity.directAndFilter");
+  } else if (connectivity.probeStatus !== "reachable") {
+    summary = t("dashboard.connectivity.transportSummary");
+    recommendation = t("dashboard.connectivity.checkRoute");
+  } else if (connectivity.proxyEnvDetected) {
+    summary = t("dashboard.connectivity.proxyEnvSummary");
+    recommendation = t("dashboard.connectivity.verifyProviderRoute");
+  }
+
+  if (connectivity.recommendation === "direct_host_and_fake_ip_filter") {
+    recommendation = t("dashboard.connectivity.directAndFilter");
+  } else if (connectivity.recommendation === "check_network_route") {
+    recommendation = t("dashboard.connectivity.checkRoute");
+  }
+
+  const probe =
+    connectivity.probeStatus === "reachable"
+      ? t("dashboard.connectivity.probeReachable", {
+          code: connectivity.probeStatusCode ?? "-",
+        })
+      : t("dashboard.connectivity.probeTransportFailure");
+
+  return { summary, recommendation, probe };
+}
+
 export default function DashboardPage() {
   const { t } = useTranslation();
+  const { canAccessProtectedApi, authRevision, markUnauthorized, status } =
+    useWebConnection();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [providers, setProviders] = useState<DashboardProviderItem[]>([]);
+  const [runtime, setRuntime] = useState<DashboardRuntime | null>(null);
+  const [connectivity, setConnectivity] = useState<DashboardConnectivity | null>(null);
+  const [config, setConfig] = useState<DashboardConfigSnapshot | null>(null);
+  const [tools, setTools] = useState<DashboardTools | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
+    if (!canAccessProtectedApi) {
+      setSummary(null);
+      setProviders([]);
+      setRuntime(null);
+      setConnectivity(null);
+      setConfig(null);
+      setTools(null);
+      setError(
+        status === "unauthorized"
+          ? t("auth.invalidBody")
+          : t("auth.requiredBody"),
+      );
+      return () => {
+        cancelled = true;
+      };
+    }
+
     async function loadDashboard() {
       setError(null);
       try {
-        const [loadedSummary, loadedProviders] = await Promise.all([
+        const [
+          loadedSummary,
+          loadedProviders,
+          loadedRuntime,
+          loadedConnectivity,
+          loadedConfig,
+          loadedTools,
+        ] = await Promise.all([
           dashboardApi.loadSummary(),
           dashboardApi.loadProviders(),
+          dashboardApi.loadRuntime(),
+          dashboardApi.loadConnectivity(),
+          dashboardApi.loadConfig(),
+          dashboardApi.loadTools(),
         ]);
 
         if (!cancelled) {
           setSummary(loadedSummary);
           setProviders(loadedProviders.items);
+          setRuntime(loadedRuntime);
+          setConnectivity(loadedConnectivity);
+          setConfig(loadedConfig);
+          setTools(loadedTools);
         }
       } catch (loadError) {
         if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : "Failed to load dashboard");
+          setError(readDashboardError(loadError, t, markUnauthorized));
         }
       }
     }
@@ -46,45 +194,52 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [authRevision, canAccessProtectedApi, markUnauthorized, status, t]);
 
-  const activeProvider = providers.find((provider) => provider.enabled) ?? providers[0] ?? null;
+  const activeProvider =
+    providers.find((provider) => provider.enabled) ?? providers[0] ?? null;
   const runtimeTone: Tone =
-    summary?.runtimeStatus === "ready" ? "good" : summary?.runtimeStatus ? "warn" : "muted";
+    runtime?.status === "ready" ? "good" : runtime?.status ? "warn" : "muted";
   const providerTone: Tone = activeProvider?.enabled ? "good" : "muted";
-  const apiKeyState = activeProvider?.apiKeyConfigured
+  const apiKeyState = config?.apiKeyConfigured
     ? t("dashboard.values.configured")
     : t("dashboard.values.missing");
+  const enabledTools = tools?.items.filter((item) => item.enabled).length ?? 0;
+  const approvalDisplay = formatApprovalMode(tools?.approvalMode, t);
+  const shellPolicyDisplay = formatShellPolicy(tools?.shellDefaultMode, t);
+  const connectivityCopy = buildConnectivityCopy(connectivity, t);
 
   const summaryCards: SummaryCard[] = [
     {
       key: "runtime",
-      value: summary?.runtimeStatus ?? "Loading",
-      chip: t("dashboard.values.live"),
+      value: runtime?.status ?? "Loading",
+      chip: runtime?.source ?? t("dashboard.values.live"),
       tone: runtimeTone,
       items: [
-        { label: t("dashboard.fields.source"), value: t("dashboard.values.localDaemon") },
-        { label: t("dashboard.fields.mode"), value: t("dashboard.values.readOnly") },
-      ],
-    },
-    {
-      key: "provider",
-      value: summary?.activeProvider ?? t("dashboard.values.none"),
-      chip: activeProvider?.enabled ? t("dashboard.values.active") : t("dashboard.values.inactive"),
-      tone: providerTone,
-      items: [
-        { label: t("dashboard.fields.model"), value: summary?.activeModel ?? t("dashboard.values.noModel") },
-        { label: t("dashboard.fields.profiles"), value: String(providers.length) },
+        {
+          label: t("dashboard.fields.configPath"),
+          value: runtime?.configPath ?? t("dashboard.values.notSet"),
+        },
+        {
+          label: t("dashboard.fields.ingest"),
+          value: runtime?.ingestMode ?? t("dashboard.values.notSet"),
+        },
       ],
     },
     {
       key: "memory",
       value: summary?.memoryBackend ?? t("dashboard.values.none"),
-      chip: t("dashboard.values.stored"),
+      chip: config?.memoryProfile ?? t("dashboard.values.stored"),
       tone: "muted",
       items: [
-        { label: t("dashboard.fields.sessions"), value: String(summary?.sessionCount ?? 0) },
-        { label: t("dashboard.fields.context"), value: t("dashboard.values.localStore") },
+        {
+          label: t("dashboard.fields.sessions"),
+          value: String(summary?.sessionCount ?? 0),
+        },
+        {
+          label: t("dashboard.fields.memoryMode"),
+          value: runtime?.memoryMode ?? t("dashboard.values.notSet"),
+        },
       ],
     },
     {
@@ -99,15 +254,23 @@ export default function DashboardPage() {
     },
     {
       key: "tools",
-      value: t("dashboard.values.readOnly"),
-      chip: t("dashboard.values.phase1"),
-      tone: "muted",
+      value: `${enabledTools}/${tools?.items.length ?? 0}`,
+      chip: approvalDisplay,
+      tone: enabledTools > 0 ? "good" : "muted",
       items: [
-        { label: t("dashboard.fields.shell"), value: t("dashboard.values.pending") },
-        { label: t("dashboard.fields.web"), value: t("dashboard.values.connected") },
+        {
+          label: t("dashboard.fields.approval"),
+          value: approvalDisplay,
+        },
+        {
+          label: t("dashboard.fields.shellPolicy"),
+          value: shellPolicyDisplay,
+        },
       ],
     },
   ];
+
+  const toolItems: DashboardToolItem[] = tools?.items ?? [];
 
   return (
     <div className="page">
@@ -146,7 +309,9 @@ export default function DashboardPage() {
             title={t("dashboard.sections.providerTitle")}
             aside={
               <span className={`dashboard-pill dashboard-pill-${providerTone}`}>
-                {activeProvider?.enabled ? t("dashboard.values.active") : t("dashboard.values.inactive")}
+                {activeProvider?.enabled
+                  ? t("dashboard.values.active")
+                  : t("dashboard.values.inactive")}
               </span>
             }
           >
@@ -157,17 +322,17 @@ export default function DashboardPage() {
                 </div>
                 <div
                   className="dashboard-provider-subtitle"
-                  title={summary?.activeModel ?? t("dashboard.values.noModel")}
+                  title={config?.model ?? t("dashboard.values.noModel")}
                 >
-                  {summary?.activeModel ?? t("dashboard.values.noModel")}
+                  {config?.model ?? t("dashboard.values.noModel")}
                 </div>
               </div>
 
               <div className="dashboard-provider-meta">
                 <div className="dashboard-meta-stack">
                   <span>{t("dashboard.fields.endpoint")}</span>
-                  <strong title={activeProvider?.endpoint ?? t("dashboard.values.notSet")}>
-                    {activeProvider?.endpoint ?? t("dashboard.values.notSet")}
+                  <strong title={config?.endpoint ?? t("dashboard.values.notSet")}>
+                    {config?.endpoint ?? t("dashboard.values.notSet")}
                   </strong>
                 </div>
                 <div className="dashboard-meta-stack">
@@ -191,8 +356,8 @@ export default function DashboardPage() {
                 </strong>
               </div>
               <div className="dashboard-kv-card">
-                <span>{t("dashboard.fields.profiles")}</span>
-                <strong>{providers.length}</strong>
+                <span>{t("dashboard.fields.lastProvider")}</span>
+                <strong>{config?.lastProvider ?? t("dashboard.values.none")}</strong>
               </div>
               <div className="dashboard-kv-card">
                 <span>{t("dashboard.fields.memory")}</span>
@@ -210,8 +375,12 @@ export default function DashboardPage() {
                         {provider.model}
                       </div>
                     </div>
-                    <span className={`dashboard-pill dashboard-pill-${provider.enabled ? "good" : "muted"}`}>
-                      {provider.enabled ? t("dashboard.values.active") : t("dashboard.values.standby")}
+                    <span
+                      className={`dashboard-pill dashboard-pill-${provider.enabled ? "good" : "muted"}`}
+                    >
+                      {provider.enabled
+                        ? t("dashboard.values.active")
+                        : t("dashboard.values.standby")}
                     </span>
                   </div>
                 ))
@@ -246,15 +415,12 @@ export default function DashboardPage() {
 
                 <label className="settings-field">
                   <span className="settings-label">{t("dashboard.settings.model")}</span>
-                  <input className="settings-input" defaultValue={activeProvider?.model ?? ""} />
+                  <input className="settings-input" defaultValue={config?.model ?? ""} />
                 </label>
 
                 <label className="settings-field">
                   <span className="settings-label">{t("dashboard.settings.endpoint")}</span>
-                  <input
-                    className="settings-input"
-                    defaultValue={activeProvider?.endpoint ?? ""}
-                  />
+                  <input className="settings-input" defaultValue={config?.endpoint ?? ""} />
                 </label>
 
                 <label className="settings-field">
@@ -262,7 +428,7 @@ export default function DashboardPage() {
                   <input
                     className="settings-input"
                     type="password"
-                    defaultValue={activeProvider?.apiKeyMasked ?? ""}
+                    defaultValue={config?.apiKeyMasked ?? ""}
                   />
                   <span className="settings-helper">{t("dashboard.settings.apiKeyMasked")}</span>
                 </label>
@@ -284,40 +450,83 @@ export default function DashboardPage() {
 
         <div className="dashboard-side-column">
           <Panel
-            eyebrow={t("dashboard.sections.runtimeEyebrow")}
-            title={t("dashboard.sections.runtimeTitle")}
+            eyebrow={t("dashboard.sections.connectivityEyebrow")}
+            title={t("dashboard.sections.connectivityTitle")}
           >
+            <p className="panel-copy">{connectivityCopy.summary}</p>
             <div className="dashboard-kv-list">
               <div className="dashboard-kv-row">
-                <span>{t("dashboard.fields.runtime")}</span>
-                <strong title={summary?.runtimeStatus ?? "Loading"}>
-                  {summary?.runtimeStatus ?? "Loading"}
+                <span>{t("dashboard.fields.providerHost")}</span>
+                <strong title={connectivity?.host ?? t("dashboard.values.notSet")}>
+                  {connectivity?.host ?? t("dashboard.values.notSet")}
                 </strong>
               </div>
               <div className="dashboard-kv-row">
-                <span>{t("dashboard.fields.provider")}</span>
-                <strong title={summary?.activeProvider ?? t("dashboard.values.none")}>
-                  {summary?.activeProvider ?? t("dashboard.values.none")}
+                <span>{t("dashboard.fields.dns")}</span>
+                <strong
+                  title={
+                    connectivity?.dnsAddresses.length
+                      ? connectivity.dnsAddresses.join(", ")
+                      : t("dashboard.values.notSet")
+                  }
+                >
+                  {connectivity?.dnsAddresses.length
+                    ? connectivity.dnsAddresses.join(", ")
+                    : t("dashboard.values.notSet")}
                 </strong>
               </div>
               <div className="dashboard-kv-row">
-                <span>{t("dashboard.fields.model")}</span>
-                <strong title={summary?.activeModel ?? t("dashboard.values.noModel")}>
-                  {summary?.activeModel ?? t("dashboard.values.noModel")}
-                </strong>
+                <span>{t("dashboard.fields.probe")}</span>
+                <strong title={connectivityCopy.probe}>{connectivityCopy.probe}</strong>
               </div>
               <div className="dashboard-kv-row">
-                <span>{t("dashboard.fields.install")}</span>
-                <strong title={summary?.webInstallMode ?? t("dashboard.values.none")}>
-                  {summary?.webInstallMode ?? t("dashboard.values.none")}
+                <span>{t("dashboard.fields.routing")}</span>
+                <strong title={connectivityCopy.recommendation}>
+                  {connectivityCopy.recommendation}
                 </strong>
               </div>
             </div>
           </Panel>
 
           <Panel
-            eyebrow={t("dashboard.sections.diagnosticsEyebrow")}
-            title={t("dashboard.sections.diagnosticsTitle")}
+            eyebrow={t("dashboard.sections.runtimeEyebrow")}
+            title={t("dashboard.sections.runtimeTitle")}
+          >
+            <div className="dashboard-kv-list">
+              <div className="dashboard-kv-row">
+                <span>{t("dashboard.fields.runtime")}</span>
+                <strong title={runtime?.status ?? "Loading"}>
+                  {runtime?.status ?? "Loading"}
+                </strong>
+              </div>
+              <div className="dashboard-kv-row">
+                <span>{t("dashboard.fields.source")}</span>
+                <strong title={runtime?.source ?? t("dashboard.values.notSet")}>
+                  {runtime?.source ?? t("dashboard.values.notSet")}
+                </strong>
+              </div>
+              <div className="dashboard-kv-row">
+                <span>{t("dashboard.fields.memoryMode")}</span>
+                <strong title={runtime?.memoryMode ?? t("dashboard.values.notSet")}>
+                  {runtime?.memoryMode ?? t("dashboard.values.notSet")}
+                </strong>
+              </div>
+              <div className="dashboard-kv-row">
+                <span>{t("dashboard.fields.ingest")}</span>
+                <strong title={runtime?.ingestMode ?? t("dashboard.values.notSet")}>
+                  {runtime?.ingestMode ?? t("dashboard.values.notSet")}
+                </strong>
+              </div>
+              <div className="dashboard-kv-row">
+                <span>{t("dashboard.fields.acp")}</span>
+                <strong>{runtime?.acpEnabled ? t("dashboard.values.enabled") : t("dashboard.values.disabled")}</strong>
+              </div>
+            </div>
+          </Panel>
+
+          <Panel
+            eyebrow={t("dashboard.sections.configEyebrow")}
+            title={t("dashboard.sections.configTitle")}
           >
             <div className="dashboard-kv-list">
               <div className="dashboard-kv-row">
@@ -325,40 +534,74 @@ export default function DashboardPage() {
                 <strong title={apiKeyState}>{apiKeyState}</strong>
               </div>
               <div className="dashboard-kv-row">
-                <span>{t("dashboard.fields.sessions")}</span>
-                <strong title={String(summary?.sessionCount ?? 0)}>{summary?.sessionCount ?? 0}</strong>
-              </div>
-              <div className="dashboard-kv-row">
-                <span>{t("dashboard.fields.memory")}</span>
-                <strong title={summary?.memoryBackend ?? t("dashboard.values.none")}>
-                  {summary?.memoryBackend ?? t("dashboard.values.none")}
+                <span>{t("dashboard.fields.memoryProfile")}</span>
+                <strong title={config?.memoryProfile ?? t("dashboard.values.notSet")}>
+                  {config?.memoryProfile ?? t("dashboard.values.notSet")}
                 </strong>
               </div>
               <div className="dashboard-kv-row">
-                <span>{t("dashboard.fields.surface")}</span>
-                <strong title={t("dashboard.values.webConsole")}>
-                  {t("dashboard.values.webConsole")}
+                <span>{t("dashboard.fields.sqlitePath")}</span>
+                <strong title={config?.sqlitePath ?? t("dashboard.values.notSet")}>
+                  {config?.sqlitePath ?? t("dashboard.values.notSet")}
+                </strong>
+              </div>
+              <div className="dashboard-kv-row">
+                <span>{t("dashboard.fields.fileRoot")}</span>
+                <strong title={config?.fileRoot ?? t("dashboard.values.notSet")}>
+                  {config?.fileRoot ?? t("dashboard.values.notSet")}
                 </strong>
               </div>
             </div>
           </Panel>
 
           <Panel
-            eyebrow={t("dashboard.sections.actionsEyebrow")}
-            title={t("dashboard.sections.actionsTitle")}
+            eyebrow={t("dashboard.sections.toolsEyebrow")}
+            title={t("dashboard.sections.toolsTitle")}
           >
-            <div className="dashboard-actions">
-              <button type="button" className="hero-btn hero-btn-secondary">
-                {t("dashboard.settings.validate")}
-              </button>
-              <button type="button" className="hero-btn hero-btn-secondary">
-                {t("dashboard.actions.reload")}
-              </button>
-              <button type="button" className="hero-btn hero-btn-primary">
-                {t("dashboard.settings.apply")}
-              </button>
+            <div className="dashboard-tool-summary">
+              <div className="dashboard-kv-card">
+                <span>{t("dashboard.fields.approval")}</span>
+                <strong title={approvalDisplay}>
+                  {approvalDisplay}
+                </strong>
+              </div>
+              <div className="dashboard-kv-card">
+                <span>{t("dashboard.fields.allowed")}</span>
+                <strong title={String(tools?.shellAllowCount ?? 0)}>
+                  {tools?.shellAllowCount ?? 0}
+                </strong>
+              </div>
+              <div className="dashboard-kv-card">
+                <span>{t("dashboard.fields.denied")}</span>
+                <strong title={String(tools?.shellDenyCount ?? 0)}>
+                  {tools?.shellDenyCount ?? 0}
+                </strong>
+              </div>
+              <div className="dashboard-kv-card">
+                <span>{t("dashboard.fields.shellPolicy")}</span>
+                <strong title={shellPolicyDisplay}>{shellPolicyDisplay}</strong>
+              </div>
             </div>
-            <p className="settings-note">{t("dashboard.actions.helper")}</p>
+
+            <div className="dashboard-tool-grid">
+              {toolItems.map((item) => (
+                <article key={item.id} className="dashboard-tool-card">
+                  <div className="dashboard-tool-card-top">
+                    <div className="dashboard-tool-card-title">
+                      {t(`dashboard.toolItems.${item.id}`)}
+                    </div>
+                    <span
+                      className={`dashboard-pill dashboard-pill-${item.enabled ? "good" : "muted"} dashboard-pill-compact`}
+                    >
+                      {item.enabled ? t("dashboard.values.enabled") : t("dashboard.values.disabled")}
+                    </span>
+                  </div>
+                  <div className="dashboard-tool-card-meta" title={item.detail}>
+                    {item.detail}
+                  </div>
+                </article>
+              ))}
+            </div>
           </Panel>
         </div>
       </section>

@@ -49,6 +49,8 @@ rand.workspace = true
 sha2.workspace = true
 ed25519-dalek.workspace = true
 axum.workspace = true
+futures-util.workspace = true
+reqwest.workspace = true
 
 [[bin]]
 name = "loongclaw"

@@ -1,7 +1,7 @@
 {
   "eyebrow": "Web Dashboard",
-  "title": "Runtime control surface",
-  "subtitle": "Inspect the active provider, runtime health, memory state, and web surface mode from one place.",
+  "title": "Runtime console",
+  "subtitle": "Check provider, runtime, tools, and local config in one place.",
   "cards": {
     "runtime": "Runtime",
     "provider": "Provider",
@@ -9,22 +9,17 @@
     "memory": "Memory",
     "install": "Web install"
   },
-  "summary": {
-    "runtimeNote": "Connected to the local daemon.",
-    "providerNote": "Current model and configured profiles.",
-    "memoryNote": "Conversation storage and session count.",
-    "installNote": "How the current web surface is delivered.",
-    "toolsNote": "Action surfaces exposed in this API slice."
-  },
   "sections": {
     "providerEyebrow": "Provider snapshot",
     "providerTitle": "Active provider",
     "runtimeEyebrow": "Runtime detail",
     "runtimeTitle": "Runtime health",
-    "diagnosticsEyebrow": "Diagnostics",
-    "diagnosticsTitle": "Connection and memory",
-    "actionsEyebrow": "Actions",
-    "actionsTitle": "Quick actions"
+    "connectivityEyebrow": "Connection",
+    "connectivityTitle": "Provider route",
+    "configEyebrow": "Config snapshot",
+    "configTitle": "Local config",
+    "toolsEyebrow": "Tool surface",
+    "toolsTitle": "Tool policy"
   },
   "fields": {
     "source": "Source",
@@ -44,7 +39,24 @@
     "memory": "Memory",
     "runtime": "Runtime",
     "provider": "Provider",
-    "install": "Install"
+    "install": "Install",
+    "configPath": "Config path",
+    "ingest": "Ingest",
+    "acp": "ACP",
+    "memoryMode": "Memory mode",
+    "memoryProfile": "Memory profile",
+    "memorySystem": "Memory system",
+    "sqlitePath": "SQLite path",
+    "fileRoot": "File root",
+    "lastProvider": "Last provider",
+    "approval": "Approval",
+    "shellPolicy": "Default policy",
+    "allowed": "Allowed",
+    "denied": "Denied",
+    "providerHost": "Provider host",
+    "dns": "DNS",
+    "probe": "Probe",
+    "routing": "Routing"
   },
   "values": {
     "live": "Live",
@@ -68,7 +80,37 @@
     "notSet": "Not set",
     "default": "Default",
     "secondary": "Secondary",
-    "noProviders": "No provider profiles loaded."
+    "noProviders": "No provider profiles loaded.",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "approvalOff": "Off",
+    "approvalManual": "Manual review",
+    "approvalAuto": "Auto approve",
+    "denyByDefault": "Deny by default",
+    "allowByDefault": "Allow by default"
+  },
+  "connectivity": {
+    "loading": "Checking local provider route…",
+    "healthySummary": "The provider endpoint responded to a local probe request.",
+    "fakeIpSummary": "The provider host resolves to a reserved fake-IP range. A local proxy or TUN is likely intercepting provider traffic.",
+    "transportSummary": "The provider endpoint did not respond to a local probe request. The route may be unstable even if the config is correct.",
+    "proxyEnvSummary": "A proxy environment is present. Keep this provider host on a predictable route before debugging the model itself.",
+    "directAndFilter": "Route this host DIRECT and add it to fake-ip-filter if you use Clash or Mihomo.",
+    "checkRoute": "Check proxy, TUN, DNS, or firewall rules for this host.",
+    "verifyProviderRoute": "If completions still fail, try a DIRECT rule for this host.",
+    "noRecommendation": "No local routing change recommended.",
+    "probeReachable": "Reachable (HTTP {{code}})",
+    "probeTransportFailure": "Transport failure"
+  },
+  "toolItems": {
+    "shell_policy": "Shell access",
+    "sessions": "Session tools",
+    "messages": "Message tools",
+    "delegate": "Delegation",
+    "browser": "Browser",
+    "browser_companion": "Browser companion",
+    "web_fetch": "Web fetch",
+    "external_skills": "External skills"
   },
   "actions": {
     "reload": "Reload runtime",

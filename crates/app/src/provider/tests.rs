@@ -1933,6 +1933,7 @@ async fn responses_turn_falls_back_to_chat_completions_for_compatible_endpoints(
             "role": "user",
             "content": "turn ping"
         })],
+        None,
         ProviderRuntimeBinding::direct(),
     )
     .await
@@ -2002,6 +2003,7 @@ async fn responses_turn_does_not_fallback_for_generic_gateway_failures() {
             "role": "user",
             "content": "turn ping"
         })],
+        None,
         ProviderRuntimeBinding::direct(),
     )
     .await

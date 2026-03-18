@@ -2013,6 +2013,7 @@ impl ConversationTurnCoordinator {
                     preparation.turn_id.as_str(),
                     &preparation.session.messages,
                     &tool_view,
+                    acp_options.event_sink,
                     binding,
                 )
                 .await,
@@ -2513,6 +2514,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                                 followup_preparation.turn_id.as_str(),
                                 &followup_preparation.session.messages,
                                 &followup_tool_view,
+                                None,
                                 binding,
                             )
                             .await,

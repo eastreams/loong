@@ -27,6 +27,7 @@
   --bg-gradient: rgb(13, 17, 22);
   --panel-gradient: #161b22;
   --font-chinese: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-ui: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", Consolas, "Noto Sans SC", sans-serif;
   --font-display: "Syncopate", "Orbitron", "Audiowide", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
   --space-xs: 0.25rem;

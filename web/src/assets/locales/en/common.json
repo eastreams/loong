@@ -8,9 +8,21 @@
   },
   "status": {
     "connected": "Connected",
+    "authRequired": "Token required",
+    "unauthorized": "Token rejected",
     "local": "Local-first",
     "providerReady": "Provider ready",
     "memoryHealthy": "Memory healthy"
+  },
+  "auth": {
+    "bannerTitle": "Unlock local API",
+    "bannerBody": "Read the local token from {{tokenPath}} and paste it here. You can also override it with {{tokenEnv}}.",
+    "invalidTitle": "Stored token was rejected",
+    "invalidBody": "The current token was rejected. Read the latest token from {{tokenPath}} and try again.",
+    "requiredBody": "Enter the local API token to load protected runtime data.",
+    "inputPlaceholder": "Paste local API token",
+    "save": "Save token",
+    "clear": "Clear"
   },
   "chrome": {
     "eyebrow": "Web Console",

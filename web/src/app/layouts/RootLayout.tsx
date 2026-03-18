@@ -1,5 +1,6 @@
 import type { PropsWithChildren } from "react";
 import NavBar from "../../components/layout/NavBar";
+import { LocalTokenBanner } from "../../components/status/LocalTokenBanner";
 
 export default function RootLayout({ children }: PropsWithChildren) {
   return (
@@ -13,6 +14,7 @@ export default function RootLayout({ children }: PropsWithChildren) {
       <div className="background-glow background-glow-right" aria-hidden="true" />
       <div className="app-frame">
         <NavBar />
+        <LocalTokenBanner />
         <main className="page-scroll">{children}</main>
       </div>
     </div>

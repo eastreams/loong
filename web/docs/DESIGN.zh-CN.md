@@ -1,452 +1,190 @@
-# LoongClaw Web 设计文档
+# LoongClaw Web 设计说明
 
-状态：Phase 4 进行中（基于实际实现进度重排）  
-范围：`alpha-test` 分支，大型交付型 PR  
+状态：Phase 4 进行中  
 最后更新：2026-03-18
 
-## 1. 目标
+## 1. 产品目标
 
-为 LoongClaw 增加一个独立的 `web/` 前端模块，首批至少包含两个主界面：
+LoongClaw Web 不是新的 assistant runtime，而是现有 LoongClaw runtime 的一个本地优先前端表面。
+
+首批目标：
 
 - Web Chat
 - Web Dashboard
 
-Web 只是新的客户端表面，不是新的 assistant runtime。实际执行、会话、provider、tool、memory、audit 语义仍然复用现有 LoongClaw runtime。
+它们都应复用现有 LoongClaw 的：
+
+- conversation 语义
+- provider 调用链
+- tools
+- memory
+- audit / policy
 
 ## 2. 产品定位
 
-Web 是可选前端模块，不是基础安装的默认组成部分。
+Web 当前定位为：
+
+- 可选前端模块
+- 本地优先控制台
+- 不替代 CLI
+
+这意味着：
 
 - 基础安装仍以 CLI/runtime 为主
-- Web 资源默认不进入基础安装包
-- `onboard` 可提供 Web 安装选项，并标注体积和用途
-- 首批优先支持本地部署模式
-- 托管前端模式保留为后续交付，不是 Phase 1 优先级
+- Web 是控制面与交互面扩展
+- Web 与 CLI 在 provider/runtime 问题上共享同一条底层链路
 
-## 3. 语言与内容策略
+## 3. 当前阶段判断
 
-前端内容策略改为：
+按当前真实实现看，项目已经不是“文档 + 壳子”阶段，而是进入了可用 MVP。
 
-- 优先英文
-- 中英双语
-- 组织方式与参考站点保持一致
+当前大致进度：
 
-这里的“优先英文”指的是：
+- Phase 1：完成
+- Phase 2：完成语义复用，但未完全做 app 层抽象收口
+- Phase 3：本地 API 控制面大部分完成
+- Phase 4：前端 MVP 已跑通，继续打磨中
 
-- 信息架构先以英文命名和英文路径组织
-- 默认翻译资源先提供英文基线
-- 中文作为首批同步支持语言，不是后补语言
+## 4. 当前已落地能力
 
-推荐首批语言：
+### Web Chat
 
-- `en`
-- `zh-CN`
+已具备：
 
-文档本身可以继续以中文维护，但前端产品形态、目录、文案组织、国际化资源结构应与参考站点一致。
+- session 列表与 history
+- 创建 session
+- 创建 turn
+- 流式 turn 消费
+- assistant 下方生成中状态
+- tool 事件摘要展示
+- 简单 Markdown 标题 / 段落 / 列表渲染
 
-## 4. 视觉与交互方向
+### Web Dashboard
 
-视觉上允许直接继承参考站点：
-
-- 参考仓库：`E:\GitDesktop\loongclaw-website`
-- 可以把它理解成“基于现有官网视觉系统，改造成 chat + dashboard 的产品界面”
-
-这意味着首版不需要刻意做出差异化外观。相反，应尽量继承：
-
-- 颜色 token
-- 字体系统
-- panel 边框和层次感
-- 深浅主题策略
-- spacing 和 typography scale
-- 动效节奏
-- 中英双语切换方式
-
-设计目标不是“做一个新的后台模板”，而是“把现有官网设计语言延展到一个可交互的控制台产品”。
-
-## 5. 核心架构决策
-
-采用 `local-first` 的前后端分离方案。
-
-- 本地 `loongclaw` 进程仍然是真实执行入口和事实来源
-- `web/` 是独立前端模块
-- 后端暴露本地 HTTP API 作为控制面
-- 前端消费本地 API，渲染 chat 和 dashboard
-
-这样可以同时满足：
-
-- Web 独立迭代
-- 对无头设备友好
-- 将来支持托管前端
-- 不破坏现有 CLI / channel / runtime 统一语义
-
-## 6. MVP 非目标
-
-Phase 1 不做这些能力：
-
-- 独立云端 agent runtime
-- 多用户服务端模式
-- 默认公网暴露
-- 远程同步产品闭环
-- 托管前端优先交付
-- 基础安装默认附带 Web 资源
-
-## 7. 仓库放置与边界
-
-首批继续同仓开发：
-
-```text
-crates/
-  app/
-  daemon/
-web/
-  docs/
-  public/
-  src/
-  package.json
-scripts/
-  web/
-```
-
-原因：
-
-- 当前协议和 UI 都在快速演进
-- 前后端联调和大型 PR 审查在同仓更高效
-- 后续如发布节奏明显分离，再考虑拆仓
-
-## 8. 运行时职责划分
-
-### 8.1 后端
-
-`crates/daemon`
-
-- 启动本地 HTTP 服务
-- 暴露 Web API
-- 处理本地 token 鉴权和 origin 校验
-- 可选挂载已安装的本地静态资源
-
-`crates/app`
-
-- 继续承载真正的 conversation runtime
-- 提供可复用的 session/turn service
-- 负责 provider、tool、memory、ACP、audit 等核心行为
-
-### 8.2 前端
-
-`web/`
-
-- 渲染 Web Chat
-- 渲染 Web Dashboard
-- 管理主题、语言、连接状态
-- 调用后端 API
-- 管理本地 token 和实例连接信息
-
-前端不能复制或重写 runtime 逻辑。
-
-## 9. 会话模型
-
-Web 应直接映射到现有 conversation address 模型。
-
-建议：
-
-- `channel_id = web`
-- `conversation_id = <browser_session_id>`
-- `thread_id = <tab_or_subthread_id>`，后续需要时再引入
-
-浏览器来源、tab、user agent 等信息可以进入 ingress 元数据，但不能承担授权语义。
-
-## 10. 主界面范围
-
-### 10.1 Web Chat
-
-MVP：
-
-- 创建或恢复会话
-- 发起一轮对话
-- 读取最近历史
-- 显示回复状态
-- 显示 provider/runtime 简要状态
-
-后续：
-
-- 更完整的 trace
-- 附件与工具结果面板
-- 多线程会话视图
-
-### 10.2 Web Dashboard
-
-MVP：
+已具备：
 
 - runtime 摘要
-- provider 摘要
-- memory 摘要
-- tool 摘要
-- 配置摘要
-- doctor/runtime 警告
-- Web 安装模式和资源状态
+- providers 摘要
+- tools 摘要
+- config 摘要
+- provider route / connectivity 诊断
 
-后续：
+### 鉴权与连接
 
-- 设置页
-- Provider Settings 面板，可修改 active provider、model、endpoint、API key
-- 运行时管理动作
-- 远程实例和多设备视图
-
-### 10.3 Dashboard 配置编辑原则
-
-Web Dashboard 后续可以支持直接管理 provider 配置，但必须遵守以下原则：
-
-- 前端只提供表单和状态反馈
-- 真正的配置读取、校验、写入、重载都走后端 API
-- 前端不能直接读写 `config.toml`
-- API key 不应明文回显，最多显示“已配置”或部分掩码
-- 配置变更应具备 `validate -> apply -> reload` 的受控流程
-- 配置失败时应允许保留旧值或回滚
-
-建议支持的编辑项：
-
-- active provider
-- model
-- base URL / endpoint
-- API key
-
-不建议在首版开放：
-
-- 任意底层 TOML 编辑
-- 未校验直接写入
-- 自动公网暴露相关配置
-
-## 11. API 形态
-
-Phase 1 API 维持本地控制面最小集合：
-
-- `GET /healthz`
-- `GET /api/meta`
-- `GET /api/chat/sessions`
-- `POST /api/chat/sessions`
-- `GET /api/chat/sessions/:id/history`
-- `POST /api/chat/sessions/:id/turn`
-- `GET /api/dashboard/summary`
-- `GET /api/dashboard/providers`
-- `GET /api/dashboard/tools`
-- `GET /api/dashboard/runtime`
-- `GET /api/dashboard/config`
-
-后续可扩展：
-
-- SSE 流式回复
-- 更细的 diagnostics
-- Web 资源安装和更新接口
-
-## 12. 安装与分发
-
-需要同时兼容两种分发方式：
-
-### 12.1 本地部署
-
-- 默认仅安装 CLI/runtime
-- 用户在 `onboard` 或后续命令中主动安装 Web 资源
-- 本地 daemon 提供静态资源和 API，或前端独立本地运行后连接 API
-
-### 12.2 托管前端
-
-仅作架构预留：
-
-- 前端可由官方或用户自行托管
-- 前端仍连接用户自己的本地 runtime
-- 需要更严格的 origin、token、endpoint 引导和风险说明
-
-Phase 1 不以该模式为交付重点。
-
-## 13. 安全模型
-
-Phase 1 默认策略：
-
-- 默认仅绑定回环地址
-- API 访问需要显式本地 token
-- 默认拒绝宽泛 origin
-- 不自动开放公网访问
-
-后续托管模式重点补充：
-
-- 跨域信任模型
-- token 生命周期和撤销
-- endpoint 暴露风险说明
-- 设备配对与授权 UX
-
-## 14. 命令面建议
-
-- `loongclaw web serve`
-- `loongclaw web status`
-- `loongclaw web install`
-- `loongclaw web remove`
-
-`onboard` 可提供：
-
-- `CLI only`
-- `CLI + Local Web Console`
-
-并显示大致资源体积。
-
-## 15. 当前实际进度
-
-按当前代码落地情况判断，项目已经不再停留在“文档和壳子”阶段。
-
-当前更准确的进度是：
-
-- Phase 1：已完成  
-  设计边界、API 草案、技术选型、目录方案都已固化在 `web/docs/`。
-- Phase 2：部分完成  
-  Web Chat 已经复用真实 LoongClaw runtime 语义，不是子进程壳；但 `crates/app` 级别的干净复用服务仍未抽出来，当前仍有一部分 runtime 初始化逻辑留在 `crates/daemon/src/web_cli.rs`。
-- Phase 3：大部分完成  
-  已有 `loongclaw web serve`，并已实现最小 chat/dashboard 本地 API；但 token 鉴权、dashboard 补全接口、流式事件仍未完成。
-- Phase 4：进行中  
-  前端 `chat + dashboard` 已可用，并且已联通真实后端；但 Chat 还没有流式 turn、tool trace、取消等 agent 表达能力，Dashboard 也还缺少 runtime/tools/config 的完整只读控制面。
-- Phase 5 及之后：未开始或仅做设计预留。
-
-换句话说，当前阶段应视为：
-
-- 已完成“Web MVP 跑通”
-- 正在进入“让 Web 真正表达 agent/runtime 能力”的阶段
-
-## 16. 重排后的实施分期
-
-### Phase 1：协议与设计固化
-
-- 固化前后端边界
-- 固化中英双语和参考站点继承策略
-- 固化本地安装模式
-
-状态：已完成
-
-### Phase 2：runtime 语义复用
-
-- 让 Web Chat 复用真实 LoongClaw conversation runtime
-- 通过统一 session address / memory / provider 路径执行 turn
-- 避免把 Web 做成调用 CLI 子进程的壳
-
-状态：已完成语义复用，未完成抽象收口
-
-### Phase 3：本地 API 控制面
-
-- 实现 `loongclaw web serve`
-- 实现最小 chat 与 dashboard API
-- 提供本地 loopback 开发链路
-
-当前已实现：
-
-- `GET /healthz`
-- `GET /api/meta`
-- `GET /api/dashboard/summary`
-- `GET /api/dashboard/providers`
-- `GET /api/chat/sessions`
-- `POST /api/chat/sessions`
-- `DELETE /api/chat/sessions/:id`
-- `GET /api/chat/sessions/:id/history`
-- `POST /api/chat/sessions/:id/turn`
-
-当前仍缺：
+已具备：
 
 - 本地 token 鉴权
-- `dashboard/tools` / `dashboard/runtime` / `dashboard/config`
-- SSE / 流式事件
+- token 缺失 / 失效状态提示
+- Web API 元信息与连接状态展示
 
-状态：大部分完成
+## 5. 当前 Chat 设计取向
 
-### Phase 4：前端 MVP
+Chat 设计方向已经从“静态聊天页面”转向“更像 agent 的工作面板”。
 
-- 基于参考站点结构搭建前端
-- 实现双语、主题、布局骨架
-- 完成 chat 和 dashboard 两个页面
-- 接入真实后端 API
+当前取向：
 
-状态：已跑通，仍在持续打磨
+- 中间消息区尽量弱化卡片感
+- assistant 生成状态直接挂在 assistant 消息下方
+- turn 完成或失败后状态自动消失
+- 工具事件先做轻量摘要，不做重型 trace 面板
 
-### Phase 4A：Chat 的 agent 化表达
+当前的流式体验分两层理解：
 
-- 为 `turn` 增加 SSE 或等价流式机制
-- 前端展示生成中状态
-- 展示 tool / runtime 事件摘要
-- 增加取消、重试、细粒度错误提示
+1. 前端协议上已经是流式 turn
+2. provider 层对 OpenAI-compatible chat completions 已优先尝试真实流式；不支持时退回缓冲路径
 
-这是当前最优先的下一阶段。
+这意味着当前已经不再是纯“完整文本闪出”的伪流式，但也还没到完整统一的 provider 级流式能力。
 
-### Phase 4B：Dashboard 的控制面补全
+## 6. 当前 Dashboard 设计取向
 
-- 增加 `runtime` / `tools` / `config` 只读接口
-- 增加 provider health、最近错误、diagnostics
-- 把 Dashboard 从“摘要页”补成“runtime 控制台”
+Dashboard 当前不是 BI 大盘，而是本地 runtime 控制台。
 
-### Phase 4C：`app` 层复用服务抽取
+当前职责：
 
-- 将 `crates/daemon/src/web_cli.rs` 中的 runtime 初始化与 turn 拼装逻辑下沉到 `crates/app`
-- 让 CLI / Web 共享更稳定的 session/turn service
-- 为流式 turn、事件流和后续 ACP 可视化做准备
+- 解释现在接的是哪条 provider/config/runtime 链路
+- 提示工具策略和权限面
+- 在 provider transport 失败时给出更可操作的路由诊断
 
-### Phase 5：可选安装流程
+设计上更偏：
 
-- 分离 Web 构建产物
-- 增加 `web install/remove/status`
-- 接入 `onboard`
+- 摘要卡
+- 配置快照
+- 本地网络诊断
+- 工具面板
 
-### Phase 6：Dashboard 受控写入能力
+而不是：
 
-- 增加 provider 配置读取和编辑界面
-- 增加 `validate -> apply -> reload`
-- 保持 key 掩码显示和安全边界
+- 图表化分析
+- 复杂运营数据看板
 
-### Phase 7：托管模式预留
+## 7. Provider 路由与 transport 诊断
 
-- 保持协议稳定
-- 增加 endpoint / origin 扩展点
-- 不在本地模式成熟前提前推进托管交付
+最近这轮开发暴露出一个很重要的问题：
 
-## 17. 当前推荐优先级
+- 某些 provider，尤其是 Volcengine / Ark 这类 host，在 TUN / fake-ip / 代理环境下，短请求可能偶发成功，但稍长 completion 更容易失败
 
-基于当前真实进度，接下来不建议优先投入：
+这不是单纯的 Web bug，也不是单纯的 provider bug，而是：
 
-- 可选安装产品化
-- 托管模式
-- Dashboard 写配置
+- provider transport
+- 本地代理 / fake-ip / TUN
+- timeout / retry 设置
 
-当前更合理的优先级是：
+共同作用后的结果。
 
-1. 先把 Chat 补成真正有 agent 感的交互面  
-   重点是流式 turn、tool/routing 事件、取消与错误表达。
-2. 再把 Dashboard 补成完整只读控制面  
-   重点是 runtime、tools、config、diagnostics。
-3. 然后把 Web runtime 复用逻辑从 `daemon` 抽回 `app`  
-   避免后续 Web 深化后继续粘在命令层实现细节上。
+因此当前设计上新增了一层本地诊断能力：
 
-## 18. 验收标准
+- 检查 provider host DNS 结果
+- 检查是否命中 fake-ip
+- 对 provider endpoint 做轻量 probe
+- 给出 route guidance
 
-首个大型 PR 的验收标准：
+这层能力的目标不是替用户自动改网络，而是：
 
-- Web Chat 和 Web Dashboard 都存在
-- Web 前端复用了现有 LoongClaw runtime 语义
-- 基础安装仍以 CLI/runtime 为主
-- Web 资源是可选安装
-- 本地部署模式可用
-- 前端支持 `en` 和 `zh-CN`
+- 更快定位问题
+- 更少把 transport 问题误判成 Web 问题
+- 为后续 `doctor` / `onboard` 提供可复用基础
 
-## 19. 开发态运行时文件约定
+## 8. 当前已知边界
 
-Web 模块的开发态运行日志不应写回仓库目录。
+当前仍未完成：
 
-约定：
+- provider 全量统一真实流式
+- turn cancel / reconnect / resume
+- 完整 tool trace 面板
+- dashboard 受控写入
+- runtime 抽象完全收口到 `crates/app`
 
-- 仓库目录 `web/` 只保存源码、文档、静态资源和构建配置
-- 开发态后台服务日志统一落到 `%USERPROFILE%\.loongclaw\logs\`
-- 前端开发态默认运行 `vite dev`，而不是 `vite preview`
+这些仍属于下一阶段工作。
 
-这样可以避免：
+## 9. 下一阶段建议
 
-- 分支切换时出现大量与源码无关的未跟踪文件
-- Git 状态被 `.vite-*.log`、`.web-*.log` 干扰
-- 把运行时痕迹错误地放进产品源码树
+### 4A：继续打磨 Chat 的 agent 表达
 
-当前推荐的本地 Web 开发入口：
+优先继续完善：
 
-- `scripts/web/start-dev.ps1`
-- `scripts/web/stop-dev.ps1`
-- 视觉系统和参考站点保持一致
-- 托管模式仅保留架构扩展位，不作为首批依赖
+- 更完整的流式文本体验
+- provider/retry 状态提示
+- 更细的失败态表达
+
+### 4B：继续补 Dashboard 的只读控制面
+
+继续完善：
+
+- provider health
+- diagnostics
+- route guidance
+- runtime 细粒度状态
+
+### 4C：谨慎推进 runtime 抽象收口
+
+仍然需要，但应克制推进，优先避免和主线高频变动区域大面积冲突。
+
+## 10. 设计结论
+
+当前 LoongClaw Web 已经具备继续往“真正可用的 agent 控制台”演进的基础。
+
+下一阶段重点不再是“有没有页面”，而是：
+
+- 让 Chat 更像真实 agent
+- 让 Dashboard 更像本地 runtime 控制台
+- 让 provider / route / transport 问题更容易被理解和修复

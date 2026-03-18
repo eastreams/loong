@@ -1,42 +1,41 @@
-# LoongClaw Web Phase 1 API 草案
+# LoongClaw Web API 说明
 
-状态：Phase 3 已部分落地，Phase 4A/4B 继续扩展  
-范围：本地优先的 Web Chat + Web Dashboard 控制面 API  
+状态：Phase 3 已落地大部分接口，Phase 4 持续扩展  
 最后更新：2026-03-18
 
-## 1. 目标
+## 1. 范围
 
-Phase 1 API 只服务于本地优先的 Web 控制面：
+当前 Web API 服务于本地优先的：
 
 - Web Chat
 - Web Dashboard
 
-API 的目标是稳定承载前端，不重新定义 runtime 语义。
+API 的目标是承载前端控制面，而不是重新定义 LoongClaw runtime。
 
-## 2. 总体原则
+## 2. 基本原则
 
-- 默认仅面向本地实例
-- 默认仅绑定回环地址
-- 默认需要本地 token
-- 响应结构尽量稳定、可扩展
-- API 字段命名优先英文
-- 用户可见文案不从 API 直接下发，由前端通过双语资源本地化
+- 默认绑定回环地址
+- 默认需要本地 token 才能访问受保护接口
+- 字段命名优先英文
+- 前端文案本地化，不由 API 直接下发中文 UI 文字
 
-最后一条很重要：前端采用英文优先、中英双语策略，因此 API 应尽量返回稳定的英文键和值，而不是携带面向 UI 的中文文案。
+## 3. 鉴权
 
-## 3. 认证方式
-
-Phase 1 推荐：
+当前受保护接口使用：
 
 - `Authorization: Bearer <local-token>`
 
-也可兼容：
+当前约定：
 
-- `X-LoongClaw-Token: <local-token>`
+- `GET /healthz` 可匿名访问
+- `GET /api/meta` 可匿名访问
+- 其它控制面接口默认需要 token
 
-首版不引入复杂登录会话。
+本地 token 默认文件：
 
-## 4. 通用响应结构
+- `~/.loongclaw/web-api-token`
+
+## 4. 响应结构
 
 成功响应：
 
@@ -47,7 +46,7 @@ Phase 1 推荐：
 }
 ```
 
-错误响应：
+失败响应：
 
 ```json
 {
@@ -59,378 +58,179 @@ Phase 1 推荐：
 }
 ```
 
-建议：
+## 5. 当前已落地接口
 
-- `code` 使用稳定英文标识
-- `message` 供调试和日志使用
-- 前端可基于 `code` 做双语映射
-
-## 5. 基础接口
-
-### `GET /healthz`
-
-用途：
-
-- 健康检查
-
-示例响应：
-
-```json
-{
-  "ok": true,
-  "data": {
-    "status": "ok"
-  }
-}
-```
-
-### `GET /api/meta`
-
-用途：
-
-- 返回运行时和 Web 支撑信息
-
-示例响应：
-
-```json
-{
-  "ok": true,
-  "data": {
-    "appVersion": "0.1.0-alpha",
-    "apiVersion": "v1",
-    "webInstallMode": "local_assets",
-    "supportedLocales": ["en", "zh-CN"],
-    "defaultLocale": "en"
-  }
-}
-```
-
-## 6. Chat API
-
-### `GET /api/chat/sessions`
-
-用途：
-
-- 获取会话列表
-
-示例响应：
-
-```json
-{
-  "ok": true,
-  "data": {
-    "items": [
-      {
-        "id": "sess_001",
-        "title": "Debug memory state",
-        "updatedAt": "2026-03-17T10:20:00Z"
-      }
-    ]
-  }
-}
-```
-
-### `POST /api/chat/sessions`
-
-用途：
-
-- 创建新会话
-
-示例请求：
-
-```json
-{
-  "title": "New Chat"
-}
-```
-
-示例响应：
-
-```json
-{
-  "ok": true,
-  "data": {
-    "id": "sess_002"
-  }
-}
-```
-
-### `GET /api/chat/sessions/:id/history`
-
-用途：
-
-- 获取会话历史
-
-示例响应：
-
-```json
-{
-  "ok": true,
-  "data": {
-    "sessionId": "sess_002",
-    "messages": [
-      {
-        "id": "msg_001",
-        "role": "user",
-        "content": "Check provider status",
-        "createdAt": "2026-03-17T10:25:00Z"
-      },
-      {
-        "id": "msg_002",
-        "role": "assistant",
-        "content": "Provider is available.",
-        "createdAt": "2026-03-17T10:25:03Z"
-      }
-    ]
-  }
-}
-```
-
-### `POST /api/chat/sessions/:id/turn`
-
-用途：
-
-- 提交一轮用户输入并返回结果
-
-示例请求：
-
-```json
-{
-  "input": "Summarize the current runtime health"
-}
-```
-
-示例响应：
-
-```json
-{
-  "ok": true,
-  "data": {
-    "turnId": "turn_001",
-    "message": {
-      "id": "msg_010",
-      "role": "assistant",
-      "content": "Runtime health is stable."
-    }
-  }
-}
-```
-
-后续可扩展：
-
-- SSE 流式输出
-- tool trace
-- richer message blocks
-
-## 7. 当前实现状态
-
-截至当前版本，下面这些接口已在本地 Web API 中落地：
+### 基础接口
 
 - `GET /healthz`
 - `GET /api/meta`
-- `GET /api/dashboard/summary`
-- `GET /api/dashboard/providers`
+
+### Chat
+
 - `GET /api/chat/sessions`
 - `POST /api/chat/sessions`
 - `DELETE /api/chat/sessions/:id`
 - `GET /api/chat/sessions/:id/history`
 - `POST /api/chat/sessions/:id/turn`
+- `GET /api/chat/sessions/:id/turns/:turn_id/stream`
 
-当前仍未落地但应优先补充的接口方向：
+### Dashboard
 
+- `GET /api/dashboard/summary`
+- `GET /api/dashboard/providers`
 - `GET /api/dashboard/tools`
 - `GET /api/dashboard/runtime`
 - `GET /api/dashboard/config`
-- `POST /api/chat/sessions/:id/turn/stream` 或等价 SSE 路径
+- `GET /api/dashboard/connectivity`
 
-因此，这份文档应理解为：
+## 6. Chat 流式接口
 
-- 其中一部分已经成为当前实现
-- 另一部分是下一阶段 API 演进目标
+### `POST /api/chat/sessions/:id/turn`
 
-## 8. Dashboard API
+用途：
+
+- 创建一个新 turn
+- 不再同步返回完整 assistant 消息
+
+响应示例：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "sessionId": "web-1710000000-ab12cd34",
+    "turnId": "turn-1710000001-ff00aa11",
+    "status": "accepted"
+  }
+}
+```
+
+### `GET /api/chat/sessions/:id/turns/:turn_id/stream`
+
+用途：
+
+- 读取该 turn 的流式事件
+
+当前协议：
+
+- `fetch` + `Authorization` 请求头
+- `application/x-ndjson`
+- 一行一个 JSON 事件
+
+当前事件：
+
+- `turn.started`
+- `message.delta`
+- `tool.started`
+- `tool.finished`
+- `turn.completed`
+- `turn.failed`
+
+事件示例：
+
+```json
+{"type":"turn.started","turnId":"turn-1","sessionId":"sess-1","createdAt":"2026-03-18T09:30:00Z"}
+{"type":"message.delta","turnId":"turn-1","role":"assistant","delta":"Hello"}
+{"type":"message.delta","turnId":"turn-1","role":"assistant","delta":" world"}
+{"type":"turn.completed","turnId":"turn-1","message":{"id":"msg-1","role":"assistant","content":"Hello world","createdAt":"2026-03-18T09:30:02Z"}}
+```
+
+## 7. 当前流式实现边界
+
+当前流式能力分两层：
+
+1. 前端消费链已经是流式 turn
+2. provider 层对 OpenAI-compatible chat completions 会优先尝试真实流式；不支持时退回缓冲路径
+
+当前尚未覆盖：
+
+- 所有 provider 的统一真实流式
+- cancel
+- reconnect
+- resume
+- 完整 tool trace
+
+## 8. Dashboard 接口职责
 
 ### `GET /api/dashboard/summary`
 
-用途：
-
-- 获取 dashboard 顶层摘要
+提供顶部摘要卡数据。
 
 ### `GET /api/dashboard/providers`
 
-用途：
-
-- 获取 provider 状态与可用性
+提供 provider 列表、当前激活项、模型、endpoint 与 key 配置状态。
 
 ### `GET /api/dashboard/tools`
 
-用途：
-
-- 获取 tool 状态摘要
+提供工具启用状态与策略摘要。
 
 ### `GET /api/dashboard/runtime`
 
-用途：
+提供 runtime 运行态信息，例如：
 
-- 获取 runtime 状态和告警
+- config path
+- memory mode
+- active provider / model
+- ingest mode
 
 ### `GET /api/dashboard/config`
 
-用途：
+提供 UI 关心的配置快照，例如：
 
-- 获取对 UI 有意义的配置摘要
+- endpoint
+- API key 是否已配置
+- sqlite path
+- file root
 
-这些接口的字段命名统一使用英文；任何用户可见标题都由前端翻译资源控制。
+### `GET /api/dashboard/connectivity`
 
-## 9. Phase 2 Provider Settings API
+提供 provider route / connectivity 诊断，例如：
 
-下面这组接口不属于当前 Phase 1 必做范围，但建议在 Phase 2 作为 Dashboard 的受控配置能力引入。
+- endpoint
+- host
+- DNS 结果
+- probe 状态
+- 是否命中 fake-ip
+- 建议的修复方向
 
-### `GET /api/dashboard/providers`
-
-用途：
-
-- 获取 provider 列表、当前激活项、模型、endpoint 和 key 配置状态
-
-示例响应：
-
-```json
-{
-  "ok": true,
-  "data": {
-    "activeProvider": "openai",
-    "items": [
-      {
-        "id": "openai",
-        "label": "OpenAI",
-        "enabled": true,
-        "model": "gpt-5",
-        "endpoint": "https://api.openai.com/v1",
-        "apiKeyConfigured": true,
-        "apiKeyMasked": "****abcd"
-      }
-    ]
-  }
-}
-```
-
-### `PATCH /api/dashboard/providers/:id`
-
-用途：
-
-- 更新某个 provider 的可编辑配置
-
-示例请求：
-
-```json
-{
-  "enabled": true,
-  "model": "gpt-5",
-  "endpoint": "https://api.openai.com/v1",
-  "apiKey": "sk-..."
-}
-```
-
-说明：
-
-- `apiKey` 只允许写入，不应通过该接口原样回显
-- 接口应只接受受控字段，不允许任意配置透传
-
-### `POST /api/dashboard/providers/:id/validate`
-
-用途：
-
-- 对当前编辑值做校验或探测连接
-
-示例响应：
+响应字段示例：
 
 ```json
 {
   "ok": true,
   "data": {
-    "valid": true,
-    "warnings": []
+    "status": "degraded",
+    "endpoint": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+    "host": "ark.cn-beijing.volces.com",
+    "dnsAddresses": ["198.18.0.189"],
+    "probeStatus": "transport_failure",
+    "probeStatusCode": null,
+    "fakeIpDetected": true,
+    "proxyEnvDetected": false,
+    "recommendation": "direct_host_and_fake_ip_filter"
   }
 }
 ```
 
-### `POST /api/dashboard/runtime/reload`
+## 9. 当前错误表达
 
-用途：
+当前仍然较常见的 provider 侧错误包括：
 
-- 在配置写入成功后请求 runtime 重载
-
-示例响应：
-
-```json
-{
-  "ok": true,
-  "data": {
-    "reloaded": true
-  }
-}
-```
-
-### Provider Settings 安全约束
-
-- 前端不能直接修改 `config.toml`
-- 服务端必须负责校验、持久化和重载
-- API key 不应明文回读
-- 建议支持失败回滚或保留旧值
-- 默认仍然只允许本地受信访问
-
-## 10. 错误码建议
-
-建议首批统一以下英文错误码：
-
-- `unauthorized`
-- `forbidden_origin`
-- `not_found`
-- `invalid_request`
-- `runtime_unavailable`
+- `transport_failure`
 - `provider_unavailable`
-- `tool_execution_failed`
-- `internal_error`
-- `config_validation_failed`
-- `runtime_reload_failed`
+- `unauthorized`
 
-前端应基于这些 code 做中英双语提示，而不是直接展示服务端 message。
+后续建议继续细化 transport 相关分类，例如：
 
-## 11. 兼容性约定
+- DNS / fake-ip 干扰
+- connect timeout
+- read timeout
+- proxy route failure
 
-- API path 采用 `/api/...`
-- 字段名采用英文 camelCase
-- 错误码采用英文 snake_case 或 kebab-case 二选一，首版需固定一种
-- `supportedLocales` 至少包含 `en` 和 `zh-CN`
+## 10. 后续 API 方向
 
-## 12. 当前建议的下一步 API 优先级
+当前更合理的下一步是：
 
-从实际开发顺序看，后续建议优先补：
-
-1. Chat 流式输出
-- SSE 事件流
-- assistant 增量文本
-- tool / runtime 事件摘要
-
-2. Dashboard 只读控制面补全
-- `tools`
-- `runtime`
-- `config`
-- provider health / diagnostics
-
-3. 再进入受控写入
-- provider validate / apply / reload
-- 更细的 auth 与安全控制
-
-## 13. Phase 1 边界
-
-Phase 1 不要求：
-
-- 复杂登录态
-- 远程设备同步
-- 多用户权限体系
-- 云端会话存储
-- 完整托管模式 API
-- Provider Settings 写入能力
-
-Phase 1 只需要把本地优先的 Web Chat 与 Web Dashboard 稳定跑通。
+1. 继续完善流式文本与 provider 状态事件
+2. 继续补 dashboard diagnostics
+3. 之后再做 dashboard 受控写入能力

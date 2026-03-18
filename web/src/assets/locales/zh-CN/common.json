@@ -2,15 +2,27 @@
   "appName": "LoongClaw Web",
   "nav": {
     "chat": "对话",
-    "dashboard": "仪表板",
+    "dashboard": "仪表盘",
     "theme": "主题",
     "language": "语言"
   },
   "status": {
     "connected": "已连接",
+    "authRequired": "需要 Token",
+    "unauthorized": "Token 被拒绝",
     "local": "本地优先",
     "providerReady": "Provider 已就绪",
     "memoryHealthy": "Memory 状态正常"
+  },
+  "auth": {
+    "bannerTitle": "解锁本地 API",
+    "bannerBody": "请从 {{tokenPath}} 读取本地 token 并粘贴到这里。你也可以通过 {{tokenEnv}} 覆盖它。",
+    "invalidTitle": "当前 token 已被拒绝",
+    "invalidBody": "当前 token 无效，请从 {{tokenPath}} 读取最新 token 后重试。",
+    "requiredBody": "先输入本地 API token，才能加载受保护的运行时数据。",
+    "inputPlaceholder": "输入本地 API token",
+    "save": "保存 token",
+    "clear": "清除"
   },
   "chrome": {
     "eyebrow": "Web Console",

@@ -5,11 +5,35 @@
   "newSession": "New session",
   "deleteSession": "Delete session",
   "deleting": "Deleting...",
+  "generating": "Generating...",
   "inputPlaceholder": "Ask LoongClaw about runtime, tools, or workflow...",
   "send": "Send",
   "panels": {
     "sessions": "Sessions",
     "composer": "Composer",
     "inspector": "Inspector"
+  },
+  "toolStatus": {
+    "running": "Running",
+    "ok": "Done",
+    "error": "Failed"
+  },
+  "errors": {
+    "providerHostFallback": "the provider host",
+    "transportFailure": "Provider connection failed while contacting {{host}}. If you use a proxy, route this host DIRECT and add it to fake-ip-filter. You can confirm the current diagnosis in Runtime console > Provider route."
+  },
+  "loading": {
+    "connectingA": "LoongClaw is joining the flight path",
+    "connectingB": "LoongClaw is checking the route",
+    "connectingC": "LoongClaw is looking for stable air",
+    "thinkingA": "LoongClaw is thinking",
+    "thinkingB": "LoongClaw is circling",
+    "thinkingC": "LoongClaw is arranging its thoughts",
+    "streamingA": "LoongClaw is laying down words",
+    "streamingB": "LoongClaw is expanding the answer",
+    "streamingC": "LoongClaw is still in flight",
+    "hintConnecting": "The provider connection is still in progress. If there is no error yet, this turn still has a chance to complete.",
+    "hintThinking": "The request is already out. LoongClaw is waiting on or shaping the response.",
+    "hintStreaming": "Incremental text is already arriving. This turn is still actively generating."
   }
 }

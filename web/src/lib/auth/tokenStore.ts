@@ -15,3 +15,11 @@ export function setStoredToken(token: string) {
     // Ignore storage failures.
   }
 }
+
+export function clearStoredToken() {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
+}
