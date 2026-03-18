@@ -1420,19 +1420,14 @@ impl TurnEngine {
         .buffer_unordered(self.parallel_tool_execution_max_in_flight);
 
         while let Some((index, result)) = executions.next().await {
-            results.push((index, result));
-        }
-        results.sort_by_key(|(index, _)| *index);
-
-        let mut outputs = Vec::with_capacity(prepared.len());
-        for (_, result) in results {
             match result {
-                Ok(output) => outputs.push(output),
+                Ok(output) => results.push((index, output)),
                 Err(turn_result) => return Err(turn_result),
             }
         }
+        results.sort_by_key(|(index, _)| *index);
 
-        Ok(outputs)
+        Ok(results.into_iter().map(|(_, output)| output).collect())
     }
 
     async fn prepare_tool_intent<D: AppToolDispatcher + ?Sized>(

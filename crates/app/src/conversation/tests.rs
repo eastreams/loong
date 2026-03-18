@@ -5030,6 +5030,150 @@ async fn handle_turn_with_runtime_safe_lane_honors_configured_tool_step_budget()
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_safe_lane_does_not_parallelize_fast_lane_batches_when_plan_path_is_disabled()
+ {
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+    use loongclaw_kernel::CoreToolAdapter;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use tokio::time::Duration;
+
+    struct OverlapDetectingToolAdapter {
+        in_flight: Arc<AtomicUsize>,
+        overlap_observed: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl CoreToolAdapter for OverlapDetectingToolAdapter {
+        fn name(&self) -> &str {
+            "overlap-detecting-tools"
+        }
+
+        async fn execute_core_tool(
+            &self,
+            request: ToolCoreRequest,
+        ) -> Result<ToolCoreOutcome, loongclaw_contracts::ToolPlaneError> {
+            let active = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            if active > 1 {
+                self.overlap_observed.store(true, Ordering::SeqCst);
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "path": request.payload.get("path").cloned().unwrap_or(Value::Null),
+                }),
+            })
+        }
+    }
+
+    let overlap_observed = Arc::new(AtomicBool::new(false));
+    let in_flight = Arc::new(AtomicUsize::new(0));
+
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongClawKernel::with_runtime(
+        StaticPolicyEngine::default(),
+        clock,
+        Arc::new(InMemoryAuditSink::default()),
+    );
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+    kernel.register_core_tool_adapter(OverlapDetectingToolAdapter {
+        in_flight: in_flight.clone(),
+        overlap_observed: overlap_observed.clone(),
+    });
+    kernel
+        .set_default_core_tool_adapter("overlap-detecting-tools")
+        .expect("set default core tool adapter");
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+    let kernel_ctx = KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Executing deployment checks.".to_owned(),
+            tool_intents: vec![
+                provider_tool_intent(
+                    "file.read",
+                    json!({"path": "first.md"}),
+                    "session-safe-fast-lane-gating",
+                    "turn-safe-fast-lane-gating",
+                    "call-safe-fast-lane-gating-1",
+                ),
+                provider_tool_intent(
+                    "file.read",
+                    json!({"path": "second.md"}),
+                    "session-safe-fast-lane-gating",
+                    "turn-safe-fast-lane-gating",
+                    "call-safe-fast-lane-gating-2",
+                ),
+            ],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+
+    let mut config = test_config();
+    config.conversation.safe_lane_plan_execution_enabled = false;
+    config.conversation.safe_lane_max_tool_steps_per_turn = 2;
+    config
+        .conversation
+        .fast_lane_parallel_tool_execution_enabled = true;
+    config
+        .conversation
+        .fast_lane_parallel_tool_execution_max_in_flight = 2;
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-safe-fast-lane-gating",
+            "deploy to production with secret token and show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("safe lane turn should complete without fast-lane parallel execution");
+
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    let checkpoint_payloads =
+        persisted_conversation_event_payloads_by_name(&persisted, "turn_checkpoint");
+    assert_eq!(
+        checkpoint_payloads.last().expect("turn_checkpoint payload")["checkpoint"]["lane"]["lane"],
+        "safe"
+    );
+    assert!(
+        reply
+            .lines()
+            .filter(|line| line.starts_with("[ok] "))
+            .count()
+            == 2,
+        "expected raw tool output for both tool calls, got: {reply}"
+    );
+    assert!(
+        !overlap_observed.load(Ordering::SeqCst),
+        "safe lane should not reuse fast-lane parallel execution"
+    );
+}
+
 #[tokio::test]
 async fn handle_turn_with_runtime_safe_lane_plan_path_bypasses_turn_step_limit() {
     let runtime = FakeRuntime::with_turn_and_completion(
@@ -7591,14 +7735,13 @@ async fn turn_engine_fails_closed_before_kernel_binding_error_for_later_core_int
 async fn turn_engine_parallel_safe_app_batch_executes_concurrently_in_source_order() {
     use async_trait::async_trait;
     use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use tokio::sync::Notify;
-    use tokio::time::{Duration, timeout};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use tokio::time::Duration;
 
     #[derive(Default)]
     struct ParallelSafeDispatcher {
         overlap_observed: AtomicBool,
-        second_started: Notify,
+        in_flight: AtomicUsize,
     }
 
     #[async_trait]
@@ -7615,15 +7758,12 @@ async fn turn_engine_parallel_safe_app_batch_executes_concurrently_in_source_ord
                 .and_then(Value::as_str)
                 .expect("marker should be present");
 
-            if marker == "second" {
-                self.second_started.notify_waiters();
-                tokio::time::sleep(Duration::from_millis(25)).await;
-            } else if timeout(Duration::from_millis(200), self.second_started.notified())
-                .await
-                .is_ok()
-            {
+            let active = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            if active > 1 {
                 self.overlap_observed.store(true, Ordering::SeqCst);
             }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
 
             Ok(ToolCoreOutcome {
                 status: "ok".to_owned(),
@@ -7726,13 +7866,131 @@ async fn turn_engine_parallel_safe_app_batch_executes_concurrently_in_source_ord
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_engine_parallel_safe_app_batch_returns_failure_without_waiting_for_in_flight_work() {
+    use async_trait::async_trait;
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use tokio::time::Duration;
+
+    #[derive(Default)]
+    struct ParallelFailureDispatcher {
+        slow_completed: AtomicBool,
+        slow_started: AtomicBool,
+        in_flight: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl crate::conversation::AppToolDispatcher for ParallelFailureDispatcher {
+        async fn execute_app_tool(
+            &self,
+            _session_context: &crate::conversation::SessionContext,
+            request: ToolCoreRequest,
+            _binding: crate::conversation::ConversationRuntimeBinding<'_>,
+        ) -> Result<ToolCoreOutcome, String> {
+            let marker = request
+                .payload
+                .get("marker")
+                .and_then(Value::as_str)
+                .expect("marker should be present");
+
+            match marker {
+                "slow" => {
+                    self.slow_started.store(true, Ordering::SeqCst);
+                    self.in_flight.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    self.slow_completed.store(true, Ordering::SeqCst);
+                    Ok(ToolCoreOutcome {
+                        status: "ok".to_owned(),
+                        payload: json!({
+                            "marker": marker,
+                            "tool_name": request.tool_name,
+                        }),
+                    })
+                }
+                "fail" => {
+                    while !self.slow_started.load(Ordering::SeqCst) {
+                        tokio::task::yield_now().await;
+                    }
+                    Err("parallel batch failure".to_owned())
+                }
+                other => panic!("unexpected marker `{other}`"),
+            }
+        }
+    }
+
+    let dispatcher = ParallelFailureDispatcher::default();
+    let engine = TurnEngine::with_parallel_tool_execution(2, 2_048, true, 2);
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![
+            provider_tool_intent(
+                "sessions_list",
+                json!({
+                    "marker": "slow",
+                }),
+                "root-session",
+                "turn-parallel-safe-batch-failure",
+                "call-parallel-safe-batch-failure-1",
+            ),
+            provider_tool_intent(
+                "sessions_list",
+                json!({
+                    "marker": "fail",
+                }),
+                "root-session",
+                "turn-parallel-safe-batch-failure",
+                "call-parallel-safe-batch-failure-2",
+            ),
+        ],
+        raw_meta: Value::Null,
+    };
+    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
+
+    let result = engine
+        .execute_turn_in_context(
+            &turn,
+            &session_context,
+            &dispatcher,
+            crate::conversation::ConversationRuntimeBinding::direct(),
+            None,
+        )
+        .await;
+
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    match result {
+        TurnResult::ToolError(failure) => {
+            assert_eq!(failure.code.as_str(), "app_tool_execution_failed");
+            assert!(
+                failure.reason.contains("parallel batch failure"),
+                "unexpected failure reason: {:?}",
+                failure.reason
+            );
+        }
+        other @ TurnResult::FinalText(_)
+        | other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected ToolError(app_tool_execution_failed), got: {other:?}")
+        }
+    }
+
+    assert!(
+        !dispatcher.slow_completed.load(Ordering::SeqCst),
+        "parallel batch should cancel in-flight work once a deterministic failure is known"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_mixed_batch_parallelizes_parallel_safe_segments_without_crossing_serial_only_boundaries()
  {
     use async_trait::async_trait;
     use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use tokio::sync::Notify;
-    use tokio::time::{Duration, timeout};
+    use tokio::time::Duration;
 
     #[derive(Default)]
     struct SegmentedParallelDispatcher {
@@ -7742,8 +8000,8 @@ async fn turn_engine_mixed_batch_parallelizes_parallel_safe_segments_without_cro
         second_segment_started_before_serial_completed: AtomicBool,
         first_segment_completed: AtomicUsize,
         serial_completed: AtomicBool,
-        first_segment_second_started: Notify,
-        second_segment_second_started: Notify,
+        first_segment_in_flight: AtomicUsize,
+        second_segment_in_flight: AtomicUsize,
     }
 
     #[async_trait]
@@ -7762,20 +8020,21 @@ async fn turn_engine_mixed_batch_parallelizes_parallel_safe_segments_without_cro
 
             match marker {
                 "p1a" => {
-                    if timeout(
-                        Duration::from_millis(200),
-                        self.first_segment_second_started.notified(),
-                    )
-                    .await
-                    .is_ok()
-                    {
+                    let active = self.first_segment_in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    if active > 1 {
                         self.first_segment_overlap.store(true, Ordering::SeqCst);
                     }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                    self.first_segment_in_flight.fetch_sub(1, Ordering::SeqCst);
                     self.first_segment_completed.fetch_add(1, Ordering::SeqCst);
                 }
                 "p1b" => {
-                    self.first_segment_second_started.notify_waiters();
+                    let active = self.first_segment_in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    if active > 1 {
+                        self.first_segment_overlap.store(true, Ordering::SeqCst);
+                    }
                     tokio::time::sleep(Duration::from_millis(25)).await;
+                    self.first_segment_in_flight.fetch_sub(1, Ordering::SeqCst);
                     self.first_segment_completed.fetch_add(1, Ordering::SeqCst);
                 }
                 "serial" => {
@@ -7791,23 +8050,24 @@ async fn turn_engine_mixed_batch_parallelizes_parallel_safe_segments_without_cro
                         self.second_segment_started_before_serial_completed
                             .store(true, Ordering::SeqCst);
                     }
-                    if timeout(
-                        Duration::from_millis(200),
-                        self.second_segment_second_started.notified(),
-                    )
-                    .await
-                    .is_ok()
-                    {
+                    let active = self.second_segment_in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    if active > 1 {
                         self.second_segment_overlap.store(true, Ordering::SeqCst);
                     }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                    self.second_segment_in_flight.fetch_sub(1, Ordering::SeqCst);
                 }
                 "p2b" => {
                     if !self.serial_completed.load(Ordering::SeqCst) {
                         self.second_segment_started_before_serial_completed
                             .store(true, Ordering::SeqCst);
                     }
-                    self.second_segment_second_started.notify_waiters();
+                    let active = self.second_segment_in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    if active > 1 {
+                        self.second_segment_overlap.store(true, Ordering::SeqCst);
+                    }
                     tokio::time::sleep(Duration::from_millis(25)).await;
+                    self.second_segment_in_flight.fetch_sub(1, Ordering::SeqCst);
                 }
                 other => panic!("unexpected marker `{other}`"),
             }

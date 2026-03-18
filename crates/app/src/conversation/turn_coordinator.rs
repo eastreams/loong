@@ -4348,12 +4348,17 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     let payload_summary_limit_chars = config
         .conversation
         .tool_result_payload_summary_limit_chars();
-    let parallel_tool_execution_enabled = config
-        .conversation
-        .fast_lane_parallel_tool_execution_enabled;
-    let parallel_tool_execution_max_in_flight = config
-        .conversation
-        .fast_lane_parallel_tool_execution_max_in_flight();
+    let parallel_tool_execution_enabled = matches!(lane, ExecutionLane::Fast)
+        && config
+            .conversation
+            .fast_lane_parallel_tool_execution_enabled;
+    let parallel_tool_execution_max_in_flight = if parallel_tool_execution_enabled {
+        config
+            .conversation
+            .fast_lane_parallel_tool_execution_max_in_flight()
+    } else {
+        1
+    };
     let use_safe_lane_plan_path = preparation
         .lane_plan
         .should_use_safe_lane_plan_path(config, turn);

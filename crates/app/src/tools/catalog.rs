@@ -2454,6 +2454,7 @@ mod tests {
                 .scheduling_class(),
             ToolSchedulingClass::ParallelSafe
         );
+        #[cfg(feature = "tool-file")]
         assert_eq!(
             catalog
                 .descriptor("file.read")
@@ -2461,6 +2462,7 @@ mod tests {
                 .scheduling_class(),
             ToolSchedulingClass::ParallelSafe
         );
+        #[cfg(feature = "tool-webfetch")]
         assert_eq!(
             catalog
                 .descriptor("web.fetch")
