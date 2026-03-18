@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::config::LoongClawConfig;
 use crate::{CliResult, KernelContext};
@@ -10,6 +10,7 @@ use super::context_engine::AssembledConversationContext;
 use super::runtime_binding::ConversationRuntimeBinding;
 
 pub const TURN_MIDDLEWARE_API_VERSION: u16 = 1;
+pub const SYSTEM_PROMPT_ADDITION_TURN_MIDDLEWARE_ID: &str = "system-prompt-addition";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TurnMiddlewareCapability {
@@ -61,6 +62,9 @@ impl TurnMiddlewareMetadata {
             .collect()
     }
 }
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SystemPromptAdditionTurnMiddleware;
 
 #[async_trait]
 pub trait ConversationTurnMiddleware: Send + Sync {
@@ -137,6 +141,67 @@ pub trait ConversationTurnMiddleware: Send + Sync {
     ) -> CliResult<()> {
         Ok(())
     }
+}
+
+#[async_trait]
+impl ConversationTurnMiddleware for SystemPromptAdditionTurnMiddleware {
+    fn id(&self) -> &'static str {
+        SYSTEM_PROMPT_ADDITION_TURN_MIDDLEWARE_ID
+    }
+
+    fn metadata(&self) -> TurnMiddlewareMetadata {
+        TurnMiddlewareMetadata::new(self.id(), [TurnMiddlewareCapability::ContextTransform])
+    }
+
+    async fn transform_context(
+        &self,
+        _config: &LoongClawConfig,
+        _session_id: &str,
+        _include_system_prompt: bool,
+        mut assembled: AssembledConversationContext,
+        _binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<AssembledConversationContext> {
+        apply_system_prompt_addition(
+            &mut assembled.messages,
+            assembled.system_prompt_addition.as_deref(),
+        );
+        Ok(assembled)
+    }
+}
+
+pub(crate) fn apply_system_prompt_addition(messages: &mut Vec<Value>, addition: Option<&str>) {
+    let Some(addition) = addition
+        .map(str::trim)
+        .filter(|content| !content.is_empty())
+    else {
+        return;
+    };
+
+    for message in messages.iter_mut() {
+        let is_system = message.get("role").and_then(Value::as_str) == Some("system");
+        if !is_system {
+            continue;
+        }
+
+        if let Some(object) = message.as_object_mut() {
+            let merged_content = match object.get("content").and_then(Value::as_str) {
+                Some(existing) if !existing.trim().is_empty() => {
+                    format!("{addition}\n\n{}", existing.trim())
+                }
+                _ => addition.to_owned(),
+            };
+            object.insert("content".to_owned(), Value::String(merged_content));
+            return;
+        }
+    }
+
+    messages.insert(
+        0,
+        json!({
+            "role": "system",
+            "content": addition,
+        }),
+    );
 }
 
 #[async_trait]

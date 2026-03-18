@@ -5,19 +5,53 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::CliResult;
 
-use super::turn_middleware::{ConversationTurnMiddleware, TurnMiddlewareMetadata};
+use super::turn_middleware::{
+    ConversationTurnMiddleware, SYSTEM_PROMPT_ADDITION_TURN_MIDDLEWARE_ID,
+    SystemPromptAdditionTurnMiddleware, TurnMiddlewareMetadata,
+};
 
 pub const TURN_MIDDLEWARE_ENV: &str = "LOONGCLAW_TURN_MIDDLEWARES";
 
 type TurnMiddlewareFactory = Arc<dyn Fn() -> Box<dyn ConversationTurnMiddleware> + Send + Sync>;
 
-static TURN_MIDDLEWARE_REGISTRY: OnceLock<RwLock<BTreeMap<String, TurnMiddlewareFactory>>> =
+#[derive(Clone)]
+struct TurnMiddlewareRegistration {
+    factory: TurnMiddlewareFactory,
+    default_enabled: bool,
+}
+
+impl TurnMiddlewareRegistration {
+    fn builtin(factory: TurnMiddlewareFactory) -> Self {
+        Self {
+            factory,
+            default_enabled: true,
+        }
+    }
+
+    fn custom(factory: TurnMiddlewareFactory) -> Self {
+        Self {
+            factory,
+            default_enabled: false,
+        }
+    }
+}
+
+static TURN_MIDDLEWARE_REGISTRY: OnceLock<RwLock<BTreeMap<String, TurnMiddlewareRegistration>>> =
     OnceLock::new();
 #[cfg(test)]
 static TURN_MIDDLEWARE_ENV_OVERRIDE: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
 
-fn registry() -> &'static RwLock<BTreeMap<String, TurnMiddlewareFactory>> {
-    TURN_MIDDLEWARE_REGISTRY.get_or_init(|| RwLock::new(BTreeMap::new()))
+fn registry() -> &'static RwLock<BTreeMap<String, TurnMiddlewareRegistration>> {
+    TURN_MIDDLEWARE_REGISTRY.get_or_init(|| {
+        let mut map: BTreeMap<String, TurnMiddlewareRegistration> = BTreeMap::new();
+        map.insert(
+            SYSTEM_PROMPT_ADDITION_TURN_MIDDLEWARE_ID.to_owned(),
+            TurnMiddlewareRegistration::builtin(Arc::new(|| {
+                Box::new(SystemPromptAdditionTurnMiddleware)
+            })),
+        );
+        RwLock::new(map)
+    })
 }
 
 fn normalize_middleware_id(raw: &str) -> String {
@@ -70,7 +104,15 @@ where
     let mut guard = registry()
         .write()
         .map_err(|_error| "turn middleware registry lock poisoned".to_owned())?;
-    guard.insert(normalized, Arc::new(factory));
+    if guard.contains_key(&normalized) {
+        return Err(format!(
+            "turn middleware `{normalized}` is already registered"
+        ));
+    }
+    guard.insert(
+        normalized,
+        TurnMiddlewareRegistration::custom(Arc::new(factory)),
+    );
     Ok(())
 }
 
@@ -87,10 +129,20 @@ pub fn list_turn_middleware_metadata() -> CliResult<Vec<TurnMiddlewareMetadata>>
         .map_err(|_error| "turn middleware registry lock poisoned".to_owned())?;
     let mut metadata = guard
         .values()
-        .map(|factory| factory().metadata())
+        .map(|registration| (registration.factory)().metadata())
         .collect::<Vec<_>>();
     metadata.sort_by_key(|entry| entry.id);
     Ok(metadata)
+}
+
+pub fn default_turn_middleware_ids() -> CliResult<Vec<String>> {
+    let guard = registry()
+        .read()
+        .map_err(|_error| "turn middleware registry lock poisoned".to_owned())?;
+    Ok(guard
+        .iter()
+        .filter_map(|(id, registration)| registration.default_enabled.then_some(id.clone()))
+        .collect())
 }
 
 pub fn resolve_turn_middleware(id: &str) -> CliResult<Box<dyn ConversationTurnMiddleware>> {
@@ -102,13 +154,13 @@ pub fn resolve_turn_middleware(id: &str) -> CliResult<Box<dyn ConversationTurnMi
     let guard = registry()
         .read()
         .map_err(|_error| "turn middleware registry lock poisoned".to_owned())?;
-    let Some(factory) = guard.get(&normalized).cloned() else {
+    let Some(registration) = guard.get(&normalized).cloned() else {
         let available = guard.keys().cloned().collect::<Vec<_>>().join(", ");
         return Err(format!(
             "turn middleware `{normalized}` is not registered (available: {available})"
         ));
     };
-    Ok(factory())
+    Ok((registration.factory)())
 }
 
 pub fn resolve_turn_middlewares(
@@ -160,46 +212,41 @@ pub(crate) fn clear_turn_middleware_env_override() {
 mod tests {
     use async_trait::async_trait;
 
-    use crate::config::LoongClawConfig;
-
-    use super::super::context_engine::AssembledConversationContext;
-    use super::super::runtime_binding::ConversationRuntimeBinding;
-    use super::super::turn_middleware::TurnMiddlewareCapability;
+    use super::super::turn_middleware::SYSTEM_PROMPT_ADDITION_TURN_MIDDLEWARE_ID;
     use super::*;
 
-    struct TestRegistryTurnMiddleware;
+    struct StaticIdTurnMiddleware {
+        id: &'static str,
+    }
 
     #[async_trait]
-    impl ConversationTurnMiddleware for TestRegistryTurnMiddleware {
+    impl ConversationTurnMiddleware for StaticIdTurnMiddleware {
         fn id(&self) -> &'static str {
-            "registry-turn-middleware"
-        }
-
-        fn metadata(&self) -> TurnMiddlewareMetadata {
-            TurnMiddlewareMetadata::new(self.id(), [TurnMiddlewareCapability::ContextTransform])
-        }
-
-        async fn transform_context(
-            &self,
-            _config: &LoongClawConfig,
-            _session_id: &str,
-            _include_system_prompt: bool,
-            assembled: AssembledConversationContext,
-            _binding: ConversationRuntimeBinding<'_>,
-        ) -> CliResult<AssembledConversationContext> {
-            Ok(assembled)
+            self.id
         }
     }
 
     #[test]
+    fn list_turn_middleware_ids_includes_builtin_defaults() {
+        let ids = list_turn_middleware_ids().expect("list ids");
+        assert!(
+            ids.iter()
+                .any(|id| id == SYSTEM_PROMPT_ADDITION_TURN_MIDDLEWARE_ID),
+            "system prompt addition middleware should be registered by default"
+        );
+    }
+
+    #[test]
     fn registry_can_register_and_resolve_custom_turn_middleware() {
-        register_turn_middleware("registry-turn-middleware", || {
-            Box::new(TestRegistryTurnMiddleware)
+        register_turn_middleware("registry-turn-middleware-custom", || {
+            Box::new(StaticIdTurnMiddleware {
+                id: "registry-turn-middleware-custom",
+            })
         })
         .expect("register custom middleware");
-        let middleware =
-            resolve_turn_middleware("registry-turn-middleware").expect("resolve custom middleware");
-        assert_eq!(middleware.id(), "registry-turn-middleware");
+        let middleware = resolve_turn_middleware("registry-turn-middleware-custom")
+            .expect("resolve custom middleware");
+        assert_eq!(middleware.id(), "registry-turn-middleware-custom");
     }
 
     #[test]
@@ -216,21 +263,40 @@ mod tests {
 
     #[test]
     fn list_turn_middleware_metadata_exposes_capabilities() {
-        register_turn_middleware("registry-turn-middleware", || {
-            Box::new(TestRegistryTurnMiddleware)
+        register_turn_middleware("registry-turn-middleware-capability", || {
+            Box::new(StaticIdTurnMiddleware {
+                id: "registry-turn-middleware-capability",
+            })
         })
         .expect("register turn middleware");
 
         let metadata = list_turn_middleware_metadata().expect("list turn middleware metadata");
         let entry = metadata
             .iter()
-            .find(|entry| entry.id == "registry-turn-middleware")
+            .find(|entry| entry.id == "registry-turn-middleware-capability")
             .expect("registry turn middleware metadata");
         assert_eq!(entry.api_version, 1);
+        assert!(entry.capabilities.is_empty());
+    }
+
+    #[test]
+    fn register_turn_middleware_rejects_duplicate_id() {
+        register_turn_middleware("registry-turn-middleware-duplicate", || {
+            Box::new(StaticIdTurnMiddleware {
+                id: "registry-turn-middleware-duplicate",
+            })
+        })
+        .expect("register duplicate test middleware");
+
+        let error = register_turn_middleware("registry-turn-middleware-duplicate", || {
+            Box::new(StaticIdTurnMiddleware {
+                id: "registry-turn-middleware-duplicate",
+            })
+        })
+        .expect_err("duplicate registration should fail");
         assert!(
-            entry
-                .capabilities
-                .contains(&TurnMiddlewareCapability::ContextTransform)
+            error.contains("already registered"),
+            "unexpected error: {error}"
         );
     }
 
