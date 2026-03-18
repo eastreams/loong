@@ -146,6 +146,14 @@ impl ChannelOperationRuntimeTracker {
         heartbeat_ms: u64,
         process_id: u32,
     ) -> CliResult<Self> {
+        let now = now_ms();
+        prune_inactive_channel_operation_runtime_files_for_account_from_dir(
+            runtime_dir,
+            platform,
+            operation_id,
+            account_id,
+            now,
+        )?;
         let path = channel_operation_runtime_path(
             runtime_dir,
             platform,
@@ -158,7 +166,7 @@ impl ChannelOperationRuntimeTracker {
             busy: false,
             active_runs: 0,
             last_run_activity_at: None,
-            last_heartbeat_at: Some(now_ms()),
+            last_heartbeat_at: Some(now),
             pid: Some(process_id),
             account_id: normalize_optional_account_value(account_id),
             account_label: normalize_optional_account_value(account_label),
@@ -355,6 +363,85 @@ fn load_channel_operation_runtime_for_optional_account_from_dir(
     summarize_runtime_candidates(candidates)
 }
 
+pub(crate) fn prune_inactive_channel_operation_runtime_files_for_account_from_dir(
+    runtime_dir: &Path,
+    platform: ChannelPlatform,
+    operation_id: &str,
+    account_id: Option<&str>,
+    now_ms: u64,
+) -> CliResult<()> {
+    prune_inactive_channel_operation_runtime_files_for_optional_account_from_dir(
+        runtime_dir,
+        platform,
+        operation_id,
+        account_id,
+        now_ms,
+    )?;
+    if account_id.is_some() {
+        prune_inactive_channel_operation_runtime_files_for_optional_account_from_dir(
+            runtime_dir,
+            platform,
+            operation_id,
+            None,
+            now_ms,
+        )?;
+    }
+    Ok(())
+}
+
+fn prune_inactive_channel_operation_runtime_files_for_optional_account_from_dir(
+    runtime_dir: &Path,
+    platform: ChannelPlatform,
+    operation_id: &str,
+    account_id: Option<&str>,
+    now_ms: u64,
+) -> CliResult<()> {
+    let prefix = channel_operation_runtime_file_prefix(platform, operation_id, account_id);
+    let entries = match fs::read_dir(runtime_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "read channel runtime state directory failed for {}: {error}",
+                runtime_dir.display()
+            ));
+        }
+    };
+
+    for entry in entries {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if !matches_channel_operation_runtime_file(file_name.as_ref(), &prefix) {
+            continue;
+        }
+        let path = entry.path();
+        if !runtime_state_path_is_inactive(path.as_path(), now_ms) {
+            continue;
+        }
+        match fs::remove_file(path.as_path()) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "remove inactive channel runtime state failed for {}: {error}",
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) fn default_channel_runtime_state_dir() -> PathBuf {
     default_loongclaw_home().join("channel-runtime")
 }
@@ -401,6 +488,12 @@ fn read_runtime_state(path: &Path, now_ms: u64) -> Option<ChannelOperationRuntim
     let raw = fs::read_to_string(path).ok()?;
     let state = serde_json::from_str::<PersistedChannelOperationRuntime>(&raw).ok()?;
     Some(state.to_runtime_view(now_ms))
+}
+
+fn runtime_state_path_is_inactive(path: &Path, now_ms: u64) -> bool {
+    read_runtime_state(path, now_ms)
+        .map(|runtime| !runtime.running)
+        .unwrap_or(false)
 }
 
 fn select_preferred_runtime(
@@ -628,6 +721,149 @@ mod tests {
         .to_string_lossy()
         .into_owned();
         assert!(entries.contains(&expected_entry));
+    }
+
+    #[tokio::test]
+    async fn runtime_tracker_prunes_inactive_pid_files_before_restart() {
+        let runtime_dir = temp_runtime_dir("tracker-restart-cleanup");
+        let first = ChannelOperationRuntimeTracker::start_in_dir_with_pid(
+            &runtime_dir,
+            ChannelPlatform::Telegram,
+            CHANNEL_OPERATION_SERVE_ID,
+            20,
+            4242,
+        )
+        .await
+        .expect("start first runtime tracker");
+        first
+            .shutdown()
+            .await
+            .expect("shutdown first runtime tracker");
+
+        let second = ChannelOperationRuntimeTracker::start_in_dir_with_pid(
+            &runtime_dir,
+            ChannelPlatform::Telegram,
+            CHANNEL_OPERATION_SERVE_ID,
+            20,
+            5252,
+        )
+        .await
+        .expect("restart runtime tracker");
+
+        let runtime = load_channel_operation_runtime_from_dir(
+            &runtime_dir,
+            ChannelPlatform::Telegram,
+            CHANNEL_OPERATION_SERVE_ID,
+            now_ms(),
+        )
+        .expect("load restarted runtime state");
+
+        assert!(runtime.running);
+        assert_eq!(runtime.pid, Some(5252));
+        assert_eq!(runtime.instance_count, 1);
+        assert_eq!(runtime.running_instances, 1);
+        assert_eq!(runtime.stale_instances, 0);
+
+        let entries = fs::read_dir(&runtime_dir)
+            .expect("list runtime dir after restart")
+            .map(|entry| {
+                entry
+                    .expect("runtime entry after restart")
+                    .file_name()
+                    .into_string()
+                    .expect("utf-8 file name after restart")
+            })
+            .collect::<Vec<_>>();
+        let expected_entry = channel_operation_runtime_path(
+            &runtime_dir,
+            ChannelPlatform::Telegram,
+            CHANNEL_OPERATION_SERVE_ID,
+            None,
+            Some(5252),
+        )
+        .file_name()
+        .expect("restarted runtime path file name")
+        .to_string_lossy()
+        .into_owned();
+        assert_eq!(entries, vec![expected_entry]);
+
+        second
+            .shutdown()
+            .await
+            .expect("shutdown restarted runtime tracker");
+    }
+
+    #[tokio::test]
+    async fn account_runtime_tracker_prunes_inactive_legacy_file_before_start() {
+        let runtime_dir = temp_runtime_dir("account-tracker-legacy-cleanup");
+        let now = now_ms();
+        write_runtime_state_for_test(
+            &runtime_dir,
+            ChannelPlatform::Telegram,
+            CHANNEL_OPERATION_SERVE_ID,
+            false,
+            false,
+            0,
+            Some(now.saturating_sub(5_000)),
+            Some(now.saturating_sub(5_000)),
+            Some(4141),
+        )
+        .expect("write inactive legacy runtime state");
+
+        let tracker = ChannelOperationRuntimeTracker::start_in_dir_with_account_and_pid(
+            &runtime_dir,
+            ChannelPlatform::Telegram,
+            CHANNEL_OPERATION_SERVE_ID,
+            "bot_123456",
+            &test_account_label("bot_123456"),
+            20,
+            5252,
+        )
+        .await
+        .expect("start account-scoped runtime tracker");
+
+        let runtime = load_channel_operation_runtime_for_account_from_dir(
+            &runtime_dir,
+            ChannelPlatform::Telegram,
+            CHANNEL_OPERATION_SERVE_ID,
+            "bot_123456",
+            now_ms(),
+        )
+        .expect("load account-scoped runtime state");
+
+        assert!(runtime.running);
+        assert_eq!(runtime.pid, Some(5252));
+        assert_eq!(runtime.instance_count, 1);
+        assert_eq!(runtime.running_instances, 1);
+        assert_eq!(runtime.stale_instances, 0);
+
+        let entries = fs::read_dir(&runtime_dir)
+            .expect("list runtime dir after account startup")
+            .map(|entry| {
+                entry
+                    .expect("runtime entry after account startup")
+                    .file_name()
+                    .into_string()
+                    .expect("utf-8 file name after account startup")
+            })
+            .collect::<Vec<_>>();
+        let expected_entry = channel_operation_runtime_path(
+            &runtime_dir,
+            ChannelPlatform::Telegram,
+            CHANNEL_OPERATION_SERVE_ID,
+            Some("bot_123456"),
+            Some(5252),
+        )
+        .file_name()
+        .expect("account runtime path file name")
+        .to_string_lossy()
+        .into_owned();
+        assert_eq!(entries, vec![expected_entry]);
+
+        tracker
+            .shutdown()
+            .await
+            .expect("shutdown account-scoped runtime tracker");
     }
 
     #[test]
