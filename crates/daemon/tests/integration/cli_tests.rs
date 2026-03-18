@@ -584,7 +584,7 @@ fn runtime_experiment_cli_rejects_compare_recorded_snapshots_with_manual_paths()
 }
 
 #[test]
-fn runtime_capability_cli_parses_propose_review_show_and_index() {
+fn runtime_capability_cli_parses_propose_review_show_index_and_plan() {
     let propose = Cli::try_parse_from([
         "loongclaw",
         "runtime-capability",
@@ -650,7 +650,8 @@ fn runtime_capability_cli_parses_propose_review_show_and_index() {
                 _,
             )
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Show(_)
-            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Index(_)) => {
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Index(_)
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Plan(_)) => {
                 panic!("unexpected runtime-capability subcommand parsed: {other:?}")
             }
         },
@@ -697,7 +698,8 @@ fn runtime_capability_cli_parses_propose_review_show_and_index() {
                 _,
             )
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Show(_)
-            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Index(_)) => {
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Index(_)
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Plan(_)) => {
                 panic!("unexpected runtime-capability subcommand parsed: {other:?}")
             }
         },
@@ -726,7 +728,8 @@ fn runtime_capability_cli_parses_propose_review_show_and_index() {
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Review(
                 _,
             )
-            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Index(_)) => {
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Index(_)
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Plan(_)) => {
                 panic!("unexpected runtime-capability subcommand parsed: {other:?}")
             }
         },
@@ -753,7 +756,39 @@ fn runtime_capability_cli_parses_propose_review_show_and_index() {
                 _,
             )
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Review(_)
-            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Show(_)) => {
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Show(_)
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Plan(_)) => {
+                panic!("unexpected runtime-capability subcommand parsed: {other:?}")
+            }
+        },
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+
+    let plan = Cli::try_parse_from([
+        "loongclaw",
+        "runtime-capability",
+        "plan",
+        "--root",
+        "/tmp/runtime-capability",
+        "--family-id",
+        "family-123",
+        "--json",
+    ])
+    .expect("`runtime-capability plan` should parse");
+
+    match plan.command {
+        Some(Commands::RuntimeCapability { command }) => match command {
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Plan(options) => {
+                assert_eq!(options.root, "/tmp/runtime-capability");
+                assert_eq!(options.family_id, "family-123");
+                assert!(options.json);
+            }
+            other @ (loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Propose(
+                _,
+            )
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Review(_)
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Show(_)
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Index(_)) => {
                 panic!("unexpected runtime-capability subcommand parsed: {other:?}")
             }
         },
