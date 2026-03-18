@@ -765,6 +765,7 @@ mod tests {
     #[test]
     fn web_fetch_enforces_allow_and_block_domain_rules() {
         let mut allowlist_config = super::super::runtime_config::ToolRuntimeConfig::default();
+        allowlist_config.web_fetch.enforce_allowed_domains = true;
         allowlist_config
             .web_fetch
             .allowed_domains
