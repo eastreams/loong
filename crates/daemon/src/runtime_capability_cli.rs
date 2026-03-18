@@ -10,7 +10,7 @@ use loongclaw_spec::CliResult;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -26,6 +26,8 @@ pub enum RuntimeCapabilityCommands {
     Review(RuntimeCapabilityReviewCommandOptions),
     /// Load and render one persisted capability-candidate artifact
     Show(RuntimeCapabilityShowCommandOptions),
+    /// Aggregate candidate artifacts into deterministic capability families and readiness states
+    Index(RuntimeCapabilityIndexCommandOptions),
 }
 
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
@@ -68,6 +70,14 @@ pub struct RuntimeCapabilityReviewCommandOptions {
 pub struct RuntimeCapabilityShowCommandOptions {
     #[arg(long)]
     pub candidate: String,
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeCapabilityIndexCommandOptions {
+    #[arg(long)]
+    pub root: String,
     #[arg(long, default_value_t = false)]
     pub json: bool,
 }
@@ -153,6 +163,82 @@ pub struct RuntimeCapabilityArtifactDocument {
     pub review: Option<RuntimeCapabilityReview>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeCapabilityFamilyReadinessStatus {
+    Ready,
+    NotReady,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeCapabilityFamilyReadinessCheckStatus {
+    Pass,
+    NeedsEvidence,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuntimeCapabilityFamilyReadinessCheck {
+    pub dimension: String,
+    pub status: RuntimeCapabilityFamilyReadinessCheckStatus,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuntimeCapabilityFamilyReadiness {
+    pub status: RuntimeCapabilityFamilyReadinessStatus,
+    pub checks: Vec<RuntimeCapabilityFamilyReadinessCheck>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct RuntimeCapabilityMetricRange {
+    pub min: f64,
+    pub max: f64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuntimeCapabilitySourceDecisionRollup {
+    pub promoted: usize,
+    pub rejected: usize,
+    pub undecided: usize,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct RuntimeCapabilityEvidenceDigest {
+    pub total_candidates: usize,
+    pub reviewed_candidates: usize,
+    pub undecided_candidates: usize,
+    pub accepted_candidates: usize,
+    pub rejected_candidates: usize,
+    pub distinct_source_run_count: usize,
+    pub distinct_experiment_count: usize,
+    pub latest_candidate_at: Option<String>,
+    pub latest_reviewed_at: Option<String>,
+    pub source_decisions: RuntimeCapabilitySourceDecisionRollup,
+    pub unique_warnings: Vec<String>,
+    pub metric_ranges: BTreeMap<String, RuntimeCapabilityMetricRange>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct RuntimeCapabilityFamilySummary {
+    pub family_id: String,
+    pub proposal: RuntimeCapabilityProposal,
+    pub candidate_ids: Vec<String>,
+    pub evidence: RuntimeCapabilityEvidenceDigest,
+    pub readiness: RuntimeCapabilityFamilyReadiness,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct RuntimeCapabilityIndexReport {
+    pub generated_at: String,
+    pub root: String,
+    pub total_candidate_count: usize,
+    pub family_count: usize,
+    pub families: Vec<RuntimeCapabilityFamilySummary>,
+}
+
 pub fn run_runtime_capability_cli(command: RuntimeCapabilityCommands) -> CliResult<()> {
     match command {
         RuntimeCapabilityCommands::Propose(options) => {
@@ -169,6 +255,11 @@ pub fn run_runtime_capability_cli(command: RuntimeCapabilityCommands) -> CliResu
             let as_json = options.json;
             let artifact = execute_runtime_capability_show_command(options)?;
             emit_runtime_capability_artifact(&artifact, as_json)
+        }
+        RuntimeCapabilityCommands::Index(options) => {
+            let as_json = options.json;
+            let report = execute_runtime_capability_index_command(options)?;
+            emit_runtime_capability_index_report(&report, as_json)
         }
     }
 }
@@ -256,6 +347,52 @@ pub fn execute_runtime_capability_show_command(
     load_runtime_capability_artifact(Path::new(&options.candidate))
 }
 
+pub fn execute_runtime_capability_index_command(
+    options: RuntimeCapabilityIndexCommandOptions,
+) -> CliResult<RuntimeCapabilityIndexReport> {
+    let root_path = Path::new(&options.root);
+    let root = canonicalize_existing_path(root_path)?;
+    let mut artifacts = Vec::new();
+    collect_runtime_capability_artifacts(root_path, &mut artifacts)?;
+
+    let total_candidate_count = artifacts.len();
+    let mut families_by_id = BTreeMap::<String, Vec<RuntimeCapabilityArtifactDocument>>::new();
+    for artifact in artifacts {
+        let family_id = compute_family_id(&artifact.proposal)?;
+        families_by_id.entry(family_id).or_default().push(artifact);
+    }
+
+    let mut families = Vec::new();
+    for (family_id, mut artifacts) in families_by_id {
+        sort_runtime_capability_artifacts(&mut artifacts);
+        let proposal = artifacts
+            .first()
+            .map(|artifact| artifact.proposal.clone())
+            .ok_or_else(|| "runtime capability family cannot be empty".to_owned())?;
+        let candidate_ids = artifacts
+            .iter()
+            .map(|artifact| artifact.candidate_id.clone())
+            .collect::<Vec<_>>();
+        let evidence = build_family_evidence_digest(&artifacts);
+        let readiness = evaluate_family_readiness(&artifacts, &evidence);
+        families.push(RuntimeCapabilityFamilySummary {
+            family_id,
+            proposal,
+            candidate_ids,
+            evidence,
+            readiness,
+        });
+    }
+
+    Ok(RuntimeCapabilityIndexReport {
+        generated_at: now_rfc3339()?,
+        root,
+        total_candidate_count,
+        family_count: families.len(),
+        families,
+    })
+}
+
 fn emit_runtime_capability_artifact(
     artifact: &RuntimeCapabilityArtifactDocument,
     as_json: bool,
@@ -268,6 +405,22 @@ fn emit_runtime_capability_artifact(
     }
 
     println!("{}", render_runtime_capability_text(artifact));
+    Ok(())
+}
+
+fn emit_runtime_capability_index_report(
+    report: &RuntimeCapabilityIndexReport,
+    as_json: bool,
+) -> CliResult<()> {
+    if as_json {
+        let pretty = serde_json::to_string_pretty(report).map_err(|error| {
+            format!("serialize runtime capability index report failed: {error}")
+        })?;
+        println!("{pretty}");
+        return Ok(());
+    }
+
+    println!("{}", render_runtime_capability_index_text(report));
     Ok(())
 }
 
@@ -339,7 +492,374 @@ fn load_runtime_capability_artifact(path: &Path) -> CliResult<RuntimeCapabilityA
             RUNTIME_CAPABILITY_ARTIFACT_JSON_SCHEMA_VERSION
         ));
     }
+    validate_runtime_capability_artifact_state(&artifact, path)?;
     Ok(artifact)
+}
+
+fn validate_runtime_capability_artifact_state(
+    artifact: &RuntimeCapabilityArtifactDocument,
+    path: &Path,
+) -> CliResult<()> {
+    match artifact.status {
+        RuntimeCapabilityStatus::Proposed => {
+            if artifact.reviewed_at.is_some()
+                || artifact.review.is_some()
+                || artifact.decision != RuntimeCapabilityDecision::Undecided
+            {
+                return Err(format!(
+                    "runtime capability artifact {} has inconsistent proposed state",
+                    path.display()
+                ));
+            }
+        }
+        RuntimeCapabilityStatus::Reviewed => {
+            if artifact.reviewed_at.is_none()
+                || artifact.review.is_none()
+                || artifact.decision == RuntimeCapabilityDecision::Undecided
+            {
+                return Err(format!(
+                    "runtime capability artifact {} has inconsistent reviewed state",
+                    path.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect_runtime_capability_artifacts(
+    root: &Path,
+    artifacts: &mut Vec<RuntimeCapabilityArtifactDocument>,
+) -> CliResult<()> {
+    let mut entries = fs::read_dir(root)
+        .map_err(|error| {
+            format!(
+                "read runtime capability index root {} failed: {error}",
+                root.display()
+            )
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            format!(
+                "enumerate runtime capability index root {} failed: {error}",
+                root.display()
+            )
+        })?;
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_runtime_capability_artifacts(&path, artifacts)?;
+            continue;
+        }
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(artifact) = load_supported_runtime_capability_artifact(&path)? else {
+            continue;
+        };
+        artifacts.push(artifact);
+    }
+    Ok(())
+}
+
+fn load_supported_runtime_capability_artifact(
+    path: &Path,
+) -> CliResult<Option<RuntimeCapabilityArtifactDocument>> {
+    let raw = fs::read_to_string(path).map_err(|error| {
+        format!(
+            "read runtime capability index entry {} failed: {error}",
+            path.display()
+        )
+    })?;
+    let value = serde_json::from_str::<serde_json::Value>(&raw).map_err(|error| {
+        format!(
+            "decode runtime capability index entry {} failed: {error}",
+            path.display()
+        )
+    })?;
+    let Some(surface) = value
+        .get("schema")
+        .and_then(|schema| schema.get("surface"))
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Ok(None);
+    };
+    if surface != "runtime_capability" {
+        return Ok(None);
+    }
+    load_runtime_capability_artifact(path).map(Some)
+}
+
+fn sort_runtime_capability_artifacts(artifacts: &mut [RuntimeCapabilityArtifactDocument]) {
+    artifacts.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.candidate_id.cmp(&right.candidate_id))
+    });
+}
+
+fn compute_family_id(proposal: &RuntimeCapabilityProposal) -> CliResult<String> {
+    let encoded = serde_json::to_vec(&json!({
+        "target": render_target(proposal.target),
+        "summary": proposal.summary,
+        "bounded_scope": proposal.bounded_scope,
+        "tags": proposal.tags,
+        "required_capabilities": proposal.required_capabilities,
+    }))
+    .map_err(|error| format!("serialize runtime capability family_id input failed: {error}"))?;
+    Ok(format!("{:x}", sha2::Sha256::digest(encoded)))
+}
+
+fn build_family_evidence_digest(
+    artifacts: &[RuntimeCapabilityArtifactDocument],
+) -> RuntimeCapabilityEvidenceDigest {
+    let reviewed_candidates = artifacts
+        .iter()
+        .filter(|artifact| artifact.status == RuntimeCapabilityStatus::Reviewed)
+        .count();
+    let undecided_candidates = artifacts
+        .iter()
+        .filter(|artifact| artifact.decision == RuntimeCapabilityDecision::Undecided)
+        .count();
+    let accepted_candidates = artifacts
+        .iter()
+        .filter(|artifact| artifact.decision == RuntimeCapabilityDecision::Accepted)
+        .count();
+    let rejected_candidates = artifacts
+        .iter()
+        .filter(|artifact| artifact.decision == RuntimeCapabilityDecision::Rejected)
+        .count();
+    let distinct_source_run_count = artifacts
+        .iter()
+        .map(|artifact| artifact.source_run.run_id.as_str())
+        .collect::<BTreeSet<_>>()
+        .len();
+    let distinct_experiment_count = artifacts
+        .iter()
+        .map(|artifact| artifact.source_run.experiment_id.as_str())
+        .collect::<BTreeSet<_>>()
+        .len();
+    let latest_candidate_at = artifacts
+        .iter()
+        .map(|artifact| artifact.created_at.as_str())
+        .max()
+        .map(str::to_owned);
+    let latest_reviewed_at = artifacts
+        .iter()
+        .filter_map(|artifact| artifact.reviewed_at.as_deref())
+        .max()
+        .map(str::to_owned);
+
+    let mut promoted = 0;
+    let mut rejected = 0;
+    let mut undecided = 0;
+    let mut unique_warnings = BTreeSet::new();
+    let mut metric_bounds = BTreeMap::<String, RuntimeCapabilityMetricRange>::new();
+
+    for artifact in artifacts {
+        match artifact.source_run.decision {
+            RuntimeExperimentDecision::Promoted => promoted += 1,
+            RuntimeExperimentDecision::Rejected => rejected += 1,
+            RuntimeExperimentDecision::Undecided => undecided += 1,
+        }
+
+        if artifact.decision == RuntimeCapabilityDecision::Accepted {
+            for warning in &artifact.source_run.warnings {
+                unique_warnings.insert(warning.clone());
+            }
+        }
+
+        for (metric, value) in &artifact.source_run.metrics {
+            let entry = metric_bounds.entry(metric.clone()).or_insert_with(|| {
+                RuntimeCapabilityMetricRange {
+                    min: *value,
+                    max: *value,
+                }
+            });
+            entry.min = entry.min.min(*value);
+            entry.max = entry.max.max(*value);
+        }
+    }
+
+    RuntimeCapabilityEvidenceDigest {
+        total_candidates: artifacts.len(),
+        reviewed_candidates,
+        undecided_candidates,
+        accepted_candidates,
+        rejected_candidates,
+        distinct_source_run_count,
+        distinct_experiment_count,
+        latest_candidate_at,
+        latest_reviewed_at,
+        source_decisions: RuntimeCapabilitySourceDecisionRollup {
+            promoted,
+            rejected,
+            undecided,
+        },
+        unique_warnings: unique_warnings.into_iter().collect(),
+        metric_ranges: metric_bounds,
+    }
+}
+
+fn evaluate_family_readiness(
+    artifacts: &[RuntimeCapabilityArtifactDocument],
+    evidence: &RuntimeCapabilityEvidenceDigest,
+) -> RuntimeCapabilityFamilyReadiness {
+    let review_consensus = evaluate_review_consensus(evidence);
+    let stability = evaluate_stability(evidence);
+    let accepted_source_integrity = evaluate_accepted_source_integrity(artifacts, evidence);
+    let warning_pressure = evaluate_warning_pressure(evidence);
+    let checks = vec![
+        review_consensus,
+        stability,
+        accepted_source_integrity,
+        warning_pressure,
+    ];
+    let status = if checks
+        .iter()
+        .any(|check| check.status == RuntimeCapabilityFamilyReadinessCheckStatus::Blocked)
+    {
+        RuntimeCapabilityFamilyReadinessStatus::Blocked
+    } else if checks
+        .iter()
+        .all(|check| check.status == RuntimeCapabilityFamilyReadinessCheckStatus::Pass)
+    {
+        RuntimeCapabilityFamilyReadinessStatus::Ready
+    } else {
+        RuntimeCapabilityFamilyReadinessStatus::NotReady
+    };
+    RuntimeCapabilityFamilyReadiness { status, checks }
+}
+
+fn evaluate_review_consensus(
+    evidence: &RuntimeCapabilityEvidenceDigest,
+) -> RuntimeCapabilityFamilyReadinessCheck {
+    let (status, summary) = if evidence.rejected_candidates > 0 {
+        (
+            RuntimeCapabilityFamilyReadinessCheckStatus::Blocked,
+            format!(
+                "{} candidate(s) in this family were explicitly rejected",
+                evidence.rejected_candidates
+            ),
+        )
+    } else if evidence.undecided_candidates > 0 {
+        (
+            RuntimeCapabilityFamilyReadinessCheckStatus::NeedsEvidence,
+            format!(
+                "{} candidate(s) still require operator review",
+                evidence.undecided_candidates
+            ),
+        )
+    } else {
+        (
+            RuntimeCapabilityFamilyReadinessCheckStatus::Pass,
+            "all candidate evidence is reviewed and accepted".to_owned(),
+        )
+    };
+    RuntimeCapabilityFamilyReadinessCheck {
+        dimension: "review_consensus".to_owned(),
+        status,
+        summary,
+    }
+}
+
+fn evaluate_stability(
+    evidence: &RuntimeCapabilityEvidenceDigest,
+) -> RuntimeCapabilityFamilyReadinessCheck {
+    let (status, summary) = if evidence.distinct_source_run_count >= 2 {
+        (
+            RuntimeCapabilityFamilyReadinessCheckStatus::Pass,
+            format!(
+                "family is supported by {} distinct source runs",
+                evidence.distinct_source_run_count
+            ),
+        )
+    } else {
+        (
+            RuntimeCapabilityFamilyReadinessCheckStatus::NeedsEvidence,
+            "family needs repeated evidence from at least two distinct source runs".to_owned(),
+        )
+    };
+    RuntimeCapabilityFamilyReadinessCheck {
+        dimension: "stability".to_owned(),
+        status,
+        summary,
+    }
+}
+
+fn evaluate_accepted_source_integrity(
+    artifacts: &[RuntimeCapabilityArtifactDocument],
+    evidence: &RuntimeCapabilityEvidenceDigest,
+) -> RuntimeCapabilityFamilyReadinessCheck {
+    if evidence.accepted_candidates == 0 {
+        return RuntimeCapabilityFamilyReadinessCheck {
+            dimension: "accepted_source_integrity".to_owned(),
+            status: RuntimeCapabilityFamilyReadinessCheckStatus::NeedsEvidence,
+            summary: "family has no accepted candidates yet".to_owned(),
+        };
+    }
+
+    let invalid_sources = artifacts
+        .iter()
+        .filter(|artifact| artifact.decision == RuntimeCapabilityDecision::Accepted)
+        .filter(|artifact| {
+            artifact.source_run.status != RuntimeExperimentStatus::Completed
+                || artifact.source_run.decision != RuntimeExperimentDecision::Promoted
+                || artifact.source_run.result_snapshot_id.is_none()
+        })
+        .count();
+
+    let (status, summary) = if invalid_sources > 0 {
+        (
+            RuntimeCapabilityFamilyReadinessCheckStatus::Blocked,
+            format!(
+                "{} accepted candidate(s) came from incomplete or non-promoted source runs",
+                invalid_sources
+            ),
+        )
+    } else {
+        (
+            RuntimeCapabilityFamilyReadinessCheckStatus::Pass,
+            "accepted candidates all trace back to completed promoted runs".to_owned(),
+        )
+    };
+    RuntimeCapabilityFamilyReadinessCheck {
+        dimension: "accepted_source_integrity".to_owned(),
+        status,
+        summary,
+    }
+}
+
+fn evaluate_warning_pressure(
+    evidence: &RuntimeCapabilityEvidenceDigest,
+) -> RuntimeCapabilityFamilyReadinessCheck {
+    let (status, summary) = if evidence.accepted_candidates == 0 {
+        (
+            RuntimeCapabilityFamilyReadinessCheckStatus::NeedsEvidence,
+            "warning pressure cannot be evaluated before the family has accepted evidence"
+                .to_owned(),
+        )
+    } else if evidence.unique_warnings.is_empty() {
+        (
+            RuntimeCapabilityFamilyReadinessCheckStatus::Pass,
+            "accepted candidates carry no source warnings".to_owned(),
+        )
+    } else {
+        (
+            RuntimeCapabilityFamilyReadinessCheckStatus::NeedsEvidence,
+            format!(
+                "accepted evidence still carries warnings: {}",
+                evidence.unique_warnings.join(" | ")
+            ),
+        )
+    };
+    RuntimeCapabilityFamilyReadinessCheck {
+        dimension: "warning_pressure".to_owned(),
+        status,
+        summary,
+    }
 }
 
 fn now_rfc3339() -> CliResult<String> {
@@ -506,6 +1026,66 @@ pub fn render_runtime_capability_text(artifact: &RuntimeCapabilityArtifactDocume
     .join("\n")
 }
 
+pub fn render_runtime_capability_index_text(report: &RuntimeCapabilityIndexReport) -> String {
+    let mut lines = vec![
+        format!("root={}", report.root),
+        format!("family_count={}", report.family_count),
+        format!("total_candidate_count={}", report.total_candidate_count),
+    ];
+
+    for family in &report.families {
+        lines.push(String::new());
+        lines.push(format!("family_id={}", family.family_id));
+        lines.push(format!(
+            "readiness={}",
+            render_family_readiness_status(family.readiness.status)
+        ));
+        lines.push(format!("target={}", render_target(family.proposal.target)));
+        lines.push(format!("target_summary={}", family.proposal.summary));
+        lines.push(format!("bounded_scope={}", family.proposal.bounded_scope));
+        lines.push(format!(
+            "candidate_ids={}",
+            render_string_values(&family.candidate_ids)
+        ));
+        lines.push(format!(
+            "evidence_counts=total:{} reviewed:{} accepted:{} rejected:{} undecided:{}",
+            family.evidence.total_candidates,
+            family.evidence.reviewed_candidates,
+            family.evidence.accepted_candidates,
+            family.evidence.rejected_candidates,
+            family.evidence.undecided_candidates
+        ));
+        lines.push(format!(
+            "distinct_source_runs={}",
+            family.evidence.distinct_source_run_count
+        ));
+        lines.push(format!(
+            "distinct_experiments={}",
+            family.evidence.distinct_experiment_count
+        ));
+        lines.push(format!(
+            "metric_ranges={}",
+            render_metric_ranges(&family.evidence.metric_ranges)
+        ));
+        lines.push(format!(
+            "warnings={}",
+            render_string_values_with_separator(&family.evidence.unique_warnings, " | ")
+        ));
+        lines.push(format!(
+            "checks={}",
+            family
+                .readiness
+                .checks
+                .iter()
+                .map(render_family_readiness_check)
+                .collect::<Vec<_>>()
+                .join(" | ")
+        ));
+    }
+
+    lines.join("\n")
+}
+
 fn render_metrics(metrics: &std::collections::BTreeMap<String, f64>) -> String {
     if metrics.is_empty() {
         "-".to_owned()
@@ -532,6 +1112,27 @@ fn render_string_values_with_separator(values: &[String], separator: &str) -> St
     } else {
         values.join(separator)
     }
+}
+
+fn render_metric_ranges(ranges: &BTreeMap<String, RuntimeCapabilityMetricRange>) -> String {
+    if ranges.is_empty() {
+        "-".to_owned()
+    } else {
+        ranges
+            .iter()
+            .map(|(key, range)| format!("{key}:{}..{}", range.min, range.max))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
+fn render_family_readiness_check(check: &RuntimeCapabilityFamilyReadinessCheck) -> String {
+    format!(
+        "{}:{}:{}",
+        check.dimension,
+        render_family_readiness_check_status(check.status),
+        check.summary
+    )
 }
 
 fn render_target(target: RuntimeCapabilityTarget) -> &'static str {
@@ -570,5 +1171,23 @@ fn render_experiment_decision(decision: RuntimeExperimentDecision) -> &'static s
         RuntimeExperimentDecision::Undecided => "undecided",
         RuntimeExperimentDecision::Promoted => "promoted",
         RuntimeExperimentDecision::Rejected => "rejected",
+    }
+}
+
+fn render_family_readiness_status(status: RuntimeCapabilityFamilyReadinessStatus) -> &'static str {
+    match status {
+        RuntimeCapabilityFamilyReadinessStatus::Ready => "ready",
+        RuntimeCapabilityFamilyReadinessStatus::NotReady => "not_ready",
+        RuntimeCapabilityFamilyReadinessStatus::Blocked => "blocked",
+    }
+}
+
+fn render_family_readiness_check_status(
+    status: RuntimeCapabilityFamilyReadinessCheckStatus,
+) -> &'static str {
+    match status {
+        RuntimeCapabilityFamilyReadinessCheckStatus::Pass => "pass",
+        RuntimeCapabilityFamilyReadinessCheckStatus::NeedsEvidence => "needs_evidence",
+        RuntimeCapabilityFamilyReadinessCheckStatus::Blocked => "blocked",
     }
 }

@@ -118,6 +118,30 @@ fn start_runtime_experiment(
     (run_path, run)
 }
 
+fn start_runtime_experiment_variant(
+    root: &Path,
+    snapshot_path: &Path,
+    slug: &str,
+) -> (
+    PathBuf,
+    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentArtifactDocument,
+) {
+    let run_path = root.join(format!("artifacts/runtime-experiment-{slug}.json"));
+    let run = loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_start_command(
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentStartCommandOptions {
+            snapshot: snapshot_path.display().to_string(),
+            output: run_path.display().to_string(),
+            mutation_summary: format!("enable browser preview skill ({slug})"),
+            experiment_id: Some("exp-42".to_owned()),
+            label: Some(format!("browser-preview-{slug}")),
+            tag: vec!["browser".to_owned(), slug.to_owned()],
+            json: false,
+        },
+    )
+    .expect("runtime experiment start should succeed");
+    (run_path, run)
+}
+
 fn finish_runtime_experiment(
     root: &Path,
     config_path: &Path,
@@ -165,6 +189,110 @@ fn finish_runtime_experiment(
         )
         .expect("runtime experiment finish should succeed");
     (run_path, finished)
+}
+
+fn finish_runtime_experiment_variant(
+    root: &Path,
+    config_path: &Path,
+    slug: &str,
+    cost_delta: f64,
+    warnings: &[&str],
+    decision: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision,
+) -> (
+    PathBuf,
+    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentArtifactDocument,
+) {
+    let (baseline_snapshot_path, baseline_snapshot_payload) = write_snapshot_artifact(
+        root,
+        config_path,
+        &format!("artifacts/runtime-snapshot-{slug}.json"),
+        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+            created_at: "2026-03-17T12:00:00Z".to_owned(),
+            label: Some(format!("baseline-{slug}")),
+            experiment_id: Some("exp-42".to_owned()),
+            parent_snapshot_id: Some("snapshot-parent".to_owned()),
+        },
+    );
+    let (run_path, _) = start_runtime_experiment_variant(root, &baseline_snapshot_path, slug);
+    let baseline_snapshot_id = snapshot_id_from_payload(&baseline_snapshot_payload);
+    let (result_snapshot_path, _) = write_snapshot_artifact(
+        root,
+        config_path,
+        &format!("artifacts/runtime-snapshot-result-{slug}.json"),
+        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+            created_at: "2026-03-17T12:30:00Z".to_owned(),
+            label: Some(format!("candidate-{slug}")),
+            experiment_id: Some("exp-42".to_owned()),
+            parent_snapshot_id: Some(baseline_snapshot_id),
+        },
+    );
+
+    let finished =
+        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
+            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
+                run: run_path.display().to_string(),
+                result_snapshot: result_snapshot_path.display().to_string(),
+                evaluation_summary: format!("provider and tool policy updated ({slug})"),
+                metric: vec![
+                    "task_success=1".to_owned(),
+                    format!("cost_delta={cost_delta}"),
+                ],
+                warning: warnings.iter().map(|warning| (*warning).to_owned()).collect(),
+                decision,
+                status:
+                    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
+                json: false,
+            },
+        )
+        .expect("runtime experiment finish should succeed");
+    (run_path, finished)
+}
+
+fn propose_runtime_capability_variant(
+    root: &Path,
+    run_path: &Path,
+    slug: &str,
+) -> (
+    PathBuf,
+    loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityArtifactDocument,
+) {
+    let candidate_path = root.join(format!("artifacts/runtime-capability-{slug}.json"));
+    let candidate =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_propose_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityProposeCommandOptions {
+                run: run_path.display().to_string(),
+                output: candidate_path.display().to_string(),
+                target:
+                    loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
+                target_summary: "Codify browser preview onboarding as a reusable managed skill"
+                    .to_owned(),
+                bounded_scope: "Browser preview onboarding and companion readiness checks only"
+                    .to_owned(),
+                required_capability: vec!["invoke_tool".to_owned(), "memory_read".to_owned()],
+                tag: vec!["browser".to_owned(), "onboarding".to_owned()],
+                label: Some(format!("browser-preview-skill-candidate-{slug}")),
+                json: false,
+            },
+        )
+        .expect("runtime capability propose should succeed");
+    (candidate_path, candidate)
+}
+
+fn review_runtime_capability_variant(
+    candidate_path: &Path,
+    decision: loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision,
+    slug: &str,
+) -> loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityArtifactDocument {
+    loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_review_command(
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewCommandOptions {
+            candidate: candidate_path.display().to_string(),
+            decision,
+            review_summary: format!("reviewed runtime capability candidate {slug}"),
+            warning: Vec::new(),
+            json: false,
+        },
+    )
+    .expect("runtime capability review should succeed")
 }
 
 #[test]
@@ -394,6 +522,259 @@ fn runtime_capability_show_round_trips_the_persisted_artifact() {
     .expect("show should round-trip the persisted artifact");
 
     assert_eq!(shown, proposed);
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_show_rejects_inconsistent_review_state() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-show-invalid-state");
+    let config_path = write_runtime_capability_config(&root);
+    let (run_path, _) = finish_runtime_experiment(&root, &config_path);
+    let candidate_path = root.join("artifacts/runtime-capability.json");
+
+    loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_propose_command(
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityProposeCommandOptions {
+            run: run_path.display().to_string(),
+            output: candidate_path.display().to_string(),
+            target: loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
+            target_summary: "Codify browser preview onboarding as a reusable managed skill"
+                .to_owned(),
+            bounded_scope: "Browser preview onboarding and companion readiness checks only"
+                .to_owned(),
+            required_capability: vec!["invoke_tool".to_owned(), "memory_read".to_owned()],
+            tag: vec!["browser".to_owned(), "onboarding".to_owned()],
+            label: Some("browser-preview-invalid-state".to_owned()),
+            json: false,
+        },
+    )
+    .expect("runtime capability propose should succeed");
+
+    let mut raw = serde_json::from_str::<Value>(
+        &fs::read_to_string(&candidate_path).expect("read persisted capability candidate"),
+    )
+    .expect("decode persisted capability candidate");
+    raw["status"] = Value::String("reviewed".to_owned());
+    fs::write(
+        &candidate_path,
+        serde_json::to_string_pretty(&raw).expect("encode malformed capability candidate"),
+    )
+    .expect("persist malformed capability candidate");
+
+    let error = loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_show_command(
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityShowCommandOptions {
+            candidate: candidate_path.display().to_string(),
+            json: false,
+        },
+    )
+    .expect_err("inconsistent review state should be rejected");
+
+    assert!(error.contains("inconsistent"), "error: {error}");
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_index_groups_related_candidates_and_reports_ready_family() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-index-ready");
+    let config_path = write_runtime_capability_config(&root);
+
+    let (run_a_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "a",
+        -0.2,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let (run_b_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "b",
+        -0.4,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+
+    let (candidate_a_path, _) = propose_runtime_capability_variant(&root, &run_a_path, "a");
+    let (candidate_b_path, _) = propose_runtime_capability_variant(&root, &run_b_path, "b");
+    review_runtime_capability_variant(
+        &candidate_a_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "a",
+    );
+    review_runtime_capability_variant(
+        &candidate_b_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "b",
+    );
+
+    fs::write(
+        root.join("artifacts/ignore-me.json"),
+        "{\"hello\":\"world\"}",
+    )
+    .expect("write unrelated json fixture");
+
+    let report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_index_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityIndexCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                json: false,
+            },
+        )
+        .expect("runtime capability index should succeed");
+
+    assert_eq!(report.total_candidate_count, 2);
+    assert_eq!(report.family_count, 1);
+
+    let family = report
+        .families
+        .first()
+        .expect("one capability family should be reported");
+    assert_eq!(
+        family.readiness.status,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityFamilyReadinessStatus::Ready
+    );
+    assert_eq!(family.evidence.total_candidates, 2);
+    assert_eq!(family.evidence.accepted_candidates, 2);
+    assert_eq!(family.evidence.distinct_source_run_count, 2);
+    assert_eq!(
+        family
+            .evidence
+            .metric_ranges
+            .get("cost_delta")
+            .expect("cost delta range should exist")
+            .min,
+        -0.4
+    );
+    assert_eq!(
+        family
+            .evidence
+            .metric_ranges
+            .get("cost_delta")
+            .expect("cost delta range should exist")
+            .max,
+        -0.2
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_index_marks_family_not_ready_when_evidence_is_incomplete() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-index-not-ready");
+    let config_path = write_runtime_capability_config(&root);
+    let (run_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "solo",
+        -0.2,
+        &["manual verification only"],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let (candidate_path, _) = propose_runtime_capability_variant(&root, &run_path, "solo");
+    review_runtime_capability_variant(
+        &candidate_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "solo",
+    );
+
+    let report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_index_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityIndexCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                json: false,
+            },
+        )
+        .expect("runtime capability index should succeed");
+
+    let family = report
+        .families
+        .first()
+        .expect("one capability family should be reported");
+    assert_eq!(
+        family.readiness.status,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityFamilyReadinessStatus::NotReady
+    );
+    assert!(
+        family.readiness.checks.iter().any(|check| {
+            check.dimension == "stability"
+                && check.status
+                    == loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityFamilyReadinessCheckStatus::NeedsEvidence
+        }),
+        "stability should require repeated evidence"
+    );
+    assert!(
+        family.readiness.checks.iter().any(|check| {
+            check.dimension == "warning_pressure"
+                && check.status
+                    == loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityFamilyReadinessCheckStatus::NeedsEvidence
+        }),
+        "warnings should keep the family out of ready state"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_index_marks_family_blocked_on_conflicting_reviews() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-index-blocked");
+    let config_path = write_runtime_capability_config(&root);
+    let (run_a_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "accept",
+        -0.2,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let (run_b_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "reject",
+        -0.1,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+
+    let (candidate_a_path, _) = propose_runtime_capability_variant(&root, &run_a_path, "accept");
+    let (candidate_b_path, _) = propose_runtime_capability_variant(&root, &run_b_path, "reject");
+    review_runtime_capability_variant(
+        &candidate_a_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "accept",
+    );
+    review_runtime_capability_variant(
+        &candidate_b_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Rejected,
+        "reject",
+    );
+
+    let report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_index_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityIndexCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                json: false,
+            },
+        )
+        .expect("runtime capability index should succeed");
+
+    let family = report
+        .families
+        .first()
+        .expect("one capability family should be reported");
+    assert_eq!(
+        family.readiness.status,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityFamilyReadinessStatus::Blocked
+    );
+    assert!(
+        family.readiness.checks.iter().any(|check| {
+            check.dimension == "review_consensus"
+                && check.status
+                    == loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityFamilyReadinessCheckStatus::Blocked
+        }),
+        "review consensus should block mixed accepted/rejected evidence"
+    );
 
     fs::remove_dir_all(&root).ok();
 }
