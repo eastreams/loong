@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { Panel } from "../../../components/surfaces/Panel";
 import { useWebConnection } from "../../../hooks/useWebConnection";
 import { ApiRequestError } from "../../../lib/api/client";
+import { dashboardApi } from "../../dashboard/api";
 import {
   chatApi,
   type ChatMessage,
@@ -148,6 +149,7 @@ export default function ChatPage() {
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [activeTools, setActiveTools] = useState<ActiveToolStatus[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [memoryWindow, setMemoryWindow] = useState<number | null>(null);
   const [pendingAssistantId, setPendingAssistantId] = useState<string | null>(null);
   const [streamPhase, setStreamPhase] = useState<StreamPhase>("idle");
   const [loadingLabelIndex, setLoadingLabelIndex] = useState(0);
@@ -208,6 +210,7 @@ export default function ChatPage() {
       setSelectedSessionId(null);
       setMessages([]);
       setActiveTools([]);
+      setMemoryWindow(null);
       setIsLoadingSessions(false);
       setError(
         status === "unauthorized"
@@ -251,6 +254,36 @@ export default function ChatPage() {
       cancelled = true;
     };
   }, [authRevision, canAccessProtectedApi, markUnauthorized, status, t]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!canAccessProtectedApi) {
+      setMemoryWindow(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    async function loadConfigSnapshot() {
+      try {
+        const config = await dashboardApi.loadConfig();
+        if (!cancelled) {
+          setMemoryWindow(config.slidingWindow);
+        }
+      } catch (loadError) {
+        if (!cancelled && loadError instanceof ApiRequestError && loadError.status === 401) {
+          markUnauthorized();
+        }
+      }
+    }
+
+    void loadConfigSnapshot();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authRevision, canAccessProtectedApi, markUnauthorized]);
 
   useEffect(() => {
     if (!canAccessProtectedApi) {
@@ -641,18 +674,27 @@ export default function ChatPage() {
         </Panel>
 
         <Panel eyebrow={t("chat.panels.inspector")} title={t("status.local")}>
-          <div className="metric-grid metric-grid-scroll">
-            <div className="metric-card">
-              <span className="metric-label">{t("status.providerReady")}</span>
-              <strong>{selectedSession ? "Live session loaded" : "Waiting for session"}</strong>
+            <div className="metric-grid metric-grid-scroll">
+              <div className="metric-card">
+                <span className="metric-label">{t("status.providerReady")}</span>
+                <strong>{selectedSession ? "Live session loaded" : "Waiting for session"}</strong>
+              </div>
+              <div className="metric-card">
+                <span className="metric-label">{t("status.memoryHealthy")}</span>
+                <strong>{messages.length > 0 ? `${messages.length} messages` : "No history"}</strong>
+              </div>
+              <div className="metric-card">
+                <span className="metric-label">{t("chat.memoryWindow.label")}</span>
+                <strong>
+                  {memoryWindow !== null
+                    ? t("chat.memoryWindow.value", { count: memoryWindow })
+                    : t("chat.memoryWindow.pending")}
+                </strong>
+                <span>{t("chat.memoryWindow.hint")}</span>
+              </div>
             </div>
-            <div className="metric-card">
-              <span className="metric-label">{t("status.memoryHealthy")}</span>
-              <strong>{messages.length > 0 ? `${messages.length} messages` : "No history"}</strong>
-            </div>
-          </div>
-        </Panel>
-      </div>
+          </Panel>
+        </div>
     </div>
   );
 }

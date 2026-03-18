@@ -18,6 +18,12 @@
     "ok": "已完成",
     "error": "失败"
   },
+  "memoryWindow": {
+    "label": "记忆窗口",
+    "value": "{{count}} 轮",
+    "pending": "读取配置中",
+    "hint": "这里显示的是当前本地实例回灌进 prompt 的滑动窗口大小。"
+  },
   "errors": {
     "providerHostFallback": "当前 provider 域名",
     "transportFailure": "连接 {{host}} 时发生了 provider 传输失败。如果你开启了代理，建议先给这个域名单独配置 DIRECT，并加入 fake-ip-filter。你也可以到 Runtime console > Provider 路由 里查看当前诊断结果。"

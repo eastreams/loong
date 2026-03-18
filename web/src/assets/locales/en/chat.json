@@ -18,6 +18,12 @@
     "ok": "Done",
     "error": "Failed"
   },
+  "memoryWindow": {
+    "label": "Memory window",
+    "value": "{{count}} turns",
+    "pending": "Reading config",
+    "hint": "This is the local sliding window currently fed back into the prompt."
+  },
   "errors": {
     "providerHostFallback": "the provider host",
     "transportFailure": "Provider connection failed while contacting {{host}}. If you use a proxy, route this host DIRECT and add it to fake-ip-filter. You can confirm the current diagnosis in Runtime console > Provider route."
