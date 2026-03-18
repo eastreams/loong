@@ -28,6 +28,8 @@ pub enum RuntimeCapabilityCommands {
     Show(RuntimeCapabilityShowCommandOptions),
     /// Aggregate candidate artifacts into deterministic capability families and readiness states
     Index(RuntimeCapabilityIndexCommandOptions),
+    /// Derive one dry-run promotion plan from one indexed capability family
+    Plan(RuntimeCapabilityPlanCommandOptions),
 }
 
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
@@ -78,6 +80,16 @@ pub struct RuntimeCapabilityShowCommandOptions {
 pub struct RuntimeCapabilityIndexCommandOptions {
     #[arg(long)]
     pub root: String,
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeCapabilityPlanCommandOptions {
+    #[arg(long)]
+    pub root: String,
+    #[arg(long)]
+    pub family_id: String,
     #[arg(long, default_value_t = false)]
     pub json: bool,
 }
@@ -239,6 +251,44 @@ pub struct RuntimeCapabilityIndexReport {
     pub families: Vec<RuntimeCapabilityFamilySummary>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuntimeCapabilityPromotionArtifactPlan {
+    pub target_kind: RuntimeCapabilityTarget,
+    pub artifact_kind: String,
+    pub artifact_id: String,
+    pub delivery_surface: String,
+    pub summary: String,
+    pub bounded_scope: String,
+    pub required_capabilities: Vec<String>,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuntimeCapabilityPromotionProvenance {
+    pub candidate_ids: Vec<String>,
+    pub source_run_ids: Vec<String>,
+    pub experiment_ids: Vec<String>,
+    pub source_run_artifact_paths: Vec<String>,
+    pub latest_candidate_at: Option<String>,
+    pub latest_reviewed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct RuntimeCapabilityPromotionPlanReport {
+    pub generated_at: String,
+    pub root: String,
+    pub family_id: String,
+    pub promotable: bool,
+    pub proposal: RuntimeCapabilityProposal,
+    pub evidence: RuntimeCapabilityEvidenceDigest,
+    pub readiness: RuntimeCapabilityFamilyReadiness,
+    pub planned_artifact: RuntimeCapabilityPromotionArtifactPlan,
+    pub blockers: Vec<RuntimeCapabilityFamilyReadinessCheck>,
+    pub approval_checklist: Vec<String>,
+    pub rollback_hints: Vec<String>,
+    pub provenance: RuntimeCapabilityPromotionProvenance,
+}
+
 pub fn run_runtime_capability_cli(command: RuntimeCapabilityCommands) -> CliResult<()> {
     match command {
         RuntimeCapabilityCommands::Propose(options) => {
@@ -260,6 +310,11 @@ pub fn run_runtime_capability_cli(command: RuntimeCapabilityCommands) -> CliResu
             let as_json = options.json;
             let report = execute_runtime_capability_index_command(options)?;
             emit_runtime_capability_index_report(&report, as_json)
+        }
+        RuntimeCapabilityCommands::Plan(options) => {
+            let as_json = options.json;
+            let report = execute_runtime_capability_plan_command(options)?;
+            emit_runtime_capability_promotion_plan(&report, as_json)
         }
     }
 }
@@ -352,36 +407,14 @@ pub fn execute_runtime_capability_index_command(
 ) -> CliResult<RuntimeCapabilityIndexReport> {
     let root_path = Path::new(&options.root);
     let root = canonicalize_existing_path(root_path)?;
-    let mut artifacts = Vec::new();
-    collect_runtime_capability_artifacts(root_path, &mut artifacts)?;
-
-    let total_candidate_count = artifacts.len();
-    let mut families_by_id = BTreeMap::<String, Vec<RuntimeCapabilityArtifactDocument>>::new();
-    for artifact in artifacts {
-        let family_id = compute_family_id(&artifact.proposal)?;
-        families_by_id.entry(family_id).or_default().push(artifact);
-    }
+    let families_by_id = collect_runtime_capability_family_artifacts(root_path)?;
+    let total_candidate_count = families_by_id.values().map(Vec::len).sum();
 
     let mut families = Vec::new();
-    for (family_id, mut artifacts) in families_by_id {
-        sort_runtime_capability_artifacts(&mut artifacts);
-        let proposal = artifacts
-            .first()
-            .map(|artifact| artifact.proposal.clone())
-            .ok_or_else(|| "runtime capability family cannot be empty".to_owned())?;
-        let candidate_ids = artifacts
-            .iter()
-            .map(|artifact| artifact.candidate_id.clone())
-            .collect::<Vec<_>>();
-        let evidence = build_family_evidence_digest(&artifacts);
-        let readiness = evaluate_family_readiness(&artifacts, &evidence);
-        families.push(RuntimeCapabilityFamilySummary {
-            family_id,
-            proposal,
-            candidate_ids,
-            evidence,
-            readiness,
-        });
+    for (family_id, artifacts) in families_by_id {
+        families.push(build_runtime_capability_family_summary(
+            family_id, artifacts,
+        )?);
     }
 
     Ok(RuntimeCapabilityIndexReport {
@@ -390,6 +423,54 @@ pub fn execute_runtime_capability_index_command(
         total_candidate_count,
         family_count: families.len(),
         families,
+    })
+}
+
+pub fn execute_runtime_capability_plan_command(
+    options: RuntimeCapabilityPlanCommandOptions,
+) -> CliResult<RuntimeCapabilityPromotionPlanReport> {
+    let root_path = Path::new(&options.root);
+    let root = canonicalize_existing_path(root_path)?;
+    let families_by_id = collect_runtime_capability_family_artifacts(root_path)?;
+    let family_artifacts = families_by_id
+        .get(&options.family_id)
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "runtime capability family `{}` not found under {}",
+                options.family_id, root
+            )
+        })?;
+    let family = build_runtime_capability_family_summary(
+        options.family_id.clone(),
+        family_artifacts.clone(),
+    )?;
+    let planned_artifact =
+        build_runtime_capability_promotion_artifact(&family.family_id, &family.proposal);
+    let blockers = family
+        .readiness
+        .checks
+        .iter()
+        .filter(|check| check.status != RuntimeCapabilityFamilyReadinessCheckStatus::Pass)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    Ok(RuntimeCapabilityPromotionPlanReport {
+        generated_at: now_rfc3339()?,
+        root,
+        family_id: family.family_id.clone(),
+        promotable: family.readiness.status == RuntimeCapabilityFamilyReadinessStatus::Ready,
+        proposal: family.proposal.clone(),
+        evidence: family.evidence.clone(),
+        readiness: family.readiness.clone(),
+        planned_artifact: planned_artifact.clone(),
+        blockers,
+        approval_checklist: build_runtime_capability_approval_checklist(&planned_artifact),
+        rollback_hints: build_runtime_capability_rollback_hints(&planned_artifact),
+        provenance: build_runtime_capability_promotion_provenance(
+            &family_artifacts,
+            &family.evidence,
+        ),
     })
 }
 
@@ -421,6 +502,22 @@ fn emit_runtime_capability_index_report(
     }
 
     println!("{}", render_runtime_capability_index_text(report));
+    Ok(())
+}
+
+fn emit_runtime_capability_promotion_plan(
+    report: &RuntimeCapabilityPromotionPlanReport,
+    as_json: bool,
+) -> CliResult<()> {
+    if as_json {
+        let pretty = serde_json::to_string_pretty(report).map_err(|error| {
+            format!("serialize runtime capability promotion plan failed: {error}")
+        })?;
+        println!("{pretty}");
+        return Ok(());
+    }
+
+    println!("{}", render_runtime_capability_promotion_plan_text(report));
     Ok(())
 }
 
@@ -564,6 +661,20 @@ fn collect_runtime_capability_artifacts(
     Ok(())
 }
 
+fn collect_runtime_capability_family_artifacts(
+    root: &Path,
+) -> CliResult<BTreeMap<String, Vec<RuntimeCapabilityArtifactDocument>>> {
+    let mut artifacts = Vec::new();
+    collect_runtime_capability_artifacts(root, &mut artifacts)?;
+
+    let mut families_by_id = BTreeMap::<String, Vec<RuntimeCapabilityArtifactDocument>>::new();
+    for artifact in artifacts {
+        let family_id = compute_family_id(&artifact.proposal)?;
+        families_by_id.entry(family_id).or_default().push(artifact);
+    }
+    Ok(families_by_id)
+}
+
 fn load_supported_runtime_capability_artifact(
     path: &Path,
 ) -> CliResult<Option<RuntimeCapabilityArtifactDocument>> {
@@ -598,6 +709,31 @@ fn sort_runtime_capability_artifacts(artifacts: &mut [RuntimeCapabilityArtifactD
             .cmp(&right.created_at)
             .then_with(|| left.candidate_id.cmp(&right.candidate_id))
     });
+}
+
+fn build_runtime_capability_family_summary(
+    family_id: String,
+    mut artifacts: Vec<RuntimeCapabilityArtifactDocument>,
+) -> CliResult<RuntimeCapabilityFamilySummary> {
+    sort_runtime_capability_artifacts(&mut artifacts);
+    let proposal = artifacts
+        .first()
+        .map(|artifact| artifact.proposal.clone())
+        .ok_or_else(|| "runtime capability family cannot be empty".to_owned())?;
+    let candidate_ids = artifacts
+        .iter()
+        .map(|artifact| artifact.candidate_id.clone())
+        .collect::<Vec<_>>();
+    let evidence = build_family_evidence_digest(&artifacts);
+    let readiness = evaluate_family_readiness(&artifacts, &evidence);
+
+    Ok(RuntimeCapabilityFamilySummary {
+        family_id,
+        proposal,
+        candidate_ids,
+        evidence,
+        readiness,
+    })
 }
 
 fn compute_family_id(proposal: &RuntimeCapabilityProposal) -> CliResult<String> {
@@ -1189,5 +1325,224 @@ fn render_family_readiness_check_status(
         RuntimeCapabilityFamilyReadinessCheckStatus::Pass => "pass",
         RuntimeCapabilityFamilyReadinessCheckStatus::NeedsEvidence => "needs_evidence",
         RuntimeCapabilityFamilyReadinessCheckStatus::Blocked => "blocked",
+    }
+}
+
+fn build_runtime_capability_promotion_artifact(
+    family_id: &str,
+    proposal: &RuntimeCapabilityProposal,
+) -> RuntimeCapabilityPromotionArtifactPlan {
+    let (artifact_kind, delivery_surface, id_prefix) =
+        runtime_capability_promotion_target_contract(proposal.target);
+    let artifact_id = format!(
+        "{id_prefix}-{}-{}",
+        slugify_runtime_capability_identifier(&proposal.summary),
+        family_id.chars().take(12).collect::<String>()
+    );
+
+    RuntimeCapabilityPromotionArtifactPlan {
+        target_kind: proposal.target,
+        artifact_kind: artifact_kind.to_owned(),
+        artifact_id,
+        delivery_surface: delivery_surface.to_owned(),
+        summary: proposal.summary.clone(),
+        bounded_scope: proposal.bounded_scope.clone(),
+        required_capabilities: proposal.required_capabilities.clone(),
+        tags: proposal.tags.clone(),
+    }
+}
+
+fn runtime_capability_promotion_target_contract(
+    target: RuntimeCapabilityTarget,
+) -> (&'static str, &'static str, &'static str) {
+    match target {
+        RuntimeCapabilityTarget::ManagedSkill => {
+            ("managed_skill_bundle", "managed_skills", "managed-skill")
+        }
+        RuntimeCapabilityTarget::ProgrammaticFlow => (
+            "programmatic_flow_spec",
+            "programmatic_flows",
+            "programmatic-flow",
+        ),
+        RuntimeCapabilityTarget::ProfileNoteAddendum => {
+            ("profile_note_addendum", "profile_note", "profile-note")
+        }
+    }
+}
+
+fn slugify_runtime_capability_identifier(raw: &str) -> String {
+    let mut slug = String::new();
+    let mut last_was_dash = false;
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            last_was_dash = false;
+        } else if !last_was_dash {
+            slug.push('-');
+            last_was_dash = true;
+        }
+    }
+    let trimmed = slug.trim_matches('-').to_owned();
+    if trimmed.is_empty() {
+        "capability".to_owned()
+    } else {
+        trimmed
+    }
+}
+
+fn build_runtime_capability_approval_checklist(
+    planned_artifact: &RuntimeCapabilityPromotionArtifactPlan,
+) -> Vec<String> {
+    let mut checklist = vec![
+        "confirm summary and bounded scope still describe exactly one lower-layer artifact"
+            .to_owned(),
+        "confirm required capabilities remain least-privilege for the planned artifact".to_owned(),
+        "confirm provenance references still represent the intended behavior to codify".to_owned(),
+        format!(
+            "confirm the chosen delivery surface `{}` matches the target kind",
+            planned_artifact.delivery_surface
+        ),
+    ];
+    checklist.push(match planned_artifact.target_kind {
+        RuntimeCapabilityTarget::ManagedSkill => {
+            "confirm the behavior belongs in a reusable managed skill".to_owned()
+        }
+        RuntimeCapabilityTarget::ProgrammaticFlow => {
+            "confirm the behavior can be expressed as a deterministic programmatic flow".to_owned()
+        }
+        RuntimeCapabilityTarget::ProfileNoteAddendum => {
+            "confirm the behavior belongs in advisory profile guidance rather than executable logic"
+                .to_owned()
+        }
+    });
+    checklist
+}
+
+fn build_runtime_capability_rollback_hints(
+    planned_artifact: &RuntimeCapabilityPromotionArtifactPlan,
+) -> Vec<String> {
+    vec![
+        format!(
+            "capture the current `{}` state before applying artifact `{}`",
+            planned_artifact.delivery_surface, planned_artifact.artifact_id
+        ),
+        format!(
+            "remove or revert `{}` from `{}` if downstream validation fails",
+            planned_artifact.artifact_id, planned_artifact.delivery_surface
+        ),
+        "keep candidate ids and source-run references attached to the rollback record".to_owned(),
+    ]
+}
+
+fn build_runtime_capability_promotion_provenance(
+    artifacts: &[RuntimeCapabilityArtifactDocument],
+    evidence: &RuntimeCapabilityEvidenceDigest,
+) -> RuntimeCapabilityPromotionProvenance {
+    RuntimeCapabilityPromotionProvenance {
+        candidate_ids: artifacts
+            .iter()
+            .map(|artifact| artifact.candidate_id.clone())
+            .collect(),
+        source_run_ids: artifacts
+            .iter()
+            .map(|artifact| artifact.source_run.run_id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+        experiment_ids: artifacts
+            .iter()
+            .map(|artifact| artifact.source_run.experiment_id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+        source_run_artifact_paths: artifacts
+            .iter()
+            .filter_map(|artifact| artifact.source_run.artifact_path.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+        latest_candidate_at: evidence.latest_candidate_at.clone(),
+        latest_reviewed_at: evidence.latest_reviewed_at.clone(),
+    }
+}
+
+pub fn render_runtime_capability_promotion_plan_text(
+    report: &RuntimeCapabilityPromotionPlanReport,
+) -> String {
+    [
+        format!("family_id={}", report.family_id),
+        format!("promotable={}", report.promotable),
+        format!(
+            "readiness={}",
+            render_family_readiness_status(report.readiness.status)
+        ),
+        format!(
+            "target={}",
+            render_target(report.planned_artifact.target_kind)
+        ),
+        format!("artifact_kind={}", report.planned_artifact.artifact_kind),
+        format!("artifact_id={}", report.planned_artifact.artifact_id),
+        format!(
+            "delivery_surface={}",
+            report.planned_artifact.delivery_surface
+        ),
+        format!("target_summary={}", report.planned_artifact.summary),
+        format!("bounded_scope={}", report.planned_artifact.bounded_scope),
+        format!(
+            "required_capabilities={}",
+            render_string_values(&report.planned_artifact.required_capabilities)
+        ),
+        format!(
+            "tags={}",
+            render_string_values(&report.planned_artifact.tags)
+        ),
+        format!(
+            "blockers={}",
+            render_family_readiness_checks(&report.blockers)
+        ),
+        format!(
+            "checks={}",
+            render_family_readiness_checks(&report.readiness.checks)
+        ),
+        format!(
+            "approval_checklist={}",
+            render_string_values_with_separator(&report.approval_checklist, " | ")
+        ),
+        format!(
+            "rollback_hints={}",
+            render_string_values_with_separator(&report.rollback_hints, " | ")
+        ),
+        format!(
+            "provenance_candidate_ids={}",
+            render_string_values(&report.provenance.candidate_ids)
+        ),
+        format!(
+            "provenance_source_run_ids={}",
+            render_string_values(&report.provenance.source_run_ids)
+        ),
+        format!(
+            "provenance_experiment_ids={}",
+            render_string_values(&report.provenance.experiment_ids)
+        ),
+        format!(
+            "provenance_source_run_artifact_paths={}",
+            render_string_values_with_separator(
+                &report.provenance.source_run_artifact_paths,
+                " | "
+            )
+        ),
+    ]
+    .join("\n")
+}
+
+fn render_family_readiness_checks(checks: &[RuntimeCapabilityFamilyReadinessCheck]) -> String {
+    if checks.is_empty() {
+        "-".to_owned()
+    } else {
+        checks
+            .iter()
+            .map(render_family_readiness_check)
+            .collect::<Vec<_>>()
+            .join(" | ")
     }
 }

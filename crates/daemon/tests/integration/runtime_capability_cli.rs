@@ -257,25 +257,47 @@ fn propose_runtime_capability_variant(
     loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityArtifactDocument,
 ) {
     let candidate_path = root.join(format!("artifacts/runtime-capability-{slug}.json"));
-    let candidate =
-        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_propose_command(
-            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityProposeCommandOptions {
-                run: run_path.display().to_string(),
-                output: candidate_path.display().to_string(),
-                target:
-                    loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
-                target_summary: "Codify browser preview onboarding as a reusable managed skill"
-                    .to_owned(),
-                bounded_scope: "Browser preview onboarding and companion readiness checks only"
-                    .to_owned(),
-                required_capability: vec!["invoke_tool".to_owned(), "memory_read".to_owned()],
-                tag: vec!["browser".to_owned(), "onboarding".to_owned()],
-                label: Some(format!("browser-preview-skill-candidate-{slug}")),
-                json: false,
-            },
-        )
-        .expect("runtime capability propose should succeed");
+    let candidate = propose_runtime_capability_variant_with_target(
+        root,
+        run_path,
+        slug,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
+        "Codify browser preview onboarding as a reusable managed skill",
+        "Browser preview onboarding and companion readiness checks only",
+        &["invoke_tool", "memory_read"],
+        &["browser", "onboarding"],
+    );
     (candidate_path, candidate)
+}
+
+fn propose_runtime_capability_variant_with_target(
+    root: &Path,
+    run_path: &Path,
+    slug: &str,
+    target: loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget,
+    target_summary: &str,
+    bounded_scope: &str,
+    required_capabilities: &[&str],
+    tags: &[&str],
+) -> loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityArtifactDocument {
+    let candidate_path = root.join(format!("artifacts/runtime-capability-{slug}.json"));
+    loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_propose_command(
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityProposeCommandOptions {
+            run: run_path.display().to_string(),
+            output: candidate_path.display().to_string(),
+            target,
+            target_summary: target_summary.to_owned(),
+            bounded_scope: bounded_scope.to_owned(),
+            required_capability: required_capabilities
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect(),
+            tag: tags.iter().map(|value| (*value).to_owned()).collect(),
+            label: Some(format!("runtime-capability-{slug}")),
+            json: false,
+        },
+    )
+    .expect("runtime capability propose should succeed")
 }
 
 fn review_runtime_capability_variant(
@@ -774,6 +796,360 @@ fn runtime_capability_index_marks_family_blocked_on_conflicting_reviews() {
                     == loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityFamilyReadinessCheckStatus::Blocked
         }),
         "review consensus should block mixed accepted/rejected evidence"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_plan_builds_promotable_managed_skill_plan() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-plan-ready");
+    let config_path = write_runtime_capability_config(&root);
+
+    let (run_a_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "ready-a",
+        -0.2,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let (run_b_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "ready-b",
+        -0.4,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+
+    let candidate_a_path = root.join("artifacts/runtime-capability-ready-a.json");
+    let candidate_b_path = root.join("artifacts/runtime-capability-ready-b.json");
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_a_path,
+        "ready-a",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
+        "Codify browser preview onboarding as a reusable managed skill",
+        "Browser preview onboarding and companion readiness checks only",
+        &["invoke_tool", "memory_read"],
+        &["browser", "onboarding"],
+    );
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_b_path,
+        "ready-b",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
+        "Codify browser preview onboarding as a reusable managed skill",
+        "Browser preview onboarding and companion readiness checks only",
+        &["invoke_tool", "memory_read"],
+        &["browser", "onboarding"],
+    );
+    review_runtime_capability_variant(
+        &candidate_a_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "ready-a",
+    );
+    review_runtime_capability_variant(
+        &candidate_b_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "ready-b",
+    );
+
+    let index_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_index_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityIndexCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                json: false,
+            },
+        )
+        .expect("runtime capability index should succeed");
+    let family = index_report
+        .families
+        .first()
+        .expect("one capability family should be reported");
+
+    let plan = loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_plan_command(
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityPlanCommandOptions {
+            root: root.join("artifacts").display().to_string(),
+            family_id: family.family_id.clone(),
+            json: false,
+        },
+    )
+    .expect("runtime capability plan should succeed");
+
+    assert!(plan.promotable, "ready family should be promotable");
+    assert_eq!(
+        plan.readiness.status,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityFamilyReadinessStatus::Ready
+    );
+    assert_eq!(plan.planned_artifact.artifact_kind, "managed_skill_bundle");
+    assert_eq!(plan.planned_artifact.delivery_surface, "managed_skills");
+    assert!(
+        plan.planned_artifact
+            .artifact_id
+            .starts_with("managed-skill-"),
+        "artifact id should carry a managed-skill prefix"
+    );
+    assert!(
+        plan.planned_artifact
+            .artifact_id
+            .ends_with(&family.family_id[..12]),
+        "artifact id should be family-derived"
+    );
+    assert!(
+        plan.blockers.is_empty(),
+        "ready family should have no blockers"
+    );
+    assert!(
+        plan.approval_checklist
+            .iter()
+            .any(|item| item.contains("managed skill")),
+        "checklist should include the target-specific managed skill review item"
+    );
+    assert!(
+        plan.rollback_hints
+            .iter()
+            .any(|hint| hint.contains("managed_skills")),
+        "rollback hints should mention the managed skill delivery surface"
+    );
+    assert_eq!(plan.provenance.candidate_ids.len(), 2);
+    assert_eq!(plan.provenance.source_run_ids.len(), 2);
+    assert!(
+        plan.provenance.source_run_artifact_paths.contains(
+            &fs::canonicalize(&run_a_path)
+                .expect("canonicalize run a path")
+                .display()
+                .to_string()
+        )
+    );
+    assert!(
+        plan.provenance.source_run_artifact_paths.contains(
+            &fs::canonicalize(&run_b_path)
+                .expect("canonicalize run b path")
+                .display()
+                .to_string()
+        )
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_plan_reports_missing_evidence_for_programmatic_flow_family() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-plan-not-ready");
+    let config_path = write_runtime_capability_config(&root);
+    let (run_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "flow",
+        -0.2,
+        &["manual verification only"],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let candidate_path = root.join("artifacts/runtime-capability-flow.json");
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_path,
+        "flow",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ProgrammaticFlow,
+        "Codify runtime compare summarization as a reusable flow",
+        "Runtime experiment compare report generation only",
+        &["invoke_tool", "memory_read"],
+        &["runtime", "compare"],
+    );
+    review_runtime_capability_variant(
+        &candidate_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "flow",
+    );
+
+    let index_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_index_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityIndexCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                json: false,
+            },
+        )
+        .expect("runtime capability index should succeed");
+    let family = index_report
+        .families
+        .first()
+        .expect("one capability family should be reported");
+
+    let plan = loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_plan_command(
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityPlanCommandOptions {
+            root: root.join("artifacts").display().to_string(),
+            family_id: family.family_id.clone(),
+            json: false,
+        },
+    )
+    .expect("runtime capability plan should succeed");
+
+    assert!(
+        !plan.promotable,
+        "not-ready family should not be promotable"
+    );
+    assert_eq!(
+        plan.readiness.status,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityFamilyReadinessStatus::NotReady
+    );
+    assert_eq!(
+        plan.planned_artifact.artifact_kind,
+        "programmatic_flow_spec"
+    );
+    assert_eq!(plan.planned_artifact.delivery_surface, "programmatic_flows");
+    assert!(
+        plan.blockers.iter().any(|blocker| {
+            blocker.dimension == "stability"
+                && blocker.status
+                    == loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityFamilyReadinessCheckStatus::NeedsEvidence
+        }),
+        "stability should surface as a missing-evidence blocker"
+    );
+    assert!(
+        plan.blockers.iter().any(|blocker| {
+            blocker.dimension == "warning_pressure"
+                && blocker.status
+                    == loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityFamilyReadinessCheckStatus::NeedsEvidence
+        }),
+        "warnings should surface as missing-evidence blockers"
+    );
+    assert!(
+        plan.approval_checklist
+            .iter()
+            .any(|item| item.contains("programmatic flow")),
+        "checklist should include the target-specific programmatic flow review item"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_plan_reports_blocked_profile_note_family() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-plan-blocked");
+    let config_path = write_runtime_capability_config(&root);
+    let (run_a_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "note-a",
+        -0.1,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let (run_b_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "note-b",
+        -0.2,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let candidate_a_path = root.join("artifacts/runtime-capability-note-a.json");
+    let candidate_b_path = root.join("artifacts/runtime-capability-note-b.json");
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_a_path,
+        "note-a",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ProfileNoteAddendum,
+        "Record browser preview operator guidance in profile memory",
+        "Browser preview operator guidance only",
+        &["memory_write"],
+        &["profile", "guidance"],
+    );
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_b_path,
+        "note-b",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ProfileNoteAddendum,
+        "Record browser preview operator guidance in profile memory",
+        "Browser preview operator guidance only",
+        &["memory_write"],
+        &["profile", "guidance"],
+    );
+    review_runtime_capability_variant(
+        &candidate_a_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "note-a",
+    );
+    review_runtime_capability_variant(
+        &candidate_b_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Rejected,
+        "note-b",
+    );
+
+    let index_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_index_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityIndexCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                json: false,
+            },
+        )
+        .expect("runtime capability index should succeed");
+    let family = index_report
+        .families
+        .first()
+        .expect("one capability family should be reported");
+
+    let plan = loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_plan_command(
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityPlanCommandOptions {
+            root: root.join("artifacts").display().to_string(),
+            family_id: family.family_id.clone(),
+            json: false,
+        },
+    )
+    .expect("runtime capability plan should succeed");
+
+    assert!(!plan.promotable, "blocked family should not be promotable");
+    assert_eq!(
+        plan.readiness.status,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityFamilyReadinessStatus::Blocked
+    );
+    assert_eq!(plan.planned_artifact.artifact_kind, "profile_note_addendum");
+    assert_eq!(plan.planned_artifact.delivery_surface, "profile_note");
+    assert!(
+        plan.blockers.iter().any(|blocker| {
+            blocker.dimension == "review_consensus"
+                && blocker.status
+                    == loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityFamilyReadinessCheckStatus::Blocked
+        }),
+        "blocked review consensus should surface as a hard-stop blocker"
+    );
+    assert!(
+        plan.approval_checklist
+            .iter()
+            .any(|item| item.contains("advisory profile guidance")),
+        "checklist should include the target-specific profile-note review item"
+    );
+    assert!(
+        plan.rollback_hints
+            .iter()
+            .any(|hint| hint.contains("profile_note")),
+        "rollback hints should mention the profile note delivery surface"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_plan_rejects_unknown_family_id() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-plan-missing-family");
+    let config_path = write_runtime_capability_config(&root);
+    let (run_path, _) = finish_runtime_experiment(&root, &config_path);
+    propose_runtime_capability_variant(&root, &run_path, "missing");
+
+    let error = loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_plan_command(
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityPlanCommandOptions {
+            root: root.join("artifacts").display().to_string(),
+            family_id: "missing-family".to_owned(),
+            json: false,
+        },
+    )
+    .expect_err("unknown family id should be rejected");
+
+    assert!(
+        error.contains("missing-family"),
+        "error should name the requested family id: {error}"
     );
 
     fs::remove_dir_all(&root).ok();
