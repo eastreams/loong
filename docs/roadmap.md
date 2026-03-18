@@ -368,7 +368,7 @@ Trade-off: SQLite is queryable but adds schema migration burden. JSONL is zero-s
 
 `persist_turn` currently uses `tokio::task::block_in_place` to bridge sync → async kernel calls. This works but blocks a tokio worker thread and panics on single-threaded runtimes.
 
-Approach: make `ConversationRuntime::persist_turn` async, update `ConversationOrchestrator` callers. Straightforward but touches 6+ files.
+Approach: make `ConversationRuntime::persist_turn` async, update `ConversationTurnCoordinator` callers. Straightforward but touches 6+ files.
 
 Trade-off: low risk, moderate churn. Unblocks single-threaded runtime compatibility.
 
@@ -386,7 +386,7 @@ Status (alpha-test): implemented.
 - Added registry/selection hooks (`register_context_engine`, `resolve_context_engine`, `LOONGCLAW_CONTEXT_ENGINE`) plus config-based selector (`[conversation].context_engine`) for future multi-engine evolution without invasive runtime refactors.
 - Added built-in `legacy` engine for rollback and behavior comparison against pre-seam assembly path.
 - Added engine metadata surface (`id`, `api_version`, `capabilities`) for diagnostics and compatibility checks before introducing more advanced engines.
-- Added explicit post-turn context compaction hook (`compact_context`) to reserve an upgrade seam for summarization/compression without rewriting orchestrator flow.
+- Added explicit post-turn context compaction hook (`compact_context`) to reserve an upgrade seam for summarization/compression without rewriting turn-coordinator flow.
 - Added reserved context-engine lifecycle hooks (`bootstrap`, `ingest`) as default no-op seams so future engine-owned import/indexing flows do not require another trait/runtime rewrite.
 - Added reserved subagent lifecycle hooks (`prepare_subagent_spawn`, `on_subagent_ended`) as default no-op seams so future multi-agent context wiring avoids trait-breaking refactors.
 - Added richer context assembly output (`messages`, optional `estimated_tokens`, optional `system_prompt_addition`) to pre-wire policy/runtime prompt augmentation without revisiting runtime boundaries.
