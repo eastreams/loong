@@ -13,6 +13,14 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{prefix}-{nanos}"))
 }
 
+fn isolated_home_guard(prefix: &str) -> (PathBuf, MigrationEnvironmentGuard) {
+    let home = unique_temp_dir(prefix);
+    fs::create_dir_all(&home).expect("create isolated home");
+    let home_string = home.to_string_lossy().into_owned();
+    let guard = MigrationEnvironmentGuard::set(&[("HOME", Some(home_string.as_str()))]);
+    (home, guard)
+}
+
 fn write_file(root: &Path, relative: &str, content: &str) {
     let path = root.join(relative);
     if let Some(parent) = path.parent() {
@@ -57,6 +65,7 @@ fn parse_legacy_claw_source_accepts_supported_ids() {
 fn run_migrate_cli_writes_nativeized_config() {
     let legacy_root = unique_temp_dir("loongclaw-import-cli-legacy");
     let output_root = unique_temp_dir("loongclaw-import-cli-output");
+    let (home_root, _env_guard) = isolated_home_guard("loongclaw-import-cli-home");
     fs::create_dir_all(&legacy_root).expect("create legacy root");
     fs::create_dir_all(&output_root).expect("create output root");
 
@@ -113,12 +122,14 @@ fn run_migrate_cli_writes_nativeized_config() {
 
     fs::remove_dir_all(&legacy_root).ok();
     fs::remove_dir_all(&output_root).ok();
+    fs::remove_dir_all(&home_root).ok();
 }
 
 #[test]
 fn run_migrate_cli_plan_mode_returns_preview_without_writing() {
     let legacy_root = unique_temp_dir("loongclaw-import-cli-plan-legacy");
     let output_root = unique_temp_dir("loongclaw-import-cli-plan-output");
+    let (home_root, _env_guard) = isolated_home_guard("loongclaw-import-cli-plan-home");
     fs::create_dir_all(&legacy_root).expect("create legacy root");
     fs::create_dir_all(&output_root).expect("create output root");
 
@@ -151,12 +162,14 @@ fn run_migrate_cli_plan_mode_returns_preview_without_writing() {
 
     fs::remove_dir_all(&legacy_root).ok();
     fs::remove_dir_all(&output_root).ok();
+    fs::remove_dir_all(&home_root).ok();
 }
 
 #[test]
 fn run_migrate_cli_apply_selected_mode_writes_manifest_and_config() {
     let discovery_root = unique_temp_dir("loongclaw-import-cli-selected-discovery");
     let output_root = unique_temp_dir("loongclaw-import-cli-selected-output");
+    let (home_root, _env_guard) = isolated_home_guard("loongclaw-import-cli-selected-home");
     fs::create_dir_all(&discovery_root).expect("create discovery root");
     fs::create_dir_all(&output_root).expect("create output root");
 
@@ -204,12 +217,14 @@ fn run_migrate_cli_apply_selected_mode_writes_manifest_and_config() {
 
     fs::remove_dir_all(&discovery_root).ok();
     fs::remove_dir_all(&output_root).ok();
+    fs::remove_dir_all(&home_root).ok();
 }
 
 #[test]
 fn run_migrate_cli_apply_selected_mode_can_apply_external_skill_plan() {
     let discovery_root = unique_temp_dir("loongclaw-import-cli-external-skills-discovery");
     let output_root = unique_temp_dir("loongclaw-import-cli-external-skills-output");
+    let (home_root, _env_guard) = isolated_home_guard("loongclaw-import-cli-external-skills-home");
     fs::create_dir_all(&discovery_root).expect("create discovery root");
     fs::create_dir_all(&output_root).expect("create output root");
 
@@ -261,4 +276,5 @@ fn run_migrate_cli_apply_selected_mode_can_apply_external_skill_plan() {
 
     fs::remove_dir_all(&discovery_root).ok();
     fs::remove_dir_all(&output_root).ok();
+    fs::remove_dir_all(&home_root).ok();
 }
