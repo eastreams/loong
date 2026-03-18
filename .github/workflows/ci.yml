@@ -49,6 +49,7 @@ jobs:
           bash -n scripts/bootstrap_release_local_artifacts.sh
           bash -n scripts/test_release_artifact_lib.sh
           bash -n scripts/test_bootstrap_release_local_artifacts.sh
+          bash -n scripts/test_promotion_guard_workflows.sh
           bash -n scripts/check-docs.sh
           bash -n scripts/check_dep_graph.sh
           bash -n scripts/stress_daemon_tests.sh
@@ -62,6 +63,7 @@ jobs:
           bash scripts/test_install_sh.sh
           bash scripts/test_release_artifact_lib.sh
           bash scripts/test_bootstrap_release_local_artifacts.sh
+          bash scripts/test_promotion_guard_workflows.sh
           bash scripts/test_stress_daemon_tests.sh
 
       - name: Fresh architecture drift report

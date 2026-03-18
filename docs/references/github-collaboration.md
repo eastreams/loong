@@ -27,9 +27,10 @@ This document defines the active GitHub collaboration baseline for the `dev` bra
   and `release/*`.
 - `perf-lint` uses the same branch set but stays path-scoped to workflow and benchmark-sensitive
   files.
-- `enforce-dev-to-main` closes promotion PRs into `main` when the source branch is not `dev`.
-- `enforce-main-to-release` closes promotion PRs into `release` lanes when the source branch is
-  not `main`.
+- `enforce-dev-to-main` closes promotion PRs into `main` when the source is not the same-repository
+  `dev` branch.
+- `enforce-main-to-release` closes promotion PRs into `release` lanes when the source is not the
+  same-repository `main` branch.
 - The stable branch-protection check is `build`, the aggregate job in `.github/workflows/ci.yml`.
 
 ## Intake Routes

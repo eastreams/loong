@@ -1,6 +1,6 @@
 # Dev Main Release CI Lifecycle Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **Execution note:** Implement this plan task-by-task and record evidence for each validation step.
 
 **Goal:** Align GitHub Actions with the repository's `dev -> main -> release` promotion model so `dev` receives continuous validation and branch protection can rely on a stable required check.
 
@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Align integration workflow trigger branches with the promotion chain
+## Task 1: Align integration workflow trigger branches with the promotion chain
 
 **Files:**
 - Modify: `.github/workflows/ci.yml`
@@ -57,10 +57,10 @@ This keeps the benchmark-lint workflow scoped to relevant files while making it 
 Create `.github/workflows/enforce-main-to-release.yml` mirroring the style of
 `enforce-dev-to-main.yml`, but scoped to:
 - `pull_request_target.branches`: `release`, `release/**`
-- source branch requirement: `main`
+- source branch requirement: the same-repository `main` branch
 
 The workflow should comment, close the PR, and fail the job when a release-lane PR comes from a
-branch other than `main`.
+branch other than the same-repository `main`.
 
 **Step 6: Update contributor-facing collaboration docs**
 
@@ -85,7 +85,7 @@ ruby -e 'require "yaml"; ARGV.each { |path| YAML.load_file(path) }' \
 
 Expected: command exits `0` with no syntax errors.
 
-### Task 2: Add a stable aggregate required check for branch protection
+## Task 2: Add a stable aggregate required check for branch protection
 
 **Files:**
 - Modify: `.github/workflows/ci.yml`
@@ -121,7 +121,7 @@ git diff --check
 
 Expected: only the intended workflow trigger and aggregate-check changes appear, with no whitespace errors.
 
-### Task 3: Verify repository baseline and post-change behavior evidence
+## Task 3: Verify repository baseline and post-change behavior evidence
 
 **Files:**
 - Modify: `docs/plans/2026-03-18-dev-main-release-ci-lifecycle-implementation-plan.md`

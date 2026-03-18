@@ -12,7 +12,7 @@ on:
 
 jobs:
   block-non-dev-source:
-    if: ${{ github.event.pull_request.head.ref != 'dev' }}
+    if: ${{ github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.head.ref != 'dev' }}
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -25,9 +25,9 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const body = [
-              "Only `dev` can merge into `main` in this repository.",
+              "Only the same-repository `dev` branch can merge into `main` in this repository.",
               "",
-              `Current source branch: \`${pr.head.ref}\``,
+              `Current source branch: \`${pr.head.repo.full_name}:${pr.head.ref}\``,
               "Please land your changes on `dev` first, then open the promotion PR from `dev` to `main`."
             ].join("\\n");
 
