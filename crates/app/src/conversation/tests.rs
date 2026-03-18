@@ -1362,7 +1362,7 @@ fn seed_delegate_child_session_with_runtime_narrowing(
         kind: SessionKind::DelegateChild,
         parent_session_id: Some(root_session_id.clone()),
         label: Some("Child".to_owned()),
-        state: SessionState::Ready,
+        state: SessionState::Running,
     })
     .expect("create child session");
     repo.append_event(crate::session::repository::NewSessionEvent {
@@ -1801,7 +1801,8 @@ async fn default_runtime_build_context_merges_delegate_runtime_contract_with_sys
 }
 
 #[tokio::test]
-async fn default_runtime_build_context_does_not_add_delegate_runtime_contract_for_root_session() {
+async fn default_runtime_build_context_does_not_add_delegate_runtime_contract_for_unpersisted_session()
+ {
     let runtime = DefaultConversationRuntime::default();
     let binding = crate::conversation::ConversationRuntimeBinding::direct();
 
@@ -1816,6 +1817,41 @@ async fn default_runtime_build_context_does_not_add_delegate_runtime_contract_fo
     assert!(
         !system_content.contains("[delegate_child_runtime_contract]"),
         "root system prompt should not include the child runtime contract block: {system_content}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_build_context_does_not_add_delegate_runtime_contract_for_persisted_root_session()
+ {
+    let mut config = test_config();
+    let sqlite_path = unique_memory_sqlite_path("persisted-root-session-no-contract");
+    config.memory.sqlite_path = sqlite_path;
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    repo.create_session(NewSessionRecord {
+        session_id: "root-session-no-contract".to_owned(),
+        kind: SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: SessionState::Ready,
+    })
+    .expect("create root session");
+
+    let runtime = DefaultConversationRuntime::default();
+    let binding = crate::conversation::ConversationRuntimeBinding::direct();
+
+    let assembled = runtime
+        .build_context(&config, "root-session-no-contract", true, binding)
+        .await
+        .expect("build context for persisted root session");
+
+    let system_content = assembled.messages[0]["content"]
+        .as_str()
+        .expect("system prompt should stay string");
+    assert!(
+        !system_content.contains("[delegate_child_runtime_contract]"),
+        "persisted root system prompt should not include the child runtime contract block: {system_content}"
     );
 }
 

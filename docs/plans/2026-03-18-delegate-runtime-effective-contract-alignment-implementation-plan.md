@@ -14,7 +14,7 @@ delegate child session fixtures, workspace cargo verification.
 
 ---
 
-### Task 1: Add failing effective-contract tests
+## Task 1: Add failing effective-contract tests
 
 **Files:**
 - Modify: `crates/app/src/tools/runtime_config.rs`
@@ -47,7 +47,7 @@ than the child request, build context, and assert the child prompt shows the eff
 Run the precise runtime-config and conversation tests and confirm they fail for the current raw
 formatter path.
 
-### Task 2: Implement effective prompt-summary rendering
+## Task 2: Implement effective prompt-summary rendering
 
 **Files:**
 - Modify: `crates/app/src/tools/runtime_config.rs`
@@ -70,7 +70,7 @@ explicit line instead of omitting the field.
 
 Keep stable ordering and sparse field emission so prompt behavior and tests remain predictable.
 
-### Task 3: Wire conversation runtime to the new effective summary API
+## Task 3: Wire conversation runtime to the new effective summary API
 
 **Files:**
 - Modify: `crates/app/src/conversation/runtime.rs`
@@ -89,7 +89,7 @@ Preserve existing `system_prompt_addition` merging and child-only gating.
 Only replace the summary source of truth. Do not add new prompt channels or rewrite tool-view
 projection.
 
-### Task 4: Verify locally and repair GitHub delivery
+## Task 4: Verify locally and repair GitHub delivery
 
 **Files:**
 - Modify: current branch / PR artifacts as needed
