@@ -948,8 +948,8 @@ fn doctor_check_spec(channel_id: &str, operation_id: &str) -> Option<DoctorChann
             runtime_name: None,
         }),
         ("feishu", "serve") => Some(DoctorChannelCheckSpec {
-            config_name: "feishu webhook verification",
-            runtime_name: Some("feishu webhook runtime"),
+            config_name: "feishu inbound transport",
+            runtime_name: Some("feishu serve runtime"),
         }),
         ("matrix", "send") => Some(DoctorChannelCheckSpec {
             config_name: "matrix channel",
@@ -1843,6 +1843,10 @@ mod tests {
             "ready matrix serve surfaces should emit runtime checks in live doctor output: {checks:#?}"
         );
         assert!(
+            names.contains(&"feishu channel") && names.contains(&"feishu inbound transport"),
+            "feishu send/serve surfaces should appear in live doctor output: {checks:#?}"
+        );
+        assert!(
             checks
                 .iter()
                 .any(|check| check.name == "matrix room sync"
@@ -2433,14 +2437,14 @@ mod tests {
                 mvp::config::ChannelDefaultAccountSelectionSource::RuntimeIdentity,
             label: "Feishu/Lark",
             aliases: vec!["lark"],
-            transport: "feishu_openapi_webhook",
+            transport: "feishu_openapi_webhook_or_websocket",
             compiled: true,
             enabled: true,
             api_base_url: Some("https://open.feishu.cn".to_owned()),
             notes: Vec::new(),
             operations: vec![ChannelOperationStatus {
                 id: "serve",
-                label: "webhook reply server",
+                label: "inbound reply service",
                 command: "feishu-serve",
                 health: ChannelOperationHealth::Ready,
                 detail: "ready".to_owned(),
@@ -2466,7 +2470,7 @@ mod tests {
 
         assert!(
             checks.iter().any(|check| {
-                check.name == "feishu webhook runtime"
+                check.name == "feishu serve runtime"
                     && check.level == DoctorCheckLevel::Fail
                     && check.detail.contains("stale")
                     && check.detail.contains("pid=4242")
@@ -2540,7 +2544,7 @@ mod tests {
                 mvp::config::ChannelDefaultAccountSelectionSource::ExplicitDefault,
             label: "Feishu/Lark",
             aliases: vec!["lark"],
-            transport: "feishu_openapi_webhook",
+            transport: "feishu_openapi_webhook_or_websocket",
             compiled: true,
             enabled: true,
             api_base_url: Some("https://open.feishu.cn".to_owned()),
@@ -2555,7 +2559,7 @@ mod tests {
             ],
             operations: vec![ChannelOperationStatus {
                 id: "serve",
-                label: "webhook reply server",
+                label: "inbound reply service",
                 command: "feishu-serve",
                 health: ChannelOperationHealth::Ready,
                 detail: "ready".to_owned(),

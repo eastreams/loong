@@ -235,7 +235,7 @@ base_url = "https://ark.cn-beijing.volces.com"
 chat_completions_path = "/api/v3/chat/completions"
 ```
 
-飞书通道示例：
+飞书通道示例（webhook 模式）：
 
 ```bash
 export FEISHU_APP_ID=cli_your_app_id
@@ -257,7 +257,28 @@ allowed_chat_ids = ["oc_your_chat_id"]
 loongclaw feishu-serve --config ~/.loongclaw/config.toml
 ```
 
-默认会读取 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_VERIFICATION_TOKEN` 和 `FEISHU_ENCRYPT_KEY`。如果你接的是 Lark，可以再加上 `domain = "lark"`。
+默认是 `mode = "webhook"`，会读取 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_VERIFICATION_TOKEN` 和 `FEISHU_ENCRYPT_KEY`。
+
+飞书通道示例（websocket 模式）：
+
+```bash
+export FEISHU_APP_ID=cli_your_app_id
+export FEISHU_APP_SECRET=your_app_secret
+```
+
+```toml
+[feishu]
+enabled = true
+mode = "websocket"
+receive_id_type = "chat_id"
+allowed_chat_ids = ["oc_your_chat_id"]
+```
+
+```bash
+loongclaw feishu-serve --config ~/.loongclaw/config.toml
+```
+
+websocket 模式不需要 webhook secret。如果你接的是 Lark，可以再加上 `domain = "lark"`。
 
 工具策略需要明确配置：
 

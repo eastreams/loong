@@ -72,6 +72,26 @@ pub struct FeishuUserInfo {
     pub tenant_key: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct FeishuWsEndpointClientConfig {
+    #[serde(rename = "ReconnectCount", default)]
+    pub reconnect_count: Option<u64>,
+    #[serde(rename = "ReconnectInterval", default)]
+    pub reconnect_interval_s: Option<u64>,
+    #[serde(rename = "ReconnectNonce", default)]
+    pub reconnect_nonce_s: Option<u64>,
+    #[serde(rename = "PingInterval", default)]
+    pub ping_interval_s: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeishuWsEndpoint {
+    #[serde(rename = "URL")]
+    pub url: String,
+    #[serde(rename = "ClientConfig", default)]
+    pub client_config: Option<FeishuWsEndpointClientConfig>,
+}
+
 impl FeishuClient {
     pub fn new(
         base_url: impl Into<String>,
@@ -175,6 +195,59 @@ impl FeishuClient {
             }
         }
         Ok(url)
+    }
+
+    pub async fn get_websocket_endpoint(&self) -> CliResult<FeishuWsEndpoint> {
+        #[derive(Debug, Deserialize)]
+        struct FeishuWsEndpointEnvelope {
+            code: i64,
+            msg: String,
+            data: Option<FeishuWsEndpoint>,
+        }
+
+        let url = self.build_open_api_url("/callback/ws/endpoint")?;
+        let response = self
+            .http
+            .post(url)
+            .header("locale", "zh")
+            .json(&json!({
+                "AppID": self.app_id(),
+                "AppSecret": self.app_secret(),
+            }))
+            .send()
+            .await
+            .map_err(|error| format!("request Feishu websocket endpoint failed: {error}"))?;
+        let status = response.status();
+        let body = response.text().await.map_err(|error| {
+            format!("read Feishu websocket endpoint response body failed: {error}")
+        })?;
+        if !status.is_success() {
+            return Err(format!(
+                "request Feishu websocket endpoint failed with status {}: {}",
+                status.as_u16(),
+                body
+            ));
+        }
+
+        let envelope: FeishuWsEndpointEnvelope = serde_json::from_str(&body).map_err(|error| {
+            format!("decode Feishu websocket endpoint response failed: {error}")
+        })?;
+        if envelope.code != 0 {
+            return Err(format!(
+                "request Feishu websocket endpoint failed with code {}: {}",
+                envelope.code, envelope.msg
+            ));
+        }
+
+        let endpoint = envelope
+            .data
+            .ok_or_else(|| "Feishu websocket endpoint response missing data".to_owned())?;
+        let url = endpoint.url.trim();
+        if url.is_empty() {
+            return Err("Feishu websocket endpoint response missing URL".to_owned());
+        }
+
+        Ok(endpoint)
     }
 
     pub async fn exchange_authorization_code(

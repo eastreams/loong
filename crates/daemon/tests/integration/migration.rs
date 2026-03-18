@@ -868,10 +868,10 @@ fn channel_registry_collects_preflight_checks_for_enabled_channels() {
     );
     assert!(
         checks.iter().any(|check| {
-            check.name == "feishu webhook verification"
+            check.name == "feishu inbound transport"
                 && check.level == loongclaw_daemon::migration::channels::ChannelCheckLevel::Pass
         }),
-        "registry preflight should include feishu webhook verification readiness: {checks:#?}"
+        "registry preflight should include feishu inbound transport readiness: {checks:#?}"
     );
 }
 

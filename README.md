@@ -288,7 +288,7 @@ chat_completions_path = "/api/v3/chat/completions"
 
 Both `volcengine` and `volcengine_coding` use `api_key = "${ARK_API_KEY}"`. LoongClaw sends that value as `Authorization: Bearer <ARK_API_KEY>` on the OpenAI-compatible Volcengine path; AK/SK request signing is not used there.
 
-Feishu channel example:
+Feishu channel example (webhook mode):
 
 ```bash
 export FEISHU_APP_ID=cli_your_app_id
@@ -310,7 +310,28 @@ allowed_chat_ids = ["oc_your_chat_id"]
 loongclaw feishu-serve --config ~/.loongclaw/config.toml
 ```
 
-By default, LoongClaw reads `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_VERIFICATION_TOKEN`, and `FEISHU_ENCRYPT_KEY`. If you are targeting Lark instead of Feishu, add `domain = "lark"`.
+LoongClaw defaults to `mode = "webhook"` and reads `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_VERIFICATION_TOKEN`, and `FEISHU_ENCRYPT_KEY`.
+
+Feishu channel example (websocket mode):
+
+```bash
+export FEISHU_APP_ID=cli_your_app_id
+export FEISHU_APP_SECRET=your_app_secret
+```
+
+```toml
+[feishu]
+enabled = true
+mode = "websocket"
+receive_id_type = "chat_id"
+allowed_chat_ids = ["oc_your_chat_id"]
+```
+
+```bash
+loongclaw feishu-serve --config ~/.loongclaw/config.toml
+```
+
+Webhook secrets are not required in websocket mode. If you are targeting Lark instead of Feishu, add `domain = "lark"`.
 
 Matrix channel example:
 

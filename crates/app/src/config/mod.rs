@@ -14,10 +14,10 @@ pub use audit::{AuditConfig, AuditMode};
 pub use channels::{
     ChannelAcpConfig, ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource,
     ChannelDescriptor, ChannelResolvedAccountRoute, ChannelRuntimeKind, CliChannelConfig,
-    FeishuAccountConfig, FeishuChannelConfig, FeishuDomain, MatrixAccountConfig,
-    MatrixChannelConfig, ResolvedFeishuChannelConfig, ResolvedMatrixChannelConfig,
-    ResolvedTelegramChannelConfig, TelegramAccountConfig, TelegramChannelConfig,
-    channel_descriptor, service_channel_descriptors,
+    FeishuAccountConfig, FeishuChannelConfig, FeishuChannelServeMode, FeishuDomain,
+    MatrixAccountConfig, MatrixChannelConfig, ResolvedFeishuChannelConfig,
+    ResolvedMatrixChannelConfig, ResolvedTelegramChannelConfig, TelegramAccountConfig,
+    TelegramChannelConfig, channel_descriptor, service_channel_descriptors,
 };
 #[allow(unused_imports)]
 pub(crate) use channels::{
