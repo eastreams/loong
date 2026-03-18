@@ -144,6 +144,7 @@ impl BrowserCompanionRuntimePolicy {
 pub struct WebFetchRuntimePolicy {
     pub enabled: bool,
     pub allow_private_hosts: bool,
+    pub enforce_allowed_domains: bool,
     pub allowed_domains: BTreeSet<String>,
     pub blocked_domains: BTreeSet<String>,
     pub timeout_seconds: u64,
@@ -156,6 +157,7 @@ impl Default for WebFetchRuntimePolicy {
         Self {
             enabled: true,
             allow_private_hosts: false,
+            enforce_allowed_domains: false,
             allowed_domains: BTreeSet::new(),
             blocked_domains: BTreeSet::new(),
             timeout_seconds: crate::config::DEFAULT_WEB_FETCH_TIMEOUT_SECONDS,
@@ -240,6 +242,8 @@ impl Default for ToolRuntimeConfig {
 
 impl ToolRuntimeConfig {
     pub fn from_loongclaw_config(config: &LoongClawConfig, config_path: Option<&Path>) -> Self {
+        let web_fetch_allowed_domains = config.tools.web.normalized_allowed_domains();
+        let web_fetch_enforce_allowed_domains = !web_fetch_allowed_domains.is_empty();
         Self {
             file_root: Some(config.tools.resolved_file_root()),
             shell_allow: config
@@ -275,12 +279,8 @@ impl ToolRuntimeConfig {
             web_fetch: WebFetchRuntimePolicy {
                 enabled: config.tools.web.enabled,
                 allow_private_hosts: config.tools.web.allow_private_hosts,
-                allowed_domains: config
-                    .tools
-                    .web
-                    .normalized_allowed_domains()
-                    .into_iter()
-                    .collect(),
+                enforce_allowed_domains: web_fetch_enforce_allowed_domains,
+                allowed_domains: web_fetch_allowed_domains.into_iter().collect(),
                 blocked_domains: config
                     .tools
                     .web
@@ -387,6 +387,7 @@ impl ToolRuntimeConfig {
             web_fetch: WebFetchRuntimePolicy {
                 enabled: web_fetch_enabled,
                 allow_private_hosts: web_fetch_allow_private_hosts,
+                enforce_allowed_domains: !web_fetch_allowed_domains.is_empty(),
                 allowed_domains: web_fetch_allowed_domains,
                 blocked_domains: web_fetch_blocked_domains,
                 timeout_seconds: web_fetch_timeout_seconds,
@@ -440,6 +441,7 @@ impl ToolRuntimeConfig {
         };
 
         if !narrowing.web_fetch.allowed_domains.is_empty() {
+            narrowed.web_fetch.enforce_allowed_domains = true;
             narrowed.web_fetch.allowed_domains = if narrowed.web_fetch.allowed_domains.is_empty() {
                 narrowing.web_fetch.allowed_domains.clone()
             } else {
@@ -763,6 +765,7 @@ mod tests {
             web_fetch: WebFetchRuntimePolicy {
                 enabled: false,
                 allow_private_hosts: true,
+                enforce_allowed_domains: true,
                 allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
                 blocked_domains: BTreeSet::from(["internal.example".to_owned()]),
                 timeout_seconds: 9,
@@ -1115,6 +1118,7 @@ mod tests {
         let policy = WebFetchRuntimePolicy {
             enabled: false,
             allow_private_hosts: true,
+            enforce_allowed_domains: true,
             allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
             blocked_domains: BTreeSet::from(["internal.example".to_owned()]),
             timeout_seconds: 9,
@@ -1124,6 +1128,7 @@ mod tests {
 
         assert!(!policy.enabled);
         assert!(policy.allow_private_hosts);
+        assert!(policy.enforce_allowed_domains);
         assert!(policy.allowed_domains.contains("docs.example.com"));
         assert!(policy.blocked_domains.contains("internal.example"));
         assert_eq!(policy.timeout_seconds, 9);
@@ -1143,6 +1148,7 @@ mod tests {
             web_fetch: WebFetchRuntimePolicy {
                 enabled: true,
                 allow_private_hosts: true,
+                enforce_allowed_domains: true,
                 allowed_domains: BTreeSet::from([
                     "docs.example.com".to_owned(),
                     "api.example.com".to_owned(),
@@ -1180,6 +1186,7 @@ mod tests {
             effective.web_fetch.allowed_domains,
             BTreeSet::from(["docs.example.com".to_owned()])
         );
+        assert!(effective.web_fetch.enforce_allowed_domains);
         assert_eq!(
             effective.web_fetch.blocked_domains,
             BTreeSet::from([
@@ -1198,6 +1205,7 @@ mod tests {
             web_fetch: WebFetchRuntimePolicy {
                 enabled: true,
                 allow_private_hosts: false,
+                enforce_allowed_domains: false,
                 allowed_domains: BTreeSet::new(),
                 blocked_domains: BTreeSet::new(),
                 timeout_seconds: 15,
@@ -1223,6 +1231,39 @@ mod tests {
         assert_eq!(
             effective.web_fetch.allowed_domains,
             BTreeSet::from(["docs.example.com".to_owned()])
+        );
+        assert!(effective.web_fetch.enforce_allowed_domains);
+    }
+
+    #[test]
+    fn tool_runtime_config_narrowed_fail_closes_disjoint_allowlists() {
+        let base = ToolRuntimeConfig {
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: true,
+                allow_private_hosts: false,
+                enforce_allowed_domains: true,
+                allowed_domains: BTreeSet::from(["api.example.com".to_owned()]),
+                blocked_domains: BTreeSet::new(),
+                timeout_seconds: 15,
+                max_bytes: 8_192,
+                max_redirects: 4,
+            },
+            ..ToolRuntimeConfig::default()
+        };
+        let narrowing = ToolRuntimeNarrowing {
+            web_fetch: WebFetchRuntimeNarrowing {
+                allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+                ..WebFetchRuntimeNarrowing::default()
+            },
+            ..ToolRuntimeNarrowing::default()
+        };
+
+        let effective = base.narrowed(&narrowing);
+
+        assert!(effective.web_fetch.enforce_allowed_domains);
+        assert!(
+            effective.web_fetch.allowed_domains.is_empty(),
+            "disjoint allowlists should preserve an enforced empty intersection"
         );
     }
 

@@ -2842,6 +2842,46 @@ mod tests {
 
     #[cfg(feature = "tool-webfetch")]
     #[test]
+    fn web_fetch_denies_disjoint_allowlists_when_runtime_narrowing_intersection_is_empty() {
+        let root = std::env::temp_dir().join(format!(
+            "loongclaw-web-fetch-runtime-narrowing-disjoint-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let mut config = test_tool_runtime_config(root.clone());
+        config
+            .web_fetch
+            .allowed_domains
+            .insert("api.example.com".to_owned());
+        let error = execute_tool_core_with_test_context(
+            ToolCoreRequest {
+                tool_name: "web.fetch".to_owned(),
+                payload: json!({
+                    "url": "https://outside.invalid/docs",
+                    "_loongclaw": {
+                        "runtime_narrowing": {
+                            "web_fetch": {
+                                "allowed_domains": ["docs.example.com"]
+                            }
+                        }
+                    }
+                }),
+            },
+            &config,
+        )
+        .expect_err("disjoint allowlists should deny before host resolution");
+
+        assert!(
+            error.contains("not in allowed_domains"),
+            "expected empty-intersection allowlist denial, got: {error}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-webfetch")]
+    #[test]
     fn web_fetch_rejects_forged_runtime_narrowing_from_untrusted_payload() {
         let root = std::env::temp_dir().join(format!(
             "loongclaw-web-fetch-runtime-narrowing-forged-{}",

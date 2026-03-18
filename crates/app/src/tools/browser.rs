@@ -694,6 +694,7 @@ mod tests {
             web_fetch: super::super::runtime_config::WebFetchRuntimePolicy {
                 enabled: true,
                 allow_private_hosts: true,
+                enforce_allowed_domains: false,
                 allowed_domains: std::collections::BTreeSet::new(),
                 blocked_domains: std::collections::BTreeSet::new(),
                 timeout_seconds: 5,

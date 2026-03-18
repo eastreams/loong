@@ -368,7 +368,7 @@ pub(crate) fn validate_web_target(
             "{surface_name} blocked host `{host}` because it matches blocked domain rule `{rule}`"
         ));
     }
-    if !policy.allowed_domains.is_empty()
+    if policy.enforce_allowed_domains
         && first_matching_domain_rule(&host, &policy.allowed_domains).is_none()
     {
         return Err(format!(
@@ -925,6 +925,20 @@ mod tests {
             validate_web_target(&url, &policy, "web.fetch").expect("localhost should be allowed");
 
         assert_eq!(host, "localhost");
+    }
+
+    #[test]
+    fn validate_web_target_denies_when_allowlist_is_enforced_but_empty() {
+        let policy = super::super::runtime_config::WebFetchRuntimePolicy {
+            enforce_allowed_domains: true,
+            ..super::super::runtime_config::WebFetchRuntimePolicy::default()
+        };
+        let url = reqwest::Url::parse("https://example.com").expect("url");
+
+        let error =
+            validate_web_target(&url, &policy, "web.fetch").expect_err("empty enforced allowlist");
+
+        assert!(error.contains("not in allowed_domains"), "error={error}");
     }
 
     #[test]
