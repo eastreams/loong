@@ -142,41 +142,53 @@ impl AsyncDelegateSpawner for DefaultAsyncDelegateSpawner {
         let repo = SessionRepository::new(&MemoryRuntimeConfig::from_memory_config(
             &self.config.memory,
         ))?;
-        let started = repo.transition_session_with_event_if_current(
-            &request.child_session_id,
-            TransitionSessionWithEventIfCurrentRequest {
-                expected_state: SessionState::Ready,
-                next_state: SessionState::Running,
-                last_error: None,
-                event_kind: "delegate_started".to_owned(),
-                actor_session_id: Some(request.parent_session_id.clone()),
-                event_payload_json: request
-                    .execution
-                    .spawn_payload(&request.task, request.label.as_deref()),
-            },
-        )?;
-        if started.is_none() {
-            return Err(format!(
-                "async_delegate_spawn_skipped: session `{}` was not in Ready state",
-                request.child_session_id,
-            ));
-        }
-
         let runtime = DefaultConversationRuntime::from_config_or_env(self.config.as_ref())?;
-        let _ = super::turn_coordinator::run_started_delegate_child_turn_with_runtime(
-            self.config.as_ref(),
+        super::turn_coordinator::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
             &runtime,
-            &request.child_session_id,
             &request.parent_session_id,
-            request.label,
-            &request.task,
-            request.execution,
-            request.timeout_seconds,
+            &request.child_session_id,
             ConversationRuntimeBinding::from_optional_kernel_context(
                 request.kernel_context.as_ref(),
             ),
+            || async {
+                let started = repo.transition_session_with_event_if_current(
+                    &request.child_session_id,
+                    TransitionSessionWithEventIfCurrentRequest {
+                        expected_state: SessionState::Ready,
+                        next_state: SessionState::Running,
+                        last_error: None,
+                        event_kind: "delegate_started".to_owned(),
+                        actor_session_id: Some(request.parent_session_id.clone()),
+                        event_payload_json: request
+                            .execution
+                            .spawn_payload(&request.task, request.label.as_deref()),
+                    },
+                )?;
+                if started.is_none() {
+                    return Err(format!(
+                        "async_delegate_spawn_skipped: session `{}` was not in Ready state",
+                        request.child_session_id
+                    ));
+                }
+
+                let _ = super::turn_coordinator::run_started_delegate_child_turn_with_runtime(
+                    self.config.as_ref(),
+                    &runtime,
+                    &request.child_session_id,
+                    &request.parent_session_id,
+                    request.label,
+                    &request.task,
+                    request.execution,
+                    request.timeout_seconds,
+                    ConversationRuntimeBinding::from_optional_kernel_context(
+                        request.kernel_context.as_ref(),
+                    ),
+                )
+                .await;
+                Ok(())
+            },
         )
-        .await;
+        .await?;
         Ok(())
     }
 }

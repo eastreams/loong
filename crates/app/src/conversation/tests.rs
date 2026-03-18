@@ -160,6 +160,35 @@ impl crate::conversation::AsyncDelegateSpawner for PanicAsyncDelegateSpawner {
 }
 
 #[cfg(feature = "memory-sqlite")]
+struct PostPrepareFailingAsyncDelegateSpawner {
+    runtime: Arc<OnceLock<Arc<FakeRuntime>>>,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[async_trait]
+impl crate::conversation::AsyncDelegateSpawner for PostPrepareFailingAsyncDelegateSpawner {
+    async fn spawn(
+        &self,
+        request: crate::conversation::AsyncDelegateSpawnRequest,
+    ) -> Result<(), String> {
+        let runtime = self
+            .runtime
+            .get()
+            .ok_or_else(|| "test_post_prepare_runtime_missing".to_owned())?;
+        super::turn_coordinator::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
+            runtime.as_ref(),
+            &request.parent_session_id,
+            &request.child_session_id,
+            ConversationRuntimeBinding::from_optional_kernel_context(
+                request.kernel_context.as_ref(),
+            ),
+            || async { Err("synthetic_post_prepare_async_spawn_failure".to_owned()) },
+        )
+        .await
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
 struct LocalChildRuntimeAsyncDelegateSpawner {
     config: LoongClawConfig,
     runtime: Arc<OnceLock<Arc<FakeRuntime>>>,
@@ -174,43 +203,55 @@ impl crate::conversation::AsyncDelegateSpawner for LocalChildRuntimeAsyncDelegat
     ) -> Result<(), String> {
         let memory_config = MemoryRuntimeConfig::from_memory_config(&self.config.memory);
         let repo = crate::session::repository::SessionRepository::new(&memory_config)?;
-        let started = repo.transition_session_with_event_if_current(
-            &request.child_session_id,
-            crate::session::repository::TransitionSessionWithEventIfCurrentRequest {
-                expected_state: crate::session::repository::SessionState::Ready,
-                next_state: crate::session::repository::SessionState::Running,
-                last_error: None,
-                event_kind: "delegate_started".to_owned(),
-                actor_session_id: Some(request.parent_session_id.clone()),
-                event_payload_json: json!({
-                    "task": request.task,
-                    "label": request.label,
-                    "timeout_seconds": request.timeout_seconds,
-                }),
-            },
-        )?;
-        if started.is_none() {
-            return Ok(());
-        }
-
         let runtime = self
             .runtime
             .get()
             .ok_or_else(|| "test_local_delegate_runtime_missing".to_owned())?;
-        let _ = super::turn_coordinator::run_started_delegate_child_turn_with_runtime(
-            &self.config,
+        super::turn_coordinator::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
             runtime.as_ref(),
-            &request.child_session_id,
             &request.parent_session_id,
-            request.label,
-            &request.task,
-            request.execution,
-            request.timeout_seconds,
+            &request.child_session_id,
             ConversationRuntimeBinding::from_optional_kernel_context(
                 request.kernel_context.as_ref(),
             ),
+            || async {
+                let started = repo.transition_session_with_event_if_current(
+                    &request.child_session_id,
+                    crate::session::repository::TransitionSessionWithEventIfCurrentRequest {
+                        expected_state: crate::session::repository::SessionState::Ready,
+                        next_state: crate::session::repository::SessionState::Running,
+                        last_error: None,
+                        event_kind: "delegate_started".to_owned(),
+                        actor_session_id: Some(request.parent_session_id.clone()),
+                        event_payload_json: json!({
+                            "task": request.task,
+                            "label": request.label,
+                            "timeout_seconds": request.timeout_seconds,
+                        }),
+                    },
+                )?;
+                if started.is_none() {
+                    return Ok(());
+                }
+
+                let _ = super::turn_coordinator::run_started_delegate_child_turn_with_runtime(
+                    &self.config,
+                    runtime.as_ref(),
+                    &request.child_session_id,
+                    &request.parent_session_id,
+                    request.label,
+                    &request.task,
+                    request.execution,
+                    request.timeout_seconds,
+                    ConversationRuntimeBinding::from_optional_kernel_context(
+                        request.kernel_context.as_ref(),
+                    ),
+                )
+                .await;
+                Ok(())
+            },
         )
-        .await;
+        .await?;
         Ok(())
     }
 }
@@ -12959,6 +13000,16 @@ async fn handle_turn_with_runtime_kernel_delegate_calls_subagent_lifecycle_hooks
             format!("on_subagent_ended:root-session:{}", child.session_id),
         ]
     );
+
+    let bootstrap_calls = runtime
+        .bootstrap_calls
+        .lock()
+        .expect("bootstrap calls lock")
+        .clone();
+    assert!(
+        bootstrap_calls.contains(&child.session_id),
+        "expected child kernel bootstrap call, got: {bootstrap_calls:?}"
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -13038,6 +13089,110 @@ async fn handle_turn_with_runtime_delegate_rejects_spawn_when_prepare_subagent_s
     assert!(
         calls[0].starts_with("prepare_subagent_spawn:root-session:delegate:"),
         "unexpected lifecycle calls: {calls:?}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_delegate_reports_end_hook_failure_after_child_completion() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-delegate", "end-hook-failure")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "Delegating.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "delegate",
+                    json!({
+                        "task": "child task",
+                        "label": "research-subtask"
+                    }),
+                    "root-session",
+                    "turn-delegate-parent",
+                    "call-delegate-parent",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Child final output".to_owned(),
+                tool_intents: vec![],
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    )
+    .with_on_subagent_ended_result(Err("synthetic_on_subagent_ended_failure".to_owned()))
+    .with_durable_memory_config(memory_config.clone());
+    let kernel_ctx = test_kernel_context("conversation-delegate-end-hook-failure");
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("delegate handle turn reply");
+
+    assert!(
+        reply.contains("delegate_subagent_end_hook_failed: synthetic_on_subagent_ended_failure"),
+        "expected on_subagent_ended failure in reply, got: {reply}"
+    );
+
+    let child = repo
+        .list_visible_sessions("root-session")
+        .expect("list visible sessions")
+        .into_iter()
+        .find(|session| session.parent_session_id.as_deref() == Some("root-session"))
+        .expect("child session summary");
+    assert_eq!(
+        child.state,
+        crate::session::repository::SessionState::Completed
+    );
+
+    let terminal_outcome = repo
+        .load_terminal_outcome(&child.session_id)
+        .expect("load terminal outcome")
+        .expect("terminal outcome row");
+    assert_eq!(terminal_outcome.status, "ok");
+    assert_eq!(
+        terminal_outcome.payload_json["final_output"],
+        "Child final output"
+    );
+
+    assert_eq!(
+        runtime
+            .subagent_lifecycle_calls
+            .lock()
+            .expect("subagent lifecycle calls lock")
+            .clone(),
+        vec![
+            format!("prepare_subagent_spawn:root-session:{}", child.session_id),
+            format!("on_subagent_ended:root-session:{}", child.session_id),
+        ]
     );
 }
 
@@ -14014,6 +14169,111 @@ async fn handle_turn_with_runtime_delegate_async_spawn_failure_is_observable_aft
         .collect();
     assert!(event_kinds.contains(&"delegate_queued"));
     assert!(event_kinds.contains(&"delegate_spawn_failed"));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_kernel_delegate_async_spawn_failure_closes_lifecycle() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-delegate-async", "kernel-spawn-failed")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+
+    let runtime_ref = Arc::new(OnceLock::new());
+    let runtime = Arc::new(
+        FakeRuntime::with_turns_and_completions(
+            vec![],
+            vec![Ok(ProviderTurn {
+                assistant_text: "Delegating async.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "delegate_async",
+                    json!({
+                        "task": "child async task",
+                        "label": "async-child"
+                    }),
+                    "root-session",
+                    "turn-delegate-async-parent",
+                    "call-delegate-async-parent",
+                )],
+                raw_meta: Value::Null,
+            })],
+            vec![],
+        )
+        .with_async_delegate_spawner(Arc::new(PostPrepareFailingAsyncDelegateSpawner {
+            runtime: runtime_ref.clone(),
+        }))
+        .with_durable_memory_config(memory_config.clone()),
+    );
+    assert!(
+        runtime_ref.set(runtime.clone()).is_ok(),
+        "install runtime ref for post-prepare spawner"
+    );
+    let kernel_ctx = test_kernel_context("conversation-delegate-async-kernel-spawn-failure");
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "show raw json tool output",
+            ProviderErrorMode::Propagate,
+            runtime.as_ref(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("delegate_async reply");
+
+    assert!(
+        reply.contains("\"tool\":\"delegate_async\""),
+        "expected raw delegate_async tool output, got: {reply}"
+    );
+
+    let child = tokio::time::timeout(std::time::Duration::from_millis(500), async {
+        loop {
+            let maybe_child = repo
+                .list_visible_sessions("root-session")
+                .expect("list visible sessions")
+                .into_iter()
+                .find(|session| session.parent_session_id.as_deref() == Some("root-session"));
+            if let Some(child) = maybe_child
+                && child.state == crate::session::repository::SessionState::Failed
+            {
+                break child;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("queued delegate child should fail after spawn failure");
+
+    let calls = runtime
+        .subagent_lifecycle_calls
+        .lock()
+        .expect("subagent lifecycle calls lock")
+        .clone();
+    assert_eq!(
+        calls,
+        vec![
+            format!("prepare_subagent_spawn:root-session:{}", child.session_id),
+            format!("on_subagent_ended:root-session:{}", child.session_id),
+        ],
+        "kernel-bound async post-prepare failure should still close the prepared lifecycle"
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]

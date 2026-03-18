@@ -32,10 +32,12 @@ The bounded target for this slice is:
 
 **Non-Goals**
 
-- Do not add a new ACP control-plane surface for delegate children in this slice.
-- Do not redesign session visibility, orphan recovery, or delivery hooks.
-- Do not add general descendant-tree scheduling or cross-parent global delegate quotas.
-- Do not widen delegate into an arbitrary custom-agent registry.
+Do not:
+
+- add a new ACP control-plane surface for delegate children in this slice
+- redesign session visibility, orphan recovery, or delivery hooks
+- add general descendant-tree scheduling or cross-parent global delegate quotas
+- widen delegate into an arbitrary custom-agent registry
 
 **Constraints**
 

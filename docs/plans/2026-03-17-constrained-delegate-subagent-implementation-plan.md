@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Add failing tests for the missing lifecycle contract
+## Task 1: Add failing tests for the missing lifecycle contract
 
 **Files:**
 - Modify: `crates/app/src/conversation/tests.rs`
@@ -60,7 +60,7 @@ Run:
 
 Expected: FAIL because the production delegate path currently never invokes the runtime lifecycle hooks.
 
-### Task 2: Implement the constrained-subagent contract and runtime wiring
+## Task 2: Implement the constrained-subagent contract and runtime wiring
 
 **Files:**
 - Add: `crates/app/src/conversation/subagent.rs`
@@ -105,7 +105,7 @@ Update delegate terminal completion/failure/timeout and async spawn-failure path
 
 Update `session_status` / delegate lifecycle extraction to parse the constrained-subagent envelope from delegate lifecycle events and surface it in the inspection JSON.
 
-### Task 3: Verify the slice and prepare GitHub delivery
+## Task 3: Verify the slice and prepare GitHub delivery
 
 **Files:**
 - Modify: `docs/plans/2026-03-17-constrained-delegate-subagent-design.md`

@@ -2026,11 +2026,19 @@ fn session_delegate_lifecycle_at(
         SessionState::TimedOut => "timed_out",
     };
     let timeout_seconds = started_timeout_seconds.or(queued_timeout_seconds);
-    let mode = if queued_at.is_some() || matches!(session.state, SessionState::Ready) {
-        "async"
-    } else {
-        "inline"
-    };
+    let mode = execution
+        .as_ref()
+        .map(|execution| match execution.mode {
+            crate::conversation::ConstrainedSubagentMode::Async => "async",
+            crate::conversation::ConstrainedSubagentMode::Inline => "inline",
+        })
+        .unwrap_or_else(|| {
+            if queued_at.is_some() || matches!(session.state, SessionState::Ready) {
+                "async"
+            } else {
+                "inline"
+            }
+        });
     let staleness = match session.state {
         SessionState::Ready => {
             session_delegate_staleness_at("queued", queued_at, timeout_seconds, now_ts)
@@ -4722,6 +4730,65 @@ mod tests {
             "overdue"
         );
         assert!(outcome.payload["delegate_lifecycle"]["started_at"].is_number());
+    }
+
+    #[test]
+    fn session_delegate_lifecycle_prefers_execution_mode_when_history_is_partial() {
+        let session = SessionSummaryRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Completed,
+            created_at: 100,
+            updated_at: 120,
+            archived_at: None,
+            turn_count: 1,
+            last_turn_at: Some(120),
+            last_error: None,
+        };
+        let events = vec![
+            SessionEventRecord {
+                id: 1,
+                session_id: "child-session".to_owned(),
+                event_kind: "delegate_started".to_owned(),
+                actor_session_id: Some("root-session".to_owned()),
+                payload_json: json!({
+                    "task": "research",
+                    "execution": {
+                        "mode": "async",
+                        "depth": 1,
+                        "max_depth": 2,
+                        "active_children": 0,
+                        "max_active_children": 3,
+                        "timeout_seconds": 60,
+                        "allow_shell_in_child": false,
+                        "child_tool_allowlist": ["file.read"],
+                        "kernel_bound": false
+                    }
+                }),
+                ts: 110,
+            },
+            SessionEventRecord {
+                id: 2,
+                session_id: "child-session".to_owned(),
+                event_kind: "delegate_completed".to_owned(),
+                actor_session_id: Some("root-session".to_owned()),
+                payload_json: json!({
+                    "terminal_reason": "completed"
+                }),
+                ts: 120,
+            },
+        ];
+
+        let lifecycle = super::session_delegate_lifecycle_at(&session, &events, 130)
+            .expect("delegate lifecycle");
+
+        assert_eq!(
+            lifecycle.mode, "async",
+            "persisted execution.mode should win when queued metadata is absent"
+        );
+        assert_eq!(lifecycle.phase, "completed");
     }
 
     #[test]
