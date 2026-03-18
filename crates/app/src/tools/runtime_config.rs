@@ -68,6 +68,73 @@ impl ToolRuntimeNarrowing {
     pub fn is_empty(&self) -> bool {
         self.browser.is_empty() && self.web_fetch.is_empty()
     }
+
+    #[must_use]
+    pub fn delegate_child_prompt_summary(&self) -> Option<String> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let mut lines = vec![
+            "[delegate_child_runtime_contract]".to_owned(),
+            "Plan within these child-session runtime limits:".to_owned(),
+        ];
+
+        if let Some(allow_private_hosts) = self.web_fetch.allow_private_hosts {
+            lines.push(format!(
+                "- web.fetch private hosts: {}",
+                if allow_private_hosts {
+                    "allowed"
+                } else {
+                    "denied"
+                }
+            ));
+        }
+        if !self.web_fetch.allowed_domains.is_empty() {
+            lines.push(format!(
+                "- web.fetch allowed domains: {}",
+                self.web_fetch
+                    .allowed_domains
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if !self.web_fetch.blocked_domains.is_empty() {
+            lines.push(format!(
+                "- web.fetch blocked domains: {}",
+                self.web_fetch
+                    .blocked_domains
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if let Some(timeout_seconds) = self.web_fetch.timeout_seconds {
+            lines.push(format!("- web.fetch timeout seconds: {timeout_seconds}"));
+        }
+        if let Some(max_bytes) = self.web_fetch.max_bytes {
+            lines.push(format!("- web.fetch max bytes: {max_bytes}"));
+        }
+        if let Some(max_redirects) = self.web_fetch.max_redirects {
+            lines.push(format!("- web.fetch max redirects: {max_redirects}"));
+        }
+
+        if let Some(max_sessions) = self.browser.max_sessions {
+            lines.push(format!("- browser max sessions: {max_sessions}"));
+        }
+        if let Some(max_links) = self.browser.max_links {
+            lines.push(format!("- browser max links: {max_links}"));
+        }
+        if let Some(max_text_chars) = self.browser.max_text_chars {
+            lines.push(format!("- browser max text chars: {max_text_chars}"));
+        }
+
+        lines.push("Treat these as enforced limits for this child session.".to_owned());
+        Some(lines.join("\n"))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1264,6 +1331,53 @@ mod tests {
         assert!(
             effective.web_fetch.allowed_domains.is_empty(),
             "disjoint allowlists should preserve an enforced empty intersection"
+        );
+    }
+
+    #[test]
+    fn delegate_child_prompt_summary_returns_none_when_narrowing_is_empty() {
+        assert_eq!(
+            ToolRuntimeNarrowing::default().delegate_child_prompt_summary(),
+            None
+        );
+    }
+
+    #[test]
+    fn delegate_child_prompt_summary_is_stable_and_sparse() {
+        let narrowing = ToolRuntimeNarrowing {
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(1),
+                max_links: Some(8),
+                max_text_chars: Some(512),
+            },
+            web_fetch: WebFetchRuntimeNarrowing {
+                allow_private_hosts: Some(false),
+                allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+                blocked_domains: BTreeSet::from(["deny.example.com".to_owned()]),
+                timeout_seconds: Some(5),
+                max_bytes: Some(4_096),
+                max_redirects: Some(2),
+            },
+        };
+
+        let summary = narrowing
+            .delegate_child_prompt_summary()
+            .expect("delegate child prompt summary");
+
+        assert_eq!(
+            summary,
+            "[delegate_child_runtime_contract]\n\
+Plan within these child-session runtime limits:\n\
+- web.fetch private hosts: denied\n\
+- web.fetch allowed domains: docs.example.com\n\
+- web.fetch blocked domains: deny.example.com\n\
+- web.fetch timeout seconds: 5\n\
+- web.fetch max bytes: 4096\n\
+- web.fetch max redirects: 2\n\
+- browser max sessions: 1\n\
+- browser max links: 8\n\
+- browser max text chars: 512\n\
+Treat these as enforced limits for this child session."
         );
     }
 

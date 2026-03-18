@@ -1258,6 +1258,80 @@ fn test_kernel_context_with_memory(
     }
 }
 
+#[cfg(feature = "memory-sqlite")]
+fn sample_delegate_runtime_narrowing() -> crate::tools::runtime_config::ToolRuntimeNarrowing {
+    crate::tools::runtime_config::ToolRuntimeNarrowing {
+        browser: crate::tools::runtime_config::BrowserRuntimeNarrowing {
+            max_sessions: Some(1),
+            max_links: Some(8),
+            max_text_chars: Some(512),
+        },
+        web_fetch: crate::tools::runtime_config::WebFetchRuntimeNarrowing {
+            allow_private_hosts: Some(false),
+            allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+            blocked_domains: BTreeSet::from(["deny.example.com".to_owned()]),
+            timeout_seconds: Some(5),
+            max_bytes: Some(4_096),
+            max_redirects: Some(2),
+        },
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn seed_delegate_child_session_with_runtime_narrowing(
+    config: &mut LoongClawConfig,
+    suffix: &str,
+    runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing,
+) -> String {
+    let sqlite_path = unique_memory_sqlite_path(&format!("delegate-runtime-contract-{suffix}"));
+    config.memory.sqlite_path = sqlite_path;
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    let root_session_id = format!("root-session-{suffix}");
+    let child_session_id = format!("child-session-{suffix}");
+
+    repo.create_session(NewSessionRecord {
+        session_id: root_session_id.clone(),
+        kind: SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(NewSessionRecord {
+        session_id: child_session_id.clone(),
+        kind: SessionKind::DelegateChild,
+        parent_session_id: Some(root_session_id.clone()),
+        label: Some("Child".to_owned()),
+        state: SessionState::Ready,
+    })
+    .expect("create child session");
+    repo.append_event(crate::session::repository::NewSessionEvent {
+        session_id: child_session_id.clone(),
+        event_kind: "delegate_started".to_owned(),
+        actor_session_id: Some(root_session_id),
+        payload_json: json!({
+            "task": "fetch docs",
+            "label": "Child",
+            "execution": {
+                "mode": "inline",
+                "depth": 1,
+                "max_depth": 2,
+                "active_children": 0,
+                "max_active_children": 3,
+                "timeout_seconds": 60,
+                "allow_shell_in_child": false,
+                "child_tool_allowlist": ["web.fetch"],
+                "kernel_bound": true,
+                "runtime_narrowing": runtime_narrowing,
+            }
+        }),
+    })
+    .expect("append delegate_started event");
+
+    child_session_id
+}
+
 fn provider_tool_intent(
     tool_name: &str,
     args_json: Value,
@@ -1618,6 +1692,97 @@ async fn default_runtime_build_context_applies_system_prompt_addition() {
     assert_eq!(
         merged, "runtime-policy-addition\n\nbase-system-prompt",
         "system prompt addition should be prepended"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_build_context_merges_delegate_runtime_contract_with_system_prompt_addition()
+ {
+    let mut config = test_config();
+    let child_session_id = seed_delegate_child_session_with_runtime_narrowing(
+        &mut config,
+        "system-prompt-contract",
+        sample_delegate_runtime_narrowing(),
+    );
+    let runtime = DefaultConversationRuntime::with_context_engine(StubSystemPromptAdditionEngine);
+    let binding = crate::conversation::ConversationRuntimeBinding::direct();
+
+    let assembled = runtime
+        .build_context(&config, &child_session_id, true, binding)
+        .await
+        .expect("build context with delegate runtime contract");
+
+    let merged = assembled.messages[0]["content"]
+        .as_str()
+        .expect("system prompt should stay string");
+    assert!(
+        merged.contains("runtime-policy-addition"),
+        "expected existing addition to remain in merged prompt, got: {merged}"
+    );
+    assert!(
+        merged.contains("[delegate_child_runtime_contract]"),
+        "expected delegate runtime contract marker, got: {merged}"
+    );
+    assert!(merged.contains("Plan within these child-session runtime limits:"));
+    assert!(merged.contains("- web.fetch private hosts: denied"));
+    assert!(merged.contains("- web.fetch allowed domains: docs.example.com"));
+    assert!(merged.contains("- web.fetch blocked domains: deny.example.com"));
+    assert!(merged.contains("- web.fetch timeout seconds: 5"));
+    assert!(merged.contains("- web.fetch max bytes: 4096"));
+    assert!(merged.contains("- web.fetch max redirects: 2"));
+    assert!(merged.contains("- browser max sessions: 1"));
+    assert!(merged.contains("- browser max links: 8"));
+    assert!(merged.contains("- browser max text chars: 512"));
+    assert!(merged.ends_with("base-system-prompt"));
+    assert!(
+        merged.find("runtime-policy-addition") < merged.find("[delegate_child_runtime_contract]"),
+        "expected the existing system prompt addition to remain ahead of the child contract block, got: {merged}"
+    );
+}
+
+#[tokio::test]
+async fn default_runtime_build_context_does_not_add_delegate_runtime_contract_for_root_session() {
+    let runtime = DefaultConversationRuntime::default();
+    let binding = crate::conversation::ConversationRuntimeBinding::direct();
+
+    let assembled = runtime
+        .build_context(&test_config(), "root-session-no-contract", true, binding)
+        .await
+        .expect("build context for root session");
+
+    let system_content = assembled.messages[0]["content"]
+        .as_str()
+        .expect("system prompt should stay string");
+    assert!(
+        !system_content.contains("[delegate_child_runtime_contract]"),
+        "root system prompt should not include the child runtime contract block: {system_content}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_build_context_skips_delegate_runtime_contract_for_empty_child_narrowing() {
+    let mut config = test_config();
+    let child_session_id = seed_delegate_child_session_with_runtime_narrowing(
+        &mut config,
+        "empty-child-narrowing",
+        crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
+    );
+    let runtime = DefaultConversationRuntime::default();
+    let binding = crate::conversation::ConversationRuntimeBinding::direct();
+
+    let assembled = runtime
+        .build_context(&config, &child_session_id, true, binding)
+        .await
+        .expect("build context for child session");
+
+    let system_content = assembled.messages[0]["content"]
+        .as_str()
+        .expect("system prompt should stay string");
+    assert!(
+        !system_content.contains("[delegate_child_runtime_contract]"),
+        "empty child narrowing should not inject a contract block: {system_content}"
     );
 }
 

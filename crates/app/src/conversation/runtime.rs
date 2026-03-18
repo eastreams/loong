@@ -589,9 +589,16 @@ where
             .context_engine
             .assemble_context(config, session_id, include_system_prompt, binding)
             .await?;
+        let delegate_runtime_contract = include_system_prompt
+            .then(|| delegate_child_runtime_contract_prompt_summary(&session_context))
+            .flatten();
+        let merged_system_prompt_addition = merge_system_prompt_additions(
+            assembled.system_prompt_addition.as_deref(),
+            delegate_runtime_contract.as_deref(),
+        );
         apply_system_prompt_addition(
             &mut assembled.messages,
-            assembled.system_prompt_addition.as_deref(),
+            merged_system_prompt_addition.as_deref(),
         );
         if include_system_prompt {
             apply_tool_view_to_system_prompt_if_needed(
@@ -749,6 +756,26 @@ where
             .on_subagent_ended(parent_session_id, subagent_session_id, kernel_ctx)
             .await
     }
+}
+
+fn delegate_child_runtime_contract_prompt_summary(
+    session_context: &SessionContext,
+) -> Option<String> {
+    session_context.parent_session_id.as_ref()?;
+    session_context
+        .runtime_narrowing
+        .as_ref()?
+        .delegate_child_prompt_summary()
+}
+
+fn merge_system_prompt_additions(existing: Option<&str>, extra: Option<&str>) -> Option<String> {
+    let merged = [existing, extra]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .filter(|content| !content.is_empty())
+        .collect::<Vec<_>>();
+    (!merged.is_empty()).then(|| merged.join("\n\n"))
 }
 
 fn apply_system_prompt_addition(messages: &mut Vec<Value>, addition: Option<&str>) {

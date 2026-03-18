@@ -376,8 +376,8 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_id_mismatch() {
 #   "capabilities": ["InvokeConnector"],
 #   "metadata": {
 #     "bridge_kind":"process_stdio",
-#     "command":"python3",
-#     "args_json":"[\"-c\",\"import json,sys,time; sys.stdout.write(json.dumps({'method':'tools/call','id':'wrong-id','payload':{'ok':True}})+'\\\\n'); sys.stdout.flush(); time.sleep(0.05)\"]",
+#     "command":"printf",
+#     "args_json":"[\"{\\\"method\\\":\\\"tools/call\\\",\\\"id\\\":\\\"wrong-id\\\",\\\"payload\\\":{\\\"ok\\\":true}}\\n\"]",
 #     "version":"1.0.0"
 #   }
 # }
@@ -418,7 +418,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_id_mismatch() {
             expected_sha256: None,
             execute_process_stdio: true,
             execute_http_json: false,
-            allowed_process_commands: vec!["python3".to_owned()],
+            allowed_process_commands: vec!["printf".to_owned()],
             enforce_execution_success: false,
             security_scan: None,
         }),
@@ -487,8 +487,8 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_method_mismatch() {
 #   "capabilities": ["InvokeConnector"],
 #   "metadata": {
 #     "bridge_kind":"process_stdio",
-#     "command":"python3",
-#     "args_json":"[\"-c\",\"import json,sys,time; sys.stdout.write(json.dumps({'method':'tools/list','id':'stdio-mismatch-method-provider:primary:invoke','payload':{'ok':True}})+'\\\\n'); sys.stdout.flush(); time.sleep(0.05)\"]",
+#     "command":"printf",
+#     "args_json":"[\"{\\\"method\\\":\\\"tools/list\\\",\\\"id\\\":\\\"stdio-mismatch-method-provider:primary:invoke\\\",\\\"payload\\\":{\\\"ok\\\":true}}\\n\"]",
 #     "version":"1.0.0"
 #   }
 # }
@@ -529,7 +529,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_method_mismatch() {
             expected_sha256: None,
             execute_process_stdio: true,
             execute_http_json: false,
-            allowed_process_commands: vec!["python3".to_owned()],
+            allowed_process_commands: vec!["printf".to_owned()],
             enforce_execution_success: false,
             security_scan: None,
         }),
