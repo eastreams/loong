@@ -38,7 +38,7 @@ wasmparser = "0.245"
 base64 = "0.22"
 ed25519-dalek = "2.2"
 wasmtime = { version = "42.0.1", default-features = false, features = ["std", "runtime", "cranelift"] }
-rusqlite = { version = "0.38", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 
 [profile.release]
