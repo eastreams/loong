@@ -17,6 +17,8 @@ mod turn_budget;
 mod turn_coordinator;
 pub mod turn_engine;
 mod turn_loop;
+mod turn_middleware;
+mod turn_middleware_registry;
 mod turn_shared;
 
 pub use analytics::{
@@ -50,8 +52,10 @@ pub use lane_arbiter::{ExecutionLane, LaneArbiterPolicy, LaneDecision};
 pub use runtime::{
     AsyncDelegateSpawnRequest, AsyncDelegateSpawner, ContextCompactionPolicySnapshot,
     ContextEngineRuntimeSnapshot, ContextEngineSelection, ContextEngineSelectionSource,
-    ConversationRuntime, DefaultConversationRuntime, SessionContext,
+    ConversationRuntime, DefaultConversationRuntime, SessionContext, TurnMiddlewareRuntimeSnapshot,
+    TurnMiddlewareSelection, TurnMiddlewareSelectionSource,
     collect_context_engine_runtime_snapshot, resolve_context_engine_selection,
+    resolve_turn_middleware_selection,
 };
 pub use runtime_binding::ConversationRuntimeBinding;
 pub use safe_lane_failure::{
@@ -82,6 +86,15 @@ pub use turn_engine::{
     ToolIntent, ToolOutcome, TurnEngine, TurnFailure, TurnFailureKind, TurnResult,
 };
 pub use turn_loop::ConversationTurnLoop;
+pub use turn_middleware::{
+    ConversationTurnMiddleware, TURN_MIDDLEWARE_API_VERSION, TurnMiddlewareCapability,
+    TurnMiddlewareMetadata,
+};
+pub use turn_middleware_registry::{
+    TURN_MIDDLEWARE_ENV, describe_turn_middlewares, list_turn_middleware_ids,
+    list_turn_middleware_metadata, register_turn_middleware, resolve_turn_middleware,
+    resolve_turn_middlewares, turn_middleware_ids_from_env,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderErrorMode {

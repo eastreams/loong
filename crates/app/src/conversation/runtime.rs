@@ -26,6 +26,11 @@ use super::context_engine_registry::{
 use super::runtime_binding::ConversationRuntimeBinding;
 use super::subagent::ConstrainedSubagentExecution;
 use super::turn_engine::ProviderTurn;
+use super::turn_middleware::{ConversationTurnMiddleware, TurnMiddlewareMetadata};
+use super::turn_middleware_registry::{
+    describe_turn_middlewares, list_turn_middleware_metadata, resolve_turn_middlewares,
+    turn_middleware_ids_from_env,
+};
 
 #[cfg(feature = "memory-sqlite")]
 use crate::memory::runtime_config::MemoryRuntimeConfig;
@@ -203,6 +208,7 @@ impl AsyncDelegateSpawner for DefaultAsyncDelegateSpawner {
 
 pub struct DefaultConversationRuntime<E = DefaultContextEngine> {
     context_engine: E,
+    turn_middlewares: Vec<Box<dyn ConversationTurnMiddleware>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,10 +228,33 @@ impl ContextEngineSelectionSource {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnMiddlewareSelectionSource {
+    Env,
+    Config,
+    Default,
+}
+
+impl TurnMiddlewareSelectionSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TurnMiddlewareSelectionSource::Env => "env",
+            TurnMiddlewareSelectionSource::Config => "config",
+            TurnMiddlewareSelectionSource::Default => "default",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextEngineSelection {
     pub id: String,
     pub source: ContextEngineSelectionSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnMiddlewareSelection {
+    pub ids: Vec<String>,
+    pub source: TurnMiddlewareSelectionSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,7 +270,15 @@ pub struct ContextEngineRuntimeSnapshot {
     pub selected: ContextEngineSelection,
     pub selected_metadata: ContextEngineMetadata,
     pub available: Vec<ContextEngineMetadata>,
+    pub turn_middlewares: TurnMiddlewareRuntimeSnapshot,
     pub compaction: ContextCompactionPolicySnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnMiddlewareRuntimeSnapshot {
+    pub selected: TurnMiddlewareSelection,
+    pub selected_metadata: Vec<TurnMiddlewareMetadata>,
+    pub available: Vec<TurnMiddlewareMetadata>,
 }
 
 pub fn resolve_context_engine_selection(config: &LoongClawConfig) -> ContextEngineSelection {
@@ -265,12 +302,40 @@ pub fn resolve_context_engine_selection(config: &LoongClawConfig) -> ContextEngi
     }
 }
 
+pub fn resolve_turn_middleware_selection(config: &LoongClawConfig) -> TurnMiddlewareSelection {
+    if let Some(ids) = turn_middleware_ids_from_env() {
+        return TurnMiddlewareSelection {
+            ids,
+            source: TurnMiddlewareSelectionSource::Env,
+        };
+    }
+
+    let ids = config.conversation.turn_middleware_ids();
+    if !ids.is_empty() {
+        return TurnMiddlewareSelection {
+            ids,
+            source: TurnMiddlewareSelectionSource::Config,
+        };
+    }
+
+    TurnMiddlewareSelection {
+        ids: Vec::new(),
+        source: TurnMiddlewareSelectionSource::Default,
+    }
+}
+
 pub fn collect_context_engine_runtime_snapshot(
     config: &LoongClawConfig,
 ) -> CliResult<ContextEngineRuntimeSnapshot> {
     let selected = resolve_context_engine_selection(config);
     let selected_metadata = describe_context_engine(Some(selected.id.as_str()))?;
     let available = list_context_engine_metadata()?;
+    let turn_middleware_selection = resolve_turn_middleware_selection(config);
+    let turn_middlewares = TurnMiddlewareRuntimeSnapshot {
+        selected_metadata: describe_turn_middlewares(turn_middleware_selection.ids.as_slice())?,
+        available: list_turn_middleware_metadata()?,
+        selected: turn_middleware_selection,
+    };
     let compaction = ContextCompactionPolicySnapshot {
         enabled: config.conversation.compact_enabled,
         min_messages: config.conversation.compact_min_messages(),
@@ -282,6 +347,7 @@ pub fn collect_context_engine_runtime_snapshot(
         selected,
         selected_metadata,
         available,
+        turn_middlewares,
         compaction,
     })
 }
@@ -290,6 +356,7 @@ impl Default for DefaultConversationRuntime<DefaultContextEngine> {
     fn default() -> Self {
         Self {
             context_engine: DefaultContextEngine,
+            turn_middlewares: Vec::new(),
         }
     }
 }
@@ -298,11 +365,33 @@ impl DefaultConversationRuntime<DefaultContextEngine> {
     pub fn new() -> Self {
         Self::default()
     }
+
+    pub fn with_turn_middlewares(
+        turn_middlewares: Vec<Box<dyn ConversationTurnMiddleware>>,
+    ) -> Self {
+        Self {
+            context_engine: DefaultContextEngine,
+            turn_middlewares,
+        }
+    }
 }
 
 impl<E> DefaultConversationRuntime<E> {
     pub fn with_context_engine(context_engine: E) -> Self {
-        Self { context_engine }
+        Self {
+            context_engine,
+            turn_middlewares: Vec::new(),
+        }
+    }
+
+    pub fn with_context_engine_and_turn_middlewares(
+        context_engine: E,
+        turn_middlewares: Vec<Box<dyn ConversationTurnMiddleware>>,
+    ) -> Self {
+        Self {
+            context_engine,
+            turn_middlewares,
+        }
     }
 }
 
@@ -313,17 +402,144 @@ where
     pub fn context_engine_metadata(&self) -> ContextEngineMetadata {
         self.context_engine.metadata()
     }
+
+    pub fn turn_middleware_metadata(&self) -> Vec<TurnMiddlewareMetadata> {
+        self.turn_middlewares
+            .iter()
+            .map(|middleware| middleware.metadata())
+            .collect()
+    }
+
+    async fn run_turn_middlewares_bootstrap(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        kernel_ctx: &KernelContext,
+    ) -> CliResult<()> {
+        for middleware in &self.turn_middlewares {
+            middleware.bootstrap(config, session_id, kernel_ctx).await?;
+        }
+        Ok(())
+    }
+
+    async fn run_turn_middlewares_ingest(
+        &self,
+        session_id: &str,
+        message: &Value,
+        kernel_ctx: &KernelContext,
+    ) -> CliResult<()> {
+        for middleware in &self.turn_middlewares {
+            middleware.ingest(session_id, message, kernel_ctx).await?;
+        }
+        Ok(())
+    }
+
+    async fn apply_turn_middlewares_to_context(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        include_system_prompt: bool,
+        mut assembled: AssembledConversationContext,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<AssembledConversationContext> {
+        for middleware in &self.turn_middlewares {
+            assembled = middleware
+                .transform_context(
+                    config,
+                    session_id,
+                    include_system_prompt,
+                    assembled,
+                    binding,
+                )
+                .await?;
+        }
+        Ok(assembled)
+    }
+
+    async fn run_turn_middlewares_after_turn(
+        &self,
+        session_id: &str,
+        user_input: &str,
+        assistant_reply: &str,
+        messages: &[Value],
+        kernel_ctx: &KernelContext,
+    ) -> CliResult<()> {
+        for middleware in &self.turn_middlewares {
+            middleware
+                .after_turn(
+                    session_id,
+                    user_input,
+                    assistant_reply,
+                    messages,
+                    kernel_ctx,
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn run_turn_middlewares_compact_context(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        messages: &[Value],
+        kernel_ctx: &KernelContext,
+    ) -> CliResult<()> {
+        for middleware in &self.turn_middlewares {
+            middleware
+                .compact_context(config, session_id, messages, kernel_ctx)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn run_turn_middlewares_prepare_subagent_spawn(
+        &self,
+        parent_session_id: &str,
+        subagent_session_id: &str,
+        kernel_ctx: &KernelContext,
+    ) -> CliResult<()> {
+        for middleware in &self.turn_middlewares {
+            middleware
+                .prepare_subagent_spawn(parent_session_id, subagent_session_id, kernel_ctx)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn run_turn_middlewares_on_subagent_ended(
+        &self,
+        parent_session_id: &str,
+        subagent_session_id: &str,
+        kernel_ctx: &KernelContext,
+    ) -> CliResult<()> {
+        for middleware in &self.turn_middlewares {
+            middleware
+                .on_subagent_ended(parent_session_id, subagent_session_id, kernel_ctx)
+                .await?;
+        }
+        Ok(())
+    }
 }
 
 impl DefaultConversationRuntime<Box<dyn ConversationContextEngine>> {
     pub fn from_engine_id(engine_id: Option<&str>) -> CliResult<Self> {
         let context_engine = resolve_context_engine(engine_id)?;
-        Ok(Self { context_engine })
+        Ok(Self {
+            context_engine,
+            turn_middlewares: Vec::new(),
+        })
     }
 
     pub fn from_config_or_env(config: &LoongClawConfig) -> CliResult<Self> {
         let selection = resolve_context_engine_selection(config);
-        Self::from_engine_id(Some(selection.id.as_str()))
+        let turn_middleware_selection = resolve_turn_middleware_selection(config);
+        let context_engine = resolve_context_engine(Some(selection.id.as_str()))?;
+        let turn_middlewares = resolve_turn_middlewares(turn_middleware_selection.ids.as_slice())?;
+        Ok(Self {
+            context_engine,
+            turn_middlewares,
+        })
     }
 }
 
@@ -581,9 +797,13 @@ where
         session_id: &str,
         kernel_ctx: &KernelContext,
     ) -> CliResult<ContextEngineBootstrapResult> {
-        self.context_engine
+        let result = self
+            .context_engine
             .bootstrap(config, session_id, kernel_ctx)
-            .await
+            .await?;
+        self.run_turn_middlewares_bootstrap(config, session_id, kernel_ctx)
+            .await?;
+        Ok(result)
     }
 
     async fn ingest(
@@ -592,9 +812,13 @@ where
         message: &Value,
         kernel_ctx: &KernelContext,
     ) -> CliResult<ContextEngineIngestResult> {
-        self.context_engine
+        let result = self
+            .context_engine
             .ingest(session_id, message, kernel_ctx)
-            .await
+            .await?;
+        self.run_turn_middlewares_ingest(session_id, message, kernel_ctx)
+            .await?;
+        Ok(result)
     }
 
     async fn build_context(
@@ -616,6 +840,15 @@ where
             assembled.system_prompt_addition.as_deref(),
             delegate_runtime_contract.as_deref(),
         );
+        assembled = self
+            .apply_turn_middlewares_to_context(
+                config,
+                session_id,
+                include_system_prompt,
+                assembled,
+                binding,
+            )
+            .await?;
         apply_system_prompt_addition(
             &mut assembled.messages,
             merged_system_prompt_addition.as_deref(),
@@ -731,7 +964,15 @@ where
                 messages,
                 kernel_ctx,
             )
-            .await
+            .await?;
+        self.run_turn_middlewares_after_turn(
+            session_id,
+            user_input,
+            assistant_reply,
+            messages,
+            kernel_ctx,
+        )
+        .await
     }
 
     async fn compact_context(
@@ -743,6 +984,8 @@ where
     ) -> CliResult<()> {
         self.context_engine
             .compact_context(config, session_id, messages, kernel_ctx)
+            .await?;
+        self.run_turn_middlewares_compact_context(config, session_id, messages, kernel_ctx)
             .await
     }
 
@@ -754,7 +997,13 @@ where
     ) -> CliResult<()> {
         self.context_engine
             .prepare_subagent_spawn(parent_session_id, subagent_session_id, kernel_ctx)
-            .await
+            .await?;
+        self.run_turn_middlewares_prepare_subagent_spawn(
+            parent_session_id,
+            subagent_session_id,
+            kernel_ctx,
+        )
+        .await
     }
 
     async fn on_subagent_ended(
@@ -765,7 +1014,13 @@ where
     ) -> CliResult<()> {
         self.context_engine
             .on_subagent_ended(parent_session_id, subagent_session_id, kernel_ctx)
-            .await
+            .await?;
+        self.run_turn_middlewares_on_subagent_ended(
+            parent_session_id,
+            subagent_session_id,
+            kernel_ctx,
+        )
+        .await
     }
 }
 

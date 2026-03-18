@@ -2009,6 +2009,21 @@ context_engine = " Legacy "
 
     #[test]
     #[cfg(feature = "config-toml")]
+    fn conversation_turn_middlewares_field_parses_and_normalizes() {
+        let raw = r#"
+[conversation]
+turn_middlewares = [" Alpha ", "beta", "", "alpha"]
+"#;
+        let parsed =
+            toml::from_str::<LoongClawConfig>(raw).expect("parse conversation turn_middlewares");
+        assert_eq!(
+            parsed.conversation.turn_middleware_ids(),
+            vec!["alpha".to_owned(), "beta".to_owned()]
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
     fn memory_system_field_parses_and_normalizes() {
         let raw = r#"
 [memory]
@@ -2069,6 +2084,7 @@ compact_fail_open = false
     #[test]
     fn conversation_compaction_defaults_are_backward_compatible() {
         let config = ConversationConfig::default();
+        assert!(config.turn_middleware_ids().is_empty());
         assert!(config.compact_enabled);
         assert!(config.compaction_fail_open());
         assert_eq!(config.compact_trigger_estimated_tokens(), None);
