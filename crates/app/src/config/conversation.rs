@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 pub struct ConversationConfig {
     #[serde(default)]
     pub context_engine: Option<String>,
+    #[serde(default)]
+    pub turn_middlewares: Vec<String>,
     #[serde(default = "default_true")]
     pub compact_enabled: bool,
     #[serde(default)]
@@ -114,6 +116,7 @@ impl Default for ConversationConfig {
     fn default() -> Self {
         Self {
             context_engine: None,
+            turn_middlewares: Vec::new(),
             compact_enabled: default_true(),
             compact_min_messages: None,
             compact_trigger_estimated_tokens: None,
@@ -234,6 +237,21 @@ impl ConversationConfig {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(|value| value.to_ascii_lowercase())
+    }
+
+    pub fn turn_middleware_ids(&self) -> Vec<String> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut ids = Vec::new();
+
+        for raw in &self.turn_middlewares {
+            let normalized = raw.trim().to_ascii_lowercase();
+            if normalized.is_empty() || !seen.insert(normalized.clone()) {
+                continue;
+            }
+            ids.push(normalized);
+        }
+
+        ids
     }
 
     pub fn compact_min_messages(&self) -> Option<usize> {
