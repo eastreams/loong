@@ -590,7 +590,7 @@ where
             .assemble_context(config, session_id, include_system_prompt, binding)
             .await?;
         let delegate_runtime_contract = include_system_prompt
-            .then(|| delegate_child_runtime_contract_prompt_summary(&session_context))
+            .then(|| delegate_child_runtime_contract_prompt_summary(config, &session_context))
             .flatten();
         let merged_system_prompt_addition = merge_system_prompt_additions(
             assembled.system_prompt_addition.as_deref(),
@@ -759,13 +759,13 @@ where
 }
 
 fn delegate_child_runtime_contract_prompt_summary(
+    config: &LoongClawConfig,
     session_context: &SessionContext,
 ) -> Option<String> {
     session_context.parent_session_id.as_ref()?;
-    session_context
-        .runtime_narrowing
-        .as_ref()?
-        .delegate_child_prompt_summary()
+    let runtime_narrowing = session_context.runtime_narrowing.as_ref()?;
+    crate::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None)
+        .delegate_child_prompt_summary(runtime_narrowing)
 }
 
 fn merge_system_prompt_additions(existing: Option<&str>, extra: Option<&str>) -> Option<String> {

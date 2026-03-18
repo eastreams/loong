@@ -1788,6 +1788,80 @@ async fn default_runtime_build_context_skips_delegate_runtime_contract_for_empty
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
+async fn default_runtime_build_context_uses_effective_private_host_policy_in_delegate_contract() {
+    let mut config = test_config();
+    let child_session_id = seed_delegate_child_session_with_runtime_narrowing(
+        &mut config,
+        "effective-private-hosts",
+        crate::tools::runtime_config::ToolRuntimeNarrowing {
+            web_fetch: crate::tools::runtime_config::WebFetchRuntimeNarrowing {
+                allow_private_hosts: Some(true),
+                ..crate::tools::runtime_config::WebFetchRuntimeNarrowing::default()
+            },
+            ..crate::tools::runtime_config::ToolRuntimeNarrowing::default()
+        },
+    );
+    let runtime = DefaultConversationRuntime::default();
+    let binding = crate::conversation::ConversationRuntimeBinding::direct();
+
+    let assembled = runtime
+        .build_context(&config, &child_session_id, true, binding)
+        .await
+        .expect("build context for child session");
+
+    let system_content = assembled.messages[0]["content"]
+        .as_str()
+        .expect("system prompt should stay string");
+    assert!(
+        system_content.contains("- web.fetch private hosts: denied"),
+        "effective child contract should preserve the base private-host denial, got: {system_content}"
+    );
+    assert!(
+        !system_content.contains("- web.fetch private hosts: allowed"),
+        "child prompt must not widen private-host policy beyond the effective runtime contract: {system_content}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_build_context_surfaces_fail_closed_allowlist_intersection() {
+    let mut config = test_config();
+    config.tools.web.allowed_domains = vec!["api.example.com".to_owned()];
+    let child_session_id = seed_delegate_child_session_with_runtime_narrowing(
+        &mut config,
+        "effective-allowlist-intersection",
+        crate::tools::runtime_config::ToolRuntimeNarrowing {
+            web_fetch: crate::tools::runtime_config::WebFetchRuntimeNarrowing {
+                allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+                ..crate::tools::runtime_config::WebFetchRuntimeNarrowing::default()
+            },
+            ..crate::tools::runtime_config::ToolRuntimeNarrowing::default()
+        },
+    );
+    let runtime = DefaultConversationRuntime::default();
+    let binding = crate::conversation::ConversationRuntimeBinding::direct();
+
+    let assembled = runtime
+        .build_context(&config, &child_session_id, true, binding)
+        .await
+        .expect("build context for child session");
+
+    let system_content = assembled.messages[0]["content"]
+        .as_str()
+        .expect("system prompt should stay string");
+    assert!(
+        system_content
+            .contains("- web.fetch allowed domains: none (effective intersection is empty)"),
+        "child prompt should expose the fail-closed effective allowlist, got: {system_content}"
+    );
+    assert!(
+        !system_content.contains("- web.fetch allowed domains: docs.example.com"),
+        "child prompt must not show requested domains that the effective runtime will reject: {system_content}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
 async fn default_runtime_build_context_matches_builtin_summary_projection() {
     let runtime = DefaultConversationRuntime::default();
     let session_id = unique_acp_test_id("default-runtime-context", "summary");
