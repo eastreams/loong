@@ -1450,24 +1450,27 @@ fn build_runtime_capability_promotion_provenance(
     artifacts: &[RuntimeCapabilityArtifactDocument],
     evidence: &RuntimeCapabilityEvidenceDigest,
 ) -> RuntimeCapabilityPromotionProvenance {
+    let mut ordered_artifacts = artifacts.to_vec();
+    sort_runtime_capability_artifacts(&mut ordered_artifacts);
+
     RuntimeCapabilityPromotionProvenance {
-        candidate_ids: artifacts
+        candidate_ids: ordered_artifacts
             .iter()
             .map(|artifact| artifact.candidate_id.clone())
             .collect(),
-        source_run_ids: artifacts
+        source_run_ids: ordered_artifacts
             .iter()
             .map(|artifact| artifact.source_run.run_id.clone())
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect(),
-        experiment_ids: artifacts
+        experiment_ids: ordered_artifacts
             .iter()
             .map(|artifact| artifact.source_run.experiment_id.clone())
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect(),
-        source_run_artifact_paths: artifacts
+        source_run_artifact_paths: ordered_artifacts
             .iter()
             .filter_map(|artifact| artifact.source_run.artifact_path.clone())
             .collect::<BTreeSet<_>>()
