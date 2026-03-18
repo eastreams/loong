@@ -14,14 +14,15 @@ use crate::acp::{
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context};
 
 use super::config::{self, ConversationConfig, LoongClawConfig};
-#[cfg(feature = "memory-sqlite")]
-use super::conversation::load_safe_lane_event_summary;
 use super::conversation::{
     ConversationRuntimeBinding, ConversationSessionAddress, ConversationTurnCoordinator,
     ProviderErrorMode, resolve_context_engine_selection,
 };
 #[cfg(any(test, feature = "memory-sqlite"))]
-use super::conversation::{SafeLaneEventSummary, SafeLaneFinalStatus};
+use super::conversation::{
+    FastLaneToolBatchEventSummary, FastLaneToolBatchSegmentSnapshot, SafeLaneEventSummary,
+    SafeLaneFinalStatus,
+};
 #[cfg(any(test, feature = "memory-sqlite"))]
 use super::conversation::{
     TurnCheckpointDiagnostics, TurnCheckpointEventSummary, TurnCheckpointFailureStep,
@@ -29,6 +30,8 @@ use super::conversation::{
     TurnCheckpointSessionState, TurnCheckpointStage, TurnCheckpointTailRepairOutcome,
     TurnCheckpointTailRepairReason, TurnCheckpointTailRepairRuntimeProbe,
 };
+#[cfg(feature = "memory-sqlite")]
+use super::conversation::{load_fast_lane_tool_batch_event_summary, load_safe_lane_event_summary};
 #[cfg(any(test, feature = "memory-sqlite"))]
 use super::memory;
 #[cfg(feature = "memory-sqlite")]
@@ -168,6 +171,26 @@ pub async fn run_cli_chat(
             print_history(
                 &runtime.session_id,
                 runtime.config.memory.sliding_window,
+                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+            )
+            .await?;
+            continue;
+        }
+        if let Some(limit) =
+            parse_fast_lane_summary_limit(input, runtime.config.memory.sliding_window)?
+        {
+            #[cfg(feature = "memory-sqlite")]
+            print_fast_lane_summary(
+                &runtime.session_id,
+                limit,
+                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                &runtime.memory_config,
+            )
+            .await?;
+            #[cfg(not(feature = "memory-sqlite"))]
+            print_fast_lane_summary(
+                &runtime.session_id,
+                limit,
                 ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
             )
             .await?;
@@ -477,6 +500,7 @@ fn is_exit_command(config: &LoongClawConfig, input: &str) -> bool {
 fn print_help() {
     println!("/help    show this help");
     println!("/history print current session sliding window");
+    println!("/fast_lane_summary [limit]  summarize fast-lane batch execution events");
     println!("/safe_lane_summary [limit]  summarize safe-lane runtime events");
     println!("/turn_checkpoint_summary [limit]  summarize durable turn finalization state");
     println!("/turn_checkpoint_repair  repair durable turn finalization tail when safe");
@@ -609,6 +633,35 @@ fn parse_safe_lane_summary_limit(input: &str, default_window: usize) -> CliResul
     Ok(Some(limit))
 }
 
+fn parse_fast_lane_summary_limit(input: &str, default_window: usize) -> CliResult<Option<usize>> {
+    let mut tokens = input.split_whitespace();
+    let Some(command) = tokens.next() else {
+        return Ok(None);
+    };
+    if command != "/fast_lane_summary" && command != "/fast-lane-summary" {
+        return Ok(None);
+    }
+
+    let default_limit = default_window.saturating_mul(4).max(64);
+    let limit = match tokens.next() {
+        Some(raw) => raw.parse::<usize>().map_err(|error| {
+            format!(
+                "invalid /fast_lane_summary limit `{raw}`: {error}; usage: /fast_lane_summary [limit]"
+            )
+        })?,
+        None => default_limit,
+    };
+    if limit == 0 {
+        return Err(
+            "invalid /fast_lane_summary limit `0`; usage: /fast_lane_summary [limit]".to_owned(),
+        );
+    }
+    if tokens.next().is_some() {
+        return Err("usage: /fast_lane_summary [limit]".to_owned());
+    }
+    Ok(Some(limit))
+}
+
 fn parse_turn_checkpoint_summary_limit(
     input: &str,
     default_window: usize,
@@ -654,6 +707,42 @@ fn is_turn_checkpoint_repair_command(input: &str) -> CliResult<bool> {
         return Err("usage: /turn_checkpoint_repair".to_owned());
     }
     Ok(true)
+}
+
+#[allow(clippy::print_stdout)] // CLI output
+async fn print_fast_lane_summary(
+    session_id: &str,
+    limit: usize,
+    binding: ConversationRuntimeBinding<'_>,
+    #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
+) -> CliResult<()> {
+    #[cfg(feature = "memory-sqlite")]
+    {
+        println!(
+            "{}",
+            load_fast_lane_summary_output(session_id, limit, binding, memory_config).await?
+        );
+        Ok(())
+    }
+
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = (session_id, limit, binding);
+        println!("fast-lane summary unavailable: memory-sqlite feature disabled");
+        Ok(())
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn load_fast_lane_summary_output(
+    session_id: &str,
+    limit: usize,
+    binding: ConversationRuntimeBinding<'_>,
+    memory_config: &MemoryRuntimeConfig,
+) -> CliResult<String> {
+    let summary =
+        load_fast_lane_tool_batch_event_summary(session_id, limit, binding, memory_config).await?;
+    Ok(format_fast_lane_summary(session_id, limit, &summary))
 }
 
 #[allow(clippy::print_stdout)] // CLI output
@@ -792,6 +881,68 @@ async fn load_turn_checkpoint_repair_output(
         .repair_turn_checkpoint_tail(config, session_id, binding)
         .await?;
     Ok(format_turn_checkpoint_repair(session_id, &outcome))
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn format_fast_lane_summary_optional<T>(value: Option<T>) -> String
+where
+    T: std::fmt::Display,
+{
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned())
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn format_fast_lane_segments(segments: &[FastLaneToolBatchSegmentSnapshot]) -> String {
+    if segments.is_empty() {
+        return "-".to_owned();
+    }
+
+    segments
+        .iter()
+        .map(|segment| {
+            format!(
+                "{}:{}/{}/{}",
+                segment.segment_index,
+                segment.scheduling_class,
+                segment.execution_mode,
+                segment.intent_count
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn format_fast_lane_summary(
+    session_id: &str,
+    limit: usize,
+    summary: &FastLaneToolBatchEventSummary,
+) -> String {
+    [
+        format!("fast_lane_summary session={session_id} limit={limit}"),
+        format!(
+            "events batch_events={} schema_version={}",
+            summary.batch_events,
+            format_fast_lane_summary_optional(summary.latest_schema_version)
+        ),
+        format!(
+            "latest_batch total_intents={} parallel_enabled={} max_in_flight={} parallel_safe_intents={} serial_only_intents={} parallel_segments={} sequential_segments={}",
+            format_fast_lane_summary_optional(summary.latest_total_intents),
+            format_fast_lane_summary_optional(summary.latest_parallel_execution_enabled),
+            format_fast_lane_summary_optional(summary.latest_parallel_execution_max_in_flight),
+            format_fast_lane_summary_optional(summary.latest_parallel_safe_intents),
+            format_fast_lane_summary_optional(summary.latest_serial_only_intents),
+            format_fast_lane_summary_optional(summary.latest_parallel_segments),
+            format_fast_lane_summary_optional(summary.latest_sequential_segments),
+        ),
+        format!(
+            "latest_segments={}",
+            format_fast_lane_segments(&summary.latest_segments)
+        ),
+    ]
+    .join("\n")
 }
 
 #[cfg(any(test, feature = "memory-sqlite"))]
@@ -1656,6 +1807,47 @@ mod tests {
         ]
     }
 
+    #[cfg(feature = "memory-sqlite")]
+    fn fast_lane_tool_batch_event_payloads() -> Vec<String> {
+        vec![
+            json!({
+                "type": "conversation_event",
+                "event": "fast_lane_tool_batch",
+                "payload": {
+                    "schema_version": 1,
+                    "total_intents": 5,
+                    "parallel_execution_enabled": true,
+                    "parallel_execution_max_in_flight": 2,
+                    "parallel_safe_intents": 4,
+                    "serial_only_intents": 1,
+                    "parallel_segments": 2,
+                    "sequential_segments": 1,
+                    "segments": [
+                        {
+                            "segment_index": 0,
+                            "scheduling_class": "parallel_safe",
+                            "execution_mode": "parallel",
+                            "intent_count": 2
+                        },
+                        {
+                            "segment_index": 1,
+                            "scheduling_class": "serial_only",
+                            "execution_mode": "sequential",
+                            "intent_count": 1
+                        },
+                        {
+                            "segment_index": 2,
+                            "scheduling_class": "parallel_safe",
+                            "execution_mode": "parallel",
+                            "intent_count": 2
+                        }
+                    ]
+                }
+            })
+            .to_string(),
+        ]
+    }
+
     #[tokio::test]
     async fn run_cli_ask_rejects_empty_message() {
         let error = run_cli_ask(None, None, "   ", &CliChatOptions::default())
@@ -1823,6 +2015,67 @@ mod tests {
             "chat-binding-safe-lane-kernel"
         );
         assert_eq!(captured[0].payload["limit"], json!(80));
+        assert_eq!(captured[0].payload["allow_extended_limit"], json!(true));
+
+        cleanup_chat_test_memory(&sqlite_path);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fast_lane_summary_output_accepts_explicit_runtime_binding() {
+        let (_config, memory_config, sqlite_path) = init_chat_test_memory("fast-lane-output");
+
+        let direct_payloads = fast_lane_tool_batch_event_payloads();
+        append_assistant_payloads(
+            "chat-binding-fast-lane-direct",
+            &direct_payloads,
+            &memory_config,
+        );
+        let direct_output = load_fast_lane_summary_output(
+            "chat-binding-fast-lane-direct",
+            72,
+            ConversationRuntimeBinding::direct(),
+            &memory_config,
+        )
+        .await
+        .expect("load fast lane summary via direct binding");
+        assert!(
+            direct_output
+                .contains("fast_lane_summary session=chat-binding-fast-lane-direct limit=72")
+        );
+        assert!(direct_output.contains("batch_events=1"));
+        assert!(direct_output.contains("total_intents=5"));
+        assert!(direct_output.contains("parallel_safe_intents=4"));
+        assert!(direct_output.contains("latest_segments=0:parallel_safe/parallel/2,1:serial_only/sequential/1,2:parallel_safe/parallel/2"));
+
+        let kernel_payloads = fast_lane_tool_batch_event_payloads();
+        let (kernel_ctx, invocations) =
+            build_kernel_context_with_window_turns(assistant_window_turns(&kernel_payloads));
+        let kernel_output = load_fast_lane_summary_output(
+            "chat-binding-fast-lane-kernel",
+            88,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            &memory_config,
+        )
+        .await
+        .expect("load fast lane summary via kernel binding");
+        assert!(
+            kernel_output
+                .contains("fast_lane_summary session=chat-binding-fast-lane-kernel limit=88")
+        );
+        assert!(kernel_output.contains("batch_events=1"));
+        assert!(kernel_output.contains("total_intents=5"));
+        assert!(kernel_output.contains("parallel_safe_intents=4"));
+        assert!(kernel_output.contains("latest_segments=0:parallel_safe/parallel/2,1:serial_only/sequential/1,2:parallel_safe/parallel/2"));
+
+        let captured = invocations.lock().expect("invocations lock");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].operation, crate::memory::MEMORY_OP_WINDOW);
+        assert_eq!(
+            captured[0].payload["session_id"],
+            "chat-binding-fast-lane-kernel"
+        );
+        assert_eq!(captured[0].payload["limit"], json!(88));
         assert_eq!(captured[0].payload["allow_extended_limit"], json!(true));
 
         cleanup_chat_test_memory(&sqlite_path);
@@ -2032,6 +2285,29 @@ mod tests {
         assert!(error.contains("usage"));
 
         let error = parse_safe_lane_summary_limit("/safe_lane_summary abc", 20)
+            .expect_err("non-number limit should be rejected");
+        assert!(error.contains("invalid"));
+    }
+
+    #[test]
+    fn parse_fast_lane_summary_limit_accepts_default_and_explicit_limit() {
+        assert_eq!(
+            parse_fast_lane_summary_limit("/fast_lane_summary", 20).expect("parse"),
+            Some(80)
+        );
+        assert_eq!(
+            parse_fast_lane_summary_limit("/fast-lane-summary 144", 20).expect("parse"),
+            Some(144)
+        );
+    }
+
+    #[test]
+    fn parse_fast_lane_summary_limit_rejects_invalid_input() {
+        let error = parse_fast_lane_summary_limit("/fast_lane_summary 0", 20)
+            .expect_err("zero limit should be rejected");
+        assert!(error.contains("usage"));
+
+        let error = parse_fast_lane_summary_limit("/fast_lane_summary nope", 20)
             .expect_err("non-number limit should be rejected");
         assert!(error.contains("invalid"));
     }

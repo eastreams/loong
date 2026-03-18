@@ -14,8 +14,9 @@ use crate::memory;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 
 use super::analytics::{
-    DiscoveryFirstEventSummary, SafeLaneEventSummary, TurnCheckpointEventSummary,
-    summarize_discovery_first_events, summarize_safe_lane_events,
+    DiscoveryFirstEventSummary, FastLaneToolBatchEventSummary, SafeLaneEventSummary,
+    TurnCheckpointEventSummary, summarize_discovery_first_events,
+    summarize_fast_lane_tool_batch_events, summarize_safe_lane_events,
     summarize_turn_checkpoint_history,
 };
 use super::runtime_binding::ConversationRuntimeBinding;
@@ -167,18 +168,37 @@ pub async fn load_safe_lane_event_summary(
 ) -> CliResult<SafeLaneEventSummary> {
     #[cfg(feature = "memory-sqlite")]
     {
-        let assistant_contents =
-            load_assistant_contents_from_session_window(session_id, limit, binding, memory_config)
-                .await?;
-        Ok(summarize_safe_lane_events(
-            assistant_contents.iter().map(String::as_str),
-        ))
+        load_assistant_history_summary(session_id, limit, binding, memory_config, |contents| {
+            summarize_safe_lane_events(contents.iter().map(String::as_str))
+        })
+        .await
     }
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
         let _ = (session_id, limit, binding);
         Err("safe-lane summary unavailable: memory-sqlite feature disabled".to_owned())
+    }
+}
+
+pub async fn load_fast_lane_tool_batch_event_summary(
+    session_id: &str,
+    limit: usize,
+    binding: ConversationRuntimeBinding<'_>,
+    #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
+) -> CliResult<FastLaneToolBatchEventSummary> {
+    #[cfg(feature = "memory-sqlite")]
+    {
+        load_assistant_history_summary(session_id, limit, binding, memory_config, |contents| {
+            summarize_fast_lane_tool_batch_events(contents.iter().map(String::as_str))
+        })
+        .await
+    }
+
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = (session_id, limit, binding);
+        Err("fast-lane summary unavailable: memory-sqlite feature disabled".to_owned())
     }
 }
 
@@ -209,12 +229,10 @@ pub(crate) async fn load_discovery_first_event_summary_with_binding(
 ) -> CliResult<DiscoveryFirstEventSummary> {
     #[cfg(feature = "memory-sqlite")]
     {
-        let assistant_contents =
-            load_assistant_contents_from_session_window(session_id, limit, binding, memory_config)
-                .await?;
-        Ok(summarize_discovery_first_events(
-            assistant_contents.iter().map(String::as_str),
-        ))
+        load_assistant_history_summary(session_id, limit, binding, memory_config, |contents| {
+            summarize_discovery_first_events(contents.iter().map(String::as_str))
+        })
+        .await
     }
 
     #[cfg(not(feature = "memory-sqlite"))]
@@ -269,6 +287,23 @@ pub(crate) async fn load_assistant_contents_from_session_window(
     load_assistant_contents_from_session_window_detailed(session_id, limit, binding, memory_config)
         .await
         .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn load_assistant_history_summary<T, F>(
+    session_id: &str,
+    limit: usize,
+    binding: ConversationRuntimeBinding<'_>,
+    memory_config: &MemoryRuntimeConfig,
+    summarize: F,
+) -> CliResult<T>
+where
+    F: FnOnce(&[String]) -> T,
+{
+    let assistant_contents =
+        load_assistant_contents_from_session_window(session_id, limit, binding, memory_config)
+            .await?;
+    Ok(summarize(&assistant_contents))
 }
 
 #[cfg(feature = "memory-sqlite")]

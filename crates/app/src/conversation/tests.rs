@@ -9891,6 +9891,111 @@ async fn load_discovery_first_event_summary_preserves_public_kernel_context_sign
     let _ = std::fs::remove_file(&db_path);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn load_fast_lane_tool_batch_event_summary_accepts_explicit_runtime_binding() {
+    let payloads = [json!({
+        "type": "conversation_event",
+        "event": "fast_lane_tool_batch",
+        "payload": {
+            "schema_version": 1,
+            "total_intents": 5,
+            "parallel_execution_enabled": true,
+            "parallel_execution_max_in_flight": 2,
+            "parallel_safe_intents": 4,
+            "serial_only_intents": 1,
+            "parallel_segments": 2,
+            "sequential_segments": 1,
+            "segments": [
+                {
+                    "segment_index": 0,
+                    "scheduling_class": "parallel_safe",
+                    "execution_mode": "parallel",
+                    "intent_count": 2
+                },
+                {
+                    "segment_index": 1,
+                    "scheduling_class": "serial_only",
+                    "execution_mode": "sequential",
+                    "intent_count": 1
+                },
+                {
+                    "segment_index": 2,
+                    "scheduling_class": "parallel_safe",
+                    "execution_mode": "parallel",
+                    "intent_count": 2
+                }
+            ]
+        }
+    })
+    .to_string()];
+
+    let (db_path, mem_config) = prepare_discovery_first_summary_test(
+        "conversation-fast-lane-batch-summary",
+        "session-fast-lane-batch-summary-direct",
+        &payloads,
+    );
+
+    let direct_summary = load_fast_lane_tool_batch_event_summary(
+        "session-fast-lane-batch-summary-direct",
+        40,
+        ConversationRuntimeBinding::direct(),
+        &mem_config,
+    )
+    .await
+    .expect("load fast-lane batch summary via direct binding");
+    assert_eq!(direct_summary.batch_events, 1);
+    assert_eq!(direct_summary.latest_schema_version, Some(1));
+    assert_eq!(direct_summary.latest_total_intents, Some(5));
+    assert_eq!(direct_summary.latest_parallel_execution_enabled, Some(true));
+    assert_eq!(
+        direct_summary.latest_parallel_execution_max_in_flight,
+        Some(2)
+    );
+    assert_eq!(direct_summary.latest_parallel_safe_intents, Some(4));
+    assert_eq!(direct_summary.latest_serial_only_intents, Some(1));
+    assert_eq!(direct_summary.latest_parallel_segments, Some(2));
+    assert_eq!(direct_summary.latest_sequential_segments, Some(1));
+    assert_eq!(direct_summary.latest_segments.len(), 3);
+
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let (kernel_ctx, invocations) =
+        build_kernel_context_with_window_turns(audit, discovery_first_window_turns(&payloads));
+
+    let kernel_summary = load_fast_lane_tool_batch_event_summary(
+        "session-fast-lane-batch-summary-kernel",
+        56,
+        ConversationRuntimeBinding::kernel(&kernel_ctx),
+        &mem_config,
+    )
+    .await
+    .expect("load fast-lane batch summary via kernel binding");
+    assert_eq!(kernel_summary.batch_events, 1);
+    assert_eq!(kernel_summary.latest_schema_version, Some(1));
+    assert_eq!(kernel_summary.latest_total_intents, Some(5));
+    assert_eq!(kernel_summary.latest_parallel_execution_enabled, Some(true));
+    assert_eq!(
+        kernel_summary.latest_parallel_execution_max_in_flight,
+        Some(2)
+    );
+    assert_eq!(kernel_summary.latest_parallel_safe_intents, Some(4));
+    assert_eq!(kernel_summary.latest_serial_only_intents, Some(1));
+    assert_eq!(kernel_summary.latest_parallel_segments, Some(2));
+    assert_eq!(kernel_summary.latest_sequential_segments, Some(1));
+    assert_eq!(kernel_summary.latest_segments.len(), 3);
+
+    let captured = invocations.lock().expect("invocations lock");
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].operation, crate::memory::MEMORY_OP_WINDOW);
+    assert_eq!(
+        captured[0].payload["session_id"],
+        "session-fast-lane-batch-summary-kernel"
+    );
+    assert_eq!(captured[0].payload["limit"], json!(56));
+    assert_eq!(captured[0].payload["allow_extended_limit"], json!(true));
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
 #[cfg(not(feature = "memory-sqlite"))]
 #[tokio::test]
 async fn persist_turn_without_memory_sqlite_is_noop_with_kernel_context() {
