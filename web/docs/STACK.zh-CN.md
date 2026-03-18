@@ -317,6 +317,39 @@ web/
 
 - HTTP client
 - 响应错误处理
+
+## 8. 运行时文件与日志位置
+
+`web/` 目录只用于放源码、文档和前端构建配置，不应该承载开发态运行日志。
+
+开发态约定如下：
+
+- 前端预览日志写入 `C:\Users\<user>\.loongclaw\logs\web-preview.log`
+- 前端预览错误日志写入 `C:\Users\<user>\.loongclaw\logs\web-preview.err.log`
+- 本地 Web API 日志写入 `C:\Users\<user>\.loongclaw\logs\web-api.log`
+- 本地 Web API 错误日志写入 `C:\Users\<user>\.loongclaw\logs\web-api.err.log`
+
+这样做的原因是：
+
+- 避免仓库工作区被运行时文件污染
+- 避免切换分支时反复看到 `.vite-*.log`、`.web-*.log`
+- 让日志归入用户数据目录，而不是源码目录
+
+推荐用下面两条脚本管理本地 Web 开发进程：
+
+- `scripts/web/start-dev.ps1`
+- `scripts/web/stop-dev.ps1`
+
+`start-dev.ps1` 会：
+
+- 以隐藏后台进程方式启动 `loongclaw web serve --bind 127.0.0.1:4317`
+- 以隐藏后台进程方式启动前端 `vite preview`，默认端口 `4173`
+- 把日志统一写入 `%USERPROFILE%\.loongclaw\logs\`
+
+运行时目录和源码目录的边界应当保持清晰：
+
+- `web/` 下允许存在 `dist/`、`node_modules/` 这类开发产物，但必须被忽略
+- 日志文件不应继续写回 `web/` 目录
 - 公共请求类型
 
 `lib/auth/`
