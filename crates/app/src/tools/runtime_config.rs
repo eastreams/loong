@@ -478,6 +478,124 @@ impl ToolRuntimeConfig {
 
         narrowed
     }
+
+    #[must_use]
+    pub(crate) fn delegate_child_prompt_summary(
+        &self,
+        narrowing: &ToolRuntimeNarrowing,
+    ) -> Option<String> {
+        if narrowing.is_empty() {
+            return None;
+        }
+
+        let effective = self.narrowed(narrowing);
+        let mut lines = vec![
+            "[delegate_child_runtime_contract]".to_owned(),
+            "Plan within these child-session runtime limits:".to_owned(),
+        ];
+        let mut rendered_any = false;
+
+        if effective.web_fetch.enabled {
+            if narrowing.web_fetch.allow_private_hosts.is_some() {
+                rendered_any = true;
+                lines.push(format!(
+                    "- web.fetch private hosts: {}",
+                    if effective.web_fetch.allow_private_hosts {
+                        "allowed"
+                    } else {
+                        "denied"
+                    }
+                ));
+            }
+            if !narrowing.web_fetch.allowed_domains.is_empty() {
+                rendered_any = true;
+                if effective.web_fetch.enforce_allowed_domains
+                    && effective.web_fetch.allowed_domains.is_empty()
+                {
+                    lines.push(
+                        "- web.fetch allowed domains: none (effective intersection is empty)"
+                            .to_owned(),
+                    );
+                } else {
+                    lines.push(format!(
+                        "- web.fetch allowed domains: {}",
+                        effective
+                            .web_fetch
+                            .allowed_domains
+                            .iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+            }
+            if !narrowing.web_fetch.blocked_domains.is_empty() {
+                rendered_any = true;
+                lines.push(format!(
+                    "- web.fetch blocked domains: {}",
+                    effective
+                        .web_fetch
+                        .blocked_domains
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            if narrowing.web_fetch.timeout_seconds.is_some() {
+                rendered_any = true;
+                lines.push(format!(
+                    "- web.fetch timeout seconds: {}",
+                    effective.web_fetch.timeout_seconds
+                ));
+            }
+            if narrowing.web_fetch.max_bytes.is_some() {
+                rendered_any = true;
+                lines.push(format!(
+                    "- web.fetch max bytes: {}",
+                    effective.web_fetch.max_bytes
+                ));
+            }
+            if narrowing.web_fetch.max_redirects.is_some() {
+                rendered_any = true;
+                lines.push(format!(
+                    "- web.fetch max redirects: {}",
+                    effective.web_fetch.max_redirects
+                ));
+            }
+        }
+
+        if effective.browser.enabled {
+            if narrowing.browser.max_sessions.is_some() {
+                rendered_any = true;
+                lines.push(format!(
+                    "- browser max sessions: {}",
+                    effective.browser.max_sessions
+                ));
+            }
+            if narrowing.browser.max_links.is_some() {
+                rendered_any = true;
+                lines.push(format!(
+                    "- browser max links: {}",
+                    effective.browser.max_links
+                ));
+            }
+            if narrowing.browser.max_text_chars.is_some() {
+                rendered_any = true;
+                lines.push(format!(
+                    "- browser max text chars: {}",
+                    effective.browser.max_text_chars
+                ));
+            }
+        }
+
+        if !rendered_any {
+            return None;
+        }
+
+        lines.push("Treat these as enforced limits for this child session.".to_owned());
+        Some(lines.join("\n"))
+    }
 }
 
 pub(crate) fn browser_companion_runtime_policy_from_tool_config(
@@ -1301,6 +1419,198 @@ mod tests {
         assert!(
             effective.web_fetch.allowed_domains.is_empty(),
             "an existing fail-closed allowlist should not be widened by later narrowing"
+        );
+    }
+
+    #[test]
+    fn delegate_child_prompt_summary_returns_none_when_narrowing_is_empty() {
+        assert_eq!(
+            ToolRuntimeConfig::default()
+                .delegate_child_prompt_summary(&ToolRuntimeNarrowing::default()),
+            None
+        );
+    }
+
+    #[test]
+    fn delegate_child_prompt_summary_is_effective_stable_and_sparse() {
+        let base = ToolRuntimeConfig {
+            browser: BrowserRuntimePolicy {
+                enabled: true,
+                max_sessions: 1,
+                max_links: 4,
+                max_text_chars: 1_024,
+            },
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: true,
+                allow_private_hosts: false,
+                enforce_allowed_domains: true,
+                allowed_domains: BTreeSet::from(["api.example.com".to_owned()]),
+                blocked_domains: BTreeSet::from(["base-block.example.com".to_owned()]),
+                timeout_seconds: 3,
+                max_bytes: 2_048,
+                max_redirects: 1,
+            },
+            ..ToolRuntimeConfig::default()
+        };
+        let narrowing = ToolRuntimeNarrowing {
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(8),
+                max_links: Some(8),
+                max_text_chars: Some(512),
+            },
+            web_fetch: WebFetchRuntimeNarrowing {
+                allow_private_hosts: Some(true),
+                allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+                blocked_domains: BTreeSet::from(["deny.example.com".to_owned()]),
+                timeout_seconds: Some(5),
+                max_bytes: Some(4_096),
+                max_redirects: Some(2),
+            },
+        };
+
+        let summary = base
+            .delegate_child_prompt_summary(&narrowing)
+            .expect("delegate child prompt summary");
+
+        assert_eq!(
+            summary,
+            "[delegate_child_runtime_contract]\n\
+Plan within these child-session runtime limits:\n\
+- web.fetch private hosts: denied\n\
+- web.fetch allowed domains: none (effective intersection is empty)\n\
+- web.fetch blocked domains: base-block.example.com, deny.example.com\n\
+- web.fetch timeout seconds: 3\n\
+- web.fetch max bytes: 2048\n\
+- web.fetch max redirects: 1\n\
+- browser max sessions: 1\n\
+- browser max links: 4\n\
+- browser max text chars: 512\n\
+Treat these as enforced limits for this child session."
+        );
+    }
+
+    #[test]
+    fn delegate_child_prompt_summary_omits_disabled_web_fetch() {
+        let base = ToolRuntimeConfig {
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: false,
+                allow_private_hosts: true,
+                enforce_allowed_domains: false,
+                allowed_domains: BTreeSet::new(),
+                blocked_domains: BTreeSet::new(),
+                timeout_seconds: 30,
+                max_bytes: 1_048_576,
+                max_redirects: 5,
+            },
+            browser: BrowserRuntimePolicy {
+                enabled: true,
+                max_sessions: 4,
+                max_links: 16,
+                max_text_chars: 8_192,
+            },
+            ..ToolRuntimeConfig::default()
+        };
+        let narrowing = ToolRuntimeNarrowing {
+            web_fetch: WebFetchRuntimeNarrowing {
+                allow_private_hosts: Some(false),
+                timeout_seconds: Some(5),
+                ..WebFetchRuntimeNarrowing::default()
+            },
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(2),
+                ..BrowserRuntimeNarrowing::default()
+            },
+        };
+
+        let summary = base
+            .delegate_child_prompt_summary(&narrowing)
+            .expect("should still render browser section");
+
+        assert!(
+            !summary.contains("web.fetch"),
+            "disabled web_fetch fields should not appear in prompt summary: {summary}"
+        );
+        assert!(
+            summary.contains("- browser max sessions: 2"),
+            "enabled browser fields should still appear: {summary}"
+        );
+    }
+
+    #[test]
+    fn delegate_child_prompt_summary_omits_disabled_browser() {
+        let base = ToolRuntimeConfig {
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: true,
+                allow_private_hosts: true,
+                enforce_allowed_domains: false,
+                allowed_domains: BTreeSet::new(),
+                blocked_domains: BTreeSet::new(),
+                timeout_seconds: 30,
+                max_bytes: 1_048_576,
+                max_redirects: 5,
+            },
+            browser: BrowserRuntimePolicy {
+                enabled: false,
+                max_sessions: 4,
+                max_links: 16,
+                max_text_chars: 8_192,
+            },
+            ..ToolRuntimeConfig::default()
+        };
+        let narrowing = ToolRuntimeNarrowing {
+            web_fetch: WebFetchRuntimeNarrowing {
+                timeout_seconds: Some(5),
+                ..WebFetchRuntimeNarrowing::default()
+            },
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(2),
+                max_links: Some(8),
+                ..BrowserRuntimeNarrowing::default()
+            },
+        };
+
+        let summary = base
+            .delegate_child_prompt_summary(&narrowing)
+            .expect("should still render web_fetch section");
+
+        assert!(
+            !summary.contains("browser"),
+            "disabled browser fields should not appear in prompt summary: {summary}"
+        );
+        assert!(
+            summary.contains("- web.fetch timeout seconds: 5"),
+            "enabled web_fetch fields should still appear: {summary}"
+        );
+    }
+
+    #[test]
+    fn delegate_child_prompt_summary_returns_none_when_all_tools_disabled() {
+        let base = ToolRuntimeConfig {
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: false,
+                ..WebFetchRuntimePolicy::default()
+            },
+            browser: BrowserRuntimePolicy {
+                enabled: false,
+                ..BrowserRuntimePolicy::default()
+            },
+            ..ToolRuntimeConfig::default()
+        };
+        let narrowing = ToolRuntimeNarrowing {
+            web_fetch: WebFetchRuntimeNarrowing {
+                timeout_seconds: Some(5),
+                ..WebFetchRuntimeNarrowing::default()
+            },
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(2),
+                ..BrowserRuntimeNarrowing::default()
+            },
+        };
+
+        assert_eq!(
+            base.delegate_child_prompt_summary(&narrowing),
+            None,
+            "should return None when all narrowed tools are disabled"
         );
     }
 

@@ -1,9 +1,23 @@
 use super::*;
+use std::sync::MutexGuard;
+
+struct ProcessStdioEnvironmentGuard {
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl ProcessStdioEnvironmentGuard {
+    fn new() -> Self {
+        Self {
+            _lock: lock_daemon_test_environment(),
+        }
+    }
+}
 
 #[tokio::test]
 async fn execute_spec_process_stdio_bridge_executes_when_enabled_and_allowed() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    let _env_lock = ProcessStdioEnvironmentGuard::new();
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
@@ -129,6 +143,7 @@ async fn execute_spec_process_stdio_bridge_executes_when_enabled_and_allowed() {
 async fn execute_spec_process_stdio_bridge_blocks_when_command_not_allowlisted() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    let _env_lock = ProcessStdioEnvironmentGuard::new();
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
@@ -237,6 +252,7 @@ async fn execute_spec_process_stdio_bridge_blocks_when_command_not_allowlisted()
 async fn execute_spec_process_stdio_bridge_fails_on_invalid_json_line_response() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    let _env_lock = ProcessStdioEnvironmentGuard::new();
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
@@ -354,6 +370,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_invalid_json_line_response()
 async fn execute_spec_process_stdio_bridge_fails_on_response_id_mismatch() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    let _env_lock = ProcessStdioEnvironmentGuard::new();
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
@@ -466,6 +483,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_id_mismatch() {
 async fn execute_spec_process_stdio_bridge_fails_on_response_method_mismatch() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    let _env_lock = ProcessStdioEnvironmentGuard::new();
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
@@ -577,6 +595,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_method_mismatch() {
 async fn execute_spec_process_stdio_bridge_blocks_when_protocol_authorization_fails() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    let _env_lock = ProcessStdioEnvironmentGuard::new();
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
@@ -703,6 +722,7 @@ async fn execute_spec_process_stdio_bridge_blocks_when_protocol_authorization_fa
 async fn execute_spec_process_stdio_bridge_fails_on_recv_timeout() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    let _env_lock = ProcessStdioEnvironmentGuard::new();
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
