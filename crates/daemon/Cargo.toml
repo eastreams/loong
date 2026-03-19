@@ -25,6 +25,7 @@ memory-sqlite = ["loongclaw-app/memory-sqlite"]
 tool-shell = ["loongclaw-app/tool-shell"]
 tool-file = ["loongclaw-app/tool-file"]
 tool-webfetch = ["loongclaw-app/tool-webfetch"]
+tool-websearch = ["loongclaw-app/tool-websearch"]
 tool-browser = ["loongclaw-app/tool-browser"]
 
 [target.'cfg(unix)'.dependencies]

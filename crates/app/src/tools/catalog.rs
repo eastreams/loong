@@ -120,7 +120,7 @@ pub fn governance_profile_for_descriptor(descriptor: &ToolDescriptor) -> ToolGov
 
 pub fn scheduling_class_for_tool_name(tool_name: &str) -> ToolSchedulingClass {
     match tool_name {
-        "tool.search" | "file.read" | "web.fetch" | "sessions_list" => {
+        "tool.search" | "file.read" | "web.fetch" | "web.search" | "sessions_list" => {
             ToolSchedulingClass::ParallelSafe
         }
         _ => ToolSchedulingClass::SerialOnly,
@@ -143,6 +143,7 @@ pub enum ToolVisibilityGate {
     BrowserCompanion,
     ExternalSkills,
     WebFetch,
+    WebSearch,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -769,6 +770,21 @@ pub fn tool_catalog() -> ToolCatalog {
         });
     }
 
+    #[cfg(feature = "tool-websearch")]
+    {
+        descriptors.push(ToolDescriptor {
+            name: "web.search",
+            provider_name: "web_search",
+            aliases: &[],
+            description: "Search the web for APIs, documentation, and error messages using DuckDuckGo, Brave Search, or Tavily",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::WebSearch,
+            provider_definition_builder: web_search_definition,
+        });
+    }
+
     descriptors.sort_by(|left, right| left.name.cmp(right.name));
     ToolCatalog { descriptors }
 }
@@ -953,6 +969,7 @@ fn tool_visibility_gate_enabled_for_runtime_view(
         ToolVisibilityGate::BrowserCompanion => false,
         ToolVisibilityGate::ExternalSkills => external_skills_enabled,
         ToolVisibilityGate::WebFetch => config.web.enabled,
+        ToolVisibilityGate::WebSearch => config.web_search.enabled,
     }
 }
 
@@ -969,6 +986,7 @@ fn tool_visibility_gate_enabled_for_runtime_policy(
         ToolVisibilityGate::BrowserCompanion => config.browser_companion.is_runtime_ready(),
         ToolVisibilityGate::ExternalSkills => config.external_skills.enabled,
         ToolVisibilityGate::WebFetch => config.web_fetch.enabled,
+        ToolVisibilityGate::WebSearch => config.web_search.enabled,
     }
 }
 
@@ -1672,6 +1690,39 @@ fn web_fetch_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+#[cfg(feature = "tool-websearch")]
+fn web_search_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query string."
+                    },
+                    "provider": {
+                        "type": "string",
+                        "enum": ["duckduckgo", "ddg", "brave", "tavily"],
+                        "description": "Search provider. Defaults to 'duckduckgo'. Brave requires BRAVE_API_KEY env var. Tavily requires TAVILY_API_KEY env var."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "Maximum results to return. Defaults to 5."
+                    }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 fn shell_exec_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
@@ -2190,6 +2241,7 @@ fn tool_argument_hint(name: &str) -> &'static str {
         | "session_status" | "session_wait" | "sessions_history" => "session_id:string",
         "sessions_list" => "limit?:integer,state?:string",
         "sessions_send" => "session_id:string,text:string",
+        "web.search" => "query:string,provider?:string,max_results?:integer",
         _ => "",
     }
 }
@@ -2261,6 +2313,11 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
         | "session_status" | "session_wait" | "sessions_history" => &[("session_id", "string")],
         "sessions_list" => &[("limit", "integer"), ("state", "string")],
         "sessions_send" => &[("session_id", "string"), ("text", "string")],
+        "web.search" => &[
+            ("query", "string"),
+            ("provider", "string"),
+            ("max_results", "integer"),
+        ],
         _ => &[],
     }
 }
@@ -2293,6 +2350,7 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => &["session_id"],
         "sessions_send" => &["session_id", "text"],
+        "web.search" => &["query"],
         _ => &[],
     }
 }
@@ -2334,6 +2392,7 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
             &["session", "history", "runtime"]
         }
         "sessions_send" => &["session", "message", "channel"],
+        "web.search" => &["web", "search", "discover", "external"],
         _ => &[],
     }
 }

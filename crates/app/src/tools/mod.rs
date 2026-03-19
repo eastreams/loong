@@ -42,6 +42,9 @@ mod shell;
 pub mod shell_policy_ext;
 #[cfg(feature = "tool-webfetch")]
 mod web_fetch;
+#[cfg(any(feature = "tool-webfetch", feature = "tool-websearch"))]
+mod web_http;
+mod web_search;
 
 pub use catalog::{
     ToolApprovalMode, ToolAvailability, ToolCatalog, ToolDescriptor, ToolExecutionKind,
@@ -703,6 +706,7 @@ fn execute_discoverable_tool_core_with_config(
         }
         #[cfg(feature = "tool-webfetch")]
         "web.fetch" => web_fetch::execute_web_fetch_tool_with_config(request, config),
+        "web.search" => web_search::execute_web_search_tool_with_config(request, config),
         _ => Err(format!(
             "tool_not_found: unknown tool `{}`",
             request.tool_name
@@ -1533,16 +1537,8 @@ mod tests {
     fn test_tool_runtime_config(root: PathBuf) -> runtime_config::ToolRuntimeConfig {
         runtime_config::ToolRuntimeConfig {
             shell_allow: BTreeSet::from(["echo".to_owned(), "cat".to_owned(), "ls".to_owned()]),
-            shell_deny: BTreeSet::new(),
-            shell_default_mode: crate::tools::shell_policy_ext::ShellPolicyDefault::Deny,
             file_root: Some(root),
-            config_path: None,
-            sessions_enabled: true,
             messages_enabled: true,
-            delegate_enabled: true,
-            browser: Default::default(),
-            browser_companion: Default::default(),
-            web_fetch: Default::default(),
             external_skills: runtime_config::ExternalSkillsRuntimePolicy {
                 enabled: true,
                 require_download_approval: true,
@@ -1551,8 +1547,7 @@ mod tests {
                 install_root: None,
                 auto_expose_installed: false,
             },
-            #[cfg(feature = "feishu-integration")]
-            feishu: None,
+            ..Default::default()
         }
     }
 
@@ -1742,11 +1737,57 @@ mod tests {
     #[cfg(all(
         feature = "tool-file",
         feature = "tool-shell",
-        feature = "memory-sqlite"
+        feature = "memory-sqlite",
+        feature = "tool-websearch"
     ))]
     #[test]
     fn tool_registry_returns_runtime_discoverable_tools_for_default_config() {
-        let entries = tool_registry();
+        let config = runtime_config::ToolRuntimeConfig::default();
+        let entries = tool_registry_with_config(Some(&config));
+        assert_eq!(entries.len(), 23);
+        let names: Vec<&str> = entries.iter().map(|e| e.name).collect();
+        assert!(names.contains(&"approval_request_resolve"));
+        assert!(names.contains(&"approval_request_status"));
+        assert!(names.contains(&"approval_requests_list"));
+        assert!(names.contains(&"browser.click"));
+        assert!(names.contains(&"browser.extract"));
+        assert!(names.contains(&"browser.open"));
+        assert!(names.contains(&"claw.migrate"));
+        assert!(names.contains(&"delegate"));
+        assert!(names.contains(&"delegate_async"));
+        assert!(names.contains(&"file.read"));
+        assert!(names.contains(&"file.write"));
+        assert!(names.contains(&"provider.switch"));
+        assert!(names.contains(&"session_archive"));
+        assert!(names.contains(&"session_cancel"));
+        assert!(names.contains(&"session_events"));
+        assert!(names.contains(&"session_recover"));
+        assert!(names.contains(&"session_status"));
+        assert!(names.contains(&"session_wait"));
+        assert!(names.contains(&"sessions_history"));
+        assert!(names.contains(&"sessions_list"));
+        assert!(names.contains(&"web.search"));
+        assert!(!names.contains(&"external_skills.fetch"));
+        assert!(!names.contains(&"external_skills.install"));
+        assert!(!names.contains(&"external_skills.inspect"));
+        assert!(!names.contains(&"external_skills.invoke"));
+        assert!(!names.contains(&"external_skills.list"));
+        assert!(names.contains(&"external_skills.policy"));
+        assert!(!names.contains(&"external_skills.remove"));
+        assert!(!names.contains(&"shell.exec"));
+        assert!(!names.contains(&"sessions_send"));
+    }
+
+    #[cfg(all(
+        feature = "tool-file",
+        feature = "tool-shell",
+        feature = "memory-sqlite",
+        not(feature = "tool-websearch")
+    ))]
+    #[test]
+    fn tool_registry_returns_runtime_discoverable_tools_for_default_config_no_websearch() {
+        let config = runtime_config::ToolRuntimeConfig::default();
+        let entries = tool_registry_with_config(Some(&config));
         assert_eq!(entries.len(), 22);
         let names: Vec<&str> = entries.iter().map(|e| e.name).collect();
         assert!(names.contains(&"approval_request_resolve"));
@@ -1769,6 +1810,7 @@ mod tests {
         assert!(names.contains(&"session_wait"));
         assert!(names.contains(&"sessions_history"));
         assert!(names.contains(&"sessions_list"));
+        assert!(!names.contains(&"web.search"));
         assert!(!names.contains(&"external_skills.fetch"));
         assert!(!names.contains(&"external_skills.install"));
         assert!(!names.contains(&"external_skills.inspect"));
@@ -2299,19 +2341,9 @@ mod tests {
 
         let config = runtime_config::ToolRuntimeConfig {
             shell_allow: BTreeSet::new(),
-            shell_deny: BTreeSet::new(),
-            shell_default_mode: crate::tools::shell_policy_ext::ShellPolicyDefault::Deny,
             file_root: Some(root.clone()),
-            config_path: None,
-            sessions_enabled: true,
             messages_enabled: true,
-            delegate_enabled: true,
-            browser: Default::default(),
-            browser_companion: Default::default(),
-            web_fetch: Default::default(),
-            external_skills: runtime_config::ExternalSkillsRuntimePolicy::default(),
-            #[cfg(feature = "feishu-integration")]
-            feishu: None,
+            ..Default::default()
         };
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {

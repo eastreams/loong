@@ -21,104 +21,6 @@ pub(super) fn execute_web_fetch_tool_with_config(
     }
 }
 
-/// Bridge sync-to-async: reuses the current tokio runtime when available
-/// (production path via `block_in_place`), otherwise creates a temporary
-/// single-threaded runtime on a dedicated thread.
-///
-/// Three cases:
-/// - **Multi-thread runtime** (production): use `block_in_place` + `block_on`.
-/// - **No runtime** (sync tests): create a temporary runtime and `block_on`.
-/// - **Current-thread runtime** (`#[tokio::test]`): spawn a dedicated thread
-///   with its own runtime, because both `block_in_place` and nested `block_on`
-///   panic under a `current_thread` runtime.
-#[cfg(feature = "tool-webfetch")]
-fn run_async<F>(fut: F) -> Result<F::Output, String>
-where
-    F: std::future::Future + Send,
-    F::Output: Send,
-{
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
-            Ok(tokio::task::block_in_place(|| handle.block_on(fut)))
-        }
-        Ok(_) => {
-            // current_thread runtime: neither block_in_place nor nested
-            // block_on is safe. Run on a dedicated thread with its own runtime.
-            std::thread::scope(|scope| {
-                scope
-                    .spawn(|| {
-                        let rt = tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()
-                            .map_err(|error| {
-                                format!("failed to create tokio runtime for web.fetch: {error}")
-                            })?;
-                        Ok(rt.block_on(fut))
-                    })
-                    .join()
-                    .map_err(|_panic| "web.fetch async worker thread panicked".to_owned())?
-            })
-        }
-        Err(_) => {
-            // No runtime (sync tests): create a temporary runtime directly.
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| {
-                    format!("failed to create tokio runtime for web.fetch: {error}")
-                })?;
-            Ok(rt.block_on(fut))
-        }
-    }
-}
-
-/// Custom DNS resolver that rejects private/special-use IP addresses at
-/// connection time, eliminating the TOCTOU window between validation and
-/// the HTTP client's own DNS resolution.
-#[cfg(feature = "tool-webfetch")]
-struct SsrfSafeResolver {
-    allow_private_hosts: bool,
-}
-
-#[cfg(feature = "tool-webfetch")]
-impl reqwest::dns::Resolve for SsrfSafeResolver {
-    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        let allow_private = self.allow_private_hosts;
-        Box::pin(async move {
-            let host = name.as_str();
-            let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host, 0))
-                .await
-                .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { Box::new(error) })?
-                .collect();
-
-            if addrs.is_empty() {
-                return Err(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("web.fetch resolved no addresses for host `{host}`"),
-                ))
-                    as Box<dyn std::error::Error + Send + Sync>);
-            }
-
-            if !allow_private {
-                for addr in &addrs {
-                    if is_private_or_special_ip(addr.ip()) {
-                        return Err(Box::new(std::io::Error::new(
-                            std::io::ErrorKind::PermissionDenied,
-                            format!(
-                                "web.fetch blocked private or special-use address `{}` for host `{host}`",
-                                addr.ip()
-                            ),
-                        ))
-                            as Box<dyn std::error::Error + Send + Sync>);
-                    }
-                }
-            }
-
-            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
-        })
-    }
-}
-
 #[cfg(feature = "tool-webfetch")]
 fn execute_web_fetch_tool_enabled(
     request: ToolCoreRequest,
@@ -144,7 +46,7 @@ fn execute_web_fetch_tool_enabled(
     let mode = parse_render_mode(payload)?;
     let max_bytes = parse_max_bytes(payload, config.web_fetch.max_bytes)?;
 
-    let resolver = SsrfSafeResolver {
+    let resolver = super::web_http::SsrfSafeResolver {
         allow_private_hosts: config.web_fetch.allow_private_hosts,
     };
 
@@ -161,7 +63,7 @@ fn execute_web_fetch_tool_enabled(
     let mut current_host = validate_web_target(&current_url, &config.web_fetch, "web.fetch")?;
     let mut redirect_count = 0usize;
 
-    run_async(async {
+    super::web_http::run_async(async {
         loop {
             let response = client
                 .get(current_url.clone())
@@ -341,7 +243,11 @@ fn parse_max_bytes(payload: &Map<String, Value>, configured_max: usize) -> Resul
     Ok(parsed)
 }
 
-#[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
+#[cfg(any(
+    feature = "tool-webfetch",
+    feature = "tool-browser",
+    feature = "tool-websearch"
+))]
 pub(crate) fn validate_web_target(
     url: &reqwest::Url,
     policy: &super::runtime_config::WebFetchRuntimePolicy,
@@ -387,7 +293,7 @@ pub(crate) fn validate_web_target(
     }
 
     if let Ok(ip) = host.parse::<IpAddr>() {
-        if is_private_or_special_ip(ip) {
+        if super::web_http::is_private_or_special_ip(ip) {
             return Err(format!(
                 "{surface_name} blocked private or special-use address `{ip}`"
             ));
@@ -405,7 +311,7 @@ pub(crate) fn validate_web_target(
     let mut saw_addr = false;
     for addr in addrs {
         saw_addr = true;
-        if is_private_or_special_ip(addr.ip()) {
+        if super::web_http::is_private_or_special_ip(addr.ip()) {
             return Err(format!(
                 "{surface_name} blocked private or special-use address `{}` for host `{host}`",
                 addr.ip()
@@ -422,7 +328,11 @@ pub(crate) fn validate_web_target(
     Ok(host)
 }
 
-#[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
+#[cfg(any(
+    feature = "tool-webfetch",
+    feature = "tool-browser",
+    feature = "tool-websearch"
+))]
 fn first_matching_domain_rule<'a>(host: &str, rules: &'a BTreeSet<String>) -> Option<&'a str> {
     rules
         .iter()
@@ -430,7 +340,11 @@ fn first_matching_domain_rule<'a>(host: &str, rules: &'a BTreeSet<String>) -> Op
         .map(String::as_str)
 }
 
-#[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
+#[cfg(any(
+    feature = "tool-webfetch",
+    feature = "tool-browser",
+    feature = "tool-websearch"
+))]
 fn domain_rule_matches(host: &str, rule: &str) -> bool {
     if let Some(suffix) = rule.strip_prefix("*.") {
         return host == suffix || host.ends_with(&format!(".{suffix}"));
@@ -438,59 +352,11 @@ fn domain_rule_matches(host: &str, rule: &str) -> bool {
     host == rule
 }
 
-#[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
-fn is_private_or_special_ip(ip: std::net::IpAddr) -> bool {
-    use std::net::IpAddr;
-
-    match ip {
-        IpAddr::V4(ipv4) => is_private_or_special_ipv4(ipv4),
-        IpAddr::V6(ipv6) => is_private_or_special_ipv6(ipv6),
-    }
-}
-
-#[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
-fn is_private_or_special_ipv4(ip: std::net::Ipv4Addr) -> bool {
-    let octets = ip.octets();
-    let first = octets[0];
-    let second = octets[1];
-    let third = octets[2];
-
-    ip.is_private()
-        || ip.is_loopback()
-        || ip.is_link_local()
-        || ip.is_broadcast()
-        || ip.is_documentation()
-        || ip.is_unspecified()
-        || ip.is_multicast()
-        || first == 0
-        || (first == 100 && (64..=127).contains(&second))
-        || (first == 192 && second == 0 && third == 0)
-        || (first == 198 && matches!(second, 18 | 19))
-        || (first == 198 && second == 51 && third == 100)
-        || (first == 203 && second == 0 && third == 113)
-        || first >= 240
-}
-
-#[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
-fn is_private_or_special_ipv6(ip: std::net::Ipv6Addr) -> bool {
-    if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
-        return true;
-    }
-
-    // Check both IPv4-mapped (::ffff:x.x.x.x) and IPv4-compatible (::x.x.x.x)
-    // addresses. IPv4-compatible addresses are deprecated (RFC 4291) but still
-    // parseable, and we must not allow them to bypass the private-IP filter.
-    if let Some(ipv4) = ip.to_ipv4_mapped().or_else(|| ip.to_ipv4()) {
-        return is_private_or_special_ipv4(ipv4);
-    }
-
-    let segments = ip.segments();
-    ((segments[0] & 0xfe00) == 0xfc00)
-        || ((segments[0] & 0xffc0) == 0xfe80)
-        || (segments[0] == 0x2001 && segments[1] == 0x0db8)
-}
-
-#[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
+#[cfg(any(
+    feature = "tool-webfetch",
+    feature = "tool-browser",
+    feature = "tool-websearch"
+))]
 pub(crate) fn looks_like_html(content_type: Option<&str>, body: &str) -> bool {
     if let Some(content_type) = content_type {
         let lowered = content_type.to_ascii_lowercase();
@@ -503,7 +369,11 @@ pub(crate) fn looks_like_html(content_type: Option<&str>, body: &str) -> bool {
     lowered.contains("<html") || lowered.contains("<body") || lowered.contains("<!doctype html")
 }
 
-#[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
+#[cfg(any(
+    feature = "tool-webfetch",
+    feature = "tool-browser",
+    feature = "tool-websearch"
+))]
 pub(crate) fn response_is_probably_binary(content_type: Option<&str>, body: &[u8]) -> bool {
     if body.is_empty() {
         return false;
@@ -547,7 +417,11 @@ pub(crate) fn response_is_probably_binary(content_type: Option<&str>, body: &[u8
     control_count.saturating_mul(8) > sample.len()
 }
 
-#[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
+#[cfg(any(
+    feature = "tool-webfetch",
+    feature = "tool-browser",
+    feature = "tool-websearch"
+))]
 pub(crate) fn extract_html_title(html: &str) -> Option<String> {
     extract_tag_inner_text(html, "title").and_then(|value| {
         let collapsed = collapse_whitespace(&decode_basic_entities(value.trim()));
@@ -555,7 +429,11 @@ pub(crate) fn extract_html_title(html: &str) -> Option<String> {
     })
 }
 
-#[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
+#[cfg(any(
+    feature = "tool-webfetch",
+    feature = "tool-browser",
+    feature = "tool-websearch"
+))]
 pub(crate) fn extract_readable_text_from_html(html: &str) -> String {
     let mut sanitized = strip_tag_block(html, "script");
     sanitized = strip_tag_block(&sanitized, "style");
@@ -565,7 +443,11 @@ pub(crate) fn extract_readable_text_from_html(html: &str) -> String {
     collapse_whitespace(&decode_basic_entities(&text))
 }
 
-#[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
+#[cfg(any(
+    feature = "tool-webfetch",
+    feature = "tool-browser",
+    feature = "tool-websearch"
+))]
 fn strip_tag_block(input: &str, tag: &str) -> String {
     let open = format!("<{tag}");
     let close = format!("</{tag}>");
@@ -590,7 +472,11 @@ fn strip_tag_block(input: &str, tag: &str) -> String {
     output
 }
 
-#[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
+#[cfg(any(
+    feature = "tool-webfetch",
+    feature = "tool-browser",
+    feature = "tool-websearch"
+))]
 fn extract_tag_inner_text<'a>(input: &'a str, tag: &str) -> Option<&'a str> {
     let lowered = input.to_ascii_lowercase();
     let open = format!("<{tag}");
@@ -601,7 +487,11 @@ fn extract_tag_inner_text<'a>(input: &'a str, tag: &str) -> Option<&'a str> {
     Some(&input[open_end..end])
 }
 
-#[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
+#[cfg(any(
+    feature = "tool-webfetch",
+    feature = "tool-browser",
+    feature = "tool-websearch"
+))]
 fn strip_tags(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
     let mut in_tag = false;
@@ -628,7 +518,11 @@ fn strip_tags(input: &str) -> String {
     output
 }
 
-#[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
+#[cfg(any(
+    feature = "tool-webfetch",
+    feature = "tool-browser",
+    feature = "tool-websearch"
+))]
 fn decode_basic_entities(input: &str) -> String {
     input
         .replace("&nbsp;", " ")
@@ -639,7 +533,11 @@ fn decode_basic_entities(input: &str) -> String {
         .replace("&#39;", "'")
 }
 
-#[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
+#[cfg(any(
+    feature = "tool-webfetch",
+    feature = "tool-browser",
+    feature = "tool-websearch"
+))]
 fn collapse_whitespace(input: &str) -> String {
     input.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -944,15 +842,15 @@ mod tests {
 
     #[test]
     fn ssrf_safe_resolver_blocks_private_ips() {
-        let resolver = SsrfSafeResolver {
+        let resolver = crate::tools::web_http::SsrfSafeResolver {
             allow_private_hosts: false,
         };
-        let result = run_async(async {
+        let result: Result<_, String> = crate::tools::web_http::run_async(async {
             use reqwest::dns::Resolve;
             let name = "localhost".parse().expect("valid name");
             resolver.resolve(name).await
-        })
-        .expect("runtime should build");
+        });
+        let result = result.expect("runtime should build");
         assert!(
             result.is_err(),
             "resolver should block localhost when allow_private_hosts is false"
@@ -961,15 +859,15 @@ mod tests {
 
     #[test]
     fn ssrf_safe_resolver_allows_private_ips_when_configured() {
-        let resolver = SsrfSafeResolver {
+        let resolver = crate::tools::web_http::SsrfSafeResolver {
             allow_private_hosts: true,
         };
-        let result = run_async(async {
+        let result: Result<_, String> = crate::tools::web_http::run_async(async {
             use reqwest::dns::Resolve;
             let name = "localhost".parse().expect("valid name");
             resolver.resolve(name).await
-        })
-        .expect("runtime should build");
+        });
+        let result = result.expect("runtime should build");
         assert!(
             result.is_ok(),
             "resolver should allow localhost when allow_private_hosts is true"
@@ -981,14 +879,14 @@ mod tests {
         // ::7f00:1 is the IPv4-compatible form of 127.0.0.1
         let ip: std::net::Ipv6Addr = "::7f00:1".parse().expect("valid ipv6");
         assert!(
-            is_private_or_special_ipv6(ip),
+            crate::tools::web_http::is_private_or_special_ipv6(ip),
             "IPv4-compatible loopback address should be detected as private"
         );
 
         // ::a00:1 is the IPv4-compatible form of 10.0.0.1
         let ip: std::net::Ipv6Addr = "::a00:1".parse().expect("valid ipv6");
         assert!(
-            is_private_or_special_ipv6(ip),
+            crate::tools::web_http::is_private_or_special_ipv6(ip),
             "IPv4-compatible private address should be detected as private"
         );
     }
@@ -997,12 +895,12 @@ mod tests {
     fn ipv4_over_block_192_tightened() {
         // 192.0.0.1 (IETF Protocol Assignments) should be blocked
         let ip: std::net::Ipv4Addr = "192.0.0.1".parse().expect("valid ipv4");
-        assert!(is_private_or_special_ipv4(ip));
+        assert!(crate::tools::web_http::is_private_or_special_ipv4(ip));
 
         // 192.0.1.1 is normal routable space and should NOT be blocked
         let ip: std::net::Ipv4Addr = "192.0.1.1".parse().expect("valid ipv4");
         assert!(
-            !is_private_or_special_ipv4(ip),
+            !crate::tools::web_http::is_private_or_special_ipv4(ip),
             "192.0.1.x should not be blocked (normal routable space)"
         );
     }

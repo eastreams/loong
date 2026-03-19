@@ -167,6 +167,29 @@ impl Default for WebFetchRuntimePolicy {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebSearchRuntimePolicy {
+    pub enabled: bool,
+    pub default_provider: String,
+    pub brave_api_key: Option<String>,
+    pub tavily_api_key: Option<String>,
+    pub timeout_seconds: u64,
+    pub max_results: usize,
+}
+
+impl Default for WebSearchRuntimePolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            default_provider: "duckduckgo".to_owned(),
+            brave_api_key: None,
+            tavily_api_key: None,
+            timeout_seconds: crate::config::DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS,
+            max_results: crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS,
+        }
+    }
+}
+
 #[cfg(feature = "feishu-integration")]
 #[derive(Debug, Clone)]
 pub struct FeishuToolRuntimeConfig {
@@ -211,6 +234,7 @@ pub struct ToolRuntimeConfig {
     pub browser: BrowserRuntimePolicy,
     pub browser_companion: BrowserCompanionRuntimePolicy,
     pub web_fetch: WebFetchRuntimePolicy,
+    pub web_search: WebSearchRuntimePolicy,
     pub external_skills: ExternalSkillsRuntimePolicy,
     #[cfg(feature = "feishu-integration")]
     pub feishu: Option<FeishuToolRuntimeConfig>,
@@ -233,6 +257,7 @@ impl Default for ToolRuntimeConfig {
             browser: BrowserRuntimePolicy::default(),
             browser_companion: BrowserCompanionRuntimePolicy::default(),
             web_fetch: WebFetchRuntimePolicy::default(),
+            web_search: WebSearchRuntimePolicy::default(),
             external_skills: ExternalSkillsRuntimePolicy::default(),
             #[cfg(feature = "feishu-integration")]
             feishu: None,
@@ -290,6 +315,24 @@ impl ToolRuntimeConfig {
                 timeout_seconds: config.tools.web.timeout_seconds,
                 max_bytes: config.tools.web.max_bytes,
                 max_redirects: config.tools.web.max_redirects,
+            },
+            web_search: WebSearchRuntimePolicy {
+                enabled: config.tools.web_search.enabled,
+                default_provider: config.tools.web_search.default_provider.clone(),
+                brave_api_key: config
+                    .tools
+                    .web_search
+                    .brave_api_key
+                    .clone()
+                    .or_else(|| std::env::var("BRAVE_API_KEY").ok()),
+                tavily_api_key: config
+                    .tools
+                    .web_search
+                    .tavily_api_key
+                    .clone()
+                    .or_else(|| std::env::var("TAVILY_API_KEY").ok()),
+                timeout_seconds: config.tools.web_search.timeout_seconds,
+                max_results: config.tools.web_search.max_results,
             },
             external_skills: ExternalSkillsRuntimePolicy {
                 enabled: config.external_skills.enabled,
@@ -354,6 +397,21 @@ impl ToolRuntimeConfig {
             .unwrap_or(crate::config::DEFAULT_WEB_FETCH_MAX_BYTES);
         let web_fetch_max_redirects = parse_env_usize("LOONGCLAW_WEB_FETCH_MAX_REDIRECTS")
             .unwrap_or(crate::config::DEFAULT_WEB_FETCH_MAX_REDIRECTS);
+        let web_search_enabled = parse_env_bool("LOONGCLAW_WEB_SEARCH_ENABLED").unwrap_or(true);
+        let web_search_default_provider = parse_env_string("LOONGCLAW_WEB_SEARCH_PROVIDER")
+            .map(|provider| provider.to_ascii_lowercase())
+            .filter(|provider| {
+                matches!(provider.as_str(), "duckduckgo" | "ddg" | "brave" | "tavily")
+            })
+            .unwrap_or_else(|| "duckduckgo".to_owned());
+        let web_search_brave_api_key = std::env::var("BRAVE_API_KEY").ok();
+        let web_search_tavily_api_key = std::env::var("TAVILY_API_KEY").ok();
+        let web_search_timeout_seconds = parse_env_u64("LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS")
+            .map(|seconds| seconds.clamp(1, 60))
+            .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS);
+        let web_search_max_results = parse_env_usize("LOONGCLAW_WEB_SEARCH_MAX_RESULTS")
+            .map(|count| count.clamp(1, 10))
+            .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS);
         let enabled = parse_env_bool("LOONGCLAW_EXTERNAL_SKILLS_ENABLED").unwrap_or(false);
         let require_download_approval =
             parse_env_bool("LOONGCLAW_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL").unwrap_or(true);
@@ -393,6 +451,14 @@ impl ToolRuntimeConfig {
                 timeout_seconds: web_fetch_timeout_seconds,
                 max_bytes: web_fetch_max_bytes,
                 max_redirects: web_fetch_max_redirects,
+            },
+            web_search: WebSearchRuntimePolicy {
+                enabled: web_search_enabled,
+                default_provider: web_search_default_provider,
+                brave_api_key: web_search_brave_api_key,
+                tavily_api_key: web_search_tavily_api_key,
+                timeout_seconds: web_search_timeout_seconds,
+                max_results: web_search_max_results,
             },
             ..Self::default()
         }
@@ -805,6 +871,12 @@ mod tests {
             "LOONGCLAW_WEB_FETCH_TIMEOUT_SECONDS",
             "LOONGCLAW_WEB_FETCH_MAX_BYTES",
             "LOONGCLAW_WEB_FETCH_MAX_REDIRECTS",
+            "LOONGCLAW_WEB_SEARCH_ENABLED",
+            "LOONGCLAW_WEB_SEARCH_PROVIDER",
+            "LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS",
+            "LOONGCLAW_WEB_SEARCH_MAX_RESULTS",
+            "BRAVE_API_KEY",
+            "TAVILY_API_KEY",
             "LOONGCLAW_EXTERNAL_SKILLS_ENABLED",
             "LOONGCLAW_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL",
             "LOONGCLAW_EXTERNAL_SKILLS_ALLOWED_DOMAINS",

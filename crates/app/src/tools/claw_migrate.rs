@@ -616,6 +616,7 @@ mod tests {
             browser: Default::default(),
             browser_companion: Default::default(),
             web_fetch: Default::default(),
+            web_search: Default::default(),
             external_skills: Default::default(),
             #[cfg(feature = "feishu-integration")]
             feishu: None,
