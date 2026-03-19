@@ -52,29 +52,65 @@ pub struct JsonlAuditSink {
     journal: Mutex<File>,
 }
 
+fn prepare_audit_journal_parent(path: &Path) -> Result<(), AuditError> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|error| {
+            AuditError::Sink(format!(
+                "failed to prepare audit journal parent directory `{}`: {error}",
+                parent.display()
+            ))
+        })?;
+    }
+
+    Ok(())
+}
+
+fn open_jsonl_audit_journal(path: &Path) -> Result<File, AuditError> {
+    prepare_audit_journal_parent(path)?;
+
+    OpenOptions::new()
+        .create(true)
+        .read(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| {
+            AuditError::Sink(format!(
+                "failed to open audit journal `{}`: {error}",
+                path.display()
+            ))
+        })
+}
+
+fn lock_audit_journal(journal: &File, path: &Path) -> Result<(), AuditError> {
+    journal.lock().map_err(|error| {
+        AuditError::Sink(format!(
+            "failed to lock audit journal `{}`: {error}",
+            path.display()
+        ))
+    })
+}
+
+fn unlock_audit_journal(journal: &File, path: &Path) -> Result<(), AuditError> {
+    journal.unlock().map_err(|error| {
+        AuditError::Sink(format!(
+            "failed to unlock audit journal `{}`: {error}",
+            path.display()
+        ))
+    })
+}
+
+/// Exercise the same open + lock + unlock path that production audit writes use.
+pub fn probe_jsonl_audit_journal_runtime_ready(path: &Path) -> Result<(), AuditError> {
+    let journal = open_jsonl_audit_journal(path)?;
+    lock_audit_journal(&journal, path)?;
+    unlock_audit_journal(&journal, path)
+}
+
 impl JsonlAuditSink {
     pub fn new(path: PathBuf) -> Result<Self, AuditError> {
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent).map_err(|error| {
-                AuditError::Sink(format!(
-                    "failed to prepare audit journal parent directory `{}`: {error}",
-                    parent.display()
-                ))
-            })?;
-        }
-
-        let journal = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|error| {
-                AuditError::Sink(format!(
-                    "failed to open audit journal `{}`: {error}",
-                    path.display()
-                ))
-            })?;
+        let journal = open_jsonl_audit_journal(&path)?;
 
         Ok(Self {
             path,
@@ -105,12 +141,7 @@ impl AuditSink for JsonlAuditSink {
             .map_err(|_error| AuditError::Sink("audit journal mutex poisoned".to_owned()))?;
         let encoded = serialize_audit_event_line(&event, &self.path)?;
 
-        guard.lock().map_err(|error| {
-            AuditError::Sink(format!(
-                "failed to lock audit journal `{}`: {error}",
-                self.path.display()
-            ))
-        })?;
+        lock_audit_journal(&guard, &self.path)?;
 
         let write_result = guard
             .write_all(&encoded)
@@ -129,12 +160,7 @@ impl AuditSink for JsonlAuditSink {
                 })
             });
 
-        let unlock_result = guard.unlock().map_err(|error| {
-            AuditError::Sink(format!(
-                "failed to unlock audit journal `{}`: {error}",
-                self.path.display()
-            ))
-        });
+        let unlock_result = unlock_audit_journal(&guard, &self.path);
 
         match (write_result, unlock_result) {
             (Err(error), _) => Err(error),

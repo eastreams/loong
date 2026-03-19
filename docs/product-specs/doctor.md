@@ -25,6 +25,8 @@ can recover a broken setup without reverse-engineering runtime internals.
 - [ ] Doctor checks cover the current MVP path: config presence, provider
       readiness, SQLite memory readiness, shipped channel prerequisites, and
       the optional browser preview companion readiness path.
+- [ ] Durable audit readiness checks exercise the runtime `open + lock + unlock`
+      path for JSONL retention instead of relying on metadata-only validation.
 - [ ] When `tools.browser_companion.enabled=true`, doctor surfaces companion
       install/runtime readiness as warnings with concrete repair steps instead
       of turning the optional managed lane into a hard core-runtime failure.

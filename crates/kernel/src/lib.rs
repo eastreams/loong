@@ -27,7 +27,7 @@ pub use architecture::{
 };
 pub use audit::{
     AuditEvent, AuditEventKind, AuditSink, ExecutionPlane, FanoutAuditSink, InMemoryAuditSink,
-    JsonlAuditSink, NoopAuditSink, PlaneTier,
+    JsonlAuditSink, NoopAuditSink, PlaneTier, probe_jsonl_audit_journal_runtime_ready,
 };
 pub use awareness::{CodebaseAwarenessConfig, CodebaseAwarenessEngine, CodebaseAwarenessSnapshot};
 pub use bootstrap::{

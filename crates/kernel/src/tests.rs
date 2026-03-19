@@ -11,6 +11,7 @@ use serde_json::json;
 
 use crate::audit::{
     AuditEvent, AuditEventKind, AuditSink, FanoutAuditSink, InMemoryAuditSink, JsonlAuditSink,
+    probe_jsonl_audit_journal_runtime_ready,
 };
 use crate::clock::FixedClock;
 use crate::contracts::{Capability, HarnessOutcome, TaskIntent};
@@ -147,10 +148,21 @@ fn jsonl_audit_sink_surfaces_io_errors() {
 }
 
 #[test]
+fn jsonl_audit_sink_runtime_probe_accepts_fresh_journal_path() {
+    let path = fresh_audit_temp_path("jsonl-probe");
+
+    probe_jsonl_audit_journal_runtime_ready(&path)
+        .expect("runtime readiness probe should succeed for a fresh journal path");
+
+    let _ = fs::remove_file(path);
+}
+
+#[test]
 fn jsonl_audit_sink_waits_for_existing_file_lock_before_appending() {
     let path = fresh_audit_temp_path("jsonl-lock");
     let sink = JsonlAuditSink::new(path.clone()).expect("jsonl sink should initialize");
     let external_lock = fs::OpenOptions::new()
+        .read(true)
         .append(true)
         .open(&path)
         .expect("open external audit journal handle");
