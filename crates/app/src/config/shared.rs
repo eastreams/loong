@@ -96,9 +96,7 @@ impl ConfigValidationCode {
             ConfigValidationCode::UnknownActiveProvider => {
                 "config.provider_selection.unknown_active"
             }
-            ConfigValidationCode::UnknownSearchProvider => {
-                "config.web_search.unknown_provider"
-            }
+            ConfigValidationCode::UnknownSearchProvider => "config.web_search.unknown_provider",
         }
     }
 
@@ -161,7 +159,6 @@ impl ConfigValidationCode {
             ConfigValidationCode::UnknownSearchProvider => {
                 "config.web_search.unknown_provider.title"
             }
-            ConfigValidationCode::MissingRequiredField => "config.missing_required_field.title",
         }
     }
 
@@ -190,7 +187,6 @@ impl ConfigValidationCode {
             ConfigValidationCode::ImplicitActiveProvider => "Implicit Active Provider Selection",
             ConfigValidationCode::UnknownActiveProvider => "Unknown Active Provider Selection",
             ConfigValidationCode::UnknownSearchProvider => "Unknown Web Search Provider",
-            ConfigValidationCode::MissingRequiredField => "Missing Required Field",
         }
     }
 
@@ -228,9 +224,6 @@ impl ConfigValidationCode {
             }
             ConfigValidationCode::UnknownSearchProvider => {
                 "[{code}] {field_path} is set to `{provider_value}`, which is not a valid web search provider. valid options are: {valid_providers}. set `{field_path}` to one of the valid providers"
-            }
-            ConfigValidationCode::MissingRequiredField => {
-                "[{code}] {field_path} is required but not configured. set `{suggested_env_name}` environment variable or configure `{inline_field_path}` in your config file"
             }
         }
     }
