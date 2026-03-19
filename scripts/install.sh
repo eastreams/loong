@@ -69,6 +69,7 @@ else
       LINUX)
         case "$normalized_arch" in
           x86_64|amd64) printf 'x86_64-unknown-linux-gnu\n' ;;
+          arm64|aarch64) printf 'aarch64-unknown-linux-gnu\n' ;;
           *)
             echo "unsupported Linux architecture: ${arch}" >&2
             return 1

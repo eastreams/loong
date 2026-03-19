@@ -32,7 +32,7 @@ make_release_fixture() {
   local fixture tag target archive_name checksum_name binary_name archive_path checksum_path release_dir
   fixture="$(mktemp -d)"
   tag="${1:-v0.1.2}"
-  target="$(host_target)"
+  target="${2:-$(host_target)}"
   archive_name="$(release_archive_name "loongclaw" "$tag" "$target")"
   checksum_name="$(release_archive_checksum_name "loongclaw" "$tag" "$target")"
   binary_name="$(release_binary_name_for_target "loongclaw" "$target")"
@@ -87,6 +87,27 @@ ERR
 exit 1
 EOF
   chmod +x "$fixture/fake-bin/curl"
+}
+
+make_uname_stub_bin() {
+  local fixture="$1"
+  local stub_platform="$2"
+  local stub_arch="$3"
+  mkdir -p "$fixture/fake-bin"
+  cat >"$fixture/fake-bin/uname" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "\${1:-}" in
+  -s) printf '%s\n' "$stub_platform" ;;
+  -m) printf '%s\n' "$stub_arch" ;;
+  *)
+    echo "unexpected uname invocation: \$*" >&2
+    exit 1
+    ;;
+esac
+EOF
+  chmod +x "$fixture/fake-bin/uname"
 }
 
 run_release_override_install_and_onboard_test() {
@@ -157,8 +178,31 @@ run_missing_release_guidance_test() {
   assert_contains "$output_file" "bash scripts/install.sh --source --onboard"
 }
 
+run_standalone_linux_arm64_install_test() {
+  local fixture install_dir output_file standalone_script
+  fixture="$(make_release_fixture "v0.1.2" "aarch64-unknown-linux-gnu")"
+  trap 'rm -rf "$fixture"' RETURN
+  install_dir="$fixture/install"
+  output_file="$fixture/standalone-install.out"
+  standalone_script="$fixture/install.sh"
+  cp "$SCRIPT_UNDER_TEST" "$standalone_script"
+  chmod +x "$standalone_script"
+  make_uname_stub_bin "$fixture" "Linux" "aarch64"
+
+  (
+    cd "$fixture"
+    PATH="$fixture/fake-bin:$PATH" \
+      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      bash "$standalone_script" --version v0.1.2 --prefix "$install_dir" >"$output_file" 2>&1
+  )
+
+  [[ -x "$install_dir/loongclaw" ]]
+  assert_contains "$output_file" "Installed loongclaw"
+}
+
 run_release_override_install_and_onboard_test
 run_checksum_mismatch_fails_test
 run_missing_release_guidance_test
+run_standalone_linux_arm64_install_test
 
 echo "install.sh smoke checks passed"

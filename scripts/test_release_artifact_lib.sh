@@ -54,6 +54,9 @@ EOF
     "loongclaw-v0.1.2-aarch64-apple-darwin.tar.gz" \
     "$(release_archive_name "loongclaw" "v0.1.2" "aarch64-apple-darwin")"
   assert_equals \
+    "loongclaw-v0.1.2-aarch64-unknown-linux-gnu.tar.gz" \
+    "$(release_archive_name "loongclaw" "v0.1.2" "aarch64-unknown-linux-gnu")"
+  assert_equals \
     "loongclaw-v0.1.2-x86_64-pc-windows-msvc.zip" \
     "$(release_archive_name "loongclaw" "v0.1.2" "x86_64-pc-windows-msvc")"
   assert_equals \
@@ -62,6 +65,9 @@ EOF
   assert_equals \
     "x86_64-unknown-linux-gnu" \
     "$(release_target_for_platform "Linux" "x86_64")"
+  assert_equals \
+    "aarch64-unknown-linux-gnu" \
+    "$(release_target_for_platform "Linux" "arm64")"
   assert_equals \
     "x86_64-apple-darwin" \
     "$(release_target_for_platform "Darwin" "x86_64")"
