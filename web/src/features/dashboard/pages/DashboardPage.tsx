@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Panel } from "../../../components/surfaces/Panel";
 import { ApiRequestError } from "../../../lib/api/client";
 import { useWebConnection } from "../../../hooks/useWebConnection";
+import { onboardingApi } from "../../onboarding/api";
 import {
   dashboardApi,
   type DashboardConnectivity,
@@ -68,6 +69,64 @@ function formatShellPolicy(
   }
 }
 
+function formatPromptMode(
+  promptMode: string | null | undefined,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  if (!promptMode) {
+    return t("dashboard.values.notSet");
+  }
+
+  switch (promptMode) {
+    case "native_prompt_pack":
+      return t("dashboard.values.nativePrompt");
+    case "inline_prompt":
+      return t("dashboard.values.inlinePrompt");
+    default:
+      return promptMode;
+  }
+}
+
+function formatPersonality(
+  personality: string | null | undefined,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  if (!personality) {
+    return t("dashboard.values.notSet");
+  }
+
+  switch (personality) {
+    case "calm_engineering":
+      return t("dashboard.values.personalityCalmEngineering");
+    case "friendly_collab":
+      return t("dashboard.values.personalityFriendlyCollab");
+    case "autonomous_executor":
+      return t("dashboard.values.personalityAutonomousExecutor");
+    default:
+      return personality;
+  }
+}
+
+function formatMemoryProfile(
+  memoryProfile: string | null | undefined,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  if (!memoryProfile) {
+    return t("dashboard.values.notSet");
+  }
+
+  switch (memoryProfile) {
+    case "window_only":
+      return t("dashboard.values.memoryProfileWindowOnly");
+    case "window_plus_summary":
+      return t("dashboard.values.memoryProfileWindowPlusSummary");
+    case "profile_plus_window":
+      return t("dashboard.values.memoryProfileProfilePlusWindow");
+    default:
+      return memoryProfile;
+  }
+}
+
 function readDashboardError(
   error: unknown,
   t: ReturnType<typeof useTranslation>["t"],
@@ -125,7 +184,13 @@ function buildConnectivityCopy(
 
 export default function DashboardPage() {
   const { t } = useTranslation();
-  const { canAccessProtectedApi, authRevision, markUnauthorized, status } =
+  const {
+    canAccessProtectedApi,
+    authRevision,
+    markUnauthorized,
+    refreshOnboardingStatus,
+    status,
+  } =
     useWebConnection();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [providers, setProviders] = useState<DashboardProviderItem[]>([]);
@@ -134,6 +199,41 @@ export default function DashboardPage() {
   const [config, setConfig] = useState<DashboardConfigSnapshot | null>(null);
   const [tools, setTools] = useState<DashboardTools | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [providerKind, setProviderKind] = useState("");
+  const [providerModel, setProviderModel] = useState("");
+  const [providerRoute, setProviderRoute] = useState("");
+  const [providerApiKey, setProviderApiKey] = useState("");
+  const [providerApiKeyDirty, setProviderApiKeyDirty] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [isRefreshingDiagnostics, setIsRefreshingDiagnostics] = useState(false);
+
+  async function reloadDashboardData() {
+    setError(null);
+    const [
+      loadedSummary,
+      loadedProviders,
+      loadedRuntime,
+      loadedConnectivity,
+      loadedConfig,
+      loadedTools,
+    ] = await Promise.all([
+      dashboardApi.loadSummary(),
+      dashboardApi.loadProviders(),
+      dashboardApi.loadRuntime(),
+      dashboardApi.loadConnectivity(),
+      dashboardApi.loadConfig(),
+      dashboardApi.loadTools(),
+    ]);
+
+    setSummary(loadedSummary);
+    setProviders(loadedProviders.items);
+    setRuntime(loadedRuntime);
+    setConnectivity(loadedConnectivity);
+    setConfig(loadedConfig);
+    setTools(loadedTools);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -155,33 +255,9 @@ export default function DashboardPage() {
       };
     }
 
-    async function loadDashboard() {
-      setError(null);
+    async function loadDashboardSnapshot() {
       try {
-        const [
-          loadedSummary,
-          loadedProviders,
-          loadedRuntime,
-          loadedConnectivity,
-          loadedConfig,
-          loadedTools,
-        ] = await Promise.all([
-          dashboardApi.loadSummary(),
-          dashboardApi.loadProviders(),
-          dashboardApi.loadRuntime(),
-          dashboardApi.loadConnectivity(),
-          dashboardApi.loadConfig(),
-          dashboardApi.loadTools(),
-        ]);
-
-        if (!cancelled) {
-          setSummary(loadedSummary);
-          setProviders(loadedProviders.items);
-          setRuntime(loadedRuntime);
-          setConnectivity(loadedConnectivity);
-          setConfig(loadedConfig);
-          setTools(loadedTools);
-        }
+        await reloadDashboardData();
       } catch (loadError) {
         if (!cancelled) {
           setError(readDashboardError(loadError, t, markUnauthorized));
@@ -189,7 +265,7 @@ export default function DashboardPage() {
       }
     }
 
-    void loadDashboard();
+    void loadDashboardSnapshot();
 
     return () => {
       cancelled = true;
@@ -207,6 +283,9 @@ export default function DashboardPage() {
   const enabledTools = tools?.items.filter((item) => item.enabled).length ?? 0;
   const approvalDisplay = formatApprovalMode(tools?.approvalMode, t);
   const shellPolicyDisplay = formatShellPolicy(tools?.shellDefaultMode, t);
+  const promptModeDisplay = formatPromptMode(config?.promptMode, t);
+  const personalityDisplay = formatPersonality(config?.personality, t);
+  const memoryProfileDisplay = formatMemoryProfile(config?.memoryProfile, t);
   const connectivityCopy = buildConnectivityCopy(connectivity, t);
 
   const summaryCards: SummaryCard[] = [
@@ -271,6 +350,69 @@ export default function DashboardPage() {
   ];
 
   const toolItems: DashboardToolItem[] = tools?.items ?? [];
+
+  useEffect(() => {
+    setProviderKind(activeProvider?.id ?? providers[0]?.id ?? "");
+    setProviderModel(config?.model ?? "");
+    setProviderRoute(config?.endpoint ?? "");
+    setProviderApiKey(config?.apiKeyConfigured ? config.apiKeyMasked ?? "••••••••" : "");
+    setProviderApiKeyDirty(false);
+    setSettingsError(null);
+  }, [activeProvider?.id, config?.endpoint, config?.model, providers]);
+
+  async function handleRefreshDiagnostics() {
+    setSettingsError(null);
+    setSettingsNotice(null);
+    setIsRefreshingDiagnostics(true);
+    try {
+      await reloadDashboardData();
+      setSettingsNotice(t("dashboard.settings.refreshed"));
+    } catch (loadError) {
+      setSettingsError(readDashboardError(loadError, t, markUnauthorized));
+    } finally {
+      setIsRefreshingDiagnostics(false);
+    }
+  }
+
+  async function handleApplySettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSettingsError(null);
+    setSettingsNotice(null);
+    setIsSavingSettings(true);
+    try {
+      await onboardingApi.saveProvider({
+        kind: providerKind,
+        model: providerModel,
+        baseUrlOrEndpoint: providerRoute,
+        ...(providerApiKeyDirty && providerApiKey.trim()
+          ? { apiKey: providerApiKey.trim() }
+          : {}),
+      });
+      setProviderApiKey("");
+      setProviderApiKeyDirty(false);
+      refreshOnboardingStatus();
+      await reloadDashboardData();
+      setSettingsNotice(t("dashboard.settings.saved"));
+    } catch (saveError) {
+      if (saveError instanceof ApiRequestError) {
+        if (saveError.status === 401) {
+          markUnauthorized();
+        }
+        setSettingsError(saveError.message);
+      } else {
+        setSettingsError(t("dashboard.settings.saveFailed"));
+      }
+    } finally {
+      setIsSavingSettings(false);
+    }
+  }
+
+  function handleApiKeyFocus() {
+    if (config?.apiKeyConfigured && !providerApiKeyDirty) {
+      setProviderApiKey("");
+      setProviderApiKeyDirty(true);
+    }
+  }
 
   return (
     <div className="page">
@@ -398,12 +540,13 @@ export default function DashboardPage() {
               <div className="settings-header">
                 <p className="panel-copy">{t("dashboard.settings.subtitle")}</p>
               </div>
-              <form className="settings-form" onSubmit={(event) => event.preventDefault()}>
+              <form className="settings-form" onSubmit={handleApplySettings}>
                 <label className="settings-field">
                   <span className="settings-label">{t("dashboard.settings.activeProvider")}</span>
                   <select
                     className="settings-input"
-                    defaultValue={activeProvider?.id ?? providers[0]?.id ?? ""}
+                    value={providerKind}
+                    onChange={(event) => setProviderKind(event.target.value)}
                   >
                     {providers.map((provider) => (
                       <option key={provider.id} value={provider.id}>
@@ -415,12 +558,20 @@ export default function DashboardPage() {
 
                 <label className="settings-field">
                   <span className="settings-label">{t("dashboard.settings.model")}</span>
-                  <input className="settings-input" defaultValue={config?.model ?? ""} />
+                  <input
+                    className="settings-input"
+                    value={providerModel}
+                    onChange={(event) => setProviderModel(event.target.value)}
+                  />
                 </label>
 
                 <label className="settings-field">
                   <span className="settings-label">{t("dashboard.settings.endpoint")}</span>
-                  <input className="settings-input" defaultValue={config?.endpoint ?? ""} />
+                  <input
+                    className="settings-input"
+                    value={providerRoute}
+                    onChange={(event) => setProviderRoute(event.target.value)}
+                  />
                 </label>
 
                 <label className="settings-field">
@@ -428,17 +579,50 @@ export default function DashboardPage() {
                   <input
                     className="settings-input"
                     type="password"
-                    defaultValue={config?.apiKeyMasked ?? ""}
+                    autoComplete="off"
+                    value={providerApiKey}
+                    onFocus={handleApiKeyFocus}
+                    onChange={(event) => {
+                      setProviderApiKey(event.target.value);
+                      setProviderApiKeyDirty(true);
+                    }}
+                    placeholder={
+                      config?.apiKeyConfigured
+                        ? ""
+                        : t("dashboard.settings.apiKeyPlaceholder")
+                    }
                   />
-                  <span className="settings-helper">{t("dashboard.settings.apiKeyMasked")}</span>
+                  <span className="settings-helper">
+                    {config?.apiKeyConfigured
+                      ? t("dashboard.settings.apiKeyMasked")
+                      : t("dashboard.settings.apiKeyHelper")}
+                  </span>
                 </label>
 
+                {settingsError ? (
+                  <p className="settings-note dashboard-error">{settingsError}</p>
+                ) : null}
+                {settingsNotice ? <p className="settings-note">{settingsNotice}</p> : null}
+
                 <div className="settings-actions">
-                  <button type="button" className="hero-btn hero-btn-secondary">
-                    {t("dashboard.settings.validate")}
+                  <button
+                    type="button"
+                    className="hero-btn hero-btn-secondary"
+                    onClick={handleRefreshDiagnostics}
+                    disabled={isRefreshingDiagnostics || isSavingSettings}
+                  >
+                    {isRefreshingDiagnostics
+                      ? t("dashboard.settings.validatePending")
+                      : t("dashboard.settings.validate")}
                   </button>
-                  <button type="submit" className="hero-btn hero-btn-primary">
-                    {t("dashboard.settings.apply")}
+                  <button
+                    type="submit"
+                    className="hero-btn hero-btn-primary"
+                    disabled={isSavingSettings || isRefreshingDiagnostics}
+                  >
+                    {isSavingSettings
+                      ? t("dashboard.settings.applyPending")
+                      : t("dashboard.settings.apply")}
                   </button>
                 </div>
 
@@ -535,8 +719,24 @@ export default function DashboardPage() {
               </div>
               <div className="dashboard-kv-row">
                 <span>{t("dashboard.fields.memoryProfile")}</span>
-                <strong title={config?.memoryProfile ?? t("dashboard.values.notSet")}>
-                  {config?.memoryProfile ?? t("dashboard.values.notSet")}
+                <strong title={memoryProfileDisplay}>
+                  {memoryProfileDisplay}
+                </strong>
+              </div>
+              <div className="dashboard-kv-row">
+                <span>{t("dashboard.fields.personality")}</span>
+                <strong title={personalityDisplay}>{personalityDisplay}</strong>
+              </div>
+              <div className="dashboard-kv-row">
+                <span>{t("dashboard.fields.promptMode")}</span>
+                <strong title={promptModeDisplay}>{promptModeDisplay}</strong>
+              </div>
+              <div className="dashboard-kv-row">
+                <span>{t("dashboard.fields.promptAddendum")}</span>
+                <strong>
+                  {config?.promptAddendumConfigured
+                    ? t("dashboard.values.configured")
+                    : t("dashboard.values.missing")}
                 </strong>
               </div>
               <div className="dashboard-kv-row">

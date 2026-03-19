@@ -21,8 +21,13 @@
   "memoryWindow": {
     "label": "Memory window",
     "value": "{{count}} turns",
-    "pending": "Reading config",
-    "hint": "This is the local sliding window currently fed back into the prompt."
+    "pending": "Reading config"
+  },
+  "currentModel": {
+    "label": "Current model",
+    "pending": "Reading model",
+    "provider": "Provider: {{provider}}",
+    "providerPending": "Reading provider"
   },
   "toolAssist": {
     "label": "Tool assist",

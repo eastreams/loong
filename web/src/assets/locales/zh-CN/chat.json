@@ -21,8 +21,13 @@
   "memoryWindow": {
     "label": "记忆窗口",
     "value": "{{count}} 轮",
-    "pending": "读取配置中",
-    "hint": "这里显示的是当前本地实例回灌进 prompt 的滑动窗口大小。"
+    "pending": "读取配置中"
+  },
+  "currentModel": {
+    "label": "当前模型",
+    "pending": "读取模型中",
+    "provider": "Provider：{{provider}}",
+    "providerPending": "Provider 读取中"
   },
   "toolAssist": {
     "label": "工具辅助",

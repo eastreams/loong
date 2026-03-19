@@ -503,7 +503,7 @@ html {
 .dashboard-stat-row,
 .dashboard-kv-row {
   display: grid;
-  grid-template-columns: 4.5rem minmax(0, 1fr);
+  grid-template-columns: 7.25rem minmax(0, 1fr);
   align-items: baseline;
   gap: 0.7rem;
   font-size: 0.84rem;
@@ -605,6 +605,10 @@ html {
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: right;
+}
+
+.dashboard-kv-row span {
+  white-space: nowrap;
 }
 
 .dashboard-kv-grid {
@@ -1314,6 +1318,22 @@ html {
   display: flex;
   gap: 0.75rem;
   justify-content: flex-end;
+}
+
+.onboarding-actions {
+  margin-top: 1.25rem;
+  padding-top: 0.5rem;
+}
+
+.onboarding-form {
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.onboarding-validation-note,
+.onboarding-validation-success {
+  margin-top: 1.25rem;
 }
 
 .dashboard-error {

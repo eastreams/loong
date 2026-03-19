@@ -218,6 +218,8 @@ export default function ChatPage() {
   const [activeTools, setActiveTools] = useState<ActiveToolStatus[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [memoryWindow, setMemoryWindow] = useState<number | null>(null);
+  const [currentModel, setCurrentModel] = useState("");
+  const [currentProvider, setCurrentProvider] = useState<string | null>(null);
   const [pendingAssistantId, setPendingAssistantId] = useState<string | null>(null);
   const [streamPhase, setStreamPhase] = useState<StreamPhase>("idle");
   const [loadingLabelIndex, setLoadingLabelIndex] = useState(0);
@@ -355,6 +357,8 @@ export default function ChatPage() {
         const config = await dashboardApi.loadConfig();
         if (!cancelled) {
           setMemoryWindow(config.slidingWindow);
+          setCurrentModel(config.model);
+          setCurrentProvider(config.activeProvider);
         }
       } catch (loadError) {
         if (!cancelled && loadError instanceof ApiRequestError && loadError.status === 401) {
@@ -795,7 +799,17 @@ export default function ChatPage() {
                     ? t("chat.memoryWindow.value", { count: memoryWindow })
                     : t("chat.memoryWindow.pending")}
                 </strong>
-                <span>{t("chat.memoryWindow.hint")}</span>
+              </div>
+              <div className="metric-card">
+                <span className="metric-label">{t("chat.currentModel.label")}</span>
+                <strong title={currentModel || t("chat.currentModel.pending")}>
+                  {currentModel || t("chat.currentModel.pending")}
+                </strong>
+                <span>
+                  {currentProvider
+                    ? t("chat.currentModel.provider", { provider: currentProvider })
+                    : t("chat.currentModel.providerPending")}
+                </span>
               </div>
             </div>
           </Panel>

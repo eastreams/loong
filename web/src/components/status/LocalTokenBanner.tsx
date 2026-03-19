@@ -4,11 +4,23 @@ import { useWebConnection } from "../../hooks/useWebConnection";
 
 export function LocalTokenBanner() {
   const { t } = useTranslation();
-  const { status, authRequired, tokenEnv, tokenPath, saveToken, clearToken } =
+  const {
+    status,
+    authRequired,
+    tokenEnv,
+    tokenPath,
+    saveToken,
+    clearToken,
+    onboardingStatus,
+  } =
     useWebConnection();
   const [tokenInput, setTokenInput] = useState("");
 
-  if (!authRequired || status === "connected") {
+  if (
+    !authRequired ||
+    status === "connected" ||
+    onboardingStatus?.blockingStage === "runtime_offline"
+  ) {
     return null;
   }
 

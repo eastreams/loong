@@ -43,6 +43,9 @@ export interface DashboardConfigSnapshot {
   endpoint: string;
   apiKeyConfigured: boolean;
   apiKeyMasked: string | null;
+  personality: string;
+  promptMode: string;
+  promptAddendumConfigured: boolean;
   memoryProfile: string;
   memorySystem: string;
   sqlitePath: string;

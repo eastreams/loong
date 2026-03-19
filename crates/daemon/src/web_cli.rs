@@ -134,6 +134,46 @@ struct MetaAuthPayload {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct OnboardStatusPayload {
+    runtime_online: bool,
+    token_required: bool,
+    token_paired: bool,
+    config_exists: bool,
+    config_loadable: bool,
+    provider_configured: bool,
+    provider_reachable: bool,
+    active_provider: Option<String>,
+    active_model: String,
+    provider_base_url: String,
+    provider_endpoint: String,
+    api_key_configured: bool,
+    config_path: String,
+    blocking_stage: &'static str,
+    next_action: &'static str,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OnboardProviderWriteRequest {
+    kind: String,
+    model: String,
+    base_url_or_endpoint: String,
+    api_key: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OnboardValidationPayload {
+    passed: bool,
+    endpoint_status: &'static str,
+    endpoint_status_code: Option<u16>,
+    credential_status: &'static str,
+    credential_status_code: Option<u16>,
+    status: OnboardStatusPayload,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DashboardSummaryPayload {
     runtime_status: &'static str,
     active_provider: Option<String>,
@@ -141,6 +181,20 @@ struct DashboardSummaryPayload {
     memory_backend: &'static str,
     session_count: usize,
     web_install_mode: &'static str,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProviderValidationResult {
+    endpoint_status: &'static str,
+    endpoint_status_code: Option<u16>,
+    credential_status: &'static str,
+    credential_status_code: Option<u16>,
+}
+
+impl ProviderValidationResult {
+    fn passed(self) -> bool {
+        self.endpoint_status == "reachable" && self.credential_status == "validated"
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -189,6 +243,9 @@ struct DashboardConfigPayload {
     endpoint: String,
     api_key_configured: bool,
     api_key_masked: Option<String>,
+    personality: String,
+    prompt_mode: &'static str,
+    prompt_addendum_configured: bool,
     memory_profile: String,
     memory_system: &'static str,
     sqlite_path: String,
@@ -325,6 +382,14 @@ impl WebApiError {
             message: message.into(),
         }
     }
+
+    fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            code: "bad_request",
+            message: message.into(),
+        }
+    }
 }
 
 impl IntoResponse for WebApiError {
@@ -359,7 +424,13 @@ async fn run_web_serve(config_path: Option<&str>, bind: &str) -> CliResult<()> {
         local_token_path,
         turn_streams: Mutex::new(HashMap::new()),
     });
+    let public_api = Router::new()
+        .route("/meta", get(meta))
+        .route("/onboard/status", get(onboard_status))
+        .with_state(state.clone());
     let protected_api = Router::new()
+        .route("/onboard/provider", post(onboard_provider))
+        .route("/onboard/validate", post(onboard_validate))
         .route("/dashboard/summary", get(dashboard_summary))
         .route("/dashboard/providers", get(dashboard_providers))
         .route("/dashboard/runtime", get(dashboard_runtime))
@@ -378,8 +449,7 @@ async fn run_web_serve(config_path: Option<&str>, bind: &str) -> CliResult<()> {
         .with_state(state.clone());
     let app = Router::new()
         .route("/healthz", get(healthz))
-        .route("/api/meta", get(meta))
-        .nest("/api", protected_api)
+        .nest("/api", public_api.merge(protected_api))
         .layer(middleware::from_fn(local_web_cors))
         .with_state(state);
 
@@ -470,6 +540,135 @@ async fn meta(State(state): State<Arc<WebApiState>>) -> Json<ApiEnvelope<MetaPay
             },
         },
     })
+}
+
+async fn onboard_status(
+    State(state): State<Arc<WebApiState>>,
+    headers: HeaderMap,
+) -> Json<ApiEnvelope<OnboardStatusPayload>> {
+    let token_paired =
+        extract_request_token(&headers).as_deref() == Some(state.local_token.as_str());
+    let payload = build_onboard_status_payload(state.as_ref(), token_paired).await;
+
+    Json(ApiEnvelope {
+        ok: true,
+        data: payload,
+    })
+}
+
+async fn onboard_provider(
+    State(state): State<Arc<WebApiState>>,
+    Json(request): Json<OnboardProviderWriteRequest>,
+) -> Result<Json<ApiEnvelope<OnboardStatusPayload>>, WebApiError> {
+    let kind = mvp::config::parse_provider_kind_id(request.kind.as_str()).ok_or_else(|| {
+        WebApiError::bad_request(format!(
+            "unknown provider kind `{}`",
+            request.kind.trim()
+        ))
+    })?;
+    let model = request.model.trim();
+    if model.is_empty() {
+        return Err(WebApiError::bad_request("model is required"));
+    }
+
+    let config_path = resolve_web_config_path(state.as_ref());
+    let config_exists = config_path.is_file();
+    let mut config = if config_exists {
+        let (_, loaded) = mvp::config::load(state.config_path.as_deref()).map_err(|error| {
+            WebApiError::bad_request(format!("local config could not be loaded: {error}"))
+        })?;
+        loaded
+    } else {
+        mvp::config::LoongClawConfig::default()
+    };
+
+    let existing_provider = config.provider.clone();
+    let kind_changed = existing_provider.kind != kind;
+    let mut provider = existing_provider.clone();
+    provider.set_kind(kind);
+    provider.model = model.to_owned();
+
+    let route = request.base_url_or_endpoint.trim();
+    if route.is_empty() {
+        provider.set_base_url(kind.profile().base_url.to_owned());
+        provider.set_chat_completions_path(kind.profile().chat_completions_path.to_owned());
+        provider.set_endpoint(None);
+        provider.set_models_endpoint(None);
+    } else if looks_like_provider_endpoint(route) {
+        provider.set_base_url(kind.profile().base_url.to_owned());
+        provider.set_chat_completions_path(kind.profile().chat_completions_path.to_owned());
+        provider.set_endpoint(Some(route.to_owned()));
+        provider.set_models_endpoint(None);
+    } else {
+        provider.set_base_url(route.to_owned());
+        provider.set_chat_completions_path(kind.profile().chat_completions_path.to_owned());
+        provider.set_endpoint(None);
+        provider.set_models_endpoint(None);
+    }
+
+    if let Some(api_key) = request
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        provider.api_key = Some(api_key.to_owned());
+    } else if kind_changed {
+        provider.api_key = None;
+        provider.set_api_key_env(kind.default_api_key_env().map(str::to_owned));
+        provider.oauth_access_token = None;
+        provider.set_oauth_access_token_env(kind.default_oauth_access_token_env().map(str::to_owned));
+    }
+
+    let profile_id = provider.inferred_profile_id();
+    config.set_active_provider_profile(
+        profile_id,
+        mvp::config::ProviderProfileConfig::from_provider(provider),
+    );
+
+    let path_string = config_path.display().to_string();
+    mvp::config::write(Some(path_string.as_str()), &config, true)
+        .map_err(WebApiError::internal)?;
+
+    let payload = build_onboard_status_payload(state.as_ref(), true).await;
+    Ok(Json(ApiEnvelope {
+        ok: true,
+        data: payload,
+    }))
+}
+
+async fn onboard_validate(
+    State(state): State<Arc<WebApiState>>,
+) -> Result<Json<ApiEnvelope<OnboardValidationPayload>>, WebApiError> {
+    let snapshot = load_web_snapshot(state.as_ref())?;
+    if !provider_is_configured(&snapshot.config) {
+        return Err(WebApiError::bad_request(
+            "provider is not configured enough to validate yet",
+        ));
+    }
+
+    let validation = validate_provider_config(&snapshot.config.provider).await;
+    let mut status = build_onboard_status_payload(state.as_ref(), true).await;
+    status.provider_reachable = validation.passed();
+    if validation.passed() {
+        status.blocking_stage = "ready";
+        status.next_action = "open_chat";
+    } else {
+        status.blocking_stage = "provider_unreachable";
+        status.next_action = "validate_provider_route";
+    }
+
+    Ok(Json(ApiEnvelope {
+        ok: true,
+        data: OnboardValidationPayload {
+            passed: validation.passed(),
+            endpoint_status: validation.endpoint_status,
+            endpoint_status_code: validation.endpoint_status_code,
+            credential_status: validation.credential_status,
+            credential_status_code: validation.credential_status_code,
+            status,
+        },
+    }))
 }
 
 async fn dashboard_summary(
@@ -586,6 +785,20 @@ async fn dashboard_config(
                 .map(|item| item.api_key_configured)
                 .unwrap_or(false),
             api_key_masked: active_provider.and_then(|item| item.api_key_masked),
+            personality: prompt_personality_id(snapshot.config.cli.resolved_personality())
+                .to_owned(),
+            prompt_mode: if snapshot.config.cli.uses_native_prompt_pack() {
+                "native_prompt_pack"
+            } else {
+                "inline_prompt"
+            },
+            prompt_addendum_configured: snapshot
+                .config
+                .cli
+                .system_prompt_addendum
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty()),
             memory_profile: snapshot.config.memory.resolved_profile().as_str().to_owned(),
             memory_system: snapshot.config.memory.resolved_system().as_str(),
             sqlite_path: snapshot.config.memory.resolved_sqlite_path().display().to_string(),
@@ -980,6 +1193,246 @@ async fn probe_provider_endpoint(endpoint: &str) -> (&'static str, Option<u16>) 
     }
 }
 
+fn build_provider_probe_headers(
+    provider: &mvp::config::ProviderConfig,
+) -> Result<reqwest::header::HeaderMap, WebApiError> {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+    for (name, value) in provider.kind.default_headers() {
+        let header_name = reqwest::header::HeaderName::from_static(name);
+        let header_value = HeaderValue::from_str(value).map_err(|error| {
+            WebApiError::internal(format!("build provider probe headers failed: {error}"))
+        })?;
+        headers.insert(header_name, header_value);
+    }
+
+    match provider.kind.auth_scheme() {
+        mvp::config::ProviderAuthScheme::Bearer => {
+            let Some(value) = provider.authorization_header() else {
+                return Ok(headers);
+            };
+            let header_value = HeaderValue::from_str(value.as_str()).map_err(|error| {
+                WebApiError::internal(format!("build provider probe headers failed: {error}"))
+            })?;
+            headers.insert(AUTHORIZATION, header_value);
+        }
+        mvp::config::ProviderAuthScheme::XApiKey => {
+            let Some(secret) = provider.resolved_auth_secret() else {
+                return Ok(headers);
+            };
+            let header_value = HeaderValue::from_str(secret.as_str()).map_err(|error| {
+                WebApiError::internal(format!("build provider probe headers failed: {error}"))
+            })?;
+            headers.insert(reqwest::header::HeaderName::from_static("x-api-key"), header_value);
+        }
+    }
+
+    Ok(headers)
+}
+
+fn provider_probe_model(provider: &mvp::config::ProviderConfig) -> String {
+    if let Some(model) = provider.explicit_model() {
+        return model;
+    }
+
+    match provider.model_catalog_probe_recovery() {
+        mvp::config::ModelCatalogProbeRecovery::ExplicitModel(model) => model,
+        mvp::config::ModelCatalogProbeRecovery::ConfiguredPreferredModels(models) => models
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| provider.configured_model_value()),
+        mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
+            recommended_onboarding_model: Some(model),
+        } => model.to_owned(),
+        mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
+            recommended_onboarding_model: None,
+        } => provider.configured_model_value(),
+    }
+}
+
+// Keep onboarding validation lightweight: probe the configured endpoint first, then try
+// a minimal authenticated request for providers that speak OpenAI-compatible chat.
+async fn validate_provider_config(
+    provider: &mvp::config::ProviderConfig,
+) -> ProviderValidationResult {
+    let endpoint = provider.endpoint();
+    let (endpoint_status, endpoint_status_code) = probe_provider_endpoint(endpoint.as_str()).await;
+    if endpoint_status != "reachable" {
+        return ProviderValidationResult {
+            endpoint_status,
+            endpoint_status_code,
+            credential_status: "transport_failure",
+            credential_status_code: None,
+        };
+    }
+
+    if provider.resolved_auth_secret().is_none() {
+        return ProviderValidationResult {
+            endpoint_status,
+            endpoint_status_code,
+            credential_status: "missing_credentials",
+            credential_status_code: None,
+        };
+    }
+
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+    else {
+        return ProviderValidationResult {
+            endpoint_status,
+            endpoint_status_code,
+            credential_status: "transport_failure",
+            credential_status_code: None,
+        };
+    };
+
+    let headers = match build_provider_probe_headers(provider) {
+        Ok(headers) => headers,
+        Err(_) => {
+            return ProviderValidationResult {
+                endpoint_status,
+                endpoint_status_code,
+                credential_status: "transport_failure",
+                credential_status_code: None,
+            };
+        }
+    };
+
+    let credential_result = match provider.kind.protocol_family() {
+        mvp::config::ProviderProtocolFamily::OpenAiChatCompletions => {
+            let request = json!({
+                "model": provider_probe_model(provider),
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "ping"
+                    }
+                ],
+                "max_tokens": 1,
+                "temperature": 0,
+                "stream": false
+            });
+
+            match client
+                .post(endpoint.as_str())
+                .headers(headers)
+                .json(&request)
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => {
+                    ("validated", Some(response.status().as_u16()))
+                }
+                Ok(response) if matches!(response.status().as_u16(), 401 | 403) => {
+                    ("auth_rejected", Some(response.status().as_u16()))
+                }
+                Ok(response) if response.status().is_server_error() => {
+                    ("upstream_unavailable", Some(response.status().as_u16()))
+                }
+                Ok(response) => ("request_rejected", Some(response.status().as_u16())),
+                Err(_) => ("transport_failure", None),
+            }
+        }
+        _ => match client.head(endpoint.as_str()).headers(headers).send().await {
+            Ok(response) if matches!(response.status().as_u16(), 401 | 403) => {
+                ("auth_rejected", Some(response.status().as_u16()))
+            }
+            Ok(response) if response.status().is_success() || response.status().as_u16() == 405 => {
+                ("validated", Some(response.status().as_u16()))
+            }
+            Ok(response) if response.status().is_server_error() => {
+                ("upstream_unavailable", Some(response.status().as_u16()))
+            }
+            Ok(response) => ("request_rejected", Some(response.status().as_u16())),
+            Err(_) => ("transport_failure", None),
+        },
+    };
+
+    ProviderValidationResult {
+        endpoint_status,
+        endpoint_status_code,
+        credential_status: credential_result.0,
+        credential_status_code: credential_result.1,
+    }
+}
+
+async fn probe_provider_reachability(provider: &mvp::config::ProviderConfig) -> bool {
+    let validation = validate_provider_headers_only(provider).await;
+    validation.endpoint_status == "reachable"
+        && !matches!(
+            validation.credential_status,
+            "transport_failure" | "missing_credentials" | "auth_rejected"
+        )
+}
+
+async fn validate_provider_headers_only(
+    provider: &mvp::config::ProviderConfig,
+) -> ProviderValidationResult {
+    let endpoint = provider.endpoint();
+    let (endpoint_status, endpoint_status_code) = probe_provider_endpoint(endpoint.as_str()).await;
+    if endpoint_status != "reachable" {
+        return ProviderValidationResult {
+            endpoint_status,
+            endpoint_status_code,
+            credential_status: "transport_failure",
+            credential_status_code: None,
+        };
+    }
+
+    if provider.resolved_auth_secret().is_none() {
+        return ProviderValidationResult {
+            endpoint_status,
+            endpoint_status_code,
+            credential_status: "missing_credentials",
+            credential_status_code: None,
+        };
+    }
+
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+    else {
+        return ProviderValidationResult {
+            endpoint_status,
+            endpoint_status_code,
+            credential_status: "transport_failure",
+            credential_status_code: None,
+        };
+    };
+
+    let headers = match build_provider_probe_headers(provider) {
+        Ok(headers) => headers,
+        Err(_) => {
+            return ProviderValidationResult {
+                endpoint_status,
+                endpoint_status_code,
+                credential_status: "transport_failure",
+                credential_status_code: None,
+            };
+        }
+    };
+
+    let credential_result = match client.head(endpoint.as_str()).headers(headers).send().await {
+        Ok(response) if matches!(response.status().as_u16(), 401 | 403) => {
+            ("auth_rejected", Some(response.status().as_u16()))
+        }
+        Ok(response) if response.status().is_server_error() => {
+            ("upstream_unavailable", Some(response.status().as_u16()))
+        }
+        Ok(response) => ("validated", Some(response.status().as_u16())),
+        Err(_) => ("transport_failure", None),
+    };
+
+    ProviderValidationResult {
+        endpoint_status,
+        endpoint_status_code,
+        credential_status: credential_result.0,
+        credential_status_code: credential_result.1,
+    }
+}
+
 fn build_provider_items(config: &mvp::config::LoongClawConfig) -> Vec<ProviderItemPayload> {
     if config.providers.is_empty() {
         return vec![provider_item_from_parts(
@@ -1002,6 +1455,100 @@ fn build_provider_items(config: &mvp::config::LoongClawConfig) -> Vec<ProviderIt
             )
         })
         .collect()
+}
+
+fn provider_is_configured(config: &mvp::config::LoongClawConfig) -> bool {
+    let provider = &config.provider;
+    let item = provider_item_from_parts("active".to_owned(), provider, true, true);
+    !provider.model.trim().is_empty()
+        && !provider.endpoint().trim().is_empty()
+        && item.api_key_configured
+}
+
+async fn build_onboard_status_payload(
+    state: &WebApiState,
+    token_paired: bool,
+) -> OnboardStatusPayload {
+    let config_path = resolve_web_config_path(state);
+    let config_exists = config_path.is_file();
+    let config_path_display = config_path.display().to_string();
+
+    let mut payload = OnboardStatusPayload {
+        runtime_online: true,
+        token_required: true,
+        token_paired,
+        config_exists,
+        config_loadable: false,
+        provider_configured: false,
+        provider_reachable: false,
+        active_provider: None,
+        active_model: String::new(),
+        provider_base_url: String::new(),
+        provider_endpoint: String::new(),
+        api_key_configured: false,
+        config_path: config_path_display,
+        blocking_stage: "token_pairing",
+        next_action: "enter_local_token",
+    };
+
+    match load_web_snapshot(state) {
+        Ok(snapshot) => {
+            payload.config_loadable = true;
+            payload.active_provider = snapshot.config.active_provider_id().map(str::to_owned);
+            payload.active_model = snapshot.config.provider.model.clone();
+            payload.provider_base_url = snapshot.config.provider.resolved_base_url();
+            payload.provider_endpoint = snapshot.config.provider.endpoint();
+            payload.provider_configured = provider_is_configured(&snapshot.config);
+            payload.api_key_configured = provider_item_from_parts(
+                "active".to_owned(),
+                &snapshot.config.provider,
+                true,
+                true,
+            )
+            .api_key_configured;
+
+            if payload.provider_configured {
+                payload.provider_reachable =
+                    probe_provider_reachability(&snapshot.config.provider).await;
+            }
+        }
+        Err(_) => {
+            payload.config_loadable = false;
+        }
+    }
+
+    let (blocking_stage, next_action) = if !payload.token_paired {
+        ("token_pairing", "enter_local_token")
+    } else if !payload.config_exists {
+        ("missing_config", "create_local_config")
+    } else if !payload.config_loadable {
+        ("config_invalid", "fix_local_config")
+    } else if !payload.provider_configured {
+        ("provider_setup", "configure_provider")
+    } else if !payload.provider_reachable {
+        ("provider_unreachable", "validate_provider_route")
+    } else {
+        ("ready", "open_chat")
+    };
+    payload.blocking_stage = blocking_stage;
+    payload.next_action = next_action;
+    payload
+}
+
+fn looks_like_provider_endpoint(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    (normalized.starts_with("http://") || normalized.starts_with("https://"))
+        && (normalized.contains("/chat/completions")
+            || normalized.ends_with("/completions")
+            || normalized.ends_with("/responses"))
+}
+
+fn prompt_personality_id(personality: mvp::prompt::PromptPersonality) -> &'static str {
+    match personality {
+        mvp::prompt::PromptPersonality::CalmEngineering => "calm_engineering",
+        mvp::prompt::PromptPersonality::FriendlyCollab => "friendly_collab",
+        mvp::prompt::PromptPersonality::AutonomousExecutor => "autonomous_executor",
+    }
 }
 
 fn provider_item_from_parts(
@@ -1110,6 +1657,14 @@ fn resolve_local_web_token() -> Result<(String, PathBuf), WebApiError> {
     fs::write(&token_path, format!("{token}\n"))
         .map_err(|error| WebApiError::internal(format!("write local web api token failed: {error}")))?;
     Ok((token, token_path))
+}
+
+fn resolve_web_config_path(state: &WebApiState) -> PathBuf {
+    state
+        .config_path
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(mvp::config::default_config_path)
 }
 
 fn extract_request_token(headers: &HeaderMap) -> Option<String> {
