@@ -396,6 +396,25 @@ fn rewrite_runtime_capability_proposal(
     .expect("persist runtime capability artifact");
 }
 
+fn rewrite_runtime_capability_schema(candidate_path: &Path, surface: &str, purpose: &str) {
+    let mut payload = serde_json::from_str::<Value>(
+        &fs::read_to_string(candidate_path).expect("read runtime capability artifact"),
+    )
+    .expect("decode runtime capability artifact");
+    let schema = payload
+        .as_object_mut()
+        .and_then(|artifact| artifact.get_mut("schema"))
+        .and_then(Value::as_object_mut)
+        .expect("runtime capability artifact should include schema");
+    schema.insert("surface".to_owned(), Value::String(surface.to_owned()));
+    schema.insert("purpose".to_owned(), Value::String(purpose.to_owned()));
+    fs::write(
+        candidate_path,
+        serde_json::to_string_pretty(&payload).expect("encode runtime capability artifact"),
+    )
+    .expect("persist runtime capability artifact");
+}
+
 fn try_symlink_dir(original: &Path, link: &Path) -> bool {
     #[cfg(unix)]
     {
@@ -678,6 +697,97 @@ fn runtime_capability_show_rejects_inconsistent_review_state() {
     .expect_err("inconsistent review state should be rejected");
 
     assert!(error.contains("inconsistent"), "error: {error}");
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_show_rejects_wrong_schema_purpose() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-show-wrong-purpose");
+    let config_path = write_runtime_capability_config(&root);
+    let (run_path, _) = finish_runtime_experiment(&root, &config_path);
+    let candidate_path = root.join("artifacts/runtime-capability.json");
+
+    loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_propose_command(
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityProposeCommandOptions {
+            run: run_path.display().to_string(),
+            output: candidate_path.display().to_string(),
+            target: loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
+            target_summary: "Codify browser preview onboarding as a reusable managed skill"
+                .to_owned(),
+            bounded_scope: "Browser preview onboarding and companion readiness checks only"
+                .to_owned(),
+            required_capability: vec!["invoke_tool".to_owned(), "memory_read".to_owned()],
+            tag: vec!["browser".to_owned(), "onboarding".to_owned()],
+            label: Some("browser-preview-invalid-schema".to_owned()),
+            json: false,
+        },
+    )
+    .expect("runtime capability propose should succeed");
+
+    rewrite_runtime_capability_schema(
+        &candidate_path,
+        "runtime_capability",
+        "promotion_plan_record",
+    );
+
+    let error = loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_show_command(
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityShowCommandOptions {
+            candidate: candidate_path.display().to_string(),
+            json: false,
+        },
+    )
+    .expect_err("wrong-purpose artifacts should be rejected");
+
+    assert!(error.contains("unsupported schema"), "error: {error}");
+    assert!(error.contains("promotion_plan_record"), "error: {error}");
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_show_rejects_wrong_schema_surface() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-show-wrong-surface");
+    let config_path = write_runtime_capability_config(&root);
+    let (run_path, _) = finish_runtime_experiment(&root, &config_path);
+    let candidate_path = root.join("artifacts/runtime-capability.json");
+
+    loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_propose_command(
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityProposeCommandOptions {
+            run: run_path.display().to_string(),
+            output: candidate_path.display().to_string(),
+            target: loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
+            target_summary: "Codify browser preview onboarding as a reusable managed skill"
+                .to_owned(),
+            bounded_scope: "Browser preview onboarding and companion readiness checks only"
+                .to_owned(),
+            required_capability: vec!["invoke_tool".to_owned(), "memory_read".to_owned()],
+            tag: vec!["browser".to_owned(), "onboarding".to_owned()],
+            label: Some("browser-preview-invalid-schema".to_owned()),
+            json: false,
+        },
+    )
+    .expect("runtime capability propose should succeed");
+
+    rewrite_runtime_capability_schema(
+        &candidate_path,
+        "runtime_capability_preview",
+        "promotion_candidate_record",
+    );
+
+    let error = loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_show_command(
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityShowCommandOptions {
+            candidate: candidate_path.display().to_string(),
+            json: false,
+        },
+    )
+    .expect_err("wrong-surface artifacts should be rejected");
+
+    assert!(error.contains("unsupported schema"), "error: {error}");
+    assert!(
+        error.contains("runtime_capability_preview"),
+        "error: {error}"
+    );
 
     fs::remove_dir_all(&root).ok();
 }
@@ -1074,6 +1184,66 @@ fn runtime_capability_index_rejects_malformed_supported_artifact_during_scan() {
     assert!(
         error.contains("inconsistent reviewed state"),
         "error should surface the invalid review state: {error}"
+    );
+    assert!(
+        error.contains(&invalid_candidate_path.display().to_string()),
+        "error should identify the malformed artifact path: {error}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_index_rejects_wrong_schema_purpose_during_scan() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-index-wrong-purpose");
+    let config_path = write_runtime_capability_config(&root);
+    let (valid_run_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "valid",
+        -0.2,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let (invalid_run_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "invalid",
+        -0.4,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+
+    let (valid_candidate_path, _) =
+        propose_runtime_capability_variant(&root, &valid_run_path, "valid");
+    review_runtime_capability_variant(
+        &valid_candidate_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "valid",
+    );
+    let (invalid_candidate_path, _) =
+        propose_runtime_capability_variant(&root, &invalid_run_path, "invalid");
+    rewrite_runtime_capability_schema(
+        &invalid_candidate_path,
+        "runtime_capability",
+        "promotion_plan_record",
+    );
+
+    let error = loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_index_command(
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityIndexCommandOptions {
+            root: root.join("artifacts").display().to_string(),
+            json: false,
+        },
+    )
+    .expect_err("wrong-purpose supported artifacts should abort index scans");
+
+    assert!(
+        error.contains("unsupported schema purpose"),
+        "error should surface the invalid schema purpose: {error}"
+    );
+    assert!(
+        error.contains("promotion_plan_record"),
+        "error should surface the invalid purpose value: {error}"
     );
     assert!(
         error.contains(&invalid_candidate_path.display().to_string()),

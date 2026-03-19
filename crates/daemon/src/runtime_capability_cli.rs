@@ -17,6 +17,8 @@ use std::{
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const RUNTIME_CAPABILITY_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 1;
+pub const RUNTIME_CAPABILITY_ARTIFACT_SURFACE: &str = "runtime_capability";
+pub const RUNTIME_CAPABILITY_ARTIFACT_PURPOSE: &str = "promotion_candidate_record";
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeCapabilityCommands {
@@ -348,8 +350,8 @@ pub fn execute_runtime_capability_propose_command(
     let artifact = RuntimeCapabilityArtifactDocument {
         schema: RuntimeCapabilityArtifactSchema {
             version: RUNTIME_CAPABILITY_ARTIFACT_JSON_SCHEMA_VERSION,
-            surface: "runtime_capability".to_owned(),
-            purpose: "promotion_candidate_record".to_owned(),
+            surface: RUNTIME_CAPABILITY_ARTIFACT_SURFACE.to_owned(),
+            purpose: RUNTIME_CAPABILITY_ARTIFACT_PURPOSE.to_owned(),
         },
         candidate_id,
         created_at,
@@ -589,8 +591,32 @@ fn load_runtime_capability_artifact(path: &Path) -> CliResult<RuntimeCapabilityA
             RUNTIME_CAPABILITY_ARTIFACT_JSON_SCHEMA_VERSION
         ));
     }
+    validate_runtime_capability_artifact_schema(&artifact, path)?;
     validate_runtime_capability_artifact_state(&artifact, path)?;
     Ok(artifact)
+}
+
+fn validate_runtime_capability_artifact_schema(
+    artifact: &RuntimeCapabilityArtifactDocument,
+    path: &Path,
+) -> CliResult<()> {
+    if artifact.schema.surface != RUNTIME_CAPABILITY_ARTIFACT_SURFACE {
+        return Err(format!(
+            "runtime capability artifact {} uses unsupported schema surface {}; expected {}",
+            path.display(),
+            artifact.schema.surface,
+            RUNTIME_CAPABILITY_ARTIFACT_SURFACE
+        ));
+    }
+    if artifact.schema.purpose != RUNTIME_CAPABILITY_ARTIFACT_PURPOSE {
+        return Err(format!(
+            "runtime capability artifact {} uses unsupported schema purpose {}; expected {}",
+            path.display(),
+            artifact.schema.purpose,
+            RUNTIME_CAPABILITY_ARTIFACT_PURPOSE
+        ));
+    }
+    Ok(())
 }
 
 fn validate_runtime_capability_artifact_state(
@@ -706,7 +732,7 @@ fn load_supported_runtime_capability_artifact(
     else {
         return Ok(None);
     };
-    if surface != "runtime_capability" {
+    if surface != RUNTIME_CAPABILITY_ARTIFACT_SURFACE {
         return Ok(None);
     }
     load_runtime_capability_artifact(path).map(Some)
