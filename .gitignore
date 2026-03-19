@@ -8,3 +8,5 @@
 .vscode
 .zed
 .claude
+__pycache__/
+*.pyc
