@@ -1098,19 +1098,35 @@ impl ProviderConfig {
 
     pub fn missing_auth_configuration_message(&self) -> String {
         let env_names = self.auth_hint_env_names();
-        let mut message = if env_names.is_empty() {
-            "provider credentials are missing; configure provider credentials or add supported auth headers".to_owned()
-        } else {
-            format!(
-                "provider credentials are missing; configure provider credentials or set {} in env",
-                env_names.join(", ")
-            )
-        };
+        let mut configuration_paths = vec!["configure provider credentials".to_owned()];
+        if !env_names.is_empty() {
+            configuration_paths.push(format!("set {} in env", env_names.join(", ")));
+        }
+        if let Some(hint) = self.alternative_auth_configuration_hint() {
+            configuration_paths.push(hint);
+        }
+        let mut message = format!(
+            "provider credentials are missing; {}",
+            join_guidance_options(&configuration_paths)
+        );
         if let Some(hint) = self.auth_guidance_hint() {
             message.push(' ');
             message.push_str(hint.as_str());
         }
         message
+    }
+
+    fn alternative_auth_configuration_hint(&self) -> Option<String> {
+        if self.kind == ProviderKind::Bedrock {
+            Some(
+                "configure AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY with AWS_REGION or AWS_DEFAULT_REGION for SigV4"
+                    .to_owned(),
+            )
+        } else if self.kind == ProviderKind::Custom {
+            Some("add `Authorization` / `X-API-Key` in `provider.headers`".to_owned())
+        } else {
+            None
+        }
     }
 
     pub fn transport_policy(&self) -> ProviderTransportPolicy {
@@ -3203,6 +3219,24 @@ fn push_inline_env_reference(keys: &mut Vec<String>, maybe_secret: Option<&str>)
         return;
     };
     push_unique_env_key(keys, parse_explicit_env_reference(secret));
+}
+
+fn join_guidance_options(options: &[String]) -> String {
+    let Some((last, rest)) = options.split_last() else {
+        return String::new();
+    };
+
+    if let [first] = rest {
+        return format!("{first} or {last}");
+    }
+    if rest.is_empty() {
+        return last.clone();
+    }
+
+    let mut joined = rest.join(", ");
+    joined.push_str(", or ");
+    joined.push_str(last);
+    joined
 }
 
 fn non_empty(value: Option<&str>) -> Option<&str> {
