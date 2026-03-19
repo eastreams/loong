@@ -2560,10 +2560,10 @@ mod tests {
             .descriptor("sessions_send")
             .expect("sessions_send descriptor");
         let definition = descriptor.provider_definition();
-        let description = definition["function"]["parameters"]["properties"]["session_id"]
-            ["description"]
-            .as_str()
-            .expect("session_id description");
+        let description =
+            definition["function"]["parameters"]["properties"]["session_id"]["description"]
+                .as_str()
+                .expect("session_id description");
 
         assert!(description.contains("channel-backed"));
         assert!(description.contains("Matrix"));

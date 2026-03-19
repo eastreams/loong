@@ -232,8 +232,8 @@ fn merge_matrix_config(
         changed = true;
     }
     if let Some(source_access_token_env) = source.access_token_env.as_ref() {
-        let target_uses_default_env =
-            target.access_token_env.is_none() || target.access_token_env == default.access_token_env;
+        let target_uses_default_env = target.access_token_env.is_none()
+            || target.access_token_env == default.access_token_env;
         if target_uses_default_env
             && target.access_token_env.as_ref() != Some(source_access_token_env)
         {
@@ -400,7 +400,11 @@ mod tests {
         let checks = collect_doctor_checks(&config);
 
         assert_eq!(checks.len(), 2);
-        assert!(checks.iter().all(|check| check.level == ChannelCheckLevel::Pass));
+        assert!(
+            checks
+                .iter()
+                .all(|check| check.level == ChannelCheckLevel::Pass)
+        );
     }
 
     #[test]
@@ -435,7 +439,10 @@ mod tests {
         );
         let account = target.accounts.get("ops").expect("merged matrix account");
         assert_eq!(account.user_id.as_deref(), Some("@ops-bot:example.org"));
-        assert_eq!(account.access_token_env.as_deref(), Some("CUSTOM_MATRIX_TOKEN"));
+        assert_eq!(
+            account.access_token_env.as_deref(),
+            Some("CUSTOM_MATRIX_TOKEN")
+        );
         assert_eq!(
             account.base_url.as_deref(),
             Some("https://matrix.example.org")

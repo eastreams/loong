@@ -1810,12 +1810,15 @@ mod tests {
         let mut config = mvp::config::LoongClawConfig::default();
         config.telegram.enabled = true;
         config.telegram.bot_token = Some("123456:test-token".to_owned());
+        config.telegram.allowed_chat_ids = vec![123_i64];
         config.feishu.enabled = true;
         config.feishu.app_id = Some("cli_a1b2c3".to_owned());
         config.feishu.app_secret = Some("feishu-secret".to_owned());
         config.matrix.enabled = true;
         config.matrix.access_token = Some("matrix-token".to_owned());
         config.matrix.base_url = Some("https://matrix.example.org".to_owned());
+        config.matrix.allowed_room_ids = vec!["!ops:example.org".to_owned()];
+        config.matrix.user_id = Some("@ops-bot:example.org".to_owned());
 
         let checks = check_channel_surfaces(&config);
         let names = checks

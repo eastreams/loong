@@ -193,7 +193,11 @@ mod tests {
 
     #[test]
     fn parse_route_session_id_keeps_raw_matrix_ids_opaque() {
-        for raw in ["!ops:example.org", "$thread:example.org", "@bot:example.org"] {
+        for raw in [
+            "!ops:example.org",
+            "$thread:example.org",
+            "@bot:example.org",
+        ] {
             assert_eq!(
                 parse_route_session_id(raw).expect("parse route session id"),
                 None,
