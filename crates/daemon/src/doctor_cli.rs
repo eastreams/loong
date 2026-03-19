@@ -3,7 +3,6 @@ use std::env;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use kernel::probe_jsonl_audit_journal_runtime_ready;
 use loongclaw_app as mvp;
@@ -11,7 +10,6 @@ use loongclaw_spec::CliResult;
 use serde_json::json;
 
 const MODEL_CATALOG_PROBE_FAILED_MARKER: &str = "model catalog probe failed";
-static AUDIT_RUNTIME_PROBE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
 pub struct DoctorCommandOptions {
@@ -367,54 +365,84 @@ fn durable_audit_metadata_issue(path: &Path) -> Option<String> {
 }
 
 fn durable_audit_runtime_probe(path: &Path) -> Result<(), String> {
-    let directory = path.parent().unwrap_or(Path::new(""));
-    if !directory.as_os_str().is_empty() && !directory.exists() {
-        return Ok(());
-    }
-
-    let use_existing_path = path.is_file();
-    let probe_path = if use_existing_path {
-        path.to_path_buf()
-    } else {
-        durable_audit_probe_path(path)
-    };
-    let probe_result = probe_jsonl_audit_journal_runtime_ready(&probe_path).map_err(|error| {
+    let path_entry_existed = fs::symlink_metadata(path).is_ok();
+    let created_directories = durable_audit_missing_parent_dirs(path);
+    let probe_result = probe_jsonl_audit_journal_runtime_ready(path).map_err(|error| {
         format!(
             "runtime open + lock probe failed for {}: {error}",
             path.display()
         )
     });
+    let cleanup_result =
+        durable_audit_runtime_probe_cleanup(path, path_entry_existed, &created_directories);
 
-    if !use_existing_path {
-        match fs::remove_file(&probe_path) {
-            Ok(()) => {}
+    match (probe_result, cleanup_result) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+fn durable_audit_missing_parent_dirs(path: &Path) -> Vec<PathBuf> {
+    let mut missing = Vec::new();
+    let Some(mut current) = path.parent() else {
+        return missing;
+    };
+
+    while !current.as_os_str().is_empty() && !current.exists() {
+        missing.push(current.to_path_buf());
+        let Some(parent) = current.parent() else {
+            break;
+        };
+        current = parent;
+    }
+
+    missing.reverse();
+    missing
+}
+
+fn durable_audit_runtime_probe_cleanup(
+    path: &Path,
+    path_entry_existed: bool,
+    created_directories: &[PathBuf],
+) -> Result<(), String> {
+    if !path_entry_existed {
+        match fs::metadata(path) {
+            Ok(metadata) if metadata.len() == 0 => {
+                fs::remove_file(path).map_err(|error| {
+                    format!(
+                        "runtime open + lock probe cleanup failed for {}: {error}",
+                        path.display()
+                    )
+                })?;
+            }
+            Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) if probe_result.is_ok() => {
+            Err(error) => {
                 return Err(format!(
                     "runtime open + lock probe cleanup failed for {}: {error}",
                     path.display()
                 ));
             }
-            Err(_) => {}
         }
     }
 
-    probe_result
-}
-
-fn durable_audit_probe_path(path: &Path) -> PathBuf {
-    let sequence = AUDIT_RUNTIME_PROBE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let directory = path.parent().unwrap_or(Path::new(""));
-    let probe_name = format!(
-        ".loongclaw-audit-probe-{}-{sequence}.jsonl",
-        std::process::id()
-    );
-
-    if directory.as_os_str().is_empty() {
-        PathBuf::from(probe_name)
-    } else {
-        directory.join(probe_name)
+    for directory in created_directories.iter().rev() {
+        match fs::remove_dir(directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
+            Err(error) => {
+                return Err(format!(
+                    "runtime open + lock probe cleanup failed for {}: failed to remove {}: {error}",
+                    path.display(),
+                    directory.display()
+                ));
+            }
+        }
     }
+
+    Ok(())
 }
 
 fn check_audit_journal_directory(
@@ -2362,6 +2390,51 @@ mod tests {
         assert_eq!(check.name, "audit retention");
         assert_eq!(check.level, DoctorCheckLevel::Fail);
         assert!(check.detail.contains("runtime open + lock probe failed"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn audit_retention_doctor_check_fails_when_missing_parent_chain_is_not_creatable() {
+        let temp_dir = browser_companion_temp_dir("audit-target-missing-parent-chain");
+        let readonly_dir = temp_dir.join("readonly-audit");
+        std::fs::create_dir_all(&readonly_dir).expect("create readonly audit directory");
+        let original_permissions = std::fs::metadata(&readonly_dir)
+            .expect("readonly audit directory metadata")
+            .permissions();
+        let mut permissions = original_permissions.clone();
+        permissions.set_mode(0o555);
+        std::fs::set_permissions(&readonly_dir, permissions)
+            .expect("mark audit directory readonly");
+        let _permission_restore =
+            PermissionRestore::new(readonly_dir.clone(), original_permissions);
+
+        let journal_path = readonly_dir.join("nested").join("events.jsonl");
+        let check = audit_retention_doctor_check(&mvp::config::AuditConfig {
+            mode: mvp::config::AuditMode::Fanout,
+            path: journal_path.display().to_string(),
+            retain_in_memory: true,
+        });
+
+        assert_eq!(check.name, "audit retention");
+        assert_eq!(check.level, DoctorCheckLevel::Fail);
+        assert!(check.detail.contains("runtime open + lock probe failed"));
+    }
+
+    #[test]
+    fn audit_retention_doctor_check_cleans_up_probe_artifacts_for_creatable_missing_path() {
+        let temp_dir = browser_companion_temp_dir("audit-target-cleanup");
+        let journal_path = temp_dir.join("nested").join("events.jsonl");
+
+        let check = audit_retention_doctor_check(&mvp::config::AuditConfig {
+            mode: mvp::config::AuditMode::Fanout,
+            path: journal_path.display().to_string(),
+            retain_in_memory: true,
+        });
+
+        assert_eq!(check.name, "audit retention");
+        assert_eq!(check.level, DoctorCheckLevel::Pass);
+        assert!(!journal_path.exists());
+        assert!(!journal_path.parent().expect("nested parent").exists());
     }
 
     fn unique_temp_feishu_db(label: &str) -> String {
