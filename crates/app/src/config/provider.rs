@@ -414,6 +414,8 @@ pub enum ProviderKind {
     Qianfan,
     #[serde(alias = "qwen_compatible", alias = "dashscope")]
     Qwen,
+    #[serde(alias = "bailian_coding_compatible")]
+    BailianCoding,
     #[serde(alias = "sambanova_compatible", alias = "samba_nova")]
     Sambanova,
     #[serde(alias = "sglang_compatible")]
@@ -1937,6 +1939,7 @@ impl ProviderKind {
             ProviderKind::Perplexity => "Perplexity",
             ProviderKind::Qianfan => "Qianfan",
             ProviderKind::Qwen => "Qwen",
+            ProviderKind::BailianCoding => "Bailian Coding",
             ProviderKind::Sambanova => "SambaNova",
             ProviderKind::Sglang => "SGLang",
             ProviderKind::Siliconflow => "SiliconFlow",
@@ -1985,6 +1988,7 @@ impl ProviderKind {
             perplexity,
             qianfan,
             qwen,
+            bailian_coding,
             sambanova,
             sglang,
             siliconflow,
@@ -2026,6 +2030,7 @@ impl ProviderKind {
             ProviderKind::Perplexity => perplexity,
             ProviderKind::Qianfan => qianfan,
             ProviderKind::Qwen => qwen,
+            ProviderKind::BailianCoding => bailian_coding,
             ProviderKind::Sambanova => sambanova,
             ProviderKind::Sglang => sglang,
             ProviderKind::Siliconflow => siliconflow,
@@ -2218,6 +2223,7 @@ impl ProviderKind {
             | ProviderKind::Perplexity
             | ProviderKind::Qianfan
             | ProviderKind::Qwen
+            | ProviderKind::BailianCoding
             | ProviderKind::Sambanova
             | ProviderKind::Sglang
             | ProviderKind::Siliconflow
@@ -2269,7 +2275,7 @@ pub fn parse_provider_kind_id(raw: &str) -> Option<ProviderKind> {
     None
 }
 
-const PROVIDER_KIND_ORDER: [ProviderKind; 39] = [
+const PROVIDER_KIND_ORDER: [ProviderKind; 40] = [
     ProviderKind::Anthropic,
     ProviderKind::Bedrock,
     ProviderKind::Byteplus,
@@ -2296,6 +2302,7 @@ const PROVIDER_KIND_ORDER: [ProviderKind; 39] = [
     ProviderKind::Perplexity,
     ProviderKind::Qianfan,
     ProviderKind::Qwen,
+    ProviderKind::BailianCoding,
     ProviderKind::Sambanova,
     ProviderKind::Sglang,
     ProviderKind::Siliconflow,
@@ -2311,7 +2318,7 @@ const PROVIDER_KIND_ORDER: [ProviderKind; 39] = [
     ProviderKind::Zhipu,
 ];
 
-const PROVIDER_PROFILES: [ProviderProfile; 39] = [
+const PROVIDER_PROFILES: [ProviderProfile; 40] = [
     ProviderProfile {
         kind: ProviderKind::Anthropic,
         id: "anthropic",
@@ -2765,6 +2772,23 @@ const PROVIDER_PROFILES: [ProviderProfile; 39] = [
         default_api_key_env: Some("DASHSCOPE_API_KEY"),
         api_key_env_aliases: &["QWEN_API_KEY"],
         default_user_agent: None,
+        default_oauth_access_token_env: None,
+        oauth_access_token_env_aliases: &[],
+        feature_family: ProviderFeatureFamily::OpenAiCompatible,
+    },
+    ProviderProfile {
+        kind: ProviderKind::BailianCoding,
+        id: "bailian_coding",
+        aliases: &["bailian_coding_compatible"],
+        base_url: "https://coding.dashscope.aliyuncs.com/v1",
+        chat_completions_path: "/chat/completions",
+        models_path: Some("/models"),
+        protocol_family: ProviderProtocolFamily::OpenAiChatCompletions,
+        auth_scheme: ProviderAuthScheme::Bearer,
+        default_headers: &[],
+        default_api_key_env: Some("BAILIAN_API_KEY"),
+        api_key_env_aliases: &[],
+        default_user_agent: Some("openclaw"),
         default_oauth_access_token_env: None,
         oauth_access_token_env_aliases: &[],
         feature_family: ProviderFeatureFamily::OpenAiCompatible,
