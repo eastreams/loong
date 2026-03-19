@@ -27,9 +27,7 @@ const OPENAI_AUTH_ENV_KEYS: &[&str] = &[
 const VOLCENGINE_AUTH_ENV_KEYS: &[&str] = &["ARK_API_KEY"];
 
 fn read_http_request_with_timeout(stream: &mut TcpStream, timeout: Duration) -> String {
-    stream
-        .set_nonblocking(false)
-        .expect("set stream blocking");
+    stream.set_nonblocking(false).expect("set stream blocking");
     stream
         .set_read_timeout(Some(timeout))
         .expect("set stream read timeout");
