@@ -24,6 +24,9 @@ next.
       explicit `Esc` cancellation hint before any config write.
 - [ ] Interactive fixed-choice prompts use terminal-native selection widgets
       with arrow-key navigation instead of raw numeric or exact-string entry.
+- [ ] The credential-source step asks for an environment variable name,
+      rejects pasted secret literals or shell assignment syntax, and never
+      echoes rejected secret-like input in review or success output.
 - [ ] When provider credentials are already available and catalog discovery
       succeeds, model selection offers a searchable model list while still
       allowing a manual custom model override.

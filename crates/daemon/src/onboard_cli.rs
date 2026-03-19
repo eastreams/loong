@@ -1909,40 +1909,61 @@ fn resolve_api_key_env_selection(
     ui: &mut impl OnboardUi,
     context: &OnboardRuntimeContext,
 ) -> CliResult<String> {
+    let explicit_selection = if let Some(api_key_env) = options.api_key_env.as_deref() {
+        if is_explicit_onboard_clear_input(api_key_env) {
+            return Ok(String::new());
+        }
+        let trimmed = api_key_env.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(validate_selected_provider_credential_env(config, trimmed)?)
+        }
+    } else {
+        None
+    };
+
     if options.non_interactive {
-        if let Some(api_key_env) = options.api_key_env.as_deref() {
-            if is_explicit_onboard_clear_input(api_key_env) {
-                return Ok(String::new());
-            }
-            let trimmed = api_key_env.trim();
-            if !trimmed.is_empty() {
-                return Ok(trimmed.to_owned());
+        return Ok(explicit_selection.unwrap_or(default_api_key_env));
+    }
+    let initial = explicit_selection
+        .as_deref()
+        .unwrap_or(default_api_key_env.as_str());
+    let example_env_name = provider_credential_env_hint(&config.provider)
+        .unwrap_or_else(|| "PROVIDER_API_KEY".to_owned());
+    loop {
+        print_lines(
+            ui,
+            render_api_key_env_selection_screen_lines_with_style(
+                config,
+                default_api_key_env.as_str(),
+                initial,
+                guided_prompt_path,
+                context.render_width,
+                true,
+            ),
+        )?;
+        let value = ui.prompt_with_default("Credential env var name", initial)?;
+        if is_explicit_onboard_clear_input(&value) {
+            return Ok(String::new());
+        }
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Ok(String::new());
+        }
+        match validate_selected_provider_credential_env(config, trimmed) {
+            Ok(validated) => return Ok(validated),
+            Err(error) => {
+                print_message(ui, error)?;
+                print_message(
+                    ui,
+                    format!(
+                        "enter the environment variable name only, for example {example_env_name}, or type :clear to remove the env binding"
+                    ),
+                )?;
             }
         }
-        return Ok(default_api_key_env);
     }
-    let initial = options
-        .api_key_env
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(default_api_key_env.as_str());
-    print_lines(
-        ui,
-        render_api_key_env_selection_screen_lines_with_style(
-            config,
-            default_api_key_env.as_str(),
-            initial,
-            guided_prompt_path,
-            context.render_width,
-            true,
-        ),
-    )?;
-    let value = ui.prompt_with_default("Credential env var", initial)?;
-    if is_explicit_onboard_clear_input(&value) {
-        return Ok(String::new());
-    }
-    Ok(value.trim().to_owned())
 }
 
 fn apply_selected_api_key_env(
@@ -2191,6 +2212,9 @@ async fn run_preflight_checks(
     skip_model_probe: bool,
 ) -> Vec<OnboardCheck> {
     let mut checks = Vec::new();
+    if let Some(validation_check) = config_validation_check(config) {
+        checks.push(validation_check);
+    }
     let credential_check = provider_credential_check(config);
     let has_credentials = credential_check.level == OnboardCheckLevel::Pass;
     checks.push(credential_check);
@@ -2234,6 +2258,15 @@ async fn run_preflight_checks(
     checks.extend(collect_channel_preflight_checks(config));
 
     checks
+}
+
+fn config_validation_check(config: &mvp::config::LoongClawConfig) -> Option<OnboardCheck> {
+    config.validate().err().map(|detail| OnboardCheck {
+        name: "config validation",
+        level: OnboardCheckLevel::Fail,
+        detail,
+        non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+    })
 }
 
 fn provider_check_detail_prefix(config: &mvp::config::LoongClawConfig) -> String {
@@ -2472,6 +2505,20 @@ pub fn provider_credential_env_hint(provider: &mvp::config::ProviderConfig) -> O
     provider_credential_env_hints(provider).into_iter().next()
 }
 
+fn validate_selected_provider_credential_env(
+    config: &mvp::config::LoongClawConfig,
+    selected_env_name: &str,
+) -> CliResult<String> {
+    let trimmed = selected_env_name.trim();
+    if trimmed.is_empty() {
+        return Ok(String::new());
+    }
+
+    let mut candidate = config.clone();
+    apply_selected_api_key_env(&mut candidate.provider, trimmed.to_owned());
+    candidate.validate().map(|_| trimmed.to_owned())
+}
+
 pub fn preferred_provider_credential_env_binding(
     provider: &mvp::config::ProviderConfig,
 ) -> Option<ProviderCredentialEnvBinding> {
@@ -2600,16 +2647,34 @@ fn push_provider_credential_env_hint(hints: &mut Vec<String>, maybe_env_name: Op
     }
 }
 
-fn normalize_provider_credential_env_name(raw: &str) -> Option<String> {
+fn provider_credential_env_name_is_safe(raw: &str) -> bool {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
+        return false;
+    }
+
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.api_key = None;
+    config.provider.api_key_env = Some(trimmed.to_owned());
+    config.validate().is_ok()
+}
+
+fn normalize_provider_credential_env_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || !provider_credential_env_name_is_safe(trimmed) {
         return None;
     }
     Some(trimmed.to_owned())
 }
 
 fn render_provider_credential_source_value(raw: Option<&str>) -> Option<String> {
-    normalize_provider_credential_env_name(raw?).map(|env_name| format!("${{{env_name}}}"))
+    let trimmed = raw?.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    normalize_provider_credential_env_name(trimmed)
+        .map(|env_name| format!("${{{env_name}}}"))
+        .or_else(|| Some("environment variable".to_owned()))
 }
 
 pub fn preferred_api_key_env_default(config: &mvp::config::LoongClawConfig) -> String {
@@ -4179,10 +4244,10 @@ fn render_api_key_env_selection_default_hint_line(
     suggested_env: &str,
     prompt_default: &str,
 ) -> String {
-    let prompt_default = render_provider_credential_source_value(Some(prompt_default))
-        .unwrap_or_else(|| prompt_default.trim().to_owned());
-    let suggested_env = render_provider_credential_source_value(Some(suggested_env))
-        .unwrap_or_else(|| suggested_env.trim().to_owned());
+    let prompt_default =
+        render_provider_credential_source_value(Some(prompt_default)).unwrap_or_default();
+    let suggested_env =
+        render_provider_credential_source_value(Some(suggested_env)).unwrap_or_default();
     let current_env =
         configured_provider_credential_env_binding(&config.provider).and_then(|binding| {
             render_provider_credential_source_value(Some(binding.env_name.as_str()))
@@ -5267,12 +5332,15 @@ fn render_api_key_env_selection_screen_lines_with_style(
         context_lines.push(format!("- suggested source: {suggested_source}"));
     }
 
+    let example_env_name = provider_credential_env_hint(&config.provider)
+        .unwrap_or_else(|| "PROVIDER_API_KEY".to_owned());
     let mut hint_lines = vec![render_api_key_env_selection_default_hint_line(
         config,
         default_api_key_env,
         prompt_default,
     )];
     hint_lines.push("- enter an env var name, not the secret value itself".to_owned());
+    hint_lines.push(format!("- example: {example_env_name}"));
     if prompt_default.trim().is_empty() {
         if provider_has_inline_credential(&config.provider) {
             hint_lines.push("- leave this blank to keep inline credentials".to_owned());
@@ -6646,6 +6714,27 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn run_preflight_checks_fail_for_invalid_provider_credential_env_value() {
+        let secret = "sk-live-direct-secret-value";
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Openai;
+        config.provider.api_key_env = Some(secret.to_owned());
+        config.provider.api_key = None;
+
+        let checks = run_preflight_checks(&config, true).await;
+
+        assert!(
+            checks.iter().any(|check| {
+                check.name == "config validation"
+                    && check.level == OnboardCheckLevel::Fail
+                    && check.detail.contains("provider.api_key_env")
+                    && !check.detail.contains(secret)
+            }),
+            "preflight should fail fast on invalid provider credential env values without echoing the secret: {checks:#?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn browser_companion_onboard_preflight_warns_when_runtime_gate_is_closed() {
         let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
         let temp_dir = browser_companion_temp_dir("runtime-gate");
@@ -6947,6 +7036,44 @@ mod tests {
     }
 
     #[test]
+    fn preferred_api_key_env_default_ignores_invalid_configured_secret_literal() {
+        let secret = "sk-live-direct-secret-value";
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Openai;
+        config.provider.api_key_env = Some(secret.to_owned());
+
+        let default_env = preferred_api_key_env_default(&config);
+
+        assert_eq!(
+            default_env, "OPENAI_CODEX_OAUTH_TOKEN",
+            "invalid configured credential env values should fall back to the provider's safe onboarding default instead of being reused as the interactive prompt default"
+        );
+        assert!(
+            !default_env.contains(secret),
+            "prompt defaults must never echo the rejected secret-like value"
+        );
+    }
+
+    #[test]
+    fn build_onboarding_success_summary_does_not_echo_invalid_credential_env_value() {
+        let secret = "sk-live-direct-secret-value";
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Openai;
+        config.provider.api_key_env = Some(secret.to_owned());
+
+        let summary =
+            build_onboarding_success_summary(Path::new("/tmp/loongclaw.toml"), &config, None);
+        let credential = summary
+            .credential
+            .expect("summary should still describe the configured credential lane");
+
+        assert!(
+            !credential.value.contains(secret),
+            "success summary must never echo invalid secret-like env input: {credential:#?}"
+        );
+    }
+
+    #[test]
     fn resolve_api_key_env_selection_accepts_explicit_clear_token_in_interactive_mode() {
         let mut config = mvp::config::LoongClawConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Openai;
@@ -6979,6 +7106,82 @@ mod tests {
         assert!(
             selected.is_empty(),
             "typing :clear should explicitly clear the api-key env selection instead of persisting the literal token: {selected:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_api_key_env_selection_reprompts_after_secret_literal_interactively() {
+        let secret = "sk-live-direct-secret-value";
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Openai;
+        let mut ui = TestOnboardUi::with_inputs([secret, "OPENAI_API_KEY"]);
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let selected = resolve_api_key_env_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: false,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            "OPENAI_API_KEY".to_owned(),
+            GuidedPromptPath::NativePromptPack,
+            &mut ui,
+            &context,
+        )
+        .expect("interactive credential selection should reprompt on invalid secret-like input");
+
+        assert_eq!(
+            selected, "OPENAI_API_KEY",
+            "interactive onboarding should reject secret-like input and keep asking for an env var name"
+        );
+    }
+
+    #[test]
+    fn resolve_api_key_env_selection_rejects_secret_literal_non_interactively() {
+        let secret = "sk-live-direct-secret-value";
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Openai;
+        let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let error = resolve_api_key_env_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: true,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: Some(secret.to_owned()),
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            "OPENAI_API_KEY".to_owned(),
+            GuidedPromptPath::NativePromptPack,
+            &mut ui,
+            &context,
+        )
+        .expect_err("non-interactive onboarding should reject secret-like env selections");
+
+        assert!(
+            error.contains("provider.api_key_env"),
+            "the validation error should identify the bad field: {error}"
+        );
+        assert!(
+            !error.contains(secret),
+            "non-interactive validation must not echo the secret-like input: {error}"
         );
     }
 

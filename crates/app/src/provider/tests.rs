@@ -152,6 +152,12 @@ async fn fetch_available_models_rejects_missing_volcengine_credentials_before_ne
         while Instant::now() < deadline {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    stream
+                        .set_nonblocking(false)
+                        .expect("set request stream blocking");
+                    stream
+                        .set_read_timeout(Some(Duration::from_millis(250)))
+                        .expect("set request stream read timeout");
                     let mut request_buf = [0_u8; 8192];
                     let len = stream.read(&mut request_buf).expect("read request");
                     let request = String::from_utf8_lossy(&request_buf[..len]).to_string();
@@ -225,6 +231,12 @@ async fn fetch_available_models_enriches_volcengine_auth_failures_with_ark_guida
             }
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    stream
+                        .set_nonblocking(false)
+                        .expect("set request stream blocking");
+                    stream
+                        .set_read_timeout(Some(Duration::from_millis(250)))
+                        .expect("set request stream read timeout");
                     let mut request_buf = [0_u8; 8192];
                     let len = stream.read(&mut request_buf).expect("read request");
                     let request = String::from_utf8_lossy(&request_buf[..len]).to_string();
