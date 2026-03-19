@@ -4297,6 +4297,13 @@ fn onboard_api_key_env_screen_explains_suggested_env_and_blank_behavior() {
     assert!(
         lines
             .iter()
+            .any(|line| line.contains("env var name")
+                && line.contains("not the secret value itself")),
+        "credential-env screen should clearly distinguish the env var name from the underlying secret value: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
             .any(|line| line == "- type :clear to clear the configured credential env"),
         "credential-env screen should explain the explicit clear token when another credential env is already configured: {lines:#?}"
     );
@@ -4518,14 +4525,18 @@ fn onboard_prompt_addendum_screen_explains_keep_and_clear_behavior() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("blank keeps the current addendum")),
-        "prompt-addendum screen should explain how to preserve the current addendum: {lines:#?}"
+            .any(|line| line == "- press Enter to keep current addendum"),
+        "prompt-addendum screen should explain the Enter behavior in the same style as other input screens: {lines:#?}"
     );
     assert!(
         lines
             .iter()
             .any(|line| line.contains("type '-' to clear it")),
         "prompt-addendum screen should explain how to clear the current addendum: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "- single-line input only"),
+        "prompt-addendum screen should keep the input instruction concise and consistent: {lines:#?}"
     );
 }
 
@@ -4558,6 +4569,24 @@ fn onboard_memory_profile_screen_shows_supported_profiles() {
             .iter()
             .all(|line| !line.contains("[profile_plus_window]")),
         "memory-profile screen should not imply that brackets are part of the expected selector syntax: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("only load the recent conversation turns")),
+        "memory-profile screen should explain the lightest profile in plain language: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("plus a short summary of earlier context")),
+        "memory-profile screen should explain the summary profile in plain language: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("plus durable profile notes")),
+        "memory-profile screen should explain the durable profile option in plain language: {lines:#?}"
     );
 }
 
@@ -4763,8 +4792,14 @@ fn onboard_existing_config_write_screen_offers_replace_backup_and_cancel() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "press Enter to use default c, cancel"),
-        "existing-config write screen should make the safe default explicit on the screen itself: {lines:#?}"
+            .any(|line| line.contains("b) Create backup and replace (recommended)")),
+        "existing-config write screen should steer users toward the safe write path once they have reached the final overwrite decision: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "press Enter to use default b, create backup and replace"),
+        "existing-config write screen should make the backup-first default explicit on the screen itself: {lines:#?}"
     );
 }
 
@@ -5159,6 +5194,26 @@ requires_openai_auth = true
     )
     .expect("write codex config");
 
+    let screen_candidates = loongclaw_daemon::onboard_cli::collect_import_candidates_with_paths(
+        &output_path,
+        Some(&codex_path),
+        loongclaw_daemon::onboard_cli::ChannelImportReadiness::default().with_state(
+            "telegram",
+            loongclaw_daemon::migration::ChannelCredentialState::Ready,
+        ),
+    )
+    .expect("collect import candidates for screen ordering");
+    let screen_lines = loongclaw_daemon::onboard_cli::render_starting_point_selection_screen_lines(
+        &screen_candidates,
+        80,
+    );
+    assert!(
+        screen_lines
+            .iter()
+            .any(|line| line.contains("2) Codex config at")),
+        "the rendered starting-point screen should keep the Codex candidate at index 2: {screen_lines:#?}"
+    );
+
     let transcript = run_scripted_onboard_flow(
         loongclaw_daemon::onboard_cli::OnboardCommandOptions {
             output: output_path.to_str().map(str::to_owned),
@@ -5279,8 +5334,9 @@ requires_openai_auth = true
 
     let joined = transcript.join("\n");
     assert!(
-        joined.contains("2) Codex config at"),
-        "the Codex candidate should remain selectable by the same index it shows on screen: {transcript:#?}"
+        joined.contains("choose detected starting point")
+            && joined.contains("SELECT Starting point"),
+        "the interactive flow should still show the starting-point selection stage before applying the chosen path: {transcript:#?}"
     );
     assert!(
         joined.contains("starting point: Codex config at")
@@ -5685,6 +5741,38 @@ fn onboard_review_lines_include_starting_point_and_domain_preview() {
     assert!(
         lines.iter().any(|line| line.contains("workspace guidance")),
         "review should include workspace guidance as its own domain: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_review_lines_group_details_into_named_sections() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
+    config.provider.model = "openai/gpt-5.1-codex".to_owned();
+
+    let lines = loongclaw_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
+        &config,
+        Some("Codex config at ~/.codex/config.toml"),
+        &[],
+        80,
+    );
+
+    let starting_point_index = lines
+        .iter()
+        .position(|line| line == "starting point")
+        .expect("review should include a starting-point section");
+    let configuration_index = lines
+        .iter()
+        .position(|line| line == "configuration")
+        .expect("review should include a configuration section");
+    let draft_source_index = lines
+        .iter()
+        .position(|line| line == "draft source")
+        .expect("review should include a draft-source section");
+
+    assert!(
+        starting_point_index < configuration_index && configuration_index < draft_source_index,
+        "review should separate starting point, config digest, and draft-source details into clear sections: {lines:#?}"
     );
 }
 

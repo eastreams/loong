@@ -20,8 +20,7 @@ const BACKUP_TIMESTAMP_FORMAT: &[FormatItem<'static>] =
 const ONBOARD_CLEAR_INPUT_TOKEN: &str = ":clear";
 const ONBOARD_CUSTOM_MODEL_OPTION_SLUG: &str = "__custom_model__";
 const ONBOARD_ESCAPE_CANCEL_HINT: &str = "- press Esc then Enter to cancel onboarding";
-const ONBOARD_SINGLE_LINE_INPUT_HINT: &str =
-    "- terminal input is single line; extra pasted lines are ignored";
+const ONBOARD_SINGLE_LINE_INPUT_HINT: &str = "- single-line input only";
 const ONBOARD_PASTE_DRAIN_WINDOW_ENV: &str = "LOONGCLAW_ONBOARD_PASTE_DRAIN_WINDOW_MS";
 const DEFAULT_ONBOARD_PASTE_DRAIN_WINDOW: Duration = Duration::from_millis(75);
 const ONBOARD_LINE_READER_BUFFER_SIZE: usize = 64;
@@ -97,6 +96,24 @@ impl OnboardRuntimeContext {
         }
     }
 }
+
+const MEMORY_PROFILE_CHOICES: [(mvp::config::MemoryProfile, &str, &str); 3] = [
+    (
+        mvp::config::MemoryProfile::WindowOnly,
+        "recent turns only",
+        "only load the recent conversation turns",
+    ),
+    (
+        mvp::config::MemoryProfile::WindowPlusSummary,
+        "window plus summary",
+        "load recent turns plus a short summary of earlier context",
+    ),
+    (
+        mvp::config::MemoryProfile::ProfilePlusWindow,
+        "profile plus window",
+        "load recent turns plus durable profile notes",
+    ),
+];
 
 trait OnboardPromptLineReader {
     fn read_blocking_line(&mut self) -> CliResult<OnboardPromptRead>;
@@ -692,7 +709,7 @@ fn build_existing_config_write_screen_options() -> Vec<OnboardScreenOption> {
             detail_lines: vec![
                 "save a timestamped .bak copy first, then write the new config".to_owned(),
             ],
-            recommended: false,
+            recommended: true,
         },
         OnboardScreenOption {
             key: "c".to_owned(),
@@ -1176,7 +1193,7 @@ pub async fn run_onboard_cli_with_ui(
     let skip_detailed_setup = if let Some(shortcut_kind) = shortcut_kind {
         print_lines(
             ui,
-            render_onboard_shortcut_screen_lines_with_style(
+            render_onboard_shortcut_header_lines_with_style(
                 shortcut_kind,
                 &config,
                 starting_selection.import_source.as_deref(),
@@ -2062,7 +2079,7 @@ fn resolve_prompt_addendum_selection(
     )?;
     prompt_optional(
         ui,
-        "Prompt addendum (blank keeps current, '-' clears)",
+        "Prompt addendum",
         config.cli.system_prompt_addendum.as_deref(),
     )
 }
@@ -2136,25 +2153,7 @@ fn resolve_memory_profile_selection(
         .as_deref()
         .and_then(parse_memory_profile)
         .unwrap_or(config.memory.profile);
-
-    let profiles = [
-        (
-            mvp::config::MemoryProfile::WindowOnly,
-            "recent turns only",
-            "load only the active sliding window",
-        ),
-        (
-            mvp::config::MemoryProfile::WindowPlusSummary,
-            "window plus summary",
-            "add a summary block before the recent window",
-        ),
-        (
-            mvp::config::MemoryProfile::ProfilePlusWindow,
-            "profile plus window",
-            "inject durable profile notes before the recent window",
-        ),
-    ];
-    let select_options: Vec<SelectOption> = profiles
+    let select_options: Vec<SelectOption> = MEMORY_PROFILE_CHOICES
         .iter()
         .map(|(p, label, desc)| SelectOption {
             label: label.to_string(),
@@ -2163,7 +2162,9 @@ fn resolve_memory_profile_selection(
             recommended: *p == default_profile,
         })
         .collect();
-    let default_idx = profiles.iter().position(|(p, _, _)| *p == default_profile);
+    let default_idx = MEMORY_PROFILE_CHOICES
+        .iter()
+        .position(|(p, _, _)| *p == default_profile);
 
     print_lines(
         ui,
@@ -2179,7 +2180,7 @@ fn resolve_memory_profile_selection(
         default_idx,
         SelectInteractionMode::List,
     )?;
-    let (profile, _, _) = profiles
+    let (profile, _, _) = MEMORY_PROFILE_CHOICES
         .get(idx)
         .ok_or_else(|| format!("memory profile selection index {idx} out of range"))?;
     Ok(*profile)
@@ -2984,7 +2985,7 @@ fn print_onboard_entry_options(
 ) -> CliResult<()> {
     print_lines(
         ui,
-        render_onboard_entry_screen_lines_with_style(
+        render_onboard_entry_interactive_screen_lines_with_style(
             current_setup_state,
             current_candidate,
             import_candidates,
@@ -3058,6 +3059,47 @@ fn render_onboard_entry_screen_lines_with_style(
         lines.push(String::new());
         lines.extend(render_onboard_wrapped_display_lines(footer_lines, width));
     }
+    lines
+}
+
+fn render_onboard_entry_interactive_screen_lines_with_style(
+    current_setup_state: crate::migration::CurrentSetupState,
+    current_candidate: Option<&ImportCandidate>,
+    import_candidates: &[ImportCandidate],
+    options: &[OnboardEntryOption],
+    workspace_root: Option<&Path>,
+    width: usize,
+    color_enabled: bool,
+) -> Vec<String> {
+    let recommended_plan_available = import_candidates.iter().any(|candidate| {
+        candidate.source_kind == crate::migration::ImportSourceKind::RecommendedPlan
+    });
+    let mut lines = render_onboard_header(
+        OnboardHeaderStyle::Compact,
+        width,
+        "guided setup for provider, channels, and workspace guidance",
+        color_enabled,
+    );
+    lines.push(String::new());
+    lines.push(crate::onboard_presentation::detected_settings_section_heading().to_owned());
+    lines.extend(render_onboard_wrapped_display_lines(
+        render_detected_settings_digest_lines(
+            current_setup_state,
+            current_candidate,
+            import_candidates,
+            workspace_root,
+            recommended_plan_available,
+        ),
+        width,
+    ));
+    if !options.is_empty() {
+        lines.push(String::new());
+        lines.push(crate::onboard_presentation::entry_choice_section_heading().to_owned());
+    }
+    lines.extend(render_onboard_wrapped_display_lines(
+        append_escape_cancel_hint(Vec::<String>::new()),
+        width,
+    ));
     lines
 }
 
@@ -3498,7 +3540,7 @@ fn print_import_candidates(
 ) -> CliResult<()> {
     print_lines(
         ui,
-        render_starting_point_selection_screen_lines_with_style(
+        render_starting_point_selection_header_lines_with_style(
             candidates,
             context.render_width,
             true,
@@ -3701,23 +3743,41 @@ fn render_onboard_review_lines_with_guidance_and_style(
     lines.push("review setup".to_owned());
     lines.push(flow_style.progress_line());
     if let Some(source) = import_source {
-        lines.extend(mvp::presentation::render_wrapped_text_line(
-            "- starting point: ",
-            &onboard_starting_point_label(None, source),
-            width,
-        ));
+        append_onboard_review_section(
+            &mut lines,
+            "starting point",
+            mvp::presentation::render_wrapped_text_line(
+                "- starting point: ",
+                &onboard_starting_point_label(None, source),
+                width,
+            ),
+        );
     }
-    lines.extend(render_onboard_review_digest_lines(config, width));
+    append_onboard_review_section(
+        &mut lines,
+        "configuration",
+        render_onboard_review_digest_lines(config, width),
+    );
     let review_candidate = build_onboard_review_candidate_with_selected_context(
         config,
         workspace_guidance,
         selected_candidate,
     );
-    lines.extend(crate::migration::render::render_candidate_preview_lines(
-        &review_candidate,
-        width,
-    ));
+    append_onboard_review_section(
+        &mut lines,
+        "draft source",
+        crate::migration::render::render_candidate_preview_lines(&review_candidate, width),
+    );
     lines
+}
+
+fn append_onboard_review_section(lines: &mut Vec<String>, title: &str, section_lines: Vec<String>) {
+    if section_lines.is_empty() {
+        return;
+    }
+    lines.push(String::new());
+    lines.push(title.to_owned());
+    lines.extend(section_lines);
 }
 
 pub fn build_onboarding_success_summary(
@@ -4297,6 +4357,36 @@ fn render_onboard_shortcut_screen_lines_with_style(
         context_lines,
         build_onboard_shortcut_screen_options(shortcut_kind),
         vec![render_shortcut_default_choice_footer_line(shortcut_kind)],
+        color_enabled,
+    )
+}
+
+fn render_onboard_shortcut_header_lines_with_style(
+    shortcut_kind: OnboardShortcutKind,
+    config: &mvp::config::LoongClawConfig,
+    import_source: Option<&str>,
+    width: usize,
+    color_enabled: bool,
+) -> Vec<String> {
+    let mut context_lines = Vec::new();
+    if let Some(source) = import_source {
+        context_lines.push(format!(
+            "- starting point: {}",
+            onboard_starting_point_label(None, source)
+        ));
+    }
+    context_lines.extend(render_onboard_review_digest_lines(config, width));
+    context_lines.push(shortcut_kind.summary_line().to_owned());
+
+    render_onboard_choice_screen(
+        OnboardHeaderStyle::Compact,
+        width,
+        shortcut_kind.subtitle(),
+        shortcut_kind.title(),
+        None,
+        context_lines,
+        Vec::new(),
+        Vec::new(),
         color_enabled,
     )
 }
@@ -4901,6 +4991,24 @@ fn render_starting_point_selection_screen_lines_with_style(
     )
 }
 
+fn render_starting_point_selection_header_lines_with_style(
+    _candidates: &[ImportCandidate],
+    width: usize,
+    color_enabled: bool,
+) -> Vec<String> {
+    render_onboard_choice_screen(
+        OnboardHeaderStyle::Compact,
+        width,
+        crate::onboard_presentation::starting_point_selection_subtitle(),
+        crate::onboard_presentation::starting_point_selection_title(),
+        None,
+        vec![crate::onboard_presentation::starting_point_selection_hint().to_owned()],
+        Vec::new(),
+        Vec::new(),
+        color_enabled,
+    )
+}
+
 pub fn render_provider_selection_screen_lines(
     plan: &crate::migration::ProviderSelectionPlan,
     width: usize,
@@ -5164,6 +5272,7 @@ fn render_api_key_env_selection_screen_lines_with_style(
         default_api_key_env,
         prompt_default,
     )];
+    hint_lines.push("- enter an env var name, not the secret value itself".to_owned());
     if prompt_default.trim().is_empty() {
         if provider_has_inline_credential(&config.provider) {
             hint_lines.push("- leave this blank to keep inline credentials".to_owned());
@@ -5367,7 +5476,7 @@ fn render_prompt_addendum_selection_screen_lines_with_style(
             format!("- current addendum: {current_addendum}"),
         ],
         vec![
-            "- blank keeps the current addendum".to_owned(),
+            "- press Enter to keep current addendum".to_owned(),
             "- type '-' to clear it".to_owned(),
             ONBOARD_SINGLE_LINE_INPUT_HINT.to_owned(),
         ],
@@ -5395,31 +5504,15 @@ fn render_memory_profile_selection_screen_lines_with_style(
     width: usize,
     color_enabled: bool,
 ) -> Vec<String> {
-    let options = [
-        (
-            mvp::config::MemoryProfile::WindowOnly,
-            "recent turns only",
-            "load only the active sliding window",
-        ),
-        (
-            mvp::config::MemoryProfile::WindowPlusSummary,
-            "window plus summary",
-            "add a summary block before the recent window",
-        ),
-        (
-            mvp::config::MemoryProfile::ProfilePlusWindow,
-            "profile plus window",
-            "inject durable profile notes before the recent window",
-        ),
-    ]
-    .into_iter()
-    .map(|(profile, label, detail)| OnboardScreenOption {
-        key: memory_profile_id(profile).to_owned(),
-        label: label.to_owned(),
-        detail_lines: vec![detail.to_owned()],
-        recommended: profile == default_profile,
-    })
-    .collect::<Vec<_>>();
+    let options = MEMORY_PROFILE_CHOICES
+        .into_iter()
+        .map(|(profile, label, detail)| OnboardScreenOption {
+            key: memory_profile_id(profile).to_owned(),
+            label: label.to_owned(),
+            detail_lines: vec![detail.to_owned()],
+            recommended: profile == default_profile,
+        })
+        .collect::<Vec<_>>();
 
     render_onboard_choice_screen(
         OnboardHeaderStyle::Compact,
@@ -5481,7 +5574,31 @@ fn render_existing_config_write_screen_lines_with_style(
             "- choose whether to replace it, keep a backup, or cancel".to_owned(),
         ],
         build_existing_config_write_screen_options(),
-        vec![render_default_choice_footer_line("c", "cancel")],
+        vec![render_default_choice_footer_line(
+            "b",
+            "create backup and replace",
+        )],
+        color_enabled,
+    )
+}
+
+fn render_existing_config_write_header_lines_with_style(
+    config_path: &str,
+    width: usize,
+    color_enabled: bool,
+) -> Vec<String> {
+    render_onboard_choice_screen(
+        OnboardHeaderStyle::Compact,
+        width,
+        "decide how to write the config",
+        "existing config found",
+        None,
+        vec![
+            format!("- config: {config_path}"),
+            "- choose whether to replace it, keep a backup, or cancel".to_owned(),
+        ],
+        Vec::new(),
+        Vec::new(),
         color_enabled,
     )
 }
@@ -5968,7 +6085,7 @@ fn resolve_write_plan(
     let existing_path = output_path.display().to_string();
     print_lines(
         ui,
-        render_existing_config_write_screen_lines_with_style(
+        render_existing_config_write_header_lines_with_style(
             &existing_path,
             context.render_width,
             true,
@@ -5980,7 +6097,7 @@ fn resolve_write_plan(
             ui,
             "Your choice",
             &options,
-            Some("c"),
+            Some("b"),
         )?)
         .ok_or_else(|| "existing-config write selection out of range".to_owned())?;
     match selected.key.as_str() {
@@ -7626,10 +7743,8 @@ mod tests {
         );
 
         assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("single line") && line.contains("ignored")),
-            "prompt addendum screen should explain how terminal onboarding handles pasted multiline text: {lines:#?}"
+            lines.iter().any(|line| line == "- single-line input only"),
+            "prompt addendum screen should keep the terminal input note concise: {lines:#?}"
         );
     }
 
@@ -7641,10 +7756,8 @@ mod tests {
         );
 
         assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("single line") && line.contains("ignored")),
-            "system prompt screen should explain how terminal onboarding handles pasted multiline text: {lines:#?}"
+            lines.iter().any(|line| line == "- single-line input only"),
+            "system prompt screen should keep the terminal input note concise: {lines:#?}"
         );
     }
 
@@ -7755,6 +7868,99 @@ mod tests {
                 )
             ),
             "wrapped option labels should continue under the label text instead of snapping back to a fixed indent: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn interactive_entry_screen_omits_static_options_when_selection_widget_handles_choices() {
+        let options = recommended_import_entry_options();
+        let lines = render_onboard_entry_interactive_screen_lines_with_style(
+            crate::migration::CurrentSetupState::Absent,
+            None,
+            &[],
+            &options,
+            None,
+            80,
+            false,
+        );
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == crate::onboard_presentation::entry_choice_section_heading()),
+            "interactive entry screen should keep the section heading even when the chooser renders options separately: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains("Continue current setup")),
+            "interactive entry screen should not duplicate option labels before the selection widget renders them: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains("press Enter to use default")),
+            "interactive entry screen should omit the redundant static default footer: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn interactive_starting_point_screen_omits_static_options_when_selection_widget_handles_choices()
+     {
+        let candidate = ImportCandidate {
+            source_kind: crate::migration::ImportSourceKind::CodexConfig,
+            source: "Codex config at ~/.codex/config.toml".to_owned(),
+            config: mvp::config::LoongClawConfig::default(),
+            surfaces: Vec::new(),
+            domains: Vec::new(),
+            channel_candidates: Vec::new(),
+            workspace_guidance: Vec::new(),
+        };
+        let lines =
+            render_starting_point_selection_header_lines_with_style(&[candidate], 80, false);
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == crate::onboard_presentation::starting_point_selection_title()),
+            "interactive starting-point screen should keep the title even when choices render separately: {lines:#?}"
+        );
+        assert!(
+            lines.iter().all(|line| !line.contains("(recommended)")),
+            "interactive starting-point screen should not duplicate static choice rows before the selection widget renders them: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains("press Enter to use default")),
+            "interactive starting-point screen should omit the redundant static default footer: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn interactive_existing_config_write_screen_omits_static_options_when_selection_widget_handles_choices()
+     {
+        let lines = render_existing_config_write_header_lines_with_style(
+            "/tmp/loongclaw-config.toml",
+            80,
+            false,
+        );
+
+        assert!(
+            lines.iter().any(|line| line == "existing config found"),
+            "interactive existing-config screen should keep its heading: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains("Replace existing config")),
+            "interactive existing-config screen should let the selection widget own the actual options: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains("press Enter to use default")),
+            "interactive existing-config screen should omit the redundant static default footer: {lines:#?}"
         );
     }
 
