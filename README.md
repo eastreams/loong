@@ -191,6 +191,37 @@ cargo install --path crates/daemon
 ```
 </details>
 
+### Shell Completion
+
+`loongclaw completions <shell>` prints a completion script to stdout. GitHub
+releases also publish pre-generated completion files if you prefer to download
+them instead of generating them locally.
+
+<details>
+<summary>Install shell completion</summary>
+
+```bash
+loongclaw completions bash >> ~/.bash_completion
+source ~/.bash_completion
+```
+
+```zsh
+loongclaw completions zsh > "${fpath[1]}/_loongclaw"
+```
+
+```fish
+loongclaw completions fish > ~/.config/fish/completions/loongclaw.fish
+```
+
+```powershell
+loongclaw completions powershell >> $PROFILE
+```
+
+```elvish
+loongclaw completions elvish >> ~/.config/elvish/rc.elv
+```
+</details>
+
 ### First Success Path
 
 1. Run guided onboarding:
