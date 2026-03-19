@@ -6,6 +6,20 @@ The format follows Keep a Changelog and semantic versioning intent.
 
 ## [Unreleased]
 
+## [0.1.0-alpha.2] - 2026-03-19
+
+### Added
+
+- Added a fast-lane summary command for chat flows to surface concise delegate context faster.
+- Surfaced the delegate child runtime contract in the app runtime so downstream tooling can reason about effective delegation behavior.
+
+### Changed
+
+- Tightened delegate prompt summary visibility and aligned the effective runtime contract with stricter disabled-tool coverage.
+- Hardened the dev-to-main release promotion lifecycle and source enforcement in CI.
+- Expanded delegate runtime, private-host, and process stdio test coverage to stabilize the prerelease line before broader promotion.
+- Refreshed contributor governance and README visuals, including new Chinese SVG diagrams and restored core harness docs changes.
+
 ## [0.1.0-alpha.1] - 2026-03-17
 
 ### Added
