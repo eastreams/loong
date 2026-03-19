@@ -1,6 +1,6 @@
 # LoongClaw Roadmap
 
-Last updated: 2026-03-19
+Last updated: 2026-03-20
 
 This roadmap is execution-focused. Every stage has:
 
@@ -289,9 +289,9 @@ Delivered in current baseline:
   - `runtime-snapshot` persists lineage-aware runtime checkpoint artifacts
   - `runtime-restore` replays a persisted checkpoint as a dry-run or apply plan
   - `runtime-experiment start|finish|show|compare` records baseline snapshot, mutation summary, result snapshot, evaluation metrics, warnings, final decision, and optional snapshot-backed runtime deltas for operator review
-  - `runtime-capability propose|review|show` records one run-derived capability candidate, bounded scope, required capabilities, and explicit operator review without mutating live runtime state
-  - `runtime-capability index` groups matching candidate records into deterministic capability families, emits compact evidence digests, and evaluates readiness as `ready`, `not_ready`, or `blocked`
-  - `runtime-capability plan` resolves one indexed capability family into a deterministic dry-run promotion plan with artifact identity, blockers, approval checklist, rollback hints, and provenance
+  - `runtime-capability propose|review|show` records one run-derived capability candidate, bounded scope, required capabilities, explicit operator review, and any recorded snapshot-backed delta evidence without mutating live runtime state
+  - `runtime-capability index` groups matching candidate records into deterministic capability families, emits compact evidence digests including delta-evidence coverage and changed runtime surfaces, and evaluates readiness as `ready`, `not_ready`, or `blocked`
+  - `runtime-capability plan` resolves one indexed capability family into a deterministic dry-run promotion plan with artifact identity, blockers, approval checklist, rollback hints, provenance, and the same family-level delta evidence digest
 - modular channel/provider architecture for extension-safe evolution:
   - `app/channel/feishu/*` split into adapter/payload/webhook layers
   - Feishu encrypted webhook payload decrypt lane with signature verification

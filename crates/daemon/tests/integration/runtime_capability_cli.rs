@@ -95,6 +95,47 @@ fn snapshot_id_from_payload(payload: &Value) -> String {
         .expect("snapshot payload should include lineage.snapshot_id")
 }
 
+fn rewrite_json_file(path: &Path, mutate: impl FnOnce(&mut Value)) {
+    let raw = fs::read_to_string(path).expect("read json fixture");
+    let mut payload = serde_json::from_str::<Value>(&raw).expect("decode json fixture");
+    mutate(&mut payload);
+    fs::write(
+        path,
+        serde_json::to_string_pretty(&payload).expect("encode json fixture"),
+    )
+    .expect("write json fixture");
+}
+
+fn rewrite_runtime_capability_compare_config(config_path: &Path) {
+    let (_, mut config) = mvp::config::load(Some(
+        config_path
+            .to_str()
+            .expect("config path should be valid utf-8"),
+    ))
+    .expect("load config fixture");
+    let openai = config
+        .providers
+        .get("openai-main")
+        .cloned()
+        .expect("openai-main provider should exist");
+    config.set_active_provider_profile("openai-main", openai);
+    config.tools.browser.enabled = false;
+    config.tools.web.enabled = false;
+    config.acp.dispatch.enabled = false;
+    config.acp.default_agent = Some("codex".to_owned());
+    config.acp.allowed_agents = vec!["codex".to_owned()];
+    mvp::config::write(
+        Some(
+            config_path
+                .to_str()
+                .expect("config path should be valid utf-8"),
+        ),
+        &config,
+        true,
+    )
+    .expect("rewrite config fixture");
+}
+
 fn start_runtime_experiment(
     root: &Path,
     snapshot_path: &Path,
@@ -184,6 +225,128 @@ fn finish_runtime_experiment(
                 warning: vec!["manual verification only".to_owned()],
                 decision: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
                 status: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
+                json: false,
+            },
+        )
+        .expect("runtime experiment finish should succeed");
+    (run_path, finished)
+}
+
+fn finish_runtime_experiment_with_compare_delta(
+    root: &Path,
+    config_path: &Path,
+) -> (
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentArtifactDocument,
+) {
+    let (baseline_snapshot_path, baseline_snapshot_payload) = write_snapshot_artifact(
+        root,
+        config_path,
+        "artifacts/runtime-snapshot.json",
+        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+            created_at: "2026-03-17T12:00:00Z".to_owned(),
+            label: Some("baseline".to_owned()),
+            experiment_id: Some("exp-42".to_owned()),
+            parent_snapshot_id: Some("snapshot-parent".to_owned()),
+        },
+    );
+    let (run_path, _) = start_runtime_experiment(root, &baseline_snapshot_path);
+
+    rewrite_runtime_capability_compare_config(config_path);
+
+    let baseline_snapshot_id = snapshot_id_from_payload(&baseline_snapshot_payload);
+    let (result_snapshot_path, _) = write_snapshot_artifact(
+        root,
+        config_path,
+        "artifacts/runtime-snapshot-result.json",
+        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+            created_at: "2026-03-17T12:30:00Z".to_owned(),
+            label: Some("candidate".to_owned()),
+            experiment_id: Some("exp-42".to_owned()),
+            parent_snapshot_id: Some(baseline_snapshot_id),
+        },
+    );
+
+    let finished =
+        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
+            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
+                run: run_path.display().to_string(),
+                result_snapshot: result_snapshot_path.display().to_string(),
+                evaluation_summary: "provider and tool policy updated".to_owned(),
+                metric: vec!["task_success=1".to_owned(), "cost_delta=-0.2".to_owned()],
+                warning: vec!["manual verification only".to_owned()],
+                decision:
+                    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+                status:
+                    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
+                json: false,
+            },
+        )
+        .expect("runtime experiment finish should succeed");
+
+    (
+        run_path,
+        baseline_snapshot_path,
+        result_snapshot_path,
+        finished,
+    )
+}
+
+fn finish_runtime_experiment_variant_with_compare_delta(
+    root: &Path,
+    slug: &str,
+    cost_delta: f64,
+    warnings: &[&str],
+    decision: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision,
+) -> (
+    PathBuf,
+    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentArtifactDocument,
+) {
+    let config_path = write_runtime_capability_config(root);
+    let (baseline_snapshot_path, baseline_snapshot_payload) = write_snapshot_artifact(
+        root,
+        &config_path,
+        &format!("artifacts/runtime-snapshot-{slug}.json"),
+        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+            created_at: "2026-03-17T12:00:00Z".to_owned(),
+            label: Some(format!("baseline-{slug}")),
+            experiment_id: Some("exp-42".to_owned()),
+            parent_snapshot_id: Some("snapshot-parent".to_owned()),
+        },
+    );
+    let (run_path, _) = start_runtime_experiment_variant(root, &baseline_snapshot_path, slug);
+
+    rewrite_runtime_capability_compare_config(&config_path);
+
+    let baseline_snapshot_id = snapshot_id_from_payload(&baseline_snapshot_payload);
+    let (result_snapshot_path, _) = write_snapshot_artifact(
+        root,
+        &config_path,
+        &format!("artifacts/runtime-snapshot-result-{slug}.json"),
+        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+            created_at: "2026-03-17T12:30:00Z".to_owned(),
+            label: Some(format!("candidate-{slug}")),
+            experiment_id: Some("exp-42".to_owned()),
+            parent_snapshot_id: Some(baseline_snapshot_id),
+        },
+    );
+
+    let finished =
+        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
+            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
+                run: run_path.display().to_string(),
+                result_snapshot: result_snapshot_path.display().to_string(),
+                evaluation_summary: format!("provider and tool policy updated ({slug})"),
+                metric: vec![
+                    "task_success=1".to_owned(),
+                    format!("cost_delta={cost_delta}"),
+                ],
+                warning: warnings.iter().map(|warning| (*warning).to_owned()).collect(),
+                decision,
+                status:
+                    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
                 json: false,
             },
         )
@@ -490,6 +653,128 @@ fn runtime_capability_propose_persists_candidate_from_finished_run() {
 }
 
 #[test]
+fn runtime_capability_propose_persists_snapshot_delta_when_recorded_snapshots_exist() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-propose-snapshot-delta");
+    let config_path = write_runtime_capability_config(&root);
+    let (run_path, _baseline_snapshot_path, _result_snapshot_path, _run) =
+        finish_runtime_experiment_with_compare_delta(&root, &config_path);
+    let candidate_path = root.join("artifacts/runtime-capability-delta.json");
+
+    let candidate =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_propose_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityProposeCommandOptions {
+                run: run_path.display().to_string(),
+                output: candidate_path.display().to_string(),
+                target:
+                    loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
+                target_summary: "Codify browser preview onboarding as a reusable managed skill"
+                    .to_owned(),
+                bounded_scope: "Browser preview onboarding and companion readiness checks only"
+                    .to_owned(),
+                required_capability: vec!["invoke_tool".to_owned(), "memory_read".to_owned()],
+                tag: vec!["browser".to_owned(), "onboarding".to_owned()],
+                label: Some("browser-preview-snapshot-delta".to_owned()),
+                json: false,
+            },
+        )
+        .expect("runtime capability propose should succeed");
+
+    let payload = serde_json::to_value(&candidate).expect("serialize candidate");
+    let snapshot_delta = payload
+        .pointer("/source_run/snapshot_delta")
+        .and_then(Value::as_object)
+        .expect("candidate should persist snapshot-backed delta evidence");
+    let changed_surface_count = snapshot_delta
+        .get("changed_surface_count")
+        .and_then(Value::as_u64)
+        .expect("snapshot delta should include changed surface count");
+    assert!(
+        changed_surface_count > 0,
+        "snapshot delta should record at least one changed surface"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_propose_leaves_snapshot_delta_empty_without_recorded_snapshots() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-propose-no-snapshot-delta");
+    let config_path = write_runtime_capability_config(&root);
+    let (run_path, _run) = finish_runtime_experiment(&root, &config_path);
+    let candidate_path = root.join("artifacts/runtime-capability-no-snapshot-delta.json");
+
+    rewrite_json_file(&run_path, |payload| {
+        payload["baseline_snapshot"]["artifact_path"] = Value::Null;
+        payload["result_snapshot"]["artifact_path"] = Value::Null;
+    });
+
+    let candidate =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_propose_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityProposeCommandOptions {
+                run: run_path.display().to_string(),
+                output: candidate_path.display().to_string(),
+                target:
+                    loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
+                target_summary: "Codify browser preview onboarding as a reusable managed skill"
+                    .to_owned(),
+                bounded_scope: "Browser preview onboarding and companion readiness checks only"
+                    .to_owned(),
+                required_capability: vec!["invoke_tool".to_owned(), "memory_read".to_owned()],
+                tag: vec!["browser".to_owned(), "onboarding".to_owned()],
+                label: Some("browser-preview-no-snapshot-delta".to_owned()),
+                json: false,
+            },
+        )
+        .expect("runtime capability propose should succeed");
+
+    let payload = serde_json::to_value(&candidate).expect("serialize candidate");
+    assert!(
+        payload
+            .pointer("/source_run/snapshot_delta")
+            .is_some_and(Value::is_null),
+        "candidate should keep snapshot delta empty when recorded snapshots are unavailable"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_propose_rejects_broken_recorded_snapshot_delta() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-propose-broken-snapshot-delta");
+    let config_path = write_runtime_capability_config(&root);
+    let (run_path, _baseline_snapshot_path, result_snapshot_path, _run) =
+        finish_runtime_experiment_with_compare_delta(&root, &config_path);
+
+    fs::remove_file(&result_snapshot_path).expect("remove result snapshot to break recorded delta");
+
+    let error =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_propose_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityProposeCommandOptions {
+                run: run_path.display().to_string(),
+                output: root
+                    .join("artifacts/runtime-capability-broken-snapshot-delta.json")
+                    .display()
+                    .to_string(),
+                target:
+                    loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
+                target_summary: "Codify browser preview onboarding as a reusable managed skill"
+                    .to_owned(),
+                bounded_scope: "Browser preview onboarding and companion readiness checks only"
+                    .to_owned(),
+                required_capability: vec!["invoke_tool".to_owned(), "memory_read".to_owned()],
+                tag: vec!["browser".to_owned(), "onboarding".to_owned()],
+                label: Some("browser-preview-broken-snapshot-delta".to_owned()),
+                json: false,
+            },
+        )
+        .expect_err("broken recorded snapshots should reject capability proposal");
+
+    assert!(error.contains("snapshot"), "error: {error}");
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn runtime_capability_propose_rejects_planned_runs() {
     let root = unique_temp_dir("loongclaw-runtime-capability-propose-planned");
     let config_path = write_runtime_capability_config(&root);
@@ -658,6 +943,53 @@ fn runtime_capability_show_round_trips_the_persisted_artifact() {
     .expect("show should round-trip the persisted artifact");
 
     assert_eq!(shown, proposed);
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_show_accepts_artifacts_missing_snapshot_delta_field() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-show-legacy-delta");
+    let config_path = write_runtime_capability_config(&root);
+    let (run_path, _, _, _) = finish_runtime_experiment_with_compare_delta(&root, &config_path);
+    let candidate_path = root.join("artifacts/runtime-capability-legacy.json");
+
+    loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_propose_command(
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityProposeCommandOptions {
+            run: run_path.display().to_string(),
+            output: candidate_path.display().to_string(),
+            target: loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
+            target_summary: "Codify browser preview onboarding as a reusable managed skill"
+                .to_owned(),
+            bounded_scope: "Browser preview onboarding and companion readiness checks only"
+                .to_owned(),
+            required_capability: vec!["invoke_tool".to_owned(), "memory_read".to_owned()],
+            tag: vec!["browser".to_owned(), "onboarding".to_owned()],
+            label: Some("browser-preview-legacy".to_owned()),
+            json: false,
+        },
+    )
+    .expect("runtime capability propose should succeed");
+
+    rewrite_json_file(&candidate_path, |payload| {
+        payload["source_run"]
+            .as_object_mut()
+            .expect("source_run should be an object")
+            .remove("snapshot_delta");
+    });
+
+    let shown = loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_show_command(
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityShowCommandOptions {
+            candidate: candidate_path.display().to_string(),
+            json: false,
+        },
+    )
+    .expect("show should keep backward compatibility with legacy artifacts");
+
+    assert!(
+        shown.source_run.snapshot_delta.is_none(),
+        "missing snapshot_delta should deserialize as None"
+    );
 
     fs::remove_dir_all(&root).ok();
 }
@@ -873,6 +1205,69 @@ fn runtime_capability_index_groups_related_candidates_and_reports_ready_family()
             .expect("cost delta range should exist")
             .max,
         -0.2
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_index_reports_delta_evidence_digest() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-index-delta-digest");
+    let (run_a_path, _) = finish_runtime_experiment_variant_with_compare_delta(
+        &root,
+        "delta-a",
+        -0.2,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let (run_b_path, _) = finish_runtime_experiment_variant_with_compare_delta(
+        &root,
+        "delta-b",
+        -0.4,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+
+    let (candidate_a_path, _) = propose_runtime_capability_variant(&root, &run_a_path, "delta-a");
+    let (candidate_b_path, _) = propose_runtime_capability_variant(&root, &run_b_path, "delta-b");
+    review_runtime_capability_variant(
+        &candidate_a_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "delta-a",
+    );
+    review_runtime_capability_variant(
+        &candidate_b_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "delta-b",
+    );
+
+    let report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_index_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityIndexCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                json: false,
+            },
+        )
+        .expect("runtime capability index should succeed");
+    let payload = serde_json::to_value(&report).expect("serialize index report");
+    let evidence = payload
+        .pointer("/families/0/evidence")
+        .and_then(Value::as_object)
+        .expect("index report should expose one family evidence object");
+    assert_eq!(
+        evidence
+            .get("delta_candidate_count")
+            .and_then(Value::as_u64)
+            .expect("evidence should include delta candidate count"),
+        2
+    );
+    let changed_surfaces = evidence
+        .get("changed_surfaces")
+        .and_then(Value::as_array)
+        .expect("evidence should include changed surfaces");
+    assert!(
+        !changed_surfaces.is_empty(),
+        "delta evidence digest should list at least one changed surface"
     );
 
     fs::remove_dir_all(&root).ok();
@@ -1388,6 +1783,84 @@ fn runtime_capability_plan_builds_promotable_managed_skill_plan() {
 }
 
 #[test]
+fn runtime_capability_plan_surfaces_delta_evidence_digest() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-plan-delta-digest");
+    let (run_a_path, _) = finish_runtime_experiment_variant_with_compare_delta(
+        &root,
+        "plan-delta-a",
+        -0.2,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let (run_b_path, _) = finish_runtime_experiment_variant_with_compare_delta(
+        &root,
+        "plan-delta-b",
+        -0.4,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+
+    let (candidate_a_path, _) =
+        propose_runtime_capability_variant(&root, &run_a_path, "plan-delta-a");
+    let (candidate_b_path, _) =
+        propose_runtime_capability_variant(&root, &run_b_path, "plan-delta-b");
+    review_runtime_capability_variant(
+        &candidate_a_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "plan-delta-a",
+    );
+    review_runtime_capability_variant(
+        &candidate_b_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "plan-delta-b",
+    );
+
+    let index_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_index_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityIndexCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                json: false,
+            },
+        )
+        .expect("runtime capability index should succeed");
+    let family = index_report
+        .families
+        .first()
+        .expect("one capability family should be reported");
+
+    let plan = loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_plan_command(
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityPlanCommandOptions {
+            root: root.join("artifacts").display().to_string(),
+            family_id: family.family_id.clone(),
+            json: false,
+        },
+    )
+    .expect("runtime capability plan should succeed");
+    let payload = serde_json::to_value(&plan).expect("serialize plan");
+    let evidence = payload
+        .get("evidence")
+        .and_then(Value::as_object)
+        .expect("plan should include family evidence");
+    assert_eq!(
+        evidence
+            .get("delta_candidate_count")
+            .and_then(Value::as_u64)
+            .expect("plan evidence should include delta candidate count"),
+        2
+    );
+    let changed_surfaces = evidence
+        .get("changed_surfaces")
+        .and_then(Value::as_array)
+        .expect("plan evidence should include changed surfaces");
+    assert!(
+        !changed_surfaces.is_empty(),
+        "plan evidence should surface at least one changed surface"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn runtime_capability_plan_rejects_malformed_supported_artifact_during_scan() {
     let root = unique_temp_dir("loongclaw-runtime-capability-plan-malformed");
     let config_path = write_runtime_capability_config(&root);
@@ -1772,6 +2245,38 @@ fn runtime_capability_plan_rejects_unknown_family_id() {
     assert!(
         error.contains("missing-family"),
         "error should name the requested family id: {error}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_show_text_renders_snapshot_delta_summary() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-show-text-delta-summary");
+    let config_path = write_runtime_capability_config(&root);
+    let (run_path, _baseline_snapshot_path, _result_snapshot_path, _run) =
+        finish_runtime_experiment_with_compare_delta(&root, &config_path);
+
+    let candidate = propose_runtime_capability_variant_with_target(
+        &root,
+        &run_path,
+        "show-delta",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
+        "Codify browser preview onboarding as a reusable managed skill",
+        "Browser preview onboarding and companion readiness checks only",
+        &["invoke_tool", "memory_read"],
+        &["browser", "onboarding"],
+    );
+
+    let rendered =
+        loongclaw_daemon::runtime_capability_cli::render_runtime_capability_text(&candidate);
+    assert!(
+        rendered.contains("source_snapshot_delta_changed_surface_count="),
+        "rendered text should include the compact changed-surface count"
+    );
+    assert!(
+        rendered.contains("source_snapshot_delta_changed_surfaces="),
+        "rendered text should include compact changed-surface names"
     );
 
     fs::remove_dir_all(&root).ok();

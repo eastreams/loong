@@ -214,7 +214,7 @@ pub struct RuntimeExperimentRestoreExecution {
     pub restore: crate::runtime_restore_cli::RuntimeRestoreExecution,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeExperimentSnapshotDelta {
     pub changed_surface_count: usize,
     pub provider_active_profile: RuntimeExperimentScalarCompare,
@@ -232,13 +232,13 @@ pub struct RuntimeExperimentSnapshotDelta {
     pub external_skill_ids: RuntimeExperimentSetCompare,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeExperimentScalarCompare {
     pub before: Option<String>,
     pub after: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeExperimentSetCompare {
     pub added: Vec<String>,
     pub removed: Vec<String>,
@@ -253,6 +253,52 @@ impl RuntimeExperimentScalarCompare {
 impl RuntimeExperimentSetCompare {
     fn changed(&self) -> bool {
         !self.added.is_empty() || !self.removed.is_empty()
+    }
+}
+
+impl RuntimeExperimentSnapshotDelta {
+    pub(crate) fn changed_surfaces(&self) -> Vec<String> {
+        let mut surfaces = Vec::new();
+        if self.provider_active_profile.changed() {
+            surfaces.push("provider_active_profile".to_owned());
+        }
+        if self.provider_active_model.changed() {
+            surfaces.push("provider_active_model".to_owned());
+        }
+        if self.context_engine_selected.changed() {
+            surfaces.push("context_engine_selected".to_owned());
+        }
+        if self.context_engine_compaction.changed() {
+            surfaces.push("context_engine_compaction".to_owned());
+        }
+        if self.memory_selected.changed() {
+            surfaces.push("memory_selected".to_owned());
+        }
+        if self.memory_policy.changed() {
+            surfaces.push("memory_policy".to_owned());
+        }
+        if self.acp_selected.changed() {
+            surfaces.push("acp_selected".to_owned());
+        }
+        if self.acp_policy.changed() {
+            surfaces.push("acp_policy".to_owned());
+        }
+        if self.enabled_channel_ids.changed() {
+            surfaces.push("enabled_channel_ids".to_owned());
+        }
+        if self.enabled_service_channel_ids.changed() {
+            surfaces.push("enabled_service_channel_ids".to_owned());
+        }
+        if self.visible_tool_names.changed() {
+            surfaces.push("visible_tool_names".to_owned());
+        }
+        if self.capability_snapshot_sha256.changed() {
+            surfaces.push("capability_snapshot_sha256".to_owned());
+        }
+        if self.external_skill_ids.changed() {
+            surfaces.push("external_skill_ids".to_owned());
+        }
+        surfaces
     }
 }
 
@@ -418,6 +464,20 @@ pub fn execute_runtime_experiment_compare_command(
         compare_mode,
         snapshot_delta,
     })
+}
+
+pub(crate) fn derive_recorded_snapshot_delta_for_run(
+    artifact: &RuntimeExperimentArtifactDocument,
+    run_path: &str,
+) -> CliResult<Option<RuntimeExperimentSnapshotDelta>> {
+    let Some(result_snapshot) = artifact.result_snapshot.as_ref() else {
+        return Ok(None);
+    };
+    if artifact.baseline_snapshot.artifact_path.is_none() || result_snapshot.artifact_path.is_none()
+    {
+        return Ok(None);
+    }
+    load_runtime_experiment_compare_snapshot_delta(artifact, run_path, None, None, true)
 }
 
 pub fn execute_runtime_experiment_restore_command(

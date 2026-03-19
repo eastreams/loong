@@ -1,8 +1,8 @@
 use crate::Capability;
 use crate::runtime_experiment_cli::{
     RuntimeExperimentArtifactDocument, RuntimeExperimentDecision,
-    RuntimeExperimentShowCommandOptions, RuntimeExperimentStatus,
-    execute_runtime_experiment_show_command,
+    RuntimeExperimentShowCommandOptions, RuntimeExperimentSnapshotDelta, RuntimeExperimentStatus,
+    derive_recorded_snapshot_delta_for_run, execute_runtime_experiment_show_command,
 };
 use crate::sha2::{self, Digest};
 use clap::{Args, Subcommand, ValueEnum};
@@ -154,6 +154,7 @@ pub struct RuntimeCapabilitySourceRunSummary {
     pub evaluation_summary: String,
     pub metrics: std::collections::BTreeMap<String, f64>,
     pub warnings: Vec<String>,
+    pub snapshot_delta: Option<RuntimeExperimentSnapshotDelta>,
     pub artifact_path: Option<String>,
 }
 
@@ -232,6 +233,8 @@ pub struct RuntimeCapabilityEvidenceDigest {
     pub latest_reviewed_at: Option<String>,
     pub source_decisions: RuntimeCapabilitySourceDecisionRollup,
     pub unique_warnings: Vec<String>,
+    pub delta_candidate_count: usize,
+    pub changed_surfaces: Vec<String>,
     pub metric_ranges: BTreeMap<String, RuntimeCapabilityMetricRange>,
 }
 
@@ -550,6 +553,10 @@ fn build_source_run_summary(
         .evaluation
         .as_ref()
         .ok_or_else(|| "runtime capability source run is missing evaluation".to_owned())?;
+    let snapshot_delta = artifact_path
+        .map(|path| derive_recorded_snapshot_delta_for_run(run, &path.display().to_string()))
+        .transpose()?
+        .flatten();
     Ok(RuntimeCapabilitySourceRunSummary {
         run_id: run.run_id.clone(),
         experiment_id: run.experiment_id.clone(),
@@ -565,6 +572,7 @@ fn build_source_run_summary(
         evaluation_summary: evaluation.summary.clone(),
         metrics: evaluation.metrics.clone(),
         warnings: evaluation.warnings.clone(),
+        snapshot_delta,
         artifact_path: artifact_path.map(canonicalize_existing_path).transpose()?,
     })
 }
@@ -829,6 +837,8 @@ fn build_family_evidence_digest(
     let mut rejected = 0;
     let mut undecided = 0;
     let mut unique_warnings = BTreeSet::new();
+    let mut changed_surfaces = BTreeSet::new();
+    let mut delta_candidate_count = 0;
     let mut metric_bounds = BTreeMap::<String, RuntimeCapabilityMetricRange>::new();
 
     for artifact in artifacts {
@@ -836,6 +846,11 @@ fn build_family_evidence_digest(
             RuntimeExperimentDecision::Promoted => promoted += 1,
             RuntimeExperimentDecision::Rejected => rejected += 1,
             RuntimeExperimentDecision::Undecided => undecided += 1,
+        }
+
+        if let Some(snapshot_delta) = artifact.source_run.snapshot_delta.as_ref() {
+            delta_candidate_count += 1;
+            changed_surfaces.extend(snapshot_delta.changed_surfaces());
         }
 
         if artifact.decision == RuntimeCapabilityDecision::Accepted {
@@ -872,6 +887,8 @@ fn build_family_evidence_digest(
             undecided,
         },
         unique_warnings: unique_warnings.into_iter().collect(),
+        delta_candidate_count,
+        changed_surfaces: changed_surfaces.into_iter().collect(),
         metric_ranges: metric_bounds,
     }
 }
@@ -1180,6 +1197,24 @@ pub fn render_runtime_capability_text(artifact: &RuntimeCapabilityArtifactDocume
             render_string_values_with_separator(&artifact.source_run.warnings, " | ")
         ),
         format!(
+            "source_snapshot_delta_changed_surface_count={}",
+            artifact
+                .source_run
+                .snapshot_delta
+                .as_ref()
+                .map(|delta| delta.changed_surface_count.to_string())
+                .unwrap_or_else(|| "-".to_owned())
+        ),
+        format!(
+            "source_snapshot_delta_changed_surfaces={}",
+            artifact
+                .source_run
+                .snapshot_delta
+                .as_ref()
+                .map(|delta| render_string_values(&delta.changed_surfaces()))
+                .unwrap_or_else(|| "-".to_owned())
+        ),
+        format!(
             "review_summary={}",
             artifact
                 .review
@@ -1243,6 +1278,14 @@ pub fn render_runtime_capability_index_text(report: &RuntimeCapabilityIndexRepor
         lines.push(format!(
             "warnings={}",
             render_string_values_with_separator(&family.evidence.unique_warnings, " | ")
+        ));
+        lines.push(format!(
+            "delta_evidence_candidates={}",
+            family.evidence.delta_candidate_count
+        ));
+        lines.push(format!(
+            "delta_changed_surfaces={}",
+            render_string_values(&family.evidence.changed_surfaces)
         ));
         lines.push(format!(
             "checks={}",
@@ -1535,6 +1578,14 @@ pub fn render_runtime_capability_promotion_plan_text(
         format!(
             "tags={}",
             render_string_values(&report.planned_artifact.tags)
+        ),
+        format!(
+            "delta_evidence_candidates={}",
+            report.evidence.delta_candidate_count
+        ),
+        format!(
+            "delta_changed_surfaces={}",
+            render_string_values(&report.evidence.changed_surfaces)
         ),
         format!(
             "blockers={}",
