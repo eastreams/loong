@@ -7,15 +7,31 @@ This document defines the active GitHub collaboration baseline for the `dev` bra
 - `dev` is the active integration branch for day-to-day OSS work.
 - Contributors should branch from `dev` and target `dev` with normal pull requests.
 - `main` is the stable promotion branch. Only reviewed `dev` changes should move into `main`.
+- `release` and `release/*` branches are optional release-hardening lanes. When used, they should
+  only receive reviewed `main` changes.
 - Promotion pull requests into `main` should come from `dev` and stay focused on stabilised work,
   not mixed feature development.
 
 ## Promotion and Release Rhythm
 
 - Maintainers aim to promote a stable slice from `dev` into `main` on a regular cadence.
+- When a dedicated release-hardening lane is needed, maintainers may promote `main` into `release`
+  or `release/*` before tagging.
 - Exact timing depends on validation status, scope completion, and operational readiness.
 - Releases are published from stable promotion points when the shipped slice is complete enough to
   support a tagged release. Not every `dev -> main` promotion must become a public release.
+
+## CI and Promotion Gates
+
+- `CI`, `CodeQL`, and `Security` validate pull requests and pushes for `dev`, `main`, `release`,
+  and `release/*`.
+- `perf-lint` uses the same branch set but stays path-scoped to workflow and benchmark-sensitive
+  files.
+- `enforce-dev-to-main` closes promotion PRs into `main` when the source is not the same-repository
+  `dev` branch.
+- `enforce-main-to-release` closes promotion PRs into `release` lanes when the source is not the
+  same-repository `main` branch.
+- The stable branch-protection check is `build`, the aggregate job in `.github/workflows/ci.yml`.
 
 ## Intake Routes
 

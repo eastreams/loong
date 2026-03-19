@@ -11,7 +11,8 @@ These must hold at every commit on every branch:
 3. `cargo test --workspace` passes
 4. `cargo test --workspace --all-features` passes (test count evolves with the codebase; CI is the source of truth)
 
-Enforced by: CI (`verify` workflow). The optional `scripts/pre-commit` hook mirrors these cargo gates locally.
+Enforced by: CI (`.github/workflows/ci.yml`, surfaced through the aggregate `build` check). The
+optional `scripts/pre-commit` hook mirrors these cargo gates locally.
 
 ## Runtime Stability Guardrails
 

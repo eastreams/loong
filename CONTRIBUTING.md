@@ -73,6 +73,8 @@ If you are unsure which track applies, open an issue and ask maintainers for tri
 - `dev` is the active integration branch for day-to-day development.
 - Contributors should branch from `dev` and target `dev` with normal pull requests.
 - `main` is the stable promotion branch and should only receive reviewed changes from `dev`.
+- `release` or `release/*` branches are reserved for release hardening. When maintainers use one,
+  it should only receive reviewed changes from `main`.
 - Maintainers aim to promote stable slices from `dev` into `main` on a regular cadence. Exact
   timing depends on validation status, scope completion, and operational readiness.
 
@@ -80,9 +82,22 @@ If you are unsure which track applies, open an issue and ask maintainers for tri
 
 - Tagged releases are published from stable promotion points rather than from arbitrary in-flight
   commits.
+- Maintainers may use `release` or `release/*` branches as short-lived release hardening lanes
+  before tagging. Those branches should stay focused on release readiness, fixes, and verification.
 - Not every `dev -> main` promotion needs to become a public release.
 - Release readiness normally includes green CI, required validation, install flow sanity, and docs
   or changelog updates for shipped user-facing changes.
+
+## CI and Required Checks
+
+- `CI`, `CodeQL`, and `Security` run for pull requests and pushes targeting `dev`, `main`,
+  `release`, and `release/*`.
+- `perf-lint` follows the same branch set but only when workflow, benchmark, daemon, spec, kernel,
+  or app paths change.
+- The aggregate required check for promotion branches is `build`, emitted by
+  `.github/workflows/ci.yml`.
+- If branch protection is enabled for `dev`, `main`, or `release` lanes, require `build` instead
+  of tracking the internal job names individually.
 
 ## Where Do I Start?
 

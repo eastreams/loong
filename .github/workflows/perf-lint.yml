@@ -2,6 +2,11 @@ name: perf-lint
 
 on:
   pull_request:
+    branches:
+      - dev
+      - main
+      - release
+      - 'release/**'
     paths:
       - '.github/workflows/**'
       - 'scripts/lint_programmatic_pressure_baseline.sh'
@@ -12,7 +17,18 @@ on:
       - 'crates/app/**'
   push:
     branches:
+      - dev
       - main
+      - release
+      - 'release/**'
+    paths:
+      - '.github/workflows/**'
+      - 'scripts/lint_programmatic_pressure_baseline.sh'
+      - 'examples/benchmarks/**'
+      - 'crates/daemon/**'
+      - 'crates/spec/**'
+      - 'crates/kernel/**'
+      - 'crates/app/**'
 
 concurrency:
   group: perf-lint-${{ github.workflow }}-${{ github.ref }}

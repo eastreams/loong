@@ -2,9 +2,17 @@ name: CI
 
 on:
   pull_request:
+    branches:
+      - dev
+      - main
+      - release
+      - 'release/**'
   push:
     branches:
+      - dev
       - main
+      - release
+      - 'release/**'
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -41,6 +49,7 @@ jobs:
           bash -n scripts/bootstrap_release_local_artifacts.sh
           bash -n scripts/test_release_artifact_lib.sh
           bash -n scripts/test_bootstrap_release_local_artifacts.sh
+          bash -n scripts/test_promotion_guard_workflows.sh
           bash -n scripts/check-docs.sh
           bash -n scripts/check_dep_graph.sh
           bash -n scripts/stress_daemon_tests.sh
@@ -54,6 +63,7 @@ jobs:
           bash scripts/test_install_sh.sh
           bash scripts/test_release_artifact_lib.sh
           bash scripts/test_bootstrap_release_local_artifacts.sh
+          bash scripts/test_promotion_guard_workflows.sh
           bash scripts/test_stress_daemon_tests.sh
 
       - name: Fresh architecture drift report
@@ -150,3 +160,41 @@ jobs:
 
       - name: Docs build
         run: cargo doc --workspace --no-deps
+
+  build:
+    name: build
+    if: ${{ always() }}
+    needs:
+      - governance
+      - rust-quality
+      - rust-test-default
+      - rust-test-all-features
+      - docs-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require successful upstream jobs
+        env:
+          GOVERNANCE_RESULT: ${{ needs.governance.result }}
+          RUST_QUALITY_RESULT: ${{ needs.rust-quality.result }}
+          RUST_TEST_DEFAULT_RESULT: ${{ needs.rust-test-default.result }}
+          RUST_TEST_ALL_FEATURES_RESULT: ${{ needs.rust-test-all-features.result }}
+          DOCS_BUILD_RESULT: ${{ needs.docs-build.result }}
+        run: |
+          set -euo pipefail
+
+          check_result() {
+            local name="$1"
+            local result="$2"
+            if [ "$result" != "success" ]; then
+              echo "::error title=${name} result::Expected success, got ${result}"
+              exit 1
+            fi
+          }
+
+          check_result governance "$GOVERNANCE_RESULT"
+          check_result rust-quality "$RUST_QUALITY_RESULT"
+          check_result rust-test-default "$RUST_TEST_DEFAULT_RESULT"
+          check_result rust-test-all-features "$RUST_TEST_ALL_FEATURES_RESULT"
+          check_result docs-build "$DOCS_BUILD_RESULT"
