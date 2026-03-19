@@ -2891,7 +2891,7 @@ mod tests {
         config.feishu.enabled = true;
         config.feishu.app_id = Some("app-id".to_owned());
         config.feishu.app_secret = Some("app-secret".to_owned());
-        config.feishu.mode = crate::config::FeishuChannelServeMode::Websocket;
+        config.feishu.mode = Some(crate::config::FeishuChannelServeMode::Websocket);
         config.feishu.allowed_chat_ids = vec!["oc_123".to_owned()];
 
         let snapshots = channel_status_snapshots(&config);

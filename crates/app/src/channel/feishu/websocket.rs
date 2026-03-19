@@ -141,6 +141,7 @@ impl FeishuWsFragments {
         }
         if let Some(part) = entry.parts.get_mut(seq) {
             *part = Some(payload);
+            entry.created_at = Instant::now();
         } else {
             return Some(payload);
         }
@@ -197,7 +198,17 @@ pub(super) async fn run_feishu_websocket_channel(
     }
 
     loop {
-        let endpoint = client.get_websocket_endpoint().await?;
+        let endpoint = match client.get_websocket_endpoint().await {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                #[allow(clippy::print_stderr)]
+                {
+                    eprintln!("warning: feishu websocket endpoint discovery failed: {error}");
+                }
+                tokio::time::sleep(Duration::from_secs(DEFAULT_WS_RECONNECT_INTERVAL_S)).await;
+                continue;
+            }
+        };
         let ws_config = endpoint.client_config.unwrap_or_default();
         let reconnect_interval = Duration::from_secs(
             ws_config
@@ -559,7 +570,7 @@ mod tests {
         config.feishu.app_id = Some("cli_a1b2c3".to_owned());
         config.feishu.app_secret = Some("secret-123".to_owned());
         config.feishu.base_url = Some(feishu_base_url.to_owned());
-        config.feishu.mode = FeishuChannelServeMode::Websocket;
+        config.feishu.mode = Some(FeishuChannelServeMode::Websocket);
         config.feishu.receive_id_type = "chat_id".to_owned();
         config.feishu.allowed_chat_ids = vec!["oc_demo".to_owned()];
         config.feishu.verification_token = None;
@@ -683,6 +694,52 @@ mod tests {
                     "content": "approved"
                 }
             })
+        );
+    }
+
+    #[tokio::test]
+    async fn feishu_websocket_fragments_refresh_ttl_when_new_chunks_arrive() {
+        let mut fragments = FeishuWsFragments::default();
+        assert_eq!(
+            fragments.combine("evt_ws_fragments", 3, 0, b"hel".to_vec()),
+            None
+        );
+
+        fragments
+            .messages
+            .get_mut("evt_ws_fragments")
+            .expect("fragment entry after first chunk")
+            .created_at = Instant::now() - Duration::from_millis(9_900);
+
+        assert_eq!(
+            fragments.combine("evt_ws_fragments", 3, 1, b"lo ".to_vec()),
+            None
+        );
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        assert_eq!(
+            fragments.combine("evt_ws_fragments", 3, 2, b"ws".to_vec()),
+            Some(b"hello ws".to_vec()),
+            "recent fragment progress should keep the in-flight assembly alive"
+        );
+    }
+
+    #[tokio::test]
+    async fn feishu_websocket_wss_urls_do_not_fail_due_to_missing_tls_support() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind disposable tcp listener");
+        let address = listener.local_addr().expect("disposable listener addr");
+        drop(listener);
+
+        let error = connect_async(format!("wss://{address}/events?service_id=42"))
+            .await
+            .expect_err("closed port should reject the wss connection");
+
+        assert!(
+            !error.to_string().contains("TLS support not compiled in"),
+            "wss support must be compiled in for Feishu websocket mode: {error}"
         );
     }
 

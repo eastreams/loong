@@ -575,13 +575,14 @@ async fn handle_feishu_inbound_event(
     state: &FeishuWebhookState,
     event: super::payload::FeishuInboundEvent,
 ) -> Result<FeishuParsedActionResponse, (StatusCode, String)> {
+    state.runtime.mark_run_start().await.map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("channel runtime start failed: {error}"),
+        )
+    })?;
+
     let result = async {
-        state.runtime.mark_run_start().await.map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("channel runtime start failed: {error}"),
-            )
-        })?;
         let channel_message = ChannelInboundMessage {
             session: event.session,
             reply_target: event.reply_target,
@@ -638,15 +639,12 @@ async fn handle_feishu_inbound_event(
         ))
     }
     .await;
-    let runtime_end_result = state.runtime.mark_run_end().await;
-    match (result, runtime_end_result) {
-        (Ok(reply), Ok(())) => Ok(reply),
-        (Err(error), _) => Err(error),
-        (Ok(_), Err(error)) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("channel runtime end failed: {error}"),
-        )),
+
+    if let Err(error) = state.runtime.mark_run_end().await {
+        log_feishu_inbound_warning("runtime end failed", &error);
     }
+
+    result
 }
 
 fn parse_feishu_structured_callback_response(text: &str) -> Option<FeishuCallbackResponse> {
@@ -798,6 +796,13 @@ fn log_feishu_callback_warning(context: &str, error: &str) {
     }
 }
 
+fn log_feishu_inbound_warning(context: &str, error: &str) {
+    #[allow(clippy::print_stderr)]
+    {
+        eprintln!("warning: feishu inbound {context}: {error}");
+    }
+}
+
 fn map_feishu_parse_error(error: String) -> (StatusCode, String) {
     if let Some(message) = error.strip_prefix("unauthorized:") {
         return (StatusCode::UNAUTHORIZED, message.trim().to_owned());
@@ -875,6 +880,7 @@ fn read_header_required<'a>(
 mod tests {
     use super::*;
     use crate::channel::ChannelPlatform;
+    use crate::channel::runtime_state::start_channel_operation_runtime_tracker_for_test;
     use crate::config::{LoongClawConfig, ProviderConfig};
     use crate::context::{DEFAULT_TOKEN_TTL_S, KernelContext, bootstrap_test_kernel_context};
     use crate::tools::runtime_config::ToolRuntimeConfig;
@@ -1086,6 +1092,34 @@ mod tests {
                                 }
                             })),
                         )
+                    }
+                }
+            }),
+        );
+        spawn_mock_server(router).await
+    }
+
+    async fn spawn_mock_provider_delayed_success_server(
+        requests: Arc<Mutex<Vec<MockRequest>>>,
+        delay: std::time::Duration,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let state = MockServerState { requests };
+        let router = Router::new().route(
+            "/v1/chat/completions",
+            post({
+                let state = state.clone();
+                move |request| {
+                    let state = state.clone();
+                    async move {
+                        record_request(State(state), request).await;
+                        tokio::time::sleep(delay).await;
+                        Json(json!({
+                            "choices": [{
+                                "message": {
+                                    "content": "structured inbound ack"
+                                }
+                            }]
+                        }))
                     }
                 }
             }),
@@ -1662,6 +1696,107 @@ mod tests {
                 .body
                 .contains("\\\"text\\\":\\\"structured inbound ack\\\""),
             "reply body should include provider text"
+        );
+
+        provider_server.abort();
+        feishu_server.abort();
+    }
+
+    #[tokio::test]
+    async fn feishu_webhook_inbound_reply_stays_successful_when_runtime_end_write_fails() {
+        let provider_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+        let feishu_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+        let (provider_base_url, provider_server) = spawn_mock_provider_delayed_success_server(
+            provider_requests.clone(),
+            std::time::Duration::from_millis(50),
+        )
+        .await;
+        let (feishu_base_url, feishu_server) =
+            spawn_mock_feishu_api_server(feishu_requests.clone(), "om_reply_runtime_end").await;
+
+        let config = test_webhook_config(&provider_base_url, &feishu_base_url);
+        let resolved = config
+            .feishu
+            .resolve_account(None)
+            .expect("resolve feishu account");
+        let mut adapter = FeishuAdapter::new(&resolved).expect("build feishu adapter");
+        adapter
+            .refresh_tenant_token()
+            .await
+            .expect("refresh tenant token before webhook test");
+        let kernel_ctx = bootstrap_test_kernel_context(
+            "feishu-webhook-runtime-end-failure",
+            DEFAULT_TOKEN_TTL_S,
+        )
+        .expect("bootstrap kernel context");
+        let runtime_dir = temp_webhook_test_dir("runtime-end-failure");
+        std::fs::create_dir_all(&runtime_dir).expect("create runtime dir");
+        let runtime = Arc::new(
+            start_channel_operation_runtime_tracker_for_test(
+                &runtime_dir,
+                ChannelPlatform::Feishu,
+                "serve",
+                resolved.account.id.as_str(),
+                resolved.account.label.as_str(),
+                424242,
+            )
+            .await
+            .expect("start test runtime tracker"),
+        );
+        let state = FeishuWebhookState::new(config, &resolved, adapter, kernel_ctx, runtime);
+
+        let runtime_dir_for_delete = runtime_dir.clone();
+        let runtime_delete = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            std::fs::remove_dir_all(&runtime_dir_for_delete).expect("remove runtime dir");
+            std::fs::write(&runtime_dir_for_delete, "blocked")
+                .expect("replace runtime dir with file");
+        });
+
+        let payload = json!({
+            "token": "verify-token",
+            "header": {
+                "event_id": "evt_runtime_end_failure",
+                "event_type": "im.message.receive_v1"
+            },
+            "event": {
+                "sender": {
+                    "sender_type": "user",
+                    "sender_id": {
+                        "open_id": "ou_sender_runtime_end"
+                    }
+                },
+                "message": {
+                    "chat_id": "oc_demo",
+                    "message_id": "om_runtime_end_1",
+                    "message_type": "text",
+                    "content": "{\"text\":\"runtime end failure should stay acknowledged\"}"
+                }
+            }
+        });
+        let raw_body = serde_json::to_string(&payload).expect("serialize payload");
+        let headers = signed_headers(&raw_body, "encrypt-key");
+        let response = handle_feishu_webhook_payload(
+            state,
+            &headers,
+            raw_body.as_str(),
+            serde_json::from_str(raw_body.as_str()).expect("payload value"),
+        )
+        .await
+        .expect("reply should stay successful even if runtime end bookkeeping fails");
+
+        runtime_delete.await.expect("join runtime file deletion");
+
+        assert_eq!(response.body(), &json!({"code": 0, "msg": "ok"}));
+
+        let provider_requests = provider_requests.lock().await.clone();
+        assert_eq!(provider_requests.len(), 1);
+
+        let feishu_requests = feishu_requests.lock().await.clone();
+        assert_eq!(feishu_requests.len(), 2);
+        assert_eq!(
+            feishu_requests[1].path,
+            "/open-apis/im/v1/messages/om_runtime_end_1/reply"
         );
 
         provider_server.abort();

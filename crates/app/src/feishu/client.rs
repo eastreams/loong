@@ -206,48 +206,84 @@ impl FeishuClient {
         }
 
         let url = self.build_open_api_url("/callback/ws/endpoint")?;
-        let response = self
-            .http
-            .post(url)
-            .header("locale", "zh")
-            .json(&json!({
-                "AppID": self.app_id(),
-                "AppSecret": self.app_secret(),
-            }))
-            .send()
-            .await
-            .map_err(|error| format!("request Feishu websocket endpoint failed: {error}"))?;
-        let status = response.status();
-        let body = response.text().await.map_err(|error| {
-            format!("read Feishu websocket endpoint response body failed: {error}")
-        })?;
-        if !status.is_success() {
-            return Err(format!(
-                "request Feishu websocket endpoint failed with status {}: {}",
-                status.as_u16(),
-                body
-            ));
+        let max_attempts = self.retry_policy.max_attempts.max(1);
+
+        for attempt in 1..=max_attempts {
+            match self
+                .http
+                .post(url.clone())
+                .header("locale", "zh")
+                .json(&json!({
+                    "AppID": self.app_id(),
+                    "AppSecret": self.app_secret(),
+                }))
+                .send()
+                .await
+            {
+                Ok(response) => {
+                    let status = response.status();
+                    let headers = response.headers().clone();
+                    let body = match response.text().await {
+                        Ok(body) => body,
+                        Err(error) => {
+                            if attempt < max_attempts {
+                                sleep(self.retry_policy.backoff_for_retry(attempt)).await;
+                                continue;
+                            }
+                            return Err(format!(
+                                "read Feishu websocket endpoint response body failed: {error}"
+                            ));
+                        }
+                    };
+                    if !status.is_success() {
+                        if attempt < max_attempts && is_retryable_json_failure(status, None) {
+                            sleep(retry_delay_for_attempt(
+                                &self.retry_policy,
+                                &headers,
+                                attempt,
+                            ))
+                            .await;
+                            continue;
+                        }
+                        return Err(format!(
+                            "request Feishu websocket endpoint failed with status {}: {}",
+                            status.as_u16(),
+                            body
+                        ));
+                    }
+
+                    let envelope: FeishuWsEndpointEnvelope =
+                        serde_json::from_str(&body).map_err(|error| {
+                            format!("decode Feishu websocket endpoint response failed: {error}")
+                        })?;
+                    if envelope.code != 0 {
+                        return Err(format!(
+                            "request Feishu websocket endpoint failed with code {}: {}",
+                            envelope.code, envelope.msg
+                        ));
+                    }
+
+                    let endpoint = envelope.data.ok_or_else(|| {
+                        "Feishu websocket endpoint response missing data".to_owned()
+                    })?;
+                    let endpoint_url = endpoint.url.trim();
+                    if endpoint_url.is_empty() {
+                        return Err("Feishu websocket endpoint response missing URL".to_owned());
+                    }
+
+                    return Ok(endpoint);
+                }
+                Err(error) => {
+                    if attempt < max_attempts && (error.is_timeout() || error.is_connect()) {
+                        sleep(self.retry_policy.backoff_for_retry(attempt)).await;
+                        continue;
+                    }
+                    return Err(format!("request Feishu websocket endpoint failed: {error}"));
+                }
+            }
         }
 
-        let envelope: FeishuWsEndpointEnvelope = serde_json::from_str(&body).map_err(|error| {
-            format!("decode Feishu websocket endpoint response failed: {error}")
-        })?;
-        if envelope.code != 0 {
-            return Err(format!(
-                "request Feishu websocket endpoint failed with code {}: {}",
-                envelope.code, envelope.msg
-            ));
-        }
-
-        let endpoint = envelope
-            .data
-            .ok_or_else(|| "Feishu websocket endpoint response missing data".to_owned())?;
-        let url = endpoint.url.trim();
-        if url.is_empty() {
-            return Err("Feishu websocket endpoint response missing URL".to_owned());
-        }
-
-        Ok(endpoint)
+        Err("feishu websocket endpoint retry loop exhausted without returning a result".to_owned())
     }
 
     pub async fn exchange_authorization_code(
@@ -1042,6 +1078,109 @@ mod tests {
         assert_eq!(
             payload.content_disposition.as_deref(),
             Some("attachment; filename=\"spec-sheet.pdf\"")
+        );
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn get_websocket_endpoint_retries_transient_server_error_then_succeeds() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let router = Router::new().route(
+            "/callback/ws/endpoint",
+            post({
+                let attempts = attempts.clone();
+                move || {
+                    let attempts = attempts.clone();
+                    async move {
+                        let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                        if attempt == 0 {
+                            return Response::builder()
+                                .status(StatusCode::SERVICE_UNAVAILABLE)
+                                .header("retry-after", "0")
+                                .body(Body::from("temporary outage"))
+                                .expect("build retry response");
+                        }
+
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header("content-type", "application/json")
+                            .body(Body::from(
+                                serde_json::json!({
+                                    "code": 0,
+                                    "msg": "ok",
+                                    "data": {
+                                        "URL": "wss://example.feishu.cn/ws?service_id=42",
+                                        "ClientConfig": {
+                                            "ReconnectInterval": 7
+                                        }
+                                    }
+                                })
+                                .to_string(),
+                            ))
+                            .expect("build websocket endpoint response")
+                    }
+                }
+            }),
+        );
+        let (base_url, server) = spawn_mock_feishu_server(router).await;
+        let mut client = FeishuClient::new(base_url, "cli_xxx", "secret_xxx", 20).expect("client");
+        client.retry_policy.max_attempts = 2;
+        client.retry_policy.initial_backoff_ms = 0;
+        client.retry_policy.max_backoff_ms = 0;
+
+        let endpoint = client
+            .get_websocket_endpoint()
+            .await
+            .expect("transient websocket endpoint failures should retry and recover");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(endpoint.url, "wss://example.feishu.cn/ws?service_id=42");
+        assert_eq!(
+            endpoint
+                .client_config
+                .expect("client config after endpoint recovery")
+                .reconnect_interval_s,
+            Some(7)
+        );
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn get_websocket_endpoint_does_not_retry_non_retryable_feishu_error() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let router = Router::new().route(
+            "/callback/ws/endpoint",
+            post({
+                let attempts = attempts.clone();
+                move || {
+                    let attempts = attempts.clone();
+                    async move {
+                        attempts.fetch_add(1, Ordering::SeqCst);
+                        Json(serde_json::json!({
+                            "code": 20001,
+                            "msg": "invalid app credentials"
+                        }))
+                    }
+                }
+            }),
+        );
+        let (base_url, server) = spawn_mock_feishu_server(router).await;
+        let mut client = FeishuClient::new(base_url, "cli_xxx", "secret_xxx", 20).expect("client");
+        client.retry_policy.max_attempts = 2;
+        client.retry_policy.initial_backoff_ms = 0;
+        client.retry_policy.max_backoff_ms = 0;
+
+        let error = client
+            .get_websocket_endpoint()
+            .await
+            .expect_err("fatal websocket endpoint errors should surface immediately");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            error,
+            "request Feishu websocket endpoint failed with code 20001: invalid app credentials"
         );
 
         server.abort();
