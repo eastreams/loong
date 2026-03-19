@@ -159,6 +159,7 @@ mod tests {
             ids,
             vec![
                 "anthropic",
+                "bailian_coding",
                 "bedrock",
                 "byteplus",
                 "byteplus_coding",
@@ -184,7 +185,6 @@ mod tests {
                 "perplexity",
                 "qianfan",
                 "qwen",
-                "bailian_coding",
                 "sambanova",
                 "sglang",
                 "siliconflow",
