@@ -142,7 +142,7 @@ loongclaw runtime-capability index \
 Behavior:
 
 - recursively scan `--root`
-- load JSON files that decode as supported `runtime-capability` artifacts
+- load JSON files that decode as supported `runtime-capability` artifacts, and abort with a file-specific error if a supported artifact fails schema or integrity validation
 - derive one stable family id from normalized proposal intent
 - group candidates by family id
 - build one compact evidence digest per family

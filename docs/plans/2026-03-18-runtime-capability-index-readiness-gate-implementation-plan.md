@@ -50,7 +50,7 @@ Extend runtime-capability CLI parsing coverage so `index` parses:
 
 **Step 2: Run the targeted parsing test to verify RED**
 
-Run: `target/debug/deps/integration-be821edddb3e2519 --exact integration::cli_tests::runtime_capability_cli_parses_propose_review_and_show --nocapture`
+Run: `cargo test -p loongclaw-daemon --test integration runtime_capability_cli_parses_propose_review_show_index_and_plan -- --nocapture`
 Expected: FAIL because `index` is not parsed yet
 
 ### Task 3: Add failing runtime-capability integration coverage
@@ -70,7 +70,7 @@ Add integration tests covering:
 
 **Step 2: Run the targeted runtime-capability tests to verify RED**
 
-Run: `target/debug/deps/integration-be821edddb3e2519 runtime_capability_ --nocapture`
+Run: `cargo test -p loongclaw-daemon --test integration runtime_capability_ -- --nocapture`
 Expected: FAIL because the index surface does not exist yet
 
 ### Task 4: Implement the new read-only index surface
@@ -119,7 +119,7 @@ why a family is `ready`, `not_ready`, or `blocked`.
 
 **Step 6: Run the targeted tests to verify GREEN**
 
-Run: `target/debug/deps/integration-be821edddb3e2519 runtime_capability_ --nocapture`
+Run: `cargo test -p loongclaw-daemon --test integration runtime_capability_ -- --nocapture`
 Expected: PASS
 
 ### Task 5: Update product docs and roadmap references
@@ -152,8 +152,8 @@ Expected: the new index/readiness references appear in the updated docs
 
 Run:
 
-- `target/debug/deps/integration-be821edddb3e2519 runtime_capability_ --nocapture`
-- `target/debug/deps/integration-be821edddb3e2519 --exact integration::cli_tests::runtime_capability_cli_parses_propose_review_and_show --nocapture`
+- `cargo test -p loongclaw-daemon --test integration runtime_capability_ -- --nocapture`
+- `cargo test -p loongclaw-daemon --test integration runtime_capability_cli_parses_propose_review_show_index_and_plan -- --nocapture`
 
 Expected: PASS
 

@@ -334,6 +334,19 @@ fn rewrite_runtime_capability_created_at(candidate_path: &Path, created_at: &str
     .expect("rewrite runtime capability artifact");
 }
 
+fn make_runtime_capability_review_state_inconsistent(candidate_path: &Path) {
+    let mut payload = serde_json::from_str::<Value>(
+        &fs::read_to_string(candidate_path).expect("read runtime capability artifact"),
+    )
+    .expect("decode runtime capability artifact");
+    payload["status"] = Value::String("reviewed".to_owned());
+    fs::write(
+        candidate_path,
+        serde_json::to_string_pretty(&payload).expect("encode malformed capability candidate"),
+    )
+    .expect("persist malformed capability candidate");
+}
+
 #[test]
 fn runtime_capability_propose_persists_candidate_from_finished_run() {
     let root = unique_temp_dir("loongclaw-runtime-capability-propose");
@@ -589,16 +602,7 @@ fn runtime_capability_show_rejects_inconsistent_review_state() {
     )
     .expect("runtime capability propose should succeed");
 
-    let mut raw = serde_json::from_str::<Value>(
-        &fs::read_to_string(&candidate_path).expect("read persisted capability candidate"),
-    )
-    .expect("decode persisted capability candidate");
-    raw["status"] = Value::String("reviewed".to_owned());
-    fs::write(
-        &candidate_path,
-        serde_json::to_string_pretty(&raw).expect("encode malformed capability candidate"),
-    )
-    .expect("persist malformed capability candidate");
+    make_runtime_capability_review_state_inconsistent(&candidate_path);
 
     let error = loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_show_command(
         loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityShowCommandOptions {
@@ -819,6 +823,58 @@ fn runtime_capability_index_marks_family_blocked_on_conflicting_reviews() {
 }
 
 #[test]
+fn runtime_capability_index_rejects_malformed_supported_artifact_during_scan() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-index-malformed");
+    let config_path = write_runtime_capability_config(&root);
+    let (valid_run_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "valid",
+        -0.2,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let (invalid_run_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "invalid",
+        -0.4,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+
+    let (valid_candidate_path, _) =
+        propose_runtime_capability_variant(&root, &valid_run_path, "valid");
+    review_runtime_capability_variant(
+        &valid_candidate_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "valid",
+    );
+    let (invalid_candidate_path, _) =
+        propose_runtime_capability_variant(&root, &invalid_run_path, "invalid");
+    make_runtime_capability_review_state_inconsistent(&invalid_candidate_path);
+
+    let error = loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_index_command(
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityIndexCommandOptions {
+            root: root.join("artifacts").display().to_string(),
+            json: false,
+        },
+    )
+    .expect_err("malformed supported artifacts should abort index scans");
+
+    assert!(
+        error.contains("inconsistent reviewed state"),
+        "error should surface the invalid review state: {error}"
+    );
+    assert!(
+        error.contains(&invalid_candidate_path.display().to_string()),
+        "error should identify the malformed artifact path: {error}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn runtime_capability_plan_builds_promotable_managed_skill_plan() {
     let root = unique_temp_dir("loongclaw-runtime-capability-plan-ready");
     let config_path = write_runtime_capability_config(&root);
@@ -947,6 +1003,87 @@ fn runtime_capability_plan_builds_promotable_managed_skill_plan() {
                 .display()
                 .to_string()
         )
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_plan_rejects_malformed_supported_artifact_during_scan() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-plan-malformed");
+    let config_path = write_runtime_capability_config(&root);
+    let (run_a_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "ready-a",
+        -0.2,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let (run_b_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "ready-b",
+        -0.4,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let (run_bad_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "bad",
+        -0.1,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+
+    let (candidate_a_path, _) = propose_runtime_capability_variant(&root, &run_a_path, "ready-a");
+    let (candidate_b_path, _) = propose_runtime_capability_variant(&root, &run_b_path, "ready-b");
+    review_runtime_capability_variant(
+        &candidate_a_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "ready-a",
+    );
+    review_runtime_capability_variant(
+        &candidate_b_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "ready-b",
+    );
+
+    let family_id =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_index_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityIndexCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                json: false,
+            },
+        )
+        .expect("index should succeed before introducing malformed artifacts")
+        .families
+        .first()
+        .expect("one capability family should be reported")
+        .family_id
+        .clone();
+
+    let (invalid_candidate_path, _) =
+        propose_runtime_capability_variant(&root, &run_bad_path, "bad");
+    make_runtime_capability_review_state_inconsistent(&invalid_candidate_path);
+
+    let error = loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_plan_command(
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityPlanCommandOptions {
+            root: root.join("artifacts").display().to_string(),
+            family_id,
+            json: false,
+        },
+    )
+    .expect_err("malformed supported artifacts should abort plan scans");
+
+    assert!(
+        error.contains("inconsistent reviewed state"),
+        "error should surface the invalid review state: {error}"
+    );
+    assert!(
+        error.contains(&invalid_candidate_path.display().to_string()),
+        "error should identify the malformed artifact path: {error}"
     );
 
     fs::remove_dir_all(&root).ok();

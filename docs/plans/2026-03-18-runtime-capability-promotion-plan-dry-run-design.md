@@ -160,6 +160,7 @@ Command errors should be limited to:
 - unreadable root
 - malformed artifact load
 - missing family id
+- unknown family id
 
 `not_ready` and `blocked` families should still produce a plan report with
 `promotable=false`.

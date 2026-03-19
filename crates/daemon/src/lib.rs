@@ -421,7 +421,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: runtime_experiment_cli::RuntimeExperimentCommands,
     },
-    /// Manage run-derived capability candidate records
+    /// Manage run-derived capability candidates, family readiness, and dry-run promotion plans
     RuntimeCapability {
         #[command(subcommand)]
         command: runtime_capability_cli::RuntimeCapabilityCommands,
