@@ -11,7 +11,7 @@ use reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
@@ -25,6 +25,18 @@ const OPENAI_AUTH_ENV_KEYS: &[&str] = &[
     "OPENAI_API_KEY",
 ];
 const VOLCENGINE_AUTH_ENV_KEYS: &[&str] = &["ARK_API_KEY"];
+
+fn read_http_request_with_timeout(stream: &mut TcpStream, timeout: Duration) -> String {
+    stream
+        .set_nonblocking(false)
+        .expect("set stream blocking");
+    stream
+        .set_read_timeout(Some(timeout))
+        .expect("set stream read timeout");
+    let mut request_buf = [0_u8; 8192];
+    let len = stream.read(&mut request_buf).expect("read request");
+    String::from_utf8_lossy(&request_buf[..len]).to_string()
+}
 
 fn build_provider_failover_test_kernel_context(
     agent_id: &str,
@@ -152,15 +164,8 @@ async fn fetch_available_models_rejects_missing_volcengine_credentials_before_ne
         while Instant::now() < deadline {
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    stream
-                        .set_nonblocking(false)
-                        .expect("set request stream blocking");
-                    stream
-                        .set_read_timeout(Some(Duration::from_millis(250)))
-                        .expect("set request stream read timeout");
-                    let mut request_buf = [0_u8; 8192];
-                    let len = stream.read(&mut request_buf).expect("read request");
-                    let request = String::from_utf8_lossy(&request_buf[..len]).to_string();
+                    let request =
+                        read_http_request_with_timeout(&mut stream, Duration::from_millis(250));
                     requests.push(request);
                     let body = r#"{"error":{"message":"unexpected request"}}"#;
                     let response = format!(
@@ -231,15 +236,8 @@ async fn fetch_available_models_enriches_volcengine_auth_failures_with_ark_guida
             }
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    stream
-                        .set_nonblocking(false)
-                        .expect("set request stream blocking");
-                    stream
-                        .set_read_timeout(Some(Duration::from_millis(250)))
-                        .expect("set request stream read timeout");
-                    let mut request_buf = [0_u8; 8192];
-                    let len = stream.read(&mut request_buf).expect("read request");
-                    let request = String::from_utf8_lossy(&request_buf[..len]).to_string();
+                    let request =
+                        read_http_request_with_timeout(&mut stream, Duration::from_millis(250));
                     requests.push(request);
 
                     let body = r#"{"error":{"code":"AuthenticationError","message":"the API key or AK/SK in the request is missing or invalid","type":"Unauthorized"}}"#;

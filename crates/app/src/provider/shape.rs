@@ -645,7 +645,9 @@ enum JsonToolBlockCandidate {
         tool_intent: ToolIntent,
     },
     Malformed(JsonToolBlockParseError),
-    Unsupported,
+    Unsupported {
+        consumed_bytes: Option<usize>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -653,6 +655,12 @@ struct JsonToolCallEnvelope {
     raw_tool_name: String,
     args_json: Value,
     tool_call_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JsonToolCallEnvelopeMode {
+    PlainStandalone,
+    TaggedBlock,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -940,8 +948,10 @@ fn extract_plain_json_tool_call_turn(
                     ),
                 };
             }
-            JsonToolBlockCandidate::Unsupported => {
-                let next_cursor = start + 1;
+            JsonToolBlockCandidate::Unsupported { consumed_bytes } => {
+                let next_cursor = consumed_bytes
+                    .map(|consumed_bytes| start + consumed_bytes)
+                    .unwrap_or(start + 1);
                 cleaned.push_str(&text[cursor..next_cursor]);
                 cursor = next_cursor;
             }
@@ -972,8 +982,8 @@ fn parse_json_tool_call_sequence(
 
     for result in stream {
         let value = result.map_err(|_error| JsonToolBlockParseError::InvalidJson)?;
-        let envelope =
-            json_tool_call_envelope(&value).ok_or(JsonToolBlockParseError::UnsupportedShape)?;
+        let envelope = json_tool_call_envelope(&value, JsonToolCallEnvelopeMode::TaggedBlock)?
+            .ok_or(JsonToolBlockParseError::UnsupportedShape)?;
         tool_intents.push(build_json_tool_intent(
             envelope,
             session_id,
@@ -1007,10 +1017,19 @@ fn parse_plain_json_tool_call_candidate(
     };
     let consumed_bytes = stream.byte_offset();
     if !is_standalone_block_end(text, consumed_bytes) {
-        return JsonToolBlockCandidate::Unsupported;
+        return JsonToolBlockCandidate::Unsupported {
+            consumed_bytes: None,
+        };
     }
-    let Some(envelope) = json_tool_call_envelope(&value) else {
-        return JsonToolBlockCandidate::Unsupported;
+    let envelope = match json_tool_call_envelope(&value, JsonToolCallEnvelopeMode::PlainStandalone)
+    {
+        Ok(Some(envelope)) => envelope,
+        Ok(None) => {
+            return JsonToolBlockCandidate::Unsupported {
+                consumed_bytes: Some(consumed_bytes),
+            };
+        }
+        Err(error) => return JsonToolBlockCandidate::Malformed(error),
     };
     JsonToolBlockCandidate::Parsed {
         consumed_bytes,
@@ -1022,6 +1041,57 @@ fn parse_plain_json_tool_call_candidate(
             tool_offset,
         ),
     }
+}
+
+fn json_tool_call_envelope(
+    value: &Value,
+    mode: JsonToolCallEnvelopeMode,
+) -> Result<Option<JsonToolCallEnvelope>, JsonToolBlockParseError> {
+    let Some(object) = value.as_object() else {
+        return Ok(None);
+    };
+    let function = object.get("function").and_then(Value::as_object);
+    let Some(raw_tool_name) = object
+        .get("name")
+        .and_then(Value::as_str)
+        .or_else(|| object.get("tool").and_then(Value::as_str))
+        .or_else(|| object.get("tool_name").and_then(Value::as_str))
+        .or_else(|| {
+            function
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str)
+        })
+    else {
+        return Ok(None);
+    };
+
+    let args_json = if let Some(arguments) = json_tool_argument_value(object, function) {
+        parse_json_tool_arguments_value(arguments)?
+    } else if matches!(mode, JsonToolCallEnvelopeMode::TaggedBlock)
+        || has_explicit_json_tool_call_marker(object)
+    {
+        json_tool_arguments_from_top_level(object)
+    } else {
+        return Ok(None);
+    };
+
+    let tool_call_id = object
+        .get("id")
+        .and_then(Value::as_str)
+        .or_else(|| object.get("tool_call_id").and_then(Value::as_str))
+        .or_else(|| object.get("call_id").and_then(Value::as_str))
+        .or_else(|| {
+            function
+                .and_then(|function| function.get("id"))
+                .and_then(Value::as_str)
+        })
+        .map(str::to_owned);
+
+    Ok(Some(JsonToolCallEnvelope {
+        raw_tool_name: raw_tool_name.to_owned(),
+        args_json,
+        tool_call_id,
+    }))
 }
 
 fn build_json_tool_intent(
@@ -1044,21 +1114,11 @@ fn build_json_tool_intent(
     )
 }
 
-fn json_tool_call_envelope(value: &Value) -> Option<JsonToolCallEnvelope> {
-    let object = value.as_object()?;
-    let function = object.get("function").and_then(Value::as_object);
-    let raw_tool_name = object
-        .get("name")
-        .and_then(Value::as_str)
-        .or_else(|| object.get("tool").and_then(Value::as_str))
-        .or_else(|| object.get("tool_name").and_then(Value::as_str))
-        .or_else(|| {
-            function
-                .and_then(|function| function.get("name"))
-                .and_then(Value::as_str)
-        })?;
-
-    let args_json = object
+fn json_tool_argument_value<'a>(
+    object: &'a serde_json::Map<String, Value>,
+    function: Option<&'a serde_json::Map<String, Value>>,
+) -> Option<&'a Value> {
+    object
         .get("arguments")
         .or_else(|| object.get("input"))
         .or_else(|| object.get("parameters"))
@@ -1067,39 +1127,24 @@ fn json_tool_call_envelope(value: &Value) -> Option<JsonToolCallEnvelope> {
         .or_else(|| function.and_then(|function| function.get("arguments")))
         .or_else(|| function.and_then(|function| function.get("input")))
         .or_else(|| function.and_then(|function| function.get("parameters")))
-        .map(parse_json_tool_arguments_value)
-        .unwrap_or_else(|| json_tool_arguments_from_top_level(object));
-
-    let tool_call_id = object
-        .get("id")
-        .and_then(Value::as_str)
-        .or_else(|| object.get("tool_call_id").and_then(Value::as_str))
-        .or_else(|| object.get("call_id").and_then(Value::as_str))
-        .or_else(|| {
-            function
-                .and_then(|function| function.get("id"))
-                .and_then(Value::as_str)
-        })
-        .map(str::to_owned);
-
-    Some(JsonToolCallEnvelope {
-        raw_tool_name: raw_tool_name.to_owned(),
-        args_json,
-        tool_call_id,
-    })
 }
 
-fn parse_json_tool_arguments_value(value: &Value) -> Value {
+fn has_explicit_json_tool_call_marker(object: &serde_json::Map<String, Value>) -> bool {
+    object.contains_key("arguments")
+        || object.contains_key("input")
+        || object.contains_key("parameters")
+        || object.contains_key("args")
+        || object.contains_key("payload")
+        || object.contains_key("function")
+        || object.contains_key("type")
+}
+
+fn parse_json_tool_arguments_value(value: &Value) -> Result<Value, JsonToolBlockParseError> {
     match value {
-        Value::String(raw) => match serde_json::from_str::<Value>(raw) {
-            Ok(parsed) => parsed,
-            Err(error) => json!({
-                "_parse_error": format!("{error}"),
-                "_raw_arguments": raw
-            }),
-        },
+        Value::String(raw) => serde_json::from_str::<Value>(raw)
+            .map_err(|_error| JsonToolBlockParseError::InvalidJson),
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => {
-            value.clone()
+            Ok(value.clone())
         }
     }
 }
@@ -2264,6 +2309,32 @@ mod tests {
     }
 
     #[test]
+    fn extract_provider_turn_parses_tool_call_wrapped_top_level_json_arguments() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "let me search for the right tool first.\n<tool_call>\n{\"name\":\"tool_search\",\"query\":\"read note.md\",\"limit\":3}\n</tool_call>"
+                }
+            }]
+        });
+
+        let turn = extract_provider_turn(&body).expect("turn");
+        assert_eq!(
+            turn.assistant_text,
+            "let me search for the right tool first."
+        );
+        assert_eq!(turn.tool_intents.len(), 1);
+        assert_eq!(turn.tool_intents[0].tool_name, "tool.search");
+        assert_eq!(
+            turn.tool_intents[0].args_json,
+            json!({
+                "query": "read note.md",
+                "limit": 3
+            })
+        );
+    }
+
+    #[test]
     fn extract_provider_turn_rewrites_plain_json_discoverable_tool_to_tool_invoke_after_search() {
         let body = serde_json::json!({
             "choices": [{
@@ -2289,6 +2360,68 @@ mod tests {
             json!({
                 "path": "note.md"
             })
+        );
+    }
+
+    #[test]
+    fn extract_provider_turn_does_not_execute_plain_json_top_level_arguments_without_envelope() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "example:\n{\n  \"name\": \"tool_search\",\n  \"query\": \"read note.md\"\n}"
+                }
+            }]
+        });
+
+        let turn = extract_provider_turn(&body).expect("turn");
+        assert!(turn.tool_intents.is_empty());
+        assert_eq!(
+            turn.assistant_text,
+            "example:\n{\n  \"name\": \"tool_search\",\n  \"query\": \"read note.md\"\n}"
+        );
+    }
+
+    #[test]
+    fn extract_provider_turn_marks_invalid_stringified_json_tool_arguments_malformed() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "let me search for the right tool first.\n{\n  \"name\": \"tool_search\",\n  \"arguments\": \"{bad\"\n}"
+                }
+            }]
+        });
+
+        let turn = extract_provider_turn(&body).expect("turn");
+        assert!(turn.tool_intents.is_empty());
+        assert_eq!(
+            turn.assistant_text,
+            "let me search for the right tool first.\n{\n  \"name\": \"tool_search\",\n  \"arguments\": \"{bad\"\n}"
+        );
+        assert_eq!(
+            turn.raw_meta["loongclaw_provider_parse"]["json_tool_block"]["status"],
+            "malformed"
+        );
+        assert_eq!(
+            turn.raw_meta["loongclaw_provider_parse"]["json_tool_block"]["error_code"],
+            "invalid_json"
+        );
+    }
+
+    #[test]
+    fn extract_provider_turn_does_not_execute_nested_tool_like_plain_json_objects() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "example:\n{\n  \"meta\":\n  {\n    \"name\": \"tool_search\",\n    \"arguments\": {\n      \"query\": \"read note.md\"\n    }\n  }\n}"
+                }
+            }]
+        });
+
+        let turn = extract_provider_turn(&body).expect("turn");
+        assert!(turn.tool_intents.is_empty());
+        assert_eq!(
+            turn.assistant_text,
+            "example:\n{\n  \"meta\":\n  {\n    \"name\": \"tool_search\",\n    \"arguments\": {\n      \"query\": \"read note.md\"\n    }\n  }\n}"
         );
     }
 
