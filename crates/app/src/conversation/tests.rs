@@ -5440,6 +5440,8 @@ async fn handle_turn_with_runtime_persists_fast_lane_tool_batch_event_for_mixed_
     config
         .conversation
         .fast_lane_parallel_tool_execution_max_in_flight = 2;
+    let sqlite_path = unique_memory_sqlite_path("fast-lane-batch-event");
+    config.memory.sqlite_path = sqlite_path.clone();
 
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     crate::memory::append_turn_direct(
@@ -5556,6 +5558,8 @@ async fn handle_turn_with_runtime_persists_fast_lane_tool_batch_event_for_mixed_
     assert_eq!(segments[2]["scheduling_class"], "parallel_safe");
     assert_eq!(segments[2]["execution_mode"], "parallel");
     assert_eq!(segments[2]["intent_count"], 2);
+
+    let _ = std::fs::remove_file(sqlite_path);
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -5569,6 +5573,8 @@ async fn handle_turn_with_runtime_fast_lane_batch_persist_failure_surfaces_runti
     config
         .conversation
         .fast_lane_parallel_tool_execution_max_in_flight = 2;
+    let sqlite_path = unique_memory_sqlite_path("fast-lane-batch-persist-failure");
+    config.memory.sqlite_path = sqlite_path.clone();
 
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     crate::memory::append_turn_direct(
@@ -5671,6 +5677,8 @@ async fn handle_turn_with_runtime_fast_lane_batch_persist_failure_surfaces_runti
         }),
         "expected fast-lane batch persistence failure audit event, got: {runtime_ops:?}"
     );
+
+    let _ = std::fs::remove_file(sqlite_path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
