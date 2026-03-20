@@ -95,6 +95,7 @@ pub fn http_json_runtime_evidence(
 pub struct ProcessStdioRuntimeBase {
     pub executor: &'static str,
     pub transport_kind: &'static str,
+    pub execution_tier: ExecutionSecurityTier,
     pub command: String,
     pub args: Vec<String>,
     pub timeout_ms: u64,
@@ -131,6 +132,7 @@ pub struct ProcessStdioRuntimeExecution {
 
 pub fn process_stdio_runtime_evidence(
     context: &ConnectorProtocolContext,
+    execution_tier: ExecutionSecurityTier,
     command: &str,
     args: &[String],
     timeout_ms: u64,
@@ -140,6 +142,7 @@ pub fn process_stdio_runtime_evidence(
     let base = ProcessStdioRuntimeBase {
         executor: EXECUTOR,
         transport_kind: "json_line",
+        execution_tier,
         command: command.to_owned(),
         args: args.to_vec(),
         timeout_ms,

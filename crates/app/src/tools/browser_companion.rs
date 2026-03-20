@@ -473,6 +473,7 @@ fn execute_browser_companion_request(
         payload: json!({
             "adapter": "browser-companion",
             "tool_name": request.tool_name,
+            "execution_tier": policy.execution_security_tier().as_str(),
             "operation": operation.protocol_name(),
             "action_class": operation.action_class(),
             "session_id": session_id,
@@ -594,6 +595,9 @@ mod tests {
         sync::atomic::{AtomicBool, AtomicUsize, Ordering},
         time::Duration,
     };
+
+    use loongclaw_contracts::ToolCoreRequest;
+    use serde_json::{Value, json};
 
     struct BrokenWriter;
 
@@ -719,5 +723,53 @@ mod tests {
     fn pause_before_browser_companion_spawn_retry_succeeds_without_runtime() {
         super::pause_before_browser_companion_spawn_retry(Duration::ZERO)
             .expect("pause should work without a tokio runtime");
+    }
+
+    struct OkRunner;
+
+    impl super::BrowserCompanionRunner for OkRunner {
+        fn invoke(
+            &self,
+            _command: &str,
+            _timeout_seconds: u64,
+            _request: &super::BrowserCompanionProtocolRequest,
+        ) -> Result<Value, String> {
+            Ok(json!({
+                "navigated": true,
+            }))
+        }
+    }
+
+    #[test]
+    fn browser_companion_session_start_reports_balanced_execution_tier() {
+        let request = ToolCoreRequest {
+            tool_name: "browser.companion.session.start".to_owned(),
+            payload: json!({}),
+        };
+        let payload = request
+            .payload
+            .as_object()
+            .expect("browser companion payload object")
+            .clone();
+        let policy = super::super::runtime_config::BrowserCompanionRuntimePolicy {
+            enabled: true,
+            ready: true,
+            command: Some("browser-companion".to_owned()),
+            expected_version: Some("1.5.0".to_owned()),
+            timeout_seconds: 5,
+        };
+
+        let outcome = super::execute_browser_companion_request(
+            request,
+            &payload,
+            "test-scope",
+            &policy,
+            &OkRunner,
+            true,
+        )
+        .expect("browser companion session start should succeed");
+
+        assert_eq!(outcome.payload["execution_tier"], json!("balanced"));
+        assert_eq!(outcome.payload["action_class"], json!("read"));
     }
 }

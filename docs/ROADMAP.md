@@ -106,7 +106,8 @@ Remaining deliverables:
   - CPU budget refinement
   - memory limits
   - timeout/termination policy
-- process bridge sandbox profile tiers (`restricted`, `balanced`, `trusted`)
+- process bridge sandbox profile tiers (`restricted`, `balanced`, `trusted`) aligned with the
+  shared execution-tier contract used by browser and WASM evidence surfaces
 - hot-reload lifecycle hooks:
   - pre-load validation
   - rollback-on-failure
@@ -438,6 +439,13 @@ risks growing its own security semantics and evidence model.
 
 Trade-off: the first slice should standardize the contract, not attempt a giant all-lane sandbox
 rewrite.
+
+Current first-slice mapping:
+
+- `restricted` - built-in browser lane and the current WASM component runtime lane
+- `balanced` - allowlisted `process_stdio` bridge execution and the managed browser companion when
+  its runtime gate is open
+- `trusted` - reserved for future explicit high-trust runtime lanes rather than assumed by default
 
 ### D9: First-party workflow packs on hardened primitives
 

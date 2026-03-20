@@ -106,7 +106,13 @@ fn execute_browser_open(
     let max_bytes = parse_max_bytes(payload, config.web_fetch.max_bytes, "browser.open")?;
     let client = build_browser_client(config)?;
     let page = fetch_browser_page(&client, raw_url.as_str(), max_bytes, config)?;
-    let response_payload = browser_page_payload("browser.open", &session_id, &page, None);
+    let response_payload = browser_page_payload(
+        "browser.open",
+        &session_id,
+        &page,
+        None,
+        config.browser_execution_security_tier().as_str(),
+    );
     store_browser_session(
         scope_id,
         session_id,
@@ -154,6 +160,7 @@ fn execute_browser_extract(
         BrowserExtractMode::PageText => json!({
             "adapter": "core-tools",
             "tool_name": "browser.extract",
+            "execution_tier": config.browser_execution_security_tier().as_str(),
             "session_id": session_id,
             "mode": mode.as_str(),
             "final_url": page.final_url,
@@ -163,6 +170,7 @@ fn execute_browser_extract(
         BrowserExtractMode::Title => json!({
             "adapter": "core-tools",
             "tool_name": "browser.extract",
+            "execution_tier": config.browser_execution_security_tier().as_str(),
             "session_id": session_id,
             "mode": mode.as_str(),
             "final_url": page.final_url,
@@ -171,6 +179,7 @@ fn execute_browser_extract(
         BrowserExtractMode::Links => json!({
             "adapter": "core-tools",
             "tool_name": "browser.extract",
+            "execution_tier": config.browser_execution_security_tier().as_str(),
             "session_id": session_id,
             "mode": mode.as_str(),
             "final_url": page.final_url,
@@ -194,6 +203,7 @@ fn execute_browser_extract(
             json!({
                 "adapter": "core-tools",
                 "tool_name": "browser.extract",
+                "execution_tier": config.browser_execution_security_tier().as_str(),
                 "session_id": session_id,
                 "mode": mode.as_str(),
                 "final_url": page.final_url,
@@ -251,6 +261,7 @@ fn execute_browser_click(
             "text": selected_link.text,
             "url": selected_link.url,
         })),
+        config.browser_execution_security_tier().as_str(),
     );
     store_browser_session(
         scope_id,
@@ -500,10 +511,12 @@ fn browser_page_payload(
     session_id: &str,
     page: &BrowserPage,
     clicked_link: Option<Value>,
+    execution_tier: &str,
 ) -> Value {
     json!({
         "adapter": "core-tools",
         "tool_name": tool_name,
+        "execution_tier": execution_tier,
         "session_id": session_id,
         "requested_url": page.requested_url,
         "final_url": page.final_url,
@@ -862,6 +875,7 @@ mod tests {
                 .expect("session id")
                 .starts_with("browser-")
         );
+        assert_eq!(outcome.payload["execution_tier"], json!("restricted"));
         assert_eq!(outcome.payload["title"], json!("Fixture Home"));
         assert!(
             outcome.payload["page_text"]
@@ -946,6 +960,7 @@ mod tests {
         )
         .expect("browser.click should succeed");
 
+        assert_eq!(clicked.payload["execution_tier"], json!("restricted"));
         assert_eq!(clicked.payload["title"], json!("Next Page"));
         assert_eq!(clicked.payload["clicked_link"]["id"], json!(1));
         assert!(

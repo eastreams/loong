@@ -3,6 +3,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+use loongclaw_contracts::ExecutionSecurityTier;
 use serde::{Deserialize, Serialize};
 
 use super::shell_policy_ext::ShellPolicyDefault;
@@ -112,6 +113,14 @@ impl Default for BrowserRuntimePolicy {
     }
 }
 
+impl BrowserRuntimePolicy {
+    #[must_use]
+    pub const fn execution_security_tier(&self) -> ExecutionSecurityTier {
+        let _ = self;
+        ExecutionSecurityTier::Restricted
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserCompanionRuntimePolicy {
     pub enabled: bool,
@@ -137,6 +146,15 @@ impl BrowserCompanionRuntimePolicy {
     #[must_use]
     pub fn is_runtime_ready(&self) -> bool {
         self.enabled && self.ready && self.command.is_some()
+    }
+
+    #[must_use]
+    pub fn execution_security_tier(&self) -> ExecutionSecurityTier {
+        if self.is_runtime_ready() {
+            ExecutionSecurityTier::Balanced
+        } else {
+            ExecutionSecurityTier::Restricted
+        }
     }
 }
 
@@ -666,6 +684,16 @@ impl ToolRuntimeConfig {
 
         lines.push("Treat these as enforced limits for this child session.".to_owned());
         Some(lines.join("\n"))
+    }
+
+    #[must_use]
+    pub const fn browser_execution_security_tier(&self) -> ExecutionSecurityTier {
+        self.browser.execution_security_tier()
+    }
+
+    #[must_use]
+    pub fn browser_companion_execution_security_tier(&self) -> ExecutionSecurityTier {
+        self.browser_companion.execution_security_tier()
     }
 }
 

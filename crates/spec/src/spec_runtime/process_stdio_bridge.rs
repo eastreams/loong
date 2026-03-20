@@ -59,6 +59,7 @@ pub async fn execute_process_stdio_bridge(
         execution["reason"] = Value::String(format!("process_stdio {reason}"));
         execution["runtime"] = process_stdio_runtime_evidence(
             &protocol_context,
+            runtime_policy.process_stdio_execution_security_tier(),
             &program,
             &args,
             timeout_ms,
@@ -90,6 +91,7 @@ pub async fn execute_process_stdio_bridge(
             }
             execution["runtime"] = process_stdio_runtime_evidence(
                 &protocol_context,
+                runtime_policy.process_stdio_execution_security_tier(),
                 &program,
                 &args,
                 timeout_ms,
@@ -109,6 +111,7 @@ pub async fn execute_process_stdio_bridge(
             execution["reason"] = Value::String(reason);
             execution["runtime"] = process_stdio_runtime_evidence(
                 &protocol_context,
+                runtime_policy.process_stdio_execution_security_tier(),
                 &program,
                 &args,
                 timeout_ms,

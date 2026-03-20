@@ -12,6 +12,7 @@ test-support = ["test-hooks"]
 [dependencies]
 async-trait.workspace = true
 kernel = { package = "loongclaw-kernel", path = "../kernel" }
+loongclaw-contracts = { path = "../contracts" }
 loongclaw-protocol = { path = "../protocol" }
 serde.workspace = true
 serde_json.workspace = true

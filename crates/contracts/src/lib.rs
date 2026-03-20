@@ -4,6 +4,7 @@ mod audit_types;
 mod clock;
 mod contracts;
 mod errors;
+mod execution_security_types;
 mod fault;
 mod memory_types;
 mod namespace;
@@ -23,6 +24,7 @@ pub use errors::{
     AuditError, ConnectorError, HarnessError, IntegrationError, KernelError, MemoryPlaneError,
     PackError, PolicyError, RuntimePlaneError, ToolPlaneError,
 };
+pub use execution_security_types::ExecutionSecurityTier;
 pub use fault::Fault;
 pub use memory_types::{
     MemoryCoreOutcome, MemoryCoreRequest, MemoryExtensionOutcome, MemoryExtensionRequest,

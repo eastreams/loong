@@ -21,6 +21,7 @@ use kernel::{
     ToolCoreRequest, ToolExtensionAdapter, ToolExtensionOutcome, ToolExtensionRequest,
     VerticalPackManifest,
 };
+use loongclaw_contracts::ExecutionSecurityTier;
 use loongclaw_protocol::{
     OutboundFrame, PROTOCOL_VERSION, ProtocolRouter, RouteAuthorizationRequest,
 };
@@ -726,6 +727,23 @@ pub struct BridgeRuntimePolicy {
     pub wasm_require_hash_pin: bool,
     pub wasm_required_sha256_by_plugin: BTreeMap<String, String>,
     pub enforce_execution_success: bool,
+}
+
+impl BridgeRuntimePolicy {
+    #[must_use]
+    pub fn process_stdio_execution_security_tier(&self) -> ExecutionSecurityTier {
+        if self.execute_process_stdio && !self.allowed_process_commands.is_empty() {
+            ExecutionSecurityTier::Balanced
+        } else {
+            ExecutionSecurityTier::Restricted
+        }
+    }
+
+    #[must_use]
+    pub const fn wasm_execution_security_tier(&self) -> ExecutionSecurityTier {
+        let _ = self;
+        ExecutionSecurityTier::Restricted
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1510,6 +1528,19 @@ pub async fn maybe_execute_bridge(
 
 include!("spec_bridge_protocol.inc.rs");
 
+fn with_execution_security_tier(
+    mut runtime: Value,
+    execution_tier: ExecutionSecurityTier,
+) -> Value {
+    if let Some(object) = runtime.as_object_mut() {
+        object.insert(
+            "execution_tier".to_owned(),
+            Value::String(execution_tier.to_string()),
+        );
+    }
+    runtime
+}
+
 fn normalize_allowed_wasm_path_prefixes(prefixes: &[PathBuf]) -> Vec<PathBuf> {
     prefixes
         .iter()
@@ -1670,6 +1701,7 @@ pub fn execute_wasm_component_bridge(
     command: &ConnectorCommand,
     runtime_policy: &BridgeRuntimePolicy,
 ) -> Value {
+    let execution_tier = runtime_policy.wasm_execution_security_tier();
     let artifact_path = match resolve_wasm_component_artifact_path(provider, &channel.endpoint) {
         Ok(path) => path,
         Err(reason) => {
@@ -1685,10 +1717,13 @@ pub fn execute_wasm_component_bridge(
             execution["reason"] = Value::String(format!(
                 "failed to canonicalize wasm artifact path: {error}"
             ));
-            execution["runtime"] = json!({
-                "executor": "wasmtime_module",
-                "artifact_path": artifact_path.display().to_string(),
-            });
+            execution["runtime"] = with_execution_security_tier(
+                json!({
+                    "executor": "wasmtime_module",
+                    "artifact_path": artifact_path.display().to_string(),
+                }),
+                execution_tier,
+            );
             return execution;
         }
     };
@@ -1703,14 +1738,17 @@ pub fn execute_wasm_component_bridge(
         execution["status"] = Value::String("blocked".to_owned());
         execution["reason"] =
             Value::String("wasm artifact path is outside runtime allowed_path_prefixes".to_owned());
-        execution["runtime"] = json!({
-            "executor": "wasmtime_module",
-            "artifact_path": artifact_path.display().to_string(),
-            "allowed_path_prefixes": normalized_allowed_prefixes
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>(),
-        });
+        execution["runtime"] = with_execution_security_tier(
+            json!({
+                "executor": "wasmtime_module",
+                "artifact_path": artifact_path.display().to_string(),
+                "allowed_path_prefixes": normalized_allowed_prefixes
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>(),
+            }),
+            execution_tier,
+        );
         return execution;
     }
 
@@ -1720,10 +1758,13 @@ pub fn execute_wasm_component_bridge(
             execution["status"] = Value::String("failed".to_owned());
             execution["reason"] =
                 Value::String(format!("failed to read wasm artifact metadata: {error}"));
-            execution["runtime"] = json!({
-                "executor": "wasmtime_module",
-                "artifact_path": artifact_path.display().to_string(),
-            });
+            execution["runtime"] = with_execution_security_tier(
+                json!({
+                    "executor": "wasmtime_module",
+                    "artifact_path": artifact_path.display().to_string(),
+                }),
+                execution_tier,
+            );
             return execution;
         }
     };
@@ -1734,10 +1775,13 @@ pub fn execute_wasm_component_bridge(
         execution["status"] = Value::String("blocked".to_owned());
         execution["reason"] =
             Value::String("wasm artifact path must reference a regular file".to_owned());
-        execution["runtime"] = json!({
-            "executor": "wasmtime_module",
-            "artifact_path": artifact_path.display().to_string(),
-        });
+        execution["runtime"] = with_execution_security_tier(
+            json!({
+                "executor": "wasmtime_module",
+                "artifact_path": artifact_path.display().to_string(),
+            }),
+            execution_tier,
+        );
         return execution;
     }
 
@@ -1749,12 +1793,15 @@ pub fn execute_wasm_component_bridge(
             "wasm artifact size {} exceeds runtime max_component_bytes {limit}",
             module_size_bytes
         ));
-        execution["runtime"] = json!({
-            "executor": "wasmtime_module",
-            "artifact_path": artifact_path.display().to_string(),
-            "module_size_bytes": module_size_bytes,
-            "max_component_bytes": limit,
-        });
+        execution["runtime"] = with_execution_security_tier(
+            json!({
+                "executor": "wasmtime_module",
+                "artifact_path": artifact_path.display().to_string(),
+                "module_size_bytes": module_size_bytes,
+                "max_component_bytes": limit,
+            }),
+            execution_tier,
+        );
         return execution;
     }
 
@@ -1767,25 +1814,28 @@ pub fn execute_wasm_component_bridge(
         Err(reason) => {
             execution["status"] = Value::String("blocked".to_owned());
             execution["reason"] = Value::String(reason);
-            execution["runtime"] = json!({
-                "executor": "wasmtime_module",
-                "artifact_path": artifact_path.display().to_string(),
-                "export": export_name,
-                "operation": command.operation,
-                "payload": command.payload,
-                "module_size_bytes": module_size_bytes,
-                "fuel_limit": runtime_policy.wasm_fuel_limit,
-                "cache_hit": false,
-                "cache_miss": true,
-                "cache_evicted_entries": 0,
-                "cache_entries": 0,
-                "cache_capacity": cache_capacity,
-                "cache_total_module_bytes": 0,
-                "cache_max_bytes": cache_max_bytes,
-                "cache_inserted": false,
-                "integrity_check_required": true,
-                "integrity_check_passed": false,
-            });
+            execution["runtime"] = with_execution_security_tier(
+                json!({
+                    "executor": "wasmtime_module",
+                    "artifact_path": artifact_path.display().to_string(),
+                    "export": export_name,
+                    "operation": command.operation,
+                    "payload": command.payload,
+                    "module_size_bytes": module_size_bytes,
+                    "fuel_limit": runtime_policy.wasm_fuel_limit,
+                    "cache_hit": false,
+                    "cache_miss": true,
+                    "cache_evicted_entries": 0,
+                    "cache_entries": 0,
+                    "cache_capacity": cache_capacity,
+                    "cache_total_module_bytes": 0,
+                    "cache_max_bytes": cache_max_bytes,
+                    "cache_inserted": false,
+                    "integrity_check_required": true,
+                    "integrity_check_passed": false,
+                }),
+                execution_tier,
+            );
             return execution;
         }
     };
@@ -1806,23 +1856,26 @@ pub fn execute_wasm_component_bridge(
                 Err(error) => {
                     execution["status"] = Value::String("failed".to_owned());
                     execution["reason"] = Value::String(error);
-                    execution["runtime"] = json!({
-                        "executor": "wasmtime_module",
-                        "artifact_path": artifact_path.display().to_string(),
-                        "export": export_name,
-                        "operation": command.operation,
-                        "payload": command.payload,
-                        "module_size_bytes": module_size_bytes,
-                        "fuel_limit": runtime_policy.wasm_fuel_limit,
-                        "cache_hit": false,
-                        "cache_miss": true,
-                        "cache_evicted_entries": 0,
-                        "cache_entries": 0,
-                        "cache_capacity": cache_capacity,
-                        "cache_total_module_bytes": 0,
-                        "cache_max_bytes": cache_max_bytes,
-                        "cache_inserted": false,
-                    });
+                    execution["runtime"] = with_execution_security_tier(
+                        json!({
+                            "executor": "wasmtime_module",
+                            "artifact_path": artifact_path.display().to_string(),
+                            "export": export_name,
+                            "operation": command.operation,
+                            "payload": command.payload,
+                            "module_size_bytes": module_size_bytes,
+                            "fuel_limit": runtime_policy.wasm_fuel_limit,
+                            "cache_hit": false,
+                            "cache_miss": true,
+                            "cache_evicted_entries": 0,
+                            "cache_entries": 0,
+                            "cache_capacity": cache_capacity,
+                            "cache_total_module_bytes": 0,
+                            "cache_max_bytes": cache_max_bytes,
+                            "cache_inserted": false,
+                        }),
+                        execution_tier,
+                    );
                     return execution;
                 }
             };
@@ -1837,12 +1890,15 @@ pub fn execute_wasm_component_bridge(
                     "wasm artifact size {} exceeds runtime max_component_bytes {limit}",
                     module_size_bytes
                 ));
-                execution["runtime"] = json!({
-                    "executor": "wasmtime_module",
-                    "artifact_path": artifact_path.display().to_string(),
-                    "module_size_bytes": module_size_bytes,
-                    "max_component_bytes": limit,
-                });
+                execution["runtime"] = with_execution_security_tier(
+                    json!({
+                        "executor": "wasmtime_module",
+                        "artifact_path": artifact_path.display().to_string(),
+                        "module_size_bytes": module_size_bytes,
+                        "max_component_bytes": limit,
+                    }),
+                    execution_tier,
+                );
                 return execution;
             }
 
@@ -1853,15 +1909,18 @@ pub fn execute_wasm_component_bridge(
                     execution["reason"] = Value::String(format!(
                         "wasm artifact sha256 mismatch: expected {expected}, actual {actual}"
                     ));
-                    execution["runtime"] = json!({
-                        "executor": "wasmtime_module",
-                        "artifact_path": artifact_path.display().to_string(),
-                        "module_size_bytes": module_size_bytes,
-                        "expected_sha256": expected,
-                        "artifact_sha256": actual,
-                        "integrity_check_required": true,
-                        "integrity_check_passed": false,
-                    });
+                    execution["runtime"] = with_execution_security_tier(
+                        json!({
+                            "executor": "wasmtime_module",
+                            "artifact_path": artifact_path.display().to_string(),
+                            "module_size_bytes": module_size_bytes,
+                            "expected_sha256": expected,
+                            "artifact_sha256": actual,
+                            "integrity_check_required": true,
+                            "integrity_check_passed": false,
+                        }),
+                        execution_tier,
+                    );
                     return execution;
                 }
                 Some(actual)
@@ -1889,7 +1948,40 @@ pub fn execute_wasm_component_bridge(
                             Err(reason) => {
                                 execution["status"] = Value::String("failed".to_owned());
                                 execution["reason"] = Value::String(reason);
-                                execution["runtime"] = json!({
+                                execution["runtime"] = with_execution_security_tier(
+                                    json!({
+                                        "executor": "wasmtime_module",
+                                        "artifact_path": artifact_path.display().to_string(),
+                                        "export": export_name,
+                                        "operation": command.operation,
+                                        "payload": command.payload,
+                                        "module_size_bytes": module_size_bytes,
+                                        "fuel_limit": runtime_policy.wasm_fuel_limit,
+                                        "cache_hit": false,
+                                        "cache_miss": true,
+                                        "cache_evicted_entries": 0,
+                                        "cache_entries": 0,
+                                        "cache_capacity": cache_capacity,
+                                        "cache_total_module_bytes": 0,
+                                        "cache_max_bytes": cache_max_bytes,
+                                        "cache_inserted": false,
+                                    }),
+                                    execution_tier,
+                                );
+                                return execution;
+                            }
+                        };
+                    let cache_lookup = match insert_cached_wasm_module(
+                        refreshed_cache_key,
+                        compiled.clone(),
+                        module_size_bytes,
+                    ) {
+                        Ok(lookup) => lookup,
+                        Err(reason) => {
+                            execution["status"] = Value::String("failed".to_owned());
+                            execution["reason"] = Value::String(reason);
+                            execution["runtime"] = with_execution_security_tier(
+                                json!({
                                     "executor": "wasmtime_module",
                                     "artifact_path": artifact_path.display().to_string(),
                                     "export": export_name,
@@ -1905,36 +1997,9 @@ pub fn execute_wasm_component_bridge(
                                     "cache_total_module_bytes": 0,
                                     "cache_max_bytes": cache_max_bytes,
                                     "cache_inserted": false,
-                                });
-                                return execution;
-                            }
-                        };
-                    let cache_lookup = match insert_cached_wasm_module(
-                        refreshed_cache_key,
-                        compiled.clone(),
-                        module_size_bytes,
-                    ) {
-                        Ok(lookup) => lookup,
-                        Err(reason) => {
-                            execution["status"] = Value::String("failed".to_owned());
-                            execution["reason"] = Value::String(reason);
-                            execution["runtime"] = json!({
-                                "executor": "wasmtime_module",
-                                "artifact_path": artifact_path.display().to_string(),
-                                "export": export_name,
-                                "operation": command.operation,
-                                "payload": command.payload,
-                                "module_size_bytes": module_size_bytes,
-                                "fuel_limit": runtime_policy.wasm_fuel_limit,
-                                "cache_hit": false,
-                                "cache_miss": true,
-                                "cache_evicted_entries": 0,
-                                "cache_entries": 0,
-                                "cache_capacity": cache_capacity,
-                                "cache_total_module_bytes": 0,
-                                "cache_max_bytes": cache_max_bytes,
-                                "cache_inserted": false,
-                            });
+                                }),
+                                execution_tier,
+                            );
                             return execution;
                         }
                     };
@@ -1943,23 +2008,26 @@ pub fn execute_wasm_component_bridge(
                 Err(reason) => {
                     execution["status"] = Value::String("failed".to_owned());
                     execution["reason"] = Value::String(reason);
-                    execution["runtime"] = json!({
-                        "executor": "wasmtime_module",
-                        "artifact_path": artifact_path.display().to_string(),
-                        "export": export_name,
-                        "operation": command.operation,
-                        "payload": command.payload,
-                        "module_size_bytes": module_size_bytes,
-                        "fuel_limit": runtime_policy.wasm_fuel_limit,
-                        "cache_hit": false,
-                        "cache_miss": true,
-                        "cache_evicted_entries": 0,
-                        "cache_entries": 0,
-                        "cache_capacity": cache_capacity,
-                        "cache_total_module_bytes": 0,
-                        "cache_max_bytes": cache_max_bytes,
-                        "cache_inserted": false,
-                    });
+                    execution["runtime"] = with_execution_security_tier(
+                        json!({
+                            "executor": "wasmtime_module",
+                            "artifact_path": artifact_path.display().to_string(),
+                            "export": export_name,
+                            "operation": command.operation,
+                            "payload": command.payload,
+                            "module_size_bytes": module_size_bytes,
+                            "fuel_limit": runtime_policy.wasm_fuel_limit,
+                            "cache_hit": false,
+                            "cache_miss": true,
+                            "cache_evicted_entries": 0,
+                            "cache_entries": 0,
+                            "cache_capacity": cache_capacity,
+                            "cache_total_module_bytes": 0,
+                            "cache_max_bytes": cache_max_bytes,
+                            "cache_inserted": false,
+                        }),
+                        execution_tier,
+                    );
                     return execution;
                 }
             }
@@ -1967,23 +2035,26 @@ pub fn execute_wasm_component_bridge(
         Err(reason) => {
             execution["status"] = Value::String("failed".to_owned());
             execution["reason"] = Value::String(reason);
-            execution["runtime"] = json!({
-                "executor": "wasmtime_module",
-                "artifact_path": artifact_path.display().to_string(),
-                "export": export_name,
-                "operation": command.operation,
-                "payload": command.payload,
-                "module_size_bytes": module_size_bytes,
-                "fuel_limit": runtime_policy.wasm_fuel_limit,
-                "cache_hit": false,
-                "cache_miss": true,
-                "cache_evicted_entries": 0,
-                "cache_entries": 0,
-                "cache_capacity": cache_capacity,
-                "cache_total_module_bytes": 0,
-                "cache_max_bytes": cache_max_bytes,
-                "cache_inserted": false,
-            });
+            execution["runtime"] = with_execution_security_tier(
+                json!({
+                    "executor": "wasmtime_module",
+                    "artifact_path": artifact_path.display().to_string(),
+                    "export": export_name,
+                    "operation": command.operation,
+                    "payload": command.payload,
+                    "module_size_bytes": module_size_bytes,
+                    "fuel_limit": runtime_policy.wasm_fuel_limit,
+                    "cache_hit": false,
+                    "cache_miss": true,
+                    "cache_evicted_entries": 0,
+                    "cache_entries": 0,
+                    "cache_capacity": cache_capacity,
+                    "cache_total_module_bytes": 0,
+                    "cache_max_bytes": cache_max_bytes,
+                    "cache_inserted": false,
+                }),
+                execution_tier,
+            );
             return execution;
         }
     };
@@ -2021,54 +2092,60 @@ pub fn execute_wasm_component_bridge(
     match run_result {
         Ok(consumed_fuel) => {
             execution["status"] = Value::String("executed".to_owned());
-            execution["runtime"] = json!({
-                "executor": "wasmtime_module",
-                "artifact_path": artifact_path.display().to_string(),
-                "export": export_name,
-                "operation": command.operation,
-                "payload": command.payload,
-                "module_size_bytes": module_size_bytes,
-                "fuel_limit": runtime_policy.wasm_fuel_limit,
-                "fuel_consumed": consumed_fuel,
-                "cache_hit": cache_lookup.hit,
-                "cache_miss": !cache_lookup.hit,
-                "cache_evicted_entries": cache_lookup.evicted_entries,
-                "cache_entries": cache_lookup.cache_len,
-                "cache_capacity": cache_lookup.cache_capacity,
-                "cache_total_module_bytes": cache_lookup.cache_total_module_bytes,
-                "cache_max_bytes": cache_lookup.cache_max_bytes,
-                "cache_inserted": cache_lookup.inserted,
-                "expected_sha256": expected_sha256,
-                "artifact_sha256": cached_module.artifact_sha256.clone(),
-                "integrity_check_required": expected_sha256.is_some(),
-                "integrity_check_passed": expected_sha256.is_none() || cached_module.artifact_sha256.is_some(),
-            });
+            execution["runtime"] = with_execution_security_tier(
+                json!({
+                    "executor": "wasmtime_module",
+                    "artifact_path": artifact_path.display().to_string(),
+                    "export": export_name,
+                    "operation": command.operation,
+                    "payload": command.payload,
+                    "module_size_bytes": module_size_bytes,
+                    "fuel_limit": runtime_policy.wasm_fuel_limit,
+                    "fuel_consumed": consumed_fuel,
+                    "cache_hit": cache_lookup.hit,
+                    "cache_miss": !cache_lookup.hit,
+                    "cache_evicted_entries": cache_lookup.evicted_entries,
+                    "cache_entries": cache_lookup.cache_len,
+                    "cache_capacity": cache_lookup.cache_capacity,
+                    "cache_total_module_bytes": cache_lookup.cache_total_module_bytes,
+                    "cache_max_bytes": cache_lookup.cache_max_bytes,
+                    "cache_inserted": cache_lookup.inserted,
+                    "expected_sha256": expected_sha256,
+                    "artifact_sha256": cached_module.artifact_sha256.clone(),
+                    "integrity_check_required": expected_sha256.is_some(),
+                    "integrity_check_passed": expected_sha256.is_none() || cached_module.artifact_sha256.is_some(),
+                }),
+                execution_tier,
+            );
             execution
         }
         Err(reason) => {
             execution["status"] = Value::String("failed".to_owned());
             execution["reason"] = Value::String(reason);
-            execution["runtime"] = json!({
-                "executor": "wasmtime_module",
-                "artifact_path": artifact_path.display().to_string(),
-                "export": export_name,
-                "operation": command.operation,
-                "payload": command.payload,
-                "module_size_bytes": module_size_bytes,
-                "fuel_limit": runtime_policy.wasm_fuel_limit,
-                "cache_hit": cache_lookup.hit,
-                "cache_miss": !cache_lookup.hit,
-                "cache_evicted_entries": cache_lookup.evicted_entries,
-                "cache_entries": cache_lookup.cache_len,
-                "cache_capacity": cache_lookup.cache_capacity,
-                "cache_total_module_bytes": cache_lookup.cache_total_module_bytes,
-                "cache_max_bytes": cache_lookup.cache_max_bytes,
-                "cache_inserted": cache_lookup.inserted,
-                "expected_sha256": expected_sha256,
-                "artifact_sha256": cached_module.artifact_sha256.clone(),
-                "integrity_check_required": expected_sha256.is_some(),
-                "integrity_check_passed": expected_sha256.is_none() || cached_module.artifact_sha256.is_some(),
-            });
+            execution["runtime"] = with_execution_security_tier(
+                json!({
+                    "executor": "wasmtime_module",
+                    "artifact_path": artifact_path.display().to_string(),
+                    "export": export_name,
+                    "operation": command.operation,
+                    "payload": command.payload,
+                    "module_size_bytes": module_size_bytes,
+                    "fuel_limit": runtime_policy.wasm_fuel_limit,
+                    "cache_hit": cache_lookup.hit,
+                    "cache_miss": !cache_lookup.hit,
+                    "cache_evicted_entries": cache_lookup.evicted_entries,
+                    "cache_entries": cache_lookup.cache_len,
+                    "cache_capacity": cache_lookup.cache_capacity,
+                    "cache_total_module_bytes": cache_lookup.cache_total_module_bytes,
+                    "cache_max_bytes": cache_lookup.cache_max_bytes,
+                    "cache_inserted": cache_lookup.inserted,
+                    "expected_sha256": expected_sha256,
+                    "artifact_sha256": cached_module.artifact_sha256.clone(),
+                    "integrity_check_required": expected_sha256.is_some(),
+                    "integrity_check_passed": expected_sha256.is_none() || cached_module.artifact_sha256.is_some(),
+                }),
+                execution_tier,
+            );
             execution
         }
     }
@@ -2663,7 +2740,11 @@ impl MemoryExtensionAdapter for VectorIndexMemoryExtension {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, path::Path, sync::Arc};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        path::Path,
+        sync::Arc,
+    };
     #[cfg(unix)]
     use std::{
         fs,
@@ -2680,8 +2761,9 @@ mod tests {
         parse_wasm_signals_based_traps,
     };
     use super::{
-        BridgeRuntimePolicy, CoreToolRuntime, WasmModuleCache, build_wasm_module_cache_key,
-        compile_wasm_module, normalize_sha256_pin, resolve_expected_wasm_sha256,
+        BridgeRuntimePolicy, ConnectorProtocolContext, CoreToolRuntime, WasmModuleCache,
+        build_wasm_module_cache_key, compile_wasm_module, normalize_sha256_pin,
+        process_stdio_runtime_evidence, resolve_expected_wasm_sha256,
     };
     use kernel::{CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest};
     use serde_json::json;
@@ -2853,6 +2935,94 @@ mod tests {
         let error = resolve_expected_wasm_sha256(&provider, &policy)
             .expect_err("metadata/policy conflict should be rejected");
         assert!(error.contains("between provider metadata"));
+    }
+
+    #[test]
+    fn process_stdio_runtime_evidence_reports_balanced_execution_tier() {
+        let provider = provider_with_metadata(BTreeMap::new());
+        let channel = kernel::ChannelConfig {
+            channel_id: "channel-x".to_owned(),
+            endpoint: "stdio://connector".to_owned(),
+            provider_id: provider.provider_id.clone(),
+            enabled: true,
+            metadata: BTreeMap::new(),
+        };
+        let command = kernel::ConnectorCommand {
+            connector_name: "connector-x".to_owned(),
+            operation: "call".to_owned(),
+            required_capabilities: BTreeSet::new(),
+            payload: json!({}),
+        };
+        let mut context =
+            ConnectorProtocolContext::from_connector_command(&provider, &channel, &command);
+        super::authorize_connector_protocol_context(&mut context)
+            .expect("protocol context should authorize");
+
+        let runtime = process_stdio_runtime_evidence(
+            &context,
+            BridgeRuntimePolicy {
+                execute_process_stdio: true,
+                allowed_process_commands: BTreeSet::from(["demo-connector".to_owned()]),
+                ..BridgeRuntimePolicy::default()
+            }
+            .process_stdio_execution_security_tier(),
+            "demo-connector",
+            &["--serve".to_owned()],
+            5_000,
+            super::ProcessStdioRuntimeEvidenceKind::BaseOnly,
+        );
+
+        assert_eq!(runtime["execution_tier"], json!("balanced"));
+    }
+
+    #[test]
+    fn execute_wasm_component_bridge_reports_restricted_execution_tier() {
+        let unique = format!(
+            "loongclaw-wasm-tier-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(&root).expect("create temp wasm root");
+        let wasm_path = root.join("fixture.wasm");
+        std::fs::write(&wasm_path, EMPTY_WASM_MODULE).expect("write wasm fixture");
+
+        let provider = provider_with_metadata(BTreeMap::from([
+            ("component".to_owned(), wasm_path.display().to_string()),
+            ("plugin_id".to_owned(), "plugin-a".to_owned()),
+        ]));
+        let channel = kernel::ChannelConfig {
+            channel_id: "channel-wasm".to_owned(),
+            endpoint: "local://fixture".to_owned(),
+            provider_id: provider.provider_id.clone(),
+            enabled: true,
+            metadata: BTreeMap::new(),
+        };
+        let command = kernel::ConnectorCommand {
+            connector_name: "connector-x".to_owned(),
+            operation: "call".to_owned(),
+            required_capabilities: BTreeSet::new(),
+            payload: json!({}),
+        };
+        let runtime_policy = BridgeRuntimePolicy {
+            execute_wasm_component: true,
+            wasm_allowed_path_prefixes: vec![root.clone()],
+            ..BridgeRuntimePolicy::default()
+        };
+
+        let execution = super::execute_wasm_component_bridge(
+            json!({"status": "planned"}),
+            &provider,
+            &channel,
+            &command,
+            &runtime_policy,
+        );
+
+        assert_eq!(execution["runtime"]["execution_tier"], json!("restricted"));
+        let _ = std::fs::remove_file(&wasm_path);
+        let _ = std::fs::remove_dir(&root);
     }
 
     #[test]

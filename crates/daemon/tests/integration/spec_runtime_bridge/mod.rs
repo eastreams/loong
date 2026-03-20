@@ -16,6 +16,7 @@ const HTTP_JSON_RUNTIME_BASE_KEYS: &[&str] = &[
 const PROCESS_STDIO_RUNTIME_BASE_KEYS: &[&str] = &[
     "args",
     "command",
+    "execution_tier",
     "executor",
     "protocol_capabilities",
     "protocol_required_capability",
@@ -128,6 +129,14 @@ fn snapshot_protocol_context() -> ConnectorProtocolContext {
     context
 }
 
+fn balanced_process_stdio_policy() -> BridgeRuntimePolicy {
+    BridgeRuntimePolicy {
+        execute_process_stdio: true,
+        allowed_process_commands: BTreeSet::from(["cat".to_owned()]),
+        ..BridgeRuntimePolicy::default()
+    }
+}
+
 #[test]
 fn bridge_http_json_runtime_evidence_snapshots_stable() {
     let context = snapshot_protocol_context();
@@ -236,8 +245,10 @@ fn bridge_http_json_runtime_evidence_snapshots_stable() {
 #[test]
 fn bridge_process_stdio_runtime_evidence_snapshots_stable() {
     let context = snapshot_protocol_context();
+    let runtime_policy = balanced_process_stdio_policy();
     let base = process_stdio_runtime_evidence(
         &context,
+        runtime_policy.process_stdio_execution_security_tier(),
         "cat",
         &["/tmp/input.txt".to_owned()],
         5_000,
@@ -249,6 +260,7 @@ fn bridge_process_stdio_runtime_evidence_snapshots_stable() {
         json!({
             "executor":"process_stdio_local",
             "transport_kind":"json_line",
+            "execution_tier":"balanced",
             "command":"cat",
             "args":["/tmp/input.txt"],
             "timeout_ms":5000,
@@ -262,6 +274,7 @@ fn bridge_process_stdio_runtime_evidence_snapshots_stable() {
 
     let execution = process_stdio_runtime_evidence(
         &context,
+        runtime_policy.process_stdio_execution_security_tier(),
         "cat",
         &["/tmp/input.txt".to_owned()],
         5_000,
@@ -290,6 +303,7 @@ fn bridge_process_stdio_runtime_evidence_snapshots_stable() {
         json!({
             "executor":"process_stdio_local",
             "transport_kind":"json_line",
+            "execution_tier":"balanced",
             "command":"cat",
             "args":["/tmp/input.txt"],
             "timeout_ms":5000,

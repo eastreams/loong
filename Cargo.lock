@@ -2096,6 +2096,7 @@ dependencies = [
  "base64",
  "ed25519-dalek",
  "futures-util",
+ "loongclaw-contracts",
  "loongclaw-kernel",
  "loongclaw-protocol",
  "reqwest",

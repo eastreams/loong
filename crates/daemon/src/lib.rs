@@ -1874,6 +1874,22 @@ mod runtime_snapshot_restore_spec_tests {
             "literal-secret",
         ));
     }
+
+    #[test]
+    fn runtime_snapshot_tool_runtime_json_reports_browser_execution_tiers() {
+        let mut runtime = mvp::tools::runtime_config::ToolRuntimeConfig::default();
+        runtime.browser_companion.enabled = true;
+        runtime.browser_companion.ready = true;
+        runtime.browser_companion.command = Some("browser-companion".to_owned());
+
+        let json = runtime_snapshot_tool_runtime_json(&runtime);
+
+        assert_eq!(json["browser"]["execution_tier"], json!("restricted"));
+        assert_eq!(
+            json["browser_companion"]["execution_tier"],
+            json!("balanced")
+        );
+    }
 }
 
 fn runtime_snapshot_artifact_metadata_now(
@@ -3517,16 +3533,20 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
         snapshot.tool_runtime.delegate_enabled
     ));
     lines.push(format!(
-        "tool_runtime browser enabled={} max_sessions={} max_links={} max_text_chars={}",
+        "tool_runtime browser enabled={} tier={} max_sessions={} max_links={} max_text_chars={}",
         snapshot.tool_runtime.browser.enabled,
+        snapshot.tool_runtime.browser_execution_security_tier(),
         snapshot.tool_runtime.browser.max_sessions,
         snapshot.tool_runtime.browser.max_links,
         snapshot.tool_runtime.browser.max_text_chars
     ));
     lines.push(format!(
-        "tool_runtime browser_companion enabled={} ready={} command={} expected_version={}",
+        "tool_runtime browser_companion enabled={} ready={} tier={} command={} expected_version={}",
         snapshot.tool_runtime.browser_companion.enabled,
         snapshot.tool_runtime.browser_companion.ready,
+        snapshot
+            .tool_runtime
+            .browser_companion_execution_security_tier(),
         snapshot
             .tool_runtime
             .browser_companion
@@ -3720,6 +3740,7 @@ fn runtime_snapshot_tool_runtime_json(
         "delegate_enabled": runtime.delegate_enabled,
         "browser": {
             "enabled": runtime.browser.enabled,
+            "execution_tier": runtime.browser_execution_security_tier().as_str(),
             "max_sessions": runtime.browser.max_sessions,
             "max_links": runtime.browser.max_links,
             "max_text_chars": runtime.browser.max_text_chars,
@@ -3727,6 +3748,7 @@ fn runtime_snapshot_tool_runtime_json(
         "browser_companion": {
             "enabled": runtime.browser_companion.enabled,
             "ready": runtime.browser_companion.ready,
+            "execution_tier": runtime.browser_companion_execution_security_tier().as_str(),
             "command": runtime.browser_companion.command,
             "expected_version": runtime.browser_companion.expected_version,
         },

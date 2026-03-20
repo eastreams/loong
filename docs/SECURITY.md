@@ -67,6 +67,24 @@ CapabilityToken → PolicyEngine → PolicyExtensionChain → Execution → Audi
 - Trade-off: corporate proxy-only egress is not currently supported for these web tools because a proxy hop would weaken the same-host assumptions behind the private-address guard
 - If proxy-aware web tooling is added later, it should preserve the same SSRF guarantees rather than silently bypassing them
 
+### Shared Execution Security Tiers
+
+LoongClaw now uses one shared execution-tier vocabulary across the process, browser, and WASM
+lanes. The first slice standardizes the contract and the emitted evidence; it does not attempt a
+full sandbox rewrite for every lane at once.
+
+| Tier | Meaning | Current lane mapping |
+|------|---------|----------------------|
+| `restricted` | tightly bounded execution intended for untrusted or heavily constrained work | built-in browser tools and the current WASM component runtime lane |
+| `balanced` | richer operator-governed execution with explicit readiness or allowlist gates | allowlisted `process_stdio` bridge execution and the managed browser companion when its runtime gate is open |
+| `trusted` | reserved for future explicit high-trust execution lanes | no default lane maps here yet |
+
+Current evidence surfaces that emit or expose this vocabulary:
+
+- `process_stdio` bridge runtime evidence now includes `execution_tier`
+- WASM bridge runtime evidence now includes `execution_tier`
+- browser tool payloads and runtime snapshots now include `execution_tier`
+
 ### Compile-Time Constraints
 
 25 workspace clippy denies prevent common agent anti-patterns. See [Harness Engineering](design-docs/harness-engineering.md) for the full list.
