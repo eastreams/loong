@@ -337,6 +337,9 @@ fn sample_summary_window_cover_context(
             words_per_turn,
         )?;
         checkpoint_sqlite_database(&db_path)?;
+        // Keep this seeded-db path aligned with the other summary scenarios so
+        // the read samples do not inherit a live writer connection.
+        release_memory_benchmark_runtime(&db_path)?;
         let config = memory_summary_config(db_path.clone(), sliding_window, summary_max_chars);
         memory::ensure_memory_db_ready(Some(db_path.clone()), &config)
             .map_err(|error| format!("summary window-cover benchmark bootstrap failed: {error}"))?;

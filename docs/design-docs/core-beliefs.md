@@ -10,7 +10,7 @@ These are the golden principles for anyone — agent or human — working in thi
 
 4. **Audit everything security-critical** — policy denials, token lifecycle events, and plane invocations all emit structured audit events. Silent drops are bugs (see: NoopAuditSink incident).
 
-5. **7-crate DAG, no cycles** — keep dependency direction strictly acyclic: `contracts -> kernel`; `app -> {contracts, kernel}`; `protocol` remains a foundation crate used by `spec`; `spec -> {kernel, protocol}`; `bench -> {kernel, spec}`; `daemon -> {kernel, app, spec, bench}`. There are currently no tracked dependency-graph deviations. Dependency direction is non-negotiable. See [Layered Kernel Design](layered-kernel-design.md).
+5. **7-crate DAG, no cycles** — keep dependency direction strictly acyclic: `contracts -> kernel`; `app -> {contracts, kernel}`; `protocol` remains a foundation crate used by `spec`; `spec -> {kernel, protocol}`; `bench -> {kernel, spec}`; `daemon -> all layers`. There are currently no tracked dependency-graph deviations. Dependency direction is non-negotiable. See [Layered Kernel Design](layered-kernel-design.md).
 
 6. **Tests are the contract** — if a behavior isn't tested, it doesn't exist. All CI-parity tests pass at every commit, enforced by CI and checked locally by `scripts/pre-commit` when installed.
 
