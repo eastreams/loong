@@ -445,7 +445,7 @@ fn required_capabilities_for_tool_name_and_payload(
         "file.read" => {
             caps.insert(Capability::FilesystemRead);
         }
-        "file.write" => {
+        "file.write" | "file.edit" => {
             caps.insert(Capability::FilesystemWrite);
         }
         "claw.migrate" => {
@@ -1790,7 +1790,7 @@ mod tests {
     fn tool_registry_returns_runtime_discoverable_tools_for_default_config_no_websearch() {
         let config = runtime_config::ToolRuntimeConfig::default();
         let entries = tool_registry_with_config(Some(&config));
-        assert_eq!(entries.len(), 22);
+        assert_eq!(entries.len(), 23);
         let names: Vec<&str> = entries.iter().map(|e| e.name).collect();
         assert!(names.contains(&"approval_request_resolve"));
         assert!(names.contains(&"approval_request_status"));
@@ -1803,6 +1803,7 @@ mod tests {
         assert!(names.contains(&"delegate_async"));
         assert!(names.contains(&"file.read"));
         assert!(names.contains(&"file.write"));
+        assert!(names.contains(&"file.edit"));
         assert!(names.contains(&"provider.switch"));
         assert!(names.contains(&"session_archive"));
         assert!(names.contains(&"session_cancel"));
@@ -2193,6 +2194,15 @@ mod tests {
         };
         assert_eq!(
             required_capabilities_for_request(&direct_file_write),
+            BTreeSet::from([Capability::InvokeTool, Capability::FilesystemWrite])
+        );
+
+        let direct_file_edit = ToolCoreRequest {
+            tool_name: "file.edit".to_owned(),
+            payload: json!({"path": "notes.txt", "old_string": "a", "new_string": "b"}),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&direct_file_edit),
             BTreeSet::from([Capability::InvokeTool, Capability::FilesystemWrite])
         );
 

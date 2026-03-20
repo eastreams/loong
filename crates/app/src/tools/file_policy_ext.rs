@@ -237,6 +237,24 @@ mod tests {
     }
 
     #[test]
+    fn denies_file_edit_without_capability() {
+        let ext = FilePolicyExtension::new(None);
+        let pack = test_pack();
+        let token = token_with_caps(BTreeSet::from([Capability::InvokeTool]));
+        let caps = BTreeSet::from([Capability::InvokeTool]);
+        let params = json!({
+            "tool_name": "file.edit",
+            "payload": {"path": "foo.txt", "old_string": "a", "new_string": "b"}
+        });
+        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        let result = ext.authorize_extension(&ctx);
+        assert!(matches!(
+            result.unwrap_err(),
+            PolicyError::ExtensionDenied { .. }
+        ));
+    }
+
+    #[test]
     fn denies_file_read_without_capability() {
         let ext = FilePolicyExtension::new(None);
         let pack = test_pack();
