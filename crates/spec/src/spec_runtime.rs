@@ -1707,6 +1707,12 @@ pub fn execute_wasm_component_bridge(
         Err(reason) => {
             execution["status"] = Value::String("blocked".to_owned());
             execution["reason"] = Value::String(reason);
+            execution["runtime"] = with_execution_security_tier(
+                json!({
+                    "executor": "wasmtime_module",
+                }),
+                execution_tier,
+            );
             return execution;
         }
     };
@@ -3023,6 +3029,44 @@ mod tests {
         assert_eq!(execution["runtime"]["execution_tier"], json!("restricted"));
         let _ = std::fs::remove_file(&wasm_path);
         let _ = std::fs::remove_dir(&root);
+    }
+
+    #[test]
+    fn execute_wasm_component_bridge_reports_runtime_on_artifact_resolution_failure() {
+        let provider = provider_with_metadata(BTreeMap::new());
+        let channel = kernel::ChannelConfig {
+            channel_id: "channel-wasm".to_owned(),
+            endpoint: "local://fixture".to_owned(),
+            provider_id: provider.provider_id.clone(),
+            enabled: true,
+            metadata: BTreeMap::new(),
+        };
+        let command = kernel::ConnectorCommand {
+            connector_name: "connector-x".to_owned(),
+            operation: "call".to_owned(),
+            required_capabilities: BTreeSet::new(),
+            payload: json!({}),
+        };
+        let runtime_policy = BridgeRuntimePolicy {
+            execute_wasm_component: true,
+            ..BridgeRuntimePolicy::default()
+        };
+
+        let execution = super::execute_wasm_component_bridge(
+            json!({"status": "planned"}),
+            &provider,
+            &channel,
+            &command,
+            &runtime_policy,
+        );
+
+        assert_eq!(execution["status"], json!("blocked"));
+        assert_eq!(
+            execution["reason"],
+            json!("wasm_component execution requires component artifact path")
+        );
+        assert_eq!(execution["runtime"]["executor"], json!("wasmtime_module"));
+        assert_eq!(execution["runtime"]["execution_tier"], json!("restricted"));
     }
 
     #[test]
