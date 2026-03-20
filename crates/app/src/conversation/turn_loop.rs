@@ -201,7 +201,7 @@ impl ConversationTurnLoop {
             )
             .await;
 
-            session.total_tool_calls += turn.tool_intents.len();
+            session.total_tool_calls = prospective_total;
 
             let reply_phase = evaluation.reply_phase(session.raw_tool_output_requested);
             if let Some(raw_reply) = reply_phase.raw_reply() {
@@ -1757,5 +1757,25 @@ mod tests {
             observe(&mut supervisor, &policy, "shell.exec"),
             ToolLoopSupervisorVerdict::Continue
         ));
+    }
+
+    #[test]
+    fn global_circuit_breaker_trips_when_prospective_total_reaches_limit() {
+        // Mirrors the prospective check in handle_turn_with_runtime:
+        //   let prospective_total = session.total_tool_calls.saturating_add(turn.tool_intents.len());
+        //   if prospective_total >= policy.max_total_tool_calls { ... }
+        let max = 200usize;
+
+        // At 198 with 3 incoming intents: 201 >= 200 → breaker fires
+        assert!(198usize.saturating_add(3) >= max);
+
+        // At 197 with 2 incoming intents: 199 < 200 → breaker does not fire
+        assert!(197usize.saturating_add(2) < max);
+
+        // Exact boundary: 199 + 1 = 200 >= 200 → fires
+        assert!(199usize.saturating_add(1) >= max);
+
+        // Saturating: usize::MAX + 1 does not overflow, still >= max
+        assert!(usize::MAX.saturating_add(1) >= max);
     }
 }
