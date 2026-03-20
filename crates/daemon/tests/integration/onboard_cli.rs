@@ -865,7 +865,7 @@ async fn non_interactive_onboard_allows_explicit_skip_model_probe_warning() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn non_interactive_onboard_preserves_reviewed_auto_when_probe_is_skipped() {
+async fn non_interactive_onboard_applies_reviewed_default_when_probe_is_skipped() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let root = unique_temp_path("non-interactive-reviewed-auto-skip-root");
     std::fs::create_dir_all(&root).expect("create test root");
@@ -890,12 +890,12 @@ async fn non_interactive_onboard_preserves_reviewed_auto_when_probe_is_skipped()
         .expect("load written onboarding config");
     assert_eq!(config.provider.kind, mvp::config::ProviderKind::Deepseek);
     assert_eq!(
-        config.provider.model, "auto",
-        "non-interactive onboarding should preserve model = auto when the operator did not explicitly pin a reviewed provider model"
+        config.provider.model, "deepseek-chat",
+        "non-interactive onboarding should materialize the reviewed provider default so skip-model-probe still leaves a usable explicit model"
     );
     assert!(
-        !raw.contains("model = \"deepseek-chat\""),
-        "skip-model-probe onboarding should not silently rewrite reviewed providers to the reviewed model: {raw}"
+        raw.contains("model = \"deepseek-chat\""),
+        "skip-model-probe onboarding should persist the reviewed model explicitly instead of leaving the config on auto: {raw}"
     );
 }
 
@@ -941,7 +941,7 @@ async fn non_interactive_onboard_allows_explicit_model_probe_warning() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn non_interactive_onboard_reports_reviewed_auto_probe_failure_without_rewriting_config() {
+async fn non_interactive_onboard_applies_reviewed_default_when_probe_fails() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let root = unique_temp_path("non-interactive-reviewed-auto-failure-root");
     std::fs::create_dir_all(&root).expect("create test root");
@@ -960,7 +960,6 @@ async fn non_interactive_onboard_reports_reviewed_auto_probe_failure_without_rew
     config.provider.api_key = Some("test-deepseek-key".to_owned());
     mvp::config::write(Some(output.to_string_lossy().as_ref()), &config, true)
         .expect("write existing config");
-    let original_body = std::fs::read_to_string(&output).expect("read original config");
 
     let mut options = default_non_interactive_onboard_options(&output);
     options.force = true;
@@ -968,21 +967,18 @@ async fn non_interactive_onboard_reports_reviewed_auto_probe_failure_without_rew
 
     let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
     let context = crate::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
-    let error = crate::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+    crate::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
         .await
-        .expect_err("reviewed auto-model probe failures should block non-interactive onboarding until the model is pinned explicitly");
+        .expect("reviewed onboarding defaults should let non-interactive onboarding pin a usable explicit model even when catalog probing fails");
 
+    let written = std::fs::read_to_string(&output).expect("read config after onboarding");
     assert!(
-        error.contains("accept reviewed model `deepseek-chat`")
-            && error.contains("provider.model")
-            && error.contains("preferred_models"),
-        "reviewed auto-model probe failures should surface the actionable explicit-model remediation instead of a generic rerun hint: {error}"
+        written.contains("model = \"deepseek-chat\""),
+        "non-interactive onboarding should persist the reviewed model explicitly instead of leaving the provider on auto after a probe warning: {written}"
     );
-    assert_eq!(
-        std::fs::read_to_string(&output).expect("read config after blocked onboard"),
-        original_body,
-        "blocking reviewed auto-model probe failures should leave the existing auto config untouched"
-    );
+    let (_, written_config) = mvp::config::load(Some(output.to_string_lossy().as_ref()))
+        .expect("load written onboarding config");
+    assert_eq!(written_config.provider.model, "deepseek-chat");
 
     let requests = server.join().expect("join local provider server");
     assert!(
@@ -991,7 +987,7 @@ async fn non_interactive_onboard_reports_reviewed_auto_probe_failure_without_rew
             request.starts_with("GET /v1/models ")
                 && normalized.contains("authorization: bearer test-deepseek-key")
         }),
-        "reviewed auto-model failures should still attempt the provider model probe before surfacing the actionable remediation: {requests:#?}"
+        "reviewed-default onboarding should still attempt the provider model probe with resolved auth before falling back to the explicit reviewed model: {requests:#?}"
     );
 }
 
