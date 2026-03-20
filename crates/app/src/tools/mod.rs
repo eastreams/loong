@@ -701,6 +701,7 @@ fn execute_discoverable_tool_core_with_config(
         "shell.exec" => shell::execute_shell_tool_with_config(request, config),
         "file.read" => file::execute_file_read_tool_with_config(request, config),
         "file.write" => file::execute_file_write_tool_with_config(request, config),
+        "file.edit" => file::execute_file_edit_tool_with_config(request, config),
         "provider.switch" => {
             provider_switch::execute_provider_switch_tool_with_config(request, config)
         }
@@ -1744,7 +1745,7 @@ mod tests {
     fn tool_registry_returns_runtime_discoverable_tools_for_default_config() {
         let config = runtime_config::ToolRuntimeConfig::default();
         let entries = tool_registry_with_config(Some(&config));
-        assert_eq!(entries.len(), 23);
+        assert_eq!(entries.len(), 24);
         let names: Vec<&str> = entries.iter().map(|e| e.name).collect();
         assert!(names.contains(&"approval_request_resolve"));
         assert!(names.contains(&"approval_request_status"));
@@ -1757,6 +1758,7 @@ mod tests {
         assert!(names.contains(&"delegate_async"));
         assert!(names.contains(&"file.read"));
         assert!(names.contains(&"file.write"));
+        assert!(names.contains(&"file.edit"));
         assert!(names.contains(&"provider.switch"));
         assert!(names.contains(&"session_archive"));
         assert!(names.contains(&"session_cancel"));
