@@ -160,10 +160,21 @@ pub(super) async fn fetch_available_models_with_policy(
                     backoff_ms = next_backoff_ms;
                     continue;
                 }
-                return Err(format!(
-                    "provider model-list request failed on attempt {attempt}/{max_attempts}: {error}",
+                let error_message = error.to_string();
+                let mut message = format!(
+                    "provider model-list request failed on attempt {attempt}/{max_attempts}: {error_message}",
                     max_attempts = runtime.request_policy.max_attempts
-                ));
+                );
+                if let Some(route_hint) = transport::render_transport_route_hint(
+                    request_endpoint.as_str(),
+                    error_message.as_str(),
+                    error.is_timeout(),
+                    error.is_connect(),
+                ) {
+                    message.push(' ');
+                    message.push_str(route_hint.as_str());
+                }
+                return Err(message);
             }
             Err(transport::RequestExecutionError::Setup(error)) => {
                 return Err(format!(

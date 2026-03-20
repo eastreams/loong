@@ -82,7 +82,22 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
                 level: DoctorCheckLevel::Pass,
                 detail: format!("{} model(s) available", models.len()),
             }),
-            Err(error) => checks.push(provider_model_probe_failure_check(&config, error)),
+            Err(error) => {
+                let transport_style_failure =
+                    crate::provider_route_diagnostics::is_transport_style_model_probe_failure(
+                        error.as_str(),
+                    );
+                checks.push(provider_model_probe_failure_check(&config, error));
+                if transport_style_failure
+                    && let Some(route_probe) =
+                        crate::provider_route_diagnostics::collect_provider_route_probe(
+                            &config.provider,
+                        )
+                        .await
+                {
+                    checks.push(provider_route_probe_doctor_check(&route_probe));
+                }
+            }
         }
     }
 
@@ -1210,6 +1225,26 @@ fn provider_transport_doctor_check(provider: &mvp::config::ProviderConfig) -> Do
     }
 }
 
+fn provider_route_probe_doctor_check(
+    probe: &crate::provider_route_diagnostics::ProviderRouteProbe,
+) -> DoctorCheck {
+    DoctorCheck {
+        name: crate::provider_route_diagnostics::PROVIDER_ROUTE_PROBE_CHECK_NAME.to_owned(),
+        level: match probe.level {
+            crate::provider_route_diagnostics::ProviderRouteProbeLevel::Pass => {
+                DoctorCheckLevel::Pass
+            }
+            crate::provider_route_diagnostics::ProviderRouteProbeLevel::Warn => {
+                DoctorCheckLevel::Warn
+            }
+            crate::provider_route_diagnostics::ProviderRouteProbeLevel::Fail => {
+                DoctorCheckLevel::Fail
+            }
+        },
+        detail: probe.detail.clone(),
+    }
+}
+
 fn provider_credentials_doctor_check(
     config: &mvp::config::LoongClawConfig,
     has_provider_credentials: bool,
@@ -1248,6 +1283,16 @@ fn provider_model_probe_failure_check(
     error: String,
 ) -> DoctorCheck {
     let provider_prefix = crate::provider_presentation::active_provider_detail_label(config);
+    if crate::provider_route_diagnostics::is_transport_style_model_probe_failure(error.as_str()) {
+        return DoctorCheck {
+            name: "provider model probe".to_owned(),
+            level: DoctorCheckLevel::Fail,
+            detail: format!(
+                "{provider_prefix}: {} ({error}); runtime could not verify the provider route. inspect the provider route probe below and retry once dns / proxy / TUN routing is stable",
+                crate::provider_route_diagnostics::MODEL_CATALOG_TRANSPORT_FAILED_MARKER
+            ),
+        };
+    }
     let auth_style_failure = mvp::provider::is_auth_style_failure_message(error.as_str());
     let append_region_hint = |mut detail: String| {
         if auth_style_failure && let Some(hint) = config.provider.region_endpoint_failure_hint() {
@@ -1483,61 +1528,101 @@ fn build_doctor_next_steps_with_path_env(
     if checks.iter().any(|check| {
         check.name == "provider model probe"
             && check.level != DoctorCheckLevel::Pass
-            && check.detail.contains(MODEL_CATALOG_PROBE_FAILED_MARKER)
+            && (check.detail.contains(MODEL_CATALOG_PROBE_FAILED_MARKER)
+                || check.detail.contains(
+                    crate::provider_route_diagnostics::MODEL_CATALOG_TRANSPORT_FAILED_MARKER,
+                ))
     }) {
-        let provider_model_probe_auth_failure = checks.iter().any(|check| {
+        let provider_model_probe_transport_failure = checks.iter().any(|check| {
             check.name == "provider model probe"
                 && check.level != DoctorCheckLevel::Pass
-                && check.detail.contains(MODEL_CATALOG_PROBE_FAILED_MARKER)
-                && mvp::provider::is_auth_style_failure_message(check.detail.as_str())
+                && check.detail.contains(
+                    crate::provider_route_diagnostics::MODEL_CATALOG_TRANSPORT_FAILED_MARKER,
+                )
         });
-        match config.provider.model_catalog_probe_recovery() {
-            mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
-                recommended_onboarding_model: Some(model),
-            } => {
+        if provider_model_probe_transport_failure {
+            if checks.iter().any(|check| {
+                check.name == crate::provider_route_diagnostics::PROVIDER_ROUTE_PROBE_CHECK_NAME
+                    && check.level != DoctorCheckLevel::Pass
+            }) {
                 push_unique_step(
                     &mut steps,
                     format!(
-                        "Rerun onboarding and accept reviewed model `{model}`: {rerun_onboard_command}"
+                        "Fix the active provider route (DNS / proxy / TUN), then re-run diagnostics: {rerun_command}"
                     ),
                 );
+                if checks.iter().any(|check| {
+                    check.name == crate::provider_route_diagnostics::PROVIDER_ROUTE_PROBE_CHECK_NAME
+                        && check.detail.contains("fake-ip-style")
+                }) {
+                    push_unique_step(
+                        &mut steps,
+                        "If the provider host should bypass proxying, add it to your direct/bypass rules; otherwise keep the fake-ip/TUN proxy healthy before retrying.".to_owned(),
+                    );
+                }
+            } else {
                 push_unique_step(
                     &mut steps,
                     format!(
-                        "Or set `provider.model` / `preferred_models` explicitly, then re-run diagnostics: {rerun_command}"
-                    ),
-                );
-            }
-            mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
-                recommended_onboarding_model: None,
-            } => {
-                push_unique_step(
-                    &mut steps,
-                    format!(
-                        "Set `provider.model` / `preferred_models` explicitly, then re-run diagnostics: {rerun_command}"
-                    ),
-                );
-            }
-            mvp::config::ModelCatalogProbeRecovery::ExplicitModel(_)
-            | mvp::config::ModelCatalogProbeRecovery::ConfiguredPreferredModels(_) => {
-                push_unique_step(
-                    &mut steps,
-                    format!(
-                        "Retry provider probe only after credentials are ready: {rerun_command}"
-                    ),
-                );
-                push_unique_step(
-                    &mut steps,
-                    format!(
-                        "If your provider blocks model listing during setup, retry with: {rerun_command} --skip-model-probe"
+                        "Re-run diagnostics after checking the active provider route: {rerun_command}"
                     ),
                 );
             }
-        }
-        if provider_model_probe_auth_failure
-            && let Some(hint) = config.provider.region_endpoint_failure_hint()
-        {
-            push_unique_step(&mut steps, hint);
+        } else {
+            let provider_model_probe_auth_failure = checks.iter().any(|check| {
+                check.name == "provider model probe"
+                    && check.level != DoctorCheckLevel::Pass
+                    && check.detail.contains(MODEL_CATALOG_PROBE_FAILED_MARKER)
+                    && mvp::provider::is_auth_style_failure_message(check.detail.as_str())
+            });
+            match config.provider.model_catalog_probe_recovery() {
+                mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
+                    recommended_onboarding_model: Some(model),
+                } => {
+                    push_unique_step(
+                        &mut steps,
+                        format!(
+                            "Rerun onboarding and accept reviewed model `{model}`: {rerun_onboard_command}"
+                        ),
+                    );
+                    push_unique_step(
+                        &mut steps,
+                        format!(
+                            "Or set `provider.model` / `preferred_models` explicitly, then re-run diagnostics: {rerun_command}"
+                        ),
+                    );
+                }
+                mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
+                    recommended_onboarding_model: None,
+                } => {
+                    push_unique_step(
+                        &mut steps,
+                        format!(
+                            "Set `provider.model` / `preferred_models` explicitly, then re-run diagnostics: {rerun_command}"
+                        ),
+                    );
+                }
+                mvp::config::ModelCatalogProbeRecovery::ExplicitModel(_)
+                | mvp::config::ModelCatalogProbeRecovery::ConfiguredPreferredModels(_) => {
+                    push_unique_step(
+                        &mut steps,
+                        format!(
+                            "Retry provider probe only after credentials are ready: {rerun_command}"
+                        ),
+                    );
+                    push_unique_step(
+                        &mut steps,
+                        format!(
+                            "If your provider blocks model listing during setup, retry with: {rerun_command} --skip-model-probe"
+                        ),
+                    );
+                }
+            }
+            if provider_model_probe_auth_failure
+                && let Some(hint) = config.provider.region_endpoint_failure_hint()
+            {
+                push_unique_step(&mut steps, hint);
+            }
         }
     }
 
@@ -2063,6 +2148,30 @@ mod tests {
         assert!(
             check.detail.contains("explicitly configured"),
             "doctor should explain that explicit-model runtime may still work when catalog probing fails: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn provider_model_probe_transport_failure_prioritizes_route_guidance() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.model = "custom-explicit-model".to_owned();
+
+        let check = provider_model_probe_failure_check(
+            &config,
+            "provider model-list request failed on attempt 3/3: operation timed out".to_owned(),
+        );
+
+        assert_eq!(check.name, "provider model probe");
+        assert_eq!(check.level, DoctorCheckLevel::Fail);
+        assert!(
+            check
+                .detail
+                .contains(crate::provider_route_diagnostics::MODEL_CATALOG_TRANSPORT_FAILED_MARKER),
+            "transport probe failures should use the route-focused marker: {check:#?}"
+        );
+        assert!(
+            !check.detail.contains("provider.model"),
+            "transport probe failures should not suggest model-selection repair when the route is the real blocker: {check:#?}"
         );
     }
 
@@ -3235,6 +3344,48 @@ mod tests {
                 step == "If your provider blocks model listing during setup, retry with: loongclaw doctor --config '/tmp/loongclaw.toml' --skip-model-probe"
             }),
             "warn-level preferred-model recovery should still keep the skip-model-probe escape hatch visible: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn build_doctor_next_steps_guides_provider_route_probe_repairs() {
+        let checks = vec![
+            DoctorCheck {
+                name: "provider model probe".to_owned(),
+                level: DoctorCheckLevel::Fail,
+                detail:
+                    "OpenAI [openai]: model catalog transport failed (provider model-list request failed on attempt 3/3: operation timed out)"
+                        .to_owned(),
+            },
+            DoctorCheck {
+                name: "provider route probe".to_owned(),
+                level: DoctorCheckLevel::Warn,
+                detail:
+                    "request/models host api.openai.com:443: dns resolved to 198.18.0.2 (fake-ip-style); tcp connect ok. the route currently depends on local fake-ip/TUN interception."
+                        .to_owned(),
+            },
+        ];
+
+        let next_steps = build_doctor_next_steps_with_path_env(
+            &checks,
+            Path::new("/tmp/loongclaw.toml"),
+            &mvp::config::LoongClawConfig::default(),
+            false,
+            Some(std::ffi::OsStr::new("")),
+        );
+
+        assert!(
+            next_steps.iter().any(|step| {
+                step.contains("provider route")
+                    && step.contains("loongclaw doctor --config '/tmp/loongclaw.toml'")
+            }),
+            "route-probe findings should produce a concrete diagnostics rerun step: {next_steps:#?}"
+        );
+        assert!(
+            next_steps.iter().any(|step| {
+                step.contains("fake-ip") || step.contains("direct/bypass") || step.contains("proxy")
+            }),
+            "route-probe findings should explain how to repair proxy/fake-ip routing instead of leaving recovery implicit: {next_steps:#?}"
         );
     }
 

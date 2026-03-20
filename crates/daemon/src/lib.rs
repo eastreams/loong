@@ -52,6 +52,7 @@ pub mod next_actions;
 pub mod onboard_cli;
 pub mod onboard_presentation;
 pub mod provider_presentation;
+mod provider_route_diagnostics;
 pub mod runtime_capability_cli;
 pub mod runtime_experiment_cli;
 pub mod runtime_restore_cli;

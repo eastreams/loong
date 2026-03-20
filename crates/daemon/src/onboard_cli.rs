@@ -2250,7 +2250,22 @@ async fn run_preflight_checks(
                 detail: format!("{} model(s) available", models.len()),
                 non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
             }),
-            Err(error) => checks.push(provider_model_probe_failure_check(config, error)),
+            Err(error) => {
+                let transport_style_failure =
+                    crate::provider_route_diagnostics::is_transport_style_model_probe_failure(
+                        error.as_str(),
+                    );
+                checks.push(provider_model_probe_failure_check(config, error));
+                if transport_style_failure
+                    && let Some(route_probe) =
+                        crate::provider_route_diagnostics::collect_provider_route_probe(
+                            &config.provider,
+                        )
+                        .await
+                {
+                    checks.push(provider_route_probe_preflight_check(&route_probe));
+                }
+            }
         }
     }
 
@@ -2293,6 +2308,17 @@ fn provider_model_probe_failure_check(
     error: String,
 ) -> OnboardCheck {
     let provider_prefix = provider_check_detail_prefix(config);
+    if crate::provider_route_diagnostics::is_transport_style_model_probe_failure(error.as_str()) {
+        return OnboardCheck {
+            name: "provider model probe",
+            level: OnboardCheckLevel::Fail,
+            detail: format!(
+                "{provider_prefix}: {} ({error}); runtime could not verify the provider route. inspect the provider route probe below and retry once dns / proxy / TUN routing is stable",
+                crate::provider_route_diagnostics::MODEL_CATALOG_TRANSPORT_FAILED_MARKER
+            ),
+            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+        };
+    }
     let auth_style_failure = mvp::provider::is_auth_style_failure_message(error.as_str());
     let append_region_hint = |mut detail: String| {
         if auth_style_failure && let Some(hint) = config.provider.region_endpoint_failure_hint() {
@@ -2474,6 +2500,27 @@ fn provider_transport_check(config: &mvp::config::LoongClawConfig) -> OnboardChe
             mvp::config::ProviderTransportReadinessLevel::Unsupported => OnboardCheckLevel::Fail,
         },
         detail: readiness.detail,
+        non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+    }
+}
+
+fn provider_route_probe_preflight_check(
+    probe: &crate::provider_route_diagnostics::ProviderRouteProbe,
+) -> OnboardCheck {
+    OnboardCheck {
+        name: crate::provider_route_diagnostics::PROVIDER_ROUTE_PROBE_CHECK_NAME,
+        level: match probe.level {
+            crate::provider_route_diagnostics::ProviderRouteProbeLevel::Pass => {
+                OnboardCheckLevel::Pass
+            }
+            crate::provider_route_diagnostics::ProviderRouteProbeLevel::Warn => {
+                OnboardCheckLevel::Warn
+            }
+            crate::provider_route_diagnostics::ProviderRouteProbeLevel::Fail => {
+                OnboardCheckLevel::Fail
+            }
+        },
+        detail: probe.detail.clone(),
         non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
     }
 }
@@ -6840,6 +6887,30 @@ mod tests {
         assert!(
             check.detail.contains("explicitly configured"),
             "explicit-model probe failures should explain that catalog discovery is advisory: {check:#?}"
+        );
+    }
+
+    #[test]
+    fn provider_model_probe_transport_failure_prioritizes_route_guidance() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.model = "custom-explicit-model".to_owned();
+
+        let check = provider_model_probe_failure_check(
+            &config,
+            "provider model-list request failed on attempt 3/3: operation timed out".to_owned(),
+        );
+
+        assert_eq!(check.name, "provider model probe");
+        assert_eq!(check.level, OnboardCheckLevel::Fail);
+        assert!(
+            check
+                .detail
+                .contains(crate::provider_route_diagnostics::MODEL_CATALOG_TRANSPORT_FAILED_MARKER),
+            "transport probe failures should use the route-focused marker during onboarding: {check:#?}"
+        );
+        assert!(
+            !check.detail.contains("provider.model"),
+            "transport probe failures should not suggest model-selection repair when the route is the real blocker: {check:#?}"
         );
     }
 

@@ -149,6 +149,66 @@ pub(super) fn resolve_request_url(
     Ok(url.replace("<region>", region))
 }
 
+fn request_host_label(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let host = parsed.host_str()?;
+    let port = parsed.port_or_known_default()?;
+    Some(format!("{host}:{port}"))
+}
+
+fn message_looks_like_dns_failure(message: &str) -> bool {
+    message.contains("dns")
+        || message.contains("lookup address")
+        || message.contains("name or service not known")
+        || message.contains("nodename nor servname")
+        || message.contains("temporary failure in name resolution")
+        || message.contains("failed to lookup address information")
+        || message.contains("no such host")
+}
+
+fn message_looks_like_proxy_route_failure(message: &str) -> bool {
+    message.contains("proxy")
+        || message.contains("tunnel")
+        || message.contains("socks")
+        || message.contains("tun")
+}
+
+pub(super) fn render_transport_route_hint(
+    url: &str,
+    error_message: &str,
+    is_timeout: bool,
+    is_connect: bool,
+) -> Option<String> {
+    let host = request_host_label(url)?;
+    let lower = error_message.to_ascii_lowercase();
+
+    if is_timeout {
+        return Some(format!(
+            "request host {host}: the transport timed out before an HTTP response arrived. if you're using a proxy/TUN/fake-ip setup, verify that the route stays healthy for longer-lived requests, then run `loongclaw doctor` to inspect provider route diagnostics"
+        ));
+    }
+
+    if is_connect && message_looks_like_dns_failure(lower.as_str()) {
+        return Some(format!(
+            "request host {host}: dns resolution failed before the request reached the provider. check local dns / proxy / TUN rules, then run `loongclaw doctor` to inspect provider route diagnostics"
+        ));
+    }
+
+    if message_looks_like_proxy_route_failure(lower.as_str()) {
+        return Some(format!(
+            "request host {host}: the transport failed while crossing a proxy/TUN route. verify that the local proxy path is healthy, then run `loongclaw doctor` to inspect provider route diagnostics"
+        ));
+    }
+
+    if is_connect {
+        return Some(format!(
+            "request host {host}: the connection failed before an HTTP status was returned. this usually points to dns, proxy/TUN routing, or another local network-path problem. run `loongclaw doctor` to inspect provider route diagnostics"
+        ));
+    }
+
+    None
+}
+
 pub(super) fn build_request_headers_without_provider_auth(
     provider: &ProviderConfig,
 ) -> CliResult<HeaderMap> {
@@ -506,6 +566,36 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("custom-key")
         );
+    }
+
+    #[test]
+    fn render_transport_route_hint_identifies_dns_failures() {
+        let hint = render_transport_route_hint(
+            "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+            "dns error: failed to lookup address information: nodename nor servname provided, or not known",
+            false,
+            true,
+        )
+        .expect("dns failure should surface a route hint");
+
+        assert!(hint.contains("ark.cn-beijing.volces.com:443"));
+        assert!(hint.contains("dns"));
+        assert!(hint.contains("loongclaw doctor"));
+    }
+
+    #[test]
+    fn render_transport_route_hint_identifies_proxy_timeout_failures() {
+        let hint = render_transport_route_hint(
+            "https://api.openai.com/v1/chat/completions",
+            "operation timed out",
+            true,
+            false,
+        )
+        .expect("timeouts should surface a route hint");
+
+        assert!(hint.contains("api.openai.com:443"));
+        assert!(hint.contains("proxy"));
+        assert!(hint.contains("TUN"));
     }
 
     #[cfg(feature = "provider-bedrock")]

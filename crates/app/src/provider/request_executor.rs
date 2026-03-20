@@ -365,12 +365,23 @@ where
                     backoff_ms = next_backoff_ms;
                     continue;
                 }
+                let error_message = error.to_string();
+                let mut message = format!(
+                    "provider request failed for model `{}` on attempt {attempt}/{max_attempts}: {error_message}",
+                    runtime.model,
+                    max_attempts = runtime.request_policy.max_attempts
+                );
+                if let Some(route_hint) = transport::render_transport_route_hint(
+                    request_endpoint.as_str(),
+                    error_message.as_str(),
+                    error.is_timeout(),
+                    error.is_connect(),
+                ) {
+                    message.push(' ');
+                    message.push_str(route_hint.as_str());
+                }
                 return Err(build_model_request_error(
-                    format!(
-                        "provider request failed for model `{}` on attempt {attempt}/{max_attempts}: {error}",
-                        runtime.model,
-                        max_attempts = runtime.request_policy.max_attempts
-                    ),
+                    message,
                     false,
                     ProviderFailoverReason::TransportFailure,
                     ProviderFailoverStage::TransportFailure,

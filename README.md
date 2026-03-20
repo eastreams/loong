@@ -291,6 +291,12 @@ addition to the existing runtime checks. For durable modes (`fanout` or
 `audit summary` when you want a compact kind/count rollup plus last-seen
 fields. Raw `tail` remains a fallback when you need the original JSONL lines.
 
+When provider model probing fails before any HTTP status is returned, `doctor`
+now adds a provider route probe for the active request/models host. That probe
+surfaces the host and port, DNS resolution results, fake-ip-style addresses,
+and a short TCP reachability check so you can separate local proxy/TUN/fake-ip
+instability from true upstream unavailability.
+
 ## Configuration
 
 `loongclaw onboard` uses `provider.api_key` to reference provider credentials, so secrets stay
