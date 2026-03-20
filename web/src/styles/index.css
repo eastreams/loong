@@ -190,6 +190,11 @@ html {
   overflow-x: hidden;
   overflow-y: auto;
 }
+
+.workspace-stage {
+  height: 100%;
+  min-height: 0;
+}
 /* #endregion */
 
 /* #region Top navigation and brand lockup */

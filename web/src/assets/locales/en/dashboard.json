@@ -14,6 +14,8 @@
     "providerTitle": "Active provider",
     "runtimeEyebrow": "Runtime detail",
     "runtimeTitle": "Runtime health",
+    "runtimeDetailLabel": "Runtime",
+    "configDetailLabel": "Local config",
     "connectivityEyebrow": "Connection",
     "connectivityTitle": "Provider route",
     "configEyebrow": "Config snapshot",
@@ -121,6 +123,8 @@
     "browser": "Browser",
     "browser_companion": "Browser companion",
     "web_fetch": "Web fetch",
+    "web_search": "Web search",
+    "file_tools": "File tools",
     "external_skills": "External skills"
   },
   "actions": {

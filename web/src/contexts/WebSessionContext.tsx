@@ -14,6 +14,7 @@ import {
 import { onboardingApi } from "../features/onboarding/api";
 
 const ONBOARDING_VALIDATION_STORAGE_KEY = "loongclaw.onboarding.validation-key";
+const ONBOARDING_ACK_STORAGE_KEY = "loongclaw.onboarding.ack-key";
 
 interface MetaAuthInfo {
   required: boolean;
@@ -98,7 +99,6 @@ export function WebSessionProvider({ children }: PropsWithChildren) {
   const [authRevision, setAuthRevision] = useState(0);
   const [onboardingStatus, setOnboardingStatus] = useState<OnboardingStatus | null>(null);
   const [onboardingLoading, setOnboardingLoading] = useState(true);
-  const [onboardingAcknowledged, setOnboardingAcknowledged] = useState(false);
   const [onboardingRevision, setOnboardingRevision] = useState(0);
   const [autoPairingInProgress, setAutoPairingInProgress] = useState(false);
   const [autoPairingAttempted, setAutoPairingAttempted] = useState(false);
@@ -107,6 +107,12 @@ export function WebSessionProvider({ children }: PropsWithChildren) {
       return null;
     }
     return window.sessionStorage.getItem(ONBOARDING_VALIDATION_STORAGE_KEY);
+  });
+  const [acknowledgedOnboardingKey, setAcknowledgedOnboardingKey] = useState<string | null>(() => {
+    if (typeof window === "undefined") {
+      return null;
+    }
+    return window.sessionStorage.getItem(ONBOARDING_ACK_STORAGE_KEY);
   });
   const authRequired = authInfo?.required ?? true;
 
@@ -121,6 +127,19 @@ export function WebSessionProvider({ children }: PropsWithChildren) {
       window.sessionStorage.removeItem(ONBOARDING_VALIDATION_STORAGE_KEY);
     }
     setValidatedOnboardingKey(key);
+  }
+
+  function persistOnboardingAcknowledgedKey(key: string | null) {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (key) {
+      window.sessionStorage.setItem(ONBOARDING_ACK_STORAGE_KEY, key);
+    } else {
+      window.sessionStorage.removeItem(ONBOARDING_ACK_STORAGE_KEY);
+    }
+    setAcknowledgedOnboardingKey(key);
   }
 
   useEffect(() => {
@@ -212,10 +231,6 @@ export function WebSessionProvider({ children }: PropsWithChildren) {
   }, [authRevision, onboardingRevision, storedToken]);
 
   useEffect(() => {
-    setOnboardingAcknowledged(false);
-  }, [authRevision]);
-
-  useEffect(() => {
     if (storedToken?.trim() || onboardingStatus?.tokenPaired) {
       setAutoPairingAttempted(false);
     }
@@ -277,6 +292,9 @@ export function WebSessionProvider({ children }: PropsWithChildren) {
   const onboardingValidationSatisfied =
     currentOnboardingValidationKey != null &&
     validatedOnboardingKey === currentOnboardingValidationKey;
+  const onboardingAcknowledged =
+    currentOnboardingValidationKey != null &&
+    acknowledgedOnboardingKey === currentOnboardingValidationKey;
   const status: WebSessionContextValue["status"] = authRequired
     ? isUnauthorized
       ? "unauthorized"
@@ -300,7 +318,10 @@ export function WebSessionProvider({ children }: PropsWithChildren) {
         !onboardingAcknowledged,
       onboardingValidationSatisfied,
       acknowledgeOnboarding: () => {
-        setOnboardingAcknowledged(true);
+        if (!currentOnboardingValidationKey) {
+          return;
+        }
+        persistOnboardingAcknowledgedKey(currentOnboardingValidationKey);
       },
       markOnboardingValidated: () => {
         if (!currentOnboardingValidationKey || typeof window === "undefined") {
@@ -316,7 +337,7 @@ export function WebSessionProvider({ children }: PropsWithChildren) {
       },
       clearOnboardingValidation: () => {
         persistOnboardingValidationKey(null);
-        setOnboardingAcknowledged(false);
+        persistOnboardingAcknowledgedKey(null);
       },
       refreshOnboardingStatus: () => {
         setOnboardingRevision((current) => current + 1);
@@ -360,6 +381,7 @@ export function WebSessionProvider({ children }: PropsWithChildren) {
       onboardingValidationSatisfied,
       onboardingRevision,
       currentOnboardingValidationKey,
+      acknowledgedOnboardingKey,
       validatedOnboardingKey,
     ],
   );

@@ -70,7 +70,7 @@
 
 .dashboard-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.65fr) minmax(320px, 0.9fr);
+  grid-template-columns: minmax(0, 1.45fr) minmax(360px, 1.05fr);
   gap: 1rem;
   align-items: start;
 }
@@ -133,7 +133,7 @@
 .dashboard-provider-meta {
   display: grid;
   gap: 0.75rem;
-  min-width: 16rem;
+  min-width: 14rem;
 }
 
 .dashboard-meta-stack {
@@ -182,6 +182,24 @@
 .dashboard-actions {
   display: grid;
   gap: 0.75rem;
+}
+
+.dashboard-stacked-section {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.dashboard-stacked-section-separated {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border-light);
+}
+
+.dashboard-section-heading {
+  font-size: 0.72rem;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
 }
 
 .dashboard-tool-summary {

@@ -11,10 +11,15 @@ function WorkspaceLayout() {
 
   return (
     <RootLayout>
-      <div hidden={activeSection !== "chat"} aria-hidden={activeSection !== "chat"}>
+      <div
+        className="workspace-stage"
+        hidden={activeSection !== "chat"}
+        aria-hidden={activeSection !== "chat"}
+      >
         <ChatPage />
       </div>
       <div
+        className="workspace-stage"
         hidden={activeSection !== "dashboard"}
         aria-hidden={activeSection !== "dashboard"}
       >

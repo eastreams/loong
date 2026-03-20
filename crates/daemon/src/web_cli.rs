@@ -657,6 +657,8 @@ async fn dashboard_tools(
     State(state): State<Arc<WebApiState>>,
 ) -> Result<Json<ApiEnvelope<DashboardToolsPayload>>, WebApiError> {
     let snapshot = load_web_snapshot(state.as_ref())?;
+    let tool_runtime =
+        mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(&snapshot.config, None);
     Ok(Json(ApiEnvelope {
         ok: true,
         data: DashboardToolsPayload {
@@ -664,7 +666,7 @@ async fn dashboard_tools(
             shell_default_mode: snapshot.config.tools.shell_default_mode.clone(),
             shell_allow_count: snapshot.config.tools.shell_allow.len(),
             shell_deny_count: snapshot.config.tools.shell_deny.len(),
-            items: build_tool_items(&snapshot.config),
+            items: build_tool_items(&snapshot.config, &tool_runtime),
         },
     }))
 }
@@ -892,7 +894,10 @@ fn load_session_messages(
     mvp::memory::window_direct(session_id, 64, memory_config).map_err(WebApiError::internal)
 }
 
-fn build_tool_items(config: &mvp::config::LoongClawConfig) -> Vec<DashboardToolItemPayload> {
+fn build_tool_items(
+    config: &mvp::config::LoongClawConfig,
+    runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
+) -> Vec<DashboardToolItemPayload> {
     vec![
         DashboardToolItemPayload {
             id: "shell_policy",
@@ -943,17 +948,22 @@ fn build_tool_items(config: &mvp::config::LoongClawConfig) -> Vec<DashboardToolI
         DashboardToolItemPayload {
             id: "browser_companion",
             enabled: config.tools.browser_companion.enabled,
-            detail: config
-                .tools
-                .browser_companion
-                .command
-                .clone()
-                .unwrap_or_else(|| {
-                    format!(
-                        "timeout {}s",
-                        config.tools.browser_companion.timeout_seconds
-                    )
-                }),
+            // Prefer runtime-ready signals here so the dashboard reflects whether
+            // the companion can actually be used right now, not just how it is configured.
+            detail: format!(
+                "{}, {}, {}s timeout",
+                if runtime.browser_companion.is_runtime_ready() {
+                    "ready"
+                } else {
+                    "not ready"
+                },
+                if runtime.browser_companion.command.is_some() {
+                    "command configured"
+                } else {
+                    "no command"
+                },
+                runtime.browser_companion.timeout_seconds
+            ),
         },
         DashboardToolItemPayload {
             id: "web_fetch",
@@ -963,6 +973,24 @@ fn build_tool_items(config: &mvp::config::LoongClawConfig) -> Vec<DashboardToolI
                 config.tools.web.timeout_seconds,
                 config.tools.web.max_bytes,
                 config.tools.web.max_redirects
+            ),
+        },
+        DashboardToolItemPayload {
+            id: "web_search",
+            enabled: config.tools.web_search.enabled,
+            detail: format!(
+                "{} provider, {}s timeout, {} results",
+                runtime.web_search.default_provider,
+                runtime.web_search.timeout_seconds,
+                runtime.web_search.max_results
+            ),
+        },
+        DashboardToolItemPayload {
+            id: "file_tools",
+            enabled: true,
+            detail: format!(
+                "read / write / edit within {}",
+                config.tools.resolved_file_root().display()
             ),
         },
         DashboardToolItemPayload {

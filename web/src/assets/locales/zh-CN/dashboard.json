@@ -14,6 +14,8 @@
     "providerTitle": "当前 Provider",
     "runtimeEyebrow": "Runtime 详情",
     "runtimeTitle": "运行健康",
+    "runtimeDetailLabel": "运行态",
+    "configDetailLabel": "本地配置",
     "connectivityEyebrow": "连接诊断",
     "connectivityTitle": "Provider 路由",
     "configEyebrow": "配置快照",
@@ -121,6 +123,8 @@
     "browser": "浏览器",
     "browser_companion": "浏览器伴随器",
     "web_fetch": "Web 抓取",
+    "web_search": "网页搜索",
+    "file_tools": "文件工具",
     "external_skills": "外部技能"
   },
   "actions": {

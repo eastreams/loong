@@ -777,80 +777,83 @@ export default function DashboardPage() {
             eyebrow={t("dashboard.sections.runtimeEyebrow")}
             title={t("dashboard.sections.runtimeTitle")}
           >
-            <div className="dashboard-kv-list">
-              <div className="dashboard-kv-row">
-                <span>{t("dashboard.fields.runtime")}</span>
-                <strong title={runtime?.status ?? "Loading"}>
-                  {runtime?.status ?? "Loading"}
-                </strong>
+            <div className="dashboard-stacked-section">
+              <div className="dashboard-section-heading">
+                {t("dashboard.sections.runtimeDetailLabel")}
               </div>
-              <div className="dashboard-kv-row">
-                <span>{t("dashboard.fields.source")}</span>
-                <strong title={runtime?.source ?? t("dashboard.values.notSet")}>
-                  {runtime?.source ?? t("dashboard.values.notSet")}
-                </strong>
-              </div>
-              <div className="dashboard-kv-row">
-                <span>{t("dashboard.fields.memoryMode")}</span>
-                <strong title={runtime?.memoryMode ?? t("dashboard.values.notSet")}>
-                  {runtime?.memoryMode ?? t("dashboard.values.notSet")}
-                </strong>
-              </div>
-              <div className="dashboard-kv-row">
-                <span>{t("dashboard.fields.ingest")}</span>
-                <strong title={runtime?.ingestMode ?? t("dashboard.values.notSet")}>
-                  {runtime?.ingestMode ?? t("dashboard.values.notSet")}
-                </strong>
-              </div>
-              <div className="dashboard-kv-row">
-                <span>{t("dashboard.fields.acp")}</span>
-                <strong>{runtime?.acpEnabled ? t("dashboard.values.enabled") : t("dashboard.values.disabled")}</strong>
+              <div className="dashboard-kv-list">
+                <div className="dashboard-kv-row">
+                  <span>{t("dashboard.fields.runtime")}</span>
+                  <strong title={runtime?.status ?? "Loading"}>
+                    {runtime?.status ?? "Loading"}
+                  </strong>
+                </div>
+                <div className="dashboard-kv-row">
+                  <span>{t("dashboard.fields.source")}</span>
+                  <strong title={runtime?.source ?? t("dashboard.values.notSet")}>
+                    {runtime?.source ?? t("dashboard.values.notSet")}
+                  </strong>
+                </div>
+                <div className="dashboard-kv-row">
+                  <span>{t("dashboard.fields.ingest")}</span>
+                  <strong title={runtime?.ingestMode ?? t("dashboard.values.notSet")}>
+                    {runtime?.ingestMode ?? t("dashboard.values.notSet")}
+                  </strong>
+                </div>
+                <div className="dashboard-kv-row">
+                  <span>{t("dashboard.fields.acp")}</span>
+                  <strong>
+                    {runtime?.acpEnabled
+                      ? t("dashboard.values.enabled")
+                      : t("dashboard.values.disabled")}
+                  </strong>
+                </div>
               </div>
             </div>
-          </Panel>
 
-          <Panel
-            eyebrow={t("dashboard.sections.configEyebrow")}
-            title={t("dashboard.sections.configTitle")}
-          >
-            <div className="dashboard-kv-list">
-              <div className="dashboard-kv-row">
-                <span>{t("dashboard.fields.apiKey")}</span>
-                <strong title={apiKeyState}>{apiKeyState}</strong>
+            <div className="dashboard-stacked-section dashboard-stacked-section-separated">
+              <div className="dashboard-section-heading">
+                {t("dashboard.sections.configDetailLabel")}
               </div>
-              <div className="dashboard-kv-row">
-                <span>{t("dashboard.fields.memoryProfile")}</span>
-                <strong title={memoryProfileDisplay}>
-                  {memoryProfileDisplay}
-                </strong>
-              </div>
-              <div className="dashboard-kv-row">
-                <span>{t("dashboard.fields.personality")}</span>
-                <strong title={personalityDisplay}>{personalityDisplay}</strong>
-              </div>
-              <div className="dashboard-kv-row">
-                <span>{t("dashboard.fields.promptMode")}</span>
-                <strong title={promptModeDisplay}>{promptModeDisplay}</strong>
-              </div>
-              <div className="dashboard-kv-row">
-                <span>{t("dashboard.fields.promptAddendum")}</span>
-                <strong>
-                  {config?.promptAddendumConfigured
-                    ? t("dashboard.values.configured")
-                    : t("dashboard.values.missing")}
-                </strong>
-              </div>
-              <div className="dashboard-kv-row">
-                <span>{t("dashboard.fields.sqlitePath")}</span>
-                <strong title={config?.sqlitePath ?? t("dashboard.values.notSet")}>
-                  {config?.sqlitePath ?? t("dashboard.values.notSet")}
-                </strong>
-              </div>
-              <div className="dashboard-kv-row">
-                <span>{t("dashboard.fields.fileRoot")}</span>
-                <strong title={config?.fileRoot ?? t("dashboard.values.notSet")}>
-                  {config?.fileRoot ?? t("dashboard.values.notSet")}
-                </strong>
+              <div className="dashboard-kv-list">
+                <div className="dashboard-kv-row">
+                  <span>{t("dashboard.fields.apiKey")}</span>
+                  <strong title={apiKeyState}>{apiKeyState}</strong>
+                </div>
+                <div className="dashboard-kv-row">
+                  <span>{t("dashboard.fields.memoryProfile")}</span>
+                  <strong title={memoryProfileDisplay}>
+                    {memoryProfileDisplay}
+                  </strong>
+                </div>
+                <div className="dashboard-kv-row">
+                  <span>{t("dashboard.fields.personality")}</span>
+                  <strong title={personalityDisplay}>{personalityDisplay}</strong>
+                </div>
+                <div className="dashboard-kv-row">
+                  <span>{t("dashboard.fields.promptMode")}</span>
+                  <strong title={promptModeDisplay}>{promptModeDisplay}</strong>
+                </div>
+                <div className="dashboard-kv-row">
+                  <span>{t("dashboard.fields.promptAddendum")}</span>
+                  <strong>
+                    {config?.promptAddendumConfigured
+                      ? t("dashboard.values.configured")
+                      : t("dashboard.values.missing")}
+                  </strong>
+                </div>
+                <div className="dashboard-kv-row">
+                  <span>{t("dashboard.fields.sqlitePath")}</span>
+                  <strong title={config?.sqlitePath ?? t("dashboard.values.notSet")}>
+                    {config?.sqlitePath ?? t("dashboard.values.notSet")}
+                  </strong>
+                </div>
+                <div className="dashboard-kv-row">
+                  <span>{t("dashboard.fields.fileRoot")}</span>
+                  <strong title={config?.fileRoot ?? t("dashboard.values.notSet")}>
+                    {config?.fileRoot ?? t("dashboard.values.notSet")}
+                  </strong>
+                </div>
               </div>
             </div>
           </Panel>
