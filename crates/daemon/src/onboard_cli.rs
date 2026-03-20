@@ -1818,7 +1818,7 @@ fn resolve_model_selection(
         if let Some(model) = options.model.as_deref() {
             return Ok(model.trim().to_owned());
         }
-        return Ok(config.provider.configured_model_value());
+        return Ok(resolve_onboarding_model_prompt_default(options, config));
     }
 
     let default_model = resolve_onboarding_model_prompt_default(options, config);
@@ -7811,7 +7811,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_model_selection_preserves_minimax_auto_non_interactively() {
+    fn resolve_model_selection_applies_minimax_recommended_model_non_interactively() {
         let mut config = mvp::config::LoongClawConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
         config.provider.model = "auto".to_owned();
@@ -7841,8 +7841,8 @@ mod tests {
         .expect("resolve model selection");
 
         assert!(
-            selected == "auto",
-            "non-interactive onboarding should preserve auto for MiniMax instead of silently rewriting the operator config to the reviewed default: {selected:?}"
+            selected == "MiniMax-M2.5",
+            "non-interactive onboarding should use the reviewed provider default for MiniMax instead of carrying auto into preflight: {selected:?}"
         );
     }
 
@@ -7883,7 +7883,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_model_selection_preserves_deepseek_auto_non_interactively() {
+    fn resolve_model_selection_applies_deepseek_recommended_model_non_interactively() {
         let mut config = mvp::config::LoongClawConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Deepseek;
         config.provider.model = "auto".to_owned();
@@ -7913,8 +7913,8 @@ mod tests {
         .expect("resolve model selection");
 
         assert!(
-            selected == "auto",
-            "non-interactive onboarding should preserve auto for DeepSeek instead of silently rewriting the operator config to the reviewed default: {selected:?}"
+            selected == "deepseek-chat",
+            "non-interactive onboarding should use the reviewed provider default for DeepSeek instead of carrying auto into preflight: {selected:?}"
         );
     }
 
