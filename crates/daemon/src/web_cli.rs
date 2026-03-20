@@ -390,6 +390,7 @@ async fn run_web_serve(config_path: Option<&str>, bind: &str) -> CliResult<()> {
         .with_state(state.clone());
     let protected_api = Router::new()
         .route("/onboard/provider", post(onboarding::onboard_provider))
+        .route("/onboard/provider/apply", post(onboarding::onboard_provider_apply))
         .route("/onboard/preferences", post(onboarding::onboard_preferences))
         .route("/onboard/validate", post(onboarding::onboard_validate))
         .route("/dashboard/summary", get(dashboard_summary))

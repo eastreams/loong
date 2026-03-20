@@ -44,11 +44,6 @@ $apiErr = Join-Path $logRoot "web-api.err.log"
 $devLog = Join-Path $logRoot "web-dev.log"
 $devErr = Join-Path $logRoot "web-dev.err.log"
 
-$userApiKey = [Environment]::GetEnvironmentVariable("ARK_API_KEY", "User")
-if ($userApiKey) {
-  $env:ARK_API_KEY = $userApiKey
-}
-
 Stop-PortProcesses -Port 4317
 Stop-PortProcesses -Port $DevPort
 

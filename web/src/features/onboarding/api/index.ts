@@ -57,6 +57,15 @@ export const onboardingApi = {
       input,
     );
   },
+  async applyProvider(
+    input: SaveOnboardingProviderRequest,
+  ): Promise<OnboardingValidationResult> {
+    const response = await apiPost<
+      ApiEnvelope<OnboardingValidationResult>,
+      SaveOnboardingProviderRequest
+    >("/api/onboard/provider/apply", input);
+    return response.data;
+  },
   async validateProvider(): Promise<OnboardingValidationResult> {
     const response = await apiPost<
       ApiEnvelope<OnboardingValidationResult>,

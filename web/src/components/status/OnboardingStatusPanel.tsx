@@ -102,7 +102,7 @@ export function OnboardingStatusPanel() {
   const needsTokenPairing =
     authRequired &&
     !onboardingLoading &&
-    onboardingStatus?.blockingStage === "token_pairing";
+    !onboardingStatus?.tokenPaired;
   const canConfigureProvider =
     !onboardingLoading &&
     onboardingStatus?.tokenPaired &&
@@ -481,7 +481,19 @@ export function OnboardingStatusPanel() {
                 className="settings-input"
                 list="onboarding-provider-suggestions"
                 value={kind}
-                onChange={(event) => setKind(event.target.value)}
+                onChange={(event) => {
+                  const nextKind = event.target.value;
+                  const currentRoute =
+                    onboardingStatus?.providerEndpoint ||
+                    onboardingStatus?.providerBaseUrl ||
+                    "";
+                  setKind(nextKind);
+                  if (baseUrlOrEndpoint === currentRoute) {
+                    // Let the next provider fall back to its own default route unless
+                    // the user has already typed a custom override.
+                    setBaseUrlOrEndpoint("");
+                  }
+                }}
                 placeholder={t("onboarding.form.kindPlaceholder")}
               />
               <datalist id="onboarding-provider-suggestions">

@@ -92,6 +92,93 @@ pub(super) async fn onboard_provider(
     State(state): State<Arc<WebApiState>>,
     Json(request): Json<OnboardProviderWriteRequest>,
 ) -> Result<Json<ApiEnvelope<OnboardStatusPayload>>, WebApiError> {
+    let config_path = resolve_web_config_path(state.as_ref());
+    let mut config = load_or_default_web_config(state.as_ref())?;
+    apply_provider_request_to_config(&mut config, &request)?;
+    let path_string = config_path.display().to_string();
+    mvp::config::write(Some(path_string.as_str()), &config, true)
+        .map_err(WebApiError::internal)?;
+
+    let payload = build_onboard_status_payload(state.as_ref(), true).await;
+    Ok(Json(ApiEnvelope {
+        ok: true,
+        data: payload,
+    }))
+}
+
+pub(super) async fn onboard_provider_apply(
+    State(state): State<Arc<WebApiState>>,
+    Json(request): Json<OnboardProviderWriteRequest>,
+) -> Result<Json<ApiEnvelope<OnboardValidationPayload>>, WebApiError> {
+    let config_path = resolve_web_config_path(state.as_ref());
+    let current_config = load_or_default_web_config(state.as_ref())?;
+    let mut candidate_config = current_config.clone();
+    apply_provider_request_to_config(&mut candidate_config, &request)?;
+
+    let validation = validate_provider_config(&candidate_config.provider).await;
+    if validation.passed() {
+        let path_string = config_path.display().to_string();
+        mvp::config::write(Some(path_string.as_str()), &candidate_config, true)
+            .map_err(WebApiError::internal)?;
+    }
+
+    let mut status = build_onboard_status_payload(state.as_ref(), true).await;
+    if validation.passed() {
+        status.provider_reachable = true;
+        status.blocking_stage = "ready";
+        status.next_action = "open_chat";
+    }
+
+    Ok(Json(ApiEnvelope {
+        ok: true,
+        data: OnboardValidationPayload {
+            passed: validation.passed(),
+            endpoint_status: validation.endpoint_status,
+            endpoint_status_code: validation.endpoint_status_code,
+            credential_status: validation.credential_status,
+            credential_status_code: validation.credential_status_code,
+            status,
+        },
+    }))
+}
+
+fn route_matches_existing_provider_route(
+    route: &str,
+    existing_provider: &mvp::config::ProviderConfig,
+) -> bool {
+    let normalized = route.trim();
+    if normalized.is_empty() {
+        return true;
+    }
+
+    normalized == existing_provider.endpoint()
+        || normalized == existing_provider.resolved_base_url()
+        || normalized == existing_provider.base_url.trim()
+        || existing_provider
+            .endpoint
+            .as_deref()
+            .map(str::trim)
+        .is_some_and(|value| normalized == value)
+}
+
+fn load_or_default_web_config(
+    state: &WebApiState,
+) -> Result<mvp::config::LoongClawConfig, WebApiError> {
+    let config_path = resolve_web_config_path(state);
+    if config_path.is_file() {
+        let (_, loaded) = mvp::config::load(state.config_path.as_deref()).map_err(|error| {
+            WebApiError::bad_request(format!("local config could not be loaded: {error}"))
+        })?;
+        Ok(loaded)
+    } else {
+        Ok(mvp::config::LoongClawConfig::default())
+    }
+}
+
+fn apply_provider_request_to_config(
+    config: &mut mvp::config::LoongClawConfig,
+    request: &OnboardProviderWriteRequest,
+) -> Result<(), WebApiError> {
     let kind = mvp::config::parse_provider_kind_id(request.kind.as_str()).ok_or_else(|| {
         WebApiError::bad_request(format!(
             "unknown provider kind `{}`",
@@ -103,17 +190,6 @@ pub(super) async fn onboard_provider(
         return Err(WebApiError::bad_request("model is required"));
     }
 
-    let config_path = resolve_web_config_path(state.as_ref());
-    let config_exists = config_path.is_file();
-    let mut config = if config_exists {
-        let (_, loaded) = mvp::config::load(state.config_path.as_deref()).map_err(|error| {
-            WebApiError::bad_request(format!("local config could not be loaded: {error}"))
-        })?;
-        loaded
-    } else {
-        mvp::config::LoongClawConfig::default()
-    };
-
     let existing_provider = config.provider.clone();
     let kind_changed = existing_provider.kind != kind;
     let mut provider = existing_provider.clone();
@@ -121,7 +197,10 @@ pub(super) async fn onboard_provider(
     provider.model = model.to_owned();
 
     let route = request.base_url_or_endpoint.trim();
-    if route.is_empty() {
+    let should_reset_route_to_kind_default = route.is_empty()
+        || (kind_changed && route_matches_existing_provider_route(route, &existing_provider));
+
+    if should_reset_route_to_kind_default {
         provider.set_base_url(kind.profile().base_url.to_owned());
         provider.set_chat_completions_path(kind.profile().chat_completions_path.to_owned());
         provider.set_endpoint(None);
@@ -159,15 +238,7 @@ pub(super) async fn onboard_provider(
         mvp::config::ProviderProfileConfig::from_provider(provider),
     );
 
-    let path_string = config_path.display().to_string();
-    mvp::config::write(Some(path_string.as_str()), &config, true)
-        .map_err(WebApiError::internal)?;
-
-    let payload = build_onboard_status_payload(state.as_ref(), true).await;
-    Ok(Json(ApiEnvelope {
-        ok: true,
-        data: payload,
-    }))
+    Ok(())
 }
 
 pub(super) async fn onboard_preferences(

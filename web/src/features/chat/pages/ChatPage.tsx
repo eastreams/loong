@@ -808,6 +808,16 @@ export default function ChatPage() {
                   onChange={(event) => {
                     setComposerText(event.target.value);
                   }}
+                  onKeyDown={(event) => {
+                    if (
+                      event.key === "Enter" &&
+                      !event.shiftKey &&
+                      !event.nativeEvent.isComposing
+                    ) {
+                      event.preventDefault();
+                      void handleSubmit();
+                    }
+                  }}
                   disabled={isSubmitting || !canAccessProtectedApi}
                 />
                 {deletingSessionId ? (

@@ -15,6 +15,14 @@ import {
   type DashboardTools,
 } from "../api";
 
+type SettingsModalPhase = "pending" | "success" | "error";
+
+interface SettingsModalState {
+  phase: SettingsModalPhase;
+  title: string;
+  body: string;
+}
+
 type Tone = "good" | "warn" | "muted";
 
 interface SummaryCard {
@@ -145,6 +153,21 @@ function readDashboardError(
   return error instanceof Error ? error.message : "Failed to load dashboard";
 }
 
+function readProviderValidationFailure(
+  credentialStatus: string,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  return t(`onboarding.validation.statuses.${credentialStatus}`, {
+    defaultValue: t("onboarding.validation.failed"),
+  });
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 function buildConnectivityCopy(
   connectivity: DashboardConnectivity | null,
   t: ReturnType<typeof useTranslation>["t"],
@@ -191,9 +214,9 @@ export default function DashboardPage() {
   const { t } = useTranslation();
   const {
     canAccessProtectedApi,
+    acceptValidatedOnboardingStatus,
     authRevision,
     markUnauthorized,
-    refreshOnboardingStatus,
     status,
     tokenPath,
     tokenEnv,
@@ -215,6 +238,7 @@ export default function DashboardPage() {
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [isRefreshingDiagnostics, setIsRefreshingDiagnostics] = useState(false);
+  const [settingsModal, setSettingsModal] = useState<SettingsModalState | null>(null);
 
   async function reloadDashboardData() {
     setError(null);
@@ -406,7 +430,12 @@ export default function DashboardPage() {
     setSettingsNotice(null);
     setIsSavingSettings(true);
     try {
-      await onboardingApi.saveProvider({
+      setSettingsModal({
+        phase: "pending",
+        title: t("dashboard.settings.applyPending"),
+        body: t("onboarding.validation.pending"),
+      });
+      const result = await onboardingApi.applyProvider({
         kind: providerKind,
         model: providerModel,
         baseUrlOrEndpoint: providerRoute,
@@ -414,11 +443,28 @@ export default function DashboardPage() {
           ? { apiKey: providerApiKey.trim() }
           : {}),
       });
-      setProviderApiKey("");
-      setProviderApiKeyDirty(false);
-      refreshOnboardingStatus();
-      await reloadDashboardData();
-      setSettingsNotice(t("dashboard.settings.saved"));
+      if (result.passed) {
+        acceptValidatedOnboardingStatus(result.status);
+        await reloadDashboardData();
+        setProviderApiKey("");
+        setProviderApiKeyDirty(false);
+        setSettingsModal({
+          phase: "success",
+          title: t("dashboard.settings.saved"),
+          body: t("onboarding.validation.success"),
+        });
+        setSettingsNotice(t("dashboard.settings.saved"));
+        await wait(1100);
+      } else {
+        setSettingsModal({
+          phase: "error",
+          title: t("onboarding.validation.failed"),
+          body: readProviderValidationFailure(result.credentialStatus, t),
+        });
+        await reloadDashboardData();
+        setSettingsError(readProviderValidationFailure(result.credentialStatus, t));
+        await wait(1600);
+      }
     } catch (saveError) {
       if (saveError instanceof ApiRequestError) {
         if (saveError.status === 401) {
@@ -428,7 +474,17 @@ export default function DashboardPage() {
       } else {
         setSettingsError(t("dashboard.settings.saveFailed"));
       }
+      setSettingsModal({
+        phase: "error",
+        title: t("dashboard.settings.saveFailed"),
+        body:
+          saveError instanceof ApiRequestError
+            ? saveError.message
+            : t("dashboard.settings.saveFailed"),
+      });
+      await wait(1600);
     } finally {
+      setSettingsModal(null);
       setIsSavingSettings(false);
     }
   }
@@ -442,6 +498,17 @@ export default function DashboardPage() {
 
   return (
     <div className="page">
+      {settingsModal ? (
+        <div className="dashboard-modal-backdrop" role="status" aria-live="polite">
+          <div
+            className={`dashboard-modal dashboard-modal-${settingsModal.phase}`}
+          >
+            <div className="dashboard-modal-title">{settingsModal.title}</div>
+            <p className="dashboard-modal-body">{settingsModal.body}</p>
+          </div>
+        </div>
+      ) : null}
+
       <section className="hero-block">
         <div className="hero-eyebrow">{t("dashboard.eyebrow")}</div>
         <h1 className="hero-title">{t("dashboard.title")}</h1>
@@ -572,7 +639,15 @@ export default function DashboardPage() {
                   <select
                     className="settings-input"
                     value={providerKind}
-                    onChange={(event) => setProviderKind(event.target.value)}
+                    onChange={(event) => {
+                      const nextKind = event.target.value;
+                      setProviderKind(nextKind);
+                      if (providerRoute === (config?.endpoint ?? "")) {
+                        // Clear the inherited route when switching kinds so save can
+                        // fall back to the selected provider's default endpoint.
+                        setProviderRoute("");
+                      }
+                    }}
                   >
                     {providers.map((provider) => (
                       <option key={provider.id} value={provider.id}>

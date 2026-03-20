@@ -63,6 +63,7 @@ export interface WebSessionContextValue {
   onboardingValidationSatisfied: boolean;
   acknowledgeOnboarding: () => void;
   markOnboardingValidated: () => void;
+  acceptValidatedOnboardingStatus: (status: OnboardingStatus) => void;
   clearOnboardingValidation: () => void;
   refreshOnboardingStatus: () => void;
   autoPairingInProgress: boolean;
@@ -107,6 +108,20 @@ export function WebSessionProvider({ children }: PropsWithChildren) {
     }
     return window.sessionStorage.getItem(ONBOARDING_VALIDATION_STORAGE_KEY);
   });
+  const authRequired = authInfo?.required ?? true;
+
+  function persistOnboardingValidationKey(key: string | null) {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (key) {
+      window.sessionStorage.setItem(ONBOARDING_VALIDATION_STORAGE_KEY, key);
+    } else {
+      window.sessionStorage.removeItem(ONBOARDING_VALIDATION_STORAGE_KEY);
+    }
+    setValidatedOnboardingKey(key);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -201,12 +216,19 @@ export function WebSessionProvider({ children }: PropsWithChildren) {
   }, [authRevision]);
 
   useEffect(() => {
+    if (storedToken?.trim() || onboardingStatus?.tokenPaired) {
+      setAutoPairingAttempted(false);
+    }
+  }, [storedToken, onboardingStatus?.tokenPaired]);
+
+  useEffect(() => {
     if (
       onboardingLoading ||
       autoPairingAttempted ||
       autoPairingInProgress ||
       !!storedToken?.trim() ||
-      onboardingStatus?.blockingStage !== "token_pairing"
+      onboardingStatus?.tokenPaired ||
+      !authRequired
     ) {
       return;
     }
@@ -240,14 +262,14 @@ export function WebSessionProvider({ children }: PropsWithChildren) {
       cancelled = true;
     };
   }, [
+    authRequired,
     autoPairingAttempted,
     autoPairingInProgress,
     onboardingLoading,
-    onboardingStatus?.blockingStage,
+    onboardingStatus?.tokenPaired,
     storedToken,
   ]);
 
-  const authRequired = authInfo?.required ?? true;
   const hasToken = !!storedToken?.trim();
   const tokenPaired = onboardingStatus?.tokenPaired ?? hasToken;
   const currentOnboardingValidationKey =
@@ -284,17 +306,16 @@ export function WebSessionProvider({ children }: PropsWithChildren) {
         if (!currentOnboardingValidationKey || typeof window === "undefined") {
           return;
         }
-        window.sessionStorage.setItem(
-          ONBOARDING_VALIDATION_STORAGE_KEY,
-          currentOnboardingValidationKey,
-        );
-        setValidatedOnboardingKey(currentOnboardingValidationKey);
+        persistOnboardingValidationKey(currentOnboardingValidationKey);
+      },
+      acceptValidatedOnboardingStatus: (status) => {
+        const nextKey = buildOnboardingValidationKey(status);
+        setOnboardingStatus(status);
+        setIsUnauthorized(false);
+        persistOnboardingValidationKey(nextKey);
       },
       clearOnboardingValidation: () => {
-        if (typeof window !== "undefined") {
-          window.sessionStorage.removeItem(ONBOARDING_VALIDATION_STORAGE_KEY);
-        }
-        setValidatedOnboardingKey(null);
+        persistOnboardingValidationKey(null);
         setOnboardingAcknowledged(false);
       },
       refreshOnboardingStatus: () => {
