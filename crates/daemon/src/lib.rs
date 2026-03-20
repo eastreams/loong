@@ -32,7 +32,39 @@ pub use loongclaw_bench::{
     run_programmatic_pressure_baseline_lint_cli, run_programmatic_pressure_benchmark_cli,
     run_wasm_cache_benchmark_cli,
 };
+#[cfg(any(feature = "memory-sqlite", feature = "mvp"))]
 pub use memory_context_benchmark::run_memory_context_benchmark_cli;
+#[cfg(not(any(feature = "memory-sqlite", feature = "mvp")))]
+pub fn run_memory_context_benchmark_cli(
+    output_path: &str,
+    temp_root: Option<&str>,
+    history_turns: usize,
+    sliding_window: usize,
+    summary_max_chars: usize,
+    words_per_turn: usize,
+    rebuild_iterations: usize,
+    hot_iterations: usize,
+    warmup_iterations: usize,
+    suite_repetitions: usize,
+    enforce_gate: bool,
+    min_steady_state_speedup_ratio: f64,
+) -> CliResult<()> {
+    let _ = (
+        output_path,
+        temp_root,
+        history_turns,
+        sliding_window,
+        summary_max_chars,
+        words_per_turn,
+        rebuild_iterations,
+        hot_iterations,
+        warmup_iterations,
+        suite_repetitions,
+        enforce_gate,
+        min_steady_state_speedup_ratio,
+    );
+    Err("benchmark-memory-context requires the daemon `memory-sqlite` feature".to_owned())
+}
 
 pub use base64;
 pub use kernel;
@@ -47,6 +79,7 @@ pub mod doctor_cli;
 pub mod feishu_cli;
 pub mod feishu_support;
 pub mod import_cli;
+#[cfg(any(feature = "memory-sqlite", feature = "mvp"))]
 mod memory_context_benchmark;
 pub mod migrate_cli;
 pub mod migration;

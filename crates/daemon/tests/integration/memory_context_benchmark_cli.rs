@@ -334,6 +334,18 @@ fn memory_context_benchmark_writes_report_with_all_scenarios() {
             .is_some()
     );
     assert!(report.get("gate").and_then(|g| g.get("warnings")).is_some());
+    let summary_window_cover_entry_count = report
+        .get("summary_window_cover_entry_count")
+        .and_then(Value::as_u64)
+        .expect("summary_window_cover_entry_count should be present");
+    let summary_window_cover_turn_entries = report
+        .get("summary_window_cover_turn_entries")
+        .and_then(Value::as_u64)
+        .expect("summary_window_cover_turn_entries should be present");
+    assert!(
+        summary_window_cover_entry_count == summary_window_cover_turn_entries,
+        "summary_window_cover should stay on the window-only surface until the history overflows"
+    );
 
     let _ = fs::remove_file(&output);
     let _ = fs::remove_dir_all(&tmp);
