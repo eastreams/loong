@@ -116,6 +116,87 @@ pub(super) fn execute_file_write_tool_with_config(
     }
 }
 
+pub(super) fn execute_file_edit_tool_with_config(
+    request: ToolCoreRequest,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<ToolCoreOutcome, String> {
+    #[cfg(not(feature = "tool-file"))]
+    {
+        let _ = (request, config);
+        return Err("file tool is disabled in this build (enable feature `tool-file`)".to_owned());
+    }
+    #[cfg(feature = "tool-file")]
+    {
+        let payload = request
+            .payload
+            .as_object()
+            .ok_or_else(|| "file.edit payload must be an object".to_owned())?;
+
+        let path = payload
+            .get("path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "file.edit requires payload.path (string)".to_owned())?;
+        let old_string = payload
+            .get("old_string")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "file.edit requires payload.old_string (string)".to_owned())?;
+        let new_string = payload
+            .get("new_string")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "file.edit requires payload.new_string (string)".to_owned())?;
+        let replace_all = payload
+            .get("replace_all")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        // Empty pattern matches every boundary position — reject for a well-defined edit contract.
+        if old_string.is_empty() {
+            return Err("edit_failed: old_string must not be empty".to_owned());
+        }
+
+        let resolved = resolve_safe_file_path_with_config(path, config)?;
+        let content = fs::read_to_string(&resolved)
+            .map_err(|e| format!("failed to read {}: {e}", resolved.display()))?;
+
+        // str::matches() — literal substring, non-overlapping, left-to-right.
+        let match_count = content.matches(old_string).count();
+
+        if match_count == 0 {
+            return Err("edit_failed: old_string not found in file".to_owned());
+        }
+        if match_count > 1 && !replace_all {
+            return Err(format!(
+                "edit_failed: old_string matches {match_count} locations; \
+                 set replace_all:true to replace all occurrences"
+            ));
+        }
+
+        let (updated, replacements_made) = if replace_all {
+            // str::replace uses the same non-overlapping semantics as str::matches.
+            let s = content.replace(old_string, new_string);
+            (s, match_count)
+        } else {
+            // Exactly one match confirmed above.
+            let s = content.replacen(old_string, new_string, 1);
+            (s, 1usize)
+        };
+
+        fs::write(&resolved, updated.as_bytes())
+            .map_err(|e| format!("failed to write {}: {e}", resolved.display()))?;
+
+        Ok(ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "adapter": "core-tools",
+                "tool_name": request.tool_name,
+                "path": resolved.display().to_string(),
+                "replacements_made": replacements_made,
+                "bytes_written": updated.len(),
+            }),
+        })
+    }
+}
+
 pub(super) fn resolve_safe_file_path_with_config(
     raw: &str,
     config: &super::runtime_config::ToolRuntimeConfig,
@@ -339,6 +420,161 @@ mod tests {
 
         let written = fs::read_to_string(root.join("safe/note.txt")).expect("read written file");
         assert_eq!(written, "hello");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    fn make_edit_request(
+        path: &str,
+        old: &str,
+        new: &str,
+        replace_all: Option<bool>,
+    ) -> ToolCoreRequest {
+        let mut map = serde_json::Map::new();
+        map.insert("path".into(), Value::String(path.to_owned()));
+        map.insert("old_string".into(), Value::String(old.to_owned()));
+        map.insert("new_string".into(), Value::String(new.to_owned()));
+        if let Some(ra) = replace_all {
+            map.insert("replace_all".into(), Value::Bool(ra));
+        }
+        ToolCoreRequest {
+            tool_name: "file.edit".to_owned(),
+            payload: Value::Object(map),
+        }
+    }
+
+    #[test]
+    fn file_edit_single_match_succeeds() {
+        let base = unique_temp_dir("loongclaw-file-edit-single");
+        let root = base.join("root");
+        fs::create_dir_all(&root).expect("create root");
+        let target = root.join("file.txt");
+        fs::write(&target, "hello world").expect("write");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let result = execute_file_edit_tool_with_config(
+            make_edit_request("file.txt", "hello", "hi", None),
+            &config,
+        );
+        assert!(result.is_ok(), "unexpected error: {result:?}");
+        let outcome = result.unwrap();
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["replacements_made"], 1);
+        assert_eq!(fs::read_to_string(&target).unwrap(), "hi world");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn file_edit_no_match_errors() {
+        let base = unique_temp_dir("loongclaw-file-edit-nomatch");
+        let root = base.join("root");
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("file.txt"), "hello world").expect("write");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let err = execute_file_edit_tool_with_config(
+            make_edit_request("file.txt", "nothere", "x", None),
+            &config,
+        )
+        .expect_err("should fail");
+        assert!(err.contains("old_string not found"), "got: {err}");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn file_edit_multiple_match_without_replace_all_errors() {
+        let base = unique_temp_dir("loongclaw-file-edit-multi");
+        let root = base.join("root");
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("file.txt"), "a\na\n").expect("write");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let err = execute_file_edit_tool_with_config(
+            make_edit_request("file.txt", "a", "b", None),
+            &config,
+        )
+        .expect_err("should fail");
+        assert!(err.contains("matches 2 locations"), "got: {err}");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn file_edit_replace_all_replaces_all_occurrences() {
+        let base = unique_temp_dir("loongclaw-file-edit-replaceall");
+        let root = base.join("root");
+        fs::create_dir_all(&root).expect("create root");
+        let target = root.join("file.txt");
+        fs::write(&target, "a\na\na\n").expect("write");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let result = execute_file_edit_tool_with_config(
+            make_edit_request("file.txt", "a", "b", Some(true)),
+            &config,
+        );
+        assert!(result.is_ok(), "unexpected error: {result:?}");
+        let outcome = result.unwrap();
+        assert_eq!(outcome.payload["replacements_made"], 3);
+        assert_eq!(fs::read_to_string(&target).unwrap(), "b\nb\nb\n");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn file_edit_empty_old_string_errors() {
+        let base = unique_temp_dir("loongclaw-file-edit-empty");
+        let root = base.join("root");
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("file.txt"), "hello").expect("write");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let err = execute_file_edit_tool_with_config(
+            make_edit_request("file.txt", "", "x", None),
+            &config,
+        )
+        .expect_err("should fail");
+        assert!(err.contains("old_string must not be empty"), "got: {err}");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_edit_rejects_path_escape() {
+        let base = unique_temp_dir("loongclaw-file-edit-escape");
+        let root = base.join("root");
+        let outside = base.join("outside");
+        fs::create_dir_all(&root).expect("create root");
+        fs::create_dir_all(&outside).expect("create outside");
+
+        let outside_file = outside.join("secret.txt");
+        fs::write(&outside_file, "secret content here").expect("write outside");
+        let link = root.join("escape-link");
+        assert!(create_symlink(&outside_file, &link).is_ok());
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let err = execute_file_edit_tool_with_config(
+            make_edit_request("escape-link", "secret", "pwned", None),
+            &config,
+        )
+        .expect_err("escape denied");
+
+        assert!(err.starts_with("policy_denied: "));
+        assert!(err.contains("escapes configured file root"));
         let _ = fs::remove_dir_all(base);
     }
 }
