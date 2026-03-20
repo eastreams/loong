@@ -166,6 +166,28 @@ impl ConversationTurnLoop {
                 }
             };
 
+            // Global circuit breaker: prospective check before dispatching tools.
+            // Trips if adding this round's intents would reach the per-turn limit,
+            // ensuring no tools from this round are executed after the cap is hit.
+            let prospective_total = session.total_tool_calls + turn.tool_intents.len();
+            if prospective_total >= policy.max_total_tool_calls {
+                return apply_turn_loop_terminal_action(
+                    runtime,
+                    session_id,
+                    user_input,
+                    TurnLoopTerminalAction::PersistReply {
+                        reply: format!(
+                            "tool_loop_circuit_breaker: reached {}/{} tool calls this turn. \
+                             Do you want to continue? Reply to resume.",
+                            prospective_total, policy.max_total_tool_calls
+                        ),
+                        persistence_mode: ReplyPersistenceMode::Success,
+                    },
+                    binding,
+                )
+                .await;
+            }
+
             let evaluation = evaluate_round_kernel(
                 config,
                 &policy,
@@ -177,26 +199,7 @@ impl ConversationTurnLoop {
             )
             .await;
 
-            // Global circuit breaker: count tool calls dispatched this round and terminate
-            // if the cumulative per-turn limit is reached.
             session.total_tool_calls += turn.tool_intents.len();
-            if session.total_tool_calls >= policy.max_total_tool_calls {
-                return apply_turn_loop_terminal_action(
-                    runtime,
-                    session_id,
-                    user_input,
-                    TurnLoopTerminalAction::PersistReply {
-                        reply: format!(
-                            "tool_loop_circuit_breaker: reached {}/{} tool calls this turn. \
-                             Do you want to continue? Reply to resume.",
-                            session.total_tool_calls, policy.max_total_tool_calls
-                        ),
-                        persistence_mode: ReplyPersistenceMode::Success,
-                    },
-                    binding,
-                )
-                .await;
-            }
 
             let reply_phase = evaluation.reply_phase(session.raw_tool_output_requested);
             if let Some(raw_reply) = reply_phase.raw_reply() {
@@ -749,6 +752,22 @@ impl ToolLoopSupervisor {
                     self.consecutive_same_tool, policy.max_consecutive_same_tool
                 ),
             };
+            // Update pattern history before returning so other detectors see this round.
+            let pattern = format!("{tool_signature}::{outcome_fingerprint}");
+            if self.last_pattern.as_deref() == Some(pattern.as_str()) {
+                self.last_pattern_streak += 1;
+            } else {
+                self.last_pattern = Some(pattern.clone());
+                self.last_pattern_streak = 1;
+            }
+            self.recent_rounds.push_back(ToolLoopObservation {
+                pattern,
+                tool_name_signature: tool_name_signature.to_owned(),
+                failed,
+            });
+            if self.recent_rounds.len() > Self::MAX_RECENT_ROUNDS {
+                self.recent_rounds.pop_front();
+            }
             return if self.warned_reason_key.as_deref() == Some(reason.key.as_str()) {
                 ToolLoopSupervisorVerdict::HardStop {
                     reason: reason.text,
