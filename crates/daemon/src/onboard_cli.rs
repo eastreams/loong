@@ -58,6 +58,9 @@ pub trait OnboardUi {
     fn print_line(&mut self, line: &str) -> CliResult<()>;
     fn prompt_with_default(&mut self, label: &str, default: &str) -> CliResult<String>;
     fn prompt_required(&mut self, label: &str) -> CliResult<String>;
+    fn prompt_allow_empty(&mut self, label: &str) -> CliResult<String> {
+        self.prompt_required(label)
+    }
     fn prompt_confirm(&mut self, message: &str, default: bool) -> CliResult<bool>;
     fn select_one(
         &mut self,
@@ -355,6 +358,13 @@ impl OnboardUi for StdioOnboardUi {
         prompt_required_stdio(self.stdio_line_reader(), label)
     }
 
+    fn prompt_allow_empty(&mut self, label: &str) -> CliResult<String> {
+        if rich_prompt_ui_available() {
+            return prompt_allow_empty_rich(label);
+        }
+        prompt_required_stdio(self.stdio_line_reader(), label)
+    }
+
     fn prompt_confirm(&mut self, message: &str, default: bool) -> CliResult<bool> {
         if rich_prompt_ui_available() {
             return prompt_confirm_rich(message, default);
@@ -513,12 +523,16 @@ fn map_rich_prompt_error(action: &str, error: DialoguerError) -> String {
 
 fn prompt_with_default_rich(label: &str, default: &str) -> CliResult<String> {
     let term = rich_prompt_term();
+    prompt_with_default_rich_on(&term, label, default)
+}
+
+fn prompt_with_default_rich_on(term: &Term, label: &str, default: &str) -> CliResult<String> {
     let theme = rich_prompt_theme();
     let value = Input::<String>::with_theme(&theme)
         .with_prompt(label)
         .default(default.to_owned())
         .report(false)
-        .interact_text_on(&term)
+        .interact_text_on(term)
         .map_err(|error| map_rich_prompt_error("interactive prompt", error))?;
     let value = ensure_onboard_input_not_cancelled(value)?;
     let trimmed = value.trim();
@@ -530,11 +544,32 @@ fn prompt_with_default_rich(label: &str, default: &str) -> CliResult<String> {
 
 fn prompt_required_rich(label: &str) -> CliResult<String> {
     let term = rich_prompt_term();
+    prompt_required_rich_on(&term, label)
+}
+
+fn prompt_required_rich_on(term: &Term, label: &str) -> CliResult<String> {
     let theme = rich_prompt_theme();
     let value = Input::<String>::with_theme(&theme)
         .with_prompt(label)
         .report(false)
-        .interact_text_on(&term)
+        .interact_text_on(term)
+        .map_err(|error| map_rich_prompt_error("interactive prompt", error))?;
+    let value = ensure_onboard_input_not_cancelled(value)?;
+    Ok(value.trim().to_owned())
+}
+
+fn prompt_allow_empty_rich(label: &str) -> CliResult<String> {
+    let term = rich_prompt_term();
+    prompt_allow_empty_rich_on(&term, label)
+}
+
+fn prompt_allow_empty_rich_on(term: &Term, label: &str) -> CliResult<String> {
+    let theme = rich_prompt_theme();
+    let value = Input::<String>::with_theme(&theme)
+        .with_prompt(label)
+        .allow_empty(true)
+        .report(false)
+        .interact_text_on(term)
         .map_err(|error| map_rich_prompt_error("interactive prompt", error))?;
     let value = ensure_onboard_input_not_cancelled(value)?;
     Ok(value.trim().to_owned())
@@ -807,7 +842,7 @@ fn prompt_optional(
     label: &str,
     current: Option<&str>,
 ) -> CliResult<Option<String>> {
-    let value = ui.prompt_required(label)?;
+    let value = ui.prompt_allow_empty(label)?;
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Ok(current
@@ -7388,6 +7423,73 @@ mod tests {
             selected,
             SystemPromptSelection::Set("prefer concise code reviews".to_owned()),
             "using the prompt default should still apply a prefilled system prompt override"
+        );
+    }
+
+    #[test]
+    fn resolve_prompt_addendum_selection_keeps_current_addendum_when_blank_input_is_used() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.cli.system_prompt_addendum = Some("Keep answers direct.".to_owned());
+        let mut ui = TestOnboardUi::with_inputs([""]);
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let selected = resolve_prompt_addendum_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: false,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            &mut ui,
+            &context,
+        )
+        .expect("resolve prompt addendum selection");
+
+        assert_eq!(
+            selected.as_deref(),
+            Some("Keep answers direct."),
+            "blank optional input should keep the current addendum"
+        );
+    }
+
+    #[test]
+    fn resolve_prompt_addendum_selection_clears_current_addendum_when_dash_input_is_used() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.cli.system_prompt_addendum = Some("Keep answers direct.".to_owned());
+        let mut ui = TestOnboardUi::with_inputs(["-"]);
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let selected = resolve_prompt_addendum_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: false,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            &mut ui,
+            &context,
+        )
+        .expect("resolve prompt addendum selection");
+
+        assert_eq!(
+            selected, None,
+            "typing '-' should still clear the current addendum"
         );
     }
 
