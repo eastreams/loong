@@ -135,6 +135,8 @@ pub(super) fn execute_file_edit_tool_with_config(
         let path = payload
             .get("path")
             .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
             .ok_or_else(|| "file.edit requires payload.path (string)".to_owned())?;
         let old_string = payload
             .get("old_string")

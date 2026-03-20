@@ -1692,6 +1692,7 @@ fn file_edit_definition(descriptor: &ToolDescriptor) -> Value {
                     },
                     "old_string": {
                         "type": "string",
+                        "minLength": 1,
                         "description": "Literal substring to find. Must be non-empty. \
                                         Must match exactly once unless replace_all is true."
                     },
