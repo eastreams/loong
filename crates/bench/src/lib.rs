@@ -1,10 +1,11 @@
 pub mod test_support;
 
+#[cfg(target_os = "macos")]
+use std::process::Command;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    process::Command,
     sync::Arc,
     time::{Duration, Instant as StdInstant, SystemTime, UNIX_EPOCH},
 };
