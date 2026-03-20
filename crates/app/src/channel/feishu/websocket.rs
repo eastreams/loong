@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use axum::http::StatusCode;
@@ -34,6 +34,16 @@ const FRAME_TYPE_CONTROL: i32 = 0;
 const FRAME_TYPE_DATA: i32 = 1;
 const DEFAULT_WS_RECONNECT_INTERVAL_S: u64 = 120;
 const DEFAULT_WS_PING_INTERVAL_S: u64 = 120;
+
+fn ensure_feishu_websocket_rustls_provider() {
+    static RUSTLS_PROVIDER_INIT: OnceLock<()> = OnceLock::new();
+
+    RUSTLS_PROVIDER_INIT.get_or_init(|| {
+        if rustls::crypto::CryptoProvider::get_default().is_none() {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        }
+    });
+}
 
 #[derive(Clone, PartialEq, prost::Message)]
 struct FeishuWsHeader {
@@ -246,6 +256,10 @@ async fn run_feishu_websocket_session(
         .unwrap_or(DEFAULT_WS_PING_INTERVAL_S)
         .max(1);
 
+    // Feishu already uses reqwest's ring-backed rustls path for HTTP calls in the same flow.
+    // Install the same process default once so websocket TLS does not panic when other crates
+    // also link rustls with aws-lc-rs enabled.
+    ensure_feishu_websocket_rustls_provider();
     let (mut stream, _) = connect_async(parsed_url.as_str())
         .await
         .map_err(|error| format!("connect Feishu websocket failed: {error}"))?;
@@ -741,6 +755,83 @@ mod tests {
             !error.to_string().contains("TLS support not compiled in"),
             "wss support must be compiled in for Feishu websocket mode: {error}"
         );
+    }
+
+    #[tokio::test]
+    async fn feishu_websocket_wss_session_surfaces_tls_errors_without_panicking() {
+        let provider_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+        let feishu_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+        let (provider_base_url, provider_server) =
+            spawn_mock_provider_server(provider_requests.clone()).await;
+        let (feishu_base_url, feishu_server) =
+            spawn_mock_feishu_api_server(feishu_requests.clone(), "om_reply_ws_tls_1").await;
+
+        let config = test_websocket_config(&provider_base_url, &feishu_base_url);
+        let resolved = config
+            .feishu
+            .resolve_account(None)
+            .expect("resolve websocket feishu account");
+        let mut adapter = FeishuAdapter::new(&resolved).expect("build feishu adapter");
+        adapter
+            .refresh_tenant_token()
+            .await
+            .expect("refresh tenant token before websocket tls test");
+        let kernel_ctx =
+            bootstrap_test_kernel_context("feishu-websocket-wss-test", DEFAULT_TOKEN_TTL_S)
+                .expect("bootstrap kernel context");
+        let runtime = Arc::new(
+            ChannelOperationRuntimeTracker::start(
+                ChannelPlatform::Feishu,
+                "serve",
+                resolved.account.id.as_str(),
+                resolved.account.label.as_str(),
+            )
+            .await
+            .expect("start runtime tracker"),
+        );
+        let state = FeishuWebhookState::new(config, &resolved, adapter, kernel_ctx, runtime);
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock tls listener");
+        let address = listener.local_addr().expect("mock tls listener addr");
+        let accept_task = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept mock tls socket");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            drop(socket);
+        });
+
+        let session_url = format!("wss://{address}/events?service_id=42");
+        let session_join = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::spawn(async move {
+                run_feishu_websocket_session(
+                    &state,
+                    session_url.as_str(),
+                    &FeishuWsEndpointClientConfig::default(),
+                )
+                .await
+            }),
+        )
+        .await
+        .expect("wss session should not hang");
+        let session_error = session_join
+            .expect("wss session should return a recoverable error instead of panicking")
+            .expect_err("plain tcp listener should not complete a tls websocket session");
+        assert!(
+            session_error.starts_with("connect Feishu websocket failed:"),
+            "unexpected websocket tls session result: {session_error}"
+        );
+        assert!(
+            !session_error
+                .contains("Could not automatically determine the process-level CryptoProvider"),
+            "wss session should not panic when rustls has multiple providers enabled: {session_error}"
+        );
+
+        accept_task.abort();
+        let _ = accept_task.await;
+        provider_server.abort();
+        feishu_server.abort();
     }
 
     #[tokio::test]
