@@ -6424,6 +6424,18 @@ mod tests {
         }
     }
 
+    struct AllowEmptyOnlyTestUi {
+        inputs: VecDeque<String>,
+    }
+
+    impl AllowEmptyOnlyTestUi {
+        fn with_inputs(inputs: impl IntoIterator<Item = impl Into<String>>) -> Self {
+            Self {
+                inputs: inputs.into_iter().map(Into::into).collect(),
+            }
+        }
+    }
+
     fn browser_companion_temp_dir(label: &str) -> PathBuf {
         static NEXT_TEMP_DIR_SEED: AtomicU64 = AtomicU64::new(1);
         let seed = NEXT_TEMP_DIR_SEED.fetch_add(1, Ordering::Relaxed);
@@ -6569,6 +6581,42 @@ mod tests {
                     default.ok_or_else(|| "missing test input for required selection".to_owned())
                 }
             }
+        }
+    }
+
+    impl OnboardUi for AllowEmptyOnlyTestUi {
+        fn print_line(&mut self, _line: &str) -> CliResult<()> {
+            Ok(())
+        }
+
+        fn prompt_with_default(&mut self, _label: &str, _default: &str) -> CliResult<String> {
+            Err("test expected prompt_allow_empty instead of prompt_with_default".to_owned())
+        }
+
+        fn prompt_required(&mut self, _label: &str) -> CliResult<String> {
+            Err("test expected prompt_allow_empty instead of prompt_required".to_owned())
+        }
+
+        fn prompt_allow_empty(&mut self, _label: &str) -> CliResult<String> {
+            let value = self
+                .inputs
+                .pop_front()
+                .ok_or_else(|| "missing allow-empty test input".to_owned())?;
+            Ok(ensure_onboard_input_not_cancelled(value)?.trim().to_owned())
+        }
+
+        fn prompt_confirm(&mut self, _message: &str, _default: bool) -> CliResult<bool> {
+            Err("test expected prompt_allow_empty instead of prompt_confirm".to_owned())
+        }
+
+        fn select_one(
+            &mut self,
+            _label: &str,
+            _options: &[SelectOption],
+            _default: Option<usize>,
+            _interaction_mode: SelectInteractionMode,
+        ) -> CliResult<usize> {
+            Err("test expected prompt_allow_empty instead of select_one".to_owned())
         }
     }
 
@@ -7457,6 +7505,71 @@ mod tests {
             selected.as_deref(),
             Some("Keep answers direct."),
             "blank optional input should keep the current addendum"
+        );
+    }
+
+    #[test]
+    fn resolve_prompt_addendum_selection_uses_allow_empty_prompt_path_for_blank_first_run_input() {
+        let config = mvp::config::LoongClawConfig::default();
+        let mut ui = AllowEmptyOnlyTestUi::with_inputs([""]);
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let selected = resolve_prompt_addendum_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: false,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            &mut ui,
+            &context,
+        )
+        .expect("resolve prompt addendum selection");
+
+        assert_eq!(
+            selected, None,
+            "blank first-run optional input should preserve the absence of an addendum"
+        );
+    }
+
+    #[test]
+    fn resolve_prompt_addendum_selection_uses_allow_empty_prompt_path_for_clear_input() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.cli.system_prompt_addendum = Some("Keep answers direct.".to_owned());
+        let mut ui = AllowEmptyOnlyTestUi::with_inputs(["-"]);
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let selected = resolve_prompt_addendum_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: false,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            &mut ui,
+            &context,
+        )
+        .expect("resolve prompt addendum selection");
+
+        assert_eq!(
+            selected, None,
+            "allow-empty prompt handling should still respect the explicit clear token"
         );
     }
 
