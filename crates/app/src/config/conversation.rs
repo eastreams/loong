@@ -212,6 +212,10 @@ pub struct ConversationTurnLoopConfig {
     pub max_followup_tool_payload_chars_total: usize,
     #[serde(default = "default_turn_loop_max_discovery_followup_rounds")]
     pub max_discovery_followup_rounds: usize,
+    #[serde(default = "default_turn_loop_max_total_tool_calls")]
+    pub max_total_tool_calls: usize,
+    #[serde(default = "default_turn_loop_max_consecutive_same_tool")]
+    pub max_consecutive_same_tool: usize,
 }
 
 impl Default for ConversationTurnLoopConfig {
@@ -226,6 +230,8 @@ impl Default for ConversationTurnLoopConfig {
             max_followup_tool_payload_chars_total:
                 default_turn_loop_max_followup_tool_payload_chars_total(),
             max_discovery_followup_rounds: default_turn_loop_max_discovery_followup_rounds(),
+            max_total_tool_calls: default_turn_loop_max_total_tool_calls(),
+            max_consecutive_same_tool: default_turn_loop_max_consecutive_same_tool(),
         }
     }
 }
@@ -472,6 +478,14 @@ const fn default_turn_loop_max_followup_tool_payload_chars_total() -> usize {
 
 const fn default_turn_loop_max_discovery_followup_rounds() -> usize {
     2
+}
+
+const fn default_turn_loop_max_total_tool_calls() -> usize {
+    200
+}
+
+const fn default_turn_loop_max_consecutive_same_tool() -> usize {
+    10
 }
 
 const fn default_fast_lane_max_tool_steps_per_turn() -> usize {

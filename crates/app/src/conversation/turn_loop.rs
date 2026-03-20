@@ -33,6 +33,7 @@ struct TurnLoopSessionState {
     last_raw_reply: String,
     loop_supervisor: ToolLoopSupervisor,
     followup_payload_budget: FollowupPayloadBudget,
+    total_tool_calls: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +176,28 @@ impl ConversationTurnLoop {
                 &mut session.loop_supervisor,
             )
             .await;
+
+            // Global circuit breaker: count tool calls dispatched this round and terminate
+            // if the cumulative per-turn limit is reached.
+            session.total_tool_calls += turn.tool_intents.len();
+            if session.total_tool_calls >= policy.max_total_tool_calls {
+                return apply_turn_loop_terminal_action(
+                    runtime,
+                    session_id,
+                    user_input,
+                    TurnLoopTerminalAction::PersistReply {
+                        reply: format!(
+                            "tool_loop_circuit_breaker: reached {}/{} tool calls this turn. \
+                             Do you want to continue? Reply to resume.",
+                            session.total_tool_calls, policy.max_total_tool_calls
+                        ),
+                        persistence_mode: ReplyPersistenceMode::Success,
+                    },
+                    binding,
+                )
+                .await;
+            }
+
             let reply_phase = evaluation.reply_phase(session.raw_tool_output_requested);
             if let Some(raw_reply) = reply_phase.raw_reply() {
                 session.last_raw_reply = raw_reply.to_owned();
@@ -309,6 +332,7 @@ fn initialize_turn_loop_session(
             policy.max_followup_tool_payload_chars,
             policy.max_followup_tool_payload_chars_total,
         ),
+        total_tool_calls: 0,
     }
 }
 
@@ -644,6 +668,8 @@ struct TurnLoopPolicy {
     max_same_tool_failure_rounds: usize,
     max_followup_tool_payload_chars: usize,
     max_followup_tool_payload_chars_total: usize,
+    max_total_tool_calls: usize,
+    max_consecutive_same_tool: usize,
 }
 
 impl TurnLoopPolicy {
@@ -659,6 +685,8 @@ impl TurnLoopPolicy {
             max_followup_tool_payload_chars_total: turn_loop
                 .max_followup_tool_payload_chars_total
                 .max(1),
+            max_total_tool_calls: turn_loop.max_total_tool_calls.max(1),
+            max_consecutive_same_tool: turn_loop.max_consecutive_same_tool.max(1),
         }
     }
 }
@@ -669,6 +697,8 @@ struct ToolLoopSupervisor {
     last_pattern_streak: usize,
     warned_reason_key: Option<String>,
     recent_rounds: VecDeque<ToolLoopObservation>,
+    consecutive_same_tool: usize,
+    last_tool_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -702,6 +732,31 @@ impl ToolLoopSupervisor {
         outcome_fingerprint: &str,
         failed: bool,
     ) -> ToolLoopSupervisorVerdict {
+        // Consecutive same-tool-name detection (tool-name only, not full signature).
+        // Fires at exactly max_consecutive_same_tool occurrences (>= threshold).
+        if self.last_tool_name.as_deref() == Some(tool_name_signature) {
+            self.consecutive_same_tool += 1;
+        } else {
+            self.last_tool_name = Some(tool_name_signature.to_owned());
+            self.consecutive_same_tool = 1;
+        }
+        if self.consecutive_same_tool >= policy.max_consecutive_same_tool {
+            let reason = LoopDetectionReason {
+                key: format!("consecutive_same_tool:{tool_name_signature}"),
+                text: format!(
+                    "consecutive_same_tool: {tool_name_signature} called {} times in a row \
+                     (limit={})",
+                    self.consecutive_same_tool, policy.max_consecutive_same_tool
+                ),
+            };
+            return if self.warned_reason_key.as_deref() == Some(reason.key.as_str()) {
+                ToolLoopSupervisorVerdict::HardStop { reason: reason.text }
+            } else {
+                self.warned_reason_key = Some(reason.key);
+                ToolLoopSupervisorVerdict::InjectWarning { reason: reason.text }
+            };
+        }
+
         let pattern = format!("{tool_signature}::{outcome_fingerprint}");
         if self.last_pattern.as_deref() == Some(pattern.as_str()) {
             self.last_pattern_streak += 1;
@@ -1599,5 +1654,61 @@ mod tests {
                 panic!("unexpected propagated error terminal action: {error}");
             }
         }
+    }
+
+    fn test_policy_with_consecutive_limit(limit: usize) -> TurnLoopPolicy {
+        TurnLoopPolicy {
+            max_rounds: 100,
+            max_tool_steps_per_round: 1,
+            max_repeated_tool_call_rounds: 100,
+            max_ping_pong_cycles: 100,
+            max_same_tool_failure_rounds: 100,
+            max_followup_tool_payload_chars: 8_000,
+            max_followup_tool_payload_chars_total: 20_000,
+            max_total_tool_calls: 200,
+            max_consecutive_same_tool: limit,
+        }
+    }
+
+    fn observe(supervisor: &mut ToolLoopSupervisor, policy: &TurnLoopPolicy, tool_name: &str) -> ToolLoopSupervisorVerdict {
+        supervisor.observe_round(policy, tool_name, tool_name, "ok", false)
+    }
+
+    #[test]
+    fn consecutive_same_tool_injects_warning_at_threshold() {
+        let policy = test_policy_with_consecutive_limit(3);
+        let mut supervisor = ToolLoopSupervisor::default();
+
+        // First two calls: below threshold
+        assert!(matches!(observe(&mut supervisor, &policy, "shell.exec"), ToolLoopSupervisorVerdict::Continue));
+        assert!(matches!(observe(&mut supervisor, &policy, "shell.exec"), ToolLoopSupervisorVerdict::Continue));
+        // Third call: hits threshold (>= 3) → InjectWarning
+        assert!(matches!(observe(&mut supervisor, &policy, "shell.exec"), ToolLoopSupervisorVerdict::InjectWarning { .. }));
+    }
+
+    #[test]
+    fn consecutive_same_tool_hard_stops_on_repeat_warning() {
+        let policy = test_policy_with_consecutive_limit(3);
+        let mut supervisor = ToolLoopSupervisor::default();
+
+        // Get to threshold
+        observe(&mut supervisor, &policy, "shell.exec");
+        observe(&mut supervisor, &policy, "shell.exec");
+        observe(&mut supervisor, &policy, "shell.exec"); // InjectWarning
+        // Same pattern again → HardStop
+        assert!(matches!(observe(&mut supervisor, &policy, "shell.exec"), ToolLoopSupervisorVerdict::HardStop { .. }));
+    }
+
+    #[test]
+    fn consecutive_same_tool_resets_on_tool_name_change() {
+        let policy = test_policy_with_consecutive_limit(3);
+        let mut supervisor = ToolLoopSupervisor::default();
+
+        observe(&mut supervisor, &policy, "shell.exec");
+        observe(&mut supervisor, &policy, "shell.exec");
+        // Switch tool — resets consecutive counter
+        assert!(matches!(observe(&mut supervisor, &policy, "file.read"), ToolLoopSupervisorVerdict::Continue));
+        // Back to shell.exec — should start fresh, not trigger warning
+        assert!(matches!(observe(&mut supervisor, &policy, "shell.exec"), ToolLoopSupervisorVerdict::Continue));
     }
 }
