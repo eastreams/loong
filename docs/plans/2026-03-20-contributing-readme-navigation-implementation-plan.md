@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Update top-level README navigation
+## Task 1: Update top-level README navigation
 
 **Files:**
 - Modify: `README.md`
@@ -28,7 +28,7 @@ Use the existing `#contributing` anchor in `README.md` and the Chinese README's 
 
 Check the surrounding separator style and ordering so the new link feels like part of the existing compact nav block.
 
-### Task 2: Clarify contribution philosophy
+## Task 2: Clarify contribution philosophy
 
 **Files:**
 - Modify: `CONTRIBUTING.md`
@@ -45,7 +45,7 @@ State clearly that contributors must still understand what they submit and remai
 
 Explain that maintainers are actively improving harness-engineering workflows in the repository so contributors can use agents more effectively and more safely.
 
-### Task 3: Align localized visuals
+## Task 3: Align localized visuals
 
 **Files:**
 - Modify: `README.zh-CN.md`
@@ -58,7 +58,7 @@ Switch the current Chinese README image references to `assets/readme/loongclaw-p
 
 Keep the current Chinese alt text and section structure intact so only the localized asset changes.
 
-### Task 4: Verify docs-only results
+## Task 4: Verify docs-only results
 
 **Files:**
 - Modify: `README.md`
