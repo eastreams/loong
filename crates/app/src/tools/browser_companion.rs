@@ -771,5 +771,31 @@ mod tests {
 
         assert_eq!(outcome.payload["execution_tier"], json!("balanced"));
         assert_eq!(outcome.payload["action_class"], json!("read"));
+        let session_id = outcome.payload["session_id"]
+            .as_str()
+            .expect("session id in payload")
+            .to_owned();
+
+        let stop_request = ToolCoreRequest {
+            tool_name: "browser.companion.session.stop".to_owned(),
+            payload: json!({"session_id": &session_id}),
+        };
+        let stop_payload = stop_request
+            .payload
+            .as_object()
+            .expect("browser companion stop payload object")
+            .clone();
+        let stopped = super::execute_browser_companion_request(
+            stop_request,
+            &stop_payload,
+            "test-scope",
+            &policy,
+            &OkRunner,
+            true,
+        )
+        .expect("browser companion session stop should succeed");
+
+        assert_eq!(stopped.payload["session_id"], json!(session_id));
+        assert_eq!(stopped.payload["operation"], json!("session.stop"));
     }
 }

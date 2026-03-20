@@ -916,6 +916,7 @@ mod tests {
             &config,
         )
         .expect("browser.extract links should succeed");
+        assert_eq!(links.payload["execution_tier"], json!("restricted"));
         assert_eq!(links.payload["links"][0]["text"], json!("Continue"));
 
         let selector_text = execute_browser_tool_with_config(
@@ -931,6 +932,7 @@ mod tests {
             &config,
         )
         .expect("browser.extract selector_text should succeed");
+        assert_eq!(selector_text.payload["execution_tier"], json!("restricted"));
         assert_eq!(selector_text.payload["items"], json!(["Alpha", "Beta"]));
         handle.join().expect("server thread");
     }
