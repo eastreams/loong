@@ -16,9 +16,9 @@
   },
   "auth": {
     "bannerTitle": "解锁本地 API",
-    "bannerBody": "请从 {{tokenPath}} 读取本地 token 并粘贴到这里。你也可以通过 {{tokenEnv}} 覆盖它。",
+    "bannerBody": "本地 token 文件位置：{{tokenPath}}。把里面的 token 粘贴到这里即可。",
     "invalidTitle": "当前 token 已被拒绝",
-    "invalidBody": "当前 token 无效，请从 {{tokenPath}} 读取最新 token 后重试。",
+    "invalidBody": "当前 token 无效，请到 {{tokenPath}} 读取最新 token 后重试。",
     "requiredBody": "先输入本地 API token，才能加载受保护的运行时数据。",
     "inputPlaceholder": "输入本地 API token",
     "save": "保存 token",
@@ -28,6 +28,7 @@
     "eyebrow": "首次进入",
     "loadingTitle": "正在检查本地环境",
     "loadingBody": "正在检查 runtime、token 配对、配置文件和 provider 可用性。",
+    "tokenPairingAutoInProgress": "正在尝试自动配对；如果你手头已有本地 token，也可以直接在下面粘贴。",
     "panelEyebrow": "进入前检查",
     "panelTitle": "进入前状态确认",
     "summary": {

@@ -311,14 +311,14 @@ export function OnboardingStatusPanel() {
           ) : null}
         </div>
 
-        {needsTokenPairing && autoPairingInProgress ? (
-          <p className="settings-note onboarding-validation-note">
-            {t("onboarding.loadingBody")}
-          </p>
-        ) : null}
-
-        {needsTokenPairing && !autoPairingInProgress ? (
+        {needsTokenPairing ? (
           <form className="settings-form onboarding-form" onSubmit={handleSubmitToken}>
+            {autoPairingInProgress ? (
+              <p className="settings-note onboarding-validation-note">
+                {t("onboarding.tokenPairingAutoInProgress")}
+              </p>
+            ) : null}
+
             <div className="settings-field">
               <label className="settings-label" htmlFor="onboarding-local-token">
                 {status === "unauthorized"

@@ -16,7 +16,7 @@
   },
   "auth": {
     "bannerTitle": "Unlock local API",
-    "bannerBody": "Read the local token from {{tokenPath}} and paste it here. You can also override it with {{tokenEnv}}.",
+    "bannerBody": "Local token file: {{tokenPath}}. Paste the token value here.",
     "invalidTitle": "Stored token was rejected",
     "invalidBody": "The current token was rejected. Read the latest token from {{tokenPath}} and try again.",
     "requiredBody": "Enter the local API token to load protected runtime data.",
@@ -28,6 +28,7 @@
     "eyebrow": "First run",
     "loadingTitle": "Checking local setup",
     "loadingBody": "Trying local runtime, token pairing, config, and provider readiness.",
+    "tokenPairingAutoInProgress": "Trying lightweight auto pairing now. If you already have the local token, you can still paste it below.",
     "panelEyebrow": "Entry check",
     "panelTitle": "Ready-to-enter status",
     "summary": {

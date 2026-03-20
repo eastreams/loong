@@ -131,10 +131,15 @@ function readDashboardError(
   error: unknown,
   t: ReturnType<typeof useTranslation>["t"],
   markUnauthorized: () => void,
+  tokenPath: string | null,
+  tokenEnv: string | null,
 ): string {
   if (error instanceof ApiRequestError && error.status === 401) {
     markUnauthorized();
-    return t("auth.invalidBody");
+    return t("auth.invalidBody", {
+      tokenPath: tokenPath ?? "",
+      tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+    });
   }
 
   return error instanceof Error ? error.message : "Failed to load dashboard";
@@ -190,6 +195,8 @@ export default function DashboardPage() {
     markUnauthorized,
     refreshOnboardingStatus,
     status,
+    tokenPath,
+    tokenEnv,
   } =
     useWebConnection();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
@@ -247,7 +254,10 @@ export default function DashboardPage() {
       setTools(null);
       setError(
         status === "unauthorized"
-          ? t("auth.invalidBody")
+          ? t("auth.invalidBody", {
+              tokenPath: tokenPath ?? "",
+              tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+            })
           : t("auth.requiredBody"),
       );
       return () => {
@@ -260,7 +270,15 @@ export default function DashboardPage() {
         await reloadDashboardData();
       } catch (loadError) {
         if (!cancelled) {
-          setError(readDashboardError(loadError, t, markUnauthorized));
+          setError(
+            readDashboardError(
+              loadError,
+              t,
+              markUnauthorized,
+              tokenPath,
+              tokenEnv,
+            ),
+          );
         }
       }
     }
@@ -368,7 +386,15 @@ export default function DashboardPage() {
       await reloadDashboardData();
       setSettingsNotice(t("dashboard.settings.refreshed"));
     } catch (loadError) {
-      setSettingsError(readDashboardError(loadError, t, markUnauthorized));
+      setSettingsError(
+        readDashboardError(
+          loadError,
+          t,
+          markUnauthorized,
+          tokenPath,
+          tokenEnv,
+        ),
+      );
     } finally {
       setIsRefreshingDiagnostics(false);
     }

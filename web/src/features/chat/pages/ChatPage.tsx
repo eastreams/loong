@@ -184,10 +184,15 @@ function toFriendlyChatError(
   error: unknown,
   t: ReturnType<typeof useTranslation>["t"],
   markUnauthorized: () => void,
+  tokenPath: string | null,
+  tokenEnv: string | null,
 ): string {
   if (error instanceof ApiRequestError && error.status === 401) {
     markUnauthorized();
-    return t("auth.invalidBody");
+    return t("auth.invalidBody", {
+      tokenPath: tokenPath ?? "",
+      tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+    });
   }
 
   const rawMessage =
@@ -205,7 +210,14 @@ function toFriendlyChatError(
 
 export default function ChatPage() {
   const { t } = useTranslation();
-  const { canAccessProtectedApi, authRevision, markUnauthorized, status } =
+  const {
+    canAccessProtectedApi,
+    authRevision,
+    markUnauthorized,
+    status,
+    tokenPath,
+    tokenEnv,
+  } =
     useWebConnection();
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -301,7 +313,10 @@ export default function ChatPage() {
       setIsLoadingSessions(false);
       setError(
         status === "unauthorized"
-          ? t("auth.invalidBody")
+          ? t("auth.invalidBody", {
+              tokenPath: tokenPath ?? "",
+              tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+            })
           : t("auth.requiredBody"),
       );
       return () => {
@@ -323,7 +338,12 @@ export default function ChatPage() {
         if (!cancelled) {
           if (loadError instanceof ApiRequestError && loadError.status === 401) {
             markUnauthorized();
-            setError(t("auth.invalidBody"));
+            setError(
+              t("auth.invalidBody", {
+                tokenPath: tokenPath ?? "",
+                tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+              }),
+            );
           } else {
             setError(loadError instanceof Error ? loadError.message : "Failed to load sessions");
           }
@@ -340,7 +360,15 @@ export default function ChatPage() {
     return () => {
       cancelled = true;
     };
-  }, [authRevision, canAccessProtectedApi, markUnauthorized, status, t]);
+  }, [
+    authRevision,
+    canAccessProtectedApi,
+    markUnauthorized,
+    status,
+    t,
+    tokenEnv,
+    tokenPath,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -401,7 +429,12 @@ export default function ChatPage() {
         if (!cancelled) {
           if (loadError instanceof ApiRequestError && loadError.status === 401) {
             markUnauthorized();
-            setError(t("auth.invalidBody"));
+            setError(
+              t("auth.invalidBody", {
+                tokenPath: tokenPath ?? "",
+                tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+              }),
+            );
           } else {
             setError(loadError instanceof Error ? loadError.message : "Failed to load history");
           }
@@ -564,7 +597,15 @@ export default function ChatPage() {
       setPendingAssistantId(null);
       setMessages(previousMessages);
       setActiveTools(previousTools);
-      setError(toFriendlyChatError(submitError, t, markUnauthorized));
+      setError(
+        toFriendlyChatError(
+          submitError,
+          t,
+          markUnauthorized,
+          tokenPath,
+          tokenEnv,
+        ),
+      );
       setComposerText(input);
     } finally {
       setStreamPhase("idle");
@@ -596,7 +637,12 @@ export default function ChatPage() {
     } catch (deleteError) {
       if (deleteError instanceof ApiRequestError && deleteError.status === 401) {
         markUnauthorized();
-        setError(t("auth.invalidBody"));
+        setError(
+          t("auth.invalidBody", {
+            tokenPath: tokenPath ?? "",
+            tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+          }),
+        );
       } else {
         setError(deleteError instanceof Error ? deleteError.message : "Failed to delete session");
       }
