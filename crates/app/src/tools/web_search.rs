@@ -87,7 +87,7 @@ fn execute_web_search_tool_enabled(
 
     let result = super::web_http::run_async(async {
         match normalized_provider {
-            "duckduckgo" => {
+            crate::config::WEB_SEARCH_PROVIDER_DUCKDUCKGO => {
                 search_duckduckgo(query, max_results, config.web_search.timeout_seconds).await
             }
             "brave" => {

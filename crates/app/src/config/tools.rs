@@ -197,9 +197,11 @@ pub struct WebToolConfig {
 
 pub const DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS: u64 = 30;
 pub const DEFAULT_WEB_SEARCH_MAX_RESULTS: usize = 5;
-pub const DEFAULT_WEB_SEARCH_PROVIDER: &str = "duckduckgo";
+pub(crate) const WEB_SEARCH_PROVIDER_DUCKDUCKGO: &str = "duckduckgo";
+pub const DEFAULT_WEB_SEARCH_PROVIDER: &str = WEB_SEARCH_PROVIDER_DUCKDUCKGO;
+#[cfg(feature = "tool-websearch")]
 pub(crate) const WEB_SEARCH_PROVIDER_SCHEMA_VALUES: &[&str] =
-    &["duckduckgo", "ddg", "brave", "tavily"];
+    &[WEB_SEARCH_PROVIDER_DUCKDUCKGO, "ddg", "brave", "tavily"];
 pub(crate) const WEB_SEARCH_PROVIDER_VALID_VALUES: &str = "duckduckgo (or ddg), brave, tavily";
 pub(crate) const WEB_SEARCH_BRAVE_API_KEY_ENV: &str = "BRAVE_API_KEY";
 pub(crate) const WEB_SEARCH_TAVILY_API_KEY_ENV: &str = "TAVILY_API_KEY";
@@ -571,16 +573,17 @@ impl ToolConfig {
 
 pub(crate) fn normalize_web_search_provider(raw: &str) -> Option<&'static str> {
     match raw.trim().to_ascii_lowercase().as_str() {
-        "duckduckgo" | "ddg" => Some(DEFAULT_WEB_SEARCH_PROVIDER),
+        "duckduckgo" | "ddg" => Some(WEB_SEARCH_PROVIDER_DUCKDUCKGO),
         "brave" => Some("brave"),
         "tavily" => Some("tavily"),
         _ => None,
     }
 }
 
+#[cfg(feature = "tool-websearch")]
 pub(crate) fn web_search_provider_parameter_description() -> String {
     format!(
-        "Search provider. Defaults to '{DEFAULT_WEB_SEARCH_PROVIDER}'. Supported providers: {WEB_SEARCH_PROVIDER_VALID_VALUES}. Brave requires {WEB_SEARCH_BRAVE_API_KEY_ENV}. Tavily requires {WEB_SEARCH_TAVILY_API_KEY_ENV}."
+        "Search provider. Defaults to '{DEFAULT_WEB_SEARCH_PROVIDER}'. Supported providers: {WEB_SEARCH_PROVIDER_VALID_VALUES}. Brave and Tavily require a configured API key; use tools.web_search.brave_api_key / tools.web_search.tavily_api_key or the {WEB_SEARCH_BRAVE_API_KEY_ENV} / {WEB_SEARCH_TAVILY_API_KEY_ENV} environment variable fallbacks."
     )
 }
 
@@ -788,15 +791,29 @@ mod tests {
     fn normalize_web_search_provider_canonicalizes_aliases() {
         assert_eq!(
             normalize_web_search_provider("duckduckgo"),
-            Some(DEFAULT_WEB_SEARCH_PROVIDER)
+            Some(WEB_SEARCH_PROVIDER_DUCKDUCKGO)
         );
         assert_eq!(
             normalize_web_search_provider(" DDG "),
-            Some(DEFAULT_WEB_SEARCH_PROVIDER)
+            Some(WEB_SEARCH_PROVIDER_DUCKDUCKGO)
         );
         assert_eq!(normalize_web_search_provider("brave"), Some("brave"));
         assert_eq!(normalize_web_search_provider("tavily"), Some("tavily"));
         assert_eq!(normalize_web_search_provider("unknown"), None);
+        assert_eq!(DEFAULT_WEB_SEARCH_PROVIDER, WEB_SEARCH_PROVIDER_DUCKDUCKGO);
+    }
+
+    #[cfg(feature = "tool-websearch")]
+    #[test]
+    fn web_search_provider_parameter_description_mentions_config_and_env_fallbacks() {
+        let description = web_search_provider_parameter_description();
+
+        assert!(description.contains("tools.web_search.brave_api_key"));
+        assert!(description.contains("tools.web_search.tavily_api_key"));
+        assert!(description.contains(WEB_SEARCH_BRAVE_API_KEY_ENV));
+        assert!(description.contains(WEB_SEARCH_TAVILY_API_KEY_ENV));
+        assert!(description.contains(DEFAULT_WEB_SEARCH_PROVIDER));
+        assert!(description.contains(WEB_SEARCH_PROVIDER_VALID_VALUES));
     }
 
     #[test]

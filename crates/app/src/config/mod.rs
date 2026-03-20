@@ -69,9 +69,12 @@ pub use tools::{
     WebSearchToolConfig, WebToolConfig,
 };
 pub(crate) use tools::{
-    WEB_SEARCH_BRAVE_API_KEY_ENV, WEB_SEARCH_PROVIDER_SCHEMA_VALUES,
-    WEB_SEARCH_PROVIDER_VALID_VALUES, WEB_SEARCH_TAVILY_API_KEY_ENV, normalize_web_search_provider,
-    web_search_provider_parameter_description,
+    WEB_SEARCH_BRAVE_API_KEY_ENV, WEB_SEARCH_TAVILY_API_KEY_ENV, normalize_web_search_provider,
+};
+#[cfg(feature = "tool-websearch")]
+pub(crate) use tools::{
+    WEB_SEARCH_PROVIDER_DUCKDUCKGO, WEB_SEARCH_PROVIDER_SCHEMA_VALUES,
+    WEB_SEARCH_PROVIDER_VALID_VALUES, web_search_provider_parameter_description,
 };
 
 #[cfg(test)]

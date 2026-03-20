@@ -151,7 +151,7 @@ jobs:
         run: >
           cargo check -p loongclaw-app --no-default-features
           --features
-          channel-cli,channel-telegram,channel-feishu,channel-matrix,config-toml,memory-sqlite,feishu-integration,tool-shell,tool-file,tool-browser,tool-websearch,provider-openai,provider-anthropic,provider-bedrock,provider-volcengine
+          channel-cli,channel-telegram,channel-feishu,channel-matrix,config-toml,memory-sqlite,feishu-integration,tool-shell,tool-file,tool-browser,provider-openai,provider-anthropic,provider-bedrock,provider-volcengine
 
   rust-test-all-features:
     runs-on: ubuntu-latest
