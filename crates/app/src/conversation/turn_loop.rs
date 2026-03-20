@@ -169,7 +169,9 @@ impl ConversationTurnLoop {
             // Global circuit breaker: prospective check before dispatching tools.
             // Trips if adding this round's intents would reach the per-turn limit,
             // ensuring no tools from this round are executed after the cap is hit.
-            let prospective_total = session.total_tool_calls.saturating_add(turn.tool_intents.len());
+            let prospective_total = session
+                .total_tool_calls
+                .saturating_add(turn.tool_intents.len());
             if prospective_total >= policy.max_total_tool_calls {
                 return apply_turn_loop_terminal_action(
                     runtime,
