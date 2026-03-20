@@ -40,9 +40,15 @@ pub mod runtime_config;
 mod session;
 mod shell;
 pub mod shell_policy_ext;
-#[cfg(feature = "tool-webfetch")]
+// Browser reuses the shared SSRF and HTML helpers from web_fetch even when the
+// public web.fetch tool is compiled out.
+#[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
 mod web_fetch;
-#[cfg(any(feature = "tool-webfetch", feature = "tool-websearch"))]
+#[cfg(any(
+    feature = "tool-webfetch",
+    feature = "tool-browser",
+    feature = "tool-websearch"
+))]
 mod web_http;
 mod web_search;
 
@@ -1900,6 +1906,15 @@ mod tests {
     }
 
     #[test]
+    fn runtime_tool_view_hides_web_search_when_disabled() {
+        let mut config = crate::config::ToolConfig::default();
+        config.web_search.enabled = false;
+
+        let root_view = runtime_tool_view_for_config(&config);
+        assert!(!root_view.contains("web.search"));
+    }
+
+    #[test]
     fn runtime_tool_view_hides_browser_when_disabled() {
         let mut config = crate::config::ToolConfig::default();
         config.browser.enabled = false;
@@ -2092,6 +2107,25 @@ mod tests {
             properties["max_bytes"]["maximum"],
             json!(5 * 1024 * 1024),
             "web.fetch schema should advertise the compile-time hard cap instead of the default runtime limit"
+        );
+    }
+
+    #[cfg(feature = "tool-websearch")]
+    #[test]
+    fn tool_registry_hides_web_search_when_runtime_disabled() {
+        let config = runtime_config::ToolRuntimeConfig {
+            web_search: runtime_config::WebSearchRuntimePolicy {
+                enabled: false,
+                ..runtime_config::WebSearchRuntimePolicy::default()
+            },
+            ..runtime_config::ToolRuntimeConfig::default()
+        };
+
+        let entries = tool_registry_with_config(Some(&config));
+
+        assert!(
+            !entries.iter().any(|entry| entry.name == "web.search"),
+            "runtime-disabled web.search should not appear in tool registry"
         );
     }
 

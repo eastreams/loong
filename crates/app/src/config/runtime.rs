@@ -21,7 +21,11 @@ use super::{
         DEFAULT_CONFIG_FILE, default_loongclaw_home as shared_default_loongclaw_home, expand_path,
         format_config_validation_issues,
     },
-    tools::{ExternalSkillsConfig, ToolConfig},
+    tools::{
+        DEFAULT_WEB_SEARCH_PROVIDER, ExternalSkillsConfig, ToolConfig,
+        WEB_SEARCH_BRAVE_API_KEY_ENV, WEB_SEARCH_PROVIDER_VALID_VALUES,
+        WEB_SEARCH_TAVILY_API_KEY_ENV,
+    },
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1597,8 +1601,9 @@ pub fn write_template(path: Option<&str>, force: bool) -> CliResult<PathBuf> {
     }
 
     let encoded = format!(
-        "{}{}",
+        "{}{}{}",
         template_secret_usage_comment(),
+        template_web_search_usage_comment(),
         encode_toml_config(&LoongClawConfig::default())?
     );
     fs::write(&output_path, encoded).map_err(|error| {
@@ -1690,6 +1695,17 @@ fn template_secret_usage_comment() -> &'static str {
 \n"
 }
 
+fn template_web_search_usage_comment() -> String {
+    format!(
+        "# Web search provider notes:\n\
+# - `[tools.web_search].default_provider` accepts {WEB_SEARCH_PROVIDER_VALID_VALUES}.\n\
+# - The default provider is `{DEFAULT_WEB_SEARCH_PROVIDER}`.\n\
+# - Brave credentials can use `tools.web_search.brave_api_key = \"${{{WEB_SEARCH_BRAVE_API_KEY_ENV}}}\"` or the `{WEB_SEARCH_BRAVE_API_KEY_ENV}` environment variable.\n\
+# - Tavily credentials can use `tools.web_search.tavily_api_key = \"${{{WEB_SEARCH_TAVILY_API_KEY_ENV}}}\"` or the `{WEB_SEARCH_TAVILY_API_KEY_ENV}` environment variable.\n\
+\n"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1771,6 +1787,31 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
         let raw = std::fs::read_to_string(&config_path).expect("read template");
         assert!(raw.contains("providers.<profile_id>.api_key = \"${PROVIDER_API_KEY}\""));
         assert!(!raw.contains("provider.api_key_env = \"PROVIDER_API_KEY\""));
+
+        std::fs::remove_file(&config_path).ok();
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_template_includes_web_search_provider_notes() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("loongclaw-template-web-search-notes-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("create temp directory");
+        let config_path = temp_dir.join("config.toml");
+
+        write_template(Some(config_path.to_string_lossy().as_ref()), true)
+            .expect("write template should succeed");
+
+        let raw = std::fs::read_to_string(&config_path).expect("read template");
+        assert!(raw.contains("# Web search provider notes:"));
+        assert!(raw.contains(WEB_SEARCH_PROVIDER_VALID_VALUES));
+        assert!(raw.contains(WEB_SEARCH_BRAVE_API_KEY_ENV));
+        assert!(raw.contains(WEB_SEARCH_TAVILY_API_KEY_ENV));
 
         std::fs::remove_file(&config_path).ok();
         std::fs::remove_dir_all(&temp_dir).ok();

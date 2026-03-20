@@ -1,8 +1,10 @@
 use std::collections::BTreeSet;
 
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+#[cfg(feature = "tool-webfetch")]
 use serde_json::{Map, Value, json};
 
+#[cfg_attr(not(feature = "tool-webfetch"), allow(dead_code))]
 pub(super) fn execute_web_fetch_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,

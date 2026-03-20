@@ -1,5 +1,6 @@
 /// Shared HTTP utilities for web tools (web.fetch, web.search).
 /// Provides SSRF-safe DNS resolution and other common patterns.
+#[cfg(any(feature = "tool-webfetch", feature = "tool-websearch"))]
 use std::sync::Arc;
 
 /// Bridge sync-to-async execution for web tools.
@@ -174,4 +175,172 @@ pub(crate) fn is_private_or_special_ipv6(ip: std::net::Ipv6Addr) -> bool {
         || ((segments[0] & 0xffc0) == 0xfe80)
         || ((segments[0] & 0xffc0) == 0xfec0)
         || (segments[0] == 0x2001 && segments[1] == 0x0db8)
+}
+
+#[cfg(all(test, any(feature = "tool-webfetch", feature = "tool-websearch")))]
+#[allow(clippy::panic)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    fn must<T, E>(result: Result<T, E>, context: &str) -> T
+    where
+        E: std::fmt::Display,
+    {
+        match result {
+            Ok(value) => value,
+            Err(error) => panic!("{context}: {error}"),
+        }
+    }
+
+    fn spawn_http_server() -> Result<
+        (
+            String,
+            mpsc::Receiver<String>,
+            std::thread::JoinHandle<Result<bool, String>>,
+        ),
+        String,
+    > {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .map_err(|error| format!("bind test server: {error}"))?;
+        let address = listener
+            .local_addr()
+            .map_err(|error| format!("resolve test server address: {error}"))?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|error| format!("configure test server nonblocking mode: {error}"))?;
+        let (request_tx, request_rx) = mpsc::sync_channel(1);
+
+        let handle = std::thread::spawn(move || -> Result<bool, String> {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            let (mut stream, _peer) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() >= deadline {
+                            return Ok(false);
+                        }
+                        std::thread::park_timeout(Duration::from_millis(20));
+                    }
+                    Err(error) => return Err(format!("accept test client: {error}")),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .map_err(|error| format!("set read timeout: {error}"))?;
+
+            let mut buffer = [0u8; 4096];
+            let byte_count = stream
+                .read(&mut buffer)
+                .map_err(|error| format!("read request bytes: {error}"))?;
+            let request_bytes = buffer
+                .get(..byte_count)
+                .ok_or_else(|| format!("captured request length out of range: {byte_count}"))?;
+            request_tx
+                .send(String::from_utf8_lossy(request_bytes).into_owned())
+                .map_err(|error| format!("send captured request: {error}"))?;
+
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nok",
+                )
+                .map_err(|error| format!("write response: {error}"))?;
+            stream
+                .flush()
+                .map_err(|error| format!("flush response: {error}"))?;
+            Ok(true)
+        });
+
+        Ok((
+            format!("http://localhost:{}", address.port()),
+            request_rx,
+            handle,
+        ))
+    }
+
+    #[test]
+    fn build_ssrf_safe_client_allows_localhost_when_private_hosts_are_enabled() {
+        let (url, request_rx, server_handle) = must(spawn_http_server(), "spawn http server");
+        let user_agent = "LoongClaw-WebHttp-Test/1.0";
+        let client = must(build_ssrf_safe_client(true, 5, user_agent), "build client");
+
+        let response = must(
+            run_async(async {
+                client
+                    .get(url)
+                    .send()
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .text()
+                    .await
+                    .map_err(|error| error.to_string())
+            }),
+            "run async request",
+        );
+        let body = must(response, "request should succeed");
+
+        assert_eq!(body, "ok");
+
+        let request = must(
+            request_rx
+                .recv_timeout(Duration::from_secs(5))
+                .map_err(|error| format!("capture request: {error}")),
+            "capture request",
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains(&format!("user-agent: {}", user_agent.to_ascii_lowercase())),
+            "expected user-agent header in request: {request}"
+        );
+
+        let accepted_request = match server_handle.join() {
+            Ok(result) => result,
+            Err(_panic) => panic!("join test server: thread panicked"),
+        };
+        assert!(
+            must(accepted_request, "test server exited with error"),
+            "expected localhost test server to receive the request"
+        );
+    }
+
+    #[test]
+    fn build_ssrf_safe_client_blocks_localhost_when_private_hosts_are_disabled() {
+        let (url, _request_rx, server_handle) = must(spawn_http_server(), "spawn http server");
+        let client = must(
+            build_ssrf_safe_client(false, 5, "LoongClaw-WebHttp-Test/1.0"),
+            "build client",
+        );
+
+        let response = must(
+            run_async(async {
+                client
+                    .get(url)
+                    .send()
+                    .await
+                    .map_err(|error| error.to_string())
+            }),
+            "run async request",
+        );
+        let error = match response {
+            Ok(_response) => panic!("localhost should be blocked when private hosts are disabled"),
+            Err(error) => error,
+        };
+        let accepted_request = match server_handle.join() {
+            Ok(result) => result,
+            Err(_panic) => panic!("join test server: thread panicked"),
+        };
+
+        assert!(
+            !error.is_empty(),
+            "expected a request error when private hosts are disabled"
+        );
+        assert!(
+            !must(accepted_request, "test server exited with error"),
+            "unexpected error: {error}"
+        );
+    }
 }

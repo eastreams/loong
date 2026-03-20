@@ -132,6 +132,27 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
+  rust-check-browser-without-webfetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26
+
+      - name: Cache Cargo Artifacts
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+
+      - name: Check browser feature set without web.fetch
+        run: >
+          cargo check -p loongclaw-app --no-default-features
+          --features
+          channel-cli,channel-telegram,channel-feishu,channel-matrix,config-toml,memory-sqlite,feishu-integration,tool-shell,tool-file,tool-browser,tool-websearch,provider-openai,provider-anthropic,provider-bedrock,provider-volcengine
+
   rust-test-all-features:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -175,6 +196,7 @@ jobs:
       - governance
       - rust-quality
       - rust-test-default
+      - rust-check-browser-without-webfetch
       - rust-test-all-features
       - docs-build
     runs-on: ubuntu-latest
@@ -186,6 +208,7 @@ jobs:
           GOVERNANCE_RESULT: ${{ needs.governance.result }}
           RUST_QUALITY_RESULT: ${{ needs.rust-quality.result }}
           RUST_TEST_DEFAULT_RESULT: ${{ needs.rust-test-default.result }}
+          RUST_CHECK_BROWSER_WITHOUT_WEBFETCH_RESULT: ${{ needs.rust-check-browser-without-webfetch.result }}
           RUST_TEST_ALL_FEATURES_RESULT: ${{ needs.rust-test-all-features.result }}
           DOCS_BUILD_RESULT: ${{ needs.docs-build.result }}
         run: |
@@ -203,5 +226,6 @@ jobs:
           check_result governance "$GOVERNANCE_RESULT"
           check_result rust-quality "$RUST_QUALITY_RESULT"
           check_result rust-test-default "$RUST_TEST_DEFAULT_RESULT"
+          check_result rust-check-browser-without-webfetch "$RUST_CHECK_BROWSER_WITHOUT_WEBFETCH_RESULT"
           check_result rust-test-all-features "$RUST_TEST_ALL_FEATURES_RESULT"
           check_result docs-build "$DOCS_BUILD_RESULT"

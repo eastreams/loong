@@ -399,11 +399,21 @@ max_sessions = 8
 enabled = true
 allowed_domains = ["docs.example.com"]
 blocked_domains = ["*.internal.example"]
+
+[tools.web_search]
+enabled = true
+default_provider = "duckduckgo" # or "ddg", "brave", "tavily"
+timeout_seconds = 30
+max_results = 5
+# brave_api_key = "${BRAVE_API_KEY}"
+# tavily_api_key = "${TAVILY_API_KEY}"
 ```
 
 Further references:
 
-- [Tool Policy Configuration](docs/configuration/tool-policy.md)
+- `default_provider` accepts `duckduckgo` (or `ddg`), `brave`, and `tavily`
+- `BRAVE_API_KEY` and `TAVILY_API_KEY` stay supported as environment fallbacks
+- [Tool Surface Spec](docs/product-specs/tool-surface.md)
 - [Product Specs](docs/product-specs/index.md)
 - `loongclaw validate-config --config ~/.loongclaw/config.toml --json`
 
