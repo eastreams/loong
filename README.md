@@ -39,6 +39,7 @@
   <a href="#why-loong">Why Loong</a> •
   <a href="#product-positioning">Positioning</a> •
   <a href="#why-teams-build-on-loongclaw">Advantages</a> •
+  <a href="#contributing">Contributing</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#migrate-existing-setup">Migration</a> •
   <a href="#core-capabilities">Capabilities</a> •
@@ -528,6 +529,7 @@ For the full layered execution model, see [ARCHITECTURE.md](ARCHITECTURE.md) and
 | [Security](SECURITY.md) | Security policy and disclosure path |
 | [Changelog](CHANGELOG.md) | Release history |
 
+<a id="contributing"></a>
 ## Contributing
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.
