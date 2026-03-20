@@ -23,7 +23,7 @@ unit and integration tests.
 
 ---
 
-### Task 1: Add Typed Builtin Derived-Memory Artifacts
+## Task 1: Add Typed Builtin Derived-Memory Artifacts
 
 **Files:**
 - Create: `crates/app/src/memory/artifacts.rs`
@@ -77,7 +77,7 @@ git add crates/app/src/memory/artifacts.rs crates/app/src/memory/mod.rs crates/a
 git commit -m "feat(memory): add builtin derived artifact storage"
 ```
 
-### Task 2: Add Bounded Hot-Memory Projection
+## Task 2: Add Bounded Hot-Memory Projection
 
 **Files:**
 - Modify: `crates/app/src/config/memory.rs`
@@ -132,7 +132,7 @@ git add crates/app/src/config/memory.rs crates/app/src/memory/runtime_config.rs 
 git commit -m "feat(memory): project bounded hot memory into context"
 ```
 
-### Task 3: Add Agent-Facing Durable Memory Management
+## Task 3: Add Agent-Facing Durable Memory Management
 
 **Files:**
 - Modify: `crates/app/src/tools/mod.rs`
@@ -183,7 +183,7 @@ git add crates/app/src/tools/mod.rs crates/app/src/tools/memory_manage.rs crates
 git commit -m "feat(tools): add durable memory management surface"
 ```
 
-### Task 4: Add Episodic Recall Over Canonical History
+## Task 4: Add Episodic Recall Over Canonical History
 
 **Files:**
 - Modify: `crates/app/src/memory/sqlite.rs`
@@ -235,7 +235,7 @@ git add crates/app/src/memory/sqlite.rs crates/app/src/memory/mod.rs crates/app/
 git commit -m "feat(memory): add episodic recall over canonical history"
 ```
 
-### Task 5: Add Diagnostics, Docs, And Follow-On Guards
+## Task 5: Add Diagnostics, Docs, And Follow-On Guards
 
 **Files:**
 - Modify: `docs/ROADMAP.md`

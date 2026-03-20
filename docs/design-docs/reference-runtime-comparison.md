@@ -376,6 +376,10 @@ It should include four concrete outcomes:
 This slice is the smallest change that meaningfully closes the product gap while
 preserving LoongClaw's better architecture.
 
+Execution plan:
+
+- [Memory Layered Continuity Foundation Implementation Plan](../plans/2026-03-20-memory-layered-continuity-foundation-implementation-plan.md)
+
 ## Follow-On Slices
 
 Once the first slice lands, the recommended order is:
