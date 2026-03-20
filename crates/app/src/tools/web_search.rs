@@ -82,10 +82,12 @@ fn execute_web_search_tool_enabled(
     .clamp(1, 10);
 
     let provider = provider_override.unwrap_or(&config.web_search.default_provider);
+    let normalized_provider =
+        crate::config::normalize_web_search_provider(provider).unwrap_or(provider);
 
     let result = super::web_http::run_async(async {
-        match provider {
-            "duckduckgo" | "ddg" => {
+        match normalized_provider {
+            "duckduckgo" => {
                 search_duckduckgo(query, max_results, config.web_search.timeout_seconds).await
             }
             "brave" => {
@@ -107,8 +109,9 @@ fn execute_web_search_tool_enabled(
                 .await
             }
             _ => Err(format!(
-                "Unknown search provider: '{}'. Use 'duckduckgo' (or 'ddg'), 'brave', or 'tavily'.",
-                provider
+                "Unknown search provider: '{}'. Supported providers: {}.",
+                provider,
+                crate::config::WEB_SEARCH_PROVIDER_VALID_VALUES
             )),
         }
     })??;
@@ -271,9 +274,12 @@ async fn search_brave(
     let api_key = api_key
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .ok_or(
-            "Brave API key not configured. Set tools.web_search.brave_api_key in config or BRAVE_API_KEY environment variable.",
-        )?;
+        .ok_or_else(|| {
+            format!(
+                "Brave API key not configured. Set tools.web_search.brave_api_key in config or {} environment variable.",
+                crate::config::WEB_SEARCH_BRAVE_API_KEY_ENV
+            )
+        })?;
 
     let url = reqwest::Url::parse_with_params(
         "https://api.search.brave.com/res/v1/web/search",
@@ -344,9 +350,12 @@ async fn search_tavily(
     let api_key = api_key
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .ok_or(
-            "Tavily API key not configured. Set tools.web_search.tavily_api_key in config or TAVILY_API_KEY environment variable.",
-        )?;
+        .ok_or_else(|| {
+            format!(
+                "Tavily API key not configured. Set tools.web_search.tavily_api_key in config or {} environment variable.",
+                crate::config::WEB_SEARCH_TAVILY_API_KEY_ENV
+            )
+        })?;
 
     let client = super::web_http::build_ssrf_safe_client(
         false, // deny private hosts by default

@@ -795,7 +795,8 @@ pub fn tool_catalog() -> ToolCatalog {
             name: "web.search",
             provider_name: "web_search",
             aliases: &[],
-            description: "Search the web for APIs, documentation, and error messages using DuckDuckGo, Brave Search, or Tavily",
+            description:
+                "Search the web for APIs, documentation, and error messages using configured web search providers",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
@@ -1713,6 +1714,7 @@ fn file_edit_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+#[cfg(feature = "tool-webfetch")]
 fn web_fetch_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
@@ -1761,8 +1763,8 @@ fn web_search_definition(descriptor: &ToolDescriptor) -> Value {
                     },
                     "provider": {
                         "type": "string",
-                        "enum": ["duckduckgo", "ddg", "brave", "tavily"],
-                        "description": "Search provider. Defaults to 'duckduckgo'. Brave requires BRAVE_API_KEY env var. Tavily requires TAVILY_API_KEY env var."
+                        "enum": crate::config::WEB_SEARCH_PROVIDER_SCHEMA_VALUES,
+                        "description": crate::config::web_search_provider_parameter_description()
                     },
                     "max_results": {
                         "type": "integer",

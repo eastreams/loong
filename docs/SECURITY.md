@@ -60,6 +60,13 @@ CapabilityToken → PolicyEngine → PolicyExtensionChain → Execution → Audi
 - Explicit no-audit behavior remains opt-in only and should stay reserved for narrow fixture seams
 - No HMAC chain for tamper evidence (TD-007)
 
+### Web HTTP SSRF Guardrails
+
+- `web.fetch`, `web.search`, and the shared browser-side URL validators intentionally build their HTTP clients with `reqwest::ClientBuilder::no_proxy()`
+- This keeps DNS resolution and connect-time routing inside the same SSRF-safe policy boundary instead of delegating host decisions to ambient `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, or `NO_PROXY` environment settings
+- Trade-off: corporate proxy-only egress is not currently supported for these web tools because a proxy hop would weaken the same-host assumptions behind the private-address guard
+- If proxy-aware web tooling is added later, it should preserve the same SSRF guarantees rather than silently bypassing them
+
 ### Compile-Time Constraints
 
 25 workspace clippy denies prevent common agent anti-patterns. See [Harness Engineering](design-docs/harness-engineering.md) for the full list.

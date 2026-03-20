@@ -197,6 +197,12 @@ pub struct WebToolConfig {
 
 pub const DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS: u64 = 30;
 pub const DEFAULT_WEB_SEARCH_MAX_RESULTS: usize = 5;
+pub const DEFAULT_WEB_SEARCH_PROVIDER: &str = "duckduckgo";
+pub(crate) const WEB_SEARCH_PROVIDER_SCHEMA_VALUES: &[&str] =
+    &["duckduckgo", "ddg", "brave", "tavily"];
+pub(crate) const WEB_SEARCH_PROVIDER_VALID_VALUES: &str = "duckduckgo (or ddg), brave, tavily";
+pub(crate) const WEB_SEARCH_BRAVE_API_KEY_ENV: &str = "BRAVE_API_KEY";
+pub(crate) const WEB_SEARCH_TAVILY_API_KEY_ENV: &str = "TAVILY_API_KEY";
 pub(crate) const MIN_WEB_SEARCH_TIMEOUT_SECONDS: usize = 1;
 pub(crate) const MAX_WEB_SEARCH_TIMEOUT_SECONDS: usize = 60;
 pub(crate) const MIN_WEB_SEARCH_MAX_RESULTS: usize = 1;
@@ -538,10 +544,7 @@ impl ToolConfig {
         // Only validate provider settings when web_search is enabled
         // Note: API key validation is deferred to runtime since keys can be set via env vars
         if self.web_search.enabled
-            && !matches!(
-                self.web_search.default_provider.as_str(),
-                "duckduckgo" | "ddg" | "brave" | "tavily"
-            )
+            && normalize_web_search_provider(self.web_search.default_provider.as_str()).is_none()
         {
             let mut extra_message_variables = std::collections::BTreeMap::new();
             extra_message_variables.insert(
@@ -550,7 +553,7 @@ impl ToolConfig {
             );
             extra_message_variables.insert(
                 "valid_providers".to_owned(),
-                "duckduckgo (or ddg), brave, tavily".to_owned(),
+                WEB_SEARCH_PROVIDER_VALID_VALUES.to_owned(),
             );
             issues.push(ConfigValidationIssue {
                 severity: super::shared::ConfigValidationSeverity::Error,
@@ -564,6 +567,21 @@ impl ToolConfig {
         }
         issues
     }
+}
+
+pub(crate) fn normalize_web_search_provider(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "duckduckgo" | "ddg" => Some(DEFAULT_WEB_SEARCH_PROVIDER),
+        "brave" => Some("brave"),
+        "tavily" => Some("tavily"),
+        _ => None,
+    }
+}
+
+pub(crate) fn web_search_provider_parameter_description() -> String {
+    format!(
+        "Search provider. Defaults to '{DEFAULT_WEB_SEARCH_PROVIDER}'. Supported providers: {WEB_SEARCH_PROVIDER_VALID_VALUES}. Brave requires {WEB_SEARCH_BRAVE_API_KEY_ENV}. Tavily requires {WEB_SEARCH_TAVILY_API_KEY_ENV}."
+    )
 }
 
 impl ExternalSkillsConfig {
@@ -673,7 +691,7 @@ const fn default_web_fetch_max_redirects() -> usize {
 }
 
 fn default_web_search_provider() -> String {
-    "duckduckgo".to_owned()
+    DEFAULT_WEB_SEARCH_PROVIDER.to_owned()
 }
 
 const fn default_web_search_timeout_seconds() -> u64 {
@@ -750,7 +768,10 @@ mod tests {
         assert_eq!(config.web.max_redirects, 3);
         // web_search defaults
         assert!(config.web_search.enabled);
-        assert_eq!(config.web_search.default_provider, "duckduckgo");
+        assert_eq!(
+            config.web_search.default_provider,
+            DEFAULT_WEB_SEARCH_PROVIDER
+        );
         assert_eq!(
             config.web_search.timeout_seconds,
             DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS
@@ -761,6 +782,95 @@ mod tests {
         );
         assert!(config.web_search.brave_api_key.is_none());
         assert!(config.web_search.tavily_api_key.is_none());
+    }
+
+    #[test]
+    fn normalize_web_search_provider_canonicalizes_aliases() {
+        assert_eq!(
+            normalize_web_search_provider("duckduckgo"),
+            Some(DEFAULT_WEB_SEARCH_PROVIDER)
+        );
+        assert_eq!(
+            normalize_web_search_provider(" DDG "),
+            Some(DEFAULT_WEB_SEARCH_PROVIDER)
+        );
+        assert_eq!(normalize_web_search_provider("brave"), Some("brave"));
+        assert_eq!(normalize_web_search_provider("tavily"), Some("tavily"));
+        assert_eq!(normalize_web_search_provider("unknown"), None);
+    }
+
+    #[test]
+    fn validate_rejects_web_search_timeout_below_minimum() {
+        let mut config = ToolConfig::default();
+        config.web_search.timeout_seconds = 0;
+
+        let issues = config.validate();
+
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.field_path == "tools.web_search.timeout_seconds"),
+            "expected timeout_seconds validation issue, got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_web_search_timeout_above_maximum() {
+        let mut config = ToolConfig::default();
+        config.web_search.timeout_seconds = 61;
+
+        let issues = config.validate();
+
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.field_path == "tools.web_search.timeout_seconds"),
+            "expected timeout_seconds validation issue, got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_web_search_max_results_out_of_range() {
+        let mut config = ToolConfig::default();
+        config.web_search.max_results = 0;
+        let issues = config.validate();
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.field_path == "tools.web_search.max_results"),
+            "expected max_results validation issue, got {issues:?}"
+        );
+
+        config.web_search.max_results = 11;
+        let issues = config.validate();
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.field_path == "tools.web_search.max_results"),
+            "expected max_results validation issue, got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_web_search_boundaries_and_alias_provider() {
+        let mut config = ToolConfig::default();
+        config.web_search.timeout_seconds = MIN_WEB_SEARCH_TIMEOUT_SECONDS as u64;
+        config.web_search.max_results = MAX_WEB_SEARCH_MAX_RESULTS;
+        config.web_search.default_provider = "ddg".to_owned();
+
+        let issues = config.validate();
+
+        assert!(
+            issues.iter().all(|issue| {
+                !matches!(
+                    issue.field_path.as_str(),
+                    "tools.web_search.timeout_seconds"
+                        | "tools.web_search.max_results"
+                        | "tools.web_search.default_provider"
+                )
+            }),
+            "unexpected web_search validation issues: {issues:?}"
+        );
     }
 
     #[cfg(feature = "config-toml")]
