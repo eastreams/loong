@@ -1631,15 +1631,13 @@ fn normalize_optional_metadata_string(value: Option<String>) -> Option<String> {
 }
 
 fn normalize_metadata_string_list(values: Vec<String>) -> Vec<String> {
-    let mut normalized = values
+    values
         .into_iter()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
         .collect::<BTreeSet<_>>()
         .into_iter()
-        .collect::<Vec<_>>();
-    normalized.sort();
-    normalized
+        .collect()
 }
 
 fn skill_content_lines(skill_markdown: &str) -> impl Iterator<Item = &str> {
