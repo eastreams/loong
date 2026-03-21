@@ -1157,6 +1157,57 @@ fn execute_skills_command_list_keeps_inactive_managed_winner_visible_to_operator
 }
 
 #[test]
+fn execute_skills_command_operator_inspection_still_works_when_runtime_is_disabled() {
+    let root = unique_temp_dir("loongclaw-skills-cli-runtime-disabled");
+    let home = unique_temp_dir("loongclaw-skills-cli-runtime-disabled-home");
+    let config_path = write_external_skills_config(&root, false);
+    fs::create_dir_all(&home).expect("create home root");
+    write_file(
+        &root,
+        ".agents/skills/demo-skill/SKILL.md",
+        "---\nname: demo-skill\ndescription: project skill should stay inspectable while runtime is disabled.\n---\n\n# Demo Skill\n\nDisabled runtime should still allow operator inspection.\n",
+    );
+    let _env = SkillsCliEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
+
+    let list = loongclaw_daemon::skills_cli::execute_skills_command(
+        loongclaw_daemon::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::List,
+        },
+    )
+    .expect("skills list should remain available for operator inspection");
+    let demo_skill = list.outcome.payload["skills"]
+        .as_array()
+        .expect("skills should be an array")
+        .iter()
+        .find(|skill| skill["skill_id"] == "demo-skill")
+        .expect("operator list should include project skills even when runtime is disabled");
+    assert_eq!(demo_skill["scope"], "project");
+
+    let info = loongclaw_daemon::skills_cli::execute_skills_command(
+        loongclaw_daemon::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::Info {
+                skill_id: "demo-skill".to_owned(),
+            },
+        },
+    )
+    .expect("skills info should remain available for operator inspection");
+    assert_eq!(info.outcome.payload["skill"]["scope"], "project");
+    assert!(
+        info.outcome.payload["instructions_preview"]
+            .as_str()
+            .expect("instructions preview should be text")
+            .contains("Disabled runtime should still allow operator inspection")
+    );
+
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&home).ok();
+}
+
+#[test]
 fn execute_skills_command_installs_bundled_browser_companion_preview() {
     let root = unique_temp_dir("loongclaw-skills-cli-bundled-install");
     let _env = SkillsCliEnvironmentGuard::set(&[]);

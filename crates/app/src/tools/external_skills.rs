@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
     fs,
     io::{ErrorKind, Read},
@@ -159,10 +160,20 @@ struct DiscoveredSkillCandidate {
     root_rank: usize,
 }
 
+#[derive(Debug, Clone)]
+struct BlockedSkillCandidate {
+    skill_id: String,
+    scope: DiscoveredSkillScope,
+    probe_rank: usize,
+    root_rank: usize,
+    source_path: String,
+    error: String,
+}
+
 #[derive(Debug, Clone, Default)]
-struct ManagedSkillDiscovery {
+struct SkillCandidateDiscovery {
     candidates: Vec<DiscoveredSkillCandidate>,
-    blocked_skill_errors: BTreeMap<String, String>,
+    blocked_candidates: Vec<BlockedSkillCandidate>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -838,7 +849,6 @@ pub(super) fn execute_external_skills_invoke_tool_with_config(
 pub(crate) fn execute_external_skills_operator_list_tool_with_config(
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    require_enabled_runtime_policy(config)?;
     execute_external_skills_list_for_audience(
         "external_skills.list".to_owned(),
         config,
@@ -850,7 +860,6 @@ pub(crate) fn execute_external_skills_operator_inspect_tool_with_config(
     skill_id: &str,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    require_enabled_runtime_policy(config)?;
     execute_external_skills_inspect_for_audience(
         "external_skills.inspect".to_owned(),
         config,
@@ -1808,6 +1817,72 @@ fn command_candidate_is_executable(candidate: &Path) -> bool {
     }
 }
 
+fn compare_candidate_priority(
+    left_scope: DiscoveredSkillScope,
+    left_probe_rank: usize,
+    left_root_rank: usize,
+    left_source_path: &str,
+    right_scope: DiscoveredSkillScope,
+    right_probe_rank: usize,
+    right_root_rank: usize,
+    right_source_path: &str,
+) -> Ordering {
+    left_scope
+        .precedence_rank()
+        .cmp(&right_scope.precedence_rank())
+        .then_with(|| left_probe_rank.cmp(&right_probe_rank))
+        .then_with(|| left_root_rank.cmp(&right_root_rank))
+        .then_with(|| left_source_path.cmp(right_source_path))
+}
+
+fn compare_discovered_skill_candidates(
+    left: &DiscoveredSkillCandidate,
+    right: &DiscoveredSkillCandidate,
+) -> Ordering {
+    compare_candidate_priority(
+        left.entry.scope,
+        left.probe_rank,
+        left.root_rank,
+        &left.entry.source_path,
+        right.entry.scope,
+        right.probe_rank,
+        right.root_rank,
+        &right.entry.source_path,
+    )
+}
+
+fn compare_blocked_skill_candidates(
+    left: &BlockedSkillCandidate,
+    right: &BlockedSkillCandidate,
+) -> Ordering {
+    compare_candidate_priority(
+        left.scope,
+        left.probe_rank,
+        left.root_rank,
+        &left.source_path,
+        right.scope,
+        right.probe_rank,
+        right.root_rank,
+        &right.source_path,
+    )
+}
+
+fn blocked_candidate_precedes_discovered(
+    blocked: &BlockedSkillCandidate,
+    candidate: &DiscoveredSkillCandidate,
+) -> bool {
+    compare_candidate_priority(
+        blocked.scope,
+        blocked.probe_rank,
+        blocked.root_rank,
+        &blocked.source_path,
+        candidate.entry.scope,
+        candidate.probe_rank,
+        candidate.root_rank,
+        &candidate.entry.source_path,
+    ) != Ordering::Greater
+}
+
 fn command_candidates(command: &str) -> Vec<String> {
     #[cfg(windows)]
     {
@@ -2073,12 +2148,15 @@ fn discover_skill_inventory(
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<SkillDiscoveryInventory, String> {
     let managed = discover_managed_skill_candidates(config)?;
+    let user = discover_user_skill_candidates(config)?;
+    let project = discover_project_skill_candidates(config)?;
+
     let mut grouped = BTreeMap::<String, Vec<DiscoveredSkillCandidate>>::new();
     for candidate in managed
         .candidates
         .into_iter()
-        .chain(discover_user_skill_candidates(config)?)
-        .chain(discover_project_skill_candidates(config)?)
+        .chain(user.candidates)
+        .chain(project.candidates)
     {
         grouped
             .entry(candidate.entry.skill_id.clone())
@@ -2086,23 +2164,45 @@ fn discover_skill_inventory(
             .push(candidate);
     }
 
-    let mut inventory = SkillDiscoveryInventory {
-        blocked_skill_errors: managed.blocked_skill_errors,
-        ..SkillDiscoveryInventory::default()
-    };
-    for (skill_id, mut candidates) in grouped {
-        if inventory.blocked_skill_errors.contains_key(&skill_id) {
+    let mut blocked_grouped = BTreeMap::<String, Vec<BlockedSkillCandidate>>::new();
+    for blocked in managed
+        .blocked_candidates
+        .into_iter()
+        .chain(user.blocked_candidates)
+        .chain(project.blocked_candidates)
+    {
+        blocked_grouped
+            .entry(blocked.skill_id.clone())
+            .or_default()
+            .push(blocked);
+    }
+
+    let mut inventory = SkillDiscoveryInventory::default();
+    let skill_ids = grouped
+        .keys()
+        .chain(blocked_grouped.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    for skill_id in skill_ids {
+        let mut candidates = grouped.remove(&skill_id).unwrap_or_default();
+        let mut blocked_candidates = blocked_grouped.remove(&skill_id).unwrap_or_default();
+        candidates.sort_by(compare_discovered_skill_candidates);
+        blocked_candidates.sort_by(compare_blocked_skill_candidates);
+
+        if let Some(blocked) = blocked_candidates.first()
+            && candidates
+                .first()
+                .is_none_or(|candidate| blocked_candidate_precedes_discovered(blocked, candidate))
+        {
+            inventory
+                .blocked_skill_errors
+                .insert(skill_id, blocked.error.clone());
             continue;
         }
-        candidates.sort_by(|left, right| {
-            left.entry
-                .scope
-                .precedence_rank()
-                .cmp(&right.entry.scope.precedence_rank())
-                .then_with(|| left.probe_rank.cmp(&right.probe_rank))
-                .then_with(|| left.root_rank.cmp(&right.root_rank))
-                .then_with(|| left.entry.source_path.cmp(&right.entry.source_path))
-        });
+
+        if candidates.is_empty() {
+            continue;
+        }
 
         let winner = candidates.remove(0);
         inventory.skills.push(winner.entry);
@@ -2157,33 +2257,41 @@ pub(super) fn installed_skill_snapshot_lines_with_config(
 
 fn discover_managed_skill_candidates(
     config: &super::runtime_config::ToolRuntimeConfig,
-) -> Result<ManagedSkillDiscovery, String> {
+) -> Result<SkillCandidateDiscovery, String> {
     let install_root = resolve_install_root(config);
     let index = load_installed_skill_index(&install_root)?;
-    let mut discovery = ManagedSkillDiscovery::default();
+    let mut discovery = SkillCandidateDiscovery::default();
     for entry in index.skills {
         let skill_id = entry.skill_id.clone();
+        let source_path = entry.source_path.clone();
         let entry = match rehydrate_installed_skill_entry(&install_root, entry) {
             Ok(entry) => entry,
             Err(error) => {
-                discovery
-                    .blocked_skill_errors
-                    .entry(skill_id)
-                    .or_insert(error);
+                discovery.blocked_candidates.push(BlockedSkillCandidate {
+                    skill_id,
+                    scope: DiscoveredSkillScope::Managed,
+                    probe_rank: 0,
+                    root_rank: 0,
+                    source_path,
+                    error,
+                });
                 continue;
             }
         };
         let entry = match build_managed_discovered_skill_entry(config, entry) {
             Ok(entry) => entry,
             Err(error) => {
-                discovery
-                    .blocked_skill_errors
-                    .entry(skill_id)
-                    .or_insert(error);
+                discovery.blocked_candidates.push(BlockedSkillCandidate {
+                    skill_id,
+                    scope: DiscoveredSkillScope::Managed,
+                    probe_rank: 0,
+                    root_rank: 0,
+                    source_path,
+                    error,
+                });
                 continue;
             }
         };
-        discovery.blocked_skill_errors.remove(&skill_id);
         discovery.candidates.push(DiscoveredSkillCandidate {
             probe_rank: 0,
             root_rank: 0,
@@ -2195,9 +2303,9 @@ fn discover_managed_skill_candidates(
 
 fn discover_user_skill_candidates(
     config: &super::runtime_config::ToolRuntimeConfig,
-) -> Result<Vec<DiscoveredSkillCandidate>, String> {
+) -> Result<SkillCandidateDiscovery, String> {
     let Some(home_root) = user_home_dir() else {
-        return Ok(Vec::new());
+        return Ok(SkillCandidateDiscovery::default());
     };
     discover_scoped_skill_candidates(
         config,
@@ -2209,7 +2317,7 @@ fn discover_user_skill_candidates(
 
 fn discover_project_skill_candidates(
     config: &super::runtime_config::ToolRuntimeConfig,
-) -> Result<Vec<DiscoveredSkillCandidate>, String> {
+) -> Result<SkillCandidateDiscovery, String> {
     discover_scoped_skill_candidates(
         config,
         &project_discovery_probe_roots(config),
@@ -2223,8 +2331,8 @@ fn discover_scoped_skill_candidates(
     probe_roots: &[PathBuf],
     scope: DiscoveredSkillScope,
     dir_specs: &[(&str, usize)],
-) -> Result<Vec<DiscoveredSkillCandidate>, String> {
-    let mut candidates = Vec::new();
+) -> Result<SkillCandidateDiscovery, String> {
+    let mut discovery = SkillCandidateDiscovery::default();
     let mut seen = BTreeSet::new();
     for (probe_rank, probe_root) in probe_roots.iter().enumerate() {
         for (relative_dir, root_rank) in dir_specs {
@@ -2240,7 +2348,17 @@ fn discover_scoped_skill_candidates(
                 }
                 let skill_markdown = match load_directory_skill_markdown(&skill_root) {
                     Ok(skill_markdown) => skill_markdown,
-                    Err(_) => continue,
+                    Err(error) => {
+                        discovery.blocked_candidates.push(BlockedSkillCandidate {
+                            skill_id: derive_skill_id(&skill_root),
+                            scope,
+                            probe_rank,
+                            root_rank: *root_rank,
+                            source_path: skill_root.display().to_string(),
+                            error,
+                        });
+                        continue;
+                    }
                 };
                 let skill_id = derive_skill_id_from_markdown(&skill_root, skill_markdown.as_str());
                 let entry = match build_discovered_skill_entry(
@@ -2249,15 +2367,25 @@ fn discover_scoped_skill_candidates(
                     "directory".to_owned(),
                     skill_root.display().to_string(),
                     key,
-                    skill_id,
+                    skill_id.clone(),
                     skill_markdown.as_str(),
                     true,
                     None,
                 ) {
                     Ok(entry) => entry,
-                    Err(_) => continue,
+                    Err(error) => {
+                        discovery.blocked_candidates.push(BlockedSkillCandidate {
+                            skill_id,
+                            scope,
+                            probe_rank,
+                            root_rank: *root_rank,
+                            source_path: skill_root.display().to_string(),
+                            error,
+                        });
+                        continue;
+                    }
                 };
-                candidates.push(DiscoveredSkillCandidate {
+                discovery.candidates.push(DiscoveredSkillCandidate {
                     probe_rank,
                     root_rank: *root_rank,
                     entry,
@@ -2265,7 +2393,7 @@ fn discover_scoped_skill_candidates(
             }
         }
     }
-    Ok(candidates)
+    Ok(discovery)
 }
 
 fn project_discovery_probe_roots(
@@ -3687,6 +3815,83 @@ mod tests {
             cleanup_perms.set_mode(0o644);
             fs::set_permissions(&unreadable_path, cleanup_perms).ok();
             fs::remove_dir_all(&root).ok();
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provider_surface_fails_closed_when_unreadable_user_winner_has_project_fallback() {
+        with_managed_runtime_test(|| {
+            use std::os::unix::fs::PermissionsExt;
+
+            let root = unique_temp_dir("loongclaw-ext-skill-unreadable-user-winner");
+            let home = unique_temp_dir("loongclaw-ext-skill-unreadable-user-winner-home");
+            fs::create_dir_all(&root).expect("create fixture root");
+            fs::create_dir_all(&home).expect("create home root");
+            write_file(
+                &root,
+                ".agents/skills/demo-skill/SKILL.md",
+                "---\nname: demo-skill\ndescription: project fallback should stay blocked.\n---\n\nProject fallback instructions.\n",
+            );
+            write_file(
+                &home,
+                ".agents/skills/demo-skill/SKILL.md",
+                "---\nname: demo-skill\ndescription: unreadable user winner.\n---\n\nBroken user instructions.\n",
+            );
+
+            let unreadable_path = home.join(".agents/skills/demo-skill/SKILL.md");
+            let mut perms = fs::metadata(&unreadable_path)
+                .expect("read metadata")
+                .permissions();
+            perms.set_mode(0o000);
+            fs::set_permissions(&unreadable_path, perms).expect("set unreadable permissions");
+
+            let config = managed_runtime_config(&root);
+            let mut env = crate::test_support::ScopedEnv::new();
+            env.set("HOME", &home);
+
+            let list_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.list".to_owned(),
+                    payload: json!({}),
+                },
+                &config,
+            )
+            .expect("list should succeed when the higher-precedence local winner is unreadable");
+
+            assert!(
+                list_outcome.payload["skills"]
+                    .as_array()
+                    .expect("skills should be an array")
+                    .iter()
+                    .all(|skill| skill["skill_id"] != "demo-skill"),
+                "provider surface should fail closed instead of promoting the project fallback: {}",
+                list_outcome.payload
+            );
+
+            let error = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.invoke".to_owned(),
+                    payload: json!({
+                        "skill_id": "demo-skill"
+                    }),
+                },
+                &config,
+            )
+            .expect_err("invoke should report the unreadable higher-precedence local winner");
+            assert!(
+                error.contains("failed to read external skill source")
+                    || error.contains("failed to inspect external skill source"),
+                "expected unreadable local winner error, got: {error}"
+            );
+
+            let mut cleanup_perms = fs::metadata(&unreadable_path)
+                .expect("read metadata for cleanup")
+                .permissions();
+            cleanup_perms.set_mode(0o644);
+            fs::set_permissions(&unreadable_path, cleanup_perms).ok();
+            fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&home).ok();
         });
     }
 
