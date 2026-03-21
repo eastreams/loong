@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::ErrorKind,
+    io::{ErrorKind, Write},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -410,7 +410,7 @@ pub fn apply_import_selection(
             );
             let body = serde_json::to_vec_pretty(&external_manifest)
                 .map_err(|error| format!("failed to encode external skills manifest: {error}"))?;
-            fs::write(&external_path, body).map_err(|error| {
+            write_bytes_atomically(&external_path, &body).map_err(|error| {
                 format!(
                     "failed to write external skills manifest {}: {error}",
                     external_path.display()
@@ -444,7 +444,7 @@ pub fn apply_import_selection(
         };
         let manifest_body = serde_json::to_vec_pretty(&manifest)
             .map_err(|error| format!("failed to encode import manifest: {error}"))?;
-        fs::write(&manifest_path, manifest_body).map_err(|error| {
+        write_bytes_atomically(&manifest_path, &manifest_body).map_err(|error| {
             format!(
                 "failed to write import manifest {}: {error}",
                 manifest_path.display()
@@ -497,6 +497,25 @@ pub fn apply_import_selection(
 fn dedup_strings_in_place(values: &mut Vec<String>) {
     let mut seen = BTreeSet::new();
     values.retain(|value| seen.insert(value.clone()));
+}
+
+fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_bytes_atomically_with(path, |file| {
+        file.write_all(bytes)?;
+        file.sync_all()
+    })
+}
+
+fn write_bytes_atomically_with<F>(path: &Path, writer: F) -> std::io::Result<()>
+where
+    F: FnOnce(&mut fs::File) -> std::io::Result<()>,
+{
+    let parent = path.parent().unwrap_or(Path::new("."));
+    let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+    writer(staged.as_file_mut())?;
+    staged.as_file_mut().sync_all()?;
+    staged.persist(path).map_err(|error| error.error)?;
+    Ok(())
 }
 
 fn bridge_installable_external_skills(
@@ -656,7 +675,9 @@ fn installable_external_skill_probe_rank(
     probe_roots: &[PathBuf],
     artifact: &super::ExternalSkillArtifact,
 ) -> usize {
-    let Some(probe_root) = installable_external_skill_probe_root(artifact) else {
+    let Some(probe_root) = installable_external_skill_probe_root(artifact)
+        .map(|root| root.canonicalize().unwrap_or(root))
+    else {
         return probe_roots.len();
     };
     probe_roots
@@ -1230,6 +1251,30 @@ mod tests {
     }
 
     #[test]
+    fn write_bytes_atomically_preserves_existing_file_when_staged_write_fails() {
+        let root = unique_temp_dir("loongclaw-import-atomic-write-failure");
+        fs::create_dir_all(&root).expect("create fixture root");
+
+        let target = root.join("manifest.json");
+        let baseline = br#"{"status":"old"}"#;
+        fs::write(&target, baseline).expect("write baseline manifest");
+
+        let error = write_bytes_atomically_with(&target, |_file| {
+            Err(std::io::Error::other("forced staged write failure"))
+        })
+        .expect_err("staged write failure should surface an error");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert_eq!(
+            fs::read(&target).expect("read preserved manifest"),
+            baseline,
+            "staged write failures should preserve the previous manifest body"
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn discover_import_sources_returns_ranked_candidates_from_fixture_root() {
         let root = unique_temp_dir("loongclaw-import-discovery-ranked");
         fs::create_dir_all(&root).expect("create fixture root");
@@ -1743,6 +1788,55 @@ mod tests {
                     .expect("canonicalize winning root")
             ],
             "duplicate installable skill ids should collapse to the highest-precedence import root"
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn collect_installable_external_skill_roots_honors_probe_precedence_for_noncanonical_artifacts()
+    {
+        let root = unique_temp_dir("loongclaw-import-noncanonical-probe-precedence");
+        fs::create_dir_all(&root).expect("create fixture root");
+        fs::create_dir_all(root.join("workspace")).expect("create workspace root");
+
+        write_file(
+            &root,
+            "skills/release-guard-root/SKILL.md",
+            "---\nname: release-guard\ndescription: root winner.\n---\n\n# release guard\n",
+        );
+        write_file(
+            &root,
+            "workspace/skills/release-guard-workspace/SKILL.md",
+            "---\nname: release-guard\ndescription: workspace fallback.\n---\n\n# release guard\n",
+        );
+
+        let mapping = crate::migration::ExternalSkillMappingPlan {
+            input_path: root.join("workspace/.."),
+            artifacts: vec![
+                crate::migration::ExternalSkillArtifact {
+                    kind: crate::migration::ExternalSkillArtifactKind::SkillsDir,
+                    path: root.join("workspace/../skills"),
+                },
+                crate::migration::ExternalSkillArtifact {
+                    kind: crate::migration::ExternalSkillArtifactKind::SkillsDir,
+                    path: root.join("workspace/skills"),
+                },
+            ],
+            ..Default::default()
+        };
+
+        let roots = collect_installable_external_skill_roots(&mapping)
+            .expect("duplicate skill ids should still resolve deterministically");
+
+        assert_eq!(
+            roots,
+            vec![
+                root.join("skills/release-guard-root")
+                    .canonicalize()
+                    .expect("canonicalize winning root")
+            ],
+            "probe-root precedence should still prefer the input root when artifact paths are noncanonical"
         );
 
         fs::remove_dir_all(&root).ok();
