@@ -34,6 +34,36 @@ fn root_help_uses_onboarding_language() {
 }
 
 #[test]
+fn welcome_subcommand_help_advertises_first_run_shortcuts() {
+    let mut command = Cli::command();
+    let welcome = command
+        .find_subcommand_mut("welcome")
+        .expect("welcome subcommand should exist");
+    let mut rendered = Vec::new();
+    welcome
+        .write_long_help(&mut rendered)
+        .expect("render welcome help");
+    let help = String::from_utf8(rendered).expect("help is valid utf-8");
+
+    assert!(
+        help.contains("quick commands"),
+        "welcome help should frame the configured path as a quick-command entrypoint: {help}"
+    );
+    assert!(
+        help.contains("loongclaw ask"),
+        "welcome help should mention ask as a next step: {help}"
+    );
+    assert!(
+        help.contains("loongclaw chat"),
+        "welcome help should mention chat as a next step: {help}"
+    );
+    assert!(
+        help.contains("loongclaw doctor"),
+        "welcome help should mention doctor as a next step: {help}"
+    );
+}
+
+#[test]
 fn setup_subcommand_is_removed() {
     let error = Cli::try_parse_from(["loongclaw", "setup"])
         .expect_err("`setup` should no longer parse as a valid subcommand");
