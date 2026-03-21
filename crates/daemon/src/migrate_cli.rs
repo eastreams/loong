@@ -1,5 +1,3 @@
-#![allow(dead_code)] // migrate flow remains test-covered until the daemon CLI exposes it directly
-
 use std::path::{Path, PathBuf};
 
 use clap::ValueEnum;
@@ -45,7 +43,7 @@ impl MigrateMode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MigrateCommandOptions {
     pub input: Option<String>,
     pub output: Option<String>,

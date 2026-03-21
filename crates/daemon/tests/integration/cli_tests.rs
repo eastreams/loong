@@ -45,6 +45,101 @@ fn setup_subcommand_is_removed() {
 }
 
 #[test]
+fn migrate_cli_parses_discover_mode_with_defaults() {
+    let cli = Cli::try_parse_from([
+        "loongclaw",
+        "migrate",
+        "--mode",
+        "discover",
+        "--input",
+        "/tmp/legacy-root",
+    ])
+    .expect("`migrate --mode discover` should parse");
+
+    match cli.command {
+        Some(Commands::Migrate {
+            input,
+            output,
+            mode,
+            json,
+            force,
+            ..
+        }) => {
+            assert_eq!(mode, loongclaw_daemon::migrate_cli::MigrateMode::Discover);
+            assert_eq!(input.as_deref(), Some("/tmp/legacy-root"));
+            assert_eq!(output, None);
+            assert!(!json);
+            assert!(!force);
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn migrate_cli_requires_mode_flag() {
+    let error = Cli::try_parse_from(["loongclaw", "migrate", "--input", "/tmp/legacy-root"])
+        .expect_err("`migrate` without --mode should fail");
+    let rendered = error.to_string();
+
+    assert!(
+        rendered.contains("--mode <MODE>"),
+        "parse failure should mention the required mode flag: {rendered}"
+    );
+}
+
+#[test]
+fn migrate_cli_parses_apply_selected_flags() {
+    let cli = Cli::try_parse_from([
+        "loongclaw",
+        "migrate",
+        "--mode",
+        "apply_selected",
+        "--input",
+        "/tmp/discovery-root",
+        "--output",
+        "/tmp/loongclaw.toml",
+        "--source-id",
+        "openclaw",
+        "--primary-source-id",
+        "openclaw",
+        "--safe-profile-merge",
+        "--apply-external-skills-plan",
+        "--json",
+        "--force",
+    ])
+    .expect("`migrate --mode apply_selected` should parse");
+
+    match cli.command {
+        Some(Commands::Migrate {
+            input,
+            output,
+            mode,
+            json,
+            source_id,
+            safe_profile_merge,
+            primary_source_id,
+            apply_external_skills_plan,
+            force,
+            ..
+        }) => {
+            assert_eq!(
+                mode,
+                loongclaw_daemon::migrate_cli::MigrateMode::ApplySelected
+            );
+            assert_eq!(input.as_deref(), Some("/tmp/discovery-root"));
+            assert_eq!(output.as_deref(), Some("/tmp/loongclaw.toml"));
+            assert_eq!(source_id.as_deref(), Some("openclaw"));
+            assert_eq!(primary_source_id.as_deref(), Some("openclaw"));
+            assert!(safe_profile_merge);
+            assert!(apply_external_skills_plan);
+            assert!(json);
+            assert!(force);
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
 fn safe_lane_summary_cli_rejects_zero_limit() {
     let error = run_safe_lane_summary_cli(None, Some("session-a"), 0, false)
         .expect_err("zero limit must be rejected");

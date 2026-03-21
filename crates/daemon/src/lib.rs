@@ -377,6 +377,42 @@ pub enum Commands {
         #[arg(long, value_delimiter = ',')]
         exclude: Vec<String>,
     },
+    #[command(
+        about = "Preview or apply legacy claw migration explicitly",
+        long_about = "Power-user migration flow for discovering, previewing, or applying legacy claw nativeization explicitly.\n\nUse this when you want exact CLI control over migration mode selection and output handling for older claw-family workspaces. If you want the guided path, use `loongclaw onboard` instead."
+    )]
+    Migrate {
+        /// Path to the legacy claw workspace or root to inspect
+        #[arg(long)]
+        input: Option<String>,
+        /// Target LoongClaw config path to preview, write, or roll back
+        #[arg(long)]
+        output: Option<String>,
+        /// Hint the legacy source kind for single-source plan/apply modes
+        #[arg(long)]
+        source: Option<String>,
+        /// Migration mode to run
+        #[arg(long, value_enum)]
+        mode: migrate_cli::MigrateMode,
+        /// Emit machine-readable JSON instead of text output
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Explicit discovered source id to apply for apply_selected mode
+        #[arg(long)]
+        source_id: Option<String>,
+        /// Merge profile-lane content while keeping one prompt owner
+        #[arg(long, default_value_t = false)]
+        safe_profile_merge: bool,
+        /// Explicit primary source id when safe profile merge is enabled
+        #[arg(long)]
+        primary_source_id: Option<String>,
+        /// Apply the planned external skills mapping during apply_selected
+        #[arg(long, default_value_t = false)]
+        apply_external_skills_plan: bool,
+        /// Overwrite an existing target config when the selected mode writes output
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
     /// Run configuration diagnostics and optionally apply safe config/path fixes
     Doctor {
         /// Config file path to validate (defaults to auto-discovery)
