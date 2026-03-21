@@ -20,7 +20,7 @@ use super::turn_shared::{
     ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase, build_tool_driven_followup_tail,
     build_tool_loop_guard_tail, decide_provider_turn_request_action,
     reduce_followup_payload_for_model, request_completion_with_raw_fallback,
-    user_requested_raw_tool_output,
+    tool_loop_circuit_breaker_reply, user_requested_raw_tool_output,
 };
 
 #[derive(Default)]
@@ -167,22 +167,20 @@ impl ConversationTurnLoop {
             };
 
             // Global circuit breaker: prospective check before dispatching tools.
-            // Trips if adding this round's intents would reach the per-turn limit,
-            // ensuring no tools from this round are executed after the cap is hit.
+            // Trips if adding this round's intents would exceed the per-turn limit,
+            // ensuring the configured max remains inclusive for executed tool calls.
             let prospective_total = session
                 .total_tool_calls
                 .saturating_add(turn.tool_intents.len());
-            if prospective_total >= policy.max_total_tool_calls {
+            if let Some(reply) =
+                tool_loop_circuit_breaker_reply(prospective_total, policy.max_total_tool_calls)
+            {
                 return apply_turn_loop_terminal_action(
                     runtime,
                     session_id,
                     user_input,
                     TurnLoopTerminalAction::PersistReply {
-                        reply: format!(
-                            "tool_loop_circuit_breaker: reached {}/{} tool calls this turn. \
-                             Do you want to continue? Reply to resume.",
-                            prospective_total, policy.max_total_tool_calls
-                        ),
+                        reply,
                         persistence_mode: ReplyPersistenceMode::Success,
                     },
                     binding,
@@ -1717,7 +1715,7 @@ mod tests {
             observe(&mut supervisor, &policy, "shell.exec"),
             ToolLoopSupervisorVerdict::Continue
         ));
-        // Third call: hits threshold (>= 3) → InjectWarning
+        // Third call: hits threshold (>= 3) -> InjectWarning
         assert!(matches!(
             observe(&mut supervisor, &policy, "shell.exec"),
             ToolLoopSupervisorVerdict::InjectWarning { .. }
@@ -1733,7 +1731,7 @@ mod tests {
         observe(&mut supervisor, &policy, "shell.exec");
         observe(&mut supervisor, &policy, "shell.exec");
         observe(&mut supervisor, &policy, "shell.exec"); // InjectWarning
-        // Same pattern again → HardStop
+        // Same pattern again -> HardStop
         assert!(matches!(
             observe(&mut supervisor, &policy, "shell.exec"),
             ToolLoopSupervisorVerdict::HardStop { .. }
@@ -1747,12 +1745,12 @@ mod tests {
 
         observe(&mut supervisor, &policy, "shell.exec");
         observe(&mut supervisor, &policy, "shell.exec");
-        // Switch tool — resets consecutive counter
+        // Switch tool - resets consecutive counter
         assert!(matches!(
             observe(&mut supervisor, &policy, "file.read"),
             ToolLoopSupervisorVerdict::Continue
         ));
-        // Back to shell.exec — should start fresh, not trigger warning
+        // Back to shell.exec - should start fresh, not trigger warning
         assert!(matches!(
             observe(&mut supervisor, &policy, "shell.exec"),
             ToolLoopSupervisorVerdict::Continue
@@ -1760,22 +1758,14 @@ mod tests {
     }
 
     #[test]
-    fn global_circuit_breaker_trips_when_prospective_total_reaches_limit() {
-        // Mirrors the prospective check in handle_turn_with_runtime:
-        //   let prospective_total = session.total_tool_calls.saturating_add(turn.tool_intents.len());
-        //   if prospective_total >= policy.max_total_tool_calls { ... }
-        let max = 200usize;
-
-        // At 198 with 3 incoming intents: 201 >= 200 → breaker fires
-        assert!(198usize.saturating_add(3) >= max);
-
-        // At 197 with 2 incoming intents: 199 < 200 → breaker does not fire
-        assert!(197usize.saturating_add(2) < max);
-
-        // Exact boundary: 199 + 1 = 200 >= 200 → fires
-        assert!(199usize.saturating_add(1) >= max);
-
-        // Saturating: usize::MAX + 1 does not overflow, still >= max
-        assert!(usize::MAX.saturating_add(1) >= max);
+    fn global_circuit_breaker_allows_reaching_limit_and_trips_only_above_it() {
+        assert_eq!(tool_loop_circuit_breaker_reply(200, 200), None);
+        assert_eq!(
+            tool_loop_circuit_breaker_reply(201, 200).as_deref(),
+            Some(
+                "tool_loop_circuit_breaker: would exceed 201/200 tool calls this turn. Do you want to continue? Reply to resume."
+            )
+        );
+        assert!(tool_loop_circuit_breaker_reply(usize::MAX, 200).is_some());
     }
 }

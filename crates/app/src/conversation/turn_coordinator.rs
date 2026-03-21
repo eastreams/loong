@@ -88,8 +88,8 @@ use super::turn_shared::{
     build_tool_driven_followup_tail, build_tool_loop_guard_tail,
     decide_provider_turn_request_action, format_approval_required_reply, next_conversation_turn_id,
     reduce_followup_payload_for_model, request_completion_with_raw_fallback,
-    tool_driven_followup_payload, tool_result_contains_truncation_signal,
-    user_requested_raw_tool_output,
+    tool_driven_followup_payload, tool_loop_circuit_breaker_reply,
+    tool_result_contains_truncation_signal, user_requested_raw_tool_output,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::session::recovery::{
@@ -952,12 +952,7 @@ impl ProviderTurnLoopState {
         next_tool_calls: usize,
     ) -> Option<String> {
         let prospective_total = self.total_tool_calls.saturating_add(next_tool_calls);
-        (prospective_total >= policy.max_total_tool_calls).then(|| {
-            format!(
-                "tool_loop_circuit_breaker: reached {}/{} tool calls this turn. Do you want to continue? Reply to resume.",
-                prospective_total, policy.max_total_tool_calls
-            )
-        })
+        tool_loop_circuit_breaker_reply(prospective_total, policy.max_total_tool_calls)
     }
 
     fn observe_turn(
