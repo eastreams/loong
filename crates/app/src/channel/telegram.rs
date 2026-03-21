@@ -35,6 +35,7 @@ pub(super) struct TelegramAdapter {
     streaming_mode: TelegramStreamingMode,
     draft_update_interval_ms: u64,
     last_draft_edit: HashMap<String, Instant>,
+    pending_reactions: Vec<(i64, i64)>,
 }
 
 struct TelegramOffsetTracker {
@@ -106,10 +107,11 @@ impl TelegramAdapter {
             offset_tracker: TelegramOffsetTracker::new(offset_path, next_offset),
             allowlist: config.allowed_chat_ids.iter().copied().collect(),
             http_client: reqwest::Client::new(),
-            ack_reactions: true,
+            ack_reactions: config.ack_reactions,
             streaming_mode: config.streaming_mode,
             draft_update_interval_ms: 500,
             last_draft_edit: HashMap::new(),
+            pending_reactions: Vec::new(),
         }
     }
 
@@ -130,17 +132,23 @@ fn split_message_for_telegram(message: &str) -> Vec<String> {
 
     let mut chunks = Vec::new();
     let mut remaining = message;
-    let chunk_limit = TELEGRAM_MAX_MESSAGE_LENGTH - TELEGRAM_CONTINUATION_OVERHEAD;
 
     while !remaining.is_empty() {
-        if remaining.chars().count() <= TELEGRAM_MAX_MESSAGE_LENGTH {
+        let is_first = chunks.is_empty();
+        let limit = if is_first {
+            TELEGRAM_MAX_MESSAGE_LENGTH
+        } else {
+            TELEGRAM_MAX_MESSAGE_LENGTH - TELEGRAM_CONTINUATION_OVERHEAD
+        };
+
+        if remaining.chars().count() <= limit {
             chunks.push(remaining.to_string());
             break;
         }
 
         let hard_split = remaining
             .char_indices()
-            .nth(chunk_limit)
+            .nth(limit)
             .map_or(remaining.len(), |(idx, _)| idx);
 
         let chunk_end = if hard_split == remaining.len() {
@@ -148,16 +156,14 @@ fn split_message_for_telegram(message: &str) -> Vec<String> {
         } else {
             let search_area = &remaining[..hard_split];
 
-            if let Some(pos) = search_area.rfind('\n') {
-                if search_area[..pos].chars().count() >= chunk_limit / 2 {
-                    pos + 1
-                } else {
-                    search_area.rfind(' ').unwrap_or(hard_split) + 1
-                }
-            } else if let Some(pos) = search_area.rfind(' ') {
-                pos + 1
-            } else {
-                hard_split
+            let candidate = search_area
+                .rfind('\n')
+                .map(|pos| pos + 1)
+                .or_else(|| search_area.rfind(' ').map(|pos| pos + 1));
+
+            match candidate {
+                Some(pos) if pos <= hard_split => pos,
+                _ => hard_split,
             }
         };
 
@@ -199,11 +205,18 @@ fn escape_html(s: &str) -> String {
 fn markdown_to_telegram_html(text: &str) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut result_lines: Vec<String> = Vec::new();
+    let mut in_fenced_block = false;
 
     for line in &lines {
         let trimmed_line = line.trim_start();
         if trimmed_line.starts_with("```") {
+            in_fenced_block = !in_fenced_block;
             result_lines.push(trimmed_line.to_string());
+            continue;
+        }
+
+        if in_fenced_block {
+            result_lines.push(line.to_string());
             continue;
         }
 
@@ -335,17 +348,20 @@ fn markdown_to_telegram_html(text: &str) -> String {
     final_out.trim_end_matches('\n').to_string()
 }
 
-fn parse_telegram_target(target_id: &str) -> CliResult<(i64, Option<String>)> {
+fn parse_telegram_target(target_id: &str) -> CliResult<(i64, Option<i64>)> {
     let id = target_id.trim();
     if id.is_empty() {
         return Err("telegram target id is empty".to_owned());
     }
 
-    if let Some((chat_id_str, thread_id)) = id.split_once(':') {
+    if let Some((chat_id_str, thread_id_str)) = id.split_once(':') {
         let chat_id = chat_id_str
             .parse::<i64>()
             .map_err(|e| format!("invalid telegram chat id `{}`: {}", chat_id_str, e))?;
-        Ok((chat_id, Some(thread_id.to_string())))
+        let thread_id = thread_id_str
+            .parse::<i64>()
+            .map_err(|e| format!("invalid telegram thread id `{}`: {}", thread_id_str, e))?;
+        Ok((chat_id, Some(thread_id)))
     } else {
         let chat_id = id
             .parse::<i64>()
@@ -473,6 +489,30 @@ impl TelegramAdapter {
         self.last_draft_edit.insert(key, now);
         Ok(())
     }
+
+    async fn cancel_draft(&self, chat_id: i64, message_id: &str) -> CliResult<()> {
+        let body = json!({
+            "chat_id": chat_id,
+            "message_id": message_id,
+        });
+
+        let response = self
+            .http_client
+            .post(self.api_url("deleteMessage"))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| format!("telegram deleteMessage failed: {error}"))?
+            .json::<Value>()
+            .await
+            .map_err(|error| format!("telegram deleteMessage decode failed: {error}"))?;
+
+        if !response.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+            return Err(format!("telegram deleteMessage not ok: {response}"));
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -514,6 +554,7 @@ impl ChannelAdapter for TelegramAdapter {
         )?;
         self.offset_tracker.remember_polled_offset(next_offset)?;
 
+        self.pending_reactions.clear();
         for message in &inbox {
             let chat_id = match message.session.conversation_id.parse::<i64>() {
                 Ok(id) => id,
@@ -530,8 +571,7 @@ impl ChannelAdapter for TelegramAdapter {
             };
 
             self.send_typing_action_nonblocking(chat_id);
-
-            self.send_ack_reaction_nonblocking(chat_id, message_id);
+            self.pending_reactions.push((chat_id, message_id));
         }
 
         Ok(inbox)
@@ -555,9 +595,9 @@ impl ChannelAdapter for TelegramAdapter {
             ));
         }
 
-        let (text, use_html) = match message {
-            ChannelOutboundMessage::Text(text) => (text.clone(), true),
-            ChannelOutboundMessage::MarkdownCard(text) => (text.clone(), true),
+        let text = match message {
+            ChannelOutboundMessage::Text(text) => text.clone(),
+            ChannelOutboundMessage::MarkdownCard(text) => text.clone(),
             other @ ChannelOutboundMessage::Post(_)
             | other @ ChannelOutboundMessage::Image { .. }
             | other @ ChannelOutboundMessage::File { .. } => {
@@ -591,39 +631,21 @@ impl ChannelAdapter for TelegramAdapter {
                 chunk.clone()
             };
 
-            let body = if use_html {
-                let html = markdown_to_telegram_html(&text_to_send);
-                let mut b = json!({
-                    "chat_id": chat_id,
-                    "text": html,
-                    "parse_mode": "HTML",
-                    "disable_web_page_preview": true,
-                });
-                if let Some(tid) = thread_id.as_ref()
-                    && let Some(obj) = b.as_object_mut()
-                {
-                    obj.insert(
-                        "message_thread_id".to_string(),
-                        serde_json::Value::String(tid.clone()),
-                    );
-                }
-                b
-            } else {
-                let mut b = json!({
-                    "chat_id": chat_id,
-                    "text": text_to_send,
-                    "disable_web_page_preview": true,
-                });
-                if let Some(tid) = thread_id.as_ref()
-                    && let Some(obj) = b.as_object_mut()
-                {
-                    obj.insert(
-                        "message_thread_id".to_string(),
-                        serde_json::Value::String(tid.clone()),
-                    );
-                }
-                b
-            };
+            let html = markdown_to_telegram_html(&text_to_send);
+            let mut body = json!({
+                "chat_id": chat_id,
+                "text": html,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": true,
+            });
+            if let Some(tid) = thread_id
+                && let Some(obj) = body.as_object_mut()
+            {
+                obj.insert(
+                    "message_thread_id".to_string(),
+                    serde_json::Value::Number(tid.into()),
+                );
+            }
 
             let payload = self
                 .http_client
@@ -687,10 +709,16 @@ impl ChannelAdapter for TelegramAdapter {
         let (chat_id, thread_id) = parse_telegram_target(&target.id)?;
 
         let placeholder = "Thinking...";
+        let thread_id_str = thread_id.map(|tid| tid.to_string());
         let draft_id = self
-            .send_draft(chat_id, thread_id.as_deref(), placeholder)
+            .send_draft(chat_id, thread_id_str.as_deref(), placeholder)
             .await?;
-        let _ = self.update_draft(chat_id, &draft_id, text).await;
+
+        if self.update_draft(chat_id, &draft_id, text).await.is_err() {
+            let _ = self.cancel_draft(chat_id, &draft_id).await;
+            return self.send_message(target, message).await;
+        }
+
         Ok(())
     }
 
@@ -700,7 +728,12 @@ impl ChannelAdapter for TelegramAdapter {
     }
 
     async fn complete_batch(&mut self) -> CliResult<()> {
-        self.offset_tracker.complete_batch()
+        self.offset_tracker.complete_batch()?;
+        let reactions: Vec<_> = std::mem::take(&mut self.pending_reactions);
+        for (chat_id, message_id) in reactions {
+            self.send_ack_reaction_nonblocking(chat_id, message_id);
+        }
+        Ok(())
     }
 }
 
@@ -1109,14 +1142,14 @@ mod tests {
     fn parse_telegram_target_with_thread_id() {
         let (chat_id, thread_id) = parse_telegram_target("123456789:42").unwrap();
         assert_eq!(chat_id, 123456789);
-        assert_eq!(thread_id, Some("42".to_string()));
+        assert_eq!(thread_id, Some(42));
     }
 
     #[test]
     fn parse_telegram_target_negative_chat_id() {
         let (chat_id, thread_id) = parse_telegram_target("-1001234567890:42").unwrap();
         assert_eq!(chat_id, -1001234567890);
-        assert_eq!(thread_id, Some("42".to_string()));
+        assert_eq!(thread_id, Some(42));
     }
 
     #[test]

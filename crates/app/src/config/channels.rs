@@ -33,7 +33,6 @@ pub enum ChannelRuntimeKind {
 pub enum TelegramStreamingMode {
     #[default]
     Off,
-    /// Send a placeholder first, then update with final content
     Draft,
 }
 
@@ -243,6 +242,9 @@ pub struct TelegramChannelConfig {
     #[cfg(feature = "channel-telegram")]
     #[serde(default)]
     pub streaming_mode: TelegramStreamingMode,
+    #[cfg(feature = "channel-telegram")]
+    #[serde(default = "default_true")]
+    pub ack_reactions: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, TelegramAccountConfig>,
 }
@@ -353,6 +355,9 @@ pub struct TelegramAccountConfig {
     #[cfg(feature = "channel-telegram")]
     #[serde(default)]
     pub streaming_mode: Option<TelegramStreamingMode>,
+    #[cfg(feature = "channel-telegram")]
+    #[serde(default)]
+    pub ack_reactions: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -368,6 +373,7 @@ pub struct ResolvedTelegramChannelConfig {
     pub allowed_chat_ids: Vec<i64>,
     pub acp: ChannelAcpConfig,
     pub streaming_mode: TelegramStreamingMode,
+    pub ack_reactions: bool,
 }
 
 impl ResolvedTelegramChannelConfig {
@@ -691,6 +697,8 @@ impl Default for TelegramChannelConfig {
             acp: ChannelAcpConfig::default(),
             #[cfg(feature = "channel-telegram")]
             streaming_mode: TelegramStreamingMode::default(),
+            #[cfg(feature = "channel-telegram")]
+            ack_reactions: true,
             accounts: BTreeMap::new(),
         }
     }
@@ -804,6 +812,9 @@ impl TelegramChannelConfig {
             streaming_mode: account_override
                 .and_then(|account| account.streaming_mode)
                 .unwrap_or(self.streaming_mode),
+            ack_reactions: account_override
+                .and_then(|account| account.ack_reactions)
+                .unwrap_or(self.ack_reactions),
             accounts: BTreeMap::new(),
         };
         let account = merged.resolved_account_identity();
@@ -820,6 +831,7 @@ impl TelegramChannelConfig {
             allowed_chat_ids: merged.allowed_chat_ids,
             acp: merged.acp,
             streaming_mode: merged.streaming_mode,
+            ack_reactions: merged.ack_reactions,
         })
     }
 
@@ -1386,6 +1398,10 @@ const fn default_telegram_timeout_seconds() -> u64 {
     15
 }
 
+const fn default_true() -> bool {
+    true
+}
+
 fn default_feishu_receive_id_type() -> String {
     "chat_id".to_owned()
 }
@@ -1416,10 +1432,6 @@ fn default_prompt_personality() -> Option<PromptPersonality> {
 
 fn default_exit_commands() -> Vec<String> {
     vec!["/exit".to_owned(), "/quit".to_owned()]
-}
-
-const fn default_true() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2385,7 +2397,7 @@ mod tests {
             "streaming_mode": "draft",
             "accounts": {
                 "Account1": {
-                    "streaming_mode": "draft",
+                    "streaming_mode": "off",
                     "bot_token_env": "ACCOUNT1_TOKEN"
                 }
             }
@@ -2395,6 +2407,6 @@ mod tests {
         let resolved = config
             .resolve_account(Some("Account1"))
             .expect("resolve account1");
-        assert_eq!(resolved.streaming_mode, TelegramStreamingMode::Draft);
+        assert_eq!(resolved.streaming_mode, TelegramStreamingMode::Off);
     }
 }
