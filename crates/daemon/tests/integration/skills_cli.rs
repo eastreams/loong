@@ -1714,16 +1714,15 @@ fn render_skills_cli_text_surfaces_skill_contract_details() {
                         "install_path": "/tmp/managed/release-guard",
                         "skill_md_path": "/tmp/managed/release-guard/SKILL.md",
                         "sha256": "abc123",
-                        "metadata": {
-                            "invocation_policy": "manual",
-                            "required_env": ["LOONGCLAW_RELEASE_GUARD_TOKEN"],
-                            "required_bins": ["sh"],
-                            "required_config": ["external_skills.enabled"],
-                            "allowed_tools": ["shell.exec"],
-                            "blocked_tools": ["web.fetch"]
-                        },
+                        "invocation_policy": "manual",
+                        "required_env": ["LOONGCLAW_RELEASE_GUARD_TOKEN"],
+                        "required_bin": ["sh"],
+                        "required_paths": [],
+                        "required_config": ["external_skills.enabled"],
+                        "allowed_tools": ["shell.exec"],
+                        "blocked_tools": ["web.fetch"],
                         "eligibility": {
-                            "eligible": false,
+                            "available": false,
                             "issues": ["missing env `LOONGCLAW_RELEASE_GUARD_TOKEN`"]
                         }
                     },

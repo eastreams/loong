@@ -165,7 +165,12 @@ struct SkillFrontmatter {
     invocation_policy: Option<SkillInvocationPolicy>,
     #[serde(default, alias = "requires_env")]
     required_env: Vec<String>,
-    #[serde(default, alias = "requires_bin", alias = "requires_bins", alias = "requires_commands")]
+    #[serde(
+        default,
+        alias = "requires_bin",
+        alias = "requires_bins",
+        alias = "requires_commands"
+    )]
     required_bins: Vec<String>,
     #[serde(default, alias = "requires_paths")]
     required_paths: Vec<String>,
@@ -1618,8 +1623,10 @@ fn parse_skill_frontmatter(skill_markdown: &str) -> Result<SkillFrontmatter, Str
     for line in lines {
         let trimmed = line.trim();
         if trimmed == "---" {
-            let raw = raw_frontmatter.join("
-");
+            let raw = raw_frontmatter.join(
+                "
+",
+            );
             if raw.trim().is_empty() {
                 return Ok(SkillFrontmatter::default());
             }
@@ -3470,37 +3477,38 @@ mod tests {
                 .find(|skill| skill["skill_id"] == "release-guard")
                 .cloned()
                 .expect("release-guard should be listed");
-            assert_eq!(listed_skill["metadata"]["invocation_policy"], "both");
-            assert_eq!(
-                listed_skill["metadata"]["allowed_tools"],
-                json!(["shell.exec"])
+            assert!(
+                listed_skill.get("metadata").is_none(),
+                "model list should not expose operator metadata: {listed_skill:?}"
             );
-            assert_eq!(
-                listed_skill["metadata"]["blocked_tools"],
-                json!(["web.fetch"])
-            );
-            assert_eq!(listed_skill["eligibility"]["eligible"], json!(true));
 
-            let inspect_outcome = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "external_skills.inspect".to_owned(),
-                    payload: json!({
-                        "skill_id": "release-guard"
-                    }),
-                },
-                &config,
-            )
-            .expect("inspect should succeed");
+            let operator_list = execute_external_skills_operator_list_tool_with_config(&config)
+                .expect("operator list should succeed");
+            let operator_skill = operator_list.payload["skills"]
+                .as_array()
+                .expect("skills should be an array")
+                .iter()
+                .find(|skill| skill["skill_id"] == "release-guard")
+                .cloned()
+                .expect("release-guard should be listed for operators");
+            assert_eq!(operator_skill["invocation_policy"], "both");
+            assert_eq!(operator_skill["allowed_tools"], json!(["shell.exec"]));
+            assert_eq!(operator_skill["blocked_tools"], json!(["web.fetch"]));
+            assert_eq!(operator_skill["eligibility"]["available"], json!(true));
+
+            let inspect_outcome =
+                execute_external_skills_operator_inspect_tool_with_config("release-guard", &config)
+                    .expect("operator inspect should succeed");
             assert_eq!(
-                inspect_outcome.payload["skill"]["metadata"]["required_env"],
+                inspect_outcome.payload["skill"]["required_env"],
                 json!(["LOONGCLAW_RELEASE_GUARD_TOKEN"])
             );
             assert_eq!(
-                inspect_outcome.payload["skill"]["metadata"]["required_config"],
+                inspect_outcome.payload["skill"]["required_config"],
                 json!(["external_skills.enabled"])
             );
             assert_eq!(
-                inspect_outcome.payload["skill"]["eligibility"]["eligible"],
+                inspect_outcome.payload["skill"]["eligibility"]["available"],
                 json!(true)
             );
 
@@ -3519,7 +3527,7 @@ mod tests {
                 "both"
             );
             assert_eq!(
-                invoke_outcome.payload["eligibility"]["eligible"],
+                invoke_outcome.payload["eligibility"]["available"],
                 json!(true)
             );
             assert!(
@@ -3552,22 +3560,16 @@ mod tests {
             );
             let config = managed_runtime_config(&root);
 
-            let list_outcome = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "external_skills.list".to_owned(),
-                    payload: json!({}),
-                },
-                &config,
-            )
-            .expect("list should succeed");
-            let env_gated = list_outcome.payload["skills"]
+            let operator_list = execute_external_skills_operator_list_tool_with_config(&config)
+                .expect("operator list should succeed");
+            let env_gated = operator_list.payload["skills"]
                 .as_array()
                 .expect("skills should be an array")
                 .iter()
                 .find(|skill| skill["skill_id"] == "env-gated")
                 .cloned()
-                .expect("env-gated should be listed");
-            assert_eq!(env_gated["eligibility"]["eligible"], json!(false));
+                .expect("env-gated should be listed for operators");
+            assert_eq!(env_gated["eligibility"]["available"], json!(false));
             assert!(
                 env_gated["eligibility"]["issues"]
                     .as_array()
@@ -3598,7 +3600,7 @@ mod tests {
                 &config,
             )
             .expect_err("missing env requirements should reject invocation");
-            assert!(env_error.contains("missing env `LOONGCLAW_MISSING_TOKEN`"));
+            assert!(env_error.contains("LOONGCLAW_MISSING_TOKEN"));
 
             fs::remove_dir_all(&root).ok();
         });
@@ -3631,22 +3633,16 @@ mod tests {
             );
             let config = managed_runtime_config(&root);
 
-            let list_outcome = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "external_skills.list".to_owned(),
-                    payload: json!({}),
-                },
-                &config,
-            )
-            .expect("list should succeed");
-            let listed_skill = list_outcome.payload["skills"]
+            let operator_list = execute_external_skills_operator_list_tool_with_config(&config)
+                .expect("operator list should succeed");
+            let listed_skill = operator_list.payload["skills"]
                 .as_array()
                 .expect("skills should be an array")
                 .iter()
                 .find(|skill| skill["skill_id"] == "bin-gated")
                 .cloned()
-                .expect("bin-gated skill should be listed");
-            assert_eq!(listed_skill["eligibility"]["eligible"], json!(false));
+                .expect("bin-gated skill should be listed for operators");
+            assert_eq!(listed_skill["eligibility"]["available"], json!(false));
             assert!(
                 listed_skill["eligibility"]["issues"]
                     .as_array()

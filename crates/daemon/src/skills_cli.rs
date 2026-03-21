@@ -1149,7 +1149,8 @@ fn render_skill_summary_line(skill: &Value) -> String {
         .get("model_visibility")
         .and_then(Value::as_str)
         .or_else(|| {
-            skill.get("metadata")
+            skill
+                .get("metadata")
                 .and_then(|value| value.get("model_visibility"))
                 .and_then(Value::as_str)
         })
@@ -1157,7 +1158,8 @@ fn render_skill_summary_line(skill: &Value) -> String {
     let eligible = skill
         .get("eligibility")
         .and_then(|value| {
-            value.get("available")
+            value
+                .get("available")
                 .and_then(Value::as_bool)
                 .or_else(|| value.get("eligible").and_then(Value::as_bool))
         })
@@ -1166,7 +1168,8 @@ fn render_skill_summary_line(skill: &Value) -> String {
         .get("invocation_policy")
         .and_then(Value::as_str)
         .or_else(|| {
-            skill.get("metadata")
+            skill
+                .get("metadata")
                 .and_then(|value| value.get("invocation_policy"))
                 .and_then(Value::as_str)
         })
