@@ -2782,6 +2782,8 @@ fn policy_payload(policy: &super::runtime_config::ExternalSkillsRuntimePolicy) -
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
 
@@ -3598,6 +3600,63 @@ mod tests {
             .expect_err("missing env requirements should reject invocation");
             assert!(env_error.contains("missing env `LOONGCLAW_MISSING_TOKEN`"));
 
+            fs::remove_dir_all(&root).ok();
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_marks_non_executable_required_bin_as_ineligible() {
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-bin-eligibility");
+            fs::create_dir_all(&root).expect("create fixture root");
+            let mut home = ScopedHomeFixture::new("loongclaw-ext-skill-bin-eligibility-home");
+            let bin_dir = unique_temp_dir("loongclaw-ext-skill-bin-eligibility-bin");
+            fs::create_dir_all(&bin_dir).expect("create fake bin dir");
+
+            let fake_bin = bin_dir.join("release-check");
+            fs::write(&fake_bin, "#!/bin/sh\nexit 0\n").expect("write fake binary");
+            let mut permissions = fs::metadata(&fake_bin)
+                .expect("read fake binary metadata")
+                .permissions();
+            permissions.set_mode(0o644);
+            fs::set_permissions(&fake_bin, permissions)
+                .expect("mark fake binary as non-executable");
+
+            home.set_env("PATH", &bin_dir);
+            write_file(
+                &home.path,
+                ".agents/skills/bin-gated/SKILL.md",
+                "---\nrequired_bins:\n- release-check\n---\n\n# Bin Gated\n\nNeeds a real executable on PATH.\n",
+            );
+            let config = managed_runtime_config(&root);
+
+            let list_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.list".to_owned(),
+                    payload: json!({}),
+                },
+                &config,
+            )
+            .expect("list should succeed");
+            let listed_skill = list_outcome.payload["skills"]
+                .as_array()
+                .expect("skills should be an array")
+                .iter()
+                .find(|skill| skill["skill_id"] == "bin-gated")
+                .cloned()
+                .expect("bin-gated skill should be listed");
+            assert_eq!(listed_skill["eligibility"]["eligible"], json!(false));
+            assert!(
+                listed_skill["eligibility"]["issues"]
+                    .as_array()
+                    .expect("eligibility issues should be an array")
+                    .iter()
+                    .any(|issue| issue.as_str() == Some("missing binary `release-check`")),
+                "non-executable files on PATH must not satisfy required_bins"
+            );
+
+            fs::remove_dir_all(&bin_dir).ok();
             fs::remove_dir_all(&root).ok();
         });
     }
@@ -4814,6 +4873,77 @@ mod tests {
             );
 
             fs::remove_dir_all(&root).ok();
+        });
+    }
+
+    #[test]
+    fn list_skips_missing_managed_installs_instead_of_failing_discovery() {
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-discovery-broken-managed");
+            let home = unique_temp_dir("loongclaw-ext-skill-discovery-broken-managed-home");
+            fs::create_dir_all(&root).expect("create fixture root");
+            fs::create_dir_all(&home).expect("create home root");
+
+            write_file(
+                &root,
+                "source/broken-managed/SKILL.md",
+                "# Broken Managed\n\nThis managed install will be removed after indexing.\n",
+            );
+            write_file(
+                &home,
+                ".agents/skills/user-only/SKILL.md",
+                "# User Only\n\nKeep discovery alive when managed state is broken.\n",
+            );
+
+            let config = managed_runtime_config(&root);
+            let mut env = crate::test_support::ScopedEnv::new();
+            env.set("HOME", &home);
+
+            crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "source/broken-managed"
+                    }),
+                },
+                &config,
+            )
+            .expect("install should succeed");
+
+            fs::remove_dir_all(
+                root.join("external-skills-installed")
+                    .join("broken-managed"),
+            )
+            .expect("remove managed install to simulate broken index entry");
+
+            let list_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.list".to_owned(),
+                    payload: json!({}),
+                },
+                &config,
+            )
+            .expect("broken managed installs should be skipped during discovery");
+
+            assert!(
+                list_outcome.payload["skills"]
+                    .as_array()
+                    .expect("skills should be an array")
+                    .iter()
+                    .any(|skill| skill["skill_id"] == "user-only" && skill["scope"] == "user"),
+                "healthy user skills should remain discoverable when a managed install is missing"
+            );
+            assert!(
+                !list_outcome.payload["skills"]
+                    .as_array()
+                    .expect("skills should be an array")
+                    .iter()
+                    .any(|skill| skill["skill_id"] == "broken-managed"),
+                "broken managed installs should be dropped from discovery output"
+            );
+
+            fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&home).ok();
         });
     }
 
