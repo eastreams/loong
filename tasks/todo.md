@@ -8,7 +8,7 @@
 - [x] Run `task verify`.
 - [x] Address actionable PR review feedback on `welcome` command behavior and committed docs.
 - [x] Add regression coverage for explicit `welcome` behavior, config-file detection, and test temp-dir uniqueness.
-- [ ] Reply to or resolve PR review threads after verification.
+- [x] Reply to or resolve PR review threads after verification.
 
 ## Progress
 
@@ -24,6 +24,7 @@
 - 2026-03-21: Added red tests for directory config-path handling, explicit `welcome` missing-config failure paths, and `welcome` help-text alignment; confirmed they failed before the fix.
 - 2026-03-21: Updated `resolve_default_entry_command()` to require a config file, made `run_welcome_cli()` fail closed with onboarding guidance when config is missing, aligned `welcome` help text with `--config <path>` usage, redacted the committed worktree path, and strengthened test temp-dir uniqueness with PID + atomic counter suffixes.
 - 2026-03-21: Re-ran targeted daemon tests plus `task verify`; all local gates passed after the review-fix follow-up.
+- 2026-03-21: Pushed review follow-up commit `a2cbbe1`, replied in-thread to the six unresolved PR findings on `#407`, and resolved those review threads after the new head landed.
 
 ## Review / Results
 
