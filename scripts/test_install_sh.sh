@@ -530,6 +530,8 @@ run_standalone_linux_arm64_install_rejects_missing_glibc_test() {
   cp "$SCRIPT_UNDER_TEST" "$standalone_script"
   chmod +x "$standalone_script"
   make_uname_stub_bin "$fixture" "Linux" "aarch64"
+  make_getconf_stub_bin "$fixture" "__FAIL__"
+  make_ldd_stub_bin "$fixture" "__FAIL__"
 
   if (
     cd "$fixture"

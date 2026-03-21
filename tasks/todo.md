@@ -78,6 +78,11 @@ change against the repo's existing shell and release gates.
   unsupported-arch failure propagation in the release helper, musl-aware glibc
   detection, `sort -V` fallback coverage, GNU-only arch rejection when no musl
   artifact exists, and shared glibc floor lookup in the release workflow.
+- 2026-03-21: After the review-follow-up push, GitHub Actions exposed one
+  Linux-only test harness gap in the standalone installer regression: the copied
+  installer still saw the host runner's real glibc via `getconf`/`ldd`. The
+  fix was test-only and narrow: stub both commands to fail so the test actually
+  exercises the intended "glibc unavailable" path on CI.
 
 ## Review / Results
 
@@ -108,3 +113,7 @@ change against the repo's existing shell and release gates.
   fixes. The standalone copied-installer regression now intentionally fails on
   GNU-only `aarch64` when no compatible glibc can be detected, matching the
   reviewed contract instead of silently installing an unusable binary.
+- 2026-03-21: CI parity follow-up passed:
+  the exact governance regression-test bundle from `.github/workflows/ci.yml`
+  now passes locally after stubbing `getconf` and `ldd` in the standalone
+  Linux `aarch64` test, and `task verify` remains green.
