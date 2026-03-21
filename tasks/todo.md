@@ -25,6 +25,9 @@ change against the repo's existing shell and release gates.
       green on this branch.
 - [x] Clear the newly surfaced `cargo audit` advisories in `aws-lc-sys` so PR
       Security checks pass.
+- [x] Address the remaining PR review threads around Linux libc detection,
+      version comparison portability, GNU-only fallback safety, and workflow
+      glibc floor reuse.
 
 ## Progress Notes
 
@@ -70,6 +73,11 @@ change against the repo's existing shell and release gates.
   update `aws-lc-rs 1.16.1 -> 1.16.2` and `aws-lc-sys 0.38.0 -> 0.39.0`,
   matching the advisory remediation without changing application code or
   release-contract behavior.
+- 2026-03-21: Reviewed each open PR bot thread against the shipped shell path,
+  reproduced the valid failures locally, and kept the fixes narrow: explicit
+  unsupported-arch failure propagation in the release helper, musl-aware glibc
+  detection, `sort -V` fallback coverage, GNU-only arch rejection when no musl
+  artifact exists, and shared glibc floor lookup in the release workflow.
 
 ## Review / Results
 
@@ -92,3 +100,11 @@ change against the repo's existing shell and release gates.
 - 2026-03-21: Security follow-up verification passed:
   `cargo audit`, `cargo deny check advisories bans sources`, and full
   `task verify` are green after the AWS-LC lockfile update.
+- 2026-03-21: Review follow-up verification passed:
+  `bash scripts/test_release_artifact_lib.sh`,
+  `bash scripts/test_install_sh.sh`,
+  `bash scripts/test_check_glibc_floor.sh`,
+  `git diff --check`, and full `task verify` are green after the review-thread
+  fixes. The standalone copied-installer regression now intentionally fails on
+  GNU-only `aarch64` when no compatible glibc can be detected, matching the
+  reviewed contract instead of silently installing an unusable binary.

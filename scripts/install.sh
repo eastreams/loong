@@ -75,17 +75,21 @@ else
 
   release_supported_linux_libcs_for_arch() {
     local arch
-    arch="$(release_normalize_linux_arch "${1:?arch is required}")"
+    arch="$(release_normalize_linux_arch "${1:?arch is required}")" || return 1
 
     case "$arch" in
       x86_64) printf 'gnu\nmusl\n' ;;
       aarch64) printf 'gnu\n' ;;
+      *)
+        echo "unsupported Linux architecture: ${1}" >&2
+        return 1
+        ;;
     esac
   }
 
   release_linux_target_for_arch_and_libc() {
     local arch libc
-    arch="$(release_normalize_linux_arch "${1:?arch is required}")"
+    arch="$(release_normalize_linux_arch "${1:?arch is required}")" || return 1
     libc="$(printf '%s' "${2:?libc is required}" | tr '[:upper:]' '[:lower:]')"
 
     case "$arch:$libc" in
@@ -327,7 +331,7 @@ parse_glibc_version() {
 }
 
 detect_host_glibc_version() {
-  local output version
+  local output normalized_output version
 
   if command -v getconf >/dev/null 2>&1; then
     if output="$(getconf GNU_LIBC_VERSION 2>/dev/null)"; then
@@ -341,10 +345,14 @@ detect_host_glibc_version() {
 
   if command -v ldd >/dev/null 2>&1; then
     if output="$(ldd --version 2>&1 | head -n 1)"; then
-      version="$(parse_glibc_version "$output" || true)"
-      if [[ -n "$version" ]]; then
-        printf '%s\n' "$version"
-        return 0
+      normalized_output="$(printf '%s' "$output" | tr '[:upper:]' '[:lower:]')"
+      if [[ "$normalized_output" != *musl* ]] && \
+        [[ "$normalized_output" == *glibc* || "$normalized_output" == *"gnu libc"* || "$normalized_output" == *"gnu c library"* ]]; then
+        version="$(parse_glibc_version "$output" || true)"
+        if [[ -n "$version" ]]; then
+          printf '%s\n' "$version"
+          return 0
+        fi
       fi
     fi
   fi
@@ -352,10 +360,57 @@ detect_host_glibc_version() {
   return 1
 }
 
+compare_versions() {
+  local actual="${1:?actual version is required}"
+  local minimum="${2:?minimum version is required}"
+  local IFS=.
+  local -a actual_parts=() minimum_parts=()
+  local len i a m
+
+  read -r -a actual_parts <<< "$actual"
+  read -r -a minimum_parts <<< "$minimum"
+
+  len="${#actual_parts[@]}"
+  if (( ${#minimum_parts[@]} > len )); then
+    len="${#minimum_parts[@]}"
+  fi
+
+  for (( i = 0; i < len; i++ )); do
+    a="${actual_parts[i]:-0}"
+    m="${minimum_parts[i]:-0}"
+    [[ "$a" =~ ^[0-9]+$ ]] || a=0
+    [[ "$m" =~ ^[0-9]+$ ]] || m=0
+
+    if (( 10#$a > 10#$m )); then
+      return 0
+    fi
+    if (( 10#$a < 10#$m )); then
+      return 1
+    fi
+  done
+
+  return 0
+}
+
+supports_sort_version() {
+  local sorted
+  if ! sorted="$(printf '2.9\n2.10\n' | sort -V 2>/dev/null)"; then
+    return 1
+  fi
+
+  [[ "$sorted" == $'2.9\n2.10' ]]
+}
+
 version_at_least() {
   local actual="${1:?actual version is required}"
   local minimum="${2:?minimum version is required}"
-  [[ "$(printf '%s\n%s\n' "$minimum" "$actual" | sort -V | head -n 1)" == "$minimum" ]]
+
+  if supports_sort_version; then
+    [[ "$(printf '%s\n%s\n' "$minimum" "$actual" | sort -V | head -n 1)" == "$minimum" ]]
+    return $?
+  fi
+
+  compare_versions "$actual" "$minimum"
 }
 
 release_target_for_install() {
@@ -415,7 +470,17 @@ release_target_for_install() {
     return 0
   fi
 
-  printf '%s\n' "$gnu_target"
+  if [[ -n "${detected_glibc:-}" ]]; then
+    printf 'error: %s requires glibc >= %s but the host reports %s; no musl release artifact is published for %s; use --source instead\n' \
+      "$gnu_target" \
+      "$required_glibc" \
+      "$detected_glibc" \
+      "$normalized_arch" >&2
+  else
+    printf 'error: could not detect a compatible glibc on the host and no musl release artifact is published for %s; use --source instead\n' \
+      "$normalized_arch" >&2
+  fi
+  exit 1
 }
 
 install_from_source() {

@@ -123,6 +123,11 @@ EOF
     exit 1
   fi
 
+  if release_supported_linux_libcs_for_arch "ppc64le" >/dev/null 2>&1; then
+    echo "expected release_supported_linux_libcs_for_arch to reject unsupported host arch" >&2
+    exit 1
+  fi
+
   release_trace_path_matches_contract \
     "v0.1.2" \
     "020e2a67" \

@@ -14,8 +14,6 @@ env:
   BIN_NAME: loongclaw
   PACKAGE_NAME: loongclaw
   CROSS_VERSION: "0.2.5"
-  LINUX_X86_64_GLIBC_FLOOR: "2.39"
-  LINUX_ARM64_GLIBC_FLOOR: "2.17"
 
 jobs:
   verify-release:
@@ -160,14 +158,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          case "${{ matrix.target }}" in
-            x86_64-unknown-linux-gnu) max_glibc="${{ env.LINUX_X86_64_GLIBC_FLOOR }}" ;;
-            aarch64-unknown-linux-gnu) max_glibc="${{ env.LINUX_ARM64_GLIBC_FLOOR }}" ;;
-            *)
-              echo "unsupported GNU Linux target for glibc floor verification: ${{ matrix.target }}" >&2
-              exit 1
-              ;;
-          esac
+          . ./scripts/release_artifact_lib.sh
+          max_glibc="$(release_gnu_glibc_floor_for_target "${{ matrix.target }}")"
           ./scripts/check_glibc_floor.sh "target/${{ matrix.target }}/release/${{ env.BIN_NAME }}" "$max_glibc"
 
       - name: Upload packaged artifact

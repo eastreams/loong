@@ -61,17 +61,21 @@ release_normalize_linux_arch() {
 
 release_supported_linux_libcs_for_arch() {
   local arch
-  arch="$(release_normalize_linux_arch "${1:?arch is required}")"
+  arch="$(release_normalize_linux_arch "${1:?arch is required}")" || return 1
 
   case "$arch" in
     x86_64) printf 'gnu\nmusl\n' ;;
     aarch64) printf 'gnu\n' ;;
+    *)
+      echo "unsupported Linux architecture: ${1}" >&2
+      return 1
+      ;;
   esac
 }
 
 release_linux_target_for_arch_and_libc() {
   local arch libc
-  arch="$(release_normalize_linux_arch "${1:?arch is required}")"
+  arch="$(release_normalize_linux_arch "${1:?arch is required}")" || return 1
   libc="$(printf '%s' "${2:?libc is required}" | tr '[:upper:]' '[:lower:]')"
 
   case "$arch:$libc" in
