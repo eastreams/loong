@@ -3,10 +3,10 @@ use std::collections::BTreeSet;
 use serde_json::{Map, Value};
 
 use crate::CliResult;
+use crate::channel::feishu::FeishuUserPrincipal;
 use crate::channel::{
     ChannelDeliveryResource, ChannelOutboundTarget, ChannelPlatform, ChannelSession,
 };
-use crate::feishu::FeishuUserPrincipal;
 
 use super::crypto::decrypt_payload_if_needed;
 use super::types::{

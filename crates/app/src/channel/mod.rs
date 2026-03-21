@@ -81,13 +81,14 @@ use super::conversation::{
 use super::conversation::{ConversationTurnCoordinator, ProviderErrorMode};
 
 #[cfg(feature = "channel-feishu")]
-mod feishu;
+pub mod feishu;
 #[cfg(feature = "channel-matrix")]
 mod matrix;
 mod registry;
 mod runtime_state;
 #[cfg(feature = "channel-telegram")]
 mod telegram;
+pub mod traits;
 
 pub use registry::{
     CHANNEL_OPERATION_SEND_ID, CHANNEL_OPERATION_SERVE_ID, ChannelCapability,
@@ -1018,7 +1019,7 @@ fn build_feishu_command_context(
     config: LoongClawConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedFeishuChannelConfig>> {
-    let resolved = crate::feishu::resolve_requested_feishu_account(
+    let resolved = crate::channel::feishu::resolve_requested_feishu_account(
         &config.feishu,
         account_id,
         "rerun with `--account <configured_account_id>` using one of those configured accounts",
@@ -1471,7 +1472,7 @@ pub async fn run_feishu_send(
                 family: FEISHU_COMMAND_FAMILY_DESCRIPTOR,
             },
             |context| {
-                Box::pin(async move { feishu::run_feishu_send(&context.resolved, &request).await })
+                Box::pin(async move { crate::channel::feishu::run_feishu_send(&context.resolved, &request).await })
             },
             |context| {
                 format!(
@@ -1512,8 +1513,8 @@ pub async fn run_feishu_channel(
     #[cfg(feature = "channel-feishu")]
     {
         let context = load_feishu_command_context(config_path, account_id)?;
-        let bind_override = bind_override.map(str::to_owned);
-        let path_override = path_override.map(str::to_owned);
+        let _bind_override = bind_override.map(str::to_owned);
+        let _path_override = path_override.map(str::to_owned);
         run_channel_serve_command(
             context,
             ChannelServeCommandSpec {
@@ -1526,14 +1527,12 @@ pub async fn run_feishu_channel(
                     let resolved_path = context.resolved_path.clone();
                     let resolved = context.resolved.clone();
                     let config = context.config.clone();
-                    feishu::run_feishu_channel(
+                    feishu::websocket::run_feishu_websocket_channel(
                         &config,
                         &resolved,
                         &resolved_path,
                         route.selected_by_default(),
                         route.default_account_source,
-                        bind_override.as_deref(),
-                        path_override.as_deref(),
                         kernel_ctx,
                         runtime,
                     )
@@ -1807,7 +1806,7 @@ pub(crate) async fn send_text_to_known_session(
                         ..FeishuChannelSendRequest::default()
                     },
                 };
-                feishu::run_feishu_send(&resolved, &request).await?;
+                crate::channel::feishu::run_feishu_send(&resolved, &request).await?;
                 Ok(ChannelSendReceipt {
                     channel: "feishu",
                     target,

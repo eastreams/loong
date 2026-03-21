@@ -1,14 +1,16 @@
 use async_trait::async_trait;
 
 use crate::CliResult;
+use crate::channel::feishu::FeishuClient;
+use crate::channel::feishu::resources::messages::{self, FeishuOutboundMessageBody};
+use crate::channel::feishu::{
+    FeishuOperatorOutboundMessageInput, resolve_operator_outbound_message_body,
+};
 use crate::channel::{
     ChannelAdapter, ChannelInboundMessage, ChannelOutboundMessage, ChannelOutboundTarget,
     ChannelOutboundTargetKind, ChannelPlatform,
 };
 use crate::config::{FeishuIntegrationConfig, ResolvedFeishuChannelConfig};
-use crate::feishu::FeishuClient;
-use crate::feishu::resources::messages::{self, FeishuOutboundMessageBody};
-use crate::feishu::{FeishuOperatorOutboundMessageInput, resolve_operator_outbound_message_body};
 
 pub(super) struct FeishuAdapter {
     client: FeishuClient,

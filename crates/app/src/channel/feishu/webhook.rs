@@ -22,12 +22,12 @@ use tokio::sync::Mutex;
 
 use crate::CliResult;
 use crate::KernelContext;
+use crate::channel::feishu::{FeishuClient, resources::cards};
 use crate::channel::{
     ChannelAdapter, ChannelInboundMessage, ChannelOutboundMessage, ChannelOutboundTarget,
     process_inbound_with_provider, runtime_state::ChannelOperationRuntimeTracker,
 };
 use crate::config::{LoongClawConfig, ResolvedFeishuChannelConfig};
-use crate::feishu::{FeishuClient, resources::cards};
 
 use super::adapter::FeishuAdapter;
 use super::payload::{FeishuCardCallbackEvent, FeishuWebhookAction};

@@ -8,7 +8,7 @@ use super::types::{
     FeishuMessageDetail, FeishuMessageHistoryPage, FeishuMessageSummary, FeishuMessageWriteReceipt,
     FeishuSearchMessagePage,
 };
-use crate::feishu::client::FeishuClient;
+use crate::channel::feishu::client::FeishuClient;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FeishuOutboundMessageBody {
