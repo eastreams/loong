@@ -560,4 +560,4 @@ How to handle:
 
 | Date | Version | Changes |
 |------|---------|---------|
-| 2026-03-21 | 0.1.0 | Initial draft |
+| 2026-03-21 | 0.0.1 | Initial draft |
