@@ -523,6 +523,18 @@ pub enum ChannelOutboundMessage {
     File { file_key: String },
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix"
+))]
+pub enum ChannelStreamingMode {
+    #[default]
+    Off,
+    Draft,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FeishuChannelSendRequest {
     pub receive_id: String,
@@ -547,12 +559,23 @@ pub struct FeishuChannelSendRequest {
 #[async_trait]
 pub trait ChannelAdapter {
     fn name(&self) -> &str;
+    fn streaming_mode(&self) -> ChannelStreamingMode {
+        ChannelStreamingMode::Off
+    }
     async fn receive_batch(&mut self) -> CliResult<Vec<ChannelInboundMessage>>;
     async fn send_message(
         &self,
         target: &ChannelOutboundTarget,
         message: &ChannelOutboundMessage,
     ) -> CliResult<()>;
+    async fn send_message_streaming(
+        &mut self,
+        target: &ChannelOutboundTarget,
+        message: &ChannelOutboundMessage,
+        _streaming_mode: ChannelStreamingMode,
+    ) -> CliResult<()> {
+        self.send_message(target, message).await
+    }
     async fn send_text(&self, target: &ChannelOutboundTarget, text: &str) -> CliResult<()> {
         let message = ChannelOutboundMessage::Text(text.to_owned());
         self.send_message(target, &message).await
@@ -851,8 +874,9 @@ where
         let result = async {
             let reply = process(message.clone()).await?;
             let outbound = ChannelOutboundMessage::Text(reply);
+            let streaming_mode = adapter.streaming_mode();
             adapter
-                .send_message(&message.reply_target, &outbound)
+                .send_message_streaming(&message.reply_target, &outbound, streaming_mode)
                 .await?;
             adapter.ack_inbound(message).await?;
             Ok::<(), String>(())
@@ -3426,5 +3450,10 @@ mod tests {
         let error = validate_matrix_security_config(&resolved)
             .expect_err("user_id is required when self-filtering is enabled");
         assert!(error.contains("matrix.user_id"));
+    }
+
+    #[test]
+    fn channel_streaming_mode_default_is_off() {
+        assert_eq!(ChannelStreamingMode::default(), ChannelStreamingMode::Off);
     }
 }

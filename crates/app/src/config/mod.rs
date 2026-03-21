@@ -17,7 +17,7 @@ pub use channels::{
     FeishuAccountConfig, FeishuChannelConfig, FeishuChannelServeMode, FeishuDomain,
     MatrixAccountConfig, MatrixChannelConfig, ResolvedFeishuChannelConfig,
     ResolvedMatrixChannelConfig, ResolvedTelegramChannelConfig, TelegramAccountConfig,
-    TelegramChannelConfig, channel_descriptor, service_channel_descriptors,
+    TelegramChannelConfig, TelegramStreamingMode, channel_descriptor, service_channel_descriptors,
 };
 #[allow(unused_imports)]
 pub(crate) use channels::{
