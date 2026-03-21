@@ -165,6 +165,31 @@ fn chat_without_config_runs_onboard_for_explicit_yes() {
 }
 
 #[test]
+fn chat_without_config_forwards_explicit_config_path_to_onboard() {
+    let fixture = ChatCliFixture::new("explicit-config");
+    fixture.install_fake_loongclaw(0);
+    let explicit_config = fixture.root.join("custom-config.toml");
+
+    let output = fixture.run_chat_command(Some(&explicit_config), Some(b"y\n"));
+    let stdout = render_output(&output.stdout);
+    let stderr = render_output(&output.stderr);
+    let onboard_log = fixture.onboard_log();
+
+    assert!(
+        output.status.success(),
+        "explicit config path should still succeed, stdout={stdout:?}, stderr={stderr:?}"
+    );
+    assert!(
+        onboard_log.contains("onboard --output"),
+        "explicit config path should be forwarded to onboarding output args: {onboard_log:?}"
+    );
+    assert!(
+        onboard_log.contains(&explicit_config.display().to_string()),
+        "explicit config path should be passed through to onboarding: {onboard_log:?}"
+    );
+}
+
+#[test]
 fn chat_without_config_treats_blank_line_as_decline() {
     let fixture = ChatCliFixture::new("blank-line");
     fixture.install_fake_loongclaw(0);

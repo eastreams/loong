@@ -118,8 +118,13 @@ pub async fn run_cli_chat(
         let input = input.trim().to_ascii_lowercase();
 
         if read > 0 && matches!(input.as_str(), "y" | "yes") {
-            let exit_status = std::process::Command::new("loongclaw")
-                .arg("onboard")
+            let mut onboard = std::process::Command::new("loongclaw");
+            onboard.arg("onboard");
+            if config_path.is_some() {
+                onboard.arg("--output").arg(&resolved_config_path);
+            }
+
+            let exit_status = onboard
                 .spawn()
                 .map_err(|e| format!("failed to spawn onboard: {e}"))?
                 .wait()
