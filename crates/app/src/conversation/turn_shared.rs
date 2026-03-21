@@ -31,6 +31,18 @@ pub fn next_conversation_turn_id() -> String {
     format!("turn-{nanos:x}-{seq:x}")
 }
 
+pub fn tool_loop_circuit_breaker_reply(
+    prospective_total: usize,
+    max_total_tool_calls: usize,
+) -> Option<String> {
+    (prospective_total > max_total_tool_calls).then(|| {
+        format!(
+            "tool_loop_circuit_breaker: would exceed {}/{} tool calls this turn. Do you want to continue? Reply to resume.",
+            prospective_total, max_total_tool_calls
+        )
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolDrivenFollowupPayload {
     ToolResult { text: String },

@@ -4739,7 +4739,7 @@ async fn handle_turn_with_runtime_tool_search_requests_a_followup_provider_turn(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn handle_turn_with_runtime_honors_max_total_tool_calls_before_tool_dispatch() {
+async fn handle_turn_with_runtime_blocks_only_when_next_round_would_exceed_max_total_tool_calls() {
     use crate::test_support::TurnTestHarness;
 
     let harness = TurnTestHarness::new();
@@ -4759,8 +4759,14 @@ async fn handle_turn_with_runtime_honors_max_total_tool_calls_before_tool_dispat
                 raw_meta: Value::Null,
             }),
             Ok(ProviderTurn {
-                assistant_text: "I found the tool, now I can continue.".to_owned(),
-                tool_intents: Vec::new(),
+                assistant_text: "I should search one more time before continuing.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "tool.search",
+                    json!({"query": "read note.md", "limit": 3}),
+                    "session-tool-search-breaker",
+                    "turn-tool-search-breaker",
+                    "call-tool-search-breaker-2",
+                )],
                 raw_meta: Value::Null,
             }),
         ],
@@ -4785,9 +4791,9 @@ async fn handle_turn_with_runtime_honors_max_total_tool_calls_before_tool_dispat
 
     assert_eq!(
         reply,
-        "tool_loop_circuit_breaker: reached 1/1 tool calls this turn. Do you want to continue? Reply to resume."
+        "tool_loop_circuit_breaker: would exceed 2/1 tool calls this turn. Do you want to continue? Reply to resume."
     );
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 1);
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 2);
     assert_eq!(
         *runtime
             .completion_calls
@@ -4802,6 +4808,13 @@ async fn handle_turn_with_runtime_honors_max_total_tool_calls_before_tool_dispat
     assert_eq!(visible_turns[0].1, "user");
     assert_eq!(visible_turns[1].1, "assistant");
     assert_eq!(visible_turns[1].2, reply);
+
+    let requested_turn_messages = runtime
+        .turn_requested_messages
+        .lock()
+        .expect("turn request lock")
+        .clone();
+    assert_eq!(requested_turn_messages.len(), 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
