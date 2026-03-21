@@ -346,123 +346,133 @@ pub fn apply_import_selection(
         }
     };
 
-    if request.apply_external_skills_plan {
-        let input_path = request
-            .external_skills_input_path
-            .as_deref()
-            .ok_or_else(|| {
-                "apply_external_skills_plan requires external_skills_input_path".to_owned()
-            })?;
-        let mapping = plan_external_skill_mapping(input_path);
-        external_skill_artifact_count = mapping.artifacts.len();
-        external_skill_entries_applied = apply_external_skill_mapping(&mut config, &mapping);
-        external_skill_managed_installs = bridge_installable_external_skills(
-            &mut config,
-            &request.output_path,
-            input_path,
-            &mapping,
-        )?;
-        warnings.extend(mapping.warnings.clone());
-        external_skill_mapping = Some(mapping);
-    }
-    dedup_strings_in_place(&mut warnings);
-
-    let state_dir = migration_state_dir(&request.output_path);
-    fs::create_dir_all(&state_dir).map_err(|error| {
-        format!(
-            "failed to create migration state directory {}: {error}",
-            state_dir.display()
-        )
-    })?;
-    let session_id = import_session_id();
-    let backup_path = backup_path_for_output(&request.output_path, &state_dir, &session_id);
-    let manifest_path = manifest_path_for_output(&request.output_path, &state_dir);
-    let output_preexisted = request.output_path.exists();
-    if output_preexisted {
-        fs::copy(&request.output_path, &backup_path).map_err(|error| {
-            format!(
-                "failed to write import backup {}: {error}",
-                backup_path.display()
-            )
-        })?;
-    } else {
-        fs::write(&backup_path, "").map_err(|error| {
-            format!(
-                "failed to initialize import backup {}: {error}",
-                backup_path.display()
-            )
-        })?;
-    }
-
-    let output_string = request.output_path.display().to_string();
-    let written_output_path = match crate::config::write(Some(&output_string), &config, true) {
-        Ok(path) => path,
-        Err(error) => {
-            if let Err(rollback_error) = rollback_bridged_external_skills(
-                &config,
+    let mut backup_context: Option<(PathBuf, bool)> = None;
+    let persist_result = (|| -> CliResult<(PathBuf, PathBuf, PathBuf, Option<PathBuf>)> {
+        if request.apply_external_skills_plan {
+            let input_path = request
+                .external_skills_input_path
+                .as_deref()
+                .ok_or_else(|| {
+                    "apply_external_skills_plan requires external_skills_input_path".to_owned()
+                })?;
+            let mapping = plan_external_skill_mapping(input_path);
+            external_skill_artifact_count = mapping.artifacts.len();
+            external_skill_entries_applied = apply_external_skill_mapping(&mut config, &mapping);
+            external_skill_managed_installs = bridge_installable_external_skills(
+                &mut config,
                 &request.output_path,
-                request.external_skills_input_path.as_deref(),
+                input_path,
+                &mapping,
+            )?;
+            warnings.extend(mapping.warnings.clone());
+            external_skill_mapping = Some(mapping);
+        }
+        dedup_strings_in_place(&mut warnings);
+
+        let state_dir = migration_state_dir(&request.output_path);
+        fs::create_dir_all(&state_dir).map_err(|error| {
+            format!(
+                "failed to create migration state directory {}: {error}",
+                state_dir.display()
+            )
+        })?;
+        let session_id = import_session_id();
+        let backup_path = backup_path_for_output(&request.output_path, &state_dir, &session_id);
+        let manifest_path = manifest_path_for_output(&request.output_path, &state_dir);
+        let output_preexisted = request.output_path.exists();
+        if output_preexisted {
+            fs::copy(&request.output_path, &backup_path).map_err(|error| {
+                format!(
+                    "failed to write import backup {}: {error}",
+                    backup_path.display()
+                )
+            })?;
+        } else {
+            fs::write(&backup_path, "").map_err(|error| {
+                format!(
+                    "failed to initialize import backup {}: {error}",
+                    backup_path.display()
+                )
+            })?;
+        }
+        backup_context = Some((backup_path.clone(), output_preexisted));
+
+        let output_string = request.output_path.display().to_string();
+        let written_output_path = crate::config::write(Some(&output_string), &config, true)?;
+        let external_skills_manifest_path = if let Some(mapping) = external_skill_mapping.as_ref() {
+            let external_path =
+                external_skills_manifest_path_for_output(&request.output_path, &state_dir);
+            let external_manifest = build_external_skills_apply_manifest(
+                &written_output_path,
+                mapping,
+                config.external_skills.resolved_install_root().as_deref(),
                 &external_skill_managed_installs,
-            ) {
-                return Err(format!(
-                    "persist migrated config {} failed: {error}; external skills bridge rollback also failed: {rollback_error}",
-                    request.output_path.display()
+            );
+            let body = serde_json::to_vec_pretty(&external_manifest)
+                .map_err(|error| format!("failed to encode external skills manifest: {error}"))?;
+            fs::write(&external_path, body).map_err(|error| {
+                format!(
+                    "failed to write external skills manifest {}: {error}",
+                    external_path.display()
+                )
+            })?;
+            Some(external_path)
+        } else {
+            None
+        };
+
+        let manifest = ImportApplyManifest {
+            session_id,
+            selected_primary_source: selected_primary_source_id.clone(),
+            merged_sources: merged_source_ids.clone(),
+            prompt_owner_source: prompt_owner_source_id.clone(),
+            output_path: written_output_path.display().to_string(),
+            backup_path: backup_path.display().to_string(),
+            output_preexisted,
+            warnings: warnings.clone(),
+            unresolved_conflicts,
+            external_skill_artifact_count,
+            external_skill_entries_applied,
+            external_skill_managed_install_count: external_skill_managed_installs.len(),
+            external_skill_managed_skill_ids: external_skill_managed_installs
+                .iter()
+                .map(|skill| skill.skill_id.clone())
+                .collect(),
+            external_skills_manifest_path: external_skills_manifest_path
+                .as_ref()
+                .map(|path| path.display().to_string()),
+        };
+        let manifest_body = serde_json::to_vec_pretty(&manifest)
+            .map_err(|error| format!("failed to encode import manifest: {error}"))?;
+        fs::write(&manifest_path, manifest_body).map_err(|error| {
+            format!(
+                "failed to write import manifest {}: {error}",
+                manifest_path.display()
+            )
+        })?;
+
+        Ok((
+            written_output_path,
+            backup_path,
+            manifest_path,
+            external_skills_manifest_path,
+        ))
+    })();
+
+    let (written_output_path, backup_path, manifest_path, external_skills_manifest_path) =
+        match persist_result {
+            Ok(result) => result,
+            Err(error) => {
+                return Err(finalize_apply_import_selection_failure(
+                    error,
+                    &config,
+                    &request.output_path,
+                    request.external_skills_input_path.as_deref(),
+                    &external_skill_managed_installs,
+                    backup_context.as_ref(),
                 ));
             }
-            return Err(error);
-        }
-    };
-    let external_skills_manifest_path = if let Some(mapping) = external_skill_mapping.as_ref() {
-        let external_path =
-            external_skills_manifest_path_for_output(&request.output_path, &state_dir);
-        let external_manifest = build_external_skills_apply_manifest(
-            &written_output_path,
-            mapping,
-            config.external_skills.resolved_install_root().as_deref(),
-            &external_skill_managed_installs,
-        );
-        let body = serde_json::to_vec_pretty(&external_manifest)
-            .map_err(|error| format!("failed to encode external skills manifest: {error}"))?;
-        fs::write(&external_path, body).map_err(|error| {
-            format!(
-                "failed to write external skills manifest {}: {error}",
-                external_path.display()
-            )
-        })?;
-        Some(external_path)
-    } else {
-        None
-    };
-
-    let manifest = ImportApplyManifest {
-        session_id,
-        selected_primary_source: selected_primary_source_id.clone(),
-        merged_sources: merged_source_ids.clone(),
-        prompt_owner_source: prompt_owner_source_id.clone(),
-        output_path: written_output_path.display().to_string(),
-        backup_path: backup_path.display().to_string(),
-        output_preexisted,
-        warnings: warnings.clone(),
-        unresolved_conflicts,
-        external_skill_artifact_count,
-        external_skill_entries_applied,
-        external_skill_managed_install_count: external_skill_managed_installs.len(),
-        external_skill_managed_skill_ids: external_skill_managed_installs
-            .iter()
-            .map(|skill| skill.skill_id.clone())
-            .collect(),
-        external_skills_manifest_path: external_skills_manifest_path
-            .as_ref()
-            .map(|path| path.display().to_string()),
-    };
-    let manifest_body = serde_json::to_vec_pretty(&manifest)
-        .map_err(|error| format!("failed to encode import manifest: {error}"))?;
-    fs::write(&manifest_path, manifest_body).map_err(|error| {
-        format!(
-            "failed to write import manifest {}: {error}",
-            manifest_path.display()
-        )
-    })?;
+        };
 
     Ok(ApplyImportSelectionResult {
         output_path: written_output_path,
@@ -528,28 +538,47 @@ fn bridge_installable_external_skills(
             )
         });
         let install = match install_outcome {
-            Ok(outcome) => match parse_external_skills_install_outcome(&outcome) {
-                Ok(install) => install,
-                Err(error) => {
-                    if let Err(rollback_error) = rollback_bridged_external_skills(
-                        config,
-                        output_path,
-                        Some(input_path),
-                        &installed,
-                    ) {
-                        return Err(format!(
-                            "{error}; external skills bridge rollback also failed: {rollback_error}"
-                        ));
+            Ok(outcome) => {
+                let current_skill_id = outcome
+                    .payload
+                    .get("skill_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
+                match parse_external_skills_install_outcome(&outcome) {
+                    Ok(install) => install,
+                    Err(error) => {
+                        let mut rollback_ids = installed_skill_ids(&installed);
+                        if let Some(skill_id) = current_skill_id.as_ref() {
+                            rollback_ids.push(skill_id.clone());
+                        }
+                        let error = if current_skill_id.is_none() {
+                            format!(
+                                "{error}; external skills install payload was missing `skill_id`, so the most recent bridged install may require manual cleanup"
+                            )
+                        } else {
+                            error
+                        };
+                        if let Err(rollback_error) = rollback_bridged_external_skill_ids(
+                            config,
+                            output_path,
+                            Some(input_path),
+                            &rollback_ids,
+                        ) {
+                            return Err(format!(
+                                "{error}; external skills bridge rollback also failed: {rollback_error}"
+                            ));
+                        }
+                        return Err(error);
                     }
-                    return Err(error);
                 }
-            },
+            }
             Err(error) => {
-                if let Err(rollback_error) = rollback_bridged_external_skills(
+                let rollback_ids = installed_skill_ids(&installed);
+                if let Err(rollback_error) = rollback_bridged_external_skill_ids(
                     config,
                     output_path,
                     Some(input_path),
-                    &installed,
+                    &rollback_ids,
                 ) {
                     return Err(format!(
                         "{error}; external skills bridge rollback also failed: {rollback_error}"
@@ -639,13 +668,68 @@ fn required_string(payload: &serde_json::Value, key: &str) -> CliResult<String> 
         .ok_or_else(|| format!("external skills install payload missing `{key}`"))
 }
 
-fn rollback_bridged_external_skills(
+fn restore_output_from_backup(
+    output_path: &Path,
+    backup_path: &Path,
+    output_preexisted: bool,
+) -> CliResult<()> {
+    if output_preexisted {
+        fs::copy(backup_path, output_path).map_err(|error| {
+            format!(
+                "failed to restore config {} from backup {}: {error}",
+                output_path.display(),
+                backup_path.display()
+            )
+        })?;
+    } else if output_path.exists() {
+        fs::remove_file(output_path).map_err(|error| {
+            format!(
+                "failed to remove partial config {} after rollback: {error}",
+                output_path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn finalize_apply_import_selection_failure(
+    error: String,
     config: &crate::config::LoongClawConfig,
     output_path: &Path,
     input_path: Option<&Path>,
     installs: &[ExternalSkillsInstalledSkill],
+    backup_context: Option<&(PathBuf, bool)>,
+) -> String {
+    let mut message = error;
+    if let Err(rollback_error) =
+        rollback_bridged_external_skills(config, output_path, input_path, installs)
+    {
+        message =
+            format!("{message}; external skills bridge rollback also failed: {rollback_error}");
+    }
+    if let Some((backup_path, output_preexisted)) = backup_context
+        && let Err(restore_error) =
+            restore_output_from_backup(output_path, backup_path, *output_preexisted)
+    {
+        message = format!("{message}; config restore also failed: {restore_error}");
+    }
+    message
+}
+
+fn installed_skill_ids(installs: &[ExternalSkillsInstalledSkill]) -> Vec<String> {
+    installs
+        .iter()
+        .map(|install| install.skill_id.clone())
+        .collect()
+}
+
+fn rollback_bridged_external_skill_ids(
+    config: &crate::config::LoongClawConfig,
+    output_path: &Path,
+    input_path: Option<&Path>,
+    skill_ids: &[String],
 ) -> CliResult<()> {
-    if installs.is_empty() {
+    if skill_ids.is_empty() {
         return Ok(());
     }
 
@@ -654,24 +738,35 @@ fn rollback_bridged_external_skills(
         output_path,
         input_path.unwrap_or(output_path),
     );
-    for install in installs.iter().rev() {
+    for skill_id in skill_ids.iter().rev() {
         crate::tools::execute_tool_core_with_config(
             ToolCoreRequest {
                 tool_name: "external_skills.remove".to_owned(),
                 payload: json!({
-                    "skill_id": install.skill_id,
+                    "skill_id": skill_id,
                 }),
             },
             &runtime,
         )
         .map_err(|error| {
-            format!(
-                "remove bridged external skill `{}` failed during rollback: {error}",
-                install.skill_id
-            )
+            format!("remove bridged external skill `{skill_id}` failed during rollback: {error}")
         })?;
     }
     Ok(())
+}
+
+fn rollback_bridged_external_skills(
+    config: &crate::config::LoongClawConfig,
+    output_path: &Path,
+    input_path: Option<&Path>,
+    installs: &[ExternalSkillsInstalledSkill],
+) -> CliResult<()> {
+    rollback_bridged_external_skill_ids(
+        config,
+        output_path,
+        input_path,
+        &installed_skill_ids(installs),
+    )
 }
 
 fn build_external_skills_apply_manifest(
@@ -1533,6 +1628,69 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
+    #[test]
+    fn apply_import_selection_rolls_back_bridged_external_skills_when_state_dir_setup_fails() {
+        let root = unique_temp_dir("loongclaw-import-apply-managed-external-skills-state-dir");
+        fs::create_dir_all(&root).expect("create fixture root");
+
+        let openclaw_root = root.join("openclaw-workspace");
+        fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+        write_file(
+            &openclaw_root,
+            "SOUL.md",
+            "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+        );
+        write_file(
+            &openclaw_root,
+            "IDENTITY.md",
+            "# Identity\n\n- role: release copilot\n",
+        );
+        write_file(
+            &root,
+            ".codex/skills/release-guard/SKILL.md",
+            "# Release Guard\n\nUse this skill when release discipline matters.\n",
+        );
+
+        let output_path = root.join("loongclaw.toml");
+        let mut baseline = crate::config::LoongClawConfig::default();
+        baseline.external_skills.install_root =
+            Some(root.join("managed-skills").display().to_string());
+        let baseline_body = crate::config::render(&baseline).expect("render baseline config");
+        fs::write(&output_path, &baseline_body).expect("write baseline config");
+
+        let state_dir = migration_state_dir(&output_path);
+        fs::write(&state_dir, "occupied").expect("occupy migration state path with file");
+
+        let discovery = discover_import_sources(&root, DiscoveryOptions::default())
+            .expect("discovery should succeed");
+        let error = apply_import_selection(&ApplyImportSelection {
+            discovery,
+            output_path: output_path.clone(),
+            mode: ImportSelectionMode::SelectedSingleSource {
+                source_id: "openclaw".to_owned(),
+            },
+            apply_external_skills_plan: true,
+            external_skills_input_path: Some(root.clone()),
+        })
+        .expect_err("state dir setup failure should abort apply");
+
+        assert!(
+            error.contains("failed to create migration state directory"),
+            "expected state dir setup failure, got: {error}"
+        );
+        assert!(
+            !root.join("managed-skills").join("release-guard").exists(),
+            "rollback should remove bridged installs when setup fails before config write"
+        );
+        assert_eq!(
+            fs::read_to_string(&output_path).expect("read preserved baseline config"),
+            baseline_body,
+            "state dir setup failures should not mutate the output config"
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
     #[cfg(unix)]
     #[test]
     fn apply_import_selection_rolls_back_bridged_external_skills_when_config_write_fails() {
@@ -1598,6 +1756,74 @@ mod tests {
         cleanup_permissions.set_mode(0o600);
         fs::set_permissions(&output_path, cleanup_permissions)
             .expect("restore output permissions for cleanup");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn apply_import_selection_restores_config_and_rolls_back_bridged_external_skills_when_external_manifest_write_fails()
+     {
+        let root = unique_temp_dir("loongclaw-import-apply-managed-external-skills-manifest");
+        fs::create_dir_all(&root).expect("create fixture root");
+
+        let openclaw_root = root.join("openclaw-workspace");
+        fs::create_dir_all(&openclaw_root).expect("create openclaw root");
+        write_file(
+            &openclaw_root,
+            "SOUL.md",
+            "# Soul\n\nPrefer direct answers and keep OpenClaw style concise.\n",
+        );
+        write_file(
+            &openclaw_root,
+            "IDENTITY.md",
+            "# Identity\n\n- role: release copilot\n",
+        );
+        write_file(
+            &root,
+            ".codex/skills/release-guard/SKILL.md",
+            "# Release Guard\n\nUse this skill when release discipline matters.\n",
+        );
+
+        let output_path = root.join("loongclaw.toml");
+        let mut baseline = crate::config::LoongClawConfig::default();
+        baseline.external_skills.install_root =
+            Some(root.join("managed-skills").display().to_string());
+        let baseline_body = crate::config::render(&baseline).expect("render baseline config");
+        fs::write(&output_path, &baseline_body).expect("write baseline config");
+
+        let state_dir = migration_state_dir(&output_path);
+        fs::create_dir_all(&state_dir).expect("create migration state directory");
+        let external_manifest_path =
+            external_skills_manifest_path_for_output(&output_path, &state_dir);
+        fs::create_dir_all(&external_manifest_path)
+            .expect("occupy external manifest path with directory");
+
+        let discovery = discover_import_sources(&root, DiscoveryOptions::default())
+            .expect("discovery should succeed");
+        let error = apply_import_selection(&ApplyImportSelection {
+            discovery,
+            output_path: output_path.clone(),
+            mode: ImportSelectionMode::SelectedSingleSource {
+                source_id: "openclaw".to_owned(),
+            },
+            apply_external_skills_plan: true,
+            external_skills_input_path: Some(root.clone()),
+        })
+        .expect_err("external manifest write failure should abort apply");
+
+        assert!(
+            error.contains("failed to write external skills manifest"),
+            "expected external manifest write failure, got: {error}"
+        );
+        assert!(
+            !root.join("managed-skills").join("release-guard").exists(),
+            "rollback should remove bridged installs when manifest writing fails"
+        );
+        assert_eq!(
+            fs::read_to_string(&output_path).expect("read restored config"),
+            baseline_body,
+            "post-write failures should restore the previous config from backup"
+        );
+
         fs::remove_dir_all(&root).ok();
     }
 
