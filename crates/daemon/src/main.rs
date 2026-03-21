@@ -38,7 +38,8 @@ impl Drop for StdinGuard {
 async fn main() {
     let _stdin_guard = StdinGuard;
     let cli = Cli::parse();
-    let result = match cli.command.unwrap_or(Commands::Demo) {
+    let result = match cli.command.unwrap_or_else(resolve_default_entry_command) {
+        Commands::Welcome => run_welcome_cli(),
         Commands::Demo => run_demo().await,
         Commands::RunTask { objective, payload } => run_task_cli(&objective, &payload).await,
         Commands::InvokeConnector { operation, payload } => {

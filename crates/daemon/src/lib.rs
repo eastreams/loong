@@ -165,6 +165,11 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    #[command(
+        long_about = "Show the configured welcome banner and quick commands.\n\nquick commands:\n- loongclaw ask --config <path> --message \"...\"\n- loongclaw chat --config <path>\n- loongclaw doctor --config <path>\n- loongclaw --help\n\nReplace <path> with your current config path, or set LOONGCLAW_CONFIG_PATH first."
+    )]
+    /// Show a welcome banner for an already configured install
+    Welcome,
     /// Run the original end-to-end bootstrap demo
     Demo,
     /// Execute one task through the kernel+harness path
@@ -711,6 +716,76 @@ pub enum ValidateConfigOutput {
     ProblemJson,
 }
 
+fn resolved_default_entry_config_path() -> PathBuf {
+    std::env::var_os("LOONGCLAW_CONFIG_PATH")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(mvp::config::default_config_path)
+}
+
+fn default_onboard_command() -> Commands {
+    Commands::Onboard {
+        output: None,
+        force: false,
+        non_interactive: false,
+        accept_risk: false,
+        provider: None,
+        model: None,
+        api_key_env: None,
+        personality: None,
+        memory_profile: None,
+        system_prompt: None,
+        skip_model_probe: false,
+    }
+}
+
+pub fn resolve_default_entry_command() -> Commands {
+    if resolved_default_entry_config_path().is_file() {
+        Commands::Welcome
+    } else {
+        default_onboard_command()
+    }
+}
+
+fn resolve_welcome_config_path() -> CliResult<PathBuf> {
+    let config_path = resolved_default_entry_config_path();
+    if config_path.is_file() {
+        Ok(config_path)
+    } else {
+        Err(format!(
+            "Config file not found at {}. Run `{} onboard` to set up LoongClaw.",
+            config_path.display(),
+            CLI_COMMAND_NAME,
+        ))
+    }
+}
+
+fn render_welcome_banner(config_path: &Path) -> String {
+    let config_path = config_path.to_string_lossy();
+    let ask_command = crate::cli_handoff::format_ask_with_config(
+        &config_path,
+        next_actions::DEFAULT_FIRST_ASK_MESSAGE,
+    );
+    let chat_command = crate::cli_handoff::format_subcommand_with_config("chat", &config_path);
+    let doctor_command = crate::cli_handoff::format_subcommand_with_config("doctor", &config_path);
+
+    format!(
+        "LoongClaw is configured and ready.\nVersion: {}\nConfig: {}\n\nQuick commands:\n- First answer: {}\n- Chat: {}\n- Doctor: {}\n- Help: {} --help",
+        env!("CARGO_PKG_VERSION"),
+        config_path,
+        ask_command,
+        chat_command,
+        doctor_command,
+        CLI_COMMAND_NAME,
+    )
+}
+
+pub fn run_welcome_cli() -> CliResult<()> {
+    let config_path = resolve_welcome_config_path()?;
+    println!("{}", render_welcome_banner(config_path.as_path()));
+    Ok(())
+}
+
 pub async fn run_demo() -> CliResult<()> {
     let kernel = kernel_bootstrap::KernelBuilder::default().build();
     let token = kernel
@@ -751,6 +826,159 @@ pub async fn run_demo() -> CliResult<()> {
 
     println!("connector dispatch: {}", connector_dispatch.outcome.payload);
     Ok(())
+}
+
+#[cfg(test)]
+mod first_run_entry_tests {
+    use super::*;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        process,
+        sync::atomic::{AtomicU64, Ordering},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    static UNIQUE_TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after epoch")
+            .as_nanos();
+        let pid = process::id();
+        let counter = UNIQUE_TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("{prefix}-{pid}-{nanos}-{counter}"))
+    }
+
+    fn isolated_home(prefix: &str) -> (mvp::test_support::ScopedEnv, PathBuf) {
+        let mut env = mvp::test_support::ScopedEnv::new();
+        let home = unique_temp_dir(prefix);
+        fs::create_dir_all(&home).expect("create isolated home");
+        env.set("HOME", &home);
+        env.remove("LOONGCLAW_CONFIG_PATH");
+        (env, home)
+    }
+
+    #[test]
+    fn resolve_default_entry_command_routes_to_onboard_when_config_is_missing() {
+        let (_env, _home) = isolated_home("loongclaw-default-entry-missing");
+
+        assert!(
+            matches!(resolve_default_entry_command(), Commands::Onboard { .. }),
+            "missing config should route to onboard"
+        );
+    }
+
+    #[test]
+    fn resolve_default_entry_command_routes_to_welcome_when_default_config_exists() {
+        let (_env, _home) = isolated_home("loongclaw-default-entry-present");
+        let config_path = mvp::config::default_config_path();
+        mvp::config::write(
+            Some(config_path.to_str().expect("utf8 config path")),
+            &mvp::config::LoongClawConfig::default(),
+            true,
+        )
+        .expect("write default config");
+
+        assert!(
+            matches!(resolve_default_entry_command(), Commands::Welcome),
+            "present config should route to welcome"
+        );
+    }
+
+    #[test]
+    fn resolve_default_entry_command_honors_loongclaw_config_path_override() {
+        let mut env = mvp::test_support::ScopedEnv::new();
+        let config_path = unique_temp_dir("loongclaw-default-entry-env").join("custom-config.toml");
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent).expect("create config parent");
+        }
+        mvp::config::write(
+            Some(config_path.to_str().expect("utf8 config path")),
+            &mvp::config::LoongClawConfig::default(),
+            true,
+        )
+        .expect("write explicit config");
+        env.set("LOONGCLAW_CONFIG_PATH", &config_path);
+
+        assert!(
+            matches!(resolve_default_entry_command(), Commands::Welcome),
+            "env override config should route to welcome"
+        );
+    }
+
+    #[test]
+    fn resolve_default_entry_command_routes_to_onboard_when_config_path_is_a_directory() {
+        let mut env = mvp::test_support::ScopedEnv::new();
+        let config_dir = unique_temp_dir("loongclaw-default-entry-dir");
+        fs::create_dir_all(&config_dir).expect("create config directory");
+        env.set("LOONGCLAW_CONFIG_PATH", &config_dir);
+
+        assert!(
+            matches!(resolve_default_entry_command(), Commands::Onboard { .. }),
+            "directory config path should still route to onboard"
+        );
+    }
+
+    #[test]
+    fn run_welcome_cli_rejects_missing_config_file() {
+        let mut env = mvp::test_support::ScopedEnv::new();
+        let config_path = unique_temp_dir("loongclaw-welcome-missing").join("missing-config.toml");
+        env.set("LOONGCLAW_CONFIG_PATH", &config_path);
+
+        let error = run_welcome_cli().expect_err("missing config should fail welcome");
+
+        assert!(
+            error.contains("Config file not found"),
+            "welcome should explain the missing config file: {error}"
+        );
+        assert!(
+            error.contains("loongclaw onboard"),
+            "welcome should point users back to onboarding: {error}"
+        );
+    }
+
+    #[test]
+    fn run_welcome_cli_rejects_directory_config_path() {
+        let mut env = mvp::test_support::ScopedEnv::new();
+        let config_dir = unique_temp_dir("loongclaw-welcome-dir");
+        fs::create_dir_all(&config_dir).expect("create config directory");
+        env.set("LOONGCLAW_CONFIG_PATH", &config_dir);
+
+        let error = run_welcome_cli().expect_err("directory config path should fail welcome");
+
+        assert!(
+            error.contains("Config file not found"),
+            "welcome should reject directory config paths as missing config files: {error}"
+        );
+    }
+
+    #[test]
+    fn render_welcome_banner_includes_version_and_next_commands() {
+        let rendered = render_welcome_banner(Path::new("/tmp/loongclaw's config.toml"));
+
+        assert!(
+            rendered.contains(env!("CARGO_PKG_VERSION")),
+            "welcome banner should include the current version: {rendered}"
+        );
+        assert!(
+            rendered.contains("loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml'"),
+            "welcome banner should include a quoted ask command: {rendered}"
+        );
+        assert!(
+            rendered.contains("loongclaw chat --config '/tmp/loongclaw'\"'\"'s config.toml'"),
+            "welcome banner should include a quoted chat command: {rendered}"
+        );
+        assert!(
+            rendered.contains("loongclaw doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"),
+            "welcome banner should include a quoted doctor command: {rendered}"
+        );
+        assert!(
+            rendered.contains("loongclaw --help"),
+            "welcome banner should point users to root help: {rendered}"
+        );
+    }
 }
 
 pub async fn run_task_cli(objective: &str, payload_raw: &str) -> CliResult<()> {
