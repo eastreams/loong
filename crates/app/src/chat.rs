@@ -99,19 +99,25 @@ pub async fn run_cli_chat(
     let resolved_config_path = config_path
         .map(config::expand_path)
         .unwrap_or_else(config::default_config_path);
+    let config_exists = resolved_config_path.try_exists().map_err(|error| {
+        format!(
+            "failed to access config path {}: {error}",
+            resolved_config_path.display()
+        )
+    })?;
 
-    if !resolved_config_path.exists() {
+    if !config_exists {
         println!("Welcome to LoongClaw!");
         println!();
         println!("No configuration found. Would you like to run the setup wizard now? [Y/n]");
 
         let mut input = String::new();
-        io::stdin()
+        let read = io::stdin()
             .read_line(&mut input)
             .map_err(|e| format!("read stdin failed: {e}"))?;
-        let input = input.trim().to_lowercase();
+        let input = input.trim().to_ascii_lowercase();
 
-        if input.is_empty() || input == "y" || input == "yes" {
+        if read > 0 && matches!(input.as_str(), "y" | "yes") {
             let exit_status = std::process::Command::new("loongclaw")
                 .arg("onboard")
                 .spawn()

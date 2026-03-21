@@ -24,6 +24,7 @@ fn validation_diagnostic_with_severity(
 
 mod acp;
 mod architecture;
+mod chat_cli;
 mod cli_tests;
 mod doctor_feishu;
 mod feishu_cli;
