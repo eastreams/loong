@@ -883,7 +883,7 @@ async fn non_interactive_onboard_applies_reviewed_default_when_probe_is_skipped(
         loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
     loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
         .await
-        .expect("skip-model-probe should allow non-interactive onboarding to keep reviewed auto providers on auto");
+        .expect("skip-model-probe should allow non-interactive onboarding to materialize the reviewed default model");
 
     let raw = std::fs::read_to_string(&output).expect("read written onboarding config");
     let (_, config) = mvp::config::load(Some(output.to_string_lossy().as_ref()))
