@@ -1,9 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { Panel } from "../surfaces/Panel";
-import { useWebConnection } from "../../hooks/useWebConnection";
-import { ApiRequestError } from "../../lib/api/client";
-import { onboardingApi } from "../../features/onboarding/api";
+import { Panel } from "../../../components/surfaces/Panel";
+import { useWebConnection } from "../../../hooks/useWebConnection";
+import { ApiRequestError } from "../../../lib/api/client";
+import { onboardingApi } from "../api";
 
 function readStageCopy(
   stage: string,
@@ -19,6 +19,11 @@ function readStageCopy(
       return {
         title: t("onboarding.stages.tokenPairing.title"),
         body: t("onboarding.stages.tokenPairing.body"),
+      };
+    case "session_refresh":
+      return {
+        title: t("onboarding.stages.sessionRefresh.title"),
+        body: t("onboarding.stages.sessionRefresh.body"),
       };
     case "missing_config":
       return {
@@ -70,6 +75,7 @@ export function OnboardingStatusPanel() {
     clearOnboardingValidation,
     refreshOnboardingStatus,
     autoPairingInProgress,
+    authMode,
   } = useWebConnection();
   const [kind, setKind] = useState("");
   const [model, setModel] = useState("");
@@ -101,6 +107,7 @@ export function OnboardingStatusPanel() {
     onboardingStatus?.providerConfigured;
   const needsTokenPairing =
     authRequired &&
+    authMode !== "same_origin_session" &&
     !onboardingLoading &&
     !onboardingStatus?.tokenPaired;
   const canConfigureProvider =
@@ -253,7 +260,11 @@ export function OnboardingStatusPanel() {
             </strong>
           </div>
           <div className="dashboard-kv-card">
-            <span>{t("onboarding.summary.token")}</span>
+            <span>
+              {authMode === "same_origin_session"
+                ? t("onboarding.summary.session")
+                : t("onboarding.summary.token")}
+            </span>
             <strong>
               {onboardingStatus?.tokenPaired
                 ? t("onboarding.values.ready")
@@ -489,8 +500,6 @@ export function OnboardingStatusPanel() {
                     "";
                   setKind(nextKind);
                   if (baseUrlOrEndpoint === currentRoute) {
-                    // Let the next provider fall back to its own default route unless
-                    // the user has already typed a custom override.
                     setBaseUrlOrEndpoint("");
                   }
                 }}

@@ -4,11 +4,11 @@ import { Panel } from "../../../components/surfaces/Panel";
 import { ApiRequestError } from "../../../lib/api/client";
 import { useWebConnection } from "../../../hooks/useWebConnection";
 import { onboardingApi } from "../../onboarding/api";
+import { DebugConsolePanel } from "../components/DebugConsolePanel";
 import {
   dashboardApi,
   type DashboardConnectivity,
   type DashboardDebugConsole,
-  type DashboardDebugConsoleBlock,
   type DashboardConfigSnapshot,
   type DashboardProviderItem,
   type DashboardRuntime,
@@ -39,55 +39,6 @@ interface ConnectivityPresentation {
   summary: string;
   recommendation: string;
   probe: string;
-}
-
-type DebugLineTone =
-  | "plain"
-  | "section"
-  | "command"
-  | "path"
-  | "success"
-  | "error"
-  | "warn"
-  | "muted";
-
-function classifyDebugLine(line: string): DebugLineTone {
-  const trimmed = line.trim();
-  if (!trimmed) {
-    return "muted";
-  }
-  if (trimmed.startsWith("$ ")) {
-    return "command";
-  }
-  if (/^\[[^\]]+\]$/.test(trimmed)) {
-    return "section";
-  }
-  if (/\[(provider:error|web-api:err|web-dev:err)\]/i.test(trimmed)) {
-    return "error";
-  }
-  if (/\[(turn|tool)\]/i.test(trimmed)) {
-    return "warn";
-  }
-  if (/\[(runtime|config|provider|tools|web-api|web-dev)\]/i.test(trimmed)) {
-    return "section";
-  }
-  if (trimmed.startsWith("path=") || trimmed.includes(" path=")) {
-    return "path";
-  }
-  if (
-    /(turn\.failed|error|failed|unavailable|denied|transport_failure|Request failed)/i.test(
-      trimmed,
-    )
-  ) {
-    return "error";
-  }
-  if (/(ready|completed|outcome=ok|\bok\b|enabled=true)/i.test(trimmed)) {
-    return "success";
-  }
-  if (/(started|pending|loading|in progress|outcome=started)/i.test(trimmed)) {
-    return "warn";
-  }
-  return "plain";
 }
 
 function formatApprovalMode(
@@ -190,15 +141,18 @@ function readDashboardError(
   error: unknown,
   t: ReturnType<typeof useTranslation>["t"],
   markUnauthorized: () => void,
+  authMode: string | null,
   tokenPath: string | null,
   tokenEnv: string | null,
 ): string {
   if (error instanceof ApiRequestError && error.status === 401) {
     markUnauthorized();
-    return t("auth.invalidBody", {
-      tokenPath: tokenPath ?? "",
-      tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
-    });
+    return authMode === "same_origin_session"
+      ? t("auth.sessionInvalidBody")
+      : t("auth.invalidBody", {
+          tokenPath: tokenPath ?? "",
+          tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+        });
   }
 
   return error instanceof Error ? error.message : "Failed to load dashboard";
@@ -269,6 +223,7 @@ export default function DashboardPage() {
     authRevision,
     markUnauthorized,
     status,
+    authMode,
     tokenPath,
     tokenEnv,
   } =
@@ -332,10 +287,12 @@ export default function DashboardPage() {
       setTools(null);
       setError(
         status === "unauthorized"
-          ? t("auth.invalidBody", {
-              tokenPath: tokenPath ?? "",
-              tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
-            })
+          ? authMode === "same_origin_session"
+            ? t("auth.sessionInvalidBody")
+            : t("auth.invalidBody", {
+                tokenPath: tokenPath ?? "",
+                tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+              })
           : t("auth.requiredBody"),
       );
       return () => {
@@ -353,6 +310,7 @@ export default function DashboardPage() {
               loadError,
               t,
               markUnauthorized,
+              authMode,
               tokenPath,
               tokenEnv,
             ),
@@ -446,7 +404,7 @@ export default function DashboardPage() {
   ];
 
   const toolItems: DashboardToolItem[] = tools?.items ?? [];
-  const debugConsoleBlocks: DashboardDebugConsoleBlock[] = debugConsole?.blocks ?? [
+  const debugConsoleBlocks = debugConsole?.blocks ?? [
     {
       id: "loading",
       kind: "loading",
@@ -494,6 +452,7 @@ export default function DashboardPage() {
               loadError,
               t,
               markUnauthorized,
+              authMode,
               tokenPath,
               tokenEnv,
             ),
@@ -514,6 +473,7 @@ export default function DashboardPage() {
       }
     };
   }, [
+    authMode,
     canAccessProtectedApi,
     markUnauthorized,
     showDebugConsole,
@@ -535,6 +495,7 @@ export default function DashboardPage() {
           loadError,
           t,
           markUnauthorized,
+          authMode,
           tokenPath,
           tokenEnv,
         ),
@@ -666,45 +627,12 @@ export default function DashboardPage() {
             eyebrow={t("dashboard.debug.eyebrow", { defaultValue: "Runtime / Debug Console" })}
             title={t("dashboard.debug.panelTitle", { defaultValue: "只读调试视图" })}
           >
-            <div className="dashboard-debug-terminal" role="log" aria-live="polite">
-              <div className="dashboard-debug-command">{debugConsoleCommand}</div>
-              <div className="dashboard-debug-lines">
-                {debugConsoleBlocks.map((block) => (
-                  <section
-                    key={block.id}
-                    className={`dashboard-debug-block dashboard-debug-block-${block.kind}`}
-                  >
-                    <div className="dashboard-debug-block-header">{block.header}</div>
-                    <div className="dashboard-debug-block-lines">
-                      {block.lines.length > 0 ? (
-                        block.lines.map((line, index) => (
-                          <div
-                            key={`${block.id}-${index}-${line}`}
-                            className={`dashboard-debug-line dashboard-debug-line-${classifyDebugLine(line)}`}
-                          >
-                            {line || "\u00A0"}
-                          </div>
-                        ))
-                      ) : (
-                        <div className="dashboard-debug-line dashboard-debug-line-muted">
-                          {block.kind === "loading" ? "\u00A0" : t("dashboard.values.notSet")}
-                        </div>
-                      )}
-                    </div>
-                  </section>
-                ))}
-                {debugConsoleError ? (
-                  <section className="dashboard-debug-block dashboard-debug-block-error">
-                    <div className="dashboard-debug-block-header">ERROR</div>
-                    <div className="dashboard-debug-block-lines">
-                      <div className="dashboard-debug-line dashboard-debug-line-error">
-                        {debugConsoleError}
-                      </div>
-                    </div>
-                  </section>
-                ) : null}
-              </div>
-            </div>
+            <DebugConsolePanel
+              command={debugConsoleCommand}
+              blocks={debugConsoleBlocks}
+              error={debugConsoleError}
+              emptyLabel={t("dashboard.values.notSet")}
+            />
           </Panel>
         </section>
       ) : (

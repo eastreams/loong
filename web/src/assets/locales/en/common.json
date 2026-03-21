@@ -19,6 +19,10 @@
     "bannerBody": "Local token file: {{tokenPath}}. Paste the token value here.",
     "invalidTitle": "Stored token was rejected",
     "invalidBody": "The current token was rejected. Read the latest token from {{tokenPath}} and try again.",
+    "sessionTitle": "Refresh local session",
+    "sessionBody": "This same-origin Web page uses a local session cookie. Reload the page to establish a fresh local session.",
+    "sessionInvalidTitle": "Local session expired",
+    "sessionInvalidBody": "The local Web session is no longer valid. Reload the same-origin page to refresh the session.",
     "requiredBody": "Enter the local API token to load protected runtime data.",
     "inputPlaceholder": "Paste local API token",
     "save": "Save token",
@@ -34,6 +38,7 @@
     "summary": {
       "runtime": "Runtime",
       "token": "Token pairing",
+      "session": "Local session",
       "config": "Config",
       "provider": "Provider"
     },
@@ -54,6 +59,7 @@
       "fix_local_config": "Fix the local config and retry.",
       "configure_provider": "Add a provider, model, and key before continuing.",
       "validate_provider_route": "Check provider route diagnostics before continuing.",
+      "refresh_local_session": "Reload the same-origin page to refresh the local session.",
       "enter_web": "Enter Web Console.",
       "open_chat": "Open chat.",
       "wait": "Wait for the latest status."
@@ -120,6 +126,10 @@
       "tokenPairing": {
         "title": "Token pairing is still required",
         "body": "This browser is not paired with the local API yet. Web will try one lightweight local pairing attempt first, then fall back to manual token entry if needed."
+      },
+      "sessionRefresh": {
+        "title": "Local session needs a refresh",
+        "body": "This same-origin Web page should establish its local session automatically. Reload the page to refresh the session, then continue."
       },
       "missingConfig": {
         "title": "Local config is still missing",

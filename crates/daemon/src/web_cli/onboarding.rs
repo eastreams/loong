@@ -78,8 +78,10 @@ pub(super) async fn onboard_status(
     State(state): State<Arc<WebApiState>>,
     headers: HeaderMap,
 ) -> Json<ApiEnvelope<OnboardStatusPayload>> {
-    let token_paired =
-        extract_request_token(&headers).as_deref() == Some(state.local_token.as_str());
+    let token_paired = request_is_authenticated(
+        state.as_ref(),
+        extract_request_token(&headers).as_deref(),
+    );
     let payload = build_onboard_status_payload(state.as_ref(), token_paired).await;
 
     Json(ApiEnvelope {
@@ -397,6 +399,9 @@ pub(super) async fn onboard_pairing_clear() -> Result<Response, WebApiError> {
     response
         .headers_mut()
         .append(SET_COOKIE, build_clear_pairing_cookie()?);
+    response
+        .headers_mut()
+        .append(SET_COOKIE, build_clear_same_origin_session_cookie()?);
     Ok(response)
 }
 
@@ -468,7 +473,7 @@ async fn build_onboard_status_payload(
 
     let mut payload = OnboardStatusPayload {
         runtime_online: true,
-        token_required: true,
+        token_required: state.web_install_mode != "same_origin_static",
         token_paired,
         config_exists,
         config_loadable: false,
@@ -483,8 +488,16 @@ async fn build_onboard_status_payload(
         memory_profile: "window_only".to_owned(),
         prompt_addendum: String::new(),
         config_path: config_path_display,
-        blocking_stage: "token_pairing",
-        next_action: "enter_local_token",
+        blocking_stage: if state.web_install_mode == "same_origin_static" {
+            "ready"
+        } else {
+            "token_pairing"
+        },
+        next_action: if state.web_install_mode == "same_origin_static" {
+            "open_chat"
+        } else {
+            "enter_local_token"
+        },
     };
 
     match load_web_snapshot(state) {
@@ -526,7 +539,11 @@ async fn build_onboard_status_payload(
     }
 
     let (blocking_stage, next_action) = if !payload.token_paired {
-        ("token_pairing", "enter_local_token")
+        if state.web_install_mode == "same_origin_static" {
+            ("session_refresh", "refresh_local_session")
+        } else {
+            ("token_pairing", "enter_local_token")
+        }
     } else if !payload.config_exists {
         ("missing_config", "create_local_config")
     } else if !payload.config_loadable {

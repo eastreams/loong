@@ -184,15 +184,18 @@ function toFriendlyChatError(
   error: unknown,
   t: ReturnType<typeof useTranslation>["t"],
   markUnauthorized: () => void,
+  authMode: string | null,
   tokenPath: string | null,
   tokenEnv: string | null,
 ): string {
   if (error instanceof ApiRequestError && error.status === 401) {
     markUnauthorized();
-    return t("auth.invalidBody", {
-      tokenPath: tokenPath ?? "",
-      tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
-    });
+    return authMode === "same_origin_session"
+      ? t("auth.sessionInvalidBody")
+      : t("auth.invalidBody", {
+          tokenPath: tokenPath ?? "",
+          tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+        });
   }
 
   const rawMessage =
@@ -215,6 +218,7 @@ export default function ChatPage() {
     authRevision,
     markUnauthorized,
     status,
+    authMode,
     tokenPath,
     tokenEnv,
   } =
@@ -313,10 +317,12 @@ export default function ChatPage() {
       setIsLoadingSessions(false);
       setError(
         status === "unauthorized"
-          ? t("auth.invalidBody", {
-              tokenPath: tokenPath ?? "",
-              tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
-            })
+          ? authMode === "same_origin_session"
+            ? t("auth.sessionInvalidBody")
+            : t("auth.invalidBody", {
+                tokenPath: tokenPath ?? "",
+                tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+              })
           : t("auth.requiredBody"),
       );
       return () => {
@@ -339,10 +345,12 @@ export default function ChatPage() {
           if (loadError instanceof ApiRequestError && loadError.status === 401) {
             markUnauthorized();
             setError(
-              t("auth.invalidBody", {
-                tokenPath: tokenPath ?? "",
-                tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
-              }),
+              authMode === "same_origin_session"
+                ? t("auth.sessionInvalidBody")
+                : t("auth.invalidBody", {
+                    tokenPath: tokenPath ?? "",
+                    tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+                  }),
             );
           } else {
             setError(loadError instanceof Error ? loadError.message : "Failed to load sessions");
@@ -366,6 +374,7 @@ export default function ChatPage() {
     markUnauthorized,
     status,
     t,
+    authMode,
     tokenEnv,
     tokenPath,
   ]);
@@ -430,10 +439,12 @@ export default function ChatPage() {
           if (loadError instanceof ApiRequestError && loadError.status === 401) {
             markUnauthorized();
             setError(
-              t("auth.invalidBody", {
-                tokenPath: tokenPath ?? "",
-                tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
-              }),
+              authMode === "same_origin_session"
+                ? t("auth.sessionInvalidBody")
+                : t("auth.invalidBody", {
+                    tokenPath: tokenPath ?? "",
+                    tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+                  }),
             );
           } else {
             setError(loadError instanceof Error ? loadError.message : "Failed to load history");
@@ -453,7 +464,7 @@ export default function ChatPage() {
     return () => {
       cancelled = true;
     };
-  }, [canAccessProtectedApi, markUnauthorized, selectedSessionId, t]);
+  }, [authMode, canAccessProtectedApi, markUnauthorized, selectedSessionId, t, tokenEnv, tokenPath]);
 
   async function refreshSessions(preferredSessionId?: string) {
     const loadedSessions = await chatApi.listSessions();
@@ -602,6 +613,7 @@ export default function ChatPage() {
           submitError,
           t,
           markUnauthorized,
+          authMode,
           tokenPath,
           tokenEnv,
         ),
@@ -638,10 +650,12 @@ export default function ChatPage() {
       if (deleteError instanceof ApiRequestError && deleteError.status === 401) {
         markUnauthorized();
         setError(
-          t("auth.invalidBody", {
-            tokenPath: tokenPath ?? "",
-            tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
-          }),
+          authMode === "same_origin_session"
+            ? t("auth.sessionInvalidBody")
+            : t("auth.invalidBody", {
+                tokenPath: tokenPath ?? "",
+                tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+              }),
         );
       } else {
         setError(deleteError instanceof Error ? deleteError.message : "Failed to delete session");

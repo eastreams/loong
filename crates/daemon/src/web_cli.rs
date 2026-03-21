@@ -3,7 +3,7 @@ use std::{
     convert::Infallible,
     env, fs,
     net::SocketAddr,
-    path::PathBuf,
+    path::{Path as FsPath, PathBuf},
     sync::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicBool, Ordering},
@@ -15,7 +15,7 @@ use axum::{
     body::Body,
     extract::{Path, Request, State},
     http::{
-        HeaderMap, HeaderValue, Method, StatusCode,
+        HeaderMap, HeaderValue, Method, StatusCode, Uri,
         header::{
             ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
             ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, AUTHORIZATION, CONTENT_TYPE,
@@ -40,6 +40,15 @@ use tokio::{
 use crate::{CliResult, mvp, with_graceful_shutdown};
 
 mod onboarding;
+mod auth;
+mod debug_console;
+
+use auth::{
+    build_clear_pairing_cookie, build_clear_same_origin_session_cookie, build_pairing_cookie,
+    build_same_origin_session_cookie, extract_request_token, request_is_authenticated,
+    require_local_token, require_same_origin_write_origin, extract_allowed_local_origin,
+};
+use debug_console::{dashboard_debug_console, record_debug_operation};
 
 #[derive(Subcommand, Debug)]
 pub enum WebCommand {
@@ -49,18 +58,23 @@ pub enum WebCommand {
         config: Option<String>,
         #[arg(long, default_value = "127.0.0.1:4317")]
         bind: String,
+        #[arg(long)]
+        static_root: Option<String>,
     },
 }
 
 const WEB_API_TOKEN_ENV: &str = "LOONGCLAW_WEB_TOKEN";
 const WEB_API_TOKEN_FILE: &str = "web-api-token";
 const WEB_API_PAIRING_COOKIE: &str = "loongclaw-web-pair";
+const WEB_API_SESSION_COOKIE: &str = "loongclaw-web-session";
 
 #[derive(Debug)]
 struct WebApiState {
     config_path: Option<String>,
     local_token: String,
     local_token_path: PathBuf,
+    web_install_mode: &'static str,
+    static_root: Option<PathBuf>,
     turn_streams: Mutex<HashMap<String, mpsc::UnboundedReceiver<String>>>,
     debug_state: StdMutex<DebugConsoleRuntimeState>,
 }
@@ -171,6 +185,7 @@ struct MetaAuthPayload {
     header: &'static str,
     token_path: String,
     token_env: &'static str,
+    mode: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -249,24 +264,6 @@ struct DashboardToolsPayload {
     shell_allow_count: usize,
     shell_deny_count: usize,
     items: Vec<DashboardToolItemPayload>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DashboardDebugConsolePayload {
-    generated_at: String,
-    command: String,
-    blocks: Vec<DashboardDebugConsoleBlockPayload>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DashboardDebugConsoleBlockPayload {
-    id: String,
-    kind: &'static str,
-    started_at: String,
-    header: String,
-    lines: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -423,18 +420,36 @@ impl IntoResponse for WebApiError {
 
 pub async fn run_web_command(command: WebCommand) -> CliResult<()> {
     match command {
-        WebCommand::Serve { config, bind } => run_web_serve(config.as_deref(), &bind).await,
+        WebCommand::Serve {
+            config,
+            bind,
+            static_root,
+        } => {
+            run_web_serve(config.as_deref(), &bind, static_root.as_deref()).await
+        }
     }
 }
 
-async fn run_web_serve(config_path: Option<&str>, bind: &str) -> CliResult<()> {
+async fn run_web_serve(
+    config_path: Option<&str>,
+    bind: &str,
+    static_root: Option<&str>,
+) -> CliResult<()> {
     let (local_token, local_token_path) = resolve_local_web_token()
         .map_err(|error| format!("initialize local web api token failed: {}", error.message))?;
     let token_path_display = local_token_path.display().to_string();
+    let resolved_static_root = resolve_static_root(static_root)?;
+    let web_install_mode = if resolved_static_root.is_some() {
+        "same_origin_static"
+    } else {
+        "api_only"
+    };
     let state = Arc::new(WebApiState {
         config_path: config_path.map(str::to_owned),
         local_token,
         local_token_path,
+        web_install_mode,
+        static_root: resolved_static_root.clone(),
         turn_streams: Mutex::new(HashMap::new()),
         debug_state: StdMutex::new(DebugConsoleRuntimeState::default()),
     });
@@ -463,24 +478,40 @@ async fn run_web_serve(config_path: Option<&str>, bind: &str) -> CliResult<()> {
         .route("/chat/sessions/{id}/history", get(chat_history))
         .layer(middleware::from_fn_with_state(
             state.clone(),
+            require_same_origin_write_origin,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
             require_local_token,
         ))
         .with_state(state.clone());
     let app = Router::new()
         .route("/healthz", get(healthz))
         .nest("/api", public_api.merge(protected_api))
+        .fallback(get(serve_web_static))
         .layer(middleware::from_fn(local_web_cors))
         .with_state(state);
 
     let address: SocketAddr = bind
         .parse()
         .map_err(|error| format!("invalid web bind address `{bind}`: {error}"))?;
+    if web_install_mode == "same_origin_static" && !address.ip().is_loopback() {
+        return Err(format!(
+            "same-origin static mode only supports loopback binds, got `{bind}`"
+        ));
+    }
     let listener = tokio::net::TcpListener::bind(address)
         .await
         .map_err(|error| format!("bind web api on {bind} failed: {error}"))?;
 
     println!("loongclaw web api listening on http://{address}");
     println!("loongclaw web api local token path: {token_path_display}");
+    if let Some(static_root) = resolved_static_root.as_ref() {
+        println!(
+            "loongclaw web ui same-origin static root: {}",
+            static_root.display()
+        );
+    }
     with_graceful_shutdown(async move {
         axum::serve(listener, app)
             .await
@@ -532,41 +563,42 @@ fn with_cors_headers(mut response: Response, allowed_origin: Option<&str>) -> Re
     response
 }
 
-async fn require_local_token(
-    State(state): State<Arc<WebApiState>>,
-    request: Request,
-    next: Next,
-) -> Result<Response, WebApiError> {
-    if request.method() == Method::OPTIONS {
-        return Ok(next.run(request).await);
-    }
-
-    let token = extract_request_token(request.headers());
-    if token.as_deref() != Some(state.local_token.as_str()) {
-        return Err(WebApiError::unauthorized(format!(
-            "Local API token required. Read it from `{}` or set `{WEB_API_TOKEN_ENV}`.",
-            state.local_token_path.display()
-        )));
-    }
-
-    Ok(next.run(request).await)
-}
-
 async fn meta(State(state): State<Arc<WebApiState>>) -> Json<ApiEnvelope<MetaPayload>> {
     Json(ApiEnvelope {
         ok: true,
         data: MetaPayload {
             app_version: env!("CARGO_PKG_VERSION").to_owned(),
             api_version: "v1",
-            web_install_mode: "api_only",
+            web_install_mode: state.web_install_mode,
             supported_locales: ["en", "zh-CN"],
             default_locale: "en",
             auth: MetaAuthPayload {
                 required: true,
-                scheme: "bearer",
-                header: "Authorization",
-                token_path: state.local_token_path.display().to_string(),
-                token_env: WEB_API_TOKEN_ENV,
+                scheme: if state.web_install_mode == "same_origin_static" {
+                    "cookie"
+                } else {
+                    "bearer"
+                },
+                header: if state.web_install_mode == "same_origin_static" {
+                    "Cookie"
+                } else {
+                    "Authorization"
+                },
+                token_path: if state.web_install_mode == "same_origin_static" {
+                    String::new()
+                } else {
+                    state.local_token_path.display().to_string()
+                },
+                token_env: if state.web_install_mode == "same_origin_static" {
+                    ""
+                } else {
+                    WEB_API_TOKEN_ENV
+                },
+                mode: if state.web_install_mode == "same_origin_static" {
+                    "same_origin_session"
+                } else {
+                    "local_token"
+                },
             },
         },
     })
@@ -584,7 +616,7 @@ async fn dashboard_summary(
             active_model: snapshot.config.provider.model.clone(),
             memory_backend: "sqlite",
             session_count: snapshot.sessions.len(),
-            web_install_mode: "api_only",
+            web_install_mode: state.web_install_mode,
         },
     }))
 }
@@ -615,7 +647,7 @@ async fn dashboard_runtime(
             memory_backend: snapshot.config.memory.resolved_backend().as_str(),
             memory_mode: snapshot.config.memory.resolved_mode().as_str(),
             ingest_mode: snapshot.config.memory.ingest_mode.as_str(),
-            web_install_mode: "api_only",
+            web_install_mode: state.web_install_mode,
             active_provider: snapshot.config.active_provider_id().map(str::to_owned),
             active_model: snapshot.config.provider.model.clone(),
             acp_enabled: snapshot.config.acp.enabled,
@@ -724,23 +756,6 @@ async fn dashboard_tools(
             shell_allow_count: snapshot.config.tools.shell_allow.len(),
             shell_deny_count: snapshot.config.tools.shell_deny.len(),
             items: build_tool_items(&snapshot.config, &tool_runtime),
-        },
-    }))
-}
-
-async fn dashboard_debug_console(
-    State(state): State<Arc<WebApiState>>,
-) -> Result<Json<ApiEnvelope<DashboardDebugConsolePayload>>, WebApiError> {
-    let snapshot = load_web_snapshot(state.as_ref())?;
-    let tool_runtime =
-        mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(&snapshot.config, None);
-    let debug_state = snapshot_debug_state(state.as_ref());
-    Ok(Json(ApiEnvelope {
-        ok: true,
-        data: DashboardDebugConsolePayload {
-            generated_at: format_timestamp(OffsetDateTime::now_utc().unix_timestamp()),
-            command: "$ loongclaw web debug --readonly".to_owned(),
-            blocks: build_debug_console_blocks(&snapshot, &tool_runtime, &debug_state),
         },
     }))
 }
@@ -1096,127 +1111,6 @@ fn build_tool_items(
     ]
 }
 
-fn build_debug_console_blocks(
-    snapshot: &WebSnapshot,
-    runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
-    debug_state: &DebugConsoleRuntimeState,
-) -> Vec<DashboardDebugConsoleBlockPayload> {
-    let now = format_timestamp(OffsetDateTime::now_utc().unix_timestamp());
-    let active_provider = snapshot.config.active_provider_id().unwrap_or("none");
-    let active_model = snapshot.config.provider.model.as_str();
-    let personality = prompt_personality_id(snapshot.config.cli.resolved_personality());
-    let prompt_mode = if snapshot.config.cli.uses_native_prompt_pack() {
-        "native_prompt_pack"
-    } else {
-        "inline_prompt"
-    };
-    let memory_profile = snapshot.config.memory.resolved_profile().as_str();
-    let enabled_tool_count = build_tool_items(&snapshot.config, runtime)
-        .into_iter()
-        .filter(|item| item.enabled)
-        .count();
-
-    let mut blocks = vec![DashboardDebugConsoleBlockPayload {
-        id: "runtime-snapshot".to_owned(),
-        kind: "runtime",
-        started_at: now.clone(),
-        header: format!("{now} runtime snapshot"),
-        lines: vec![
-            format!(
-                "{now} [runtime] ready source=local_daemon provider={active_provider} model={active_model}"
-            ),
-            format!(
-                "{now} [config] prompt={prompt_mode} personality={} memory_profile={memory_profile}",
-                personality
-            ),
-            format!(
-                "{now} [provider] endpoint={}",
-                snapshot.config.provider.endpoint()
-            ),
-            format!(
-                "{now} [tools] enabled={} approval={} shell_default={}",
-                enabled_tool_count,
-                approval_mode_label(snapshot.config.tools.approval.mode),
-                snapshot.config.tools.shell_default_mode
-            ),
-        ],
-    }];
-
-    blocks.extend(
-        debug_state
-            .recent_blocks
-            .iter()
-            .rev()
-            .take(6)
-            .rev()
-            .map(|block| DashboardDebugConsoleBlockPayload {
-                id: block.id.clone(),
-                kind: block.kind,
-                started_at: block.started_at.clone(),
-                header: block.header.clone(),
-                lines: block.lines.clone(),
-            }),
-    );
-
-    if let Some(log_block) = build_log_output_block() {
-        blocks.push(log_block);
-    }
-
-    blocks
-}
-
-fn snapshot_debug_state(state: &WebApiState) -> DebugConsoleRuntimeState {
-    // This clone keeps the console builder simple and avoids holding the mutex
-    // while we format multiple output sections.
-    let Ok(debug) = state.debug_state.lock() else {
-        return DebugConsoleRuntimeState::default();
-    };
-    debug.clone()
-}
-
-fn build_log_output_block() -> Option<DashboardDebugConsoleBlockPayload> {
-    let mut lines = Vec::new();
-    append_log_tail(&mut lines, "web-api", default_web_log_root().join("web-api.log"), 10);
-    append_log_tail(
-        &mut lines,
-        "web-api:err",
-        default_web_log_root().join("web-api.err.log"),
-        8,
-    );
-    append_log_tail(&mut lines, "web-dev", default_web_log_root().join("web-dev.log"), 8);
-    append_log_tail(
-        &mut lines,
-        "web-dev:err",
-        default_web_log_root().join("web-dev.err.log"),
-        8,
-    );
-
-    (!lines.is_empty()).then(|| DashboardDebugConsoleBlockPayload {
-        id: "process-output".to_owned(),
-        kind: "logs",
-        started_at: format_timestamp(OffsetDateTime::now_utc().unix_timestamp()),
-        header: format!(
-            "{} process output",
-            format_timestamp(OffsetDateTime::now_utc().unix_timestamp())
-        ),
-        lines,
-    })
-}
-
-fn default_web_log_root() -> PathBuf {
-    mvp::config::default_loongclaw_home().join("logs")
-}
-
-fn append_log_tail(lines: &mut Vec<String>, label: &str, path: PathBuf, max_lines: usize) {
-    match read_log_tail_lines(path.as_path(), max_lines) {
-        Ok(entries) if entries.is_empty() => {}
-        Ok(entries) => {
-            lines.extend(entries.into_iter().map(|entry| format!("[{label}] {entry}")));
-        }
-        Err(message) => lines.push(format!("[{label}] unavailable {message}")),
-    }
-}
-
 fn truncate_debug_value(value: &str, max_chars: usize) -> String {
     let mut output = String::new();
     for (index, ch) in value.chars().enumerate() {
@@ -1226,53 +1120,6 @@ fn truncate_debug_value(value: &str, max_chars: usize) -> String {
         }
         output.push(ch);
     }
-    output
-}
-
-fn read_log_tail_lines(path: &std::path::Path, max_lines: usize) -> Result<Vec<String>, String> {
-    if !path.exists() {
-        return Ok(vec!["(missing)".to_owned()]);
-    }
-
-    let bytes = fs::read(path).map_err(|error| error.to_string())?;
-    let content = String::from_utf8_lossy(&bytes);
-    let mut entries = content
-        .lines()
-        .rev()
-        .filter(|line| !line.trim().is_empty())
-        .take(max_lines)
-        .map(strip_ansi_escape_codes)
-        .collect::<Vec<_>>();
-    entries.reverse();
-    Ok(entries)
-}
-
-fn strip_ansi_escape_codes(input: &str) -> String {
-    let mut output = String::with_capacity(input.len());
-    let chars: Vec<char> = input.chars().collect();
-    let mut index = 0usize;
-
-    while index < chars.len() {
-        if chars[index] == '\u{1b}' {
-            index += 1;
-            if index < chars.len() && chars[index] == '[' {
-                index += 1;
-                while index < chars.len() {
-                    let ch = chars[index];
-                    index += 1;
-                    if ('@'..='~').contains(&ch) {
-                        break;
-                    }
-                }
-                continue;
-            }
-            continue;
-        }
-
-        output.push(chars[index]);
-        index += 1;
-    }
-
     output
 }
 
@@ -1484,75 +1331,107 @@ fn resolve_web_config_path(state: &WebApiState) -> PathBuf {
         .unwrap_or_else(mvp::config::default_config_path)
 }
 
-fn extract_request_token(headers: &HeaderMap) -> Option<String> {
-    if let Some(raw) = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return Some(raw.to_owned());
+fn resolve_static_root(static_root: Option<&str>) -> CliResult<Option<PathBuf>> {
+    let Some(raw_root) = static_root else {
+        return Ok(None);
+    };
+    let root = PathBuf::from(raw_root);
+    if !root.exists() {
+        return Err(format!("web static root `{}` does not exist", root.display()));
     }
-
-    headers
-        .get("x-loongclaw-token")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            headers
-                .get(COOKIE)
-                .and_then(|value| value.to_str().ok())
-                .and_then(extract_pairing_cookie_token)
-        })
+    if !root.is_dir() {
+        return Err(format!("web static root `{}` is not a directory", root.display()));
+    }
+    let index_path = root.join("index.html");
+    if !index_path.is_file() {
+        return Err(format!(
+            "web static root `{}` is missing `index.html`",
+            root.display()
+        ));
+    }
+    Ok(Some(root))
 }
 
-fn extract_pairing_cookie_token(raw_cookie: &str) -> Option<String> {
-    raw_cookie
-        .split(';')
-        .map(str::trim)
-        .filter_map(|segment| segment.split_once('='))
-        .find_map(|(name, value)| {
-            (name.trim() == WEB_API_PAIRING_COOKIE)
-                .then(|| value.trim())
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-        })
-}
-
-fn extract_allowed_local_origin(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get(ORIGIN)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| is_allowed_local_origin(value))
-        .map(ToOwned::to_owned)
-}
-
-fn is_allowed_local_origin(origin: &str) -> bool {
-    let Ok(url) = reqwest::Url::parse(origin) else {
-        return false;
+async fn serve_web_static(
+    State(state): State<Arc<WebApiState>>,
+    uri: Uri,
+) -> Result<Response, WebApiError> {
+    let Some(static_root) = state.static_root.as_ref() else {
+        return Err(WebApiError::not_found("not found"));
     };
 
-    matches!(url.scheme(), "http" | "https")
-        && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"))
+    let request_path = uri.path();
+    let candidate = match resolve_static_asset_path(static_root, request_path) {
+        Some(path) => path,
+        None => return Err(WebApiError::not_found("not found")),
+    };
+    let effective_path = if candidate.is_file() {
+        candidate
+    } else if is_asset_like_path(request_path) {
+        return Err(WebApiError::not_found("not found"));
+    } else {
+        static_root.join("index.html")
+    };
+    let bytes = fs::read(&effective_path).map_err(|error| {
+        WebApiError::internal(format!(
+            "read web static asset `{}` failed: {error}",
+            effective_path.display()
+        ))
+    })?;
+    let mut response = Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, detect_static_content_type(&effective_path))
+        .body(Body::from(bytes))
+        .map_err(|error| WebApiError::internal(format!("build static response failed: {error}")))?;
+    if state.web_install_mode == "same_origin_static" {
+        response
+            .headers_mut()
+            .append(SET_COOKIE, build_same_origin_session_cookie(state.local_token.as_str())?);
+    }
+    Ok(response)
 }
 
-fn build_pairing_cookie(token: &str) -> Result<HeaderValue, WebApiError> {
-    HeaderValue::from_str(&format!(
-        "{WEB_API_PAIRING_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000"
-    ))
-    .map_err(|error| WebApiError::internal(format!("build pairing cookie failed: {error}")))
+fn resolve_static_asset_path(static_root: &FsPath, request_path: &str) -> Option<PathBuf> {
+    let trimmed = request_path.trim_start_matches('/');
+    if trimmed.is_empty() {
+        return Some(static_root.join("index.html"));
+    }
+
+    let relative = FsPath::new(trimmed);
+    let mut resolved = static_root.to_path_buf();
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(segment) => resolved.push(segment),
+            _ => return None,
+        }
+    }
+    if resolved.is_dir() {
+        Some(resolved.join("index.html"))
+    } else {
+        Some(resolved)
+    }
 }
 
-fn build_clear_pairing_cookie() -> Result<HeaderValue, WebApiError> {
-    HeaderValue::from_str(&format!(
-        "{WEB_API_PAIRING_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
-    ))
-    .map_err(|error| WebApiError::internal(format!("build pairing cookie clear failed: {error}")))
+fn is_asset_like_path(request_path: &str) -> bool {
+    FsPath::new(request_path.trim_start_matches('/'))
+        .extension()
+        .is_some()
+}
+
+fn detect_static_content_type(path: &FsPath) -> &'static str {
+    match path.extension().and_then(|value| value.to_str()) {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") => "application/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("json") => "application/json; charset=utf-8",
+        Some("webmanifest") => "application/manifest+json; charset=utf-8",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("woff") => "font/woff",
+        Some("woff2") => "font/woff2",
+        _ => "application/octet-stream",
+    }
 }
 
 fn format_timestamp(unix_seconds: i64) -> String {
@@ -1933,25 +1812,6 @@ fn find_debug_block_mut<'a>(
     id: &str,
 ) -> Option<&'a mut DebugConsoleBlock> {
     blocks.iter_mut().find(|block| block.id == id)
-}
-
-pub(super) fn record_debug_operation(
-    state: &Arc<WebApiState>,
-    kind: &'static str,
-    title: String,
-    lines: Vec<String>,
-) {
-    let Ok(mut debug) = state.debug_state.lock() else {
-        return;
-    };
-    let at = format_timestamp(OffsetDateTime::now_utc().unix_timestamp());
-    let mut block = DebugConsoleBlock::operation(
-        format!("{kind}:{at}:{}", random::<u32>()),
-        kind,
-        title,
-    );
-    block.lines = lines;
-    push_debug_block(&mut debug.recent_blocks, block);
 }
 
 fn collect_internal_record_keys(turns: &[mvp::memory::ConversationTurn]) -> HashSet<String> {

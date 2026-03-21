@@ -22,6 +22,7 @@ interface MetaAuthInfo {
   header: string;
   tokenPath: string;
   tokenEnv: string;
+  mode: string;
 }
 
 export interface OnboardingStatus {
@@ -70,6 +71,7 @@ export interface WebSessionContextValue {
   autoPairingInProgress: boolean;
   tokenPath: string | null;
   tokenEnv: string | null;
+  authMode: string | null;
   authRevision: number;
   saveToken: (token: string) => void;
   clearToken: () => void;
@@ -115,6 +117,7 @@ export function WebSessionProvider({ children }: PropsWithChildren) {
     return window.sessionStorage.getItem(ONBOARDING_ACK_STORAGE_KEY);
   });
   const authRequired = authInfo?.required ?? true;
+  const authMode = authInfo?.mode ?? null;
 
   function persistOnboardingValidationKey(key: string | null) {
     if (typeof window === "undefined") {
@@ -198,7 +201,7 @@ export function WebSessionProvider({ children }: PropsWithChildren) {
         if (!cancelled) {
           setOnboardingStatus({
             runtimeOnline: false,
-            tokenRequired: true,
+            tokenRequired: authMode !== "same_origin_session",
             tokenPaired: false,
             configExists: false,
             configLoadable: false,
@@ -228,7 +231,7 @@ export function WebSessionProvider({ children }: PropsWithChildren) {
     return () => {
       cancelled = true;
     };
-  }, [authRevision, onboardingRevision, storedToken]);
+  }, [authMode, authRevision, onboardingRevision, storedToken]);
 
   useEffect(() => {
     if (storedToken?.trim() || onboardingStatus?.tokenPaired) {
@@ -243,7 +246,8 @@ export function WebSessionProvider({ children }: PropsWithChildren) {
       autoPairingInProgress ||
       !!storedToken?.trim() ||
       onboardingStatus?.tokenPaired ||
-      !authRequired
+      !authRequired ||
+      authMode === "same_origin_session"
     ) {
       return;
     }
@@ -278,6 +282,7 @@ export function WebSessionProvider({ children }: PropsWithChildren) {
     };
   }, [
     authRequired,
+    authMode,
     autoPairingAttempted,
     autoPairingInProgress,
     onboardingLoading,
@@ -345,6 +350,7 @@ export function WebSessionProvider({ children }: PropsWithChildren) {
       autoPairingInProgress,
       tokenPath: authInfo?.tokenPath ?? null,
       tokenEnv: authInfo?.tokenEnv ?? null,
+      authMode,
       authRevision,
       saveToken: (token: string) => {
         const normalized = token.trim();
@@ -369,6 +375,7 @@ export function WebSessionProvider({ children }: PropsWithChildren) {
     [
       authInfo?.tokenEnv,
       authInfo?.tokenPath,
+      authMode,
       authRequired,
       authRevision,
       autoPairingInProgress,

@@ -1,6 +1,6 @@
 import type { PropsWithChildren } from "react";
 import NavBar from "../../components/layout/NavBar";
-import { OnboardingStatusPanel } from "../../components/status/OnboardingStatusPanel";
+import { OnboardingStatusPanel } from "../../features/onboarding/components/OnboardingStatusPanel";
 import { useWebConnection } from "../../hooks/useWebConnection";
 
 export default function RootLayout({ children }: PropsWithChildren) {

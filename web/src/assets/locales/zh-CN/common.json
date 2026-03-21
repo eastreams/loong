@@ -19,6 +19,10 @@
     "bannerBody": "本地 token 文件位置：{{tokenPath}}。把里面的 token 粘贴到这里即可。",
     "invalidTitle": "当前 token 已被拒绝",
     "invalidBody": "当前 token 无效，请到 {{tokenPath}} 读取最新 token 后重试。",
+    "sessionTitle": "刷新本地会话",
+    "sessionBody": "这个同源 Web 页面会使用本地 session cookie。刷新页面即可重新建立本地会话。",
+    "sessionInvalidTitle": "本地会话已失效",
+    "sessionInvalidBody": "当前本地 Web 会话已失效，请刷新同源页面以重新建立会话。",
     "requiredBody": "先输入本地 API token，才能加载受保护的运行时数据。",
     "inputPlaceholder": "输入本地 API token",
     "save": "保存 token",
@@ -34,6 +38,7 @@
     "summary": {
       "runtime": "Runtime",
       "token": "Token 配对",
+      "session": "本地会话",
       "config": "配置文件",
       "provider": "Provider"
     },
@@ -54,6 +59,7 @@
       "fix_local_config": "先修复本地配置，再重试。",
       "configure_provider": "先补齐 provider、model 和 key。",
       "validate_provider_route": "先检查 provider 路由与连通性。",
+      "refresh_local_session": "刷新同源页面，重新建立本地会话。",
       "enter_web": "进入 Web Console。",
       "open_chat": "进入 chat。",
       "wait": "等待最新状态。"
@@ -120,6 +126,10 @@
       "tokenPairing": {
         "title": "还没有完成 token 配对",
         "body": "当前浏览器还没有和本地 API 完成配对。Web 会先尝试一次轻量自动配对，如果失败，再回退到手动输入 token。"
+      },
+      "sessionRefresh": {
+        "title": "本地会话需要刷新",
+        "body": "这个同源 Web 页面本应自动建立本地会话。请刷新页面以重新建立会话，然后继续。"
       },
       "missingConfig": {
         "title": "本地配置文件还不存在",
