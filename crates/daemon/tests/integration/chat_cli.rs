@@ -1,7 +1,6 @@
 #![cfg(unix)]
 
 use super::*;
-use std::ffi::{OsStr, OsString};
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -22,16 +21,6 @@ fn unique_temp_path(label: &str) -> PathBuf {
         "loongclaw-chat-cli-{label}-{}-{nanos}-{counter}",
         std::process::id(),
     ))
-}
-
-fn prepend_path(dir: &Path) -> OsString {
-    let original_path = std::env::var_os("PATH").unwrap_or_default();
-    let mut path_value = dir.as_os_str().to_os_string();
-    if !original_path.is_empty() {
-        path_value.push(OsStr::new(":"));
-        path_value.push(original_path);
-    }
-    path_value
 }
 
 fn render_output(bytes: &[u8]) -> String {
@@ -64,15 +53,8 @@ struct ChatCliFixture {
     _lock: MutexGuard<'static, ()>,
     root: PathBuf,
     home_dir: PathBuf,
-    bin_dir: PathBuf,
-    chat_binary_path: PathBuf,
+    onboard_binary_path: PathBuf,
     onboard_log_path: PathBuf,
-}
-
-#[derive(Clone, Copy)]
-enum PathMode {
-    IncludeFixtureBinDir,
-    Empty,
 }
 
 impl ChatCliFixture {
@@ -81,54 +63,34 @@ impl ChatCliFixture {
         let root = unique_temp_path(label);
         let home_dir = root.join("home");
         let bin_dir = root.join("bin");
-        let chat_binary_path = bin_dir.join("loongclaw");
+        let onboard_binary_path = bin_dir.join("fake-onboard");
         std::fs::create_dir_all(&home_dir).expect("create fixture home");
         std::fs::create_dir_all(&bin_dir).expect("create fixture bin");
-        std::fs::copy(env!("CARGO_BIN_EXE_loongclaw"), &chat_binary_path)
-            .expect("copy loongclaw chat binary");
-        let mut permissions = std::fs::metadata(&chat_binary_path)
-            .expect("copied loongclaw metadata")
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&chat_binary_path, permissions)
-            .expect("mark copied loongclaw executable");
         Self {
             _lock: lock,
             home_dir,
-            bin_dir,
-            chat_binary_path,
+            onboard_binary_path,
             onboard_log_path: root.join("fake-onboard.log"),
             root,
         }
     }
 
-    fn swap_chat_binary_with_fake_onboard(&self, exit_code: i32) {
-        let staged_binary_path = self.bin_dir.join("loongclaw.chat");
-        if !staged_binary_path.exists() {
-            std::fs::rename(&self.chat_binary_path, &staged_binary_path)
-                .expect("stage copied loongclaw binary");
-        }
-
+    fn install_fake_onboard(&self, exit_code: i32) {
         let script = format!(
             "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\nexit {exit_code}\n",
             self.onboard_log_path.display()
         );
-        std::fs::write(&self.chat_binary_path, script).expect("write fake loongclaw script");
-        let mut permissions = std::fs::metadata(&self.chat_binary_path)
+        std::fs::write(&self.onboard_binary_path, script).expect("write fake loongclaw script");
+        let mut permissions = std::fs::metadata(&self.onboard_binary_path)
             .expect("fake loongclaw metadata")
             .permissions();
         permissions.set_mode(0o755);
-        std::fs::set_permissions(&self.chat_binary_path, permissions)
+        std::fs::set_permissions(&self.onboard_binary_path, permissions)
             .expect("mark fake loongclaw executable");
     }
 
     fn run_chat_command(&self, config_path: Option<&Path>, stdin_bytes: Option<&[u8]>) -> Output {
-        self.run_chat_command_with_fake_onboard(
-            config_path,
-            stdin_bytes,
-            None,
-            PathMode::IncludeFixtureBinDir,
-        )
+        self.run_chat_command_with_fake_onboard(config_path, stdin_bytes, None)
     }
 
     fn run_chat_command_with_fake_onboard(
@@ -136,9 +98,8 @@ impl ChatCliFixture {
         config_path: Option<&Path>,
         stdin_bytes: Option<&[u8]>,
         fake_onboard_exit_code: Option<i32>,
-        path_mode: PathMode,
     ) -> Output {
-        let mut command = Command::new(&self.chat_binary_path);
+        let mut command = Command::new(env!("CARGO_BIN_EXE_loongclaw"));
         command
             .arg("chat")
             .current_dir(&self.root)
@@ -148,22 +109,18 @@ impl ChatCliFixture {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        match path_mode {
-            PathMode::IncludeFixtureBinDir => {
-                command.env("PATH", prepend_path(&self.bin_dir));
-            }
-            PathMode::Empty => {
-                command.env("PATH", "");
-            }
-        }
         if let Some(config_path) = config_path {
             command.arg("--config").arg(config_path);
         }
+        if let Some(exit_code) = fake_onboard_exit_code {
+            self.install_fake_onboard(exit_code);
+            command.env(
+                "LOONGCLAW_TEST_ONBOARD_EXECUTABLE",
+                &self.onboard_binary_path,
+            );
+        }
 
         let mut child = command.spawn().expect("spawn chat cli");
-        if let Some(exit_code) = fake_onboard_exit_code {
-            self.swap_chat_binary_with_fake_onboard(exit_code);
-        }
         if let Some(stdin_bytes) = stdin_bytes {
             child
                 .stdin
@@ -190,12 +147,7 @@ impl Drop for ChatCliFixture {
 #[test]
 fn chat_without_config_runs_onboard_for_explicit_yes() {
     let fixture = ChatCliFixture::new("explicit-yes");
-    let output = fixture.run_chat_command_with_fake_onboard(
-        None,
-        Some(b"yes\n"),
-        Some(0),
-        PathMode::IncludeFixtureBinDir,
-    );
+    let output = fixture.run_chat_command_with_fake_onboard(None, Some(b"yes\n"), Some(0));
     let stdout = render_output(&output.stdout);
     let stderr = render_output(&output.stderr);
 
@@ -219,12 +171,8 @@ fn chat_without_config_forwards_explicit_config_path_to_onboard() {
     let fixture = ChatCliFixture::new("explicit-config");
     let explicit_config = fixture.root.join("custom-config.toml");
 
-    let output = fixture.run_chat_command_with_fake_onboard(
-        Some(&explicit_config),
-        Some(b"y\n"),
-        Some(0),
-        PathMode::IncludeFixtureBinDir,
-    );
+    let output =
+        fixture.run_chat_command_with_fake_onboard(Some(&explicit_config), Some(b"y\n"), Some(0));
     let stdout = render_output(&output.stdout);
     let stderr = render_output(&output.stderr);
     let onboard_log = fixture.onboard_log();
@@ -320,12 +268,7 @@ fn chat_without_config_treats_eof_as_decline() {
 #[test]
 fn chat_without_config_reports_onboard_failure() {
     let fixture = ChatCliFixture::new("onboard-failure");
-    let output = fixture.run_chat_command_with_fake_onboard(
-        None,
-        Some(b"y\n"),
-        Some(7),
-        PathMode::IncludeFixtureBinDir,
-    );
+    let output = fixture.run_chat_command_with_fake_onboard(None, Some(b"y\n"), Some(7));
     let stdout = render_output(&output.stdout);
     let stderr = render_output(&output.stderr);
 
@@ -337,26 +280,6 @@ fn chat_without_config_reports_onboard_failure() {
     assert!(
         stderr.contains("error: onboard exited with code Some(7)"),
         "stderr should surface the subprocess failure: {stderr:?}"
-    );
-}
-
-#[test]
-fn chat_without_config_reexecutes_current_binary_for_onboard() {
-    let fixture = ChatCliFixture::new("current-exe-reexec");
-
-    let output =
-        fixture.run_chat_command_with_fake_onboard(None, Some(b"y\n"), Some(0), PathMode::Empty);
-    let stdout = render_output(&output.stdout);
-    let stderr = render_output(&output.stderr);
-
-    assert!(
-        output.status.success(),
-        "re-executing onboard through current_exe should not depend on PATH, stdout={stdout:?}, stderr={stderr:?}"
-    );
-    assert!(
-        fixture.onboard_log().contains("onboard"),
-        "accepting onboarding should re-execute the current binary: {:?}",
-        fixture.onboard_log()
     );
 }
 
