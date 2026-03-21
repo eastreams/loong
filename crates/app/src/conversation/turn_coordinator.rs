@@ -85,10 +85,11 @@ use super::turn_engine::{
 use super::turn_shared::{
     ProviderTurnRequestAction, ReplyPersistenceMode, ReplyResolutionMode, ToolDrivenFollowupKind,
     ToolDrivenFollowupPayload, ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase,
-    build_tool_driven_followup_tail, decide_provider_turn_request_action,
-    format_approval_required_reply, next_conversation_turn_id, reduce_followup_payload_for_model,
-    request_completion_with_raw_fallback, tool_driven_followup_payload,
-    tool_result_contains_truncation_signal, user_requested_raw_tool_output,
+    build_tool_driven_followup_tail, build_tool_loop_guard_tail,
+    decide_provider_turn_request_action, format_approval_required_reply, next_conversation_turn_id,
+    reduce_followup_payload_for_model, request_completion_with_raw_fallback,
+    tool_driven_followup_payload, tool_result_contains_truncation_signal,
+    user_requested_raw_tool_output,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::session::recovery::{
@@ -913,11 +914,107 @@ impl ProviderTurnLaneExecution {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ProviderTurnLoopPolicy {
+    max_total_tool_calls: usize,
+    max_consecutive_same_tool: usize,
+}
+
+impl ProviderTurnLoopPolicy {
+    fn from_config(config: &LoongClawConfig) -> Self {
+        let turn_loop = &config.conversation.turn_loop;
+        Self {
+            max_total_tool_calls: turn_loop.max_total_tool_calls.max(1),
+            max_consecutive_same_tool: turn_loop.max_consecutive_same_tool.max(1),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct ProviderTurnLoopState {
+    total_tool_calls: usize,
+    consecutive_same_tool: usize,
+    last_tool_name: Option<String>,
+    warned_same_tool_key: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+enum ProviderTurnLoopVerdict {
+    Continue,
+    InjectWarning { reason: String },
+    HardStop { reason: String },
+}
+
+impl ProviderTurnLoopState {
+    fn circuit_breaker_reply(
+        &self,
+        policy: &ProviderTurnLoopPolicy,
+        next_tool_calls: usize,
+    ) -> Option<String> {
+        let prospective_total = self.total_tool_calls.saturating_add(next_tool_calls);
+        (prospective_total >= policy.max_total_tool_calls).then(|| {
+            format!(
+                "tool_loop_circuit_breaker: reached {}/{} tool calls this turn. Do you want to continue? Reply to resume.",
+                prospective_total, policy.max_total_tool_calls
+            )
+        })
+    }
+
+    fn observe_turn(
+        &mut self,
+        policy: &ProviderTurnLoopPolicy,
+        turn: &ProviderTurn,
+    ) -> Option<ProviderTurnLoopVerdict> {
+        let tool_intent_count = turn.tool_intents.len();
+        self.total_tool_calls = self.total_tool_calls.saturating_add(tool_intent_count);
+        if tool_intent_count == 0 {
+            self.warned_same_tool_key = None;
+            return None;
+        }
+
+        let tool_name_signature = provider_turn_tool_name_signature(&turn.tool_intents);
+        if self.last_tool_name.as_deref() == Some(tool_name_signature.as_str()) {
+            self.consecutive_same_tool += 1;
+        } else {
+            self.last_tool_name = Some(tool_name_signature.clone());
+            self.consecutive_same_tool = 1;
+            self.warned_same_tool_key = None;
+        }
+
+        if self.consecutive_same_tool < policy.max_consecutive_same_tool {
+            self.warned_same_tool_key = None;
+            return Some(ProviderTurnLoopVerdict::Continue);
+        }
+
+        let reason_key = format!("consecutive_same_tool:{tool_name_signature}");
+        let reason = format!(
+            "consecutive_same_tool: {tool_name_signature} called {} times in a row (limit={})",
+            self.consecutive_same_tool, policy.max_consecutive_same_tool
+        );
+
+        if self.warned_same_tool_key.as_deref() == Some(reason_key.as_str()) {
+            Some(ProviderTurnLoopVerdict::HardStop { reason })
+        } else {
+            self.warned_same_tool_key = Some(reason_key);
+            Some(ProviderTurnLoopVerdict::InjectWarning { reason })
+        }
+    }
+}
+
+fn provider_turn_tool_name_signature(intents: &[ToolIntent]) -> String {
+    intents
+        .iter()
+        .map(|intent| intent.tool_name.trim())
+        .collect::<Vec<_>>()
+        .join("||")
+}
+
 #[derive(Debug, Clone)]
 struct ProviderTurnContinuePhase {
     request: TurnCheckpointRequest,
     lane_execution: ProviderTurnLaneExecution,
     reply_phase: ToolDrivenReplyPhase,
+    loop_verdict: Option<ProviderTurnLoopVerdict>,
     followup_config: LoongClawConfig,
     ingress: Option<ConversationIngressContext>,
 }
@@ -926,6 +1023,7 @@ impl ProviderTurnContinuePhase {
     fn new(
         tool_intents: usize,
         lane_execution: ProviderTurnLaneExecution,
+        loop_verdict: Option<ProviderTurnLoopVerdict>,
         followup_config: LoongClawConfig,
         ingress: Option<&ConversationIngressContext>,
     ) -> Self {
@@ -934,6 +1032,7 @@ impl ProviderTurnContinuePhase {
             request: TurnCheckpointRequest::Continue { tool_intents },
             lane_execution,
             reply_phase,
+            loop_verdict,
             followup_config,
             ingress: ingress.cloned(),
         }
@@ -964,12 +1063,28 @@ impl ProviderTurnContinuePhase {
         }
     }
 
+    fn loop_warning_reason(&self) -> Option<&str> {
+        match self.loop_verdict.as_ref() {
+            Some(ProviderTurnLoopVerdict::InjectWarning { reason }) => Some(reason.as_str()),
+            _ => None,
+        }
+    }
+
+    fn hard_stop_reason(&self) -> Option<&str> {
+        match self.loop_verdict.as_ref() {
+            Some(ProviderTurnLoopVerdict::HardStop { reason }) => Some(reason.as_str()),
+            _ => None,
+        }
+    }
+
     async fn resolve<R: ConversationRuntime + ?Sized>(
         &self,
         runtime: &R,
         session_id: &str,
         preparation: &ProviderTurnPreparation,
         user_input: &str,
+        turn_loop_policy: &ProviderTurnLoopPolicy,
+        turn_loop_state: &mut ProviderTurnLoopState,
         remaining_provider_rounds: usize,
         binding: ConversationRuntimeBinding<'_>,
     ) -> ResolvedProviderTurn {
@@ -980,6 +1095,8 @@ impl ProviderTurnContinuePhase {
             preparation,
             self,
             user_input,
+            turn_loop_policy,
+            turn_loop_state,
             remaining_provider_rounds,
             binding,
             self.ingress.as_ref(),
@@ -2272,16 +2389,31 @@ async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
     binding: ConversationRuntimeBinding<'_>,
     ingress: Option<&ConversationIngressContext>,
 ) -> ResolvedProviderTurn {
+    let turn_loop_policy = ProviderTurnLoopPolicy::from_config(config);
+    let mut turn_loop_state = ProviderTurnLoopState::default();
+
     match decide_provider_turn_request_action(result, error_mode) {
         ProviderTurnRequestAction::Continue { turn } => {
             let turn =
                 scope_provider_turn_tool_intents(turn, session_id, preparation.turn_id.as_str());
+            if let Some(reply) =
+                turn_loop_state.circuit_breaker_reply(&turn_loop_policy, turn.tool_intents.len())
+            {
+                return build_turn_loop_circuit_breaker_resolved_turn(
+                    preparation,
+                    user_input,
+                    turn.tool_intents.len(),
+                    reply,
+                );
+            }
             let continue_phase = prepare_provider_turn_continue_phase(
                 config,
                 runtime,
                 session_id,
                 preparation,
                 turn,
+                &turn_loop_policy,
+                &mut turn_loop_state,
                 binding,
                 ingress,
             )
@@ -2292,6 +2424,8 @@ async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
                     session_id,
                     preparation,
                     user_input,
+                    &turn_loop_policy,
+                    &mut turn_loop_state,
                     config
                         .conversation
                         .turn_loop
@@ -2334,12 +2468,32 @@ fn scope_provider_turn_tool_intents(
     turn
 }
 
+fn build_turn_loop_circuit_breaker_resolved_turn(
+    preparation: &ProviderTurnPreparation,
+    user_input: &str,
+    tool_intents: usize,
+    reply: String,
+) -> ResolvedProviderTurn {
+    let checkpoint = build_resolved_provider_checkpoint(
+        preparation,
+        user_input,
+        Some(reply.as_str()),
+        TurnCheckpointRequest::Continue { tool_intents },
+        None,
+        None,
+        TurnFinalizationCheckpoint::persist_reply(ReplyPersistenceMode::Success),
+    );
+    ResolvedProviderTurn::persist_reply(reply, checkpoint)
+}
+
 async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
     config: &LoongClawConfig,
     runtime: &R,
     session_id: &str,
     preparation: &ProviderTurnPreparation,
     turn: ProviderTurn,
+    turn_loop_policy: &ProviderTurnLoopPolicy,
+    turn_loop_state: &mut ProviderTurnLoopState,
     binding: ConversationRuntimeBinding<'_>,
     ingress: Option<&ConversationIngressContext>,
 ) -> ProviderTurnContinuePhase {
@@ -2354,9 +2508,16 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
         ingress,
     )
     .await;
+    let loop_verdict = turn_loop_state.observe_turn(turn_loop_policy, &turn);
     let followup_config =
         ConversationTurnCoordinator::reload_followup_provider_config_after_tool_turn(config, &turn);
-    ProviderTurnContinuePhase::new(tool_intents, lane_execution, followup_config, ingress)
+    ProviderTurnContinuePhase::new(
+        tool_intents,
+        lane_execution,
+        loop_verdict,
+        followup_config,
+        ingress,
+    )
 }
 
 async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
@@ -2366,6 +2527,8 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     preparation: &ProviderTurnPreparation,
     continue_phase: &ProviderTurnContinuePhase,
     user_input: &str,
+    turn_loop_policy: &ProviderTurnLoopPolicy,
+    turn_loop_state: &mut ProviderTurnLoopState,
     remaining_provider_rounds: usize,
     binding: ConversationRuntimeBinding<'_>,
     ingress: Option<&ConversationIngressContext>,
@@ -2376,6 +2539,12 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
             raw_reply: String,
             payload: ToolDrivenFollowupPayload,
             requires_completion_pass: bool,
+            loop_warning_reason: Option<String>,
+        },
+        GuardFollowup {
+            raw_reply: String,
+            reason: String,
+            latest_tool_payload: Option<ToolDrivenFollowupPayload>,
         },
     }
 
@@ -2412,18 +2581,28 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
 
         let reply_decision = match current_continue_phase.reply_phase.decision() {
             ToolDrivenReplyBaseDecision::FinalizeDirect { reply } => {
-                if current_continue_phase
+                let latest_tool_payload = tool_driven_followup_payload(
+                    current_continue_phase.lane_execution.had_tool_intents,
+                    &current_continue_phase.lane_execution.turn_result,
+                );
+                if let Some(reason) = current_continue_phase.hard_stop_reason() {
+                    ReplyLoopDecision::GuardFollowup {
+                        raw_reply: reply.clone(),
+                        reason: reason.to_owned(),
+                        latest_tool_payload,
+                    }
+                } else if current_continue_phase
                     .lane_execution
                     .requires_provider_turn_followup
-                    && let Some(payload) = tool_driven_followup_payload(
-                        current_continue_phase.lane_execution.had_tool_intents,
-                        &current_continue_phase.lane_execution.turn_result,
-                    )
+                    && let Some(payload) = latest_tool_payload
                 {
                     ReplyLoopDecision::Followup {
                         raw_reply: reply.clone(),
                         payload,
                         requires_completion_pass: false,
+                        loop_warning_reason: current_continue_phase
+                            .loop_warning_reason()
+                            .map(ToOwned::to_owned),
                     }
                 } else {
                     ReplyLoopDecision::FinalizeDirect(reply.clone())
@@ -2432,11 +2611,24 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
             ToolDrivenReplyBaseDecision::RequireFollowup {
                 raw_reply,
                 payload: followup,
-            } => ReplyLoopDecision::Followup {
-                raw_reply: raw_reply.clone(),
-                payload: followup.clone(),
-                requires_completion_pass: true,
-            },
+            } => {
+                if let Some(reason) = current_continue_phase.hard_stop_reason() {
+                    ReplyLoopDecision::GuardFollowup {
+                        raw_reply: raw_reply.clone(),
+                        reason: reason.to_owned(),
+                        latest_tool_payload: Some(followup.clone()),
+                    }
+                } else {
+                    ReplyLoopDecision::Followup {
+                        raw_reply: raw_reply.clone(),
+                        payload: followup.clone(),
+                        requires_completion_pass: true,
+                        loop_warning_reason: current_continue_phase
+                            .loop_warning_reason()
+                            .map(ToOwned::to_owned),
+                    }
+                }
+            }
         };
 
         match reply_decision {
@@ -2448,8 +2640,9 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                 raw_reply,
                 payload: followup,
                 requires_completion_pass,
+                loop_warning_reason,
             } => {
-                let follow_up_messages = build_turn_reply_followup_messages(
+                let follow_up_messages = build_turn_reply_followup_messages_with_warning(
                     &current_preparation.session.messages,
                     current_continue_phase
                         .lane_execution
@@ -2457,6 +2650,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                         .as_str(),
                     followup.clone(),
                     user_input,
+                    loop_warning_reason.as_deref(),
                 );
                 if current_continue_phase
                     .lane_execution
@@ -2543,12 +2737,24 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                                 kernel_ctx,
                             )
                             .await;
+                            if let Some(reply) = turn_loop_state
+                                .circuit_breaker_reply(turn_loop_policy, turn.tool_intents.len())
+                            {
+                                return build_turn_loop_circuit_breaker_resolved_turn(
+                                    preparation,
+                                    user_input,
+                                    turn.tool_intents.len(),
+                                    reply,
+                                );
+                            }
                             current_continue_phase = prepare_provider_turn_continue_phase(
                                 &current_continue_phase.followup_config,
                                 runtime,
                                 session_id,
                                 &followup_preparation,
                                 turn,
+                                turn_loop_policy,
+                                turn_loop_state,
                                 binding,
                                 ingress,
                             )
@@ -2603,6 +2809,33 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                     current_continue_phase.checkpoint(preparation, user_input, raw_reply.as_str());
                 return ResolvedProviderTurn::persist_reply(raw_reply, checkpoint);
             }
+            ReplyLoopDecision::GuardFollowup {
+                raw_reply,
+                reason,
+                latest_tool_payload,
+            } => {
+                let guard_messages = build_turn_reply_guard_messages(
+                    &current_preparation.session.messages,
+                    current_continue_phase
+                        .lane_execution
+                        .assistant_preface
+                        .as_str(),
+                    reason.as_str(),
+                    latest_tool_payload.as_ref(),
+                    user_input,
+                );
+                let reply = request_completion_with_raw_fallback(
+                    runtime,
+                    &current_continue_phase.followup_config,
+                    &guard_messages,
+                    binding,
+                    raw_reply.as_str(),
+                )
+                .await;
+                let checkpoint =
+                    current_continue_phase.checkpoint(preparation, user_input, reply.as_str());
+                return ResolvedProviderTurn::persist_reply(reply, checkpoint);
+            }
         }
     }
 }
@@ -2639,18 +2872,53 @@ fn format_analytics_turn_checkpoint_progress_status(
     }
 }
 
+#[cfg(test)]
 fn build_turn_reply_followup_messages(
     base_messages: &[Value],
     assistant_preface: &str,
     followup: ToolDrivenFollowupPayload,
     user_input: &str,
 ) -> Vec<Value> {
+    build_turn_reply_followup_messages_with_warning(
+        base_messages,
+        assistant_preface,
+        followup,
+        user_input,
+        None,
+    )
+}
+
+fn build_turn_reply_followup_messages_with_warning(
+    base_messages: &[Value],
+    assistant_preface: &str,
+    followup: ToolDrivenFollowupPayload,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+) -> Vec<Value> {
     let mut messages = base_messages.to_vec();
     messages.extend(build_tool_driven_followup_tail(
         assistant_preface,
         &followup,
         user_input,
-        None,
+        loop_warning_reason,
+        |label, text| reduce_followup_payload_for_model(label, text).into_owned(),
+    ));
+    messages
+}
+
+fn build_turn_reply_guard_messages(
+    base_messages: &[Value],
+    assistant_preface: &str,
+    reason: &str,
+    latest_tool_payload: Option<&ToolDrivenFollowupPayload>,
+    user_input: &str,
+) -> Vec<Value> {
+    let mut messages = base_messages.to_vec();
+    messages.extend(build_tool_loop_guard_tail(
+        assistant_preface,
+        reason,
+        user_input,
+        latest_tool_payload.map(ToolDrivenFollowupPayload::message_context),
         |label, text| reduce_followup_payload_for_model(label, text).into_owned(),
     ));
     messages
@@ -7142,6 +7410,7 @@ mod tests {
                     source: SafeLaneFailureRouteSource::SessionGovernor,
                 }),
             },
+            None,
             config,
             None,
         );
@@ -7352,6 +7621,7 @@ mod tests {
                 turn_result: TurnResult::FinalText("hello there".to_owned()),
                 safe_lane_terminal_route: None,
             },
+            None,
             LoongClawConfig::default(),
             None,
         );

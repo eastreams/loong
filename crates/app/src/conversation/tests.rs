@@ -4739,6 +4739,151 @@ async fn handle_turn_with_runtime_tool_search_requests_a_followup_provider_turn(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_honors_max_total_tool_calls_before_tool_dispatch() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "Let me search for the right tool first.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "tool.search",
+                    json!({"query": "read note.md", "limit": 3}),
+                    "session-tool-search-breaker",
+                    "turn-tool-search-breaker",
+                    "call-tool-search-breaker",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "I found the tool, now I can continue.".to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    );
+
+    let mut config = test_config();
+    config.conversation.turn_loop.max_total_tool_calls = 1;
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-tool-search-breaker",
+            "search for the right tool, then read and summarize note.md",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx)),
+        )
+        .await
+        .expect("tool loop breaker should return a synthetic reply");
+
+    assert_eq!(
+        reply,
+        "tool_loop_circuit_breaker: reached 1/1 tool calls this turn. Do you want to continue? Reply to resume."
+    );
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 1);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    let visible_turns = persisted_visible_turns(&persisted);
+    assert_eq!(visible_turns.len(), 2);
+    assert_eq!(visible_turns[0].1, "user");
+    assert_eq!(visible_turns[1].1, "assistant");
+    assert_eq!(visible_turns[1].2, reply);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_includes_same_tool_warning_in_followup_provider_round() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "Let me search for the right tool first.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "tool.search",
+                    json!({"query": "read note.md", "limit": 3}),
+                    "session-tool-search-warning",
+                    "turn-tool-search-warning",
+                    "call-tool-search-warning-1",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "I should search again before continuing.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "tool.search",
+                    json!({"query": "read note.md", "limit": 3}),
+                    "session-tool-search-warning",
+                    "turn-tool-search-warning",
+                    "call-tool-search-warning-2",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "I should stop and ask before continuing.".to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    );
+
+    let mut config = test_config();
+    config.conversation.turn_loop.max_consecutive_same_tool = 2;
+    config.conversation.turn_loop.max_discovery_followup_rounds = 3;
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-tool-search-warning",
+            "search for the right tool, then read and summarize note.md",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx)),
+        )
+        .await
+        .expect("same-tool warning path should still return a reply");
+
+    assert_eq!(reply, "I should stop and ask before continuing.");
+
+    let requested_turn_messages = runtime
+        .turn_requested_messages
+        .lock()
+        .expect("turn request lock")
+        .clone();
+    assert_eq!(requested_turn_messages.len(), 3);
+    assert!(
+        requested_turn_messages[2].iter().any(|message| {
+            message.get("role").and_then(Value::as_str) == Some("assistant")
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| {
+                        content.starts_with("[tool_loop_warning]\nconsecutive_same_tool:")
+                    })
+        }),
+        "third provider turn should receive the repeated-tool warning in coordinator followup context: {requested_turn_messages:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_tool_search_raw_request_still_uses_followup_provider_turn() {
     use crate::test_support::TurnTestHarness;
 
