@@ -6,104 +6,10 @@ import { Panel } from "../../../components/surfaces/Panel";
 import { useWebConnection } from "../../../hooks/useWebConnection";
 import { ApiRequestError } from "../../../lib/api/client";
 import { dashboardApi } from "../../dashboard/api";
-import {
-  chatApi,
-  type ChatMessage,
-  type ChatSessionSummary,
-  type ChatTurnStreamEvent,
-} from "../api";
+import { useChatSessions } from "../hooks/useChatSessions";
+import { useChatStream } from "../hooks/useChatStream";
 
-interface ActiveToolStatus {
-  toolId: string;
-  label: string;
-  status: "running" | "ok" | "error";
-}
-
-interface SessionViewState {
-  messages: ChatMessage[];
-  activeTools: ActiveToolStatus[];
-  pendingAssistantId: string | null;
-  streamPhase: StreamPhase;
-}
-
-type StreamPhase = "idle" | "connecting" | "thinking" | "streaming";
-type ToolAssistIntent = "filesystem" | "repo_search" | "shell" | "web";
-
-// Temporary Web-only workaround: keep this small and easy to remove while we
-// verify whether tool discovery reliability should be fixed deeper in runtime.
 const TOOL_ASSIST_STORAGE_KEY = "loongclaw.web.toolAssist";
-const CHAT_SELECTED_SESSION_STORAGE_KEY = "loongclaw.web.chat.selectedSessionId";
-
-function readStoredSelectedSessionId(): string | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  const value = window.sessionStorage.getItem(CHAT_SELECTED_SESSION_STORAGE_KEY);
-  return value && value.trim() ? value : null;
-}
-
-function detectToolAssistIntent(input: string): ToolAssistIntent | null {
-  const normalized = input.trim().toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-
-  if (
-    /(https?:\/\/|网页|网站|链接|打开网页|打开网站|browse|browser|web fetch|webfetch|url|summarize this page)/i.test(
-      normalized,
-    )
-  ) {
-    return "web";
-  }
-
-  if (
-    /(ls|pwd|终端|命令行|shell|执行命令|run command|current directory|列出当前目录)/i.test(
-      normalized,
-    )
-  ) {
-    return "shell";
-  }
-
-  if (
-    /(搜索|查找|grep|rg|ripgrep|仓库|代码里|repository|repo|source code|find in code)/i.test(
-      normalized,
-    )
-  ) {
-    return "repo_search";
-  }
-
-  if (
-    /(文件|目录|读取|查看|打开文件|readme|cargo\.toml|package\.json|file|directory|folder|read the file)/i.test(
-      normalized,
-    )
-  ) {
-    return "filesystem";
-  }
-
-  return null;
-}
-
-function buildToolAssistHint(intent: ToolAssistIntent | null): string | null {
-  if (!intent) {
-    return null;
-  }
-
-  const generic =
-    "If tools are needed, first use tool.search to discover the right runtime tool, then use tool.invoke instead of claiming the tool is unavailable.";
-
-  switch (intent) {
-    case "filesystem":
-      return `${generic} This request looks file- or directory-related, so prefer discovering a file or shell-oriented tool before answering from memory.`;
-    case "repo_search":
-      return `${generic} This request looks like repository/code search, so prefer discovering a search, file, or shell-oriented tool before answering from memory.`;
-    case "shell":
-      return `${generic} This request explicitly asks for a shell-style action, so prefer discovering a shell-oriented tool and executing it if policy allows.`;
-    case "web":
-      return `${generic} This request looks web-related, so prefer discovering a browser or web-fetch tool before answering from memory.`;
-    default:
-      return generic;
-  }
-}
 
 function renderInlineBreaks(text: string): ReactNode[] {
   return text.split("\n").flatMap((line, index, lines) => {
@@ -191,71 +97,17 @@ function renderMessageContent(content: string): ReactNode[] {
   return blocks;
 }
 
-function extractErrorHost(message: string): string | null {
-  const match = message.match(/https?:\/\/([^/\s)]+)/i);
-  return match?.[1] ?? null;
-}
 
-function toFriendlyChatError(
-  error: unknown,
-  t: ReturnType<typeof useTranslation>["t"],
-  markUnauthorized: () => void,
-  authMode: string | null,
-  tokenPath: string | null,
-  tokenEnv: string | null,
-): string {
-  if (error instanceof ApiRequestError && error.status === 401) {
-    markUnauthorized();
-    return authMode === "same_origin_session"
-      ? t("auth.sessionInvalidBody")
-      : t("auth.invalidBody", {
-          tokenPath: tokenPath ?? "",
-          tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
-        });
-  }
-
-  const rawMessage =
-    error instanceof Error ? error.message : "Failed to send message";
-
-  if (rawMessage.includes("transport_failure")) {
-    const host = extractErrorHost(rawMessage);
-    return t("chat.errors.transportFailure", {
-      host: host ?? t("chat.errors.providerHostFallback"),
-    });
-  }
-
-  return rawMessage;
-}
 
 export default function ChatPage() {
   const { t } = useTranslation();
-  const {
-    canAccessProtectedApi,
-    authRevision,
-    markUnauthorized,
-    status,
-    authMode,
-    tokenPath,
-    tokenEnv,
-  } =
-    useWebConnection();
-  const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() =>
-    readStoredSelectedSessionId(),
-  );
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const connection = useWebConnection();
+  const { canAccessProtectedApi, authRevision, markUnauthorized } = connection;
+
   const [composerText, setComposerText] = useState("");
-  const [isLoadingSessions, setIsLoadingSessions] = useState(true);
-  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
-  const [activeTools, setActiveTools] = useState<ActiveToolStatus[]>([]);
-  const [error, setError] = useState<string | null>(null);
   const [memoryWindow, setMemoryWindow] = useState<number | null>(null);
   const [currentModel, setCurrentModel] = useState("");
   const [currentProvider, setCurrentProvider] = useState<string | null>(null);
-  const [pendingAssistantId, setPendingAssistantId] = useState<string | null>(null);
-  const [streamPhase, setStreamPhase] = useState<StreamPhase>("idle");
   const [loadingLabelIndex, setLoadingLabelIndex] = useState(0);
   const [toolAssistEnabled, setToolAssistEnabled] = useState<boolean>(() => {
     if (typeof window === "undefined") {
@@ -264,57 +116,47 @@ export default function ChatPage() {
     const stored = window.localStorage.getItem(TOOL_ASSIST_STORAGE_KEY);
     return stored === "true";
   });
+
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const shouldAutoScrollRef = useRef(true);
-  const sessionViewStateRef = useRef<Map<string, SessionViewState>>(new Map());
-  const selectedSessionIdRef = useRef<string | null>(selectedSessionId);
-  const previousSelectedSessionIdRef = useRef<string | null>(selectedSessionId);
-  const messagesRef = useRef<ChatMessage[]>(messages);
-  const activeToolsRef = useRef<ActiveToolStatus[]>(activeTools);
-  const pendingAssistantIdRef = useRef<string | null>(pendingAssistantId);
-  const streamPhaseRef = useRef<StreamPhase>(streamPhase);
 
-  function getCurrentVisibleViewState(): SessionViewState {
-    return {
-      messages: messagesRef.current,
-      activeTools: activeToolsRef.current,
-      pendingAssistantId: pendingAssistantIdRef.current,
-      streamPhase: streamPhaseRef.current,
-    };
-  }
+  const sessionsState = useChatSessions(t);
+  const {
+    sessions,
+    selectedSessionId,
+    messages,
+    activeTools,
+    pendingAssistantId,
+    streamPhase,
+    isLoadingSessions,
+    isLoadingHistory,
+    deletingSessionId,
+    error,
+    setError,
+    selectSession,
+    upsertSession,
+    refreshSessions,
+    deleteSession,
+    updateSessionViewState,
+  } = sessionsState;
 
-  function getStoredSessionViewState(sessionId: string): SessionViewState {
-    return (
-      sessionViewStateRef.current.get(sessionId) ?? {
-        messages: [],
-        activeTools: [],
-        pendingAssistantId: null,
-        streamPhase: "idle",
-      }
-    );
-  }
+  const streamState = useChatStream({
+    t,
+    sessionId: selectedSessionId,
+    canAccessProtectedApi,
+    markUnauthorized,
+    authMode: connection.authMode,
+    tokenPath: connection.tokenPath,
+    tokenEnv: connection.tokenEnv,
+    toolAssistEnabled,
+    updateSessionViewState,
+    selectSession,
+    upsertSession,
+    refreshSessions,
+    setError,
+  });
 
-  function replaceSessionViewState(sessionId: string, nextState: SessionViewState) {
-    sessionViewStateRef.current.set(sessionId, nextState);
-
-    if (selectedSessionIdRef.current === sessionId) {
-      setMessages(nextState.messages);
-      setActiveTools(nextState.activeTools);
-      setPendingAssistantId(nextState.pendingAssistantId);
-      setStreamPhase(nextState.streamPhase);
-    }
-  }
-
-  function updateSessionViewState(
-    sessionId: string,
-    updater: (current: SessionViewState) => SessionViewState,
-  ) {
-    const baseState =
-      selectedSessionIdRef.current === sessionId
-        ? getCurrentVisibleViewState()
-        : getStoredSessionViewState(sessionId);
-    replaceSessionViewState(sessionId, updater(baseState));
-  }
+  const { isSubmitting, sendMessage, stopStream } = streamState;
 
   const loadingPhraseKeys = useMemo(() => {
     switch (streamPhase) {
@@ -364,147 +206,15 @@ export default function ChatPage() {
     };
   }, [loadingPhrases.length, streamPhase]);
 
+
+
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    window.localStorage.setItem(
-      TOOL_ASSIST_STORAGE_KEY,
-      toolAssistEnabled ? "true" : "false",
-    );
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(TOOL_ASSIST_STORAGE_KEY, toolAssistEnabled ? "true" : "false");
   }, [toolAssistEnabled]);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    if (selectedSessionId) {
-      window.sessionStorage.setItem(CHAT_SELECTED_SESSION_STORAGE_KEY, selectedSessionId);
-    } else {
-      window.sessionStorage.removeItem(CHAT_SELECTED_SESSION_STORAGE_KEY);
-    }
-  }, [selectedSessionId]);
-
-  useEffect(() => {
-    const previousSessionId = previousSelectedSessionIdRef.current;
-    if (previousSessionId && previousSessionId !== selectedSessionId) {
-      sessionViewStateRef.current.set(previousSessionId, getCurrentVisibleViewState());
-    }
-
-    previousSelectedSessionIdRef.current = selectedSessionId;
-    selectedSessionIdRef.current = selectedSessionId;
-  }, [selectedSessionId]);
-
-  useEffect(() => {
-    messagesRef.current = messages;
-    activeToolsRef.current = activeTools;
-    pendingAssistantIdRef.current = pendingAssistantId;
-    streamPhaseRef.current = streamPhase;
-
-    if (selectedSessionIdRef.current) {
-      sessionViewStateRef.current.set(selectedSessionIdRef.current, {
-        messages,
-        activeTools,
-        pendingAssistantId,
-        streamPhase,
-      });
-    }
-  }, [activeTools, messages, pendingAssistantId, streamPhase]);
-
-  useEffect(() => {
     let cancelled = false;
-
-    if (!canAccessProtectedApi) {
-      setSessions([]);
-      setSelectedSessionId(null);
-      setMessages([]);
-      setActiveTools([]);
-      setMemoryWindow(null);
-      setIsLoadingSessions(false);
-      setError(
-        status === "unauthorized"
-          ? authMode === "same_origin_session"
-            ? t("auth.sessionInvalidBody")
-            : t("auth.invalidBody", {
-                tokenPath: tokenPath ?? "",
-                tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
-              })
-          : t("auth.requiredBody"),
-      );
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    async function loadSessions() {
-      setIsLoadingSessions(true);
-      setError(null);
-      try {
-        const loadedSessions = await chatApi.listSessions();
-        if (cancelled) {
-          return;
-        }
-        setSessions(loadedSessions);
-        setSelectedSessionId((current) => {
-          if (current && loadedSessions.some((session) => session.id === current)) {
-            return current;
-          }
-          const stored = readStoredSelectedSessionId();
-          if (stored && loadedSessions.some((session) => session.id === stored)) {
-            return stored;
-          }
-          return loadedSessions[0]?.id ?? null;
-        });
-      } catch (loadError) {
-        if (!cancelled) {
-          if (loadError instanceof ApiRequestError && loadError.status === 401) {
-            markUnauthorized();
-            setError(
-              authMode === "same_origin_session"
-                ? t("auth.sessionInvalidBody")
-                : t("auth.invalidBody", {
-                    tokenPath: tokenPath ?? "",
-                    tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
-                  }),
-            );
-          } else {
-            setError(loadError instanceof Error ? loadError.message : "Failed to load sessions");
-          }
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoadingSessions(false);
-        }
-      }
-    }
-
-    void loadSessions();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    authRevision,
-    canAccessProtectedApi,
-    markUnauthorized,
-    status,
-    t,
-    authMode,
-    tokenEnv,
-    tokenPath,
-  ]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    if (!canAccessProtectedApi) {
-      setMemoryWindow(null);
-      return () => {
-        cancelled = true;
-      };
-    }
-
     async function loadConfigSnapshot() {
       try {
         const config = await dashboardApi.loadConfig();
@@ -519,387 +229,29 @@ export default function ChatPage() {
         }
       }
     }
-
-    void loadConfigSnapshot();
-
-    return () => {
-      cancelled = true;
-    };
+    if (canAccessProtectedApi) void loadConfigSnapshot();
+    return () => { cancelled = true; };
   }, [authRevision, canAccessProtectedApi, markUnauthorized]);
-
-  useEffect(() => {
-    if (!canAccessProtectedApi) {
-      setMessages([]);
-      setActiveTools([]);
-      setPendingAssistantId(null);
-      setStreamPhase("idle");
-      return;
-    }
-
-    if (!selectedSessionId) {
-      setMessages([]);
-      setActiveTools([]);
-      setPendingAssistantId(null);
-      setStreamPhase("idle");
-      return;
-    }
-
-    const sessionId = selectedSessionId;
-    const cachedViewState = sessionViewStateRef.current.get(sessionId);
-    let cancelled = false;
-
-    if (cachedViewState) {
-      setMessages(cachedViewState.messages);
-      setActiveTools(cachedViewState.activeTools);
-      setPendingAssistantId(cachedViewState.pendingAssistantId);
-      setStreamPhase(cachedViewState.streamPhase);
-    } else {
-      setMessages([]);
-      setActiveTools([]);
-      setPendingAssistantId(null);
-      setStreamPhase("idle");
-    }
-
-    function applyHistoryState(loadedMessages: ChatMessage[]) {
-      const cachedState = sessionViewStateRef.current.get(sessionId);
-      const hasTransientState =
-        !!cachedState?.pendingAssistantId ||
-        cachedState?.streamPhase === "connecting" ||
-        cachedState?.streamPhase === "thinking" ||
-        cachedState?.streamPhase === "streaming" ||
-        (cachedState?.activeTools.length ?? 0) > 0;
-      const nextState: SessionViewState = hasTransientState
-        ? {
-            messages:
-              cachedState && cachedState.messages.length > 0
-                ? cachedState.messages
-                : loadedMessages,
-            activeTools: cachedState?.activeTools ?? [],
-            pendingAssistantId: cachedState?.pendingAssistantId ?? null,
-            streamPhase: cachedState?.streamPhase ?? "idle",
-          }
-        : {
-            messages: loadedMessages,
-            activeTools: [],
-            pendingAssistantId: null,
-            streamPhase: "idle",
-          };
-
-      sessionViewStateRef.current.set(sessionId, nextState);
-      if (!cancelled) {
-        setMessages(nextState.messages);
-        setActiveTools(nextState.activeTools);
-        setPendingAssistantId(nextState.pendingAssistantId);
-        setStreamPhase(nextState.streamPhase);
-      }
-    }
-
-    async function loadHistory() {
-      setIsLoadingHistory(true);
-      setError(null);
-      try {
-        const loadedMessages = await chatApi.loadHistory(sessionId);
-        if (!cancelled) {
-          applyHistoryState(loadedMessages);
-
-          window.setTimeout(() => {
-            if (cancelled) {
-              return;
-            }
-            void chatApi
-              .loadHistory(sessionId)
-              .then((latestMessages) => {
-                if (!cancelled) {
-                  applyHistoryState(latestMessages);
-                }
-              })
-              .catch(() => {});
-          }, 1000);
-        }
-      } catch (loadError) {
-        if (!cancelled) {
-          if (loadError instanceof ApiRequestError && loadError.status === 401) {
-            markUnauthorized();
-            setError(
-              authMode === "same_origin_session"
-                ? t("auth.sessionInvalidBody")
-                : t("auth.invalidBody", {
-                    tokenPath: tokenPath ?? "",
-                    tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
-                  }),
-            );
-          } else {
-            setError(loadError instanceof Error ? loadError.message : "Failed to load history");
-          }
-          setMessages([]);
-          setActiveTools([]);
-          setPendingAssistantId(null);
-          setStreamPhase("idle");
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoadingHistory(false);
-        }
-      }
-    }
-
-    void loadHistory();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [authMode, canAccessProtectedApi, markUnauthorized, selectedSessionId, t, tokenEnv, tokenPath]);
 
   useEffect(() => {
     shouldAutoScrollRef.current = true;
   }, [selectedSessionId]);
 
   useEffect(() => {
-    if (!messageListRef.current || !shouldAutoScrollRef.current) {
-      return;
-    }
-
+    if (!messageListRef.current || !shouldAutoScrollRef.current) return;
     const container = messageListRef.current;
     container.scrollTop = container.scrollHeight;
   }, [messages, isLoadingHistory, selectedSessionId]);
 
-  async function refreshSessions(preferredSessionId?: string) {
-    const loadedSessions = await chatApi.listSessions();
-    setSessions(loadedSessions);
-    setSelectedSessionId(
-      (current) => preferredSessionId ?? current ?? loadedSessions[0]?.id ?? null,
-    );
-  }
-
-  function handleStreamEvent(
-    sessionId: string,
-    event: ChatTurnStreamEvent,
-    placeholderId: string,
-  ) {
-    switch (event.type) {
-      case "turn.started":
-        updateSessionViewState(sessionId, (current) => ({
-          ...current,
-          streamPhase: "thinking",
-        }));
-        break;
-      case "message.delta":
-        updateSessionViewState(sessionId, (current) => ({
-          ...current,
-          streamPhase: "streaming",
-          messages: current.messages.map((message) =>
-            message.id === placeholderId
-              ? { ...message, content: `${message.content}${event.delta}` }
-              : message,
-          ),
-        }));
-        break;
-      case "tool.started":
-        updateSessionViewState(sessionId, (current) => {
-          const existing = current.activeTools.find((item) => item.toolId === event.toolId);
-          return {
-            ...current,
-            streamPhase: current.streamPhase === "connecting" ? "thinking" : current.streamPhase,
-            activeTools: existing
-              ? current.activeTools.map((item) =>
-                  item.toolId === event.toolId
-                    ? { ...item, label: event.label, status: "running" }
-                    : item,
-                )
-              : [
-                  ...current.activeTools,
-                  { toolId: event.toolId, label: event.label, status: "running" },
-                ],
-          };
-        });
-        break;
-      case "tool.finished":
-        updateSessionViewState(sessionId, (current) => ({
-          ...current,
-          activeTools: current.activeTools.map((item) =>
-            item.toolId === event.toolId
-              ? {
-                  ...item,
-                  label: event.label,
-                  status: event.outcome === "ok" ? "ok" : "error",
-                }
-              : item,
-          ),
-        }));
-        break;
-      case "turn.completed":
-        updateSessionViewState(sessionId, (current) => ({
-          messages: current.messages.map((message) =>
-            message.id === placeholderId ? event.message : message,
-          ),
-          activeTools: [],
-          pendingAssistantId: null,
-          streamPhase: "idle",
-        }));
-        break;
-      case "turn.failed":
-        updateSessionViewState(sessionId, (current) => ({
-          messages: current.messages.filter((message) => message.id !== placeholderId),
-          activeTools: [],
-          pendingAssistantId: null,
-          streamPhase: "idle",
-        }));
-        if (selectedSessionIdRef.current === sessionId) {
-          setError(event.message);
-        }
-        break;
-      default:
-        break;
-    }
-  }
-
   async function handleSubmit() {
     const input = composerText.trim();
-    if (!input || isSubmitting || !canAccessProtectedApi) {
-      return;
-    }
-
-    const nowIso = new Date().toISOString();
-    const optimisticUserMessage: ChatMessage = {
-      id: `local-user-${Date.now()}`,
-      role: "user",
-      content: input,
-      createdAt: nowIso,
-    };
-    const placeholderAssistantId = `local-assistant-${Date.now()}`;
-    const placeholderAssistantMessage: ChatMessage = {
-      id: placeholderAssistantId,
-      role: "assistant",
-      content: "",
-      createdAt: nowIso,
-    };
-    const previousState: SessionViewState = {
-      messages,
-      activeTools,
-      pendingAssistantId,
-      streamPhase,
-    };
-    const optimisticState: SessionViewState = {
-      messages: [...messages, optimisticUserMessage, placeholderAssistantMessage],
-      activeTools: [],
-      pendingAssistantId: placeholderAssistantId,
-      streamPhase: "connecting",
-    };
-
-    setError(null);
-    setIsSubmitting(true);
-    if (selectedSessionId) {
-      replaceSessionViewState(selectedSessionId, optimisticState);
-    } else {
-      setMessages(optimisticState.messages);
-      setActiveTools([]);
-      setPendingAssistantId(placeholderAssistantId);
-      setStreamPhase("connecting");
-    }
+    if (!input) return;
     setComposerText("");
-
-    let targetSessionId = selectedSessionId;
-
-    try {
-      // Keep the visible user message unchanged. This injects only a
-      // one-shot Web hint when the temporary assist toggle is enabled.
-      const toolAssistHint = toolAssistEnabled
-        ? buildToolAssistHint(detectToolAssistIntent(input))
-        : null;
-      targetSessionId = selectedSessionId ?? (await chatApi.createSession(input.slice(0, 48)));
-      sessionViewStateRef.current.set(targetSessionId, optimisticState);
-      const acceptedTurn = await chatApi.createTurn(
-        targetSessionId,
-        input,
-        toolAssistHint ?? undefined,
-      );
-
-      await chatApi.streamTurn(targetSessionId, acceptedTurn.turnId, {
-        onEvent: (event) => {
-          handleStreamEvent(targetSessionId!, event, placeholderAssistantId);
-        },
-      });
-
-      updateSessionViewState(targetSessionId, (current) => ({
-        ...current,
-        activeTools: [],
-      }));
-      await refreshSessions(targetSessionId);
-    } catch (submitError) {
-      if (targetSessionId && selectedSessionId) {
-        replaceSessionViewState(targetSessionId, {
-          messages: previousState.messages,
-          activeTools: previousState.activeTools,
-          pendingAssistantId: null,
-          streamPhase: "idle",
-        });
-      } else {
-        setMessages(previousState.messages);
-        setActiveTools(previousState.activeTools);
-        setPendingAssistantId(null);
-        setStreamPhase("idle");
-        if (targetSessionId) {
-          sessionViewStateRef.current.delete(targetSessionId);
-        }
-      }
-      setError(
-        toFriendlyChatError(
-          submitError,
-          t,
-          markUnauthorized,
-          authMode,
-          tokenPath,
-          tokenEnv,
-        ),
-      );
-      setComposerText(input);
-    } finally {
-      setIsSubmitting(false);
-    }
-  }
-
-  async function handleDeleteSession(sessionId: string) {
-    if (deletingSessionId || !canAccessProtectedApi) {
-      return;
-    }
-
-    setDeletingSessionId(sessionId);
-    setError(null);
-
-    try {
-      await chatApi.deleteSession(sessionId);
-      const remainingSessions = sessions.filter((session) => session.id !== sessionId);
-      setSessions(remainingSessions);
-
-      if (selectedSessionId === sessionId) {
-        const nextSessionId = remainingSessions[0]?.id ?? null;
-        setSelectedSessionId(nextSessionId);
-        if (!nextSessionId) {
-          setMessages([]);
-          setActiveTools([]);
-        }
-      }
-    } catch (deleteError) {
-      if (deleteError instanceof ApiRequestError && deleteError.status === 401) {
-        markUnauthorized();
-        setError(
-          authMode === "same_origin_session"
-            ? t("auth.sessionInvalidBody")
-            : t("auth.invalidBody", {
-                tokenPath: tokenPath ?? "",
-                tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
-              }),
-        );
-      } else {
-        setError(deleteError instanceof Error ? deleteError.message : "Failed to delete session");
-      }
-    } finally {
-      setDeletingSessionId(null);
-    }
+    await sendMessage(input);
   }
 
   const selectedSession =
-    sessions.find((session) => session.id === selectedSessionId) ?? sessions[0] ?? null;
+    sessions.find((session) => session.id === selectedSessionId) ?? null;
 
   return (
     <div className="page page-chat">
@@ -912,11 +264,7 @@ export default function ChatPage() {
               type="button"
               className="panel-action"
               onClick={() => {
-                setSelectedSessionId(null);
-                setMessages([]);
-                setActiveTools([]);
-                setPendingAssistantId(null);
-                setStreamPhase("idle");
+                selectSession(null);
                 setError(null);
               }}
               disabled={!canAccessProtectedApi}
@@ -927,7 +275,7 @@ export default function ChatPage() {
         >
           <div className="stack-list stack-list-scroll">
             {isLoadingSessions ? (
-              <div className="empty-state">Loading sessions...</div>
+              <div className="empty-state">{t("chat.loadingSessions")}</div>
             ) : sessions.length > 0 ? (
               sessions.map((session) => (
                 <div
@@ -938,7 +286,7 @@ export default function ChatPage() {
                     type="button"
                     className="session-select"
                     onClick={() => {
-                      setSelectedSessionId(session.id);
+                      selectSession(session.id);
                     }}
                   >
                     <span>{session.title}</span>
@@ -949,7 +297,7 @@ export default function ChatPage() {
                     className="session-delete"
                     aria-label={`${t("chat.deleteSession")} ${session.title}`}
                     onClick={() => {
-                      void handleDeleteSession(session.id);
+                      void deleteSession(session.id);
                     }}
                     disabled={deletingSessionId === session.id}
                   >
@@ -958,7 +306,7 @@ export default function ChatPage() {
                 </div>
               ))
             ) : (
-              <div className="empty-state">No saved sessions yet.</div>
+              <div className="empty-state">{t("chat.noSessions")}</div>
             )}
           </div>
         </Panel>
@@ -969,11 +317,11 @@ export default function ChatPage() {
               <div>
                 <div className="panel-eyebrow">{t("chat.eyebrow")}</div>
                 <div className="chat-session-title">
-                  {selectedSession?.title ?? "Untitled session"}
+                  {selectedSession?.title ?? t("chat.untitledSession")}
                 </div>
               </div>
               <div className="chat-topline-meta">
-                <span>{selectedSession?.updatedAt ?? "No history"}</span>
+                <span>{selectedSession?.updatedAt ?? t("chat.noHistory")}</span>
                 <span
                   className="chat-status-dot"
                   title={t("status.connected")}
@@ -992,17 +340,21 @@ export default function ChatPage() {
                 shouldAutoScrollRef.current = distanceToBottom < 80;
               }}
             >
-              {error ? <div className="empty-state">{error}</div> : null}
+              {error && messages.length === 0 ? (
+                <div className="empty-state">{error}</div>
+              ) : null}
               {!error && isLoadingHistory && messages.length === 0 ? (
-                <div className="empty-state">Loading history...</div>
+                <div className="empty-state">{t("chat.loadingHistory")}</div>
               ) : null}
               {!error && !isLoadingHistory && messages.length === 0 ? (
-                <div className="empty-state">
-                  Start a new conversation or open an existing session.
+                <div className="empty-state">{t("chat.emptyState")}</div>
+              ) : null}
+              {error && messages.length > 0 ? (
+                <div className="empty-state" style={{ marginBottom: "1rem" }}>
+                  {error}
                 </div>
               ) : null}
-              {!error &&
-                messages.map((message) => (
+              {messages.map((message) => (
                   <article
                     key={message.id}
                     className={`message-bubble message-bubble-${message.role}`}
@@ -1099,7 +451,7 @@ export default function ChatPage() {
             <div className="metric-grid metric-grid-scroll">
               <div className="metric-card">
                 <span className="metric-label">{t("status.providerReady")}</span>
-                <strong>{selectedSession ? "Live session loaded" : "Waiting for session"}</strong>
+                <strong>{selectedSession ? t("chat.inspector.sessionLoaded") : t("chat.inspector.waitingForSession")}</strong>
               </div>
               <div className="metric-card">
                 <span className="metric-label">{t("status.memoryHealthy")}</span>

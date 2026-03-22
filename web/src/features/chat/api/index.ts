@@ -6,6 +6,8 @@ import {
   buildApiUrl,
   type ApiRequestOptions,
 } from "../../../lib/api/client";
+import { ChatMessage } from "../types";
+export type { ChatMessage };
 
 const CHAT_READ_TIMEOUT_MS = 15_000;
 const CHAT_WRITE_TIMEOUT_MS = 30_000;
@@ -14,13 +16,6 @@ export interface ChatSessionSummary {
   id: string;
   title: string;
   updatedAt: string;
-}
-
-export interface ChatMessage {
-  id: string;
-  role: "user" | "assistant" | string;
-  content: string;
-  createdAt: string;
 }
 
 export interface ChatTurnAccepted {

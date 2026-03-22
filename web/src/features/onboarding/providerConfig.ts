@@ -44,12 +44,16 @@ export function useProviderConfigForm(source: ProviderConfigFormSource) {
   const [apiKey, setApiKey] = useState("");
   const [apiKeyDirty, setApiKeyDirty] = useState(false);
 
-  useEffect(() => {
-    setKind(source.kind);
-    setModel(source.model);
-    setBaseUrlOrEndpoint(source.baseUrlOrEndpoint);
+  function resetFromSource(nextSource: ProviderConfigFormSource) {
+    setKind(nextSource.kind);
+    setModel(nextSource.model);
+    setBaseUrlOrEndpoint(nextSource.baseUrlOrEndpoint);
     setApiKey("");
     setApiKeyDirty(false);
+  }
+
+  useEffect(() => {
+    resetFromSource(source);
   }, [source.baseUrlOrEndpoint, source.kind, source.model]);
 
   function setKindWithRouteReset(nextKind: string) {
@@ -82,6 +86,7 @@ export function useProviderConfigForm(source: ProviderConfigFormSource) {
     baseUrlOrEndpoint,
     apiKey,
     apiKeyDirty,
+    resetFromSource,
     setModel,
     setBaseUrlOrEndpoint,
     setKindWithRouteReset,
@@ -122,16 +127,21 @@ export function usePreferencesForm(source: PreferencesFormSource) {
   const [memoryProfile, setMemoryProfile] = useState(source.memoryProfile);
   const [promptAddendum, setPromptAddendum] = useState(source.promptAddendum);
 
+  function resetFromSource(nextSource: PreferencesFormSource) {
+    setPersonality(nextSource.personality);
+    setMemoryProfile(nextSource.memoryProfile);
+    setPromptAddendum(nextSource.promptAddendum);
+  }
+
   useEffect(() => {
-    setPersonality(source.personality);
-    setMemoryProfile(source.memoryProfile);
-    setPromptAddendum(source.promptAddendum);
+    resetFromSource(source);
   }, [source.memoryProfile, source.personality, source.promptAddendum]);
 
   return {
     personality,
     memoryProfile,
     promptAddendum,
+    resetFromSource,
     setPersonality,
     setMemoryProfile,
     setPromptAddendum,

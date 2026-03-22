@@ -1,30 +1,19 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Panel } from "../../../components/surfaces/Panel";
-import { ApiRequestError } from "../../../lib/api/client";
 import { useWebConnection } from "../../../hooks/useWebConnection";
-import { onboardingApi } from "../../onboarding/api";
+import { useDashboardData } from "../hooks/useDashboardData";
 import {
-  buildPreferencesSavePayload,
-  buildProviderSavePayload,
   MEMORY_PROFILE_OPTIONS,
   PERSONALITY_OPTIONS,
-  readProviderSaveError,
-  readProviderValidationFailure,
   usePreferencesForm,
   useProviderConfigForm,
 } from "../../onboarding/providerConfig";
 import { DebugConsolePanel } from "../components/DebugConsolePanel";
-import {
-  dashboardApi,
-  type DashboardConnectivity,
-  type DashboardDebugConsole,
-  type DashboardConfigSnapshot,
-  type DashboardProviderItem,
-  type DashboardRuntime,
-  type DashboardSummary,
-  type DashboardToolItem,
-  type DashboardTools,
+import type {
+  DashboardConnectivity,
+  DashboardToolItem,
+  DashboardTools,
 } from "../api";
 
 type SettingsModalPhase = "pending" | "success" | "error";
@@ -147,32 +136,7 @@ function formatMemoryProfile(
   }
 }
 
-function readDashboardError(
-  error: unknown,
-  t: ReturnType<typeof useTranslation>["t"],
-  markUnauthorized: () => void,
-  authMode: string | null,
-  tokenPath: string | null,
-  tokenEnv: string | null,
-): string {
-  if (error instanceof ApiRequestError && error.status === 401) {
-    markUnauthorized();
-    return authMode === "same_origin_session"
-      ? t("auth.sessionInvalidBody")
-      : t("auth.invalidBody", {
-          tokenPath: tokenPath ?? "",
-          tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
-        });
-  }
 
-  return error instanceof Error ? error.message : "Failed to load dashboard";
-}
-
-function wait(ms: number) {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
-}
 
 function buildConnectivityCopy(
   connectivity: DashboardConnectivity | null,
@@ -218,124 +182,53 @@ function buildConnectivityCopy(
 
 export default function DashboardPage() {
   const { t } = useTranslation();
+  const connection = useWebConnection();
+  const { onboardingStatus } = connection;
+
+  // These forms depend on initial data but manage their own state
+  const providerForm = useProviderConfigForm({
+    kind: "",
+    model: "",
+    baseUrlOrEndpoint: "",
+    apiKeyConfigured: false,
+  });
+
+  const preferencesForm = usePreferencesForm({
+    personality: onboardingStatus?.personality || "calm_engineering",
+    memoryProfile: onboardingStatus?.memoryProfile || "window_only",
+    promptAddendum: onboardingStatus?.promptAddendum || "",
+  });
+
+  const { state, actions } = useDashboardData({
+    t,
+    connection,
+    providerForm,
+    preferencesForm,
+  });
+
   const {
-    canAccessProtectedApi,
-    acceptValidatedOnboardingStatus,
-    onboardingStatus,
-    refreshOnboardingStatus,
-    authRevision,
-    markUnauthorized,
-    status,
-    authMode,
-    tokenPath,
-    tokenEnv,
-  } = useWebConnection();
-  const [summary, setSummary] = useState<DashboardSummary | null>(null);
-  const [providers, setProviders] = useState<DashboardProviderItem[]>([]);
-  const [runtime, setRuntime] = useState<DashboardRuntime | null>(null);
-  const [connectivity, setConnectivity] = useState<DashboardConnectivity | null>(null);
-  const [config, setConfig] = useState<DashboardConfigSnapshot | null>(null);
-  const [tools, setTools] = useState<DashboardTools | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [settingsError, setSettingsError] = useState<string | null>(null);
-  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
-  const [isSavingSettings, setIsSavingSettings] = useState(false);
-  const [isRefreshingDiagnostics, setIsRefreshingDiagnostics] = useState(false);
-  const [settingsModal, setSettingsModal] = useState<SettingsModalState | null>(null);
-  const [showDebugConsole, setShowDebugConsole] = useState(false);
-  const [debugConsole, setDebugConsole] = useState<DashboardDebugConsole | null>(null);
-  const [debugConsoleError, setDebugConsoleError] = useState<string | null>(null);
+    summary,
+    providers,
+    runtime,
+    connectivity,
+    config,
+    tools,
+    error,
+    settingsError,
+    settingsNotice,
+    isSavingSettings,
+    isRefreshingDiagnostics,
+    settingsModal,
+    showDebugConsole,
+    debugConsole,
+    debugConsoleError,
+  } = state;
 
-  async function reloadDashboardData() {
-    setError(null);
-    const [
-      loadedSummary,
-      loadedProviders,
-      loadedRuntime,
-      loadedConnectivity,
-      loadedConfig,
-      loadedTools,
-    ] = await Promise.all([
-      dashboardApi.loadSummary(),
-      dashboardApi.loadProviders(),
-      dashboardApi.loadRuntime(),
-      dashboardApi.loadConnectivity(),
-      dashboardApi.loadConfig(),
-      dashboardApi.loadTools(),
-    ]);
-
-    setSummary(loadedSummary);
-    setProviders(loadedProviders.items);
-    setRuntime(loadedRuntime);
-    setConnectivity(loadedConnectivity);
-    setConfig(loadedConfig);
-    setTools(loadedTools);
-  }
-
-  useEffect(() => {
-    let cancelled = false;
-
-    if (!canAccessProtectedApi) {
-      setSummary(null);
-      setProviders([]);
-      setRuntime(null);
-      setConnectivity(null);
-      setConfig(null);
-      setTools(null);
-      setError(
-        status === "unauthorized"
-          ? authMode === "same_origin_session"
-            ? t("auth.sessionInvalidBody")
-            : t("auth.invalidBody", {
-                tokenPath: tokenPath ?? "",
-                tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
-              })
-          : t("auth.requiredBody"),
-      );
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    async function loadDashboardSnapshot() {
-      try {
-        await reloadDashboardData();
-      } catch (loadError) {
-        if (!cancelled) {
-          setError(
-            readDashboardError(
-              loadError,
-              t,
-              markUnauthorized,
-              authMode,
-              tokenPath,
-              tokenEnv,
-            ),
-          );
-        }
-      }
-    }
-
-    void loadDashboardSnapshot();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [authRevision, canAccessProtectedApi, markUnauthorized, status, t]);
+  const { setShowDebugConsole, handleRefreshDiagnostics, handleApplySettings } =
+    actions;
 
   const activeProvider =
     providers.find((provider) => provider.enabled) ?? providers[0] ?? null;
-  const providerForm = useProviderConfigForm({
-    kind: activeProvider?.id ?? providers[0]?.id ?? "",
-    model: config?.model ?? "",
-    baseUrlOrEndpoint: config?.endpoint ?? "",
-    apiKeyConfigured: config?.apiKeyConfigured ?? false,
-  });
-  const preferencesForm = usePreferencesForm({
-    personality: onboardingStatus?.personality || config?.personality || "calm_engineering",
-    memoryProfile: onboardingStatus?.memoryProfile || config?.memoryProfile || "window_only",
-    promptAddendum: onboardingStatus?.promptAddendum || "",
-  });
   const runtimeTone: Tone =
     runtime?.status === "ready" ? "good" : runtime?.status ? "warn" : "muted";
   const providerTone: Tone = activeProvider?.enabled ? "good" : "muted";
@@ -425,151 +318,36 @@ export default function DashboardPage() {
     debugConsole?.command ?? "$ loongclaw web debug --readonly";
 
   useEffect(() => {
-    let cancelled = false;
-    let timer: number | undefined;
-
-    if (!showDebugConsole || !canAccessProtectedApi) {
-      return () => {
-        cancelled = true;
-        if (timer) {
-          window.clearInterval(timer);
-        }
-      };
-    }
-
-    async function refreshDebugConsole() {
-      try {
-        const payload = await dashboardApi.loadDebugConsole();
-        if (!cancelled) {
-          setDebugConsole(payload);
-          setDebugConsoleError(null);
-        }
-      } catch (loadError) {
-        if (!cancelled) {
-          setDebugConsoleError(
-            readDashboardError(
-              loadError,
-              t,
-              markUnauthorized,
-              authMode,
-              tokenPath,
-              tokenEnv,
-            ),
-          );
-        }
-      }
-    }
-
-    void refreshDebugConsole();
-    timer = window.setInterval(() => {
-      void refreshDebugConsole();
-    }, 4000);
-
-    return () => {
-      cancelled = true;
-      if (timer) {
-        window.clearInterval(timer);
-      }
-    };
+    providerForm.resetFromSource({
+      kind: activeProvider?.id ?? providers[0]?.id ?? "",
+      model: config?.model ?? "",
+      baseUrlOrEndpoint: config?.endpoint ?? "",
+      apiKeyConfigured: config?.apiKeyConfigured ?? false,
+    });
   }, [
-    authMode,
-    canAccessProtectedApi,
-    markUnauthorized,
-    showDebugConsole,
-    t,
-    tokenEnv,
-    tokenPath,
+    activeProvider?.id,
+    config?.apiKeyConfigured,
+    config?.endpoint,
+    config?.model,
+    providers,
   ]);
 
-  async function handleRefreshDiagnostics() {
-    setSettingsError(null);
-    setSettingsNotice(null);
-    setIsRefreshingDiagnostics(true);
-    try {
-      await reloadDashboardData();
-      setSettingsNotice(t("dashboard.settings.refreshed"));
-    } catch (loadError) {
-      setSettingsError(
-        readDashboardError(
-          loadError,
-          t,
-          markUnauthorized,
-          authMode,
-          tokenPath,
-          tokenEnv,
-        ),
-      );
-    } finally {
-      setIsRefreshingDiagnostics(false);
-    }
-  }
+  useEffect(() => {
+    preferencesForm.resetFromSource({
+      personality: config?.personality || onboardingStatus?.personality || "calm_engineering",
+      memoryProfile:
+        config?.memoryProfile || onboardingStatus?.memoryProfile || "window_only",
+      promptAddendum: onboardingStatus?.promptAddendum || "",
+    });
+  }, [
+    config?.memoryProfile,
+    config?.personality,
+    onboardingStatus?.memoryProfile,
+    onboardingStatus?.personality,
+    onboardingStatus?.promptAddendum,
+  ]);
 
-  async function handleApplySettings(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setSettingsError(null);
-    setSettingsNotice(null);
-    setIsSavingSettings(true);
-    try {
-      setSettingsModal({
-        phase: "pending",
-        title: t("dashboard.settings.applyPending"),
-        body: t("onboarding.validation.pending"),
-      });
-      const result = await onboardingApi.applyProvider(
-        buildProviderSavePayload({
-          kind: providerForm.kind,
-          model: providerForm.model,
-          baseUrlOrEndpoint: providerForm.baseUrlOrEndpoint,
-          apiKey: providerForm.apiKey,
-        }),
-      );
-      if (result.passed) {
-        acceptValidatedOnboardingStatus(result.status);
-        await onboardingApi.savePreferences(
-          buildPreferencesSavePayload({
-            personality: preferencesForm.personality,
-            memoryProfile: preferencesForm.memoryProfile,
-            promptAddendum: preferencesForm.promptAddendum,
-          }),
-        );
-        refreshOnboardingStatus();
-        await reloadDashboardData();
-        providerForm.markApiKeyPristine();
-        setSettingsModal({
-          phase: "success",
-          title: t("dashboard.settings.saved"),
-          body: t("onboarding.validation.success"),
-        });
-        setSettingsNotice(t("dashboard.settings.saved"));
-        await wait(1100);
-      } else {
-        const validationError = readProviderValidationFailure(result.credentialStatus, t);
-        setSettingsModal({
-          phase: "error",
-          title: t("onboarding.validation.failed"),
-          body: validationError,
-        });
-        await reloadDashboardData();
-        setSettingsError(validationError);
-        await wait(1600);
-      }
-    } catch (saveError) {
-      if (saveError instanceof ApiRequestError && saveError.status === 401) {
-        markUnauthorized();
-      }
-      const saveErrorMessage = readProviderSaveError(saveError, t, "dashboard.settings.saveFailed");
-      setSettingsError(saveErrorMessage);
-      setSettingsModal({
-        phase: "error",
-        title: t("dashboard.settings.saveFailed"),
-        body: saveErrorMessage,
-      });
-      await wait(1600);
-    } finally {
-      setSettingsModal(null);
-      setIsSavingSettings(false);
-    }
-  }
+
 
   return (
     <div className="page">
@@ -666,20 +444,20 @@ export default function DashboardPage() {
                   </span>
                 }
               >
-            <div className="dashboard-provider-head">
-              <div>
-                <div className="dashboard-provider-name">
-                  {activeProvider?.label ?? t("dashboard.values.none")}
+              <div className="dashboard-provider-head">
+                <div>
+                  <div className="dashboard-provider-name">
+                    {activeProvider?.label ?? t("dashboard.values.none")}
+                  </div>
+                  <div
+                    className="dashboard-provider-subtitle"
+                    title={config?.model ?? t("dashboard.values.noModel")}
+                  >
+                    {config?.model ?? t("dashboard.values.noModel")}
+                  </div>
                 </div>
-                <div
-                  className="dashboard-provider-subtitle"
-                  title={config?.model ?? t("dashboard.values.noModel")}
-                >
-                  {config?.model ?? t("dashboard.values.noModel")}
-                </div>
-              </div>
 
-              <div className="dashboard-provider-meta">
+                <div className="dashboard-provider-meta">
                 <div className="dashboard-meta-stack">
                   <span>{t("dashboard.fields.endpoint")}</span>
                   <strong title={config?.endpoint ?? t("dashboard.values.notSet")}>
@@ -739,13 +517,13 @@ export default function DashboardPage() {
                 <div className="empty-state">{t("dashboard.values.noProviders")}</div>
               )}
             </div>
-              </Panel>
+          </Panel>
 
-              <section className="dashboard-settings">
-                <Panel
-                  eyebrow={t("dashboard.settings.eyebrow")}
-                  title={t("dashboard.settings.title")}
-                >
+          <section className="dashboard-settings">
+            <Panel
+              eyebrow={t("dashboard.settings.eyebrow")}
+              title={t("dashboard.settings.title")}
+            >
               <div className="settings-header">
                 <p className="panel-copy">{t("dashboard.settings.subtitle")}</p>
               </div>
@@ -891,15 +669,15 @@ export default function DashboardPage() {
 
                 <p className="settings-note">{t("dashboard.settings.helper")}</p>
               </form>
-                </Panel>
-              </section>
-            </div>
+            </Panel>
+          </section>
+        </div>
 
-            <div className="dashboard-side-column">
-              <Panel
-                eyebrow={t("dashboard.sections.connectivityEyebrow")}
-                title={t("dashboard.sections.connectivityTitle")}
-              >
+        <div className="dashboard-side-column">
+          <Panel
+            eyebrow={t("dashboard.sections.connectivityEyebrow")}
+            title={t("dashboard.sections.connectivityTitle")}
+          >
             <p className="panel-copy">{connectivityCopy.summary}</p>
             <div className="dashboard-kv-list">
               <div className="dashboard-kv-row">
@@ -1018,12 +796,12 @@ export default function DashboardPage() {
                 </div>
               </div>
             </div>
-              </Panel>
+          </Panel>
 
-              <Panel
-                eyebrow={t("dashboard.sections.toolsEyebrow")}
-                title={t("dashboard.sections.toolsTitle")}
-              >
+          <Panel
+            eyebrow={t("dashboard.sections.toolsEyebrow")}
+            title={t("dashboard.sections.toolsTitle")}
+          >
             <div className="dashboard-tool-summary">
               <div className="dashboard-kv-card">
                 <span>{t("dashboard.fields.approval")}</span>
@@ -1068,9 +846,9 @@ export default function DashboardPage() {
                 </article>
               ))}
             </div>
-              </Panel>
-            </div>
-          </section>
+          </Panel>
+        </div>
+      </section>
         </>
       )}
     </div>

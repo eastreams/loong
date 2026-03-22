@@ -6,6 +6,12 @@
   "deleteSession": "Delete session",
   "deleting": "Deleting...",
   "generating": "Generating...",
+  "loadingSessions": "Loading sessions...",
+  "noSessions": "No saved sessions yet.",
+  "untitledSession": "Untitled session",
+  "noHistory": "No history",
+  "emptyState": "Start a new conversation or open an existing session.",
+  "loadingHistory": "Loading history...",
   "inputPlaceholder": "Ask LoongClaw about runtime, tools, or workflow...",
   "send": "Send",
   "panels": {
@@ -28,6 +34,10 @@
     "pending": "Reading model",
     "provider": "Provider: {{provider}}",
     "providerPending": "Reading provider"
+  },
+  "inspector": {
+    "sessionLoaded": "Live session loaded",
+    "waitingForSession": "Waiting for session"
   },
   "toolAssist": {
     "label": "Tool assist",
