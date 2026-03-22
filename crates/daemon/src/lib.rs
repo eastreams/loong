@@ -383,6 +383,42 @@ pub enum Commands {
         #[arg(long, value_delimiter = ',')]
         exclude: Vec<String>,
     },
+    #[command(
+        about = "Preview or apply legacy claw migration explicitly",
+        long_about = "Power-user migration flow for discovering, previewing, or applying legacy claw nativeization explicitly.\n\nUse this when you want exact CLI control over migration mode selection and output handling for older claw-family workspaces. If you want the guided path, use `loongclaw onboard` instead.\n\nMode quick reference:\n- discover, plan_many, recommend_primary, merge_profiles, map_external_skills: require `--input`\n- plan: requires `--input`; `--output` is optional preview target\n- apply: requires `--input` and `--output`\n- apply_selected: requires `--input` and `--output`; use `--source-id` to pin one discovered source\n- rollback_last_apply: requires `--output`"
+    )]
+    Migrate {
+        /// Path to the legacy claw workspace or root to inspect
+        #[arg(long)]
+        input: Option<String>,
+        /// Target LoongClaw config path to preview, write, or roll back
+        #[arg(long)]
+        output: Option<String>,
+        /// Hint the legacy source kind for single-source plan/apply modes
+        #[arg(long)]
+        source: Option<String>,
+        /// Migration mode to run
+        #[arg(long, value_enum)]
+        mode: migrate_cli::MigrateMode,
+        /// Emit machine-readable JSON instead of text output
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Explicit discovered source id to apply for apply_selected mode
+        #[arg(long)]
+        source_id: Option<String>,
+        /// Merge profile-lane content while keeping one prompt owner
+        #[arg(long, default_value_t = false)]
+        safe_profile_merge: bool,
+        /// Explicit primary source id when safe profile merge is enabled
+        #[arg(long)]
+        primary_source_id: Option<String>,
+        /// Apply the planned external skills mapping during apply_selected
+        #[arg(long, default_value_t = false)]
+        apply_external_skills_plan: bool,
+        /// Overwrite an existing target config when the selected mode writes output
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
     /// Run configuration diagnostics and optionally apply safe config/path fixes
     Doctor {
         /// Config file path to validate (defaults to auto-discovery)
@@ -1861,18 +1897,14 @@ fn normalize_runtime_snapshot_restore_provider_profile(
     profile: &mut mvp::config::ProviderProfileConfig,
     warnings: &mut Vec<String>,
 ) {
-    if profile.provider.api_key.is_none() {
-        profile.provider.api_key =
-            runtime_snapshot_canonical_env_reference(profile.provider.api_key_env.as_deref());
-    }
-    if profile.provider.oauth_access_token.is_none() {
-        profile.provider.oauth_access_token = runtime_snapshot_canonical_env_reference(
-            profile.provider.oauth_access_token_env.as_deref(),
-        );
-    }
-
-    profile.provider.api_key_env = None;
-    profile.provider.oauth_access_token_env = None;
+    runtime_snapshot_migrate_provider_env_reference(
+        &mut profile.provider.api_key,
+        &mut profile.provider.api_key_env,
+    );
+    runtime_snapshot_migrate_provider_env_reference(
+        &mut profile.provider.oauth_access_token,
+        &mut profile.provider.oauth_access_token_env,
+    );
 
     if runtime_snapshot_redact_provider_secret_field(
         profile.provider.api_key.as_mut(),
@@ -1960,40 +1992,59 @@ fn runtime_snapshot_provider_header_is_safe_to_persist(
         .any(|(default_name, _)| default_name.eq_ignore_ascii_case(&normalized))
 }
 
-fn runtime_snapshot_canonical_env_reference(env_name: Option<&str>) -> Option<String> {
-    let env_name = env_name.map(str::trim).filter(|value| !value.is_empty())?;
-    Some(format!("${{{env_name}}}"))
+fn runtime_snapshot_migrate_provider_env_reference(
+    inline_secret: &mut Option<String>,
+    env_name: &mut Option<String>,
+) {
+    let Some(explicit_env_name) = inline_secret
+        .as_deref()
+        .and_then(runtime_snapshot_parse_env_reference)
+        .map(str::to_owned)
+    else {
+        return;
+    };
+    let configured_env_name = env_name.as_deref();
+    let configured_env_name = configured_env_name.map(str::trim);
+    let configured_env_name = configured_env_name.filter(|value| !value.is_empty());
+    if configured_env_name.is_none() {
+        *env_name = Some(explicit_env_name);
+    }
+    *inline_secret = None;
 }
 
 fn runtime_snapshot_is_env_reference_literal(raw: &str) -> bool {
+    runtime_snapshot_parse_env_reference(raw).is_some()
+}
+
+fn runtime_snapshot_parse_env_reference(raw: &str) -> Option<&str> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return false;
+        return None;
     }
 
     if let Some(inner) = trimmed
         .strip_prefix("${")
         .and_then(|value| value.strip_suffix('}'))
     {
-        return runtime_snapshot_is_valid_env_name(inner);
+        return runtime_snapshot_is_valid_env_name(inner).then_some(inner);
     }
 
     if let Some(inner) = trimmed.strip_prefix('$') {
-        return runtime_snapshot_is_valid_env_name(inner);
+        return runtime_snapshot_is_valid_env_name(inner).then_some(inner);
     }
 
     if let Some(inner) = trimmed.strip_prefix("env:") {
-        return runtime_snapshot_is_valid_env_name(inner);
+        return runtime_snapshot_is_valid_env_name(inner).then_some(inner);
     }
 
     if let Some(inner) = trimmed
         .strip_prefix('%')
         .and_then(|value| value.strip_suffix('%'))
     {
-        return runtime_snapshot_is_valid_env_name(inner);
+        return runtime_snapshot_is_valid_env_name(inner).then_some(inner);
     }
 
-    false
+    None
 }
 
 fn runtime_snapshot_is_valid_env_name(raw: &str) -> bool {
@@ -2142,6 +2193,74 @@ mod runtime_snapshot_restore_spec_tests {
             "x-secret-version",
             "literal-secret",
         ));
+    }
+
+    #[test]
+    fn runtime_snapshot_restore_normalization_keeps_provider_env_name_fields() {
+        let mut warnings = Vec::new();
+        let mut profile = mvp::config::ProviderProfileConfig {
+            default_for_kind: true,
+            provider: mvp::config::ProviderConfig {
+                kind: mvp::config::ProviderKind::Openai,
+                model: "openai/gpt-5.1-codex".to_owned(),
+                api_key_env: Some("OPENAI_API_KEY".to_owned()),
+                oauth_access_token_env: Some("OPENAI_CODEX_OAUTH_TOKEN".to_owned()),
+                ..Default::default()
+            },
+        };
+
+        normalize_runtime_snapshot_restore_provider_profile(
+            "openai-main",
+            &mut profile,
+            &mut warnings,
+        );
+
+        assert_eq!(profile.provider.api_key, None);
+        assert_eq!(
+            profile.provider.api_key_env.as_deref(),
+            Some("OPENAI_API_KEY")
+        );
+        assert_eq!(profile.provider.oauth_access_token, None);
+        assert_eq!(
+            profile.provider.oauth_access_token_env.as_deref(),
+            Some("OPENAI_CODEX_OAUTH_TOKEN")
+        );
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn runtime_snapshot_restore_normalization_prefers_existing_env_name_fields() {
+        let mut warnings = Vec::new();
+        let mut profile = mvp::config::ProviderProfileConfig {
+            default_for_kind: true,
+            provider: mvp::config::ProviderConfig {
+                kind: mvp::config::ProviderKind::Openai,
+                model: "openai/gpt-5.1-codex".to_owned(),
+                api_key: Some("${INLINE_OPENAI_API_KEY}".to_owned()),
+                api_key_env: Some("CONFIGURED_OPENAI_API_KEY".to_owned()),
+                oauth_access_token: Some("$INLINE_OPENAI_OAUTH_TOKEN".to_owned()),
+                oauth_access_token_env: Some("CONFIGURED_OPENAI_OAUTH_TOKEN".to_owned()),
+                ..Default::default()
+            },
+        };
+
+        normalize_runtime_snapshot_restore_provider_profile(
+            "openai-main",
+            &mut profile,
+            &mut warnings,
+        );
+
+        assert_eq!(profile.provider.api_key, None);
+        assert_eq!(
+            profile.provider.api_key_env.as_deref(),
+            Some("CONFIGURED_OPENAI_API_KEY")
+        );
+        assert_eq!(profile.provider.oauth_access_token, None);
+        assert_eq!(
+            profile.provider.oauth_access_token_env.as_deref(),
+            Some("CONFIGURED_OPENAI_OAUTH_TOKEN")
+        );
+        assert!(warnings.is_empty());
     }
 
     #[test]

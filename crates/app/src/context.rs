@@ -48,6 +48,7 @@ pub fn bootstrap_kernel_context(agent_id: &str, ttl_s: u64) -> Result<KernelCont
         agent_id,
         ttl_s,
         Arc::new(InMemoryAuditSink::default()) as Arc<dyn AuditSink>,
+        &LoongClawConfig::default(),
     )
 }
 
@@ -60,15 +61,20 @@ pub(crate) fn bootstrap_test_kernel_context(
     agent_id: &str,
     ttl_s: u64,
 ) -> Result<KernelContext, String> {
-    bootstrap_kernel_context(agent_id, ttl_s)
+    bootstrap_kernel_context_with_audit_sink(
+        agent_id,
+        ttl_s,
+        Arc::new(InMemoryAuditSink::default()) as Arc<dyn AuditSink>,
+        &LoongClawConfig::default(),
+    )
 }
 
-pub(crate) fn bootstrap_kernel_context_with_config(
+pub fn bootstrap_kernel_context_with_config(
     agent_id: &str,
     ttl_s: u64,
     config: &LoongClawConfig,
 ) -> Result<KernelContext, String> {
-    bootstrap_kernel_context_with_audit_sink(agent_id, ttl_s, build_audit_sink(config)?)
+    bootstrap_kernel_context_with_audit_sink(agent_id, ttl_s, build_audit_sink(config)?, config)
 }
 
 fn build_audit_sink(config: &LoongClawConfig) -> Result<Arc<dyn AuditSink>, String> {
@@ -105,6 +111,7 @@ fn bootstrap_kernel_context_with_audit_sink(
     agent_id: &str,
     ttl_s: u64,
     audit_sink: Arc<dyn AuditSink>,
+    config: &LoongClawConfig,
 ) -> Result<KernelContext, String> {
     let mut kernel = LoongClawKernel::with_runtime(
         StaticPolicyEngine::default(),
@@ -145,17 +152,20 @@ fn bootstrap_kernel_context_with_audit_sink(
             .map_err(|e| format!("set default memory adapter failed: {e}"))?;
     }
 
-    kernel.register_core_tool_adapter(crate::tools::MvpToolAdapter::new());
+    let tool_rt =
+        crate::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None);
+    let file_root = tool_rt.file_root.clone();
+    kernel.register_core_tool_adapter(crate::tools::MvpToolAdapter::with_config(tool_rt));
     kernel
         .set_default_core_tool_adapter("mvp-tools")
         .map_err(|e| format!("set default tool adapter failed: {e}"))?;
 
     // Register policy extensions for unified security enforcement.
-    let tool_rt = crate::tools::runtime_config::get_tool_runtime_config();
+    let tool_policy_rt =
+        crate::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None);
     kernel.register_policy_extension(
-        crate::tools::shell_policy_ext::ToolPolicyExtension::from_config(tool_rt),
+        crate::tools::shell_policy_ext::ToolPolicyExtension::from_config(&tool_policy_rt),
     );
-    let file_root = tool_rt.file_root.clone();
     kernel.register_policy_extension(crate::tools::file_policy_ext::FilePolicyExtension::new(
         file_root,
     ));

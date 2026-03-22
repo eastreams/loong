@@ -86,6 +86,36 @@ fn cli_import_help_explains_explicit_power_user_flow() {
 }
 
 #[test]
+fn cli_migrate_help_explains_explicit_migration_flow() {
+    let mut command = Cli::command();
+    let migrate = command
+        .find_subcommand_mut("migrate")
+        .expect("migrate subcommand should exist");
+    let mut help = Vec::new();
+    migrate
+        .write_long_help(&mut help)
+        .expect("render migrate help");
+    let help = String::from_utf8(help).expect("help should be utf8");
+
+    assert!(
+        help.contains("Power-user migration flow"),
+        "migrate help should explain when to use the explicit migration command: {help}"
+    );
+    assert!(
+        help.contains("--mode <MODE>"),
+        "migrate help should surface the required mode flag: {help}"
+    );
+    assert!(
+        help.contains("discover"),
+        "migrate help should list supported migration modes: {help}"
+    );
+    assert!(
+        help.contains("loongclaw onboard"),
+        "migrate help should direct guided users back to onboard: {help}"
+    );
+}
+
+#[test]
 fn cli_onboard_help_mentions_detected_reusable_settings() {
     let mut command = Cli::command();
     let onboard = command

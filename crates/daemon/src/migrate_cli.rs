@@ -1,8 +1,11 @@
-#![allow(dead_code)] // migrate flow remains test-covered until the daemon CLI exposes it directly
-
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    future::Future,
+    path::{Path, PathBuf},
+};
 
 use clap::ValueEnum;
+use kernel::{ToolCoreOutcome, ToolCoreRequest};
 use loongclaw_app as mvp;
 use loongclaw_spec::CliResult;
 use serde_json::{Value, json};
@@ -22,14 +25,6 @@ pub enum MigrateMode {
 }
 
 impl MigrateMode {
-    fn requires_input(self) -> bool {
-        !matches!(self, Self::RollbackLastApply)
-    }
-
-    fn writes_output(self) -> bool {
-        matches!(self, Self::Apply | Self::ApplySelected)
-    }
-
     fn as_id(self) -> &'static str {
         match self {
             Self::Apply => "apply",
@@ -62,632 +57,666 @@ pub struct MigrateCommandOptions {
 pub fn parse_legacy_claw_source(raw: &str) -> Option<mvp::migration::LegacyClawSource> {
     mvp::migration::LegacyClawSource::from_id(raw)
 }
-
 pub fn run_migrate_cli(options: MigrateCommandOptions) -> CliResult<()> {
-    let output_path = resolve_output_path(options.output.as_deref());
-    let input_path = options.input.as_deref().map(mvp::config::expand_path);
-
-    if options.mode.writes_output() && output_path.exists() && !options.force {
-        return Err(format!(
-            "config {} already exists (use --force to overwrite)",
-            output_path.display()
-        ));
-    }
-
-    match options.mode {
-        MigrateMode::RollbackLastApply => run_rollback_mode(&output_path, options.json),
-        MigrateMode::Discover => {
-            let input = require_input_path(input_path, options.mode)?;
-            let report = mvp::migration::discover_import_sources(
-                &input,
-                mvp::migration::DiscoveryOptions::default(),
-            )?;
-            if options.json {
-                return print_json_payload(json!({
-                    "mode": options.mode.as_id(),
-                    "input_path": input.display().to_string(),
-                    "sources": report
-                        .sources
-                        .iter()
-                        .map(discovered_source_payload)
-                        .collect::<Vec<_>>(),
-                }));
-            }
-
-            println!("migration discovery complete");
-            println!("- input: {}", input.display());
-            println!("- discovered sources: {}", report.sources.len());
-            for source in &report.sources {
-                println!(
-                    "- [{}] kind={} confidence={} path={}",
-                    source.source_id,
-                    source.source.as_id(),
-                    source.confidence_score,
-                    source.path.display()
-                );
-            }
-            Ok(())
-        }
-        MigrateMode::PlanMany | MigrateMode::RecommendPrimary => {
-            let input = require_input_path(input_path, options.mode)?;
-            let report = mvp::migration::discover_import_sources(
-                &input,
-                mvp::migration::DiscoveryOptions::default(),
-            )?;
-            let summary = mvp::migration::plan_import_sources(&report)?;
-            let recommendation = mvp::migration::recommend_primary_source(&summary).ok();
-
-            if matches!(options.mode, MigrateMode::RecommendPrimary) && recommendation.is_none() {
-                return Err(
-                    "no import sources discovered; cannot recommend primary source".to_owned(),
-                );
-            }
-
-            if options.json {
-                return print_json_payload(json!({
-                    "mode": options.mode.as_id(),
-                    "input_path": input.display().to_string(),
-                    "plans": summary.plans.iter().map(planned_source_payload).collect::<Vec<_>>(),
-                    "recommendation": recommendation.as_ref().map(primary_recommendation_payload),
-                }));
-            }
-
-            println!("migration planning complete");
-            println!("- mode: {}", options.mode.as_id());
-            println!("- input: {}", input.display());
-            println!("- planned sources: {}", summary.plans.len());
-            if let Some(recommended) = recommendation.as_ref() {
-                println!(
-                    "- recommended source: {} ({})",
-                    recommended.source_id,
-                    recommended.source.as_id()
-                );
-            }
-            for plan in &summary.plans {
-                println!(
-                    "- [{}] kind={} confidence={} prompt={} profile={} warnings={} path={}",
-                    plan.source_id,
-                    plan.source.as_id(),
-                    plan.confidence_score,
-                    yes_no(plan.prompt_addendum_present),
-                    yes_no(plan.profile_note_present),
-                    plan.warning_count,
-                    plan.input_path.display()
-                );
-            }
-            Ok(())
-        }
-        MigrateMode::MergeProfiles => {
-            let input = require_input_path(input_path, options.mode)?;
-            let report = mvp::migration::discover_import_sources(
-                &input,
-                mvp::migration::DiscoveryOptions::default(),
-            )?;
-            let summary = mvp::migration::plan_import_sources(&report)?;
-            let recommendation = mvp::migration::recommend_primary_source(&summary).ok();
-            let merged = mvp::migration::merge_profile_sources(&report)?;
-
-            if options.json {
-                return print_json_payload(json!({
-                    "mode": options.mode.as_id(),
-                    "input_path": input.display().to_string(),
-                    "plans": summary.plans.iter().map(planned_source_payload).collect::<Vec<_>>(),
-                    "recommendation": recommendation.as_ref().map(primary_recommendation_payload),
-                    "result": merged_profile_plan_payload(&merged),
-                }));
-            }
-
-            println!("profile merge preview complete");
-            println!("- input: {}", input.display());
-            println!("- source count: {}", summary.plans.len());
-            if let Some(recommended) = recommendation.as_ref() {
-                println!("- recommended prompt owner: {}", recommended.source_id);
-            }
-            println!(
-                "- auto apply allowed: {}",
-                yes_no(merged.auto_apply_allowed)
-            );
-            println!(
-                "- unresolved conflicts: {}",
-                merged.unresolved_conflicts.len()
-            );
-            println!("- kept entries: {}", merged.kept_entries.len());
-            println!("- dropped duplicates: {}", merged.dropped_duplicates.len());
-            Ok(())
-        }
-        MigrateMode::MapExternalSkills => {
-            let input = require_input_path(input_path, options.mode)?;
-            let mapping = mvp::migration::plan_external_skill_mapping(&input);
-
-            if options.json {
-                return print_json_payload(json!({
-                    "mode": options.mode.as_id(),
-                    "input_path": input.display().to_string(),
-                    "result": external_skill_mapping_plan_payload(&mapping),
-                }));
-            }
-
-            println!("external skills mapping plan ready");
-            println!("- input: {}", input.display());
-            println!("- detected artifacts: {}", mapping.artifacts.len());
-            println!("- declared skills: {}", mapping.declared_skills.len());
-            println!("- locked skills: {}", mapping.locked_skills.len());
-            println!("- resolved skills: {}", mapping.resolved_skills.len());
-            println!(
-                "- profile addendum generated: {}",
-                yes_no(mapping.profile_note_addendum.is_some())
-            );
-            for artifact in &mapping.artifacts {
-                println!(
-                    "- artifact: kind={} path={}",
-                    artifact.kind.as_id(),
-                    artifact.path.display()
-                );
-            }
-            for warning in &mapping.warnings {
-                println!("- warning: {warning}");
-            }
-            println!(
-                "next step: loongclaw migrate --mode apply_selected --input {} --output {} --apply-external-skills-plan --force",
-                input.display(),
-                output_path.display()
-            );
-            Ok(())
-        }
-        MigrateMode::ApplySelected => {
-            let input = require_input_path(input_path, options.mode)?;
-            let report = mvp::migration::discover_import_sources(
-                &input,
-                mvp::migration::DiscoveryOptions::default(),
-            )?;
-            let summary = mvp::migration::plan_import_sources(&report)?;
-            let selection = resolve_apply_selection_mode(&options, &summary)?;
-            let result =
-                mvp::migration::apply_import_selection(&mvp::migration::ApplyImportSelection {
-                    discovery: report,
-                    output_path,
-                    mode: selection.clone(),
-                    apply_external_skills_plan: options.apply_external_skills_plan,
-                    external_skills_input_path: if options.apply_external_skills_plan {
-                        Some(input.clone())
-                    } else {
-                        None
-                    },
-                })?;
-
-            #[cfg(feature = "memory-sqlite")]
-            let memory_path = ensure_memory_ready_from_path(&result.output_path)?;
-
-            if options.json {
-                return print_json_payload(json!({
-                    "mode": options.mode.as_id(),
-                    "input_path": input.display().to_string(),
-                    "output_path": result.output_path.display().to_string(),
-                    "selection_mode": selection_mode_id(&selection),
-                    "apply_external_skills_plan": options.apply_external_skills_plan,
-                    "result": apply_selection_result_payload(&result),
-                }));
-            }
-
-            println!("migration selection applied");
-            println!("- mode: {}", options.mode.as_id());
-            println!("- input: {}", input.display());
-            println!("- output: {}", result.output_path.display());
-            println!("- selection mode: {}", selection_mode_id(&selection));
-            println!(
-                "- selected primary source: {}",
-                result.selected_primary_source_id
-            );
-            println!(
-                "- merged source ids: {}",
-                result.merged_source_ids.join(", ")
-            );
-            println!("- unresolved conflicts: {}", result.unresolved_conflicts);
-            println!(
-                "- external skill artifacts: {}",
-                result.external_skill_artifact_count
-            );
-            println!(
-                "- external skill entries applied: {}",
-                result.external_skill_entries_applied
-            );
-            if let Some(path) = result.external_skills_manifest_path.as_ref() {
-                println!("- external skills manifest: {}", path.display());
-            }
-            #[cfg(feature = "memory-sqlite")]
-            println!("- sqlite memory: {}", memory_path.display());
-            for warning in &result.warnings {
-                println!("- warning: {warning}");
-            }
-            if let Ok(resolved_config) = load_or_default_config(&result.output_path, true) {
-                let config_path = result.output_path.display().to_string();
-                if let Some(primary_action) =
-                    crate::next_actions::collect_setup_next_actions(&resolved_config, &config_path)
-                        .into_iter()
-                        .next()
-                {
-                    println!("next step: {}", primary_action.command);
-                }
-            }
-            Ok(())
-        }
-        MigrateMode::Plan | MigrateMode::Apply => {
-            let input = require_input_path(input_path, options.mode)?;
-            let hint = if let Some(raw) = options.source.as_deref() {
-                let parsed = parse_legacy_claw_source(raw).ok_or_else(|| {
-                    format!(
-                        "unsupported --source value \"{raw}\". supported: {}",
-                        supported_legacy_source_list()
-                    )
-                })?;
-                if parsed == mvp::migration::LegacyClawSource::Unknown {
-                    None
-                } else {
-                    Some(parsed)
-                }
-            } else {
-                None
-            };
-
-            let plan = mvp::migration::plan_import_from_path(&input, hint)?;
-            let mut config = load_or_default_config(&output_path, output_path.exists())?;
-            mvp::migration::apply_import_plan(&mut config, &plan);
-
-            if matches!(options.mode, MigrateMode::Plan) {
-                if options.json {
-                    let rendered = mvp::config::render(&config)
-                        .map_err(|error| format!("render preview failed: {error}"))?;
-                    return print_json_payload(json!({
-                        "mode": options.mode.as_id(),
-                        "source": legacy_claw_source_id(plan.source),
-                        "input_path": input.display().to_string(),
-                        "output_path": output_path.display().to_string(),
-                        "warnings": plan.warnings,
-                        "config_preview": config_preview_payload(&config),
-                        "config_toml": rendered,
-                    }));
-                }
-
-                println!("migration plan ready");
-                println!("- source: {}", legacy_claw_source_id(plan.source));
-                println!("- input: {}", input.display());
-                println!("- output target: {}", output_path.display());
-                println!(
-                    "- prompt pack: {}",
-                    config
-                        .cli
-                        .prompt_pack_id()
-                        .unwrap_or(mvp::prompt::DEFAULT_PROMPT_PACK_ID)
-                );
-                println!(
-                    "- memory profile: {}",
-                    memory_profile_id(config.memory.profile)
-                );
-                println!(
-                    "- migrated prompt addendum: {}",
-                    yes_no(config.cli.system_prompt_addendum.is_some())
-                );
-                println!(
-                    "- migrated profile note: {}",
-                    yes_no(config.memory.profile_note.is_some())
-                );
-                for warning in &plan.warnings {
-                    println!("- warning: {warning}");
-                }
-                println!(
-                    "next step: loongclaw migrate --mode apply --input {} --output {} --force",
-                    input.display(),
-                    output_path.display()
-                );
-                return Ok(());
-            }
-
-            let output_string = output_path.display().to_string();
-            let written = mvp::config::write(Some(&output_string), &config, options.force)?;
-
-            #[cfg(feature = "memory-sqlite")]
-            let memory_path = {
-                let mem_config =
-                    mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(
-                        &config.memory,
-                    );
-                mvp::memory::ensure_memory_db_ready(
-                    Some(config.memory.resolved_sqlite_path()),
-                    &mem_config,
-                )
-                .map_err(|error| format!("failed to bootstrap sqlite memory: {error}"))?
-            };
-
-            if options.json {
-                return print_json_payload(json!({
-                    "mode": options.mode.as_id(),
-                    "source": legacy_claw_source_id(plan.source),
-                    "input_path": input.display().to_string(),
-                    "output_path": written.display().to_string(),
-                    "warnings": plan.warnings,
-                    "config_preview": config_preview_payload(&config),
-                }));
-            }
-
-            println!("migration complete");
-            println!("- source: {}", legacy_claw_source_id(plan.source));
-            println!("- input: {}", input.display());
-            println!("- config: {}", written.display());
-            println!(
-                "- prompt pack: {}",
-                config
-                    .cli
-                    .prompt_pack_id()
-                    .unwrap_or(mvp::prompt::DEFAULT_PROMPT_PACK_ID)
-            );
-            println!(
-                "- memory profile: {}",
-                memory_profile_id(config.memory.profile)
-            );
-            println!(
-                "- migrated prompt addendum: {}",
-                yes_no(config.cli.system_prompt_addendum.is_some())
-            );
-            println!(
-                "- migrated profile note: {}",
-                yes_no(config.memory.profile_note.is_some())
-            );
-            #[cfg(feature = "memory-sqlite")]
-            println!("- sqlite memory: {}", memory_path.display());
-            for warning in &plan.warnings {
-                println!("- warning: {warning}");
-            }
-            if let Ok(resolved_config) = load_or_default_config(&written, true) {
-                let config_path = written.display().to_string();
-                if let Some(primary_action) =
-                    crate::next_actions::collect_setup_next_actions(&resolved_config, &config_path)
-                        .into_iter()
-                        .next()
-                {
-                    println!("next step: {}", primary_action.command);
-                }
-            }
-            Ok(())
-        }
-    }
+    block_on_migrate_cli(run_migrate_cli_async(options))
 }
 
-fn load_or_default_config(path: &Path, exists: bool) -> CliResult<mvp::config::LoongClawConfig> {
-    if !exists {
-        return Ok(mvp::config::LoongClawConfig::default());
+async fn run_migrate_cli_async(options: MigrateCommandOptions) -> CliResult<()> {
+    let config = load_migrate_cli_runtime_config(&options)?;
+    let kernel_ctx = mvp::context::bootstrap_kernel_context_with_config(
+        "daemon-migrate-cli",
+        mvp::context::DEFAULT_TOKEN_TTL_S,
+        &config,
+    )?;
+    let outcome = mvp::tools::execute_tool(
+        ToolCoreRequest {
+            tool_name: "claw.migrate".to_owned(),
+            payload: build_migrate_tool_payload(&options),
+        },
+        &kernel_ctx,
+    )
+    .await
+    .map_err(|error| translate_migrate_cli_error(&options, error))?;
+
+    render_migrate_tool_outcome(&options, outcome)
+}
+
+fn block_on_migrate_cli<F>(future: F) -> CliResult<()>
+where
+    F: Future<Output = CliResult<()>>,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        return tokio::task::block_in_place(|| handle.block_on(future));
     }
-    let path_string = path.display().to_string();
-    let (_, config) = mvp::config::load(Some(&path_string))?;
+
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("failed to create migrate CLI runtime: {error}"))?
+        .block_on(future)
+}
+
+fn load_migrate_cli_runtime_config(
+    options: &MigrateCommandOptions,
+) -> CliResult<mvp::config::LoongClawConfig> {
+    let config_path = mvp::config::default_config_path();
+    let mut config = if config_path.exists() {
+        let config_path_string = config_path.display().to_string();
+        let (_, config) = mvp::config::load(Some(&config_path_string))?;
+        config
+    } else {
+        mvp::config::LoongClawConfig::default()
+    };
+
+    if config.tools.file_root.is_none()
+        && let Some(file_root) = derive_migrate_cli_file_root(options)
+    {
+        config.tools.file_root = Some(file_root.display().to_string());
+    }
+
     Ok(config)
 }
 
-fn legacy_claw_source_id(source: mvp::migration::LegacyClawSource) -> &'static str {
-    source.as_id()
-}
+fn derive_migrate_cli_file_root(options: &MigrateCommandOptions) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
 
-fn supported_legacy_source_list() -> &'static str {
-    "auto, nanobot, openclaw, picoclaw, zeroclaw, nanoclaw"
-}
-
-fn resolve_output_path(output: Option<&str>) -> PathBuf {
-    output
-        .map(mvp::config::expand_path)
-        .unwrap_or_else(mvp::config::default_config_path)
-}
-
-fn require_input_path(input: Option<PathBuf>, mode: MigrateMode) -> CliResult<PathBuf> {
-    if mode.requires_input() {
-        return input.ok_or_else(|| format!("migrate mode `{}` requires --input", mode.as_id()));
+    if let Some(input) = options.input.as_deref() {
+        candidates.push(policy_root_candidate(
+            normalize_migrate_cli_path(input, true),
+            true,
+        ));
     }
-    Ok(PathBuf::new())
+    if let Some(output) = options.output.as_deref() {
+        candidates.push(policy_root_candidate(
+            normalize_migrate_cli_path(output, false),
+            false,
+        ));
+    }
+
+    common_ancestor_path(&candidates)
+}
+
+fn policy_root_candidate(path: PathBuf, keep_dir: bool) -> PathBuf {
+    if keep_dir && path.is_dir() {
+        return path;
+    }
+
+    path.parent().map(Path::to_path_buf).unwrap_or(path)
+}
+
+fn normalize_migrate_cli_path(raw: &str, keep_dir: bool) -> PathBuf {
+    normalize_migrate_cli_pathbuf(mvp::config::expand_path(raw), keep_dir)
+}
+
+fn normalize_migrate_cli_pathbuf(path: PathBuf, keep_dir: bool) -> PathBuf {
+    if path.exists() {
+        return fs::canonicalize(&path).unwrap_or(path);
+    }
+
+    if !keep_dir
+        && let (Some(parent), Some(file_name)) = (path.parent(), path.file_name())
+        && parent.exists()
+        && let Ok(parent) = fs::canonicalize(parent)
+    {
+        return parent.join(file_name);
+    }
+
+    path
+}
+
+fn common_ancestor_path(paths: &[PathBuf]) -> Option<PathBuf> {
+    let mut iter = paths.iter();
+    let mut current = iter.next()?.clone();
+
+    for path in iter {
+        let mut shared = PathBuf::new();
+        let mut matched = false;
+        for (left, right) in current.components().zip(path.components()) {
+            if left != right {
+                break;
+            }
+            shared.push(left.as_os_str());
+            matched = true;
+        }
+        if !matched {
+            return None;
+        }
+        current = shared;
+    }
+
+    Some(current)
+}
+
+fn build_migrate_tool_payload(options: &MigrateCommandOptions) -> Value {
+    let mut payload = serde_json::Map::new();
+    payload.insert("mode".to_owned(), json!(options.mode.as_id()));
+    if let Some(input) = options.input.as_deref() {
+        let input = normalize_migrate_cli_path(input, true);
+        payload.insert("input_path".to_owned(), json!(input.display().to_string()));
+    }
+    if let Some(output) = options.output.as_deref() {
+        let output = normalize_migrate_cli_path(output, false);
+        payload.insert(
+            "output_path".to_owned(),
+            json!(output.display().to_string()),
+        );
+    }
+    if let Some(source) = options.source.as_deref() {
+        payload.insert("source".to_owned(), json!(source));
+    }
+    if let Some(source_id) = options.source_id.as_deref() {
+        payload.insert("source_id".to_owned(), json!(source_id));
+    }
+    if options.safe_profile_merge {
+        payload.insert("safe_profile_merge".to_owned(), json!(true));
+    }
+    if let Some(primary_source_id) = options.primary_source_id.as_deref() {
+        payload.insert("primary_source_id".to_owned(), json!(primary_source_id));
+    }
+    if options.apply_external_skills_plan {
+        payload.insert("apply_external_skills_plan".to_owned(), json!(true));
+    }
+    if options.force {
+        payload.insert("force".to_owned(), json!(true));
+    }
+    Value::Object(payload)
+}
+
+fn translate_migrate_cli_error(options: &MigrateCommandOptions, error: String) -> String {
+    let leaf = error
+        .strip_prefix("tool execution failed: ")
+        .unwrap_or(&error);
+    if leaf == "claw.migrate requires payload.input_path" {
+        return format!(
+            "`--input` is required for `loongclaw migrate --mode {}`",
+            options.mode.as_id()
+        );
+    }
+
+    if leaf
+        == format!(
+            "claw.migrate {} mode requires payload.output_path",
+            options.mode.as_id()
+        )
+    {
+        return format!(
+            "`--output` is required for `loongclaw migrate --mode {}`",
+            options.mode.as_id()
+        );
+    }
+
+    format!("migrate tool execution failed: {error}")
+}
+
+fn render_migrate_tool_outcome(
+    options: &MigrateCommandOptions,
+    outcome: ToolCoreOutcome,
+) -> CliResult<()> {
+    let mut payload = outcome.payload;
+    let mode = payload
+        .get("mode")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "migrate tool payload missing `mode`".to_owned())?
+        .to_owned();
+
+    let sqlite_memory_path = ensure_memory_ready_for_tool_payload(mode.as_str(), &payload)?;
+    if let Some(memory_path) = sqlite_memory_path.as_ref()
+        && let Some(object) = payload.as_object_mut()
+    {
+        let object: &mut serde_json::Map<String, Value> = object;
+        object.insert(
+            "sqlite_memory_path".to_owned(),
+            json!(memory_path.display().to_string()),
+        );
+    }
+
+    if options.json {
+        return print_json_payload(payload);
+    }
+
+    match mode.as_str() {
+        "discover" => render_discover_outcome(&payload),
+        "plan_many" | "recommend_primary" => render_plan_many_outcome(&payload),
+        "merge_profiles" => render_merge_profiles_outcome(&payload),
+        "map_external_skills" => render_external_skill_mapping_outcome(&payload, options),
+        "apply_selected" => render_apply_selected_outcome(&payload, options, sqlite_memory_path),
+        "apply" | "plan" => {
+            render_apply_or_plan_outcome(mode.as_str(), &payload, sqlite_memory_path, options)
+        }
+        "rollback_last_apply" => render_rollback_outcome(&payload),
+        other => Err(format!("unsupported migrate tool mode `{other}`")),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn ensure_memory_ready_for_tool_payload(mode: &str, payload: &Value) -> CliResult<Option<PathBuf>> {
+    let output_path = match mode {
+        "apply" => payload.get("output_path").and_then(Value::as_str),
+        "apply_selected" => payload
+            .get("result")
+            .and_then(|value| value.get("output_path"))
+            .and_then(Value::as_str),
+        _ => None,
+    };
+
+    match output_path {
+        Some(path) => ensure_memory_ready_from_path(Path::new(path)).map(Some),
+        None => Ok(None),
+    }
+}
+
+#[cfg(not(feature = "memory-sqlite"))]
+fn ensure_memory_ready_for_tool_payload(
+    _mode: &str,
+    _payload: &Value,
+) -> CliResult<Option<PathBuf>> {
+    Ok(None)
+}
+
+fn render_discover_outcome(payload: &Value) -> CliResult<()> {
+    let input_path = payload
+        .get("input_path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "discover payload missing `input_path`".to_owned())?;
+    let sources = payload
+        .get("sources")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "discover payload missing `sources`".to_owned())?;
+
+    println!("migration discovery complete");
+    println!("- input: {input_path}");
+    println!("- discovered sources: {}", sources.len());
+    for source in sources {
+        println!(
+            "- [{}] kind={} confidence={} path={}",
+            source
+                .get("source_id")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
+            source
+                .get("source_kind")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
+            source
+                .get("confidence_score")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            source
+                .get("input_path")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+        );
+    }
+    Ok(())
+}
+
+fn render_plan_many_outcome(payload: &Value) -> CliResult<()> {
+    let mode = payload
+        .get("mode")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "planning payload missing `mode`".to_owned())?;
+    let input_path = payload
+        .get("input_path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "planning payload missing `input_path`".to_owned())?;
+    let plans = payload
+        .get("plans")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "planning payload missing `plans`".to_owned())?;
+
+    println!("migration planning complete");
+    println!("- mode: {mode}");
+    println!("- input: {input_path}");
+    println!("- planned sources: {}", plans.len());
+    if let Some(recommendation) = payload.get("recommendation")
+        && let Some(source_id) = recommendation.get("source_id").and_then(Value::as_str)
+    {
+        let source_kind = recommendation
+            .get("source_kind")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        println!("- recommended source: {source_id} ({source_kind})");
+    }
+    for plan in plans {
+        println!(
+            "- [{}] kind={} confidence={} prompt={} profile={} warnings={} path={}",
+            plan.get("source_id")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
+            plan.get("source_kind")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
+            plan.get("confidence_score")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            yes_no(
+                plan.get("prompt_addendum_present")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            ),
+            yes_no(
+                plan.get("profile_note_present")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            ),
+            plan.get("warning_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            plan.get("input_path")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+        );
+    }
+    Ok(())
+}
+
+fn render_merge_profiles_outcome(payload: &Value) -> CliResult<()> {
+    let input_path = payload
+        .get("input_path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "merge_profiles payload missing `input_path`".to_owned())?;
+    let plans = payload
+        .get("plans")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "merge_profiles payload missing `plans`".to_owned())?;
+    let result = payload
+        .get("result")
+        .ok_or_else(|| "merge_profiles payload missing `result`".to_owned())?;
+
+    println!("profile merge preview complete");
+    println!("- input: {input_path}");
+    println!("- source count: {}", plans.len());
+    if let Some(recommendation) = payload.get("recommendation")
+        && let Some(source_id) = recommendation.get("source_id").and_then(Value::as_str)
+    {
+        println!("- recommended prompt owner: {source_id}");
+    }
+    println!(
+        "- auto apply allowed: {}",
+        yes_no(
+            result
+                .get("auto_apply_allowed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        )
+    );
+    println!(
+        "- unresolved conflicts: {}",
+        result
+            .get("unresolved_conflicts")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len)
+    );
+    println!(
+        "- kept entries: {}",
+        result
+            .get("kept_entries")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len)
+    );
+    println!(
+        "- dropped duplicates: {}",
+        result
+            .get("dropped_duplicates")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len)
+    );
+    Ok(())
+}
+
+fn render_external_skill_mapping_outcome(
+    payload: &Value,
+    options: &MigrateCommandOptions,
+) -> CliResult<()> {
+    let input_path = payload
+        .get("input_path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "map_external_skills payload missing `input_path`".to_owned())?;
+    let result = payload
+        .get("result")
+        .ok_or_else(|| "map_external_skills payload missing `result`".to_owned())?;
+
+    println!("external skills mapping plan ready");
+    println!("- input: {input_path}");
+    println!(
+        "- detected artifacts: {}",
+        result
+            .get("artifact_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    );
+    println!(
+        "- declared skills: {}",
+        result
+            .get("declared_skills")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len)
+    );
+    println!(
+        "- locked skills: {}",
+        result
+            .get("locked_skills")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len)
+    );
+    println!(
+        "- resolved skills: {}",
+        result
+            .get("resolved_skills")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len)
+    );
+    println!(
+        "- profile addendum generated: {}",
+        yes_no(result.get("profile_note_addendum").is_some())
+    );
+    if let Some(artifacts) = result.get("artifacts").and_then(Value::as_array) {
+        for artifact in artifacts {
+            println!(
+                "- artifact: kind={} path={}",
+                artifact
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown"),
+                artifact
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+            );
+        }
+    }
+    if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
+        for warning in warnings.iter().filter_map(Value::as_str) {
+            println!("- warning: {warning}");
+        }
+    }
+    if let Some(output) = options.output.as_deref() {
+        println!(
+            "next step: loongclaw migrate --mode apply_selected --input {} --output {} --apply-external-skills-plan --force",
+            input_path, output
+        );
+    }
+    Ok(())
+}
+
+fn render_apply_selected_outcome(
+    payload: &Value,
+    options: &MigrateCommandOptions,
+    sqlite_memory_path: Option<PathBuf>,
+) -> CliResult<()> {
+    let input_path = payload
+        .get("input_path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "apply_selected payload missing `input_path`".to_owned())?;
+    let output_path = payload
+        .get("output_path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "apply_selected payload missing `output_path`".to_owned())?;
+    let result = payload
+        .get("result")
+        .ok_or_else(|| "apply_selected payload missing `result`".to_owned())?;
+
+    println!("migration selection applied");
+    println!("- mode: apply_selected");
+    println!("- input: {input_path}");
+    println!("- output: {output_path}");
+    let selection_mode = if options.safe_profile_merge {
+        "safe_profile_merge"
+    } else if options.source_id.is_some() {
+        "selected_single_source"
+    } else {
+        "recommended_single_source"
+    };
+    println!("- selection mode: {selection_mode}");
+    if let Some(source_id) = result
+        .get("selected_primary_source_id")
+        .and_then(Value::as_str)
+    {
+        println!("- selected primary source: {source_id}");
+    }
+    if let Some(merged_ids) = result.get("merged_source_ids").and_then(Value::as_array) {
+        let merged = merged_ids
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("- merged source ids: {merged}");
+    }
+    println!(
+        "- unresolved conflicts: {}",
+        result
+            .get("unresolved_conflicts")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len)
+    );
+    println!(
+        "- external skill artifacts: {}",
+        result
+            .get("external_skill_artifact_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    );
+    println!(
+        "- external skill entries applied: {}",
+        result
+            .get("external_skill_entries_applied")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    );
+    if let Some(manifest_path) = result
+        .get("external_skills_manifest_path")
+        .and_then(Value::as_str)
+    {
+        println!("- external skills manifest: {manifest_path}");
+    }
+    if let Some(memory_path) = sqlite_memory_path.as_ref() {
+        println!("- sqlite memory: {}", memory_path.display());
+    }
+    if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
+        for warning in warnings.iter().filter_map(Value::as_str) {
+            println!("- warning: {warning}");
+        }
+    }
+    println!(
+        "next step: loongclaw ask --config '{}' --message 'Summarize this repository and suggest the best next step.'",
+        output_path
+    );
+    Ok(())
+}
+
+fn render_apply_or_plan_outcome(
+    mode: &str,
+    payload: &Value,
+    sqlite_memory_path: Option<PathBuf>,
+    options: &MigrateCommandOptions,
+) -> CliResult<()> {
+    let source = payload
+        .get("source")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{mode} payload missing `source`"))?;
+    let input_path = payload
+        .get("input_path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{mode} payload missing `input_path`"))?;
+    let output_path = payload.get("output_path").and_then(Value::as_str);
+    let config_preview = payload
+        .get("config_preview")
+        .ok_or_else(|| format!("{mode} payload missing `config_preview`"))?;
+    let prompt_pack_id = config_preview
+        .get("prompt_pack_id")
+        .and_then(Value::as_str)
+        .unwrap_or(mvp::prompt::DEFAULT_PROMPT_PACK_ID);
+    let memory_profile = config_preview
+        .get("memory_profile")
+        .and_then(Value::as_str)
+        .unwrap_or("profile_plus_window");
+    let prompt_addendum_present = config_preview
+        .get("system_prompt_addendum")
+        .and_then(Value::as_str)
+        .is_some();
+    let profile_note_present = config_preview
+        .get("profile_note")
+        .and_then(Value::as_str)
+        .is_some();
+
+    if mode == "plan" {
+        println!("migration plan ready");
+        println!("- source: {source}");
+        println!("- input: {input_path}");
+        if let Some(output_path) = output_path.or(options.output.as_deref()) {
+            println!("- output target: {output_path}");
+        }
+    } else {
+        println!("migration complete");
+        println!("- source: {source}");
+        println!("- input: {input_path}");
+        if let Some(output_path) = output_path {
+            println!("- config: {output_path}");
+        }
+    }
+    println!("- prompt pack: {prompt_pack_id}");
+    println!("- memory profile: {memory_profile}");
+    println!(
+        "- migrated prompt addendum: {}",
+        yes_no(prompt_addendum_present)
+    );
+    println!("- migrated profile note: {}", yes_no(profile_note_present));
+    if let Some(memory_path) = sqlite_memory_path.as_ref() {
+        println!("- sqlite memory: {}", memory_path.display());
+    }
+    if let Some(warnings) = payload.get("warnings").and_then(Value::as_array) {
+        for warning in warnings.iter().filter_map(Value::as_str) {
+            println!("- warning: {warning}");
+        }
+    }
+    if let Some(next_step) = payload.get("next_step").and_then(Value::as_str) {
+        println!("next step: {next_step}");
+    } else if mode == "plan"
+        && let Some(output_path) = output_path.or(options.output.as_deref())
+    {
+        println!(
+            "next step: loongclaw migrate --mode apply --input {} --output {} --force",
+            input_path, output_path
+        );
+    }
+    Ok(())
+}
+
+fn render_rollback_outcome(payload: &Value) -> CliResult<()> {
+    let output_path = payload
+        .get("output_path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "rollback payload missing `output_path`".to_owned())?;
+    println!("migration rollback complete");
+    println!("- output: {output_path}");
+    println!("- rolled_back: yes");
+    Ok(())
 }
 
 fn print_json_payload(payload: Value) -> CliResult<()> {
     let encoded = serde_json::to_string_pretty(&payload)
         .map_err(|error| format!("json serialization failed: {error}"))?;
     println!("{encoded}");
-    Ok(())
-}
-
-fn resolve_apply_selection_mode(
-    options: &MigrateCommandOptions,
-    summary: &mvp::migration::DiscoveryPlanSummary,
-) -> CliResult<mvp::migration::ImportSelectionMode> {
-    let source_id = options
-        .source_id
-        .as_deref()
-        .or(options.primary_source_id.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned);
-
-    if options.safe_profile_merge {
-        let primary_source_id = source_id
-            .or_else(|| {
-                mvp::migration::recommend_primary_source(summary)
-                    .ok()
-                    .map(|recommendation| recommendation.source_id)
-            })
-            .ok_or_else(|| {
-                "apply_selected requires --source-id or --primary-source-id when --safe-profile-merge is enabled".to_owned()
-            })?;
-        return Ok(mvp::migration::ImportSelectionMode::SafeProfileMerge { primary_source_id });
-    }
-
-    if let Some(source_id) = source_id {
-        return Ok(mvp::migration::ImportSelectionMode::SelectedSingleSource { source_id });
-    }
-
-    let recommendation = mvp::migration::recommend_primary_source(summary)
-        .map_err(|error| format!("cannot recommend primary source: {error}"))?;
-    Ok(
-        mvp::migration::ImportSelectionMode::RecommendedSingleSource {
-            source_id: recommendation.source_id,
-        },
-    )
-}
-
-fn discovered_source_payload(source: &mvp::migration::DiscoveredImportSource) -> Value {
-    json!({
-        "source_id": source.source_id,
-        "source_kind": source.source.as_id(),
-        "input_path": source.path.display().to_string(),
-        "confidence_score": source.confidence_score,
-        "found_files": source.found_files,
-    })
-}
-
-fn planned_source_payload(plan: &mvp::migration::PlannedImportSource) -> Value {
-    json!({
-        "source_id": plan.source_id,
-        "source_kind": plan.source.as_id(),
-        "input_path": plan.input_path.display().to_string(),
-        "confidence_score": plan.confidence_score,
-        "prompt_addendum_present": plan.prompt_addendum_present,
-        "profile_note_present": plan.profile_note_present,
-        "warning_count": plan.warning_count,
-    })
-}
-
-fn primary_recommendation_payload(
-    recommendation: &mvp::migration::PrimarySourceRecommendation,
-) -> Value {
-    json!({
-        "source_id": recommendation.source_id,
-        "source_kind": recommendation.source.as_id(),
-        "input_path": recommendation.input_path.display().to_string(),
-        "reasons": recommendation.reasons,
-    })
-}
-
-fn merged_profile_plan_payload(plan: &mvp::migration::MergedProfilePlan) -> Value {
-    json!({
-        "prompt_owner_source_id": plan.prompt_owner_source_id,
-        "merged_profile_note": plan.merged_profile_note,
-        "auto_apply_allowed": plan.auto_apply_allowed,
-        "kept_entries": plan
-            .kept_entries
-            .iter()
-            .map(|entry| {
-                json!({
-                    "lane": match entry.lane {
-                        mvp::migration::ProfileEntryLane::Prompt => "prompt",
-                        mvp::migration::ProfileEntryLane::Profile => "profile",
-                    },
-                    "canonical_text": entry.canonical_text,
-                    "source_id": entry.source_id,
-                    "slot_key": entry.slot_key,
-                })
-            })
-            .collect::<Vec<_>>(),
-        "dropped_duplicates": plan
-            .dropped_duplicates
-            .iter()
-            .map(|entry| {
-                json!({
-                    "lane": match entry.lane {
-                        mvp::migration::ProfileEntryLane::Prompt => "prompt",
-                        mvp::migration::ProfileEntryLane::Profile => "profile",
-                    },
-                    "canonical_text": entry.canonical_text,
-                    "source_id": entry.source_id,
-                    "slot_key": entry.slot_key,
-                })
-            })
-            .collect::<Vec<_>>(),
-        "unresolved_conflicts": plan
-            .unresolved_conflicts
-            .iter()
-            .map(|conflict| {
-                json!({
-                    "slot_key": conflict.slot_key,
-                    "preferred_source_id": conflict.preferred_source_id,
-                    "discarded_source_id": conflict.discarded_source_id,
-                    "preferred_text": conflict.preferred_text,
-                    "discarded_text": conflict.discarded_text,
-                })
-            })
-            .collect::<Vec<_>>(),
-    })
-}
-
-fn external_skill_mapping_plan_payload(plan: &mvp::migration::ExternalSkillMappingPlan) -> Value {
-    json!({
-        "input_path": plan.input_path.display().to_string(),
-        "artifact_count": plan.artifacts.len(),
-        "artifacts": plan
-            .artifacts
-            .iter()
-            .map(|artifact| {
-                json!({
-                    "kind": artifact.kind.as_id(),
-                    "path": artifact.path.display().to_string(),
-                })
-            })
-            .collect::<Vec<_>>(),
-        "declared_skills": plan.declared_skills,
-        "locked_skills": plan.locked_skills,
-        "resolved_skills": plan.resolved_skills,
-        "profile_note_addendum": plan.profile_note_addendum,
-        "warnings": plan.warnings,
-    })
-}
-
-fn apply_selection_result_payload(result: &mvp::migration::ApplyImportSelectionResult) -> Value {
-    json!({
-        "output_path": result.output_path.display().to_string(),
-        "backup_path": result.backup_path.display().to_string(),
-        "manifest_path": result.manifest_path.display().to_string(),
-        "external_skills_manifest_path": result
-            .external_skills_manifest_path
-            .as_ref()
-            .map(|path| path.display().to_string()),
-        "selected_primary_source_id": result.selected_primary_source_id,
-        "merged_source_ids": result.merged_source_ids,
-        "prompt_owner_source_id": result.prompt_owner_source_id,
-        "unresolved_conflicts": result.unresolved_conflicts,
-        "external_skill_artifact_count": result.external_skill_artifact_count,
-        "external_skill_entries_applied": result.external_skill_entries_applied,
-        "warnings": result.warnings,
-    })
-}
-
-fn config_preview_payload(config: &mvp::config::LoongClawConfig) -> Value {
-    json!({
-        "prompt_pack_id": config
-            .cli
-            .prompt_pack_id()
-            .unwrap_or(mvp::prompt::DEFAULT_PROMPT_PACK_ID),
-        "memory_profile": memory_profile_id(config.memory.profile),
-        "system_prompt_addendum": config.cli.system_prompt_addendum.clone(),
-        "profile_note": config.memory.profile_note.clone(),
-    })
-}
-
-fn selection_mode_id(selection: &mvp::migration::ImportSelectionMode) -> &'static str {
-    match selection {
-        mvp::migration::ImportSelectionMode::RecommendedSingleSource { .. } => {
-            "recommended_single_source"
-        }
-        mvp::migration::ImportSelectionMode::SelectedSingleSource { .. } => {
-            "selected_single_source"
-        }
-        mvp::migration::ImportSelectionMode::SafeProfileMerge { .. } => "safe_profile_merge",
-    }
-}
-
-fn run_rollback_mode(output_path: &Path, as_json: bool) -> CliResult<()> {
-    let restored = mvp::migration::rollback_last_migration(output_path)?;
-    if as_json {
-        return print_json_payload(json!({
-            "mode": "rollback_last_apply",
-            "output_path": restored.display().to_string(),
-            "rolled_back": true,
-        }));
-    }
-
-    println!("rollback complete");
-    println!("- restored config: {}", restored.display());
     Ok(())
 }
 
@@ -699,14 +728,6 @@ fn ensure_memory_ready_from_path(path: &Path) -> CliResult<PathBuf> {
         mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
     mvp::memory::ensure_memory_db_ready(Some(config.memory.resolved_sqlite_path()), &runtime)
         .map_err(|error| format!("failed to bootstrap sqlite memory: {error}"))
-}
-
-fn memory_profile_id(profile: mvp::config::MemoryProfile) -> &'static str {
-    match profile {
-        mvp::config::MemoryProfile::WindowOnly => "window_only",
-        mvp::config::MemoryProfile::WindowPlusSummary => "window_plus_summary",
-        mvp::config::MemoryProfile::ProfilePlusWindow => "profile_plus_window",
-    }
 }
 
 fn yes_no(value: bool) -> &'static str {

@@ -19,7 +19,7 @@ use super::{
     shared::{
         ConfigValidationIssue, ConfigValidationLocale, ConfigValidationSeverity,
         DEFAULT_CONFIG_FILE, default_loongclaw_home as shared_default_loongclaw_home, expand_path,
-        format_config_validation_issues,
+        format_config_validation_issues, parse_explicit_env_reference,
     },
     tools::{
         DEFAULT_WEB_SEARCH_PROVIDER, ExternalSkillsConfig, ToolConfig,
@@ -970,27 +970,42 @@ impl<'a> ProviderSelectorIndex<'a> {
     }
 }
 
-fn canonical_env_reference(env_name: &str) -> Option<String> {
-    let trimmed = env_name.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    Some(format!("${{{trimmed}}}"))
+fn canonicalize_provider_profile_for_encoding(profile: &mut ProviderProfileConfig) {
+    canonicalize_provider_secret_env_reference(
+        &mut profile.provider.api_key,
+        &mut profile.provider.api_key_env,
+    );
+    canonicalize_provider_secret_env_reference(
+        &mut profile.provider.oauth_access_token,
+        &mut profile.provider.oauth_access_token_env,
+    );
 }
 
-fn canonicalize_provider_profile_for_encoding(profile: &mut ProviderProfileConfig) {
-    if profile.provider.api_key.is_none()
-        && let Some(api_key_env) = profile.provider.api_key_env.as_deref()
-    {
-        profile.provider.api_key = canonical_env_reference(api_key_env);
+fn canonicalize_provider_secret_env_reference(
+    inline_secret: &mut Option<String>,
+    env_name: &mut Option<String>,
+) {
+    let Some(explicit_env_name) = inline_secret
+        .as_deref()
+        .and_then(parse_explicit_env_reference)
+        .map(str::to_owned)
+    else {
+        return;
+    };
+    let configured_env_name = env_name.as_deref();
+    let configured_env_name = configured_env_name.map(str::trim);
+    let configured_env_name = configured_env_name.filter(|value| !value.is_empty());
+    match configured_env_name {
+        None => {
+            *env_name = Some(explicit_env_name);
+            *inline_secret = None;
+        }
+        Some(configured) if configured == explicit_env_name => {
+            *env_name = Some(explicit_env_name);
+            *inline_secret = None;
+        }
+        Some(_) => {}
     }
-    if profile.provider.oauth_access_token.is_none()
-        && let Some(oauth_env) = profile.provider.oauth_access_token_env.as_deref()
-    {
-        profile.provider.oauth_access_token = canonical_env_reference(oauth_env);
-    }
-    profile.provider.api_key_env = None;
-    profile.provider.oauth_access_token_env = None;
 }
 
 fn normalize_acp_agent_id(raw: &str) -> Option<String> {
@@ -1689,9 +1704,9 @@ fn encode_toml_config(_config: &LoongClawConfig) -> CliResult<String> {
 
 fn template_secret_usage_comment() -> &'static str {
     "# Secret configuration notes:\n\
-# - Preferred provider credential form: `providers.<profile_id>.api_key = \"${PROVIDER_API_KEY}\"`.\n\
-# - `providers.<profile_id>.api_key` also accepts direct literals and explicit env refs like `$VAR`, `env:VAR`, and `%VAR%`.\n\
-# - Legacy `*_env` fields stay supported for compatibility, but new configs should prefer the non-`_env` fields.\n\
+# - Preferred provider credential form: `providers.<profile_id>.api_key_env = \"PROVIDER_API_KEY\"`.\n\
+# - Inline fields like `providers.<profile_id>.api_key` still accept direct literals and explicit env refs like `$VAR`, `env:VAR`, and `%VAR%`.\n\
+# - When LoongClaw writes config back to disk, explicit env refs are persisted as `*_env` fields.\n\
 \n"
 }
 
@@ -1772,7 +1787,7 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
 
     #[test]
     #[cfg(feature = "config-toml")]
-    fn write_template_prefers_generic_provider_api_key_reference_example() {
+    fn write_template_prefers_generic_provider_api_key_env_example() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock before unix epoch")
@@ -1785,8 +1800,8 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
             .expect("write template should succeed");
 
         let raw = std::fs::read_to_string(&config_path).expect("read template");
-        assert!(raw.contains("providers.<profile_id>.api_key = \"${PROVIDER_API_KEY}\""));
-        assert!(!raw.contains("provider.api_key_env = \"PROVIDER_API_KEY\""));
+        assert!(raw.contains("providers.<profile_id>.api_key_env = \"PROVIDER_API_KEY\""));
+        assert!(!raw.contains("providers.<profile_id>.api_key = \"${PROVIDER_API_KEY}\""));
 
         std::fs::remove_file(&config_path).ok();
         std::fs::remove_dir_all(&temp_dir).ok();
@@ -2414,7 +2429,7 @@ model = "gpt-5"
 
     #[test]
     #[cfg(feature = "config-toml")]
-    fn write_default_config_omits_legacy_provider_api_key_env_field() {
+    fn write_default_config_does_not_eagerly_persist_provider_api_key_env_field() {
         let path = unique_config_path("loongclaw-config-runtime-default");
         let path_string = path.display().to_string();
 
@@ -2423,6 +2438,7 @@ model = "gpt-5"
 
         let raw = fs::read_to_string(&path).expect("read written config");
         assert!(!raw.contains("api_key_env = \"OPENAI_API_KEY\""));
+        assert!(!raw.contains("api_key = \"${OPENAI_API_KEY}\""));
 
         let _ = fs::remove_file(path);
     }
@@ -2467,7 +2483,7 @@ model = "gpt-5"
 
     #[test]
     #[cfg(feature = "config-toml")]
-    fn write_canonicalizes_provider_env_pointers_to_inline_env_references() {
+    fn write_persists_provider_env_pointers_as_env_name_fields() {
         let path = unique_config_path("loongclaw-config-runtime-canonical-provider-env");
         let path_string = path.display().to_string();
         let mut config = LoongClawConfig::default();
@@ -2476,8 +2492,59 @@ model = "gpt-5"
         write(Some(&path_string), &config, true).expect("config write should pass");
 
         let raw = fs::read_to_string(&path).expect("read written config");
-        assert!(raw.contains("api_key = \"${OPENAI_API_KEY}\""));
-        assert!(!raw.contains("api_key_env = "));
+        assert!(raw.contains("api_key_env = \"OPENAI_API_KEY\""));
+        assert!(!raw.contains("api_key = \"${OPENAI_API_KEY}\""));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_migrates_inline_provider_env_references_to_env_name_fields() {
+        let path = unique_config_path("loongclaw-config-runtime-inline-provider-env");
+        let path_string = path.display().to_string();
+        let mut config = LoongClawConfig::default();
+        let inline_references = [
+            "${TEAM_OPENAI_KEY}",
+            "$TEAM_OPENAI_KEY",
+            "env:TEAM_OPENAI_KEY",
+            "%TEAM_OPENAI_KEY%",
+        ];
+
+        for inline_reference in inline_references {
+            config.provider.api_key = Some(inline_reference.to_owned());
+
+            write(Some(&path_string), &config, true).expect("config write should pass");
+
+            let raw = fs::read_to_string(&path).expect("read written config");
+            assert!(
+                raw.contains("api_key_env = \"TEAM_OPENAI_KEY\""),
+                "expected api_key_env writeback for {inline_reference}"
+            );
+            assert!(
+                !raw.contains(inline_reference),
+                "expected inline env reference removal for {inline_reference}"
+            );
+        }
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_canonicalizes_matching_provider_env_name_fields() {
+        let path = unique_config_path("loongclaw-config-runtime-trimmed-provider-env");
+        let path_string = path.display().to_string();
+        let mut config = LoongClawConfig::default();
+        config.provider.api_key = Some("${TEAM_OPENAI_KEY}".to_owned());
+        config.provider.api_key_env = Some(" TEAM_OPENAI_KEY ".to_owned());
+
+        write(Some(&path_string), &config, true).expect("config write should pass");
+
+        let raw = fs::read_to_string(&path).expect("read written config");
+        assert!(raw.contains("api_key_env = \"TEAM_OPENAI_KEY\""));
+        assert!(!raw.contains("api_key_env = \" TEAM_OPENAI_KEY \""));
+        assert!(!raw.contains("api_key = \"${TEAM_OPENAI_KEY}\""));
 
         let _ = fs::remove_file(path);
     }

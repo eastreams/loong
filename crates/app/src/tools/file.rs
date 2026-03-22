@@ -38,6 +38,12 @@ pub(super) fn execute_file_read_tool_with_config(
             .min(8 * 1_048_576) as usize;
 
         let resolved = resolve_safe_file_path_with_config(target, config)?;
+        if resolved.is_dir() {
+            return Err(format!(
+                "path '{}' is a directory, not a file",
+                resolved.display()
+            ));
+        }
         let bytes = fs::read(&resolved)
             .map_err(|error| format!("failed to read file {}: {error}", resolved.display()))?;
         let clipped = bytes.len() > max_bytes;

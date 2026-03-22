@@ -1021,7 +1021,7 @@ fn tool_search_definition(descriptor: &ToolDescriptor) -> Value {
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Natural-language description of the tool capability you need."
+                        "description": "English natural-language description of the tool capability you need."
                     },
                     "limit": {
                         "type": "integer",

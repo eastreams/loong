@@ -1308,9 +1308,13 @@ model = "deepseek-chat"
     );
     assert_eq!(imported.provider.model, "deepseek-chat");
     assert_eq!(
-        imported.provider.api_key.as_deref(),
-        Some("${DEEPSEEK_API_KEY}"),
-        "source-path-selected provider should retain its provider-specific credential binding in canonical inline-env form"
+        imported.provider.api_key, None,
+        "source-path-selected provider should not keep the legacy inline api_key field once the env name field is persisted"
+    );
+    assert_eq!(
+        imported.provider.api_key_env.as_deref(),
+        Some("DEEPSEEK_API_KEY"),
+        "source-path-selected provider should retain its provider-specific credential binding as an env name field"
     );
     assert_eq!(
         imported.provider.authorization_header().as_deref(),
@@ -1418,13 +1422,13 @@ requires_openai_auth = true
         mvp::config::ProviderWireApi::Responses
     );
     assert_eq!(
-        imported.provider.api_key.as_deref(),
-        Some("${OPENAI_API_KEY}"),
-        "codex import should persist OpenAI auth in canonical inline-env form"
+        imported.provider.api_key, None,
+        "codex import should not keep the legacy inline api_key field once the env name field is persisted"
     );
-    assert!(
-        imported.provider.api_key_env.is_none(),
-        "codex import should not keep the legacy api_key_env pointer once the canonical inline-env reference is written"
+    assert_eq!(
+        imported.provider.api_key_env.as_deref(),
+        Some("OPENAI_API_KEY"),
+        "codex import should persist OpenAI auth as an env name field"
     );
 
     let models = mvp::provider::fetch_available_models(&imported)

@@ -189,6 +189,29 @@ async fn main() {
             })
             .await
         }
+        Commands::Migrate {
+            input,
+            output,
+            source,
+            mode,
+            json,
+            source_id,
+            safe_profile_merge,
+            primary_source_id,
+            apply_external_skills_plan,
+            force,
+        } => migrate_cli::run_migrate_cli(migrate_cli::MigrateCommandOptions {
+            input,
+            output,
+            source,
+            mode,
+            json,
+            source_id,
+            safe_profile_merge,
+            primary_source_id,
+            apply_external_skills_plan,
+            force,
+        }),
         Commands::Doctor {
             config,
             fix,

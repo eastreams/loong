@@ -278,3 +278,96 @@ fn run_migrate_cli_apply_selected_mode_can_apply_external_skill_plan() {
     fs::remove_dir_all(&output_root).ok();
     fs::remove_dir_all(&home_root).ok();
 }
+
+#[test]
+fn run_migrate_cli_apply_mode_rejects_output_path_outside_configured_file_root() {
+    let policy_root = unique_temp_dir("loongclaw-import-cli-policy-root");
+    let legacy_root = policy_root.join("legacy-root");
+    let escape_root = unique_temp_dir("loongclaw-import-cli-policy-escape");
+    let (home_root, _env_guard) = isolated_home_guard("loongclaw-import-cli-policy-home");
+    fs::create_dir_all(&legacy_root).expect("create legacy root under policy root");
+    fs::create_dir_all(&escape_root).expect("create escape root");
+
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.tools.file_root = Some(policy_root.display().to_string());
+    mvp::config::write(None, &config, true).expect("write discovered config");
+
+    write_file(
+        &legacy_root,
+        "SOUL.md",
+        "# Soul\n\nAlways prefer concise shell output. updated by nanobot.\n",
+    );
+
+    let escape_output = escape_root.join("outside-root.toml");
+    let error = loongclaw_daemon::migrate_cli::run_migrate_cli(
+        loongclaw_daemon::migrate_cli::MigrateCommandOptions {
+            input: Some(legacy_root.display().to_string()),
+            output: Some(escape_output.display().to_string()),
+            source: Some("nanobot".to_owned()),
+            mode: loongclaw_daemon::migrate_cli::MigrateMode::Apply,
+            json: false,
+            source_id: None,
+            safe_profile_merge: false,
+            primary_source_id: None,
+            apply_external_skills_plan: false,
+            force: true,
+        },
+    )
+    .expect_err("policy root should deny writing outside configured file root");
+
+    assert!(
+        error.contains("policy_denied"),
+        "expected policy denial, got: {error}"
+    );
+
+    fs::remove_dir_all(&policy_root).ok();
+    fs::remove_dir_all(&escape_root).ok();
+    fs::remove_dir_all(&home_root).ok();
+}
+
+#[test]
+fn migrate_cli_ux_apply_mode_reports_flag_level_output_requirement() {
+    let error = loongclaw_daemon::migrate_cli::run_migrate_cli(
+        loongclaw_daemon::migrate_cli::MigrateCommandOptions {
+            input: Some(".".to_owned()),
+            output: None,
+            source: None,
+            mode: loongclaw_daemon::migrate_cli::MigrateMode::Apply,
+            json: false,
+            source_id: None,
+            safe_profile_merge: false,
+            primary_source_id: None,
+            apply_external_skills_plan: false,
+            force: false,
+        },
+    )
+    .expect_err("apply mode without --output should fail");
+
+    assert_eq!(
+        error,
+        "`--output` is required for `loongclaw migrate --mode apply`"
+    );
+    assert!(
+        !error.contains("payload.output_path"),
+        "raw tool payload wording leaked into CLI error: {error}"
+    );
+}
+
+#[test]
+fn migrate_cli_ux_help_mentions_mode_specific_required_flags() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+        .args(["migrate", "--help"])
+        .output()
+        .expect("run loongclaw migrate --help");
+
+    assert!(output.status.success(), "help should succeed");
+    let stdout = String::from_utf8(output.stdout).expect("help output should be utf8");
+    assert!(
+        stdout.contains("apply: requires `--input` and `--output`"),
+        "help should mention apply mode requirements, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("rollback_last_apply: requires `--output`"),
+        "help should mention rollback requirements, got: {stdout}"
+    );
+}

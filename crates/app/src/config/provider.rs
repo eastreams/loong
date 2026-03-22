@@ -750,16 +750,8 @@ impl<'de> Deserialize<'de> for ProviderConfig {
         let chat_completions_path = raw
             .chat_completions_path
             .unwrap_or_else(default_openai_chat_path);
-        let api_key_env_explicit = raw
-            .api_key_env
-            .as_deref()
-            .map(|value| is_explicit_api_key_env_name(raw.kind, value))
-            .unwrap_or(false);
-        let oauth_access_token_env_explicit = raw
-            .oauth_access_token_env
-            .as_deref()
-            .map(|value| is_explicit_oauth_access_token_env_name(raw.kind, value))
-            .unwrap_or(false);
+        let api_key_env_explicit = raw.api_key_env.is_some();
+        let oauth_access_token_env_explicit = raw.oauth_access_token_env.is_some();
 
         let mut config = Self {
             kind: raw.kind,
@@ -819,16 +811,8 @@ impl ProviderConfig {
         self.base_url_explicit = is_explicit_base_url(self.kind, self.base_url.as_str());
         self.chat_completions_path_explicit =
             is_explicit_chat_completions_path(self.kind, self.chat_completions_path.as_str());
-        self.api_key_env_explicit = self
-            .api_key_env
-            .as_deref()
-            .map(|value| is_explicit_api_key_env_name(self.kind, value))
-            .unwrap_or(false);
-        self.oauth_access_token_env_explicit = self
-            .oauth_access_token_env
-            .as_deref()
-            .map(|value| is_explicit_oauth_access_token_env_name(self.kind, value))
-            .unwrap_or(false);
+        self.api_key_env_explicit = self.api_key_env.is_some();
+        self.oauth_access_token_env_explicit = self.oauth_access_token_env.is_some();
         self.refresh_endpoint_override_flags();
     }
 
@@ -856,18 +840,12 @@ impl ProviderConfig {
     }
 
     pub fn set_api_key_env(&mut self, api_key_env: Option<String>) {
-        self.api_key_env_explicit = api_key_env
-            .as_deref()
-            .map(|value| is_explicit_api_key_env_name(self.kind, value))
-            .unwrap_or(false);
+        self.api_key_env_explicit = api_key_env.is_some();
         self.api_key_env = api_key_env;
     }
 
     pub fn set_oauth_access_token_env(&mut self, oauth_access_token_env: Option<String>) {
-        self.oauth_access_token_env_explicit = oauth_access_token_env
-            .as_deref()
-            .map(|value| is_explicit_oauth_access_token_env_name(self.kind, value))
-            .unwrap_or(false);
+        self.oauth_access_token_env_explicit = oauth_access_token_env.is_some();
         self.oauth_access_token_env = oauth_access_token_env;
     }
 
@@ -1857,13 +1835,6 @@ fn contains_template_placeholder(value: &str) -> bool {
     value.contains('<') && value.contains('>')
 }
 
-fn is_explicit_api_key_env_name(kind: ProviderKind, env_name: &str) -> bool {
-    let Some(env_name) = non_empty(Some(env_name)) else {
-        return false;
-    };
-    !is_current_provider_api_key_env_name(kind, env_name)
-}
-
 fn is_explicit_base_url(kind: ProviderKind, base_url: &str) -> bool {
     let Some(base_url) = non_empty(Some(base_url)) else {
         return false;
@@ -1892,28 +1863,12 @@ fn is_explicit_models_endpoint(provider: &ProviderConfig, endpoint: &str) -> boo
     !is_same_base_url(endpoint, provider.derived_models_endpoint().as_str())
 }
 
-fn is_explicit_oauth_access_token_env_name(kind: ProviderKind, env_name: &str) -> bool {
-    let Some(env_name) = non_empty(Some(env_name)) else {
-        return false;
-    };
-    !is_current_provider_oauth_access_token_env_name(kind, env_name)
-}
-
 fn is_current_provider_base_url(kind: ProviderKind, base_url: &str) -> bool {
     is_same_base_url(base_url, kind.profile().base_url)
 }
 
 fn is_current_provider_chat_completions_path(kind: ProviderKind, path: &str) -> bool {
     is_same_chat_path(path, kind.profile().chat_completions_path)
-}
-
-fn is_current_provider_api_key_env_name(kind: ProviderKind, env_name: &str) -> bool {
-    kind.default_api_key_env() == Some(env_name) || kind.api_key_env_aliases().contains(&env_name)
-}
-
-fn is_current_provider_oauth_access_token_env_name(kind: ProviderKind, env_name: &str) -> bool {
-    kind.default_oauth_access_token_env() == Some(env_name)
-        || kind.oauth_access_token_env_aliases().contains(&env_name)
 }
 
 fn is_provider_managed_api_key_env_name(env_name: &str) -> bool {
@@ -3474,6 +3429,32 @@ mod tests {
             api_key: Some("${OPENAI_API_KEY}".to_owned()),
             ..ProviderConfig::default()
         };
+
+        assert_eq!(config.oauth_access_token(), None);
+        assert_eq!(config.api_key().as_deref(), Some("api-key-wins"));
+        assert_eq!(
+            config.resolved_auth_secret().as_deref(),
+            Some("api-key-wins")
+        );
+        assert_eq!(
+            config.authorization_header().as_deref(),
+            Some("Bearer api-key-wins")
+        );
+    }
+
+    #[test]
+    fn explicit_api_key_env_field_beats_default_oauth_fallback() {
+        let mut env = ScopedEnv::new();
+        env.set("OPENAI_API_KEY", "api-key-wins");
+        env.set("OPENAI_CODEX_OAUTH_TOKEN", "oauth-fallback-should-not-win");
+
+        let config: ProviderConfig = toml::from_str(
+            r#"
+kind = "openai"
+api_key_env = "OPENAI_API_KEY"
+"#,
+        )
+        .expect("deserialize provider config");
 
         assert_eq!(config.oauth_access_token(), None);
         assert_eq!(config.api_key().as_deref(), Some("api-key-wins"));

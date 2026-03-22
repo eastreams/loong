@@ -318,13 +318,15 @@ instability from true upstream unavailability.
 
 ## Configuration
 
-`loongclaw onboard` uses `provider.api_key` to reference provider credentials, so secrets stay
+`loongclaw onboard` uses `provider.api_key_env` to reference provider credentials, so secrets stay
 outside the config file:
 
 ```toml
-[provider]
+active_provider = "openai"
+
+[providers.openai]
 kind = "openai"
-api_key = "${PROVIDER_API_KEY}"
+api_key_env = "PROVIDER_API_KEY"
 ```
 
 Volcengine / ARK example:
@@ -334,15 +336,17 @@ export ARK_API_KEY=your-ark-api-key
 ```
 
 ```toml
-[provider]
+active_provider = "volcengine"
+
+[providers.volcengine]
 kind = "volcengine"
 model = "your-coding-plan-model-id"
-api_key = "${ARK_API_KEY}"
+api_key_env = "ARK_API_KEY"
 base_url = "https://ark.cn-beijing.volces.com"
 chat_completions_path = "/api/v3/chat/completions"
 ```
 
-Both `volcengine` and `volcengine_coding` use `api_key = "${ARK_API_KEY}"`. LoongClaw sends that value as `Authorization: Bearer <ARK_API_KEY>` on the OpenAI-compatible Volcengine path; AK/SK request signing is not used there.
+Both `volcengine` and `volcengine_coding` use `api_key_env = "ARK_API_KEY"`. LoongClaw resolves that environment variable and sends it as `Authorization: Bearer <ARK_API_KEY>` on the OpenAI-compatible Volcengine path; AK/SK request signing is not used there.
 
 Feishu channel example (webhook mode):
 

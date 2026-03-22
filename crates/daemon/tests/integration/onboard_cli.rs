@@ -833,29 +833,29 @@ async fn non_interactive_onboard_allows_explicit_skip_model_probe_warning() {
 
     let raw = std::fs::read_to_string(&output).expect("read written onboarding config");
     assert!(
-        raw.contains("oauth_access_token = \"${OPENAI_CODEX_OAUTH_TOKEN}\""),
-        "onboarding should persist the openai oauth binding as the canonical env reference after provider-aligned credential routing: {raw}"
+        raw.contains("oauth_access_token_env = \"OPENAI_CODEX_OAUTH_TOKEN\""),
+        "onboarding should persist the openai oauth env name after provider-aligned credential routing: {raw}"
+    );
+    assert!(
+        !raw.contains("oauth_access_token = "),
+        "provider-aligned onboarding should not fall back to the legacy oauth_access_token field for the openai oauth route: {raw}"
     );
     assert!(
         !raw.contains("api_key = "),
         "provider-aligned onboarding should not fall back to the legacy api_key field for the openai oauth route: {raw}"
-    );
-    assert!(
-        !raw.contains("api_key_env"),
-        "canonical onboarding config should not persist the legacy api_key_env field: {raw}"
     );
 
     let (_, config) = mvp::config::load(Some(output.to_string_lossy().as_ref()))
         .expect("load written onboarding config");
     assert_eq!(config.provider.model, "openai/gpt-5.1-codex");
     assert_eq!(
-        config.provider.oauth_access_token.as_deref(),
-        Some("${OPENAI_CODEX_OAUTH_TOKEN}"),
-        "reloaded config should keep the canonical oauth credential source after provider-aligned routing"
+        config.provider.oauth_access_token, None,
+        "reloaded config should not repopulate the legacy oauth_access_token field for the oauth-backed openai route"
     );
     assert_eq!(
-        config.provider.api_key, None,
-        "reloaded config should not repopulate the legacy api_key field for the oauth-backed openai route"
+        config.provider.oauth_access_token_env.as_deref(),
+        Some("OPENAI_CODEX_OAUTH_TOKEN"),
+        "reloaded config should keep the routed oauth env name after provider-aligned onboarding"
     );
     assert_eq!(
         config.provider.authorization_header(),
@@ -1022,7 +1022,7 @@ async fn non_interactive_api_key_env_override_clears_existing_oauth_credentials(
 
     let raw = std::fs::read_to_string(&output).expect("read written onboarding config");
     assert!(
-        raw.contains("api_key = \"${OPENAI_API_KEY}\""),
+        raw.contains("api_key_env = \"OPENAI_API_KEY\""),
         "api key env override should persist the selected api key source: {raw}"
     );
     assert!(
@@ -1033,9 +1033,14 @@ async fn non_interactive_api_key_env_override_clears_existing_oauth_credentials(
     let (_, config) = mvp::config::load(Some(output.to_string_lossy().as_ref()))
         .expect("load written onboarding config");
     assert_eq!(config.provider.oauth_access_token, None);
+    assert_eq!(config.provider.oauth_access_token_env, None);
     assert_eq!(
-        config.provider.api_key.as_deref(),
-        Some("${OPENAI_API_KEY}"),
+        config.provider.api_key, None,
+        "reloaded config should not keep the legacy inline api_key field once the env name field is persisted"
+    );
+    assert_eq!(
+        config.provider.api_key_env.as_deref(),
+        Some("OPENAI_API_KEY"),
         "reloaded config should keep only the selected api key credential source"
     );
 }
@@ -1071,7 +1076,7 @@ async fn non_interactive_api_key_env_override_clears_existing_inline_api_key() {
 
     let raw = std::fs::read_to_string(&output).expect("read written onboarding config");
     assert!(
-        raw.contains("api_key = \"${OPENAI_API_KEY}\""),
+        raw.contains("api_key_env = \"OPENAI_API_KEY\""),
         "api key env override should persist the selected api key source: {raw}"
     );
     assert!(
@@ -1082,8 +1087,12 @@ async fn non_interactive_api_key_env_override_clears_existing_inline_api_key() {
     let (_, config) = mvp::config::load(Some(output.to_string_lossy().as_ref()))
         .expect("load written onboarding config");
     assert_eq!(
-        config.provider.api_key.as_deref(),
-        Some("${OPENAI_API_KEY}"),
+        config.provider.api_key, None,
+        "reloaded config should not keep the legacy inline api_key field once the env name field is persisted"
+    );
+    assert_eq!(
+        config.provider.api_key_env.as_deref(),
+        Some("OPENAI_API_KEY"),
         "reloaded config should keep only the selected api key env reference"
     );
 }
@@ -4275,19 +4284,19 @@ fn onboard_api_key_env_screen_explains_suggested_env_and_blank_behavior() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("- current source: ${OPENAI_CODEX_OAUTH_TOKEN}")),
+            .any(|line| line.contains("- current source: OPENAI_CODEX_OAUTH_TOKEN")),
         "credential-env screen should show the active oauth credential source instead of hiding it behind api-key-only rendering: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("- suggested source: ${OPENAI_API_KEY}")),
+            .any(|line| line.contains("- suggested source: OPENAI_API_KEY")),
         "credential-env screen should surface the suggested env var name: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "- press Enter to use suggested source: ${OPENAI_API_KEY}"),
+            .any(|line| line == "- press Enter to use suggested source: OPENAI_API_KEY"),
         "credential-env screen should state that Enter uses the suggested env when no current env is set: {lines:#?}"
     );
     assert!(
@@ -4322,7 +4331,7 @@ fn onboard_api_key_env_screen_shows_prefilled_env_when_enter_default_is_overridd
     assert!(
         lines
             .iter()
-            .any(|line| line == "- press Enter to use prefilled source: ${TEAM_OPENAI_KEY}"),
+            .any(|line| line == "- press Enter to use prefilled source: TEAM_OPENAI_KEY"),
         "credential-env screen should surface the actual prefilled env when it differs from both the current and suggested env: {lines:#?}"
     );
     assert!(
@@ -5847,7 +5856,7 @@ fn onboard_review_lines_include_core_setup_summary_for_fresh_setup() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("- credential source: ${OPENAI_CODEX_OAUTH_TOKEN}")),
+            .any(|line| line.contains("- credential source: OPENAI_CODEX_OAUTH_TOKEN")),
         "review should keep the provider-preferred credential env visible for fresh setup flows: {lines:#?}"
     );
     assert!(
@@ -5885,13 +5894,13 @@ fn onboard_review_lines_prefer_oauth_env_over_api_key_env_when_both_are_configur
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("- credential source: ${OPENAI_CODEX_OAUTH_TOKEN}")),
+            .any(|line| line.contains("- credential source: OPENAI_CODEX_OAUTH_TOKEN")),
         "review should reflect the higher-priority oauth credential path when both bindings exist: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .all(|line| !line.contains("- credential source: ${OPENAI_API_KEY}")),
+            .all(|line| !line.contains("- credential source: OPENAI_API_KEY")),
         "review should not keep advertising the api key env as primary once oauth is configured: {lines:#?}"
     );
 }
@@ -6250,13 +6259,13 @@ fn onboarding_success_summary_prefers_oauth_env_over_api_key_env_when_both_are_c
     assert!(
         lines
             .iter()
-            .any(|line| line == "- credential source: ${OPENAI_CODEX_OAUTH_TOKEN}"),
+            .any(|line| line == "- credential source: OPENAI_CODEX_OAUTH_TOKEN"),
         "success summary should surface the primary oauth binding when oauth and api key envs both exist: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .all(|line| line != "- credential source: ${OPENAI_API_KEY}"),
+            .all(|line| line != "- credential source: OPENAI_API_KEY"),
         "success summary should not keep the api key env as the primary credential line once oauth is configured: {lines:#?}"
     );
 }
@@ -6274,7 +6283,7 @@ fn onboarding_success_summary_reports_existing_config_kept() {
         provider_endpoint: None,
         credential: Some(loongclaw_daemon::onboard_cli::OnboardingCredentialSummary {
             label: "credential source",
-            value: "${OPENAI_API_KEY}".to_owned(),
+            value: "OPENAI_API_KEY".to_owned(),
         }),
         prompt_mode: "native prompt pack".to_owned(),
         personality: Some("calm_engineering".to_owned()),
@@ -6352,7 +6361,7 @@ fn onboarding_success_summary_groups_domain_outcomes_by_decision() {
         provider_endpoint: None,
         credential: Some(loongclaw_daemon::onboard_cli::OnboardingCredentialSummary {
             label: "credential source",
-            value: "${OPENAI_API_KEY}".to_owned(),
+            value: "OPENAI_API_KEY".to_owned(),
         }),
         prompt_mode: "native prompt pack".to_owned(),
         personality: Some("friendly_collab".to_owned()),
@@ -6417,7 +6426,7 @@ fn onboarding_success_summary_wraps_domain_outcomes_for_narrow_width() {
         provider_endpoint: None,
         credential: Some(loongclaw_daemon::onboard_cli::OnboardingCredentialSummary {
             label: "credential source",
-            value: "${OPENAI_API_KEY}".to_owned(),
+            value: "OPENAI_API_KEY".to_owned(),
         }),
         prompt_mode: "native prompt pack".to_owned(),
         personality: Some("friendly_collab".to_owned()),

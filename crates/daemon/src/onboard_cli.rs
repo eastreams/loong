@@ -2784,7 +2784,6 @@ fn render_provider_credential_source_value(raw: Option<&str>) -> Option<String> 
         return None;
     }
     normalize_provider_credential_env_name(trimmed)
-        .map(|env_name| format!("${{{env_name}}}"))
         .or_else(|| Some("environment variable".to_owned()))
 }
 
@@ -3870,13 +3869,17 @@ fn provider_matches_for_review(
 
     left.api_key = None;
     left.api_key_env = None;
+    left.api_key_env_explicit = false;
     left.oauth_access_token = None;
     left.oauth_access_token_env = None;
+    left.oauth_access_token_env_explicit = false;
 
     right.api_key = None;
     right.api_key_env = None;
+    right.api_key_env_explicit = false;
     right.oauth_access_token = None;
     right.oauth_access_token_env = None;
+    right.oauth_access_token_env_explicit = false;
 
     left == right
 }
@@ -7493,6 +7496,32 @@ mod tests {
         assert_eq!(
             provider.oauth_access_token_env, None,
             "switching to a custom env name should clear the stale oauth binding"
+        );
+    }
+
+    #[test]
+    fn provider_matches_for_review_ignores_credential_field_explicitness() {
+        let current = mvp::config::ProviderConfig {
+            kind: mvp::config::ProviderKind::Openai,
+            model: "gpt-4.1".to_owned(),
+            api_key: Some("inline-secret".to_owned()),
+            ..mvp::config::ProviderConfig::default()
+        };
+
+        let mut api_key_env_update = current.clone();
+        apply_selected_api_key_env(&mut api_key_env_update, "OPENAI_API_KEY".to_owned());
+        assert!(api_key_env_update.api_key_env_explicit);
+        assert!(
+            provider_matches_for_review(&current, &api_key_env_update),
+            "review matching should ignore explicit api_key_env metadata when the provider identity is otherwise unchanged"
+        );
+
+        let mut oauth_env_update = current.clone();
+        apply_selected_api_key_env(&mut oauth_env_update, "OPENAI_CODEX_OAUTH_TOKEN".to_owned());
+        assert!(oauth_env_update.oauth_access_token_env_explicit);
+        assert!(
+            provider_matches_for_review(&current, &oauth_env_update),
+            "review matching should ignore explicit oauth_access_token_env metadata when the provider identity is otherwise unchanged"
         );
     }
 
