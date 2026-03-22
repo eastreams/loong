@@ -43,12 +43,12 @@ pub(super) struct ModelRequestRuntime<'a> {
     pub(super) auth_context: &'a transport::RequestAuthContext,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) struct StreamingModelRequestRuntime<'a> {
     pub(super) provider: &'a ProviderConfig,
     pub(super) model: &'a str,
     pub(super) runtime_contract: ProviderRuntimeContract,
     pub(super) capability: ProviderCapabilityContract,
+    #[allow(dead_code)]
     pub(super) auto_model_mode: bool,
     pub(super) auth_profile: &'a ProviderAuthProfile,
     pub(super) endpoint: &'a str,
@@ -1220,7 +1220,6 @@ mod tests {
     fn streaming_event_to_token_event_conversion() {
         use crate::acp::StreamingTokenEvent;
         use crate::acp::TokenDelta;
-        use crate::acp::ToolCallDelta;
 
         let text_event = StreamingTokenEvent {
             event_type: "content_block_delta".to_owned(),

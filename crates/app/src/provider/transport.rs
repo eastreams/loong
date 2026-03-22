@@ -119,16 +119,17 @@ pub(super) fn parse_sse_line(line: &str) -> SseLine {
     SseLine::Empty
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum SseStreamEvent {
     Message {
         data: Value,
         event_type: Option<String>,
     },
+    #[allow(dead_code)]
     Error {
         message: String,
     },
+    #[allow(dead_code)]
     Done,
 }
 
@@ -747,7 +748,9 @@ mod tests {
                     "{\"type\":\"content_block_delta\",\"text\":\"Hello\"}"
                 );
             }
-            other => panic!("expected SseLine::Event, got {:?}", other),
+            other @ (SseLine::Retry { .. } | SseLine::Comment | SseLine::Empty) => {
+                panic!("expected SseLine::Event, got {:?}", other)
+            }
         }
     }
 
@@ -760,7 +763,9 @@ mod tests {
                 assert_eq!(event_type.as_deref(), Some("content_block_delta"));
                 assert!(data.is_empty());
             }
-            other => panic!("expected SseLine::Event, got {:?}", other),
+            other @ (SseLine::Retry { .. } | SseLine::Comment | SseLine::Empty) => {
+                panic!("expected SseLine::Event, got {:?}", other)
+            }
         }
     }
 
@@ -772,7 +777,9 @@ mod tests {
             SseLine::Retry { timeout_ms } => {
                 assert_eq!(timeout_ms, 1000);
             }
-            other => panic!("expected SseLine::Retry, got {:?}", other),
+            other @ (SseLine::Event { .. } | SseLine::Comment | SseLine::Empty) => {
+                panic!("expected SseLine::Retry, got {:?}", other)
+            }
         }
     }
 
@@ -781,7 +788,9 @@ mod tests {
         let parsed = parse_sse_line("");
         match parsed {
             SseLine::Empty => {}
-            other => panic!("expected SseLine::Empty, got {:?}", other),
+            other @ (SseLine::Event { .. } | SseLine::Retry { .. } | SseLine::Comment) => {
+                panic!("expected SseLine::Empty, got {:?}", other)
+            }
         }
     }
 
@@ -790,7 +799,9 @@ mod tests {
         let parsed = parse_sse_line(": this is a comment");
         match parsed {
             SseLine::Comment => {}
-            other => panic!("expected SseLine::Comment, got {:?}", other),
+            other @ (SseLine::Event { .. } | SseLine::Retry { .. } | SseLine::Empty) => {
+                panic!("expected SseLine::Comment, got {:?}", other)
+            }
         }
     }
 
@@ -803,7 +814,9 @@ mod tests {
                 assert!(event_type.is_none());
                 assert_eq!(data, "");
             }
-            other => panic!("expected SseLine::Event, got {:?}", other),
+            other @ (SseLine::Retry { .. } | SseLine::Comment | SseLine::Empty) => {
+                panic!("expected SseLine::Event, got {:?}", other)
+            }
         }
     }
 
@@ -845,7 +858,9 @@ mod tests {
                 );
                 assert_eq!(data.get("text").and_then(|v| v.as_str()), Some("Hello"));
             }
-            other => panic!("expected SseStreamEvent::Message, got {:?}", other),
+            Some(SseStreamEvent::Error { .. } | SseStreamEvent::Done) | None => {
+                panic!("expected SseStreamEvent::Message, got {:?}", event)
+            }
         }
     }
 
