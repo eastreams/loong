@@ -201,6 +201,57 @@ fn memory_window_limit_semantics_cover_explicit_fallback_and_bounds() {
 
 #[cfg(feature = "memory-sqlite")]
 #[test]
+fn load_prompt_context_with_diagnostics_omits_legacy_identity_from_profile_projection() {
+    use crate::config::{MemoryMode, MemoryProfile};
+    use std::fs;
+
+    let tmp = std::env::temp_dir().join(format!(
+        "loongclaw-test-memory-profile-diagnostics-{}",
+        std::process::id()
+    ));
+    let _ = fs::create_dir_all(&tmp);
+    let db_path = tmp.join("profile-diagnostics.sqlite3");
+    let _ = fs::remove_file(&db_path);
+
+    let profile_note = "## Imported IDENTITY.md\n# Identity\n\n- Name: Legacy build copilot\n\n## Imported External Skills Artifacts\n- kind=skills_catalog\n- declared=custom/skill-a";
+    let config = runtime_config::MemoryRuntimeConfig {
+        profile: MemoryProfile::ProfilePlusWindow,
+        mode: MemoryMode::ProfilePlusWindow,
+        sqlite_path: Some(db_path.clone()),
+        sliding_window: 2,
+        profile_note: Some(profile_note.to_owned()),
+        ..runtime_config::MemoryRuntimeConfig::default()
+    };
+
+    append_turn_direct(
+        "profile-diagnostics-session",
+        "user",
+        "recent turn",
+        &config,
+    )
+    .expect("append_turn_direct should succeed");
+
+    let (entries, _diagnostics) =
+        load_prompt_context_with_diagnostics("profile-diagnostics-session", &config)
+            .expect("load_prompt_context_with_diagnostics should succeed");
+    let profile_entry = entries
+        .iter()
+        .find(|entry| entry.kind == MemoryContextKind::Profile)
+        .expect("profile entry");
+
+    assert!(
+        profile_entry
+            .content
+            .contains("Imported External Skills Artifacts")
+    );
+    assert!(!profile_entry.content.contains("Legacy build copilot"));
+
+    let _ = fs::remove_file(&db_path);
+    let _ = fs::remove_dir(&tmp);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
 fn append_turn_direct_bypasses_core_dispatch() {
     use std::fs;
 

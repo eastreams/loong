@@ -15,6 +15,9 @@ system prompt.
 - [ ] All personalities share the same safety-first operating boundaries.
 - [ ] Personality selection can affect tone and action style without weakening
       security requirements.
+- [ ] Runtime identity overlays are resolved separately from the native base
+      prompt so workspace `IDENTITY.md` context can take precedence over legacy
+      imported identity without replacing LoongClaw's product-owned baseline.
 - [ ] Non-interactive onboarding supports personality selection with a stable
       CLI flag.
 - [ ] Advanced users can still provide a full inline system prompt override.

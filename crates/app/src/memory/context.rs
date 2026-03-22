@@ -2,6 +2,7 @@ use loongclaw_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
 use serde_json::{Value, json};
 
 use crate::config::MemoryMode;
+use crate::runtime_identity;
 
 #[cfg(feature = "memory-sqlite")]
 use super::sqlite;
@@ -44,19 +45,15 @@ pub fn load_prompt_context(
 ) -> Result<Vec<MemoryContextEntry>, String> {
     let mut entries = Vec::new();
 
+    let profile_section =
+        runtime_identity::render_session_profile_section(config.profile_note.as_deref());
     if matches!(config.mode, MemoryMode::ProfilePlusWindow)
-        && let Some(profile_note) = config
-            .profile_note
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
+        && let Some(profile_section) = profile_section
     {
         entries.push(MemoryContextEntry {
             kind: MemoryContextKind::Profile,
             role: "system".to_owned(),
-            content: format!(
-                "## Session Profile\nDurable preferences or imported identity carried into this session:\n- {profile_note}"
-            ),
+            content: profile_section,
         });
     }
 
@@ -184,6 +181,99 @@ mod tests {
                 .any(|entry| entry.content.contains("Imported ZeroClaw preferences")),
             "expected profile note content"
         );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn profile_plus_window_omits_legacy_identity_blocks_from_profile_projection() {
+        use crate::config::{MemoryMode, MemoryProfile};
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-profile-memory-projection-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("profile-projection.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let profile_note = "## Imported IDENTITY.md\n# Identity\n\n- Name: Legacy build copilot\n\n## Imported External Skills Artifacts\n- kind=skills_catalog\n- declared=custom/skill-a";
+        let config = MemoryRuntimeConfig {
+            profile: MemoryProfile::ProfilePlusWindow,
+            mode: MemoryMode::ProfilePlusWindow,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            profile_note: Some(profile_note.to_owned()),
+            ..MemoryRuntimeConfig::default()
+        };
+
+        super::super::append_turn_direct(
+            "profile-projection-session",
+            "user",
+            "recent turn",
+            &config,
+        )
+        .expect("append turn should succeed");
+
+        let hydrated = load_prompt_context("profile-projection-session", &config)
+            .expect("load prompt context");
+        let profile_entry = hydrated
+            .iter()
+            .find(|entry| entry.kind == MemoryContextKind::Profile)
+            .expect("profile entry");
+
+        assert!(
+            profile_entry
+                .content
+                .contains("Imported External Skills Artifacts")
+        );
+        assert!(!profile_entry.content.contains("Legacy build copilot"));
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn profile_plus_window_drops_profile_entry_when_only_legacy_identity_exists() {
+        use crate::config::{MemoryMode, MemoryProfile};
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-profile-memory-identity-only-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("profile-identity-only.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let profile_note = "## Imported IDENTITY.md\n# Identity\n\n- Name: Legacy build copilot";
+        let config = MemoryRuntimeConfig {
+            profile: MemoryProfile::ProfilePlusWindow,
+            mode: MemoryMode::ProfilePlusWindow,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            profile_note: Some(profile_note.to_owned()),
+            ..MemoryRuntimeConfig::default()
+        };
+
+        super::super::append_turn_direct(
+            "profile-identity-only-session",
+            "user",
+            "recent turn",
+            &config,
+        )
+        .expect("append turn should succeed");
+
+        let hydrated = load_prompt_context("profile-identity-only-session", &config)
+            .expect("load prompt context");
+        let profile_entries = hydrated
+            .iter()
+            .filter(|entry| entry.kind == MemoryContextKind::Profile)
+            .count();
+
+        assert_eq!(profile_entries, 0);
 
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_dir(&tmp);

@@ -2,6 +2,7 @@ use serde_json::{Value, json};
 
 use crate::CliResult;
 use crate::config::LoongClawConfig;
+use crate::runtime_identity;
 use crate::runtime_self;
 use crate::tools::{self, ToolView};
 
@@ -41,18 +42,28 @@ fn build_system_message_with_tool_runtime_config(
     let system_prompt = config.cli.resolved_system_prompt();
     let system = system_prompt.trim();
     let snapshot = tools::capability_snapshot_for_view_with_config(tool_view, tool_runtime_config);
-
-    let runtime_self_section = tool_runtime_config
-        .file_root
-        .as_deref()
-        .map(runtime_self::load_runtime_self_model)
-        .and_then(|model| runtime_self::render_runtime_self_section(&model));
+    let workspace_root = tool_runtime_config.file_root.as_deref();
+    let runtime_self_model = workspace_root.map(runtime_self::load_runtime_self_model);
+    let runtime_self_section = runtime_self_model
+        .as_ref()
+        .and_then(runtime_self::render_runtime_self_section);
+    let trimmed_profile_note = config.memory.trimmed_profile_note();
+    let resolved_runtime_identity = runtime_identity::resolve_runtime_identity(
+        runtime_self_model.as_ref(),
+        trimmed_profile_note.as_deref(),
+    );
+    let runtime_identity_section = resolved_runtime_identity
+        .as_ref()
+        .map(runtime_identity::render_runtime_identity_section);
 
     let mut sections = Vec::new();
     if !system.is_empty() {
         sections.push(system.to_owned());
     }
     if let Some(section) = runtime_self_section {
+        sections.push(section);
+    }
+    if let Some(section) = runtime_identity_section {
         sections.push(section);
     }
     sections.push(snapshot);
@@ -317,10 +328,67 @@ mod tests {
         assert!(system_content.contains(agents_text));
         assert!(system_content.contains("### Soul Guidance"));
         assert!(system_content.contains(soul_text));
-        assert!(system_content.contains("### Identity Context"));
-        assert!(system_content.contains(identity_text));
         assert!(system_content.contains("### User Context"));
         assert!(system_content.contains(user_text));
+        assert!(system_content.contains("## Resolved Runtime Identity"));
+        assert!(system_content.contains(identity_text));
+        assert!(!system_content.contains("### Identity Context"));
+    }
+
+    #[test]
+    fn build_system_message_promotes_legacy_imported_identity_when_workspace_identity_is_absent() {
+        let mut config = LoongClawConfig::default();
+        let legacy_profile_note =
+            "## Imported IDENTITY.md\n# Identity\n\n- Name: Legacy build copilot";
+        config.memory.profile_note = Some(legacy_profile_note.to_owned());
+
+        let tool_view = tools::runtime_tool_view();
+        let tool_runtime_config = tools::runtime_config::ToolRuntimeConfig::default();
+
+        let system_message = build_system_message_with_tool_runtime_config(
+            &config,
+            true,
+            &tool_view,
+            &tool_runtime_config,
+        )
+        .expect("system message");
+        let system_content = system_message["content"].as_str().expect("system content");
+
+        assert!(system_content.contains("## Resolved Runtime Identity"));
+        assert!(system_content.contains("Legacy build copilot"));
+    }
+
+    #[test]
+    fn build_system_message_prefers_workspace_identity_over_legacy_profile_note_identity() {
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        let identity_path = workspace_root.join("IDENTITY.md");
+        let workspace_identity = "# Identity\n\n- Name: Workspace build copilot";
+        std::fs::write(&identity_path, workspace_identity).expect("write IDENTITY");
+
+        let mut config = LoongClawConfig::default();
+        let legacy_profile_note =
+            "## Imported IDENTITY.md\n# Identity\n\n- Name: Legacy build copilot";
+        config.memory.profile_note = Some(legacy_profile_note.to_owned());
+
+        let tool_view = tools::runtime_tool_view();
+        let tool_runtime_config = tools::runtime_config::ToolRuntimeConfig {
+            file_root: Some(workspace_root.to_path_buf()),
+            ..tools::runtime_config::ToolRuntimeConfig::default()
+        };
+
+        let system_message = build_system_message_with_tool_runtime_config(
+            &config,
+            true,
+            &tool_view,
+            &tool_runtime_config,
+        )
+        .expect("system message");
+        let system_content = system_message["content"].as_str().expect("system content");
+
+        assert!(system_content.contains("## Resolved Runtime Identity"));
+        assert!(system_content.contains("Workspace build copilot"));
+        assert!(!system_content.contains("Legacy build copilot"));
     }
 
     #[cfg(feature = "memory-sqlite")]
