@@ -781,24 +781,44 @@ where
                                     this.event_type = Some(name);
                                 }
                                 transport::SseLine::Data { content } => {
-                                    if !content.is_empty()
-                                        && let Ok(Some(event)) =
-                                            transport::SseStreamEvent::from_sse_lines(
-                                                this.event_type.clone(),
-                                                &[content],
-                                            )
-                                    {
-                                        match event {
-                                            transport::SseStreamEvent::Message { data, .. } => {
-                                                let parse_fn = &mut this.parse_stream_item;
-                                                if let Some(item) = parse_fn(data) {
-                                                    this.pending.push_back(Ok(item));
+                                    if !content.is_empty() {
+                                        match transport::SseStreamEvent::from_sse_lines(
+                                            this.event_type.clone(),
+                                            &[content],
+                                        ) {
+                                            Ok(Some(event)) => match event {
+                                                transport::SseStreamEvent::Message {
+                                                    data, ..
+                                                } => {
+                                                    let parse_fn = &mut this.parse_stream_item;
+                                                    if let Some(item) = parse_fn(data) {
+                                                        this.pending.push_back(Ok(item));
+                                                    }
                                                 }
-                                            }
-                                            transport::SseStreamEvent::Error { message } => {
+                                                transport::SseStreamEvent::Error { message } => {
+                                                    this.pending.push_back(Err(build_model_request_error(
+                                                        message,
+                                                        false,
+                                                        ProviderFailoverReason::ResponseShapeInvalid,
+                                                        ProviderFailoverStage::ResponseDecode,
+                                                        "",
+                                                        1,
+                                                        1,
+                                                        None,
+                                                        None,
+                                                    )));
+                                                }
+                                                transport::SseStreamEvent::Done => {
+                                                    return Poll::Ready(None);
+                                                }
+                                            },
+                                            Ok(None) => {}
+                                            Err(error) => {
                                                 this.pending
                                                     .push_back(Err(build_model_request_error(
-                                                    message,
+                                                    format!(
+                                                        "streaming event parse failed: {error}"
+                                                    ),
                                                     false,
                                                     ProviderFailoverReason::ResponseShapeInvalid,
                                                     ProviderFailoverStage::ResponseDecode,
@@ -808,9 +828,6 @@ where
                                                     None,
                                                     None,
                                                 )));
-                                            }
-                                            transport::SseStreamEvent::Done => {
-                                                return Poll::Ready(None);
                                             }
                                         }
                                     }
