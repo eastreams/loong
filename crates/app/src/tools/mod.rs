@@ -2577,6 +2577,40 @@ mod tests {
         );
     }
 
+    #[cfg(all(feature = "tool-shell", unix))]
+    #[test]
+    fn shell_exec_timeout_returns_without_waiting_for_descendant_pipe_holders() {
+        let mut config = test_tool_runtime_config(std::env::temp_dir());
+        let args = vec!["-c", "sleep 5 & wait"];
+        let started_at = std::time::Instant::now();
+
+        config.shell_allow.insert("sh".to_owned());
+
+        let error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "shell.exec".to_owned(),
+                payload: json!({
+                    "command": "sh",
+                    "args": args,
+                    "timeout_ms": 1_000,
+                }),
+            },
+            &config,
+        )
+        .expect_err("timed-out shell should return an error");
+
+        let elapsed = started_at.elapsed();
+
+        assert!(
+            error.contains("timed out after 1000ms"),
+            "expected timeout message, got: {error}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(2_500),
+            "timeout path should not wait for descendant pipe holders; elapsed={elapsed:?}"
+        );
+    }
+
     #[cfg(feature = "tool-shell")]
     #[test]
     fn shell_exec_succeeds_when_fast_command_receives_timeout_ms() {

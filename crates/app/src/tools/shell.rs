@@ -230,12 +230,16 @@ async fn run_shell_command_with_timeout(
             })
         }
         Ok(Err(error)) => {
+            stdout_task.abort();
+            stderr_task.abort();
             let _ = child.kill().await;
             let _ = child.wait().await;
             let _ = tokio::join!(stdout_task, stderr_task);
             Err(format!("shell command wait failed: {error}"))
         }
         Err(_) => {
+            stdout_task.abort();
+            stderr_task.abort();
             let _ = child.kill().await;
             let _ = child.wait().await;
             let _ = tokio::join!(stdout_task, stderr_task);
