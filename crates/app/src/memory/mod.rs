@@ -46,7 +46,10 @@ pub use protocol::{
 #[cfg(feature = "memory-sqlite")]
 pub use sqlite::ConversationSessionSummary;
 #[cfg(feature = "memory-sqlite")]
-pub use sqlite::{ConversationTurn, SqliteBootstrapDiagnostics, SqliteContextLoadDiagnostics};
+pub use sqlite::{
+    ConversationTurn, SqliteBootstrapDiagnostics, SqliteContextLoadDiagnostics,
+    clear_session_direct, list_recent_sessions_direct,
+};
 pub use system::{
     BuiltinMemorySystem, DEFAULT_MEMORY_SYSTEM_ID, MEMORY_SYSTEM_API_VERSION, MemorySystem,
     MemorySystemCapability, MemorySystemMetadata,
@@ -187,29 +190,6 @@ pub fn window_direct_extended(
         true,
         runtime_config::get_memory_runtime_config(),
     )
-}
-
-#[cfg(feature = "memory-sqlite")]
-pub fn list_recent_sessions_direct(
-    limit: usize,
-    config: &runtime_config::MemoryRuntimeConfig,
-) -> Result<Vec<ConversationSessionSummary>, String> {
-    sqlite::list_recent_sessions_direct(limit, config)
-}
-
-#[cfg(feature = "memory-sqlite")]
-pub fn clear_session_direct(
-    session_id: &str,
-    config: &runtime_config::MemoryRuntimeConfig,
-) -> Result<(), String> {
-    let request = MemoryCoreRequest {
-        operation: MEMORY_OP_CLEAR_SESSION.to_owned(),
-        payload: json!({
-            "session_id": session_id,
-        }),
-    };
-    let _ = sqlite::clear_session(request, config)?;
-    Ok(())
 }
 
 #[cfg(feature = "memory-sqlite")]

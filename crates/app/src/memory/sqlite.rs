@@ -564,7 +564,7 @@ pub(super) fn window_direct_with_options(
     load_window_internal(session_id, limit, allow_extended_limit, config).map(|window| window.turns)
 }
 
-pub(super) fn list_recent_sessions_direct(
+pub fn list_recent_sessions_direct(
     limit: usize,
     config: &MemoryRuntimeConfig,
 ) -> Result<Vec<ConversationSessionSummary>, String> {
@@ -597,6 +597,20 @@ pub(super) fn list_recent_sessions_direct(
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|error| format!("decode recent sessions failed: {error}"))
     })
+}
+
+pub fn clear_session_direct(
+    session_id: &str,
+    config: &MemoryRuntimeConfig,
+) -> Result<(), String> {
+    let request = MemoryCoreRequest {
+        operation: MEMORY_OP_CLEAR_SESSION.to_owned(),
+        payload: json!({
+            "session_id": session_id,
+        }),
+    };
+    let _ = clear_session(request, config)?;
+    Ok(())
 }
 
 pub(super) fn load_context_snapshot(
