@@ -2611,6 +2611,35 @@ mod tests {
         assert_eq!(outcome.payload["stdout"].as_str(), Some(expected_stdout));
     }
 
+    #[cfg(all(feature = "tool-shell", unix))]
+    #[test]
+    fn shell_exec_truncates_large_stdout_without_failing_command() {
+        let mut config = test_tool_runtime_config(std::env::temp_dir());
+        config.shell_allow.insert("perl".to_owned());
+
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "shell.exec".to_owned(),
+                payload: json!({
+                    "command": "perl",
+                    "args": ["-e", "print chr(97) x 2000000"],
+                    "timeout_ms": 5_000,
+                }),
+            },
+            &config,
+        )
+        .expect("large-output command should still complete");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["exit_code"].as_i64(), Some(0));
+
+        let stdout = outcome.payload["stdout"]
+            .as_str()
+            .expect("stdout should be present");
+        assert_eq!(stdout.len(), 1_048_576);
+        assert!(stdout.bytes().all(|byte| byte == b'a'));
+    }
+
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
     fn tool_search_result_includes_compact_argument_hints() {

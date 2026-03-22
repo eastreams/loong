@@ -101,7 +101,7 @@ pub(super) fn execute_shell_tool_with_config(
 const SHELL_EXEC_DEFAULT_TIMEOUT_MS: u64 = 120_000;
 #[cfg(feature = "tool-shell")]
 const SHELL_EXEC_MAX_TIMEOUT_MS: u64 = 600_000;
-const SHELL_OUTPUT_CAP_BYTES: u64 = 1_048_576;
+const SHELL_OUTPUT_CAP_BYTES: usize = 1_048_576;
 
 #[cfg(feature = "tool-shell")]
 fn parse_shell_timeout_ms(payload: &serde_json::Map<String, Value>) -> Result<u64, String> {
@@ -152,6 +152,32 @@ where
 }
 
 #[cfg(feature = "tool-shell")]
+async fn read_capped<R>(mut reader: R, cap: usize, stream_name: &str) -> Result<Vec<u8>, String>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut output = Vec::new();
+    let mut buffer = [0_u8; 8_192];
+
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .await
+            .map_err(|error| format!("shell command {stream_name} read failed: {error}"))?;
+        if read == 0 {
+            break;
+        }
+
+        let remaining = cap.saturating_sub(output.len());
+        if remaining > 0 {
+            let to_copy = remaining.min(read);
+            output.extend(buffer.iter().take(to_copy).copied());
+        }
+    }
+
+    Ok(output)
+}
+
 async fn run_shell_command_with_timeout(
     command: &str,
     args: &[String],
@@ -178,24 +204,10 @@ async fn run_shell_command_with_timeout(
         .take()
         .ok_or_else(|| "shell command stderr pipe missing".to_owned())?;
 
-    let stdout_task = tokio::spawn(async move {
-        let mut output = Vec::new();
-        stdout
-            .take(SHELL_OUTPUT_CAP_BYTES)
-            .read_to_end(&mut output)
-            .await
-            .map_err(|error| format!("shell command stdout read failed: {error}"))?;
-        Ok::<Vec<u8>, String>(output)
-    });
-    let stderr_task = tokio::spawn(async move {
-        let mut output = Vec::new();
-        stderr
-            .take(SHELL_OUTPUT_CAP_BYTES)
-            .read_to_end(&mut output)
-            .await
-            .map_err(|error| format!("shell command stderr read failed: {error}"))?;
-        Ok::<Vec<u8>, String>(output)
-    });
+    let stdout_task =
+        tokio::spawn(async move { read_capped(stdout, SHELL_OUTPUT_CAP_BYTES, "stdout").await });
+    let stderr_task =
+        tokio::spawn(async move { read_capped(stderr, SHELL_OUTPUT_CAP_BYTES, "stderr").await });
 
     match tokio::time::timeout(duration, child.wait()).await {
         Ok(Ok(status)) => {
