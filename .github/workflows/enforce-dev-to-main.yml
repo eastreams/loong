@@ -1,0 +1,47 @@
+name: enforce-dev-to-main
+
+on:
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+
+jobs:
+  block-non-dev-source:
+    if: ${{ github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.head.ref != 'dev' }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+      contents: read
+    steps:
+      - name: Close PR when source branch is not dev
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const body = [
+              "Only the same-repository `dev` branch can merge into `main` in this repository.",
+              "",
+              `Current source branch: \`${pr.head.repo.full_name}:${pr.head.ref}\``,
+              "Please land your changes on `dev` first, then open the promotion PR from `dev` to `main`."
+            ].join("\\n");
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body
+            });
+
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              state: "closed"
+            });
+            core.setFailed("Blocked: only dev can merge into main.");
