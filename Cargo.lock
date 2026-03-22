@@ -2048,6 +2048,7 @@ dependencies = [
  "clap_complete",
  "dialoguer",
  "ed25519-dalek",
+ "futures-util",
  "libc",
  "loongclaw-app",
  "loongclaw-bench",

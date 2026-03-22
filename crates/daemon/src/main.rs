@@ -517,6 +517,7 @@ async fn main() {
             .await
         }
         Commands::Feishu { command } => feishu_cli::run_feishu_command(command).await,
+        Commands::Web { command } => web_cli::run_web_command(command).await,
         Commands::Completions { shell } => {
             completions_cli::run_completions_cli(completions_cli::CompletionsCommandOptions {
                 shell,

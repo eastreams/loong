@@ -1702,6 +1702,7 @@ requires_openai_auth = true
             "role": "user",
             "content": "ping"
         })],
+        None,
         mvp::provider::ProviderRuntimeBinding::direct(),
     )
     .await
@@ -1818,6 +1819,7 @@ requires_openai_auth = true
             "role": "user",
             "content": "ping"
         })],
+        None,
         mvp::provider::ProviderRuntimeBinding::direct(),
     )
     .await

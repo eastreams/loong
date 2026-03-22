@@ -1,0 +1,66 @@
+{
+  "eyebrow": "Web Chat",
+  "title": "Conversation surface",
+  "subtitle": "Reuse the existing LoongClaw runtime through a browser-first shell.",
+  "newSession": "New session",
+  "deleteSession": "Delete session",
+  "deleting": "Deleting...",
+  "generating": "Generating...",
+  "loadingSessions": "Loading sessions...",
+  "noSessions": "No saved sessions yet.",
+  "untitledSession": "Untitled session",
+  "noHistory": "No history",
+  "emptyState": "Start a new conversation or open an existing session.",
+  "loadingHistory": "Loading history...",
+  "inputPlaceholder": "Ask LoongClaw about runtime, tools, or workflow...",
+  "send": "Send",
+  "panels": {
+    "sessions": "Sessions",
+    "composer": "Composer",
+    "inspector": "Inspector"
+  },
+  "toolStatus": {
+    "running": "Running",
+    "ok": "Done",
+    "error": "Failed"
+  },
+  "memoryWindow": {
+    "label": "Memory window",
+    "value": "{{count}} turns",
+    "pending": "Reading config"
+  },
+  "currentModel": {
+    "label": "Current model",
+    "pending": "Reading model",
+    "provider": "Provider: {{provider}}",
+    "providerPending": "Reading provider"
+  },
+  "inspector": {
+    "sessionLoaded": "Live session loaded",
+    "waitingForSession": "Waiting for session"
+  },
+  "toolAssist": {
+    "label": "Tool assist",
+    "enabled": "On",
+    "disabled": "Off",
+    "hint": "Add a small Web-only hint for file, shell, repo-search, and webpage tasks."
+  },
+  "errors": {
+    "providerHostFallback": "the provider host",
+    "transportFailure": "Provider connection failed while contacting {{host}}. If you use a proxy, route this host DIRECT and add it to fake-ip-filter. You can confirm the current diagnosis in Runtime console > Provider route."
+  },
+  "loading": {
+    "connectingA": "LoongClaw is joining the flight path",
+    "connectingB": "LoongClaw is checking the route",
+    "connectingC": "LoongClaw is looking for stable air",
+    "thinkingA": "LoongClaw is thinking",
+    "thinkingB": "LoongClaw is circling",
+    "thinkingC": "LoongClaw is arranging its thoughts",
+    "streamingA": "LoongClaw is laying down words",
+    "streamingB": "LoongClaw is expanding the answer",
+    "streamingC": "LoongClaw is still in flight",
+    "hintConnecting": "The provider connection is still in progress. If there is no error yet, this turn still has a chance to complete.",
+    "hintThinking": "The request is already out. LoongClaw is waiting on or shaping the response.",
+    "hintStreaming": "Incremental text is already arriving. This turn is still actively generating."
+  }
+}

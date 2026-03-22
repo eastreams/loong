@@ -1,0 +1,15 @@
+{
+  "name": "LoongClaw Web",
+  "short_name": "LoongClaw",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d1116",
+  "theme_color": "#0d1116",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

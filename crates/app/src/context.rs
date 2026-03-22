@@ -43,6 +43,16 @@ impl KernelContext {
 /// Registers a default pack manifest with `InvokeTool`, `MemoryRead`, and
 /// `MemoryWrite` capabilities, then issues a long-lived token for the given
 /// `agent_id`.
+pub fn bootstrap_kernel_context(agent_id: &str, ttl_s: u64) -> Result<KernelContext, String> {
+    bootstrap_kernel_context_with_audit_sink(
+        agent_id,
+        ttl_s,
+        Arc::new(InMemoryAuditSink::default()) as Arc<dyn AuditSink>,
+        &LoongClawConfig::default(),
+    )
+}
+
+/// Bootstrap a minimal in-memory kernel suitable for tests.
 ///
 /// Production-facing runtime entrypoints should prefer
 /// `bootstrap_kernel_context_with_config` so audit retention follows config.

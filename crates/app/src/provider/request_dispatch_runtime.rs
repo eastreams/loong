@@ -7,15 +7,19 @@ use crate::config::{LoongClawConfig, ProviderConfig};
 use super::auth_profile_runtime::ProviderAuthProfile;
 use super::capability_profile_runtime::ProviderCapabilityProfile;
 use super::contracts::{
-    ProviderApiError, provider_runtime_contract, should_disable_tool_schema_for_error,
+    ProviderApiError, ProviderTransportMode, provider_runtime_contract,
+    should_disable_tool_schema_for_error,
 };
 use super::failover::ModelRequestError;
 use super::policy;
-use super::request_executor::{ModelRequestRuntime, execute_model_request};
+use super::request_executor::{
+    ModelRequestRuntime, execute_model_request, execute_openai_streaming_turn_request,
+};
 use super::request_payload_runtime::{
     build_completion_request_body_with_capability, build_turn_request_body_with_capability,
 };
 use super::shape;
+use crate::acp::AcpTurnEventSink;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn request_completion_with_model(
@@ -55,6 +59,7 @@ pub(super) async fn request_turn_with_model(
     model: String,
     auto_model_mode: bool,
     tool_definitions: &[Value],
+    event_sink: Option<&dyn AcpTurnEventSink>,
     auth_profile: ProviderAuthProfile,
     endpoint: &str,
     headers: &reqwest::header::HeaderMap,
@@ -71,6 +76,7 @@ pub(super) async fn request_turn_with_model(
         model.as_str(),
         auto_model_mode,
         tool_definitions,
+        event_sink,
         endpoint,
         &auth_profile,
         auth_context,
@@ -161,6 +167,7 @@ async fn request_turn_with_provider(
     model: &str,
     auto_model_mode: bool,
     tool_definitions: &[Value],
+    event_sink: Option<&dyn AcpTurnEventSink>,
     initial_endpoint: &str,
     auth_profile: &ProviderAuthProfile,
     auth_context: &super::transport::RequestAuthContext,
@@ -192,6 +199,50 @@ async fn request_turn_with_provider(
             client,
             auth_context,
         };
+
+        // Prefer native provider streaming when the caller can consume incremental events.
+        // Unsupported providers stay on the existing buffered turn path below.
+        if let Some(event_sink) = event_sink
+            && matches!(
+                runtime_contract.transport_mode,
+                ProviderTransportMode::OpenAiChatCompletions
+            )
+        {
+            match execute_openai_streaming_turn_request(
+                runtime,
+                |payload_mode| {
+                    build_turn_request_body_with_capability(
+                        &request_config,
+                        messages,
+                        model,
+                        payload_mode,
+                        runtime_contract,
+                        capability,
+                        include_tool_schema.load(Ordering::Relaxed),
+                        tool_definitions,
+                    )
+                },
+                messages,
+                session_id,
+                turn_id,
+                event_sink,
+            )
+            .await
+            {
+                Err(error)
+                    if should_retry_with_chat_completions_fallback(&current_provider, &error) =>
+                {
+                    if let Some(fallback_provider) = current_provider.responses_fallback_provider()
+                    {
+                        current_provider = fallback_provider;
+                        current_endpoint = current_provider.endpoint();
+                        continue;
+                    }
+                    return Err(error);
+                }
+                result => return result,
+            }
+        }
 
         match execute_model_request(
             runtime,

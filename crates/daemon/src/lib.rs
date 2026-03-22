@@ -93,6 +93,7 @@ pub mod runtime_experiment_cli;
 pub mod runtime_restore_cli;
 pub mod skills_cli;
 pub mod source_presentation;
+pub mod web_cli;
 
 pub use loongclaw_spec::programmatic::{
     acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
@@ -737,6 +738,11 @@ pub enum Commands {
     Feishu {
         #[command(subcommand)]
         command: feishu_cli::FeishuCommand,
+    },
+    /// Run the Web Console API surface
+    Web {
+        #[command(subcommand)]
+        command: web_cli::WebCommand,
     },
     /// Print a shell completion script to stdout
     Completions {

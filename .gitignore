@@ -3,6 +3,7 @@
 /.docs
 /.loongclaw.local.toml
 /.env.local
+/.tmp-web-*.log
 .worktrees/
 .idea
 .vscode

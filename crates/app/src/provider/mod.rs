@@ -209,6 +209,7 @@ pub async fn request_turn(
     session_id: &str,
     turn_id: &str,
     messages: &[Value],
+    event_sink: Option<&dyn crate::acp::AcpTurnEventSink>,
     binding: ProviderRuntimeBinding<'_>,
 ) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
     request_turn_in_view(
@@ -217,6 +218,7 @@ pub async fn request_turn(
         turn_id,
         messages,
         &crate::tools::runtime_tool_view(),
+        event_sink,
         binding,
     )
     .await
@@ -228,6 +230,7 @@ pub async fn request_turn_in_view(
     turn_id: &str,
     messages: &[Value],
     tool_view: &crate::tools::ToolView,
+    event_sink: Option<&dyn crate::acp::AcpTurnEventSink>,
     binding: ProviderRuntimeBinding<'_>,
 ) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
     let session = prepare_provider_request_session(config).await?;
@@ -257,6 +260,7 @@ pub async fn request_turn_in_view(
                 model,
                 auto_model_mode,
                 tool_definitions.as_slice(),
+                event_sink,
                 auth_profile,
                 &session.endpoint,
                 &session.headers,

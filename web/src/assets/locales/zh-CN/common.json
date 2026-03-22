@@ -1,0 +1,162 @@
+{
+  "appName": "LoongClaw Web",
+  "nav": {
+    "chat": "对话",
+    "dashboard": "仪表盘",
+    "theme": "主题",
+    "language": "语言"
+  },
+  "status": {
+    "connected": "已连接",
+    "authRequired": "需要 Token",
+    "unauthorized": "Token 被拒绝",
+    "local": "本地优先",
+    "providerReady": "Provider 已就绪",
+    "memoryHealthy": "Memory 状态正常"
+  },
+  "auth": {
+    "bannerTitle": "解锁本地 API",
+    "bannerBody": "本地 token 文件位置：{{tokenPath}}。把里面的 token 粘贴到这里即可。",
+    "invalidTitle": "当前 token 已被拒绝",
+    "invalidBody": "当前 token 无效，请到 {{tokenPath}} 读取最新 token 后重试。",
+    "sessionTitle": "刷新本地会话",
+    "sessionBody": "这个同源 Web 页面会使用本地 session cookie。刷新页面即可重新建立本地会话。",
+    "sessionInvalidTitle": "本地会话已失效",
+    "sessionInvalidBody": "当前本地 Web 会话已失效，请刷新同源页面以重新建立会话。",
+    "requiredBody": "先输入本地 API token，才能加载受保护的运行时数据。",
+    "inputPlaceholder": "输入本地 API token",
+    "save": "保存 token",
+    "clear": "清除"
+  },
+  "onboarding": {
+    "eyebrow": "首次进入",
+    "loadingTitle": "正在检查本地环境",
+    "loadingBody": "正在检查 runtime、token 配对、配置文件和 provider 可用性。",
+    "tokenPairingAutoInProgress": "正在尝试自动配对；如果你手头已有本地 token，也可以直接在下面粘贴。",
+    "panelEyebrow": "进入前检查",
+    "panelTitle": "进入前状态确认",
+    "summary": {
+      "runtime": "Runtime",
+      "token": "Token 配对",
+      "session": "本地会话",
+      "config": "配置文件",
+      "provider": "Provider"
+    },
+    "details": {
+      "nextAction": "下一步",
+      "provider": "Provider",
+      "model": "模型",
+      "configPath": "配置路径"
+    },
+    "values": {
+      "ready": "已就绪",
+      "blocked": "未完成"
+    },
+    "actions": {
+      "start_local_runtime": "先启动本地 runtime，然后刷新页面。",
+      "enter_local_token": "先输入本地 API token，再继续。",
+      "create_local_config": "先创建本地配置，再进入 chat。",
+      "fix_local_config": "先修复本地配置，再重试。",
+      "configure_provider": "先补齐 provider、model 和 key。",
+      "validate_provider_route": "先检查 provider 路由与连通性。",
+      "refresh_local_session": "刷新同源页面，重新建立本地会话。",
+      "enter_web": "进入 Web Console。",
+      "open_chat": "进入 chat。",
+      "wait": "等待最新状态。"
+    },
+    "form": {
+      "kind": "Provider 类型",
+      "kindPlaceholder": "例如 volcengine",
+      "model": "模型",
+      "modelPlaceholder": "例如 doubao-seed-2-0-pro-260215",
+      "baseUrlOrEndpoint": "Base URL / Endpoint",
+      "baseUrlOrEndpointPlaceholder": "例如 https://ark.cn-beijing.volces.com",
+      "baseUrlOrEndpointHelper": "这里既可以填 base URL，也可以填完整 chat endpoint；留空则回到该 provider 的默认值。",
+      "apiKey": "API Key",
+      "apiKeyPlaceholder": "粘贴 provider API key",
+      "apiKeyPlaceholderConfigured": "留空可继续沿用当前 key",
+      "apiKeyHelper": "O2 第一版会把这里输入的 key 连同本地 provider 配置一起保存。",
+      "apiKeyHelperConfigured": "如果不想改当前 key，可以留空；如果要替换，就在这里粘贴新的 key。",
+      "save": "保存 provider 配置",
+      "savePending": "保存中...",
+      "errors": {
+        "saveFailed": "provider 配置保存失败。"
+      }
+    },
+    "preferences": {
+      "toggle": "可选个性化设置",
+      "show": "展开",
+      "hide": "收起",
+      "personality": "性格",
+      "personalityCalmEngineering": "冷静工程",
+      "personalityFriendlyCollab": "友好协作",
+      "personalityAutonomousExecutor": "自主执行",
+      "memoryProfile": "记忆档位",
+      "memoryProfileWindowOnly": "仅窗口",
+      "memoryProfileWindowPlusSummary": "窗口 + 摘要",
+      "memoryProfileProfilePlusWindow": "画像 + 窗口",
+      "promptAddendum": "Prompt 附加说明",
+      "promptAddendumPlaceholder": "给后续对话补充一条可选说明",
+      "helper": "这些设置是可选项，会影响后续对话风格，但不会阻塞进入 Web。",
+      "save": "保存可选设置",
+      "savePending": "保存中...",
+      "saved": "可选设置已保存。",
+      "saveFailed": "可选设置保存失败。"
+    },
+    "validation": {
+      "required": "进入 Web 前，先做一次 provider 验证。",
+      "ready": "当前这套 provider 配置已经通过验证。",
+      "action": "验证并继续",
+      "pending": "验证中...",
+      "success": "Provider 验证通过，现在可以进入 Web 了。",
+      "failed": "Provider 验证还没有通过。",
+      "statuses": {
+        "transport_failure": "本地 runtime 目前还无法连到这个 provider endpoint。",
+        "missing_credentials": "当前 provider 配置里还缺少可用凭证。",
+        "auth_rejected": "当前配置的 API Key 被 provider 拒绝了。",
+        "request_rejected": "Provider 收到了验证请求，但当前配置还不能通过验证。",
+        "upstream_unavailable": "Provider endpoint 有响应，但当前状态还不够稳定。"
+      }
+    },
+    "stages": {
+      "runtimeOffline": {
+        "title": "本地 runtime 还没有启动",
+        "body": "Web 页面可以打开，但本地 API 目前还不可达。先启动 runtime，再刷新页面。"
+      },
+      "tokenPairing": {
+        "title": "还没有完成 token 配对",
+        "body": "当前浏览器还没有和本地 API 完成配对。Web 会先尝试一次轻量自动配对，如果失败，再回退到手动输入 token。"
+      },
+      "sessionRefresh": {
+        "title": "本地会话需要刷新",
+        "body": "这个同源 Web 页面本应自动建立本地会话。请刷新页面以重新建立会话，然后继续。"
+      },
+      "missingConfig": {
+        "title": "本地配置文件还不存在",
+        "body": "runtime 已在线，但预期配置文件还不存在。现在可以先在这里补齐最小 provider 配置。"
+      },
+      "configInvalid": {
+        "title": "本地配置无法正常加载",
+        "body": "配置文件存在，但 runtime 还不能正常加载它。通常说明本地配置仍需要先修复。"
+      },
+      "providerSetup": {
+        "title": "Provider 配置还不完整",
+        "body": "runtime 已在线，但当前 provider 还没有配置到可运行 chat 的状态。"
+      },
+      "providerUnreachable": {
+        "title": "Provider 路由仍然不健康",
+        "body": "基础配置已经存在，但当前 provider endpoint 看起来还不可达。你可以先调整 provider 配置，再继续。"
+      },
+      "ready": {
+        "title": "本地环境已经准备好了",
+        "body": "runtime、token 配对、配置文件和 provider 检查都已经通过，你现在可以进入 Web Console。"
+      }
+    },
+    "enter": "进入 Web"
+  },
+  "chrome": {
+    "eyebrow": "Web Console",
+    "title": "LoongClaw 的本地控制台",
+    "subtitle": "英文优先、中英双语，并与 LoongClaw 官网视觉体系保持一致。"
+  }
+}

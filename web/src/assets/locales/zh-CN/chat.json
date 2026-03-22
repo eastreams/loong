@@ -1,0 +1,66 @@
+{
+  "eyebrow": "Web Chat",
+  "title": "对话界面",
+  "subtitle": "通过浏览器外壳复用现有 LoongClaw runtime。",
+  "newSession": "新建会话",
+  "deleteSession": "删除会话",
+  "deleting": "删除中...",
+  "generating": "生成中...",
+  "loadingSessions": "加载会话中...",
+  "noSessions": "暂无保存的会话。",
+  "untitledSession": "未命名会话",
+  "noHistory": "暂无历史",
+  "emptyState": "新建对话或打开已有会话。",
+  "loadingHistory": "加载历史中...",
+  "inputPlaceholder": "向 LoongClaw 询问 runtime、工具或工作流问题...",
+  "send": "发送",
+  "panels": {
+    "sessions": "会话",
+    "composer": "输入区",
+    "inspector": "状态面板"
+  },
+  "toolStatus": {
+    "running": "运行中",
+    "ok": "已完成",
+    "error": "失败"
+  },
+  "memoryWindow": {
+    "label": "记忆窗口",
+    "value": "{{count}} 轮",
+    "pending": "读取配置中"
+  },
+  "currentModel": {
+    "label": "当前模型",
+    "pending": "读取模型中",
+    "provider": "Provider：{{provider}}",
+    "providerPending": "Provider 读取中"
+  },
+  "inspector": {
+    "sessionLoaded": "会话已加载",
+    "waitingForSession": "等待选择会话"
+  },
+  "toolAssist": {
+    "label": "工具辅助",
+    "enabled": "已开启",
+    "disabled": "已关闭",
+    "hint": "对于文件、命令、仓库搜索和网页任务，Web 会追加一段仅本轮生效的轻量提示。"
+  },
+  "errors": {
+    "providerHostFallback": "当前 provider 域名",
+    "transportFailure": "连接 {{host}} 时发生了 provider 传输失败。如果你开启了代理，建议先给这个域名单独配置 DIRECT，并加入 fake-ip-filter。你也可以到 Runtime console > Provider 路由 里查看当前诊断结果。"
+  },
+  "loading": {
+    "connectingA": "LoongClaw 正在接入航线",
+    "connectingB": "LoongClaw 正在确认路线",
+    "connectingC": "LoongClaw 正在寻找稳定气流",
+    "thinkingA": "LoongClaw 正在思考",
+    "thinkingB": "LoongClaw 正在盘旋",
+    "thinkingC": "LoongClaw 正在整理想法",
+    "streamingA": "LoongClaw 正在落字",
+    "streamingB": "LoongClaw 正在展开回答",
+    "streamingC": "LoongClaw 正在继续飞行",
+    "hintConnecting": "还在连接 provider，只要没有报错，这一轮就还有机会。",
+    "hintThinking": "请求已经发出，LoongClaw 还在等待或组织回复。",
+    "hintStreaming": "已经收到增量文本，这一轮仍在继续生成。"
+  }
+}

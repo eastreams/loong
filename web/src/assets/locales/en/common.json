@@ -1,0 +1,162 @@
+{
+  "appName": "LoongClaw Web",
+  "nav": {
+    "chat": "Chat",
+    "dashboard": "Dashboard",
+    "theme": "Theme",
+    "language": "Language"
+  },
+  "status": {
+    "connected": "Connected",
+    "authRequired": "Token required",
+    "unauthorized": "Token rejected",
+    "local": "Local-first",
+    "providerReady": "Provider ready",
+    "memoryHealthy": "Memory healthy"
+  },
+  "auth": {
+    "bannerTitle": "Unlock local API",
+    "bannerBody": "Local token file: {{tokenPath}}. Paste the token value here.",
+    "invalidTitle": "Stored token was rejected",
+    "invalidBody": "The current token was rejected. Read the latest token from {{tokenPath}} and try again.",
+    "sessionTitle": "Refresh local session",
+    "sessionBody": "This same-origin Web page uses a local session cookie. Reload the page to establish a fresh local session.",
+    "sessionInvalidTitle": "Local session expired",
+    "sessionInvalidBody": "The local Web session is no longer valid. Reload the same-origin page to refresh the session.",
+    "requiredBody": "Enter the local API token to load protected runtime data.",
+    "inputPlaceholder": "Paste local API token",
+    "save": "Save token",
+    "clear": "Clear"
+  },
+  "onboarding": {
+    "eyebrow": "First run",
+    "loadingTitle": "Checking local setup",
+    "loadingBody": "Trying local runtime, token pairing, config, and provider readiness.",
+    "tokenPairingAutoInProgress": "Trying lightweight auto pairing now. If you already have the local token, you can still paste it below.",
+    "panelEyebrow": "Entry check",
+    "panelTitle": "Ready-to-enter status",
+    "summary": {
+      "runtime": "Runtime",
+      "token": "Token pairing",
+      "session": "Local session",
+      "config": "Config",
+      "provider": "Provider"
+    },
+    "details": {
+      "nextAction": "Next action",
+      "provider": "Provider",
+      "model": "Model",
+      "configPath": "Config path"
+    },
+    "values": {
+      "ready": "Ready",
+      "blocked": "Blocked"
+    },
+    "actions": {
+      "start_local_runtime": "Start the local runtime and reload this page.",
+      "enter_local_token": "Paste the local API token to continue.",
+      "create_local_config": "Create the local config before entering chat.",
+      "fix_local_config": "Fix the local config and retry.",
+      "configure_provider": "Add a provider, model, and key before continuing.",
+      "validate_provider_route": "Check provider route diagnostics before continuing.",
+      "refresh_local_session": "Reload the same-origin page to refresh the local session.",
+      "enter_web": "Enter Web Console.",
+      "open_chat": "Open chat.",
+      "wait": "Wait for the latest status."
+    },
+    "form": {
+      "kind": "Provider kind",
+      "kindPlaceholder": "e.g. volcengine",
+      "model": "Model",
+      "modelPlaceholder": "e.g. doubao-seed-2-0-pro-260215",
+      "baseUrlOrEndpoint": "Base URL / endpoint",
+      "baseUrlOrEndpointPlaceholder": "e.g. https://ark.cn-beijing.volces.com",
+      "baseUrlOrEndpointHelper": "Paste a base URL or a full chat endpoint override. Leave it blank to use the provider default.",
+      "apiKey": "API key",
+      "apiKeyPlaceholder": "Paste provider API key",
+      "apiKeyPlaceholderConfigured": "Leave blank to keep the current key",
+      "apiKeyHelper": "For this first pass, the key is persisted with the local provider config.",
+      "apiKeyHelperConfigured": "Leave this blank to keep the current key, or paste a new one to replace it.",
+      "save": "Save provider setup",
+      "savePending": "Saving...",
+      "errors": {
+        "saveFailed": "Provider setup could not be saved."
+      }
+    },
+    "preferences": {
+      "toggle": "Optional personalization",
+      "show": "Expand",
+      "hide": "Collapse",
+      "personality": "Personality",
+      "personalityCalmEngineering": "Calm engineering",
+      "personalityFriendlyCollab": "Friendly collaboration",
+      "personalityAutonomousExecutor": "Autonomous executor",
+      "memoryProfile": "Memory profile",
+      "memoryProfileWindowOnly": "Window only",
+      "memoryProfileWindowPlusSummary": "Window plus summary",
+      "memoryProfileProfilePlusWindow": "Profile plus window",
+      "promptAddendum": "Prompt addendum",
+      "promptAddendumPlaceholder": "Optional extra instruction for future conversations",
+      "helper": "These settings are optional. They shape later conversations, but they do not block entry.",
+      "save": "Save optional settings",
+      "savePending": "Saving...",
+      "saved": "Optional settings saved.",
+      "saveFailed": "Optional settings could not be saved."
+    },
+    "validation": {
+      "required": "Run one quick provider validation before entering Web.",
+      "ready": "Provider validation passed for this setup.",
+      "action": "Validate and continue",
+      "pending": "Validating...",
+      "success": "Provider validation passed. You can enter Web now.",
+      "failed": "Provider validation did not pass yet.",
+      "statuses": {
+        "transport_failure": "The provider endpoint could not be reached from the local runtime.",
+        "missing_credentials": "The current provider config is still missing credentials.",
+        "auth_rejected": "The provider rejected the configured key.",
+        "request_rejected": "The provider received the validation request but rejected this setup.",
+        "upstream_unavailable": "The provider endpoint responded, but it is not healthy enough right now."
+      }
+    },
+    "stages": {
+      "runtimeOffline": {
+        "title": "Local runtime is offline",
+        "body": "Web can open, but the local API is not reachable yet. Start the runtime first, then reload the page."
+      },
+      "tokenPairing": {
+        "title": "Token pairing is still required",
+        "body": "This browser is not paired with the local API yet. Web will try one lightweight local pairing attempt first, then fall back to manual token entry if needed."
+      },
+      "sessionRefresh": {
+        "title": "Local session needs a refresh",
+        "body": "This same-origin Web page should establish its local session automatically. Reload the page to refresh the session, then continue."
+      },
+      "missingConfig": {
+        "title": "Local config is still missing",
+        "body": "The runtime is online, but the expected config file does not exist yet. Web still needs a first-run setup flow for this case."
+      },
+      "configInvalid": {
+        "title": "Local config could not be loaded",
+        "body": "A config file exists, but the runtime could not load it cleanly. This usually means the local config still needs to be fixed before chat can work."
+      },
+      "providerSetup": {
+        "title": "Provider setup is still incomplete",
+        "body": "The runtime is online, but the active provider is not configured enough to run chat yet."
+      },
+      "providerUnreachable": {
+        "title": "Provider route still looks unhealthy",
+        "body": "Basic config exists, but the active provider endpoint does not look reachable yet. Web should surface this before sending users into chat."
+      },
+      "ready": {
+        "title": "Local setup looks ready",
+        "body": "Runtime, token pairing, config, and provider checks all look healthy. You can enter the Web Console now."
+      }
+    },
+    "enter": "Enter Web"
+  },
+  "chrome": {
+    "eyebrow": "Web Console",
+    "title": "Local control surface for LoongClaw",
+    "subtitle": "English-first bilingual console aligned with the main LoongClaw website."
+  }
+}

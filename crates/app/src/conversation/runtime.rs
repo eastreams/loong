@@ -677,6 +677,7 @@ pub trait ConversationRuntime: Send + Sync {
         turn_id: &str,
         messages: &[Value],
         tool_view: &ToolView,
+        event_sink: Option<&dyn crate::acp::AcpTurnEventSink>,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ProviderTurn>;
 
@@ -916,6 +917,7 @@ where
         turn_id: &str,
         messages: &[Value],
         tool_view: &ToolView,
+        event_sink: Option<&dyn crate::acp::AcpTurnEventSink>,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ProviderTurn> {
         provider::request_turn_in_view(
@@ -924,6 +926,7 @@ where
             turn_id,
             messages,
             tool_view,
+            event_sink,
             provider_runtime_binding(binding),
         )
         .await

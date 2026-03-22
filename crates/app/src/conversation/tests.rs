@@ -112,6 +112,7 @@ impl ConversationRuntime for TraitDefaultToolViewRuntime {
         _turn_id: &str,
         _messages: &[Value],
         _tool_view: &crate::tools::ToolView,
+        _event_sink: Option<&dyn crate::acp::AcpTurnEventSink>,
         _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ProviderTurn> {
         Err("trait default tool view test should not request a provider turn".to_owned())
@@ -1239,6 +1240,7 @@ impl ConversationRuntime for FakeRuntime {
         turn_id: &str,
         messages: &[Value],
         tool_view: &crate::tools::ToolView,
+        _event_sink: Option<&dyn crate::acp::AcpTurnEventSink>,
         _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ProviderTurn> {
         let mut calls = self.turn_calls.lock().expect("turn calls lock");
