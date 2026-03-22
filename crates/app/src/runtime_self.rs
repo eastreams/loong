@@ -95,11 +95,6 @@ pub(crate) fn render_runtime_self_section(model: &RuntimeSelfModel) -> Option<St
         &model.standing_instructions,
     );
     push_rendered_lane(&mut sections, "### Soul Guidance", &model.soul_guidance);
-    push_rendered_lane(
-        &mut sections,
-        "### Identity Context",
-        &model.identity_context,
-    );
     push_rendered_lane(&mut sections, "### User Context", &model.user_context);
 
     Some(sections.join("\n\n"))

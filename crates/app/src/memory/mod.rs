@@ -10,6 +10,7 @@ use loongclaw_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
 use serde_json::json;
 
 use crate::config::MemoryBackendKind;
+use crate::runtime_identity;
 
 mod canonical;
 mod context;
@@ -209,20 +210,15 @@ pub fn load_prompt_context_with_diagnostics(
     config: &runtime_config::MemoryRuntimeConfig,
 ) -> Result<(Vec<MemoryContextEntry>, SqliteContextLoadDiagnostics), String> {
     let mut profile_entry = None;
-
+    let profile_section =
+        runtime_identity::render_session_profile_section(config.profile_note.as_deref());
     if matches!(config.mode, crate::config::MemoryMode::ProfilePlusWindow)
-        && let Some(profile_note) = config
-            .profile_note
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
+        && let Some(profile_section) = profile_section
     {
         profile_entry = Some(MemoryContextEntry {
             kind: MemoryContextKind::Profile,
             role: "system".to_owned(),
-            content: format!(
-                "## Session Profile\nDurable preferences or imported identity carried into this session:\n- {profile_note}"
-            ),
+            content: profile_section,
         });
     }
 
