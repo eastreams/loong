@@ -18,19 +18,18 @@ LoongClaw implements a multi-layer security model. Higher layers add defense-in-
 
 ### Policy Engine (L1)
 
-Current tool enforcement uses two paths:
+Every kernel-bound core tool call passes through capability + policy gates:
 
 ```
-Full Rule-of-Two path:
-CapabilityToken → PolicyEngine → PolicyExtensionChain → Execution → Audit
-
-Filesystem tool path today (TD-002):
-CapabilityToken → filesystem capability check → file policy extension/path sandboxing → Execution → Audit
+CapabilityToken → PolicyEngine.authorize(...) → PolicyExtensionChain → Execution → Audit
 ```
+
+Tool-specific request approval currently lives in the `PolicyExtensionChain`; the legacy
+`PolicyEngine::check_tool_call` hook is deprecated.
 
 **Current coverage:**
-- `shell.exec` — Kernel-mediated tool execution with capability checks, full PolicyEngine review, shell policy extensions, and audit events
-- `file.read` / `file.write` / `file.edit` — Kernel-mediated tool execution with filesystem capabilities, file policy extension checks, path sandboxing, and audit events, but these tools do not currently flow through the full PolicyEngine rule path (see `docs/design-docs/harness-engineering.md`, TD-002)
+- `shell.exec` — Kernel-mediated core tool execution with capability checks, shell policy extensions, and audit events
+- `file.read` / `file.write` / `file.edit` — Kernel-mediated core tool execution with filesystem capabilities, file policy extension checks, execution-layer path sandboxing, and audit events
 - Conversation tool turns — Fast-lane and safe-lane inner tool execution now flow through an explicit `ConversationRuntimeBinding` (`Kernel` or `Direct`); core tools require a bound `KernelContext`, missing authority is rejected at the binding boundary as `no_kernel_context`, and async delegate child turns now inherit parent kernel authority instead of forcing direct mode
 - Memory/runtime/context orchestration — The conversation module now carries `ConversationRuntimeBinding` end-to-end across runtime, context, persistence, turn coordination, loop followup, history, and app-dispatch seams. Kernel-bound history readers fail closed on kernel memory-window errors or non-`ok` statuses instead of silently downgrading to direct sqlite
 - Provider request/failover orchestration — Provider request entrypoints and failover telemetry now use an explicit `ProviderRuntimeBinding` (`Kernel` or `Direct`). Provider failover metrics record in both modes, while kernel-backed audit emission only occurs when provider execution is explicitly kernel-bound

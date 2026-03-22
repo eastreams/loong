@@ -36,9 +36,9 @@ The intended capability gate for every tool call:
 CapabilityToken → PolicyEngine → PolicyExtensionChain → ToolPlane → CoreToolAdapter → Audit
 ```
 
-**Current reality**: Only `shell.exec` passes through the full PolicyEngine check. `file.read`, `file.write`, and `file.edit` have path sandboxing but bypass the policy engine entirely (TD-002). This means the Rule of Two (LLM intent + deterministic policy approval) is only enforced for shell commands.
+**Current reality**: Kernel-bound core tools still follow this gate. Tool-specific request approval now lives in policy extensions instead of the deprecated `PolicyEngine::check_tool_call` hook, so `shell.exec` is enforced by `ToolPolicyExtension` while `file.read`, `file.write`, and `file.edit` are enforced by `FilePolicyExtension` plus execution-layer path sandboxing. The Rule of Two is therefore still enforced on the kernel tool path, even though the request-policy split between engine and extensions remains architectural debt.
 
-Current tool registry: `shell.exec`, `file.read`, `file.write`, `file.edit`.
+Current built-in core tool slice: `shell.exec`, `file.read`, `file.write`, `file.edit`.
 
 ### Stage 3: Context Management & Memory
 
