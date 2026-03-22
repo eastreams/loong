@@ -72,10 +72,12 @@ pub(super) fn execute_shell_tool_with_config(
             ));
         }
 
-        let output = run_shell_async(async {
-            run_shell_command_with_timeout(normalized_command.as_str(), &args, &cwd, timeout_ms)
-                .await
-        })??;
+        let output = run_shell_async(run_shell_command_with_timeout(
+            normalized_command.as_str(),
+            &args,
+            cwd.as_path(),
+            timeout_ms,
+        ))??;
 
         Ok(ToolCoreOutcome {
             status: if output.status.success() {
@@ -183,7 +185,7 @@ where
 async fn run_shell_command_with_timeout(
     command: &str,
     args: &[String],
-    cwd: &PathBuf,
+    cwd: &std::path::Path,
     timeout_ms: u64,
 ) -> Result<std::process::Output, String> {
     let mut child = Command::new(command)
