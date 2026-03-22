@@ -1298,44 +1298,11 @@ impl ConversationRuntime for FakeRuntime {
         turn_id: &str,
         messages: &[Value],
         tool_view: &crate::tools::ToolView,
-        _binding: ConversationRuntimeBinding<'_>,
+        binding: ConversationRuntimeBinding<'_>,
         _on_token: crate::provider::StreamingTokenCallback,
     ) -> CliResult<ProviderTurn> {
-        let mut calls = self.turn_calls.lock().expect("turn calls lock");
-        *calls += 1;
-        *self.requested_messages.lock().expect("request lock") = messages.to_vec();
-        self.turn_requested_messages
-            .lock()
-            .expect("turn request lock")
-            .push(messages.to_vec());
-        self.turn_requested_tool_views
-            .lock()
-            .expect("turn request tool views lock")
-            .push(tool_view.clone());
-        self.turn_requested_provider_ids
-            .lock()
-            .expect("turn provider ids lock")
-            .push(config.active_provider_id().unwrap_or_default().to_owned());
-        drop(calls);
-        match self
-            .turn_responses
-            .lock()
-            .expect("turn response lock")
-            .pop_front()
-            .unwrap_or_else(|| Err("unexpected_turn_call".to_owned()))
-        {
-            Ok(FakeTurnResponse::Parsed(turn)) => Ok(turn),
-            Ok(FakeTurnResponse::RawBody(body)) => {
-                crate::provider::extract_provider_turn_with_scope_and_messages(
-                    &body,
-                    Some(session_id),
-                    Some(turn_id),
-                    messages,
-                )
-                .ok_or_else(|| "fake_runtime_failed_to_parse_provider_body".to_owned())
-            }
-            Err(error) => Err(error),
-        }
+        self.request_turn(config, session_id, turn_id, messages, tool_view, binding)
+            .await
     }
 
     async fn persist_turn(

@@ -306,6 +306,7 @@ async fn integ_malformed_tool_args_returns_error() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::wildcard_enum_match_arm)]
 async fn integ_file_write_denied_without_capability() {
     let harness = TurnTestHarness::with_capabilities(BTreeSet::from([Capability::InvokeTool]));
 
@@ -324,12 +325,7 @@ async fn integ_file_write_denied_without_capability() {
                 "expected 'FilesystemWrite' in reason, got: {err}"
             );
         }
-        other @ (TurnResult::FinalText(_)
-        | TurnResult::StreamingText(_)
-        | TurnResult::StreamingDone(_)
-        | TurnResult::NeedsApproval(_)
-        | TurnResult::ToolError(_)
-        | TurnResult::ProviderError(_)) => {
+        other => {
             panic!("expected ToolDenied with FilesystemWrite, got: {other:?}")
         }
     }

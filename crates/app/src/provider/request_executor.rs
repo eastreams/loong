@@ -1,5 +1,7 @@
+use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::pin::Pin;
+use std::str::from_utf8;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -636,8 +638,9 @@ where
 struct SseByteStreamParser<T, ParseStreamItem> {
     byte_stream: Pin<Box<dyn Stream<Item = Result<Bytes, RequestExecutionError>> + Send>>,
     parse_stream_item: ParseStreamItem,
-    line_buffer: String,
+    line_buffer: Vec<u8>,
     event_type: Option<String>,
+    pending: VecDeque<Result<T, ModelRequestError>>,
     _phantom: PhantomData<T>,
 }
 
@@ -652,8 +655,9 @@ where
         Self {
             byte_stream,
             parse_stream_item,
-            line_buffer: String::new(),
+            line_buffer: Vec::new(),
             event_type: None,
+            pending: VecDeque::new(),
             _phantom: PhantomData,
         }
     }
@@ -669,33 +673,41 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         loop {
+            if let Some(item) = this.pending.pop_front() {
+                return Poll::Ready(Some(item));
+            }
             match this.byte_stream.as_mut().poll_next(cx) {
                 Poll::Ready(Some(Ok(bytes))) => {
                     for byte in bytes {
                         if byte == b'\n' {
                             let line = std::mem::take(&mut this.line_buffer);
-                            let parsed_line = transport::parse_sse_line(&line);
+                            let line_str = match from_utf8(&line) {
+                                Ok(s) => s,
+                                Err(_) => continue,
+                            };
+                            let parsed_line = transport::parse_sse_line(line_str);
                             match parsed_line {
-                                transport::SseLine::Event { event_type, data } => {
-                                    if let Some(et) = event_type {
-                                        this.event_type = Some(et);
-                                    }
-                                    if !data.is_empty()
-                                        && let Some(event) =
+                                transport::SseLine::EventType { name } => {
+                                    this.event_type = Some(name);
+                                }
+                                transport::SseLine::Data { content } => {
+                                    if !content.is_empty()
+                                        && let Ok(Some(event)) =
                                             transport::SseStreamEvent::from_sse_lines(
                                                 this.event_type.clone(),
-                                                &[data],
+                                                &[content],
                                             )
                                     {
                                         match event {
                                             transport::SseStreamEvent::Message { data, .. } => {
                                                 let parse_fn = &mut this.parse_stream_item;
                                                 if let Some(item) = parse_fn(data) {
-                                                    return Poll::Ready(Some(Ok(item)));
+                                                    this.pending.push_back(Ok(item));
                                                 }
                                             }
                                             transport::SseStreamEvent::Error { message } => {
-                                                return Poll::Ready(Some(Err(build_model_request_error(
+                                                this.pending
+                                                    .push_back(Err(build_model_request_error(
                                                     message,
                                                     false,
                                                     ProviderFailoverReason::ResponseShapeInvalid,
@@ -705,7 +717,7 @@ where
                                                     1,
                                                     None,
                                                     None,
-                                                ))));
+                                                )));
                                             }
                                             transport::SseStreamEvent::Done => {
                                                 return Poll::Ready(None);
@@ -719,7 +731,7 @@ where
                             }
                             this.line_buffer.clear();
                         } else if byte != b'\r' {
-                            this.line_buffer.push(byte as char);
+                            this.line_buffer.push(byte);
                         }
                     }
                 }
@@ -787,11 +799,8 @@ pub(super) async fn execute_streaming_turn_request(
                 });
             }
         }
-        if event_type == "message_delta" {
-            let delta = data.get("delta")?;
-            if delta.get("type").and_then(|v| v.as_str()) == Some("message_stop") {
-                return Some(StreamingEvent::Done);
-            }
+        if event_type == "message_stop" {
+            return Some(StreamingEvent::Done);
         }
         None
     })
@@ -871,16 +880,30 @@ pub(super) async fn execute_streaming_turn_request(
     let tool_intents = accumulator
         .tool_calls
         .values()
-        .map(|tool_call| ToolIntent {
-            tool_name: tool_call.name.clone(),
-            args_json: serde_json::from_str(&tool_call.input)
-                .unwrap_or_else(|_| Value::Object(serde_json::Map::new())),
-            source: "streaming".to_owned(),
-            session_id: session_id.unwrap_or("").to_owned(),
-            turn_id: turn_id.unwrap_or("").to_owned(),
-            tool_call_id: tool_call.id.clone(),
+        .map(|tool_call| {
+            let args_json = serde_json::from_str(&tool_call.input).map_err(|e| {
+                build_model_request_error(
+                    format!("failed to parse tool call input: {}", e),
+                    false,
+                    ProviderFailoverReason::ResponseShapeInvalid,
+                    ProviderFailoverStage::ResponseDecode,
+                    &model_name,
+                    1,
+                    1,
+                    None,
+                    None,
+                )
+            })?;
+            Ok(ToolIntent {
+                tool_name: tool_call.name.clone(),
+                args_json,
+                source: "streaming".to_owned(),
+                session_id: session_id.unwrap_or("").to_owned(),
+                turn_id: turn_id.unwrap_or("").to_owned(),
+                tool_call_id: tool_call.id.clone(),
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(ProviderTurn {
         assistant_text: accumulator.text,
@@ -1099,7 +1122,7 @@ mod tests {
         let event = SseStreamEvent::from_sse_lines(event_type, &data_lines);
 
         match event {
-            Some(SseStreamEvent::Message { data, event_type }) => {
+            Ok(Some(SseStreamEvent::Message { data, event_type })) => {
                 assert_eq!(event_type.as_deref(), Some("content_block_delta"));
                 let data: &serde_json::Value = &data;
                 assert_eq!(

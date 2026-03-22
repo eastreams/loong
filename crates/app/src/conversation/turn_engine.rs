@@ -189,6 +189,7 @@ impl fmt::Display for TurnFailure {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum TurnResult {
     FinalText(String),
     StreamingText(String),

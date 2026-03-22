@@ -268,7 +268,6 @@ pub(super) async fn request_turn_streaming(
 ) -> Result<crate::conversation::turn_engine::ProviderTurn, ModelRequestError> {
     let mut current_provider = request_provider.clone();
     let mut current_endpoint = initial_endpoint.to_owned();
-    let on_token = on_token;
     loop {
         let runtime_contract = provider_runtime_contract(&current_provider);
         let capability_profile =

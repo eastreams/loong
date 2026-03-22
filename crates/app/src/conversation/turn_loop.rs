@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use crate::CliResult;
 use crate::acp::{AcpTurnEventSink, JsonlAcpTurnEventSink, StreamingTokenEvent, TokenDelta};
+use crate::config::ProviderProtocolFamily;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 
 use super::super::config::LoongClawConfig;
@@ -129,7 +130,9 @@ impl ConversationTurnLoop {
         );
 
         for round_index in 0..policy.max_rounds {
-            let on_token: crate::provider::StreamingTokenCallback = {
+            let use_streaming =
+                config.provider.kind.protocol_family() == ProviderProtocolFamily::AnthropicMessages;
+            let on_token: crate::provider::StreamingTokenCallback = if use_streaming {
                 let sink = JsonlAcpTurnEventSink::stderr_with_prefix("");
                 Some(Arc::new(
                     move |data: crate::provider::StreamingCallbackData| {
@@ -164,8 +167,12 @@ impl ConversationTurnLoop {
                             } => (
                                 "tool_call_input_delta".to_owned(),
                                 TokenDelta {
-                                    text: Some(partial_json),
-                                    tool_call: None,
+                                    text: None,
+                                    tool_call: Some(crate::acp::ToolCallDelta {
+                                        name: None,
+                                        args: Some(partial_json),
+                                        id: None,
+                                    }),
                                 },
                                 Some(index),
                             ),
@@ -178,19 +185,34 @@ impl ConversationTurnLoop {
                         let _ = sink.on_event(&serde_json::to_value(&event).unwrap_or_default());
                     },
                 ))
+            } else {
+                None
             };
             let turn = match decide_provider_turn_request_action(
-                runtime
-                    .request_turn_streaming(
-                        config,
-                        session_id,
-                        turn_id.as_str(),
-                        &session.messages,
-                        &tool_view,
-                        binding,
-                        on_token,
-                    )
-                    .await,
+                if use_streaming {
+                    runtime
+                        .request_turn_streaming(
+                            config,
+                            session_id,
+                            turn_id.as_str(),
+                            &session.messages,
+                            &tool_view,
+                            binding,
+                            on_token,
+                        )
+                        .await
+                } else {
+                    runtime
+                        .request_turn(
+                            config,
+                            session_id,
+                            turn_id.as_str(),
+                            &session.messages,
+                            &tool_view,
+                            binding,
+                        )
+                        .await
+                },
                 error_mode,
             ) {
                 ProviderTurnRequestAction::Continue { turn } => turn,
