@@ -98,9 +98,9 @@ pub(super) fn execute_shell_tool_with_config(
 }
 
 #[cfg(feature = "tool-shell")]
-const SHELL_EXEC_DEFAULT_TIMEOUT_MS: u64 = 10_000;
+const SHELL_EXEC_DEFAULT_TIMEOUT_MS: u64 = 120_000;
 #[cfg(feature = "tool-shell")]
-const SHELL_EXEC_MAX_TIMEOUT_MS: u64 = 120_000;
+const SHELL_EXEC_MAX_TIMEOUT_MS: u64 = 600_000;
 
 #[cfg(feature = "tool-shell")]
 fn parse_shell_timeout_ms(payload: &serde_json::Map<String, Value>) -> Result<u64, String> {
@@ -111,7 +111,7 @@ fn parse_shell_timeout_ms(payload: &serde_json::Map<String, Value>) -> Result<u6
         None => SHELL_EXEC_DEFAULT_TIMEOUT_MS,
     };
 
-    Ok(timeout_ms.clamp(1, SHELL_EXEC_MAX_TIMEOUT_MS))
+    Ok(timeout_ms.clamp(1_000, SHELL_EXEC_MAX_TIMEOUT_MS))
 }
 
 #[cfg(feature = "tool-shell")]
@@ -163,6 +163,7 @@ async fn run_shell_command_with_timeout(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|error| format!("shell command spawn failed: {error}"))?;
 

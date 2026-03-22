@@ -1800,9 +1800,9 @@ fn shell_exec_definition(descriptor: &ToolDescriptor) -> Value {
                     },
                     "timeout_ms": {
                         "type": "integer",
-                        "minimum": 1,
-                        "maximum": 120000,
-                        "description": "Optional command timeout in milliseconds. Defaults to 10000 and is clamped to 1..=120000."
+                        "minimum": 1000,
+                        "maximum": 600000,
+                        "description": "Optional command timeout in milliseconds. Defaults to 120000 and is clamped to 1000..=600000."
                     },
                     "cwd": {
                         "type": "string",
@@ -2298,7 +2298,7 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "file.read" => "path:string,max_bytes?:integer",
         "file.write" => "path:string,content:string,create_dirs?:boolean",
         "file.edit" => "path:string,old_string:string,new_string:string,replace_all?:boolean",
-        "shell.exec" => "command:string,args?:string[],timeout_ms?:integer",
+        "shell.exec" => "command:string,args?:string[],timeout_ms?:integer,cwd?:string",
         "provider.switch" => "selector?:string",
         "delegate" | "delegate_async" => "task:string,label?:string,timeout_seconds?:integer",
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
@@ -2376,6 +2376,7 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("command", "string"),
             ("args", "array"),
             ("timeout_ms", "integer"),
+            ("cwd", "string"),
         ],
         "provider.switch" => &[("selector", "string")],
         "delegate" | "delegate_async" => &[
