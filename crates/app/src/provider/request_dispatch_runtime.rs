@@ -310,6 +310,16 @@ pub(super) async fn request_turn_streaming(
             Some(turn_id),
             messages,
             on_token.clone(),
+            |api_error| {
+                if include_tool_schema.load(Ordering::Relaxed)
+                    && capability.tool_schema_downgrade_on_unsupported()
+                    && should_disable_tool_schema_for_error(api_error, runtime_contract)
+                {
+                    include_tool_schema.store(false, Ordering::Relaxed);
+                    return true;
+                }
+                false
+            },
         )
         .await
         {

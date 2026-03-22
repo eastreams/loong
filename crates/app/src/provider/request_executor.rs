@@ -760,16 +760,20 @@ where
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-pub(super) async fn execute_streaming_turn_request(
+pub(super) async fn execute_streaming_turn_request<PreStatusError>(
     runtime: StreamingModelRequestRuntime<'_>,
     build_body: impl FnMut(CompletionPayloadMode) -> Value + Unpin,
     session_id: Option<&str>,
     turn_id: Option<&str>,
     _messages: &[Value],
     on_token: StreamingTokenCallback,
-) -> Result<ProviderTurn, ModelRequestError> {
+    mut pre_status_error: PreStatusError,
+) -> Result<ProviderTurn, ModelRequestError>
+where
+    PreStatusError: FnMut(&ProviderApiError) -> bool,
+{
     let model_name = runtime.model.to_owned();
-    let stream = execute_streaming_model_request(runtime, build_body, |data: Value| {
+    let stream = match execute_streaming_model_request(runtime, build_body, |data: Value| {
         let event_type = data.get("type").and_then(|v| v.as_str())?;
         if event_type == "content_block_start" {
             let content_block = data.get("content_block")?;
@@ -804,7 +808,18 @@ pub(super) async fn execute_streaming_turn_request(
         }
         None
     })
-    .await?;
+    .await
+    {
+        Ok(stream) => stream,
+        Err(error) => {
+            if let Some(api_error) = &error.api_error
+                && pre_status_error(api_error)
+            {
+                return Err(error);
+            }
+            return Err(error);
+        }
+    };
 
     let mut accumulator = StreamingAccumulator::default();
     futures_util::pin_mut!(stream);
@@ -851,6 +866,11 @@ pub(super) async fn execute_streaming_turn_request(
                 accumulator.done = true;
             }
             Err(e) => {
+                if let Some(api_error) = &e.api_error
+                    && pre_status_error(api_error)
+                {
+                    return Err(e);
+                }
                 accumulator.error = Some(e);
             }
         }
