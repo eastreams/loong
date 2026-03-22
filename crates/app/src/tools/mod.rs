@@ -2633,7 +2633,8 @@ mod tests {
         let results = outcome.payload["results"].as_array().expect("results");
         assert!(results.iter().any(|entry| {
             entry["tool_id"] == "shell.exec"
-                && entry["argument_hint"].as_str() == Some("command:string,args?:string[]")
+                && entry["argument_hint"].as_str()
+                    == Some("command:string,args?:string[],timeout_ms?:integer")
         }));
 
         std::fs::remove_dir_all(&root).ok();
