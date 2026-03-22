@@ -304,7 +304,9 @@ instability from true upstream unavailability.
 outside the config file:
 
 ```toml
-[provider]
+active_provider = "openai"
+
+[providers.openai]
 kind = "openai"
 api_key_env = "PROVIDER_API_KEY"
 ```
@@ -316,7 +318,9 @@ export ARK_API_KEY=your-ark-api-key
 ```
 
 ```toml
-[provider]
+active_provider = "volcengine"
+
+[providers.volcengine]
 kind = "volcengine"
 model = "your-coding-plan-model-id"
 api_key_env = "ARK_API_KEY"

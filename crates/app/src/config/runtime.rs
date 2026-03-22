@@ -992,16 +992,16 @@ fn canonicalize_provider_secret_env_reference(
     else {
         return;
     };
-    match env_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    let configured_env_name = env_name.as_deref();
+    let configured_env_name = configured_env_name.map(str::trim);
+    let configured_env_name = configured_env_name.filter(|value| !value.is_empty());
+    match configured_env_name {
         None => {
             *env_name = Some(explicit_env_name);
             *inline_secret = None;
         }
         Some(configured) if configured == explicit_env_name => {
+            *env_name = Some(explicit_env_name);
             *inline_secret = None;
         }
         Some(_) => {}
@@ -2504,12 +2504,46 @@ model = "gpt-5"
         let path = unique_config_path("loongclaw-config-runtime-inline-provider-env");
         let path_string = path.display().to_string();
         let mut config = LoongClawConfig::default();
+        let inline_references = [
+            "${TEAM_OPENAI_KEY}",
+            "$TEAM_OPENAI_KEY",
+            "env:TEAM_OPENAI_KEY",
+            "%TEAM_OPENAI_KEY%",
+        ];
+
+        for inline_reference in inline_references {
+            config.provider.api_key = Some(inline_reference.to_owned());
+
+            write(Some(&path_string), &config, true).expect("config write should pass");
+
+            let raw = fs::read_to_string(&path).expect("read written config");
+            assert!(
+                raw.contains("api_key_env = \"TEAM_OPENAI_KEY\""),
+                "expected api_key_env writeback for {inline_reference}"
+            );
+            assert!(
+                !raw.contains(inline_reference),
+                "expected inline env reference removal for {inline_reference}"
+            );
+        }
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_canonicalizes_matching_provider_env_name_fields() {
+        let path = unique_config_path("loongclaw-config-runtime-trimmed-provider-env");
+        let path_string = path.display().to_string();
+        let mut config = LoongClawConfig::default();
         config.provider.api_key = Some("${TEAM_OPENAI_KEY}".to_owned());
+        config.provider.api_key_env = Some(" TEAM_OPENAI_KEY ".to_owned());
 
         write(Some(&path_string), &config, true).expect("config write should pass");
 
         let raw = fs::read_to_string(&path).expect("read written config");
         assert!(raw.contains("api_key_env = \"TEAM_OPENAI_KEY\""));
+        assert!(!raw.contains("api_key_env = \" TEAM_OPENAI_KEY \""));
         assert!(!raw.contains("api_key = \"${TEAM_OPENAI_KEY}\""));
 
         let _ = fs::remove_file(path);

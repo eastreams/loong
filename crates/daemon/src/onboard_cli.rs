@@ -2784,7 +2784,6 @@ fn render_provider_credential_source_value(raw: Option<&str>) -> Option<String> 
         return None;
     }
     normalize_provider_credential_env_name(trimmed)
-        .map(|env_name| env_name.to_owned())
         .or_else(|| Some("environment variable".to_owned()))
 }
 
@@ -7511,6 +7510,7 @@ mod tests {
 
         let mut api_key_env_update = current.clone();
         apply_selected_api_key_env(&mut api_key_env_update, "OPENAI_API_KEY".to_owned());
+        assert!(api_key_env_update.api_key_env_explicit);
         assert!(
             provider_matches_for_review(&current, &api_key_env_update),
             "review matching should ignore explicit api_key_env metadata when the provider identity is otherwise unchanged"
@@ -7518,6 +7518,7 @@ mod tests {
 
         let mut oauth_env_update = current.clone();
         apply_selected_api_key_env(&mut oauth_env_update, "OPENAI_CODEX_OAUTH_TOKEN".to_owned());
+        assert!(oauth_env_update.oauth_access_token_env_explicit);
         assert!(
             provider_matches_for_review(&current, &oauth_env_update),
             "review matching should ignore explicit oauth_access_token_env metadata when the provider identity is otherwise unchanged"

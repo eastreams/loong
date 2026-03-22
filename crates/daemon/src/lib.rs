@@ -1698,20 +1698,13 @@ fn runtime_snapshot_migrate_provider_env_reference(
     else {
         return;
     };
-    match env_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        None => {
-            *env_name = Some(explicit_env_name);
-            *inline_secret = None;
-        }
-        Some(configured) if configured == explicit_env_name => {
-            *inline_secret = None;
-        }
-        Some(_) => {}
+    let configured_env_name = env_name.as_deref();
+    let configured_env_name = configured_env_name.map(str::trim);
+    let configured_env_name = configured_env_name.filter(|value| !value.is_empty());
+    if configured_env_name.is_none() {
+        *env_name = Some(explicit_env_name);
     }
+    *inline_secret = None;
 }
 
 fn runtime_snapshot_is_env_reference_literal(raw: &str) -> bool {
@@ -1926,6 +1919,41 @@ mod runtime_snapshot_restore_spec_tests {
         assert_eq!(
             profile.provider.oauth_access_token_env.as_deref(),
             Some("OPENAI_CODEX_OAUTH_TOKEN")
+        );
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn runtime_snapshot_restore_normalization_prefers_existing_env_name_fields() {
+        let mut warnings = Vec::new();
+        let mut profile = mvp::config::ProviderProfileConfig {
+            default_for_kind: true,
+            provider: mvp::config::ProviderConfig {
+                kind: mvp::config::ProviderKind::Openai,
+                model: "openai/gpt-5.1-codex".to_owned(),
+                api_key: Some("${INLINE_OPENAI_API_KEY}".to_owned()),
+                api_key_env: Some("CONFIGURED_OPENAI_API_KEY".to_owned()),
+                oauth_access_token: Some("$INLINE_OPENAI_OAUTH_TOKEN".to_owned()),
+                oauth_access_token_env: Some("CONFIGURED_OPENAI_OAUTH_TOKEN".to_owned()),
+                ..Default::default()
+            },
+        };
+
+        normalize_runtime_snapshot_restore_provider_profile(
+            "openai-main",
+            &mut profile,
+            &mut warnings,
+        );
+
+        assert_eq!(profile.provider.api_key, None);
+        assert_eq!(
+            profile.provider.api_key_env.as_deref(),
+            Some("CONFIGURED_OPENAI_API_KEY")
+        );
+        assert_eq!(profile.provider.oauth_access_token, None);
+        assert_eq!(
+            profile.provider.oauth_access_token_env.as_deref(),
+            Some("CONFIGURED_OPENAI_OAUTH_TOKEN")
         );
         assert!(warnings.is_empty());
     }
