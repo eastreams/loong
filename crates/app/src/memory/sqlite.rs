@@ -599,10 +599,7 @@ pub fn list_recent_sessions_direct(
     })
 }
 
-pub fn clear_session_direct(
-    session_id: &str,
-    config: &MemoryRuntimeConfig,
-) -> Result<(), String> {
+pub fn clear_session_direct(session_id: &str, config: &MemoryRuntimeConfig) -> Result<(), String> {
     let request = MemoryCoreRequest {
         operation: MEMORY_OP_CLEAR_SESSION.to_owned(),
         payload: json!({
