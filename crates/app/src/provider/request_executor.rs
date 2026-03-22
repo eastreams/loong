@@ -6,10 +6,10 @@ use futures_util::StreamExt;
 use serde_json::Value;
 use tokio::time::sleep;
 
-use crate::acp::AcpTurnEventSink;
-use crate::conversation::turn_engine::ProviderTurn;
 use crate::CliResult;
+use crate::acp::AcpTurnEventSink;
 use crate::config::ProviderConfig;
+use crate::conversation::turn_engine::ProviderTurn;
 
 use super::{
     auth_profile_runtime::ProviderAuthProfile,
@@ -553,11 +553,7 @@ where
                 let response_headers = response.headers().clone();
                 if status.is_success() {
                     match decode_openai_streaming_turn(
-                        response,
-                        messages,
-                        session_id,
-                        turn_id,
-                        event_sink,
+                        response, messages, session_id, turn_id, event_sink,
                     )
                     .await
                     {
@@ -768,7 +764,8 @@ async fn decode_openai_streaming_turn(
     let mut stream = response.bytes_stream();
 
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| format!("read streaming response chunk failed: {error}"))?;
+        let chunk =
+            chunk.map_err(|error| format!("read streaming response chunk failed: {error}"))?;
         pending.push_str(String::from_utf8_lossy(&chunk).as_ref());
 
         while let Some(newline_index) = pending.find('\n') {
@@ -787,8 +784,9 @@ async fn decode_openai_streaming_turn(
                 continue;
             }
 
-            let event: Value = serde_json::from_str(payload)
-                .map_err(|error| format!("decode streaming event failed: {error}; payload={payload}"))?;
+            let event: Value = serde_json::from_str(payload).map_err(|error| {
+                format!("decode streaming event failed: {error}; payload={payload}")
+            })?;
             let Some(choice) = event
                 .get("choices")
                 .and_then(Value::as_array)
@@ -814,7 +812,8 @@ async fn decode_openai_streaming_turn(
                         let index = tool_call_delta
                             .get("index")
                             .and_then(Value::as_u64)
-                            .unwrap_or(tool_calls.len() as u64) as usize;
+                            .unwrap_or(tool_calls.len() as u64)
+                            as usize;
                         let partial = tool_calls.entry(index).or_default();
                         if partial.id.is_none() {
                             partial.id = tool_call_delta

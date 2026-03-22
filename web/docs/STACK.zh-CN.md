@@ -1,7 +1,7 @@
 # LoongClaw Web 技术栈与目录结构
 
-状态：已进入可用 MVP，持续迭代中  
-最后更新：2026-03-21
+状态：已进入可用 MVP，持续迭代中
+最后更新：2026-03-22
 
 ## 1. 目标
 
@@ -37,8 +37,9 @@
 
 后端承接：
 
-- `crates/daemon/src/web_cli.rs`
+- `crates/daemon/src/web_cli.rs`（包含 `web install/status/remove/serve` 命令）
 - `crates/daemon/src/web_cli/onboarding.rs`
+- `crates/daemon/src/web_cli/debug_console.rs`
 - Axum 本地 API
 
 ## 3. 当前目录
@@ -158,8 +159,16 @@ web/
 同源静态模式：
 
 - 默认地址：`http://127.0.0.1:4318/`
-- 需要先存在 `web/dist/index.html`
+- 需要先存在 `web/dist/index.html`（开发用，指定 `--static-root`），或已执行 `loongclaw web install`
 - 可由 daemon 直接托管静态资源与 API
+- `web serve` 会自动检测 `~/.loongclaw/web/dist/index.html`；检测到后无需传 `--static-root`
+
+安装模式：
+
+- 安装：`loongclaw web install --source <dist-dir>`
+- 状态：`loongclaw web status`
+- 卸载：`loongclaw web remove [--force]`
+- 安装目录：`~/.loongclaw/web/dist/`，清单：`~/.loongclaw/web/install.json`
 
 ## 5.5 当前工程实现特征（专项 review 摘要）
 
@@ -277,15 +286,15 @@ web/
 - 完整的 Dashboard 轻配置项写入闭环
 - 更像真实 CLI 的连续输出流
 - 更完整的 tool trace / event timeline
-- 更平滑的安装态入口与打包分发体验
-- `web install / remove / status`
+- 更平滑的安装态打包分发体验（`web install` 已落地，分发产物的打包流程尚未建立）
+- 安装态级别的无感 token 配对（命令已实现，session 自动绑定链路待完善）
 - 更强的 provider / tool doctor
 
 ## 9. 近期值得关注的新事项
 
 这段时间新增且会影响后续开发的事项：
 
-- Debug Console 已从“卡片拼接”转向“操作块分段”展示
+- Debug Console 已从”卡片拼接”转向”操作块分段”展示
 - Chat 历史已改成按**可见消息**计数
 - Dashboard 工具区已对齐更多 runtime 能力：
   - `web_search`
@@ -293,6 +302,10 @@ web/
   - `file_tools`
 - macOS 启停脚本已补齐
 - provider apply 已收成当前页验证流程
+- **`web install/status/remove` 命令已落地**，安装流程：
+  1. `npm run build`（或 CI 产出 `dist/`）
+  2. `loongclaw web install --source ./dist`
+  3. `loongclaw web serve`（自动检测已安装前端，无需 `--static-root`）
 
 ## 10. 接下来最适合继续做什么
 

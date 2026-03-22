@@ -44,9 +44,9 @@ pub use protocol::{
     decode_window_turns,
 };
 #[cfg(feature = "memory-sqlite")]
-pub use sqlite::{ConversationTurn, SqliteBootstrapDiagnostics, SqliteContextLoadDiagnostics};
-#[cfg(feature = "memory-sqlite")]
 pub use sqlite::ConversationSessionSummary;
+#[cfg(feature = "memory-sqlite")]
+pub use sqlite::{ConversationTurn, SqliteBootstrapDiagnostics, SqliteContextLoadDiagnostics};
 pub use system::{
     BuiltinMemorySystem, DEFAULT_MEMORY_SYSTEM_ID, MEMORY_SYSTEM_API_VERSION, MemorySystem,
     MemorySystemCapability, MemorySystemMetadata,

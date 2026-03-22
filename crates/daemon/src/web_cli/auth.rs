@@ -127,7 +127,9 @@ pub(super) fn build_same_origin_session_cookie(token: &str) -> Result<HeaderValu
     HeaderValue::from_str(&format!(
         "{WEB_API_SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000"
     ))
-    .map_err(|error| WebApiError::internal(format!("build same-origin session cookie failed: {error}")))
+    .map_err(|error| {
+        WebApiError::internal(format!("build same-origin session cookie failed: {error}"))
+    })
 }
 
 pub(super) fn build_clear_same_origin_session_cookie() -> Result<HeaderValue, WebApiError> {

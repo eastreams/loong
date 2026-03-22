@@ -4,7 +4,6 @@ use serde_json::Value;
 
 use crate::config::{LoongClawConfig, ProviderConfig};
 
-use crate::acp::AcpTurnEventSink;
 use super::auth_profile_runtime::ProviderAuthProfile;
 use super::capability_profile_runtime::ProviderCapabilityProfile;
 use super::contracts::{
@@ -20,6 +19,7 @@ use super::request_payload_runtime::{
     build_completion_request_body_with_capability, build_turn_request_body_with_capability,
 };
 use super::shape;
+use crate::acp::AcpTurnEventSink;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn request_completion_with_model(
