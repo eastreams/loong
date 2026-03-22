@@ -76,7 +76,7 @@ async fn run_migrate_cli_async(options: MigrateCommandOptions) -> CliResult<()> 
         &kernel_ctx,
     )
     .await
-    .map_err(|error| format!("migrate tool execution failed: {error}"))?;
+    .map_err(|error| translate_migrate_cli_error(&options, error))?;
 
     render_migrate_tool_outcome(&options, outcome)
 }
@@ -220,6 +220,32 @@ fn build_migrate_tool_payload(options: &MigrateCommandOptions) -> Value {
         payload.insert("force".to_owned(), json!(true));
     }
     Value::Object(payload)
+}
+
+fn translate_migrate_cli_error(options: &MigrateCommandOptions, error: String) -> String {
+    let leaf = error
+        .strip_prefix("tool execution failed: ")
+        .unwrap_or(&error);
+    if leaf == "claw.migrate requires payload.input_path" {
+        return format!(
+            "`--input` is required for `loongclaw migrate --mode {}`",
+            options.mode.as_id()
+        );
+    }
+
+    if leaf
+        == format!(
+            "claw.migrate {} mode requires payload.output_path",
+            options.mode.as_id()
+        )
+    {
+        return format!(
+            "`--output` is required for `loongclaw migrate --mode {}`",
+            options.mode.as_id()
+        );
+    }
+
+    format!("migrate tool execution failed: {error}")
 }
 
 fn render_migrate_tool_outcome(

@@ -324,3 +324,50 @@ fn run_migrate_cli_apply_mode_rejects_output_path_outside_configured_file_root()
     fs::remove_dir_all(&escape_root).ok();
     fs::remove_dir_all(&home_root).ok();
 }
+
+#[test]
+fn migrate_cli_ux_apply_mode_reports_flag_level_output_requirement() {
+    let error = loongclaw_daemon::migrate_cli::run_migrate_cli(
+        loongclaw_daemon::migrate_cli::MigrateCommandOptions {
+            input: Some(".".to_owned()),
+            output: None,
+            source: None,
+            mode: loongclaw_daemon::migrate_cli::MigrateMode::Apply,
+            json: false,
+            source_id: None,
+            safe_profile_merge: false,
+            primary_source_id: None,
+            apply_external_skills_plan: false,
+            force: false,
+        },
+    )
+    .expect_err("apply mode without --output should fail");
+
+    assert_eq!(
+        error,
+        "`--output` is required for `loongclaw migrate --mode apply`"
+    );
+    assert!(
+        !error.contains("payload.output_path"),
+        "raw tool payload wording leaked into CLI error: {error}"
+    );
+}
+
+#[test]
+fn migrate_cli_ux_help_mentions_mode_specific_required_flags() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+        .args(["migrate", "--help"])
+        .output()
+        .expect("run loongclaw migrate --help");
+
+    assert!(output.status.success(), "help should succeed");
+    let stdout = String::from_utf8(output.stdout).expect("help output should be utf8");
+    assert!(
+        stdout.contains("apply: requires `--input` and `--output`"),
+        "help should mention apply mode requirements, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("rollback_last_apply: requires `--output`"),
+        "help should mention rollback requirements, got: {stdout}"
+    );
+}
