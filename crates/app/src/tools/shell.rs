@@ -101,6 +101,7 @@ pub(super) fn execute_shell_tool_with_config(
 const SHELL_EXEC_DEFAULT_TIMEOUT_MS: u64 = 120_000;
 #[cfg(feature = "tool-shell")]
 const SHELL_EXEC_MAX_TIMEOUT_MS: u64 = 600_000;
+#[cfg(feature = "tool-shell")]
 const SHELL_OUTPUT_CAP_BYTES: usize = 1_048_576;
 
 #[cfg(feature = "tool-shell")]
@@ -178,6 +179,7 @@ where
     Ok(output)
 }
 
+#[cfg(feature = "tool-shell")]
 async fn run_shell_command_with_timeout(
     command: &str,
     args: &[String],
