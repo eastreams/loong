@@ -162,6 +162,7 @@ async fn run_shell_command_with_timeout(
         .current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .stdin(Stdio::null())
         .spawn()
         .map_err(|error| format!("shell command spawn failed: {error}"))?;
 
