@@ -16,10 +16,10 @@ unit and integration tests.
 
 **Why this slice first:**
 
-- It closes the highest-impact product gaps without an architectural rewrite.
-- It avoids premature semantic-vendor integration and keeps debugging simple.
-- It builds the right substrate for later compaction flush, procedural memory,
-  and external adapters.
+- Close the highest-impact product gaps without an architectural rewrite.
+- Keep debugging simple by avoiding premature semantic-vendor integration.
+- Create the right substrate for later compaction flush, procedural memory, and
+  external adapters.
 
 ---
 
@@ -317,6 +317,13 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --locked
 cargo test --workspace --all-features --locked
+```
+
+If the slice touches docs, roadmap entries, or generated references, also run:
+
+```bash
+scripts/check-docs.sh
+git diff --check
 ```
 
 If any tool or test requires process-global state mutation, serialize the

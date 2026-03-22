@@ -123,15 +123,19 @@ faster short-term feature gains.
 
 ## Comparative Snapshot
 
+The qualitative ratings below are this document's synthesis from the linked
+reference docs and the repo evidence listed later in this document, not the
+reference projects' own labels.
+
 | Dimension | Hermes Agent | OpenClaw | DeepAgents | LoongClaw (`dev`) |
 | --- | --- | --- | --- | --- |
-| Canonical source of truth | bounded prompt memory + SQLite session archive | workspace Markdown, plus plugin-managed search indexes | state/checkpoints + optional persistent file paths | SQLite canonical history owned by LoongClaw |
-| Hot memory | strong | moderate | weak | weak |
-| Episodic recall | strong | strong | weak | weak |
-| Prompt-cache awareness | strong | moderate | weak | weak to moderate |
-| Procedural memory | strong | moderate | weak | weak |
+| Canonical source of truth | bounded prompt memory + SQLite session archive ([Hermes memory docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory#how-it-works), [session search](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory#session-search)) | workspace Markdown, plus plugin-managed search indexes ([OpenClaw memory](https://docs.openclaw.ai/concepts/memory#memory-files-markdown), [memory config](https://docs.openclaw.ai/reference/memory-config)) | state/checkpoints + optional persistent file paths ([DeepAgents customization](https://docs.langchain.com/oss/python/deepagents/customization#backends), [long-term memory](https://docs.langchain.com/oss/python/deepagents/long-term-memory#path-routing)) | SQLite canonical history owned by LoongClaw |
+| Hot memory | strong ([Hermes memory docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory#how-it-works)) | moderate ([OpenClaw memory](https://docs.openclaw.ai/concepts/memory#memory-files-markdown)) | weak ([DeepAgents long-term memory](https://docs.langchain.com/oss/python/deepagents/long-term-memory#how-it-works)) | weak |
+| Episodic recall | strong ([Hermes session search](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory#session-search)) | strong ([OpenClaw memory tools](https://docs.openclaw.ai/concepts/memory#memory-tools), [memory config](https://docs.openclaw.ai/reference/memory-config)) | weak ([DeepAgents long-term memory](https://docs.langchain.com/oss/python/deepagents/long-term-memory#cross-thread-persistence)) | weak |
+| Prompt-cache awareness | strong ([Hermes memory prompt projection](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory#how-memory-appears-in-the-system-prompt)) | moderate ([OpenClaw memory](https://docs.openclaw.ai/concepts/memory#memory-files-markdown)) | weak ([DeepAgents long-term memory](https://docs.langchain.com/oss/python/deepagents/long-term-memory#how-it-works)) | weak to moderate |
+| Procedural memory | strong ([Hermes skills system](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills#using-skills), [progressive disclosure](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills#progressive-disclosure)) | moderate ([OpenClaw plugin tools](https://docs.openclaw.ai/tools/plugin), [memory tools](https://docs.openclaw.ai/concepts/memory#memory-tools)) | weak ([DeepAgents customization](https://docs.langchain.com/oss/python/deepagents/customization), [long-term memory](https://docs.langchain.com/oss/python/deepagents/long-term-memory)) | weak |
 | Architecture boundary cleanliness | good | moderate | moderate | strong |
-| External memory adapter posture | optional Honcho layer | plugin slot and sidecars | backend routing to stores/filesystems | explicit derivation/retrieval adapter design |
+| External memory adapter posture | optional Honcho layer ([Hermes Honcho integration](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory#honcho-integration-cross-session-user-modeling)) | plugin slot and sidecars ([OpenClaw plugin docs](https://docs.openclaw.ai/tools/plugin), [memory config](https://docs.openclaw.ai/reference/memory-config)) | backend routing to stores/filesystems ([DeepAgents customization](https://docs.langchain.com/oss/python/deepagents/customization#backends), [long-term memory](https://docs.langchain.com/oss/python/deepagents/long-term-memory#path-routing)) | explicit derivation/retrieval adapter design |
 
 ## Hermes Agent
 
@@ -141,10 +145,10 @@ Hermes has the clearest layered memory model among the references inspected.
 
 Its official docs show four meaningful layers:
 
-- bounded persistent memory in `MEMORY.md`
-- bounded user profile memory in `USER.md`
-- SQLite-backed `session_search` for cross-session recall
-- skills as procedural memory
+- bounded persistent memory in `MEMORY.md` ([Hermes memory docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory#how-it-works))
+- bounded user profile memory in `USER.md` ([Hermes memory docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory#how-it-works))
+- SQLite-backed `session_search` for cross-session recall ([Hermes session search](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory#session-search))
+- skills as procedural memory ([Hermes skills system](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills#using-skills))
 
 The most important architectural choice is not the file format.
 It is the split between:
@@ -193,12 +197,12 @@ OpenClaw's current docs show a more capable memory product than the older
 
 Today OpenClaw provides:
 
-- `MEMORY.md` plus append-only daily logs under `memory/YYYY-MM-DD.md`
-- agent-facing `memory_search` and `memory_get`
-- automatic pre-compaction memory flush
-- hybrid retrieval options including BM25 and vector search
-- optional session transcript indexing
-- install-on-demand long-term memory through `memory-lancedb`
+- `MEMORY.md` plus append-only daily logs under `memory/YYYY-MM-DD.md` ([OpenClaw memory files](https://docs.openclaw.ai/concepts/memory#memory-files-markdown))
+- agent-facing `memory_search` and `memory_get` ([OpenClaw memory tools](https://docs.openclaw.ai/concepts/memory#memory-tools))
+- automatic pre-compaction memory flush ([OpenClaw pre-compaction flush](https://docs.openclaw.ai/concepts/memory#automatic-memory-flush-pre-compaction-ping))
+- hybrid retrieval options including BM25 and vector search ([OpenClaw vector memory search](https://docs.openclaw.ai/concepts/memory#vector-memory-search), [memory config](https://docs.openclaw.ai/reference/memory-config))
+- optional session transcript indexing ([memory config](https://docs.openclaw.ai/reference/memory-config))
+- install-on-demand long-term memory through `memory-lancedb` ([memory config](https://docs.openclaw.ai/reference/memory-config))
 
 This produces a very operator-legible memory model:
 
@@ -242,11 +246,12 @@ DeepAgents is best treated as a control case rather than a direct memory target.
 
 Its official docs emphasize:
 
-- checkpoint-backed thread persistence
-- transient filesystem state inside the agent runtime
-- optional long-term persistence by routing specific filesystem paths such as
-  `/memories/` into a durable store
-- `AGENTS.md`-style memory files as additional context
+- checkpoint-backed thread persistence ([DeepAgents customization](https://docs.langchain.com/oss/python/deepagents/customization), [LangGraph persistence note](https://docs.langchain.com/oss/python/langgraph/persistence))
+- transient filesystem state inside the agent runtime ([DeepAgents long-term memory](https://docs.langchain.com/oss/python/deepagents/long-term-memory#1-short-term-transient-filesystem), [DeepAgents customization backends](https://docs.langchain.com/oss/python/deepagents/customization#backends))
+- optional long-term persistence by routing specific filesystem paths into a
+  durable store ([DeepAgents path routing](https://docs.langchain.com/oss/python/deepagents/long-term-memory#path-routing), [cross-thread persistence](https://docs.langchain.com/oss/python/deepagents/long-term-memory#cross-thread-persistence))
+- additional memory and skill files can be injected through the selected backend
+  before agent startup ([DeepAgents customization](https://docs.langchain.com/oss/python/deepagents/customization#backends))
 
 This is useful because it demonstrates a clean split between:
 
@@ -403,6 +408,12 @@ Once the first slice lands, the recommended order is:
 - richer user-modeling layers
 
 All of them should remain below LoongClaw's final context projection.
+
+The broader memory and knowledge delivery track now lives under epic #421.
+That is the right home for file-backed knowledge, hybrid or semantic retrieval,
+and per-agent scoping. The foundation slice in this document should land
+beneath that epic as a prerequisite, not expand to absorb the whole backlog at
+once.
 
 ## Why This Direction Fits Issue #356
 
