@@ -101,6 +101,7 @@ pub(super) fn execute_shell_tool_with_config(
 const SHELL_EXEC_DEFAULT_TIMEOUT_MS: u64 = 120_000;
 #[cfg(feature = "tool-shell")]
 const SHELL_EXEC_MAX_TIMEOUT_MS: u64 = 600_000;
+const SHELL_OUTPUT_CAP_BYTES: u64 = 1_048_576;
 
 #[cfg(feature = "tool-shell")]
 fn parse_shell_timeout_ms(payload: &serde_json::Map<String, Value>) -> Result<u64, String> {
@@ -168,11 +169,11 @@ async fn run_shell_command_with_timeout(
         .map_err(|error| format!("shell command spawn failed: {error}"))?;
 
     let duration = Duration::from_millis(timeout_ms.max(1));
-    let mut stdout = child
+    let stdout = child
         .stdout
         .take()
         .ok_or_else(|| "shell command stdout pipe missing".to_owned())?;
-    let mut stderr = child
+    let stderr = child
         .stderr
         .take()
         .ok_or_else(|| "shell command stderr pipe missing".to_owned())?;
@@ -180,6 +181,7 @@ async fn run_shell_command_with_timeout(
     let stdout_task = tokio::spawn(async move {
         let mut output = Vec::new();
         stdout
+            .take(SHELL_OUTPUT_CAP_BYTES)
             .read_to_end(&mut output)
             .await
             .map_err(|error| format!("shell command stdout read failed: {error}"))?;
@@ -188,6 +190,7 @@ async fn run_shell_command_with_timeout(
     let stderr_task = tokio::spawn(async move {
         let mut output = Vec::new();
         stderr
+            .take(SHELL_OUTPUT_CAP_BYTES)
             .read_to_end(&mut output)
             .await
             .map_err(|error| format!("shell command stderr read failed: {error}"))?;
