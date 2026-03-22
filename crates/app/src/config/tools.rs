@@ -678,7 +678,11 @@ const fn default_browser_max_text_chars() -> usize {
 }
 
 fn default_delegate_child_tool_allowlist() -> Vec<String> {
-    vec!["file.read".to_owned(), "file.write".to_owned()]
+    vec![
+        "file.read".to_owned(),
+        "file.write".to_owned(),
+        "file.edit".to_owned(),
+    ]
 }
 
 const fn default_web_fetch_max_bytes() -> usize {
@@ -748,7 +752,11 @@ mod tests {
         assert_eq!(config.delegate.timeout_seconds, 60);
         assert_eq!(
             config.delegate.child_tool_allowlist,
-            vec!["file.read".to_owned(), "file.write".to_owned()]
+            vec![
+                "file.read".to_owned(),
+                "file.write".to_owned(),
+                "file.edit".to_owned()
+            ]
         );
         assert!(!config.delegate.allow_shell_in_child);
         assert!(config.browser.enabled);

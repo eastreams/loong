@@ -36,9 +36,9 @@ The intended capability gate for every tool call:
 CapabilityToken → PolicyEngine → PolicyExtensionChain → ToolPlane → CoreToolAdapter → Audit
 ```
 
-**Current reality**: Only `shell.exec` passes through the full PolicyEngine check. `file.read` and `file.write` have path sandboxing but bypass the policy engine entirely (TD-002). This means the Rule of Two (LLM intent + deterministic policy approval) is only enforced for shell commands.
+**Current reality**: Only `shell.exec` passes through the full PolicyEngine check. `file.read`, `file.write`, and `file.edit` have path sandboxing but bypass the policy engine entirely (TD-002). This means the Rule of Two (LLM intent + deterministic policy approval) is only enforced for shell commands.
 
-Current tool registry: `shell.exec`, `file.read`, `file.write`.
+Current tool registry: `shell.exec`, `file.read`, `file.write`, `file.edit`.
 
 ### Stage 3: Context Management & Memory
 

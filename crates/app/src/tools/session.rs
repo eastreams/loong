@@ -4563,7 +4563,7 @@ mod tests {
                     "max_active_children": 3,
                     "timeout_seconds": 60,
                     "allow_shell_in_child": false,
-                    "child_tool_allowlist": ["file.read", "file.write"],
+                    "child_tool_allowlist": ["file.read", "file.write", "file.edit"],
                     "kernel_bound": false,
                     "runtime_narrowing": {
                         "web_fetch": {
@@ -4630,7 +4630,7 @@ mod tests {
         );
         assert_eq!(
             outcome.payload["delegate_lifecycle"]["execution"]["child_tool_allowlist"],
-            json!(["file.read", "file.write"])
+            json!(["file.read", "file.write", "file.edit"])
         );
         assert_eq!(
             outcome.payload["delegate_lifecycle"]["execution"]["kernel_bound"],

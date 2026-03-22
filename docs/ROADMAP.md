@@ -280,7 +280,7 @@ Delivered in current baseline:
 - first-party Telegram polling channel adapter
 - first-party Feishu webhook channel adapter
 - SQLite-backed conversation memory with sliding-window retrieval
-- core tool execution for `browser.open`, `browser.extract`, `browser.click`, `web.fetch`, `shell.exec`, `file.read`, `file.write`
+- core tool execution for `browser.open`, `browser.extract`, `browser.click`, `web.fetch`, `shell.exec`, `file.read`, `file.write`, `file.edit`
 - release-first install flow with checksum-verified prebuilt binaries and explicit source fallback (`scripts/install.sh`, `scripts/install.ps1`)
 - runtime-visible tool advertising so capability snapshots and provider tool schemas follow the actually enabled tool surface
 - Cargo feature flags for MVP packaging controls

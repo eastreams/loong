@@ -64,7 +64,7 @@ Four parallel planes, each following the Core/Extension adapter pattern:
 | Plane | Core Adapter | Extension Adapter |
 |-------|-------------|-------------------|
 | Runtime | Minimal trusted substrate | Rich behavior (WASM, process bridges) |
-| Tool | Built-in tools (`shell.exec`, `file.read`, `file.write`) | Community tool adapters |
+| Tool | Built-in tools (`shell.exec`, `file.read`, `file.write`, `file.edit`) | Community tool adapters |
 | Memory | Base storage (SQLite) | Semantic retrieval enrichment |
 | Connector | Direct HTTP/protocol calls | Third-party integration adapters |
 

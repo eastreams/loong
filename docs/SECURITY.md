@@ -26,7 +26,7 @@ CapabilityToken → PolicyEngine → PolicyExtensionChain → Execution → Audi
 
 **Current coverage:**
 - `shell.exec` — Kernel-mediated tool execution with capability checks, shell policy extensions, and audit events
-- `file.read` / `file.write` — Kernel-mediated tool execution with filesystem capabilities, file policy extension checks, and audit events
+- `file.read` / `file.write` / `file.edit` — Kernel-mediated tool execution with filesystem capabilities, file policy extension checks, and audit events
 - Conversation tool turns — Fast-lane and safe-lane inner tool execution now flow through an explicit `ConversationRuntimeBinding` (`Kernel` or `Direct`); core tools require a bound `KernelContext`, missing authority is rejected at the binding boundary as `no_kernel_context`, and async delegate child turns now inherit parent kernel authority instead of forcing direct mode
 - Memory/runtime/context orchestration — The conversation module now carries `ConversationRuntimeBinding` end-to-end across runtime, context, persistence, turn coordination, loop followup, history, and app-dispatch seams. Kernel-bound history readers fail closed on kernel memory-window errors or non-`ok` statuses instead of silently downgrading to direct sqlite
 - Provider request/failover orchestration — Provider request entrypoints and failover telemetry now use an explicit `ProviderRuntimeBinding` (`Kernel` or `Direct`). Provider failover metrics record in both modes, while kernel-backed audit emission only occurs when provider execution is explicitly kernel-bound
