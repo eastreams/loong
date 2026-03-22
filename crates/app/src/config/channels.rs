@@ -27,6 +27,14 @@ pub enum ChannelRuntimeKind {
     Service,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TelegramStreamingMode {
+    #[default]
+    Off,
+    Draft,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelDescriptor {
     pub id: &'static str,
@@ -230,6 +238,10 @@ pub struct TelegramChannelConfig {
     pub allowed_chat_ids: Vec<i64>,
     #[serde(default)]
     pub acp: ChannelAcpConfig,
+    #[serde(default)]
+    pub streaming_mode: TelegramStreamingMode,
+    #[serde(default = "default_true")]
+    pub ack_reactions: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, TelegramAccountConfig>,
 }
@@ -337,6 +349,10 @@ pub struct TelegramAccountConfig {
     pub allowed_chat_ids: Option<Vec<i64>>,
     #[serde(default)]
     pub acp: Option<ChannelAcpConfig>,
+    #[serde(default)]
+    pub streaming_mode: Option<TelegramStreamingMode>,
+    #[serde(default)]
+    pub ack_reactions: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -351,6 +367,8 @@ pub struct ResolvedTelegramChannelConfig {
     pub polling_timeout_s: u64,
     pub allowed_chat_ids: Vec<i64>,
     pub acp: ChannelAcpConfig,
+    pub streaming_mode: TelegramStreamingMode,
+    pub ack_reactions: bool,
 }
 
 impl ResolvedTelegramChannelConfig {
@@ -672,6 +690,8 @@ impl Default for TelegramChannelConfig {
             polling_timeout_s: default_telegram_timeout_seconds(),
             allowed_chat_ids: Vec::new(),
             acp: ChannelAcpConfig::default(),
+            streaming_mode: TelegramStreamingMode::default(),
+            ack_reactions: true,
             accounts: BTreeMap::new(),
         }
     }
@@ -782,6 +802,12 @@ impl TelegramChannelConfig {
                 &self.acp,
                 account_override.and_then(|account| account.acp.as_ref()),
             ),
+            streaming_mode: account_override
+                .and_then(|account| account.streaming_mode)
+                .unwrap_or(self.streaming_mode),
+            ack_reactions: account_override
+                .and_then(|account| account.ack_reactions)
+                .unwrap_or(self.ack_reactions),
             accounts: BTreeMap::new(),
         };
         let account = merged.resolved_account_identity();
@@ -797,6 +823,8 @@ impl TelegramChannelConfig {
             polling_timeout_s: merged.polling_timeout_s,
             allowed_chat_ids: merged.allowed_chat_ids,
             acp: merged.acp,
+            streaming_mode: merged.streaming_mode,
+            ack_reactions: merged.ack_reactions,
         })
     }
 
@@ -1363,6 +1391,10 @@ const fn default_telegram_timeout_seconds() -> u64 {
     15
 }
 
+const fn default_true() -> bool {
+    true
+}
+
 fn default_feishu_receive_id_type() -> String {
     "chat_id".to_owned()
 }
@@ -1393,10 +1425,6 @@ fn default_prompt_personality() -> Option<PromptPersonality> {
 
 fn default_exit_commands() -> Vec<String> {
     vec!["/exit".to_owned(), "/quit".to_owned()]
-}
-
-const fn default_true() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2312,5 +2340,66 @@ mod tests {
             ChannelDefaultAccountSelectionSource::ExplicitDefault
         );
         assert!(!route.uses_implicit_fallback_default());
+    }
+
+    #[test]
+    fn telegram_streaming_mode_deserializes_from_json() {
+        let off: TelegramStreamingMode = serde_json::from_str("\"off\"").expect("deserialize off");
+        assert_eq!(off, TelegramStreamingMode::Off);
+
+        let draft: TelegramStreamingMode =
+            serde_json::from_str("\"draft\"").expect("deserialize draft");
+        assert_eq!(draft, TelegramStreamingMode::Draft);
+    }
+
+    #[test]
+    fn telegram_streaming_mode_default_is_off() {
+        let config: TelegramChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "bot_token_env": "TEST_TOKEN"
+        }))
+        .expect("deserialize telegram config");
+        assert_eq!(config.streaming_mode, TelegramStreamingMode::Off);
+    }
+
+    #[test]
+    fn telegram_streaming_mode_inherited_from_base_in_multi_account() {
+        let config: TelegramChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "bot_token_env": "BASE_TOKEN",
+            "streaming_mode": "draft",
+            "accounts": {
+                "Account1": {
+                    "bot_token_env": "ACCOUNT1_TOKEN"
+                }
+            }
+        }))
+        .expect("deserialize telegram config");
+
+        let resolved = config
+            .resolve_account(Some("Account1"))
+            .expect("resolve account1");
+        assert_eq!(resolved.streaming_mode, TelegramStreamingMode::Draft);
+    }
+
+    #[test]
+    fn telegram_streaming_mode_overridden_per_account() {
+        let config: TelegramChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "bot_token_env": "BASE_TOKEN",
+            "streaming_mode": "draft",
+            "accounts": {
+                "Account1": {
+                    "streaming_mode": "off",
+                    "bot_token_env": "ACCOUNT1_TOKEN"
+                }
+            }
+        }))
+        .expect("deserialize telegram config");
+
+        let resolved = config
+            .resolve_account(Some("Account1"))
+            .expect("resolve account1");
+        assert_eq!(resolved.streaming_mode, TelegramStreamingMode::Off);
     }
 }
