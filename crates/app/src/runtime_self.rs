@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeSelfLane {
     StandingInstructions,
@@ -38,7 +40,7 @@ const RUNTIME_SELF_SOURCE_SPECS: &[RuntimeSelfSourceSpec] = &[
     },
 ];
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RuntimeSelfModel {
     pub standing_instructions: Vec<String>,
     pub soul_guidance: Vec<String>,

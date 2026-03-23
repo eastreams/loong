@@ -32,7 +32,9 @@ use crate::memory::MEMORY_OP_WINDOW;
 #[cfg(feature = "memory-sqlite")]
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
-use crate::session::repository::{NewSessionRecord, SessionKind, SessionRepository, SessionState};
+use crate::session::repository::{
+    NewSessionEvent, NewSessionRecord, SessionKind, SessionRepository, SessionState,
+};
 
 struct FakeRuntime {
     seed_messages: Vec<Value>,
@@ -1495,6 +1497,120 @@ fn seed_delegate_child_session_with_runtime_narrowing(
     child_session_id
 }
 
+#[cfg(feature = "memory-sqlite")]
+fn runtime_self_continuity_fixture(identity_text: &str) -> Value {
+    let continuity = json!({
+        "runtime_self": {
+            "standing_instructions": [
+                "Keep continuity explicit."
+            ],
+            "soul_guidance": [
+                "Prefer rigorous execution."
+            ],
+            "identity_context": [
+                identity_text
+            ],
+            "user_context": [
+                "The operator prefers concise technical summaries."
+            ]
+        },
+        "resolved_identity": {
+            "source": "workspace_self",
+            "content": identity_text
+        },
+        "session_profile_projection": "## Session Profile\nDurable preferences and advisory session context carried into this session:\nOperator prefers concise technical summaries."
+    });
+    continuity
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn create_runtime_self_workspace(suffix: &str, identity_text: &str) -> PathBuf {
+    let directory_name = unique_acp_test_id("conversation-runtime-self-workspace", suffix);
+    let workspace_root = std::env::temp_dir().join(directory_name);
+    let _ = std::fs::remove_dir_all(&workspace_root);
+    std::fs::create_dir_all(&workspace_root).expect("create runtime self workspace");
+
+    let agents_path = workspace_root.join("AGENTS.md");
+    let soul_path = workspace_root.join("SOUL.md");
+    let identity_path = workspace_root.join("IDENTITY.md");
+    let user_path = workspace_root.join("USER.md");
+
+    let agents_text = "Keep continuity explicit.";
+    let soul_text = "Prefer rigorous execution.";
+    let user_text = "The operator prefers concise technical summaries.";
+
+    std::fs::write(&agents_path, agents_text).expect("write AGENTS");
+    std::fs::write(&soul_path, soul_text).expect("write SOUL");
+    std::fs::write(&identity_path, identity_text).expect("write IDENTITY");
+    std::fs::write(&user_path, user_text).expect("write USER");
+
+    workspace_root
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn create_root_session_record(session_id: &str) -> NewSessionRecord {
+    NewSessionRecord {
+        session_id: session_id.to_owned(),
+        kind: SessionKind::Root,
+        parent_session_id: None,
+        label: None,
+        state: SessionState::Ready,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn create_child_session_record(session_id: &str, parent_session_id: &str) -> NewSessionRecord {
+    NewSessionRecord {
+        session_id: session_id.to_owned(),
+        kind: SessionKind::DelegateChild,
+        parent_session_id: Some(parent_session_id.to_owned()),
+        label: Some("Child".to_owned()),
+        state: SessionState::Running,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn append_runtime_self_continuity_refresh_event(
+    repo: &SessionRepository,
+    session_id: &str,
+    identity_text: &str,
+) {
+    let payload = json!({
+        "source": "compaction",
+        "runtime_self_continuity": runtime_self_continuity_fixture(identity_text),
+    });
+    let event = NewSessionEvent {
+        session_id: session_id.to_owned(),
+        event_kind: "runtime_self_continuity_refreshed".to_owned(),
+        actor_session_id: Some(session_id.to_owned()),
+        payload_json: payload,
+    };
+    repo.append_event(event)
+        .expect("append runtime self continuity refresh event");
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn append_delegate_started_event_with_runtime_self_continuity(
+    repo: &SessionRepository,
+    child_session_id: &str,
+    parent_session_id: &str,
+    identity_text: &str,
+) {
+    let payload = json!({
+        "task": "research continuity",
+        "label": "Child",
+        "runtime_self_continuity": runtime_self_continuity_fixture(identity_text),
+    });
+    let event = NewSessionEvent {
+        session_id: child_session_id.to_owned(),
+        event_kind: "delegate_started".to_owned(),
+        actor_session_id: Some(parent_session_id.to_owned()),
+        payload_json: payload,
+    };
+    repo.append_event(event)
+        .expect("append delegate_started event");
+}
+
 fn provider_tool_intent(
     tool_name: &str,
     args_json: Value,
@@ -2284,6 +2400,159 @@ async fn default_runtime_build_context_matches_builtin_summary_projection() {
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
+async fn default_runtime_build_context_rehydrates_runtime_self_continuity_when_live_sources_are_missing()
+ {
+    let runtime = DefaultConversationRuntime::default();
+    let session_id = unique_acp_test_id("default-runtime-context", "stored-self-fallback");
+    let sqlite_path = unique_memory_sqlite_path("stored-self-fallback");
+    let mut config = test_config();
+    let identity_text = "# Identity\n\n- Name: Stored continuity identity";
+
+    config.memory.sqlite_path = sqlite_path.clone();
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    let root_session = create_root_session_record(&session_id);
+
+    repo.create_session(root_session)
+        .expect("create root session");
+    append_runtime_self_continuity_refresh_event(&repo, &session_id, identity_text);
+
+    let assembled = runtime
+        .build_context(
+            &config,
+            &session_id,
+            true,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("build context from stored continuity");
+
+    let system_content = assembled.messages[0]["content"]
+        .as_str()
+        .expect("system prompt should be text");
+
+    assert!(
+        system_content.contains("[runtime_self_continuity]"),
+        "expected stored continuity marker in system prompt, got: {system_content}"
+    );
+    assert!(
+        system_content.contains("Stored continuity identity"),
+        "expected stored identity in system prompt, got: {system_content}"
+    );
+    assert!(
+        system_content.contains("Keep continuity explicit."),
+        "expected stored standing instructions in system prompt, got: {system_content}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_build_context_rehydrates_delegate_child_runtime_self_continuity_when_live_sources_are_missing()
+ {
+    let runtime = DefaultConversationRuntime::default();
+    let root_session_id = unique_acp_test_id("default-runtime-context", "delegate-parent");
+    let child_session_id = unique_acp_test_id("default-runtime-context", "delegate-child");
+    let sqlite_path = unique_memory_sqlite_path("delegate-self-fallback");
+    let mut config = test_config();
+    let identity_text = "# Identity\n\n- Name: Inherited child identity";
+
+    config.memory.sqlite_path = sqlite_path.clone();
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    let root_session = create_root_session_record(&root_session_id);
+    let child_session = create_child_session_record(&child_session_id, &root_session_id);
+
+    repo.create_session(root_session)
+        .expect("create root session");
+    repo.create_session(child_session)
+        .expect("create child session");
+    append_delegate_started_event_with_runtime_self_continuity(
+        &repo,
+        &child_session_id,
+        &root_session_id,
+        identity_text,
+    );
+
+    let assembled = runtime
+        .build_context(
+            &config,
+            &child_session_id,
+            true,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("build child context from inherited continuity");
+
+    let system_content = assembled.messages[0]["content"]
+        .as_str()
+        .expect("system prompt should be text");
+
+    assert!(
+        system_content.contains("[runtime_self_continuity]"),
+        "expected inherited continuity marker in child system prompt, got: {system_content}"
+    );
+    assert!(
+        system_content.contains("Inherited child identity"),
+        "expected inherited identity in child system prompt, got: {system_content}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_build_context_prefers_live_identity_over_stored_runtime_self_continuity() {
+    let runtime = DefaultConversationRuntime::default();
+    let session_id = unique_acp_test_id("default-runtime-context", "live-over-stored");
+    let sqlite_path = unique_memory_sqlite_path("live-over-stored");
+    let workspace_root = create_runtime_self_workspace(
+        "live-over-stored",
+        "# Identity\n\n- Name: Live workspace identity",
+    );
+    let mut config = test_config();
+
+    config.memory.sqlite_path = sqlite_path.clone();
+    config.tools.file_root = Some(workspace_root.display().to_string());
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    let root_session = create_root_session_record(&session_id);
+    let stored_identity_text = "# Identity\n\n- Name: Stored continuity identity";
+
+    repo.create_session(root_session)
+        .expect("create root session");
+    append_runtime_self_continuity_refresh_event(&repo, &session_id, stored_identity_text);
+
+    let assembled = runtime
+        .build_context(
+            &config,
+            &session_id,
+            true,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("build context with live identity");
+
+    let system_content = assembled.messages[0]["content"]
+        .as_str()
+        .expect("system prompt should be text");
+
+    assert!(
+        system_content.contains("Live workspace identity"),
+        "expected live identity in system prompt, got: {system_content}"
+    );
+    assert!(
+        !system_content.contains("[runtime_self_continuity]"),
+        "stored continuity should not override or duplicate live identity, got: {system_content}"
+    );
+    assert!(
+        !system_content.contains("Stored continuity identity"),
+        "stored continuity should not override live identity, got: {system_content}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
 async fn default_runtime_build_context_explicit_builtin_system_preserves_profile_projection() {
     let runtime = DefaultConversationRuntime::default();
     let session_id = unique_acp_test_id("default-runtime-context", "profile");
@@ -2327,6 +2596,68 @@ async fn default_runtime_build_context_explicit_builtin_system_preserves_profile
     );
 
     let _ = std::fs::remove_file(sqlite_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_records_runtime_self_continuity_before_compaction() {
+    let session_id = unique_acp_test_id("conversation-runtime-self", "compaction");
+    let sqlite_path = unique_memory_sqlite_path("runtime-self-compaction");
+    let workspace_root = create_runtime_self_workspace(
+        "runtime-self-compaction",
+        "# Identity\n\n- Name: Workspace continuity identity",
+    );
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("I am Temporary Bob".to_owned()),
+    );
+    let mut config = test_config();
+
+    config.memory.sqlite_path = sqlite_path.clone();
+    config.tools.file_root = Some(workspace_root.display().to_string());
+    config.conversation.compact_min_messages = Some(999);
+    config.conversation.compact_trigger_estimated_tokens = Some(1);
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    let root_session = create_root_session_record(&session_id);
+
+    repo.create_session(root_session)
+        .expect("create root session");
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("test-runtime-self-compaction");
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            &session_id,
+            "hello",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("handle turn success");
+
+    assert_eq!(reply, "I am Temporary Bob");
+
+    let events = repo
+        .list_recent_events(&session_id, 20)
+        .expect("list recent events");
+    let continuity_event = events
+        .iter()
+        .find(|event| event.event_kind == "runtime_self_continuity_refreshed")
+        .expect("runtime self continuity event");
+    let payload_text = continuity_event.payload_json.to_string();
+
+    assert!(
+        payload_text.contains("Workspace continuity identity"),
+        "expected workspace identity in continuity payload, got: {payload_text}"
+    );
+    assert!(
+        !payload_text.contains("Temporary Bob"),
+        "session-local assistant reply must not be promoted into continuity payload: {payload_text}"
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -5738,72 +6069,64 @@ async fn handle_turn_with_runtime_persists_fast_lane_tool_batch_event_for_mixed_
     assert_eq!(payload["total_intents"], 5);
     assert_eq!(payload["parallel_execution_enabled"], true);
     assert_eq!(payload["parallel_execution_max_in_flight"], 2);
-    assert!(
-        payload["observed_peak_in_flight"]
-            .as_u64()
-            .expect("observed peak should exist")
-            >= 1
-    );
-    assert!(
-        payload["observed_wall_time_ms"]
-            .as_u64()
-            .expect("observed wall time should exist")
-            >= 1
-    );
+    let observed_peak_in_flight = payload["observed_peak_in_flight"]
+        .as_u64()
+        .expect("observed peak should exist");
+    let observed_wall_time_ms = payload["observed_wall_time_ms"]
+        .as_u64()
+        .expect("observed wall time should exist");
+    assert!(observed_peak_in_flight >= 1);
     assert_eq!(payload["parallel_safe_intents"], 4);
     assert_eq!(payload["serial_only_intents"], 1);
     assert_eq!(payload["parallel_segments"], 2);
     assert_eq!(payload["sequential_segments"], 1);
 
     let segments = payload["segments"].as_array().expect("segments array");
+    let first_segment = &segments[0];
+    let second_segment = &segments[1];
+    let third_segment = &segments[2];
     assert_eq!(
         segments.len(),
         3,
         "expected contiguous mixed-batch segments"
     );
-    assert_eq!(segments[0]["segment_index"], 0);
-    assert_eq!(segments[0]["scheduling_class"], "parallel_safe");
-    assert_eq!(segments[0]["execution_mode"], "parallel");
-    assert_eq!(segments[0]["intent_count"], 2);
+    let first_segment_observed_wall_time_ms = first_segment["observed_wall_time_ms"]
+        .as_u64()
+        .expect("parallel segment wall time should exist");
+    assert_eq!(first_segment["segment_index"], 0);
+    assert_eq!(first_segment["scheduling_class"], "parallel_safe");
+    assert_eq!(first_segment["execution_mode"], "parallel");
+    assert_eq!(first_segment["intent_count"], 2);
     assert!(
-        segments[0]["observed_peak_in_flight"]
+        first_segment["observed_peak_in_flight"]
             .as_u64()
             .expect("parallel segment observed peak should exist")
             >= 1
     );
+    let second_segment_observed_wall_time_ms = second_segment["observed_wall_time_ms"]
+        .as_u64()
+        .expect("sequential segment wall time should exist");
+    assert_eq!(second_segment["segment_index"], 1);
+    assert_eq!(second_segment["scheduling_class"], "serial_only");
+    assert_eq!(second_segment["execution_mode"], "sequential");
+    assert_eq!(second_segment["intent_count"], 1);
+    assert_eq!(second_segment["observed_peak_in_flight"], 1);
+    let third_segment_observed_wall_time_ms = third_segment["observed_wall_time_ms"]
+        .as_u64()
+        .expect("parallel segment wall time should exist");
+    assert_eq!(third_segment["segment_index"], 2);
+    assert_eq!(third_segment["scheduling_class"], "parallel_safe");
+    assert_eq!(third_segment["execution_mode"], "parallel");
+    assert_eq!(third_segment["intent_count"], 2);
     assert!(
-        segments[0]["observed_wall_time_ms"]
-            .as_u64()
-            .expect("parallel segment wall time should exist")
-            >= 1
-    );
-    assert_eq!(segments[1]["segment_index"], 1);
-    assert_eq!(segments[1]["scheduling_class"], "serial_only");
-    assert_eq!(segments[1]["execution_mode"], "sequential");
-    assert_eq!(segments[1]["intent_count"], 1);
-    assert_eq!(segments[1]["observed_peak_in_flight"], 1);
-    assert!(
-        segments[1]["observed_wall_time_ms"]
-            .as_u64()
-            .expect("sequential segment wall time should exist")
-            >= 1
-    );
-    assert_eq!(segments[2]["segment_index"], 2);
-    assert_eq!(segments[2]["scheduling_class"], "parallel_safe");
-    assert_eq!(segments[2]["execution_mode"], "parallel");
-    assert_eq!(segments[2]["intent_count"], 2);
-    assert!(
-        segments[2]["observed_peak_in_flight"]
+        third_segment["observed_peak_in_flight"]
             .as_u64()
             .expect("parallel segment observed peak should exist")
             >= 1
     );
-    assert!(
-        segments[2]["observed_wall_time_ms"]
-            .as_u64()
-            .expect("parallel segment wall time should exist")
-            >= 1
-    );
+    assert!(observed_wall_time_ms >= first_segment_observed_wall_time_ms);
+    assert!(observed_wall_time_ms >= second_segment_observed_wall_time_ms);
+    assert!(observed_wall_time_ms >= third_segment_observed_wall_time_ms);
 
     let _ = std::fs::remove_file(sqlite_path);
 }
