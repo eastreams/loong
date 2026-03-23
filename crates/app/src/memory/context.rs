@@ -9,7 +9,7 @@ use crate::runtime_identity;
 use super::sqlite;
 use super::{
     MEMORY_OP_READ_CONTEXT, MEMORY_OP_READ_STAGE_ENVELOPE, encode_stage_envelope_payload,
-    hydrate_stage_envelope,
+    orchestrator::hydrate_stage_envelope_with_workspace_root,
     protocol::{MemoryContextEntry, MemoryContextKind},
     runtime_config::MemoryRuntimeConfig,
 };
@@ -131,7 +131,31 @@ pub(crate) fn read_stage_envelope(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "memory.read_stage_envelope requires payload.session_id".to_owned())?;
-    let envelope = hydrate_stage_envelope(session_id, config)?;
+    let runtime_config = read_context_runtime_config(payload, config)?;
+    let workspace_root = payload
+        .get("workspace_root")
+        .map(|value| match value {
+            Value::Null => Ok(None),
+            Value::String(raw_path) => {
+                let trimmed_path = raw_path.trim();
+                if trimmed_path.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(std::path::PathBuf::from(trimmed_path)))
+                }
+            }
+            _ => Err(
+                "memory.read_stage_envelope payload.workspace_root must be a string or null"
+                    .to_owned(),
+            ),
+        })
+        .transpose()?
+        .flatten();
+    let envelope = hydrate_stage_envelope_with_workspace_root(
+        session_id,
+        workspace_root.as_deref(),
+        &runtime_config,
+    )?;
     let mut response_payload = encode_stage_envelope_payload(&envelope);
 
     if let Some(map) = response_payload.as_object_mut() {
@@ -201,7 +225,10 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::memory::{build_read_stage_envelope_request, decode_stage_envelope};
+    use crate::memory::{
+        build_read_stage_envelope_request, build_read_stage_envelope_request_with_workspace_root,
+        decode_stage_envelope,
+    };
 
     #[cfg(feature = "memory-sqlite")]
     #[test]
@@ -526,5 +553,46 @@ mod tests {
 
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn read_stage_envelope_operation_preserves_durable_recall_with_workspace_root() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        let curated_memory_path = workspace_root.join("MEMORY.md");
+
+        std::fs::write(
+            &curated_memory_path,
+            "# Durable Notes\n\nRemember the deploy freeze window.\n",
+        )
+        .expect("write durable recall");
+
+        let db_path = workspace_root.join("stage-envelope-durable-recall.sqlite3");
+        let config = MemoryRuntimeConfig {
+            sqlite_path: Some(db_path),
+            ..MemoryRuntimeConfig::default()
+        };
+
+        let outcome = super::super::execute_memory_core_with_config(
+            build_read_stage_envelope_request_with_workspace_root(
+                "durable-recall-stage-envelope-session",
+                Some(workspace_root),
+                &config,
+            ),
+            &config,
+        )
+        .expect("read_stage_envelope should preserve durable recall");
+
+        let envelope = decode_stage_envelope(&outcome.payload).expect("decode staged envelope");
+        let has_durable_recall = envelope.hydrated.entries.iter().any(|entry| {
+            entry.kind == MemoryContextKind::RetrievedMemory
+                && entry.content.contains("Remember the deploy freeze window.")
+        });
+
+        assert!(
+            has_durable_recall,
+            "expected staged envelope payload to keep workspace durable recall"
+        );
     }
 }

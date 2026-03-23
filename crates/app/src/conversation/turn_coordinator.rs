@@ -7792,6 +7792,7 @@ mod tests {
                     "role": "system",
                     "content": "sys"
                 })],
+                artifacts: vec![],
                 estimated_tokens: Some(42),
                 system_prompt_addition: None,
             },
@@ -7830,6 +7831,7 @@ mod tests {
                     "role": "system",
                     "content": "sys"
                 })],
+                artifacts: vec![],
                 estimated_tokens: Some(42),
                 system_prompt_addition: None,
             },
@@ -8416,6 +8418,7 @@ mod tests {
                     "role": "system",
                     "content": "sys"
                 })],
+                artifacts: vec![],
                 estimated_tokens: Some(42),
                 system_prompt_addition: None,
             },

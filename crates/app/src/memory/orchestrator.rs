@@ -329,9 +329,7 @@ pub fn hydrate_memory_context_with_workspace_root(
     workspace_root: Option<&Path>,
     config: &MemoryRuntimeConfig,
 ) -> Result<HydratedMemoryContext, String> {
-    Ok(
-        hydrate_stage_envelope_with_workspace_root(session_id, workspace_root, config)?.hydrated,
-    )
+    Ok(hydrate_stage_envelope_with_workspace_root(session_id, workspace_root, config)?.hydrated)
 }
 
 pub fn hydrate_stage_envelope(
@@ -341,7 +339,7 @@ pub fn hydrate_stage_envelope(
     hydrate_stage_envelope_with_workspace_root(session_id, None, config)
 }
 
-fn hydrate_stage_envelope_with_workspace_root(
+pub(crate) fn hydrate_stage_envelope_with_workspace_root(
     session_id: &str,
     workspace_root: Option<&Path>,
     config: &MemoryRuntimeConfig,

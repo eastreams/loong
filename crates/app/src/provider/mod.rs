@@ -156,22 +156,7 @@ pub fn build_system_message(
     request_message_runtime::build_system_message(config, include_system_prompt)
 }
 
-pub(crate) async fn build_base_messages_with_binding(
-    config: &LoongClawConfig,
-    include_system_prompt: bool,
-    binding: ProviderRuntimeBinding<'_>,
-) -> Vec<Value> {
-    request_message_runtime::build_base_messages_with_binding(
-        config,
-        include_system_prompt,
-        binding,
-    )
-    .await
-}
-
-pub(crate) fn push_history_message(messages: &mut Vec<Value>, role: &str, content: &str) {
-    request_message_runtime::push_history_message(messages, role, content);
-}
+pub(crate) use request_message_runtime::project_hydrated_memory_context_for_view_with_binding;
 
 pub fn build_messages_for_session(
     config: &LoongClawConfig,

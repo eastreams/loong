@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use loongclaw_contracts::MemoryCoreRequest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -179,6 +181,34 @@ pub fn build_read_stage_envelope_request(session_id: &str) -> MemoryCoreRequest 
         payload: json!({
             "session_id": session_id,
         }),
+    }
+}
+
+pub fn build_read_stage_envelope_request_with_workspace_root(
+    session_id: &str,
+    workspace_root: Option<&Path>,
+    config: &MemoryRuntimeConfig,
+) -> MemoryCoreRequest {
+    let mut payload = serde_json::Map::from_iter([("session_id".to_owned(), json!(session_id))]);
+
+    if let Some(workspace_root) = workspace_root {
+        payload.insert(
+            "workspace_root".to_owned(),
+            json!(workspace_root.to_string_lossy().to_string()),
+        );
+    }
+
+    payload.insert("profile".to_owned(), json!(config.profile.as_str()));
+    payload.insert("sliding_window".to_owned(), json!(config.sliding_window));
+    payload.insert(
+        "summary_max_chars".to_owned(),
+        json!(config.summary_max_chars),
+    );
+    payload.insert("profile_note".to_owned(), json!(config.profile_note));
+
+    MemoryCoreRequest {
+        operation: MEMORY_OP_READ_STAGE_ENVELOPE.to_owned(),
+        payload: Value::Object(payload),
     }
 }
 

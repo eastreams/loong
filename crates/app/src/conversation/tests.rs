@@ -438,6 +438,7 @@ impl ConversationContextEngine for StubSystemPromptAdditionEngine {
                 "role": "system",
                 "content": "base-system-prompt",
             })],
+            artifacts: vec![],
             estimated_tokens: Some(42),
             system_prompt_addition: Some("runtime-policy-addition".to_owned()),
         })
@@ -2900,6 +2901,181 @@ async fn default_runtime_build_context_fail_open_memory_derivation_preserves_rec
             ("assistant".to_owned(), "turn 2".to_owned()),
             ("user".to_owned(), "turn 3".to_owned()),
         ]
+    );
+
+    let _ = std::fs::remove_file(sqlite_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_kernel_build_context_matches_builtin_summary_projection() {
+    let runtime = DefaultConversationRuntime::default();
+    let session_id = unique_acp_test_id("default-runtime-kernel-context", "summary");
+    let sqlite_path = unique_memory_sqlite_path("kernel-summary");
+    let mut config = test_config();
+    config.memory.system = MemorySystemKind::Builtin;
+    config.memory.profile = MemoryProfile::WindowPlusSummary;
+    config.memory.sliding_window = 2;
+    config.memory.sqlite_path = sqlite_path.clone();
+
+    let runtime_config =
+        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    crate::memory::append_turn_direct(&session_id, "user", "turn 1", &runtime_config)
+        .expect("append turn 1 should succeed");
+    crate::memory::append_turn_direct(&session_id, "assistant", "turn 2", &runtime_config)
+        .expect("append turn 2 should succeed");
+    crate::memory::append_turn_direct(&session_id, "user", "turn 3", &runtime_config)
+        .expect("append turn 3 should succeed");
+    crate::memory::append_turn_direct(&session_id, "assistant", "turn 4", &runtime_config)
+        .expect("append turn 4 should succeed");
+
+    let kernel_ctx =
+        test_kernel_context_with_memory("default-runtime-kernel-context-summary", &runtime_config);
+    let assembled = runtime
+        .build_context(
+            &config,
+            &session_id,
+            true,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("build kernel context from default runtime");
+    let provider_messages = crate::provider::build_messages_for_session(&config, &session_id, true)
+        .expect("build provider messages");
+
+    assert_eq!(
+        assembled.messages, provider_messages,
+        "kernel-bound default runtime should match the builtin staged projection"
+    );
+
+    let _ = std::fs::remove_file(sqlite_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_kernel_build_context_preserves_profile_projection() {
+    let runtime = DefaultConversationRuntime::default();
+    let session_id = unique_acp_test_id("default-runtime-kernel-context", "profile");
+    let sqlite_path = unique_memory_sqlite_path("kernel-profile");
+    let mut config = test_config();
+    config.memory.system = MemorySystemKind::Builtin;
+    config.memory.profile = MemoryProfile::ProfilePlusWindow;
+    config.memory.profile_note = Some("Imported ZeroClaw preferences".to_owned());
+    config.memory.sliding_window = 2;
+    config.memory.sqlite_path = sqlite_path.clone();
+
+    let runtime_config =
+        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    crate::memory::append_turn_direct(&session_id, "assistant", "turn 1", &runtime_config)
+        .expect("append turn should succeed");
+
+    let kernel_ctx =
+        test_kernel_context_with_memory("default-runtime-kernel-context-profile", &runtime_config);
+    let assembled = runtime
+        .build_context(
+            &config,
+            &session_id,
+            true,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("build kernel context from default runtime");
+    let provider_messages = crate::provider::build_messages_for_session(&config, &session_id, true)
+        .expect("build provider messages");
+
+    assert_eq!(
+        assembled.messages, provider_messages,
+        "kernel-bound default runtime should preserve builtin profile projection"
+    );
+    assert!(
+        assembled.artifacts.iter().any(|artifact| {
+            artifact.artifact_kind == ContextArtifactKind::Profile
+                && artifact.message_index < assembled.messages.len()
+        }),
+        "expected a profile artifact descriptor for the injected profile block"
+    );
+
+    let _ = std::fs::remove_file(sqlite_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_kernel_build_context_emits_context_artifact_annotations() {
+    let runtime = DefaultConversationRuntime::default();
+    let session_id = unique_acp_test_id("default-runtime-kernel-context", "artifacts");
+    let sqlite_path = unique_memory_sqlite_path("kernel-artifacts");
+    let mut config = test_config();
+    config.memory.system = MemorySystemKind::Builtin;
+    config.memory.profile = MemoryProfile::WindowPlusSummary;
+    config.memory.sliding_window = 2;
+    config.memory.sqlite_path = sqlite_path.clone();
+
+    let runtime_config =
+        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    crate::memory::append_turn_direct(&session_id, "user", "turn 1", &runtime_config)
+        .expect("append turn 1 should succeed");
+    crate::memory::append_turn_direct(&session_id, "assistant", "turn 2", &runtime_config)
+        .expect("append turn 2 should succeed");
+    crate::memory::append_turn_direct(&session_id, "user", "turn 3", &runtime_config)
+        .expect("append turn 3 should succeed");
+
+    let kernel_ctx = test_kernel_context_with_memory(
+        "default-runtime-kernel-context-artifacts",
+        &runtime_config,
+    );
+    let assembled = runtime
+        .build_context(
+            &config,
+            &session_id,
+            true,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("build kernel context from default runtime");
+
+    assert!(
+        assembled
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.artifact_kind == ContextArtifactKind::SystemPrompt),
+        "expected a system prompt artifact descriptor"
+    );
+    assert!(
+        assembled
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.artifact_kind == ContextArtifactKind::RuntimeContract),
+        "expected a runtime-contract artifact descriptor"
+    );
+    assert!(
+        assembled
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.artifact_kind == ContextArtifactKind::Summary),
+        "expected a summary artifact descriptor"
+    );
+    assert!(
+        assembled
+            .artifacts
+            .iter()
+            .filter(|artifact| artifact.artifact_kind == ContextArtifactKind::ConversationTurn)
+            .count()
+            >= 2,
+        "expected conversation-turn artifact descriptors for projected turns"
+    );
+    assert!(
+        assembled
+            .artifacts
+            .iter()
+            .all(|artifact| artifact.message_index < assembled.messages.len()),
+        "artifact indices must point at emitted messages"
+    );
+    assert!(
+        assembled
+            .artifacts
+            .iter()
+            .all(|artifact| artifact.streaming_policy == ToolOutputStreamingPolicy::BufferFull),
+        "slice 1 artifacts should use buffered delivery"
     );
 
     let _ = std::fs::remove_file(sqlite_path);
@@ -13164,6 +13340,7 @@ async fn repair_turn_checkpoint_tail_rebuilds_original_finalization_context_for_
                     json!({"role": "user", "content": "hello"}),
                     json!({"role": "assistant", "content": "assistant-reply"}),
                 ],
+                artifacts: vec![],
                 estimated_tokens: Some(3),
                 system_prompt_addition: None,
             },
@@ -13172,6 +13349,7 @@ async fn repair_turn_checkpoint_tail_rebuilds_original_finalization_context_for_
                     json!({"role": "user", "content": "hello"}),
                     json!({"role": "assistant", "content": "assistant-reply"}),
                 ],
+                artifacts: vec![],
                 estimated_tokens: Some(2),
                 system_prompt_addition: None,
             },
@@ -13285,6 +13463,7 @@ async fn repair_turn_checkpoint_tail_prefers_checkpoint_estimate_for_compaction_
                 json!({"role": "user", "content": "hello"}),
                 json!({"role": "assistant", "content": "assistant-reply"}),
             ],
+            artifacts: vec![],
             estimated_tokens: Some(1),
             system_prompt_addition: None,
         });
@@ -13397,6 +13576,7 @@ async fn probe_turn_checkpoint_tail_runtime_gate_reports_preparation_content_mis
                 json!({"role": "user", "content": "hello"}),
                 json!({"role": "assistant", "content": "assistant-reply"}),
             ],
+            artifacts: vec![],
             estimated_tokens: Some(99),
             system_prompt_addition: None,
         });
@@ -13908,6 +14088,7 @@ async fn load_turn_checkpoint_diagnostics_with_runtime_preserves_summary_assessm
                 json!({"role": "user", "content": "hello"}),
                 json!({"role": "assistant", "content": "assistant-reply"}),
             ],
+            artifacts: vec![],
             estimated_tokens: Some(99),
             system_prompt_addition: None,
         });
@@ -14032,6 +14213,7 @@ async fn load_turn_checkpoint_diagnostics_uses_single_kernel_window_snapshot_for
                 json!({"role": "user", "content": "hello"}),
                 json!({"role": "assistant", "content": "assistant-reply"}),
             ],
+            artifacts: vec![],
             estimated_tokens: Some(99),
             system_prompt_addition: None,
         });
@@ -17177,6 +17359,7 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_preparation_conte
                 json!({"role": "user", "content": "hello"}),
                 json!({"role": "assistant", "content": "assistant-reply"}),
             ],
+            artifacts: vec![],
             estimated_tokens: Some(99),
             system_prompt_addition: None,
         });
@@ -17295,6 +17478,7 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_preparation_conte
                 json!({"role": "user", "content": "hello"}),
                 json!({"role": "assistant", "content": "assistant-reply"}),
             ],
+            artifacts: vec![],
             estimated_tokens: Some(99),
             system_prompt_addition: None,
         });
@@ -17413,6 +17597,7 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_malformed_prepara
                 json!({"role": "user", "content": "hello"}),
                 json!({"role": "assistant", "content": "assistant-reply"}),
             ],
+            artifacts: vec![],
             estimated_tokens: Some(99),
             system_prompt_addition: None,
         });

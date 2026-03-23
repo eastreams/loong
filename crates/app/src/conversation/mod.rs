@@ -34,9 +34,10 @@ pub use analytics::{
     summarize_turn_checkpoint_events,
 };
 pub use context_engine::{
-    AssembledConversationContext, CONTEXT_ENGINE_API_VERSION, ContextEngineBootstrapResult,
-    ContextEngineCapability, ContextEngineIngestResult, ContextEngineMetadata,
-    ConversationContextEngine, DefaultContextEngine, LegacyContextEngine,
+    AssembledConversationContext, CONTEXT_ENGINE_API_VERSION, ContextArtifactDescriptor,
+    ContextArtifactKind, ContextEngineBootstrapResult, ContextEngineCapability,
+    ContextEngineIngestResult, ContextEngineMetadata, ConversationContextEngine,
+    DefaultContextEngine, LegacyContextEngine, ToolOutputStreamingPolicy,
 };
 pub use context_engine_registry::{
     CONTEXT_ENGINE_ENV, DEFAULT_CONTEXT_ENGINE_ID, LEGACY_CONTEXT_ENGINE_ID,
