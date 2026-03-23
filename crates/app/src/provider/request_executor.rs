@@ -793,9 +793,10 @@ where
                                     this.event_type = Some(name);
                                 }
                                 transport::SseLine::Data { content } => {
+                                    let current_event_type = this.event_type.take();
                                     if !content.is_empty() {
                                         match transport::SseStreamEvent::from_sse_lines(
-                                            this.event_type.clone(),
+                                            current_event_type,
                                             &[content],
                                         ) {
                                             Ok(Some(event)) => match event {
@@ -848,7 +849,6 @@ where
                                 transport::SseLine::Comment => {}
                                 transport::SseLine::Retry { .. } => {}
                             }
-                            this.line_buffer.clear();
                         } else if byte != b'\r' {
                             this.line_buffer.push(byte);
                         }
@@ -878,7 +878,7 @@ where
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[allow(clippy::result_large_err)]
 pub(super) async fn execute_streaming_turn_request<PreStatusError>(
     runtime: StreamingModelRequestRuntime<'_>,
     build_body: impl FnMut(CompletionPayloadMode) -> Value + Unpin,
@@ -924,6 +924,18 @@ where
         }
         if event_type == "message_stop" {
             return Some(StreamingEvent::Done);
+        }
+        if event_type == "message_start" || event_type == "message_delta" {
+            return Some(StreamingEvent::Meta(data));
+        }
+        if event_type == "error" {
+            let message = data
+                .get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown streaming error")
+                .to_owned();
+            return Some(StreamingEvent::StreamError(message));
         }
         None
     })
@@ -975,6 +987,32 @@ where
                 if let Some(tool_call) = accumulator.tool_calls.get_mut(&index) {
                     tool_call.input.push_str(&partial_json);
                 }
+            }
+            Ok(StreamingEvent::Meta(data)) => {
+                // Merge message_start and message_delta metadata for raw_meta
+                if let Some(obj) = data.as_object() {
+                    if !accumulator.meta.is_object() {
+                        accumulator.meta = serde_json::json!({});
+                    }
+                    if let Some(meta) = accumulator.meta.as_object_mut() {
+                        for (k, v) in obj {
+                            meta.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+            }
+            Ok(StreamingEvent::StreamError(message)) => {
+                accumulator.error = Some(build_model_request_error(
+                    format!("Anthropic streaming error: {message}"),
+                    false,
+                    ProviderFailoverReason::ResponseShapeInvalid,
+                    ProviderFailoverStage::ResponseDecode,
+                    &model_name,
+                    1,
+                    1,
+                    None,
+                    None,
+                ));
             }
             Ok(StreamingEvent::Done) => {
                 accumulator.done = true;
@@ -1031,7 +1069,7 @@ where
             Ok(ToolIntent {
                 tool_name: tool_call.name.clone(),
                 args_json,
-                source: "streaming".to_owned(),
+                source: "provider_tool_call".to_owned(),
                 session_id: session_id.unwrap_or("").to_owned(),
                 turn_id: turn_id.unwrap_or("").to_owned(),
                 tool_call_id: tool_call.id.clone(),
@@ -1042,7 +1080,7 @@ where
     Ok(ProviderTurn {
         assistant_text: accumulator.text,
         tool_intents,
-        raw_meta: Value::Null,
+        raw_meta: accumulator.meta,
     })
 }
 
@@ -1056,7 +1094,8 @@ pub(crate) struct ToolCallInfo {
 #[derive(Default)]
 pub(crate) struct StreamingAccumulator {
     text: String,
-    tool_calls: std::collections::HashMap<usize, ToolCallInfo>,
+    tool_calls: std::collections::BTreeMap<usize, ToolCallInfo>,
+    meta: Value,
     done: bool,
     error: Option<ModelRequestError>,
 }
@@ -1072,6 +1111,8 @@ pub(crate) enum StreamingEvent {
         index: usize,
         partial_json: String,
     },
+    Meta(Value),
+    StreamError(String),
     Done,
 }
 

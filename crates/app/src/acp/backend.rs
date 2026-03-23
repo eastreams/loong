@@ -450,7 +450,6 @@ pub struct AcpTurnResult {
     pub stop_reason: Option<AcpTurnStopReason>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamingTokenEvent {
     pub event_type: String,
@@ -458,14 +457,12 @@ pub struct StreamingTokenEvent {
     pub index: Option<usize>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenDelta {
     pub text: Option<String>,
     pub tool_call: Option<ToolCallDelta>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallDelta {
     pub name: Option<String>,

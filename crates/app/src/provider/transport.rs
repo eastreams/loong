@@ -75,7 +75,6 @@ pub(super) enum RequestExecutionError {
     Setup(String),
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub(super) enum SseLine {
@@ -86,7 +85,6 @@ pub(super) enum SseLine {
     Empty,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn parse_sse_line(line: &str) -> SseLine {
     if line.is_empty() {
         return SseLine::Empty;
@@ -124,7 +122,6 @@ pub(super) enum SseStreamEvent {
     Done,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl SseStreamEvent {
     pub(super) fn from_sse_lines(
         event_type: Option<String>,
