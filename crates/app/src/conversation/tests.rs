@@ -1410,6 +1410,30 @@ fn test_kernel_context(agent_id: &str) -> KernelContext {
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn collect_markdown_file_paths(root: &std::path::Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    if !root.exists() {
+        return paths;
+    }
+
+    let read_dir = std::fs::read_dir(root).expect("read markdown directory");
+    for entry_result in read_dir {
+        let entry = entry_result.expect("read markdown entry");
+        let path = entry.path();
+        let extension = path.extension().and_then(|value| value.to_str());
+        let is_markdown = extension.is_some_and(|value| value.eq_ignore_ascii_case("md"));
+        if !is_markdown {
+            continue;
+        }
+        paths.push(path);
+    }
+
+    paths.sort();
+    paths
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn test_kernel_context_with_memory(
     agent_id: &str,
     memory_config: &MemoryRuntimeConfig,
@@ -4558,6 +4582,105 @@ async fn handle_turn_with_runtime_compacts_when_token_threshold_reached() {
     let compact = runtime.compact_calls.lock().expect("compact lock").clone();
     assert_eq!(compact.len(), 1);
     assert_eq!(compact[0].0, "session-compact-token-threshold");
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
+    let workspace_root = crate::test_support::unique_temp_dir("pre-compaction-durable-flush");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+
+    let db_path = workspace_root.join("memory.sqlite3");
+    let mut config = test_config();
+    config.tools.file_root = Some(workspace_root.display().to_string());
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.memory.sliding_window = 1;
+    config.conversation.compact_min_messages = Some(999);
+    config.conversation.compact_trigger_estimated_tokens = Some(1);
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("assistant-reply".to_owned()),
+    )
+    .with_durable_memory_config(memory_config.clone());
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context_with_memory("test-pre-compaction-flush", &memory_config);
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-pre-compaction-flush",
+            "hello before compaction",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("handle turn success");
+
+    assert_eq!(reply, "assistant-reply");
+
+    let compact = runtime.compact_calls.lock().expect("compact lock").clone();
+    assert_eq!(compact.len(), 1);
+
+    let memory_dir = workspace_root.join("memory");
+    let exported_paths = collect_markdown_file_paths(&memory_dir);
+    assert_eq!(
+        exported_paths.len(),
+        1,
+        "expected one durable memory export"
+    );
+
+    let exported = std::fs::read_to_string(&exported_paths[0]).expect("read durable memory export");
+    assert!(exported.contains("Advisory durable recall"));
+    assert!(exported.contains("Resolved Runtime Identity"));
+    assert!(exported.contains("hello before compaction"));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_does_not_flush_durable_memory_when_compaction_is_skipped() {
+    let workspace_root = crate::test_support::unique_temp_dir("pre-compaction-durable-skip");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+
+    let db_path = workspace_root.join("memory.sqlite3");
+    let mut config = test_config();
+    config.tools.file_root = Some(workspace_root.display().to_string());
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.memory.sliding_window = 1;
+    config.conversation.compact_enabled = false;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("assistant-reply".to_owned()),
+    )
+    .with_durable_memory_config(memory_config.clone());
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx =
+        test_kernel_context_with_memory("test-pre-compaction-flush-skipped", &memory_config);
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-pre-compaction-flush-skipped",
+            "hello without compaction",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("handle turn success");
+
+    assert_eq!(reply, "assistant-reply");
+
+    let memory_dir = workspace_root.join("memory");
+    let exported_paths = collect_markdown_file_paths(&memory_dir);
+    assert!(
+        exported_paths.is_empty(),
+        "compaction skip should not create durable exports"
+    );
 }
 
 #[tokio::test]

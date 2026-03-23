@@ -2319,6 +2319,30 @@ async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
     #[cfg(feature = "memory-sqlite")]
     {
         persist_runtime_self_continuity_for_compaction(config, session_id)?;
+
+        let workspace_root = config
+            .tools
+            .file_root
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|_| config.tools.resolved_file_root());
+
+        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let durable_flush_result = crate::memory::flush_pre_compaction_durable_memory(
+            session_id,
+            workspace_root.as_deref(),
+            &memory_config,
+        );
+        match durable_flush_result {
+            Ok(_) => {}
+            Err(_error) if config.conversation.compaction_fail_open() => {}
+            Err(error) => {
+                return Err(format!(
+                    "pre-compaction durable memory flush failed: {error}"
+                ));
+            }
+        }
     }
 
     match runtime
