@@ -9,7 +9,7 @@ use std::{
 };
 
 use loongclaw_spec::CliResult;
-use tokio::task::JoinSet;
+use tokio::task::{Id, JoinSet};
 
 use crate::{mvp, wait_for_shutdown_signal};
 
@@ -182,6 +182,34 @@ impl SupervisorSpec {
                 cli_session: session.to_owned(),
             },
             BackgroundChannelSurface::all_from_accounts(telegram_account, feishu_account),
+        )
+    }
+
+    pub fn from_loaded_multi_channel_serve(
+        session: &str,
+        config: &mvp::config::LoongClawConfig,
+        telegram_account: Option<&str>,
+        feishu_account: Option<&str>,
+    ) -> Result<Self, String> {
+        let mut surfaces = Vec::new();
+
+        if telegram_surface_is_enabled(config, telegram_account)? {
+            surfaces.push(BackgroundChannelSurface::Telegram {
+                account_id: telegram_account.map(str::to_owned),
+            });
+        }
+
+        if feishu_surface_is_enabled(config, feishu_account)? {
+            surfaces.push(BackgroundChannelSurface::Feishu {
+                account_id: feishu_account.map(str::to_owned),
+            });
+        }
+
+        Self::new(
+            RuntimeOwnerMode::MultiChannelServe {
+                cli_session: session.to_owned(),
+            },
+            surfaces,
         )
     }
 }
@@ -578,6 +606,31 @@ enum BackgroundTaskExit {
     },
 }
 
+fn telegram_surface_is_enabled(
+    config: &mvp::config::LoongClawConfig,
+    account_id: Option<&str>,
+) -> CliResult<bool> {
+    if !config.telegram.enabled {
+        return Ok(false);
+    }
+    Ok(config.telegram.resolve_account(account_id)?.enabled)
+}
+
+fn feishu_surface_is_enabled(
+    config: &mvp::config::LoongClawConfig,
+    account_id: Option<&str>,
+) -> CliResult<bool> {
+    if !config.feishu.enabled {
+        return Ok(false);
+    }
+    Ok(mvp::feishu::resolve_requested_feishu_account(
+        &config.feishu,
+        account_id,
+        "rerun with `--account <configured_account_id>` using one of those configured accounts",
+    )?
+    .enabled)
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -613,11 +666,16 @@ pub async fn run_multi_channel_serve_with_hooks_for_test(
     feishu_account: Option<&str>,
     hooks: SupervisorRuntimeHooks,
 ) -> CliResult<SupervisorState> {
-    let spec = SupervisorSpec::from_multi_channel_serve(session, telegram_account, feishu_account)?;
     let LoadedSupervisorConfig {
         resolved_path,
         config,
     } = (hooks.load_config)(config_path)?;
+    let spec = SupervisorSpec::from_loaded_multi_channel_serve(
+        session,
+        &config,
+        telegram_account,
+        feishu_account,
+    )?;
     let mut supervisor = SupervisorState::new(spec.clone());
 
     let cli_shutdown = mvp::chat::ConcurrentCliShutdown::new();
@@ -626,6 +684,7 @@ pub async fn run_multi_channel_serve_with_hooks_for_test(
     let stop_handles = vec![telegram_stop.clone(), feishu_stop.clone()];
 
     let mut background_tasks = JoinSet::new();
+    let mut background_task_surfaces = BTreeMap::<Id, BackgroundChannelSurface>::new();
 
     for surface in &spec.surfaces {
         supervisor.mark_surface_running(surface, now_ms())?;
@@ -638,13 +697,17 @@ pub async fn run_multi_channel_serve_with_hooks_for_test(
                     stop: telegram_stop.clone(),
                 };
                 let run_telegram = hooks.run_telegram.clone();
-                let surface = surface.clone();
-                background_tasks.spawn(async move {
-                    BackgroundTaskExit::Surface {
-                        surface,
-                        result: run_telegram(request).await,
-                    }
-                });
+                let tracked_surface = surface.clone();
+                let task_surface = tracked_surface.clone();
+                let task_id = background_tasks
+                    .spawn(async move {
+                        BackgroundTaskExit::Surface {
+                            surface: task_surface,
+                            result: run_telegram(request).await,
+                        }
+                    })
+                    .id();
+                background_task_surfaces.insert(task_id, tracked_surface);
             }
             BackgroundChannelSurface::Feishu { account_id } => {
                 let request = BackgroundChannelRunnerRequest {
@@ -654,13 +717,17 @@ pub async fn run_multi_channel_serve_with_hooks_for_test(
                     stop: feishu_stop.clone(),
                 };
                 let run_feishu = hooks.run_feishu.clone();
-                let surface = surface.clone();
-                background_tasks.spawn(async move {
-                    BackgroundTaskExit::Surface {
-                        surface,
-                        result: run_feishu(request).await,
-                    }
-                });
+                let tracked_surface = surface.clone();
+                let task_surface = tracked_surface.clone();
+                let task_id = background_tasks
+                    .spawn(async move {
+                        BackgroundTaskExit::Surface {
+                            surface: task_surface,
+                            result: run_feishu(request).await,
+                        }
+                    })
+                    .id();
+                background_task_surfaces.insert(task_id, tracked_surface);
             }
         }
     }
@@ -706,10 +773,10 @@ pub async fn run_multi_channel_serve_with_hooks_for_test(
                 }
                 forward_root_shutdown(&mut supervisor, &cli_shutdown, &stop_handles, &mut signal_active);
             }
-            Some(joined) = background_tasks.join_next(), if !background_tasks.is_empty() => {
-                let exit = joined.map_err(|error| format!("background channel task failed to join: {error}"))?;
-                match exit {
-                    BackgroundTaskExit::Surface { surface, result } => {
+            Some(joined) = background_tasks.join_next_with_id(), if !background_tasks.is_empty() => {
+                match joined {
+                    Ok((task_id, BackgroundTaskExit::Surface { surface, result })) => {
+                        background_task_surfaces.remove(&task_id);
                         match result {
                             Ok(()) => {
                                 supervisor.mark_surface_stopped(&surface, now_ms())?;
@@ -718,6 +785,18 @@ pub async fn run_multi_channel_serve_with_hooks_for_test(
                                 supervisor.record_surface_failure(&surface, now_ms(), error)?;
                             }
                         }
+                    }
+                    Err(error) => {
+                        let Some(surface) = background_task_surfaces.remove(&error.id()) else {
+                            return Err(format!(
+                                "background channel task failed to join and could not be attributed to a tracked surface: {error}"
+                            ));
+                        };
+                        supervisor.record_surface_failure(
+                            &surface,
+                            now_ms(),
+                            format!("background channel task failed to join: {error}"),
+                        )?;
                     }
                 }
 

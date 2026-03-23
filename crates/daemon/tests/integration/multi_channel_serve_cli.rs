@@ -50,9 +50,32 @@ fn pending_shutdown_future() -> BoxedCliFuture {
 }
 
 fn loaded_config_fixture() -> LoadedSupervisorConfig {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = true;
+    config.feishu.enabled = true;
     LoadedSupervisorConfig {
         resolved_path: PathBuf::from("/tmp/loongclaw.toml"),
-        config: mvp::config::LoongClawConfig::default(),
+        config,
+    }
+}
+
+fn telegram_only_loaded_config_fixture() -> LoadedSupervisorConfig {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = true;
+    config.feishu.enabled = false;
+    LoadedSupervisorConfig {
+        resolved_path: PathBuf::from("/tmp/loongclaw.toml"),
+        config,
+    }
+}
+
+fn feishu_only_loaded_config_fixture() -> LoadedSupervisorConfig {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = false;
+    config.feishu.enabled = true;
+    LoadedSupervisorConfig {
+        resolved_path: PathBuf::from("/tmp/loongclaw.toml"),
+        config,
     }
 }
 
@@ -198,6 +221,156 @@ async fn multi_channel_serve_starts_telegram_and_feishu_background_tasks() {
         events
             .iter()
             .any(|event| event == "feishu-start account=alerts"),
+        "events: {events:?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn multi_channel_serve_skips_feishu_when_only_telegram_is_enabled() {
+    let log = EventLog::default();
+    let state = run_multi_channel_serve_with_hooks_for_test(
+        None,
+        "cli-supervisor",
+        Some("bot_123456"),
+        Some("stale-feishu"),
+        hooks(
+            |_| Ok(telegram_only_loaded_config_fixture()),
+            {
+                let log = log.clone();
+                move |options| {
+                    let log = log.clone();
+                    boxed_cli_result(async move {
+                        log.push(format!("cli-start session={}", options.session_id));
+                        Ok(())
+                    })
+                }
+            },
+            {
+                let log = log.clone();
+                move |request| {
+                    let log = log.clone();
+                    boxed_cli_result(async move {
+                        log.push(format!(
+                            "telegram-start account={}",
+                            request.account_id.as_deref().unwrap_or("-")
+                        ));
+                        while !request.stop.is_requested() {
+                            tokio::task::yield_now().await;
+                        }
+                        log.push("telegram-stop");
+                        Ok(())
+                    })
+                }
+            },
+            {
+                let log = log.clone();
+                move |_| {
+                    let log = log.clone();
+                    boxed_cli_result(async move {
+                        log.push("feishu-start");
+                        Err("feishu should not start when disabled".to_owned())
+                    })
+                }
+            },
+            pending_shutdown_future,
+        ),
+    )
+    .await
+    .expect("run helper");
+
+    assert!(state.final_exit_result().is_ok());
+    assert_eq!(state.spec().surfaces.len(), 1);
+    assert_eq!(
+        state.spec().surfaces[0],
+        loongclaw_daemon::supervisor::BackgroundChannelSurface::Telegram {
+            account_id: Some("bot_123456".to_owned()),
+        }
+    );
+
+    let events = log.snapshot();
+    assert!(
+        events
+            .iter()
+            .any(|event| event == "telegram-start account=bot_123456"),
+        "events: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|event| event == "feishu-start"),
+        "events: {events:?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn multi_channel_serve_skips_telegram_when_only_feishu_is_enabled() {
+    let log = EventLog::default();
+    let state = run_multi_channel_serve_with_hooks_for_test(
+        None,
+        "cli-supervisor",
+        Some("stale-telegram"),
+        Some("alerts"),
+        hooks(
+            |_| Ok(feishu_only_loaded_config_fixture()),
+            {
+                let log = log.clone();
+                move |options| {
+                    let log = log.clone();
+                    boxed_cli_result(async move {
+                        log.push(format!("cli-start session={}", options.session_id));
+                        Ok(())
+                    })
+                }
+            },
+            {
+                let log = log.clone();
+                move |_| {
+                    let log = log.clone();
+                    boxed_cli_result(async move {
+                        log.push("telegram-start");
+                        Err("telegram should not start when disabled".to_owned())
+                    })
+                }
+            },
+            {
+                let log = log.clone();
+                move |request| {
+                    let log = log.clone();
+                    boxed_cli_result(async move {
+                        log.push(format!(
+                            "feishu-start account={}",
+                            request.account_id.as_deref().unwrap_or("-")
+                        ));
+                        while !request.stop.is_requested() {
+                            tokio::task::yield_now().await;
+                        }
+                        log.push("feishu-stop");
+                        Ok(())
+                    })
+                }
+            },
+            pending_shutdown_future,
+        ),
+    )
+    .await
+    .expect("run helper");
+
+    assert!(state.final_exit_result().is_ok());
+    assert_eq!(state.spec().surfaces.len(), 1);
+    assert_eq!(
+        state.spec().surfaces[0],
+        loongclaw_daemon::supervisor::BackgroundChannelSurface::Feishu {
+            account_id: Some("alerts".to_owned()),
+        }
+    );
+
+    let events = log.snapshot();
+    assert!(
+        events
+            .iter()
+            .any(|event| event == "feishu-start account=alerts"),
+        "events: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|event| event == "telegram-start"),
         "events: {events:?}"
     );
 }
@@ -373,6 +546,88 @@ async fn multi_channel_serve_background_failure_before_cli_wait_still_stops_fore
     assert!(
         events.iter().any(|event| event == "cli-stop"),
         "cli host should still stop after shutdown was requested early: {events:?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn multi_channel_serve_background_join_error_still_shuts_down_cli_and_other_surfaces() {
+    let log = EventLog::default();
+    let run_log = log.clone();
+    let run: tokio::task::JoinHandle<CliResult<loongclaw_daemon::supervisor::SupervisorState>> =
+        tokio::spawn(async move {
+            run_multi_channel_serve_with_hooks_for_test(
+                None,
+                "cli-supervisor",
+                Some("bot_123456"),
+                Some("alerts"),
+                hooks(
+                    |_| Ok(loaded_config_fixture()),
+                    {
+                        let log = run_log.clone();
+                        move |options| {
+                            let log = log.clone();
+                            boxed_cli_result(async move {
+                                log.push("cli-start");
+                                options.shutdown.wait().await;
+                                log.push("cli-stop");
+                                Ok(())
+                            })
+                        }
+                    },
+                    {
+                        let log = run_log.clone();
+                        move |_| {
+                            let log = log.clone();
+                            boxed_cli_result(async move {
+                                log.push("telegram-panic");
+                                panic!("telegram runner panicked");
+                            })
+                        }
+                    },
+                    {
+                        let log = run_log.clone();
+                        move |request| {
+                            let log = log.clone();
+                            boxed_cli_result(async move {
+                                log.push("feishu-start");
+                                while !request.stop.is_requested() {
+                                    tokio::task::yield_now().await;
+                                }
+                                log.push("feishu-stop");
+                                Ok(())
+                            })
+                        }
+                    },
+                    pending_shutdown_future,
+                ),
+            )
+            .await
+        });
+
+    let state = tokio::time::timeout(Duration::from_millis(250), run)
+        .await
+        .expect("supervisor should not hang after a background join error")
+        .expect("supervisor join")
+        .expect("run helper");
+
+    let error = state
+        .final_exit_result()
+        .expect_err("background join error should fail the supervisor");
+    assert!(
+        error.contains("telegram(account=bot_123456) exited unexpectedly"),
+        "error: {error}"
+    );
+    assert!(error.contains("failed to join"), "error: {error}");
+
+    let events = log.snapshot();
+    assert!(events.iter().any(|event| event == "telegram-panic"));
+    assert!(
+        events.iter().any(|event| event == "cli-stop"),
+        "events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| event == "feishu-stop"),
+        "events: {events:?}"
     );
 }
 
