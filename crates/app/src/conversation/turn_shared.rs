@@ -21,6 +21,20 @@ const FILE_READ_FOLLOWUP_CONTENT_PREVIEW_CHARS: usize = 384;
 const SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS: usize = 384;
 const SHELL_FOLLOWUP_STDIO_OMISSION_MARKER: &str = "\n[... omitted ...]\n";
 
+/// Strips <think>...</think> tags from model response text to prevent
+/// internal reasoning chains from leaking to user-facing output.
+/// This handles both standard think tags and case-insensitive variants.
+#[allow(clippy::expect_used)]
+fn strip_think_tags(text: &str) -> String {
+    use regex::Regex;
+    static THINK_TAG_RE: std::sync::LazyLock<Regex> =
+        std::sync::LazyLock::new(|| {
+            // Match <think> ... </think> tags (case-insensitive, multiline)
+            Regex::new(r"(?is)<think>.*?</think>").expect("static regex should always compile")
+        });
+    THINK_TAG_RE.replace_all(text, "").to_string()
+}
+
 pub fn next_conversation_turn_id() -> String {
     static NEXT_CONVERSATION_TURN_SEQ: AtomicU64 = AtomicU64::new(1);
     let seq = NEXT_CONVERSATION_TURN_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -307,10 +321,11 @@ pub fn compose_assistant_reply(
         TurnResult::FinalText(text)
         | TurnResult::StreamingText(text)
         | TurnResult::StreamingDone(text) => {
+            let cleaned_text = strip_think_tags(&text.trim());
             if had_tool_intents {
-                join_non_empty_lines(&[assistant_preface, text.as_str()])
+                join_non_empty_lines(&[assistant_preface, cleaned_text.as_str()])
             } else {
-                text
+                cleaned_text.trim().to_string()
             }
         }
         TurnResult::NeedsApproval(requirement) => {
@@ -1965,5 +1980,36 @@ mod tests {
 
         assert_eq!(reduced.as_ref(), tool_result);
         assert_eq!(reduced.as_ptr(), tool_result.as_ptr());
+    }
+
+    #[test]
+    fn strip_think_tags_removes_think_content() {
+        let input = "<think>Let me think about this...\nThe user wants to know the weather.\nI should check the forecast.</think>The weather today is sunny.";
+        let expected = "The weather today is sunny.";
+        assert_eq!(strip_think_tags(input), expected);
+    }
+
+    #[test]
+    fn strip_think_tags_handles_empty_tags() {
+        let input = "Hello world";
+        assert_eq!(strip_think_tags(input), "Hello world");
+    }
+
+    #[test]
+    fn strip_think_tags_handles_multiple_tags() {
+        let input = "<think>First thought</think>Middle<think>Second thought</think>End";
+        assert_eq!(strip_think_tags(input), "MiddleEnd");
+    }
+
+    #[test]
+    fn strip_think_tags_handles_nested_content() {
+        let input = "<think>Think content with <tag> inside</think>Real response";
+        assert_eq!(strip_think_tags(input), "Real response");
+    }
+
+    #[test]
+    fn strip_think_tags_case_insensitive() {
+        let input = "<think>think content</think>Result";
+        assert_eq!(strip_think_tags(input), "Result");
     }
 }
