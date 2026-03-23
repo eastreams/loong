@@ -6,7 +6,7 @@ use axum::{Router, routing::post};
 use crate::CliResult;
 use crate::KernelContext;
 use crate::channel::{
-    ChannelAdapter, ChannelOutboundTarget, FeishuChannelSendRequest,
+    ChannelAdapter, ChannelOutboundTarget, ChannelServeStopHandle, FeishuChannelSendRequest,
     runtime_state::ChannelOperationRuntimeTracker,
 };
 use crate::config::{
@@ -74,6 +74,7 @@ pub(super) async fn run_feishu_channel(
     path_override: Option<&str>,
     kernel_ctx: KernelContext,
     runtime: Arc<ChannelOperationRuntimeTracker>,
+    stop: ChannelServeStopHandle,
 ) -> CliResult<()> {
     if resolved.mode == crate::config::FeishuChannelServeMode::Websocket {
         return websocket::run_feishu_websocket_channel(
@@ -84,6 +85,7 @@ pub(super) async fn run_feishu_channel(
             default_account_source,
             kernel_ctx,
             runtime,
+            stop,
         )
         .await;
     }
@@ -135,6 +137,9 @@ pub(super) async fn run_feishu_channel(
     );
 
     axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            stop.wait().await;
+        })
         .await
         .map_err(|error| format!("feishu webhook server stopped: {error}"))
 }

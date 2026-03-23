@@ -14,7 +14,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::CliResult;
 use crate::KernelContext;
-use crate::channel::runtime_state::ChannelOperationRuntimeTracker;
+use crate::channel::{ChannelServeStopHandle, runtime_state::ChannelOperationRuntimeTracker};
 use crate::config::{
     ChannelDefaultAccountSelectionSource, LoongClawConfig, ResolvedFeishuChannelConfig,
 };
@@ -182,6 +182,7 @@ pub(super) async fn run_feishu_websocket_channel(
     default_account_source: ChannelDefaultAccountSelectionSource,
     kernel_ctx: KernelContext,
     runtime: Arc<ChannelOperationRuntimeTracker>,
+    stop: ChannelServeStopHandle,
 ) -> CliResult<()> {
     let mut adapter = FeishuAdapter::new(resolved)?;
     adapter.refresh_tenant_token().await?;
@@ -208,14 +209,20 @@ pub(super) async fn run_feishu_websocket_channel(
     }
 
     loop {
-        let endpoint = match client.get_websocket_endpoint().await {
+        let endpoint = match tokio::select! {
+            _ = stop.wait() => return Ok(()),
+            endpoint = client.get_websocket_endpoint() => endpoint,
+        } {
             Ok(endpoint) => endpoint,
             Err(error) => {
                 #[allow(clippy::print_stderr)]
                 {
                     eprintln!("warning: feishu websocket endpoint discovery failed: {error}");
                 }
-                tokio::time::sleep(Duration::from_secs(DEFAULT_WS_RECONNECT_INTERVAL_S)).await;
+                tokio::select! {
+                    _ = stop.wait() => return Ok(()),
+                    _ = tokio::time::sleep(Duration::from_secs(DEFAULT_WS_RECONNECT_INTERVAL_S)) => {}
+                }
                 continue;
             }
         };
@@ -227,14 +234,19 @@ pub(super) async fn run_feishu_websocket_channel(
                 .max(1),
         );
 
-        if let Err(error) = run_feishu_websocket_session(&state, &endpoint.url, &ws_config).await {
+        if let Err(error) =
+            run_feishu_websocket_session(&state, &endpoint.url, &ws_config, stop.clone()).await
+        {
             #[allow(clippy::print_stderr)]
             {
                 eprintln!("warning: feishu websocket session ended: {error}");
             }
         }
 
-        tokio::time::sleep(reconnect_interval).await;
+        tokio::select! {
+            _ = stop.wait() => return Ok(()),
+            _ = tokio::time::sleep(reconnect_interval) => {}
+        }
     }
 }
 
@@ -242,6 +254,7 @@ async fn run_feishu_websocket_session(
     state: &FeishuWebhookState,
     url: &str,
     ws_config: &FeishuWsEndpointClientConfig,
+    stop: ChannelServeStopHandle,
 ) -> CliResult<()> {
     let parsed_url = reqwest::Url::parse(url)
         .map_err(|error| format!("parse Feishu websocket URL failed: {error}"))?;
@@ -269,6 +282,7 @@ async fn run_feishu_websocket_session(
 
     loop {
         tokio::select! {
+            _ = stop.wait() => return Ok(()),
             _ = ping_interval.tick() => {
                 let ping_frame = FeishuWsFrame {
                     seq_id: 0,
@@ -809,6 +823,7 @@ mod tests {
                     &state,
                     session_url.as_str(),
                     &FeishuWsEndpointClientConfig::default(),
+                    ChannelServeStopHandle::new(),
                 )
                 .await
             }),
@@ -899,6 +914,7 @@ mod tests {
                 ping_interval_s: Some(30),
                 ..FeishuWsEndpointClientConfig::default()
             },
+            ChannelServeStopHandle::new(),
         )
         .await
         .expect_err("session should end after the mock server closes");

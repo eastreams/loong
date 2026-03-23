@@ -10,7 +10,10 @@ use std::{
     future::Future,
     path::PathBuf,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 use std::{fmt, str::FromStr};
@@ -1143,6 +1146,7 @@ struct ChannelServeCommandSpec {
 ))]
 #[derive(Debug, Clone)]
 pub struct ChannelServeStopHandle {
+    requested: Arc<AtomicBool>,
     stop: Arc<Notify>,
 }
 
@@ -1154,16 +1158,30 @@ pub struct ChannelServeStopHandle {
 impl ChannelServeStopHandle {
     pub fn new() -> Self {
         Self {
+            requested: Arc::new(AtomicBool::new(false)),
             stop: Arc::new(Notify::new()),
         }
     }
 
     pub fn request_stop(&self) {
-        self.stop.notify_one();
+        self.requested.store(true, Ordering::SeqCst);
+        self.stop.notify_waiters();
+    }
+
+    pub fn is_requested(&self) -> bool {
+        self.requested.load(Ordering::SeqCst)
     }
 
     async fn wait(&self) {
-        self.stop.notified().await;
+        if self.is_requested() {
+            return;
+        }
+        let notified = self.stop.notified();
+        tokio::pin!(notified);
+        if self.is_requested() {
+            return;
+        }
+        notified.await;
     }
 }
 
@@ -1271,16 +1289,10 @@ async fn with_channel_serve_runtime_with_stop<F, Fut>(
     run: F,
 ) -> CliResult<()>
 where
-    F: FnOnce(Arc<ChannelOperationRuntimeTracker>) -> Fut,
+    F: FnOnce(Arc<ChannelOperationRuntimeTracker>, ChannelServeStopHandle) -> Fut,
     Fut: Future<Output = CliResult<()>>,
 {
-    with_channel_serve_runtime(spec, move |runtime| async move {
-        tokio::select! {
-            result = run(runtime) => result,
-            _ = stop.wait() => Ok(()),
-        }
-    })
-    .await
+    with_channel_serve_runtime(spec, move |runtime| run(runtime, stop)).await
 }
 
 #[cfg(test)]
@@ -1292,14 +1304,11 @@ async fn with_channel_serve_runtime_with_stop_in_dir<F, Fut>(
     run: F,
 ) -> CliResult<()>
 where
-    F: FnOnce(Arc<ChannelOperationRuntimeTracker>) -> Fut,
+    F: FnOnce(Arc<ChannelOperationRuntimeTracker>, ChannelServeStopHandle) -> Fut,
     Fut: Future<Output = CliResult<()>>,
 {
-    with_channel_serve_runtime_in_dir(runtime_dir, process_id, spec, move |runtime| async move {
-        tokio::select! {
-            result = run(runtime) => result,
-            _ = stop.wait() => Ok(()),
-        }
+    with_channel_serve_runtime_in_dir(runtime_dir, process_id, spec, move |runtime| {
+        run(runtime, stop)
     })
     .await
 }
@@ -1324,8 +1333,14 @@ where
         Arc<ChannelOperationRuntimeTracker>,
     ) -> ChannelCommandFuture<'a>,
 {
-    run_channel_serve_command_with_stop(context, spec, validate, ChannelServeStopHandle::new(), run)
-        .await
+    run_channel_serve_command_with_stop(
+        context,
+        spec,
+        validate,
+        ChannelServeStopHandle::new(),
+        move |context, kernel_ctx, runtime, _stop| run(context, kernel_ctx, runtime),
+    )
+    .await
 }
 
 #[cfg(any(
@@ -1347,6 +1362,7 @@ where
         &'a ChannelCommandContext<R>,
         KernelContext,
         Arc<ChannelOperationRuntimeTracker>,
+        ChannelServeStopHandle,
     ) -> ChannelCommandFuture<'a>,
 {
     validate(&context.resolved)?;
@@ -1370,9 +1386,9 @@ where
             account_label: runtime_account_label.as_str(),
         },
         stop,
-        move |runtime| async move {
+        move |runtime, stop| async move {
             context.emit_route_notice(spec.family.runtime.platform);
-            run(&context, kernel_ctx, runtime).await
+            run(&context, kernel_ctx, runtime, stop).await
         },
     )
     .await
@@ -1418,7 +1434,7 @@ async fn run_telegram_channel_with_context(
             account_label: runtime_account_label.as_str(),
         },
         stop,
-        move |runtime| async move {
+        move |runtime, stop| async move {
             let mut adapter = telegram::TelegramAdapter::new(&resolved, token);
             context.emit_route_notice(ChannelPlatform::Telegram);
 
@@ -1434,7 +1450,10 @@ async fn run_telegram_channel_with_context(
             );
 
             loop {
-                let batch = adapter.receive_batch().await?;
+                let batch = tokio::select! {
+                    _ = stop.wait() => break,
+                    batch = adapter.receive_batch() => batch?,
+                };
                 let config = batch_config.clone();
                 let kernel_ctx = batch_kernel_ctx.clone();
                 let had_messages = process_channel_batch(
@@ -1463,7 +1482,10 @@ async fn run_telegram_channel_with_context(
                 if once {
                     break;
                 }
-                sleep(Duration::from_millis(250)).await;
+                tokio::select! {
+                    _ = stop.wait() => break,
+                    _ = sleep(Duration::from_millis(250)) => {}
+                }
             }
             Ok(())
         },
@@ -1698,7 +1720,7 @@ async fn run_feishu_channel_with_context(
         },
         validate_feishu_security_config,
         stop,
-        move |context, kernel_ctx, runtime| {
+        move |context, kernel_ctx, runtime, stop| {
             Box::pin(async move {
                 let route = context.route.clone();
                 let resolved_path = context.resolved_path.clone();
@@ -1714,6 +1736,7 @@ async fn run_feishu_channel_with_context(
                     path_override.as_deref(),
                     kernel_ctx,
                     runtime,
+                    stop,
                 )
                 .await
             })
@@ -3187,7 +3210,7 @@ mod tests {
                 9191,
                 operation,
                 stop_for_body,
-                move |_runtime| {
+                move |_runtime, stop| {
                     let runtime_dir_for_body = runtime_dir_for_body.clone();
                     async move {
                         let live =
@@ -3202,8 +3225,8 @@ mod tests {
                         assert!(live.running);
                         assert_eq!(live.pid, Some(9191));
                         entered_for_body.notify_one();
-                        let _: CliResult<()> = std::future::pending().await;
-                        Ok::<_, String>(())
+                        stop.wait().await;
+                        Ok(())
                     }
                 },
             )
