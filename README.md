@@ -324,6 +324,22 @@ surfaces the host and port, DNS resolution results, fake-ip-style addresses,
 and a short TCP reachability check so you can separate local proxy/TUN/fake-ip
 instability from true upstream unavailability.
 
+## We Are Currently Working On
+
+1. **Web UI**
+
+   We are currently building the first usable LoongClaw Web UI.
+
+   It is an optional install surface, and the current scope includes:
+
+   - chat
+   - dashboard
+   - onboarding
+
+   This surface is still evolving and should be understood as an active MVP rather than a fully finished product interface.
+
+   If you would like to help us continue improving it, please switch to the `web` branch and share feedback there.
+
 ## Configuration
 
 `loongclaw onboard` uses `provider.api_key = { env = "..." }` to reference provider credentials, so secrets stay

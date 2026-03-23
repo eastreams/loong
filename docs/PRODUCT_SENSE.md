@@ -50,7 +50,7 @@ See [Product Specs Index](product-specs/index.md) for detailed user-facing requi
 - [Browser Automation](product-specs/browser-automation.md) — bounded browser-style assistant actions
 - [Channel Setup](product-specs/channel-setup.md) — configuring shipped assistant surfaces
 - [Tool Surface](product-specs/tool-surface.md) — truthful runtime-visible tool advertising
-- [WebChat](product-specs/webchat.md) — expectations for the browser-facing chat surface
+- [Web UI](product-specs/web-ui.md) — expectations for the browser-facing product surface
 - [Memory Profiles](product-specs/memory-profiles.md) — memory access patterns
 - [Prompt And Personality](product-specs/prompt-and-personality.md) — prompt engineering constraints
 

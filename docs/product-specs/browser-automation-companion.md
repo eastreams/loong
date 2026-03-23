@@ -63,5 +63,5 @@ runtime packaging still remain planned work.
 
 - Replacing the shipped lightweight browser tools
 - Making heavy browser automation part of the default install path
-- WebChat, dashboard controls, or broader trigger automation
+- The broader Web UI surface or trigger automation beyond the browser companion scope
 - Arbitrary desktop automation outside the browser surface

@@ -218,6 +218,40 @@ cargo install --path crates/daemon
 
 先把 CLI 这条基础路径走通，再继续配置其他通道。
 
+### 仓库可观测性
+
+LoongClaw 内置了一条面向开发者的可观测性路径，用于基于 kernel 的调试与审查。默认情况下，应用运行时会在 `[audit].mode = "fanout"` 下将审计事件写入 `~/.loongclaw/audit/events.jsonl`，因此策略拒绝、token 生命周期事件以及其他安全关键证据在进程重启后仍然会保留下来。
+
+```bash
+loongclaw doctor --config ~/.loongclaw/config.toml
+loongclaw doctor --config ~/.loongclaw/config.toml --json
+loongclaw audit recent --config ~/.loongclaw/config.toml
+loongclaw audit summary --config ~/.loongclaw/config.toml
+loongclaw audit recent --config ~/.loongclaw/config.toml --json
+if [ -f ~/.loongclaw/audit/events.jsonl ]; then tail -n 20 ~/.loongclaw/audit/events.jsonl; else echo "audit journal is created on first audit write"; fi
+```
+
+现在，`doctor` 除了原有的运行时检查外，还会额外显示审计保留模式以及 journal 目录是否就绪。对于持久化模式（`fanout` 或 `jsonl`），LoongClaw 会在第一次写入时自动创建 journal 目录；如果你希望在正式运行前先完成准备，`doctor --fix` 也可以提前把这个目录建好。
+当你想查看最近一小段事件窗口时，可以使用 `audit recent`；当你想查看按类型聚合后的计数和最近出现时间时，可以使用 `audit summary`。如果你需要最原始的 JSONL 记录，直接 `tail` 仍然是一个可接受的兜底方式。
+
+当 provider 的模型探测在还没拿到任何 HTTP 状态码之前就失败时，`doctor` 现在还会为当前 `request/models` host 增加一条 provider route probe。这个探测会展示 host 和 port、DNS 解析结果、是否命中 fake-ip 风格地址，以及一个简短的 TCP 可达性检查，帮助你区分是本地代理 / TUN / fake-ip 环境不稳定，还是上游 provider 本身不可达。
+
+## 我们正在推进
+
+1. **Web UI**
+
+   我们目前正在构建 LoongClaw 第一版可实际使用的 Web UI。
+
+   它是一个可选的安装内容，当前范围包括：
+
+   - chat
+   - dashboard
+   - onboarding
+
+   这部分目前仍在持续迭代中，更适合被理解为一个正在成型的 MVP，而不是已经完全收口的正式产品界面。
+
+   如果你愿意帮助我们继续打磨它，欢迎切换到 `web` 分支并在那里向我们反馈建议。
+
 ## 配置
 
 `loongclaw onboard` 默认通过 `provider.api_key = { env = "..." }` 引用 provider 凭据，让密钥不直接写进配置文件：

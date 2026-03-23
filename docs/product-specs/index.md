@@ -18,7 +18,7 @@ Product specs describe **what** the product does from the user's perspective, no
 - [Tool Surface](tool-surface.md)
 - [Runtime Experiment](runtime-experiment.md)
 - [Runtime Capability](runtime-capability.md)
-- [WebChat](webchat.md)
+- [Web UI](web-ui.md)
 - [Prompt And Personality](prompt-and-personality.md)
 - [Memory Profiles](memory-profiles.md)
 - [Shell Completion](shell-completion.md)
@@ -28,7 +28,7 @@ Product specs describe **what** the product does from the user's perspective, no
 - `Installation`, `Onboarding`, `One-Shot Ask`, `Doctor`, `Browser Automation`, `Tool Surface`, and `Channel Setup` define the shipped first-run and support journey for the current MVP.
 - `Runtime Experiment` defines the shipped local experiment-record surface layered on top of runtime snapshot and restore artifacts.
 - `Runtime Capability` defines the shipped local capability-candidate review surface layered on top of runtime experiment artifacts.
-- `Browser Automation Companion` and `WebChat` are expectation-setting specs for the next user-facing surfaces. They should not be documented as generally available before the implementation exists.
+- `Browser Automation Companion` and `Web UI` are expectation-setting specs for the next user-facing surfaces. They should not be documented as generally available before the implementation exists.
 
 Template for new specs:
 
