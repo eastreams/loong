@@ -450,6 +450,26 @@ pub struct AcpTurnResult {
     pub stop_reason: Option<AcpTurnStopReason>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamingTokenEvent {
+    pub event_type: String,
+    pub delta: TokenDelta,
+    pub index: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenDelta {
+    pub text: Option<String>,
+    pub tool_call: Option<ToolCallDelta>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallDelta {
+    pub name: Option<String>,
+    pub args: Option<String>,
+    pub id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AcpSessionStatus {
     pub session_key: String,

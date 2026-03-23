@@ -680,6 +680,17 @@ pub trait ConversationRuntime: Send + Sync {
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ProviderTurn>;
 
+    async fn request_turn_streaming(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        turn_id: &str,
+        messages: &[Value],
+        tool_view: &ToolView,
+        binding: ConversationRuntimeBinding<'_>,
+        on_token: crate::provider::StreamingTokenCallback,
+    ) -> CliResult<ProviderTurn>;
+
     async fn persist_turn(
         &self,
         session_id: &str,
@@ -925,6 +936,28 @@ where
             messages,
             tool_view,
             provider_runtime_binding(binding),
+        )
+        .await
+    }
+
+    async fn request_turn_streaming(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        turn_id: &str,
+        messages: &[Value],
+        tool_view: &ToolView,
+        binding: ConversationRuntimeBinding<'_>,
+        on_token: crate::provider::StreamingTokenCallback,
+    ) -> CliResult<ProviderTurn> {
+        provider::request_turn_streaming_in_view(
+            config,
+            session_id,
+            turn_id,
+            messages,
+            tool_view,
+            provider_runtime_binding(binding),
+            on_token,
         )
         .await
     }

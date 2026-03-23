@@ -81,7 +81,9 @@ pub fn tool_driven_followup_payload(
     }
 
     match turn_result {
-        TurnResult::FinalText(text) => {
+        TurnResult::FinalText(text)
+        | TurnResult::StreamingText(text)
+        | TurnResult::StreamingDone(text) => {
             Some(ToolDrivenFollowupPayload::ToolResult { text: text.clone() })
         }
         TurnResult::NeedsApproval(_) => None,
@@ -240,7 +242,9 @@ impl<'a> ToolDrivenReplyKernel<'a> {
             return None;
         }
         match self.turn_result {
-            TurnResult::FinalText(text) => Some(join_non_empty_lines(&[
+            TurnResult::FinalText(text)
+            | TurnResult::StreamingText(text)
+            | TurnResult::StreamingDone(text) => Some(join_non_empty_lines(&[
                 self.assistant_preface,
                 text.as_str(),
             ])),
@@ -300,7 +304,9 @@ pub fn compose_assistant_reply(
     turn_result: TurnResult,
 ) -> String {
     match turn_result {
-        TurnResult::FinalText(text) => {
+        TurnResult::FinalText(text)
+        | TurnResult::StreamingText(text)
+        | TurnResult::StreamingDone(text) => {
             if had_tool_intents {
                 join_non_empty_lines(&[assistant_preface, text.as_str()])
             } else {

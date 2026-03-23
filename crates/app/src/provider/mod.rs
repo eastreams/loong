@@ -42,6 +42,7 @@ mod runtime_binding;
 mod shape;
 mod transport;
 
+pub use request_executor::{StreamingCallbackData, StreamingTokenCallback};
 pub use runtime_binding::ProviderRuntimeBinding;
 pub use shape::{
     extract_provider_turn, extract_provider_turn_with_scope,
@@ -130,7 +131,9 @@ use profile_state_store::{
 use provider_keyspace::build_model_catalog_cache_key;
 #[cfg(test)]
 use provider_keyspace::build_provider_profile_state_key;
-use request_dispatch_runtime::{request_completion_with_model, request_turn_with_model};
+use request_dispatch_runtime::{
+    request_completion_with_model, request_turn_streaming_with_model, request_turn_with_model,
+};
 use request_failover_runtime::request_across_model_candidates;
 #[cfg(test)]
 use request_payload_runtime::{build_completion_request_body, build_turn_request_body};
@@ -263,6 +266,75 @@ pub async fn request_turn_in_view(
                 &session.request_policy,
                 &session.client,
                 &session.auth_context,
+            )
+        },
+    )
+    .await
+}
+
+pub async fn request_turn_streaming(
+    config: &LoongClawConfig,
+    session_id: &str,
+    turn_id: &str,
+    messages: &[Value],
+    binding: ProviderRuntimeBinding<'_>,
+    on_token: crate::provider::request_executor::StreamingTokenCallback,
+) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
+    request_turn_streaming_in_view(
+        config,
+        session_id,
+        turn_id,
+        messages,
+        &crate::tools::runtime_tool_view(),
+        binding,
+        on_token,
+    )
+    .await
+}
+
+pub async fn request_turn_streaming_in_view(
+    config: &LoongClawConfig,
+    session_id: &str,
+    turn_id: &str,
+    messages: &[Value],
+    tool_view: &crate::tools::ToolView,
+    binding: ProviderRuntimeBinding<'_>,
+    on_token: crate::provider::request_executor::StreamingTokenCallback,
+) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
+    let session = prepare_provider_request_session(config).await?;
+    let tool_runtime_config =
+        crate::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None);
+    let runtime_tool_view =
+        crate::tools::runtime_tool_view_with_runtime_config(&config.tools, &tool_runtime_config);
+    let tool_definitions = if tool_view == &runtime_tool_view {
+        crate::tools::provider_tool_definitions_with_config(Some(&tool_runtime_config))
+    } else {
+        crate::tools::try_provider_tool_definitions_for_view(tool_view)?
+    };
+    request_across_model_candidates(
+        &config.provider,
+        binding,
+        &session.auth_profiles,
+        session.profile_state_policy.as_ref(),
+        &session.model_candidates,
+        session.auto_model_mode,
+        session.model_candidate_cooldown_policy.as_ref(),
+        |model, auto_model_mode, auth_profile| {
+            request_turn_streaming_with_model(
+                config,
+                session_id,
+                turn_id,
+                messages,
+                model,
+                auto_model_mode,
+                tool_definitions.as_slice(),
+                auth_profile,
+                &session.endpoint,
+                &session.headers,
+                &session.request_policy,
+                &session.client,
+                &session.auth_context,
+                on_token.clone(),
             )
         },
     )
