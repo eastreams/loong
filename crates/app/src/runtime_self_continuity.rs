@@ -107,6 +107,9 @@ pub(crate) fn merge_runtime_self_continuity(
         merged.runtime_self.standing_instructions =
             fallback.runtime_self.standing_instructions.clone();
     }
+    if merged.runtime_self.tool_usage_policy.is_empty() {
+        merged.runtime_self.tool_usage_policy = fallback.runtime_self.tool_usage_policy.clone();
+    }
     if merged.runtime_self.soul_guidance.is_empty() {
         merged.runtime_self.soul_guidance = fallback.runtime_self.soul_guidance.clone();
     }
@@ -141,6 +144,9 @@ pub(crate) fn missing_runtime_self_continuity(
     if live.runtime_self.standing_instructions.is_empty() {
         missing.runtime_self.standing_instructions =
             stored.runtime_self.standing_instructions.clone();
+    }
+    if live.runtime_self.tool_usage_policy.is_empty() {
+        missing.runtime_self.tool_usage_policy = stored.runtime_self.tool_usage_policy.clone();
     }
     if live.runtime_self.soul_guidance.is_empty() {
         missing.runtime_self.soul_guidance = stored.runtime_self.soul_guidance.clone();
@@ -214,4 +220,81 @@ pub(crate) const fn durable_recall_intro() -> &'static str {
 
 pub(crate) const fn runtime_durable_recall_intro() -> &'static str {
     RUNTIME_DURABLE_RECALL_INTRO
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn runtime_self_continuity_from_event_payload_defaults_missing_tool_usage_policy_lane() {
+        let payload = json!({
+            "runtime_self_continuity": {
+                "runtime_self": {
+                    "standing_instructions": ["Keep continuity explicit."],
+                    "soul_guidance": ["Prefer rigorous execution."],
+                    "identity_context": ["# Identity\n\n- Name: Stored continuity identity"],
+                    "user_context": ["The operator prefers concise technical summaries."]
+                },
+                "resolved_identity": {
+                    "source": "workspace_self",
+                    "content": "# Identity\n\n- Name: Stored continuity identity"
+                }
+            }
+        });
+
+        let continuity =
+            runtime_self_continuity_from_event_payload(&payload).expect("deserialize continuity");
+
+        assert!(continuity.runtime_self.tool_usage_policy.is_empty());
+        assert_eq!(
+            continuity.runtime_self.standing_instructions,
+            vec!["Keep continuity explicit.".to_owned()]
+        );
+    }
+
+    #[test]
+    fn missing_runtime_self_continuity_rehydrates_missing_tool_usage_policy_lane() {
+        let stored = RuntimeSelfContinuity {
+            runtime_self: RuntimeSelfModel {
+                tool_usage_policy: vec![
+                    "Search memory before guessing workspace facts.".to_owned(),
+                ],
+                ..RuntimeSelfModel::default()
+            },
+            ..RuntimeSelfContinuity::default()
+        };
+        let live = RuntimeSelfContinuity::default();
+
+        let missing = missing_runtime_self_continuity(&stored, Some(&live))
+            .expect("missing continuity should preserve tool usage policy");
+
+        assert_eq!(
+            missing.runtime_self.tool_usage_policy,
+            vec!["Search memory before guessing workspace facts.".to_owned()]
+        );
+    }
+
+    #[test]
+    fn merge_runtime_self_continuity_rehydrates_missing_tool_usage_policy_lane() {
+        let fallback = RuntimeSelfContinuity {
+            runtime_self: RuntimeSelfModel {
+                tool_usage_policy: vec![
+                    "Search memory before guessing workspace facts.".to_owned(),
+                ],
+                ..RuntimeSelfModel::default()
+            },
+            ..RuntimeSelfContinuity::default()
+        };
+        let primary = Some(RuntimeSelfContinuity::default());
+
+        let merged = merge_runtime_self_continuity(primary, Some(&fallback))
+            .expect("merged continuity should preserve tool usage policy");
+
+        assert_eq!(
+            merged.runtime_self.tool_usage_policy,
+            vec!["Search memory before guessing workspace facts.".to_owned()]
+        );
+    }
 }
