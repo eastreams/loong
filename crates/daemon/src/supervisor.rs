@@ -334,6 +334,24 @@ impl SupervisorState {
         surface: &BackgroundChannelSurface,
         stopped_at_ms: u64,
     ) -> Result<(), String> {
+        let current_phase = self
+            .surface_state(surface)
+            .ok_or_else(|| format!("unknown background surface: {surface}"))?
+            .phase;
+        if current_phase == SurfacePhase::Failed {
+            let state = self.surface_state_mut(surface)?;
+            state.stopped_at_ms = Some(stopped_at_ms);
+            return Ok(());
+        }
+
+        if self.shutdown_reason.is_none() {
+            return self.record_surface_failure(
+                surface,
+                stopped_at_ms,
+                "surface stopped unexpectedly without a shutdown request",
+            );
+        }
+
         let exit_reason = self.shutdown_reason.as_ref().map(|reason| match reason {
             SupervisorShutdownReason::Requested { reason } => {
                 format!("shutdown requested: {reason}")
@@ -386,6 +404,19 @@ impl SupervisorState {
             return summary;
         }
 
+        if self.all_surfaces_terminal() && self.shutdown_reason().is_none() {
+            let surfaces = self
+                .spec
+                .surfaces
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return format!(
+                "multi-channel supervisor failed because surfaces stopped without a shutdown request: {surfaces}"
+            );
+        }
+
         let surfaces = self
             .spec
             .surfaces
@@ -407,7 +438,10 @@ impl SupervisorState {
         }
 
         if self.all_surfaces_terminal() {
-            return Ok(());
+            return match self.shutdown_reason() {
+                Some(SupervisorShutdownReason::Requested { .. }) => Ok(()),
+                _ => Err(self.final_exit_summary()),
+            };
         }
 
         Err(self.final_exit_summary())
@@ -617,6 +651,84 @@ mod tests {
         assert_eq!(
             state.exit_reason.as_deref(),
             Some("surface failed: lost upstream connection")
+        );
+    }
+
+    #[tokio::test]
+    async fn child_stop_without_shutdown_request_returns_failure_result() {
+        let telegram = telegram_surface(Some("bot_123456"));
+        let mut supervisor =
+            SupervisorState::new(sample_spec(vec![telegram.clone()]).expect("build spec"));
+
+        supervisor
+            .mark_surface_running(&telegram, 1_710_000_000_000)
+            .expect("start telegram");
+        supervisor
+            .mark_surface_stopped(&telegram, 1_710_000_000_500)
+            .expect("record unexpected stop");
+
+        assert_eq!(supervisor.phase(), RuntimeOwnerPhase::Failed);
+        let state = supervisor
+            .surface_state(&telegram)
+            .expect("telegram surface should be tracked");
+        assert_eq!(state.phase, SurfacePhase::Failed);
+        assert_eq!(
+            state.last_error.as_deref(),
+            Some("surface stopped unexpectedly without a shutdown request")
+        );
+        assert_eq!(
+            state.exit_reason.as_deref(),
+            Some("surface failed: surface stopped unexpectedly without a shutdown request")
+        );
+
+        let result = supervisor.final_exit_result();
+        let error = result.expect_err("unexpected child exit must fail closed");
+        assert!(
+            error.contains("telegram"),
+            "failure result should name the stopped surface: {error}"
+        );
+        assert!(
+            error.contains("surface stopped unexpectedly without a shutdown request"),
+            "failure result should explain the unexpected clean exit: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_child_later_reporting_stopped_preserves_failure_phase_and_result() {
+        let telegram = telegram_surface(Some("bot_123456"));
+        let mut supervisor =
+            SupervisorState::new(sample_spec(vec![telegram.clone()]).expect("build spec"));
+
+        supervisor
+            .mark_surface_running(&telegram, 1_710_000_000_000)
+            .expect("start telegram");
+        supervisor
+            .record_surface_failure(&telegram, 1_710_000_000_500, "lost upstream connection")
+            .expect("record telegram failure");
+        supervisor
+            .mark_surface_stopped(&telegram, 1_710_000_000_800)
+            .expect("record stop bookkeeping after failure");
+
+        assert_eq!(supervisor.phase(), RuntimeOwnerPhase::Failed);
+        let state = supervisor
+            .surface_state(&telegram)
+            .expect("telegram surface should be tracked");
+        assert_eq!(state.phase, SurfacePhase::Failed);
+        assert_eq!(state.stopped_at_ms, Some(1_710_000_000_800));
+        assert_eq!(
+            state.last_error.as_deref(),
+            Some("lost upstream connection")
+        );
+        assert_eq!(
+            state.exit_reason.as_deref(),
+            Some("surface failed: lost upstream connection")
+        );
+
+        let result = supervisor.final_exit_result();
+        let error = result.expect_err("failure result must be preserved");
+        assert!(
+            error.contains("lost upstream connection"),
+            "failure result should keep the original failure reason: {error}"
         );
     }
 
