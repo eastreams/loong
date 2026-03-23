@@ -643,6 +643,89 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[test]
+    fn hydrate_stage_envelope_window_plus_summary_keeps_summary_retrieval_request() {
+        let tmp = hydrated_memory_temp_dir("loongclaw-stage-envelope-window-plus-summary");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("window-plus-summary.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            mode: MemoryMode::WindowPlusSummary,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 4,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+
+        let envelope = hydrate_stage_envelope("stage-window-plus-summary", &config)
+            .expect("hydrate staged envelope");
+
+        let retrieval_request = envelope
+            .retrieval_request
+            .expect("window-plus-summary should advertise retrieval request");
+        assert_eq!(retrieval_request.budget_items, config.sliding_window);
+        assert_eq!(
+            retrieval_request.allowed_kinds,
+            vec![DerivedMemoryKind::Summary]
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn hydrate_stage_envelope_window_only_omits_summary_retrieval_request() {
+        let tmp = hydrated_memory_temp_dir("loongclaw-stage-envelope-window-only");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("window-only.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowOnly,
+            mode: MemoryMode::WindowOnly,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 4,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+
+        let envelope =
+            hydrate_stage_envelope("stage-window-only", &config).expect("hydrate staged envelope");
+
+        assert_eq!(envelope.retrieval_request, None);
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn hydrate_stage_envelope_profile_plus_window_omits_summary_retrieval_request() {
+        let tmp = hydrated_memory_temp_dir("loongclaw-stage-envelope-profile-plus-window");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("profile-plus-window.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::ProfilePlusWindow,
+            mode: MemoryMode::ProfilePlusWindow,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 4,
+            profile_note: Some("Imported ZeroClaw preferences".to_owned()),
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+
+        let envelope = hydrate_stage_envelope("stage-profile-plus-window", &config)
+            .expect("hydrate staged envelope");
+
+        assert_eq!(envelope.retrieval_request, None);
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
     fn fail_open_memory_derivation_failure_keeps_recent_window_behavior() {
         let session_id = "fail-open-derivation";
         let _faults = ScopedMemoryOrchestratorTestFaults::set(MemoryOrchestratorTestFaults {
