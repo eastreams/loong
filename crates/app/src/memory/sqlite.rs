@@ -711,6 +711,36 @@ pub(super) fn load_context_snapshot_with_diagnostics(
     })
 }
 
+pub(super) fn load_summary_body_for_durable_flush(
+    session_id: &str,
+    config: &MemoryRuntimeConfig,
+) -> Result<Option<String>, String> {
+    let window_limit = default_window_size(config);
+    let runtime = acquire_memory_runtime(config)?;
+
+    runtime.with_connection("memory.durable_flush_summary", |conn| {
+        let recent_window =
+            query_recent_prompt_turns_with_overflow_probe(conn, session_id, window_limit, None)?;
+        if recent_window.window_starts_at_session_origin {
+            return Ok(None);
+        }
+
+        let checkpoint_meta = match recent_window.checkpoint_meta_lookup {
+            SummaryCheckpointMetaLookup::Known(checkpoint_meta) => checkpoint_meta,
+            SummaryCheckpointMetaLookup::Unknown => load_summary_checkpoint_meta(conn, session_id)?,
+        };
+        let checkpoint = materialize_summary_checkpoint(
+            conn,
+            session_id,
+            recent_window.summary_before_turn_id,
+            checkpoint_meta,
+            config,
+        )?;
+
+        Ok(checkpoint.map(|value| value.summary_body))
+    })
+}
+
 pub(super) fn ensure_memory_db_ready(
     path: Option<PathBuf>,
     config: &MemoryRuntimeConfig,

@@ -14,6 +14,8 @@ use crate::runtime_identity;
 
 mod canonical;
 mod context;
+#[cfg(feature = "memory-sqlite")]
+mod durable_flush;
 mod kernel_adapter;
 mod orchestrator;
 mod protocol;
@@ -32,6 +34,8 @@ pub use canonical::{
     canonical_memory_record_from_persisted_turn,
 };
 pub use context::load_prompt_context;
+#[cfg(feature = "memory-sqlite")]
+pub(crate) use durable_flush::flush_pre_compaction_durable_memory;
 pub use kernel_adapter::MvpMemoryAdapter;
 pub use orchestrator::{
     BuiltinMemoryOrchestrator, HydratedMemoryContext, MemoryDiagnostics, hydrate_memory_context,

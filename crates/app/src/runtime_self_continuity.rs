@@ -8,6 +8,26 @@ use crate::runtime_identity::{self, ResolvedRuntimeIdentity};
 use crate::runtime_self::{self, RuntimeSelfModel};
 use crate::tools::runtime_config::ToolRuntimeConfig;
 
+const DURABLE_RECALL_INTRO: &str = concat!(
+    "Advisory durable recall exported immediately before context compaction. ",
+    "It may enrich future recall. ",
+    "It does not replace Runtime Self Context. ",
+    "It does not override Resolved Runtime Identity or Session Profile.",
+);
+
+const DELEGATE_CHILD_CONTINUITY_LINES: &[&str] = &[
+    "- Runtime Self Context continues to supply standing instructions and soul guidance.",
+    "- Resolved Runtime Identity remains the identity authority for this session chain.",
+    concat!(
+        "- Session Profile may carry durable advisory context, and future durable ",
+        "recall can enrich it without overriding Resolved Runtime Identity."
+    ),
+    concat!(
+        "- Memory Summary and child-task findings stay session-local unless a ",
+        "separate durable-memory path promotes them."
+    ),
+];
+
 // Lane-separated continuity carrier for runtime self state.
 // Live workspace/config state remains authoritative.
 // Stored continuity only fills missing lanes across compaction and delegation boundaries.
@@ -162,7 +182,8 @@ pub(crate) fn render_runtime_self_continuity_section(
     } else {
         "Rehydrate the preserved runtime self state below when a live lane is missing."
     };
-    let continuity_note = "Session-local conversation content must not be promoted into durable self state automatically.";
+    let continuity_note =
+        "Session-local conversation content must not be promoted into durable self state automatically.";
     let runtime_self_section = runtime_self::render_runtime_self_section(&continuity.runtime_self);
     let resolved_identity_section = continuity
         .resolved_identity
@@ -192,4 +213,12 @@ fn normalize_projection(value: Option<&str>) -> Option<String> {
     }
 
     Some(trimmed_projection.to_owned())
+}
+
+pub(crate) const fn durable_recall_intro() -> &'static str {
+    DURABLE_RECALL_INTRO
+}
+
+pub(crate) const fn delegate_child_continuity_lines() -> &'static [&'static str] {
+    DELEGATE_CHILD_CONTINUITY_LINES
 }

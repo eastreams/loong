@@ -1,5 +1,6 @@
 use loongclaw_contracts::MemoryCoreRequest;
 use serde_json::json;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 use super::*;
@@ -7,6 +8,21 @@ use super::*;
 fn core_dispatch_test_lock() -> &'static Mutex<()> {
     static CORE_DISPATCH_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     CORE_DISPATCH_TEST_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn isolated_memory_workspace(prefix: &str) -> (PathBuf, runtime_config::MemoryRuntimeConfig) {
+    let root = crate::test_support::unique_temp_dir(prefix);
+    std::fs::create_dir_all(&root).expect("create isolated memory workspace");
+
+    let db_path = root.join("memory.sqlite3");
+    let config = runtime_config::MemoryRuntimeConfig {
+        sqlite_path: Some(db_path),
+        sliding_window: 1,
+        ..runtime_config::MemoryRuntimeConfig::default()
+    };
+
+    (root, config)
 }
 
 #[test]
@@ -248,6 +264,99 @@ fn load_prompt_context_with_diagnostics_omits_legacy_identity_from_profile_proje
 
     let _ = fs::remove_file(&db_path);
     let _ = fs::remove_dir(&tmp);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn pre_compaction_durable_flush_deduplicates_repeated_summary_exports() {
+    let _guard = core_dispatch_test_lock()
+        .lock()
+        .expect("core dispatch test lock");
+
+    let (workspace_root, config) =
+        isolated_memory_workspace("loongclaw-pre-compaction-durable-flush");
+
+    append_turn_direct(
+        "durable-flush-session",
+        "user",
+        "remember the deployment cutoff",
+        &config,
+    )
+    .expect("append user turn");
+    append_turn_direct(
+        "durable-flush-session",
+        "assistant",
+        "deployment cutoff is tonight",
+        &config,
+    )
+    .expect("append assistant turn");
+
+    let first = super::durable_flush::flush_pre_compaction_durable_memory(
+        "durable-flush-session",
+        Some(workspace_root.as_path()),
+        &config,
+    )
+    .expect("first durable flush");
+    let first_path = match first {
+        super::durable_flush::PreCompactionDurableFlushOutcome::Flushed { path, .. } => path,
+        other @ super::durable_flush::PreCompactionDurableFlushOutcome::SkippedMissingWorkspaceRoot
+        | other @ super::durable_flush::PreCompactionDurableFlushOutcome::SkippedNoSummary
+        | other @ super::durable_flush::PreCompactionDurableFlushOutcome::SkippedDuplicate => {
+            panic!("expected flushed outcome, got {other:?}")
+        }
+    };
+
+    let second = super::durable_flush::flush_pre_compaction_durable_memory(
+        "durable-flush-session",
+        Some(workspace_root.as_path()),
+        &config,
+    )
+    .expect("second durable flush");
+    assert_eq!(
+        second,
+        super::durable_flush::PreCompactionDurableFlushOutcome::SkippedDuplicate
+    );
+
+    let exported = std::fs::read_to_string(&first_path).expect("read durable memory log");
+    let marker_count = exported.matches("- content_sha256: ").count();
+    assert_eq!(
+        marker_count, 1,
+        "duplicate flush should not append another entry"
+    );
+    assert!(exported.contains("Advisory durable recall"));
+    assert!(exported.contains("remember the deployment cutoff"));
+    assert!(!exported.contains("## Resolved Runtime Identity"));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn pre_compaction_durable_flush_skips_when_no_summary_checkpoint_exists() {
+    let _guard = core_dispatch_test_lock()
+        .lock()
+        .expect("core dispatch test lock");
+
+    let (workspace_root, config) =
+        isolated_memory_workspace("loongclaw-pre-compaction-durable-flush-empty");
+
+    append_turn_direct(
+        "durable-flush-empty-session",
+        "user",
+        "only one turn",
+        &config,
+    )
+    .expect("append user turn");
+
+    let outcome = super::durable_flush::flush_pre_compaction_durable_memory(
+        "durable-flush-empty-session",
+        Some(workspace_root.as_path()),
+        &config,
+    )
+    .expect("durable flush without summary should succeed");
+
+    assert_eq!(
+        outcome,
+        super::durable_flush::PreCompactionDurableFlushOutcome::SkippedNoSummary
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]
