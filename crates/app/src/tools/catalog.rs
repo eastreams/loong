@@ -1043,8 +1043,7 @@ fn tool_visibility_gate_enabled_for_runtime_policy(
 
             #[cfg(feature = "tool-file")]
             {
-                let memory_corpus_available = super::memory_tools::memory_corpus_available(config);
-                memory_corpus_available
+                super::memory_tools::memory_corpus_available(config)
             }
 
             #[cfg(not(feature = "tool-file"))]
