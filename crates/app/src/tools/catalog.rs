@@ -1031,10 +1031,27 @@ fn tool_visibility_gate_enabled_for_runtime_policy(
         ToolVisibilityGate::Browser => config.browser.enabled,
         ToolVisibilityGate::BrowserCompanion => config.browser_companion.is_runtime_ready(),
         ToolVisibilityGate::ExternalSkills => config.external_skills.enabled,
-        ToolVisibilityGate::MemoryFileRoot => config
-            .file_root
-            .as_ref()
-            .is_some_and(|value| !value.as_os_str().is_empty()),
+        ToolVisibilityGate::MemoryFileRoot => {
+            let has_file_root = config
+                .file_root
+                .as_ref()
+                .is_some_and(|value| !value.as_os_str().is_empty());
+
+            if !has_file_root {
+                return false;
+            }
+
+            #[cfg(feature = "tool-file")]
+            {
+                let memory_corpus_available = super::memory_tools::memory_corpus_available(config);
+                memory_corpus_available
+            }
+
+            #[cfg(not(feature = "tool-file"))]
+            {
+                has_file_root
+            }
+        }
         ToolVisibilityGate::WebFetch => config.web_fetch.enabled,
         ToolVisibilityGate::WebSearch => config.web_search.enabled,
     }
@@ -2578,6 +2595,7 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[cfg(feature = "tool-browser")]
     #[test]
@@ -2682,8 +2700,26 @@ mod tests {
             &hidden_runtime
         ));
 
+        let empty_runtime_dir = tempdir().expect("tempdir");
+        let empty_runtime = ToolRuntimeConfig {
+            file_root: Some(empty_runtime_dir.path().to_path_buf()),
+            ..ToolRuntimeConfig::default()
+        };
+        assert!(!tool_visibility_gate_enabled_for_runtime_policy(
+            ToolVisibilityGate::MemoryFileRoot,
+            &empty_runtime
+        ));
+
+        let visible_runtime_dir = tempdir().expect("tempdir");
+        let visible_memory_path = visible_runtime_dir.path().join("MEMORY.md");
+        std::fs::write(
+            &visible_memory_path,
+            "# Durable Notes\nDeploy freeze window is Friday.\n",
+        )
+        .expect("write root memory");
+
         let visible_runtime = ToolRuntimeConfig {
-            file_root: Some(std::path::PathBuf::from("/tmp/workspace")),
+            file_root: Some(visible_runtime_dir.path().to_path_buf()),
             ..ToolRuntimeConfig::default()
         };
         assert!(tool_visibility_gate_enabled_for_runtime_policy(

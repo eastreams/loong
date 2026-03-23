@@ -2408,8 +2408,31 @@ mod tests {
 
     #[cfg(feature = "tool-file")]
     #[test]
-    fn runtime_tool_view_includes_memory_tools_when_safe_file_root_is_configured() {
-        let root = unique_tool_temp_dir("loongclaw-memory-tool-view");
+    fn runtime_tool_view_hides_memory_tools_when_memory_corpus_is_empty() {
+        let root = unique_tool_temp_dir("loongclaw-memory-tool-view-empty");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+
+        let config = test_tool_runtime_config(root);
+        let tool_view = runtime_tool_view_for_runtime_config(&config);
+
+        assert!(!tool_view.contains("memory_search"));
+        assert!(!tool_view.contains("memory_get"));
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn runtime_tool_view_includes_memory_tools_when_memory_corpus_exists() {
+        let root = unique_tool_temp_dir("loongclaw-memory-tool-view-visible");
+        let memory_path = root.join("MEMORY.md");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(
+            &memory_path,
+            "# Durable Notes\nDeploy freeze window is Friday.\n",
+        )
+        .expect("write root memory");
+
         let config = test_tool_runtime_config(root);
         let tool_view = runtime_tool_view_for_runtime_config(&config);
 
@@ -2497,6 +2520,36 @@ mod tests {
                 .any(|entry| entry["tool_id"] == "memory_search")
         );
         assert!(results.iter().any(|entry| entry["tool_id"] == "memory_get"));
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
+    #[test]
+    fn tool_search_hides_memory_tools_when_memory_corpus_is_empty() {
+        let root = unique_tool_temp_dir("loongclaw-memory-tool-search-empty");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+
+        let config = test_tool_runtime_config(root);
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "query": "search memory recall durable notes",
+                    "limit": 6
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+
+        assert!(
+            results
+                .iter()
+                .all(|entry| entry["tool_id"] != "memory_search")
+        );
+        assert!(results.iter().all(|entry| entry["tool_id"] != "memory_get"));
     }
 
     #[cfg(feature = "tool-file")]
