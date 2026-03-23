@@ -29,6 +29,7 @@ use crate::acp::{
     execute_acp_conversation_turn_for_address,
 };
 use crate::memory::runtime_config::MemoryRuntimeConfig;
+use crate::runtime_self_continuity;
 
 use super::super::config::LoongClawConfig;
 use super::ConversationSessionAddress;
@@ -99,8 +100,8 @@ use crate::session::recovery::{
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
     ApprovalDecision, ApprovalRequestRecord, ApprovalRequestStatus, CreateSessionWithEventRequest,
-    FinalizeSessionTerminalRequest, NewApprovalGrantRecord, NewSessionRecord, SessionKind,
-    SessionRepository, SessionState, TransitionApprovalRequestIfCurrentRequest,
+    FinalizeSessionTerminalRequest, NewApprovalGrantRecord, NewSessionEvent, NewSessionRecord,
+    SessionKind, SessionRepository, SessionState, TransitionApprovalRequestIfCurrentRequest,
     TransitionSessionWithEventIfCurrentRequest,
 };
 
@@ -2315,6 +2316,11 @@ async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
         return Ok(ContextCompactionOutcome::Skipped);
     };
 
+    #[cfg(feature = "memory-sqlite")]
+    {
+        persist_runtime_self_continuity_for_compaction(config, session_id)?;
+    }
+
     match runtime
         .compact_context(config, session_id, messages, kernel_ctx)
         .await
@@ -2325,6 +2331,80 @@ async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
         }
         Err(error) => Err(error),
     }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn persist_runtime_self_continuity_for_compaction(
+    config: &LoongClawConfig,
+    session_id: &str,
+) -> Result<(), String> {
+    let continuity = runtime_self_continuity::resolve_runtime_self_continuity_for_config(config);
+    let Some(continuity) = continuity else {
+        return Ok(());
+    };
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config)?;
+
+    ensure_root_session_exists_for_runtime_self_continuity(&repo, session_id)?;
+
+    let recent_events = repo.list_recent_events(session_id, 8)?;
+    let latest_continuity = recent_events.into_iter().rev().find_map(|event| {
+        let is_continuity_event =
+            event.event_kind == runtime_self_continuity::RUNTIME_SELF_CONTINUITY_EVENT_KIND;
+        if !is_continuity_event {
+            return None;
+        }
+        runtime_self_continuity::runtime_self_continuity_from_event_payload(&event.payload_json)
+    });
+    if latest_continuity.as_ref() == Some(&continuity) {
+        return Ok(());
+    }
+
+    let payload = json!({
+        "source": "compaction",
+        "runtime_self_continuity": continuity,
+    });
+    let event = NewSessionEvent {
+        session_id: session_id.to_owned(),
+        event_kind: runtime_self_continuity::RUNTIME_SELF_CONTINUITY_EVENT_KIND.to_owned(),
+        actor_session_id: Some(session_id.to_owned()),
+        payload_json: payload,
+    };
+    repo.append_event(event)?;
+    Ok(())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn ensure_root_session_exists_for_runtime_self_continuity(
+    repo: &SessionRepository,
+    session_id: &str,
+) -> Result<(), String> {
+    let existing_session = repo.load_session(session_id)?;
+    if existing_session.is_some() {
+        return Ok(());
+    }
+
+    let record = NewSessionRecord {
+        session_id: session_id.to_owned(),
+        kind: SessionKind::Root,
+        parent_session_id: None,
+        label: None,
+        state: SessionState::Ready,
+    };
+    let _ = repo.ensure_session(record)?;
+    Ok(())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn effective_runtime_self_continuity_for_session(
+    config: &LoongClawConfig,
+    session_context: &SessionContext,
+) -> Option<runtime_self_continuity::RuntimeSelfContinuity> {
+    let live_continuity =
+        runtime_self_continuity::resolve_runtime_self_continuity_for_config(config);
+    let stored_continuity = session_context.runtime_self_continuity.as_ref();
+    runtime_self_continuity::merge_runtime_self_continuity(live_continuity, stored_continuity)
 }
 
 fn estimate_tokens(messages: &[Value]) -> Option<usize> {
@@ -4055,6 +4135,8 @@ async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
     let child_label = delegate_request.label.clone();
     let repo = SessionRepository::new(&MemoryRuntimeConfig::from_memory_config(&config.memory))?;
     let next_child_depth = next_delegate_child_depth_for_delegate(config, &repo, session_context)?;
+    let runtime_self_continuity =
+        effective_runtime_self_continuity_for_session(config, session_context);
     with_prepared_subagent_spawn_cleanup_if_kernel_bound(
         runtime,
         &session_context.session_id,
@@ -4085,7 +4167,11 @@ async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
                             event_kind: "delegate_started".to_owned(),
                             actor_session_id: Some(session_context.session_id.clone()),
                             event_payload_json: execution
-                                .spawn_payload(&delegate_request.task, child_label.as_deref()),
+                                .spawn_payload_with_runtime_self_continuity(
+                                    &delegate_request.task,
+                                    child_label.as_deref(),
+                                    runtime_self_continuity.as_ref(),
+                                ),
                         },
                         execution,
                     ))
@@ -4135,6 +4221,8 @@ async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>(
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
     let next_child_depth = next_delegate_child_depth_for_delegate(config, &repo, session_context)?;
+    let runtime_self_continuity =
+        effective_runtime_self_continuity_for_session(config, session_context);
     let (_, execution) = repo.create_delegate_child_session_with_event_if_within_limit(
         &session_context.session_id,
         config.tools.delegate.max_active_children,
@@ -4158,8 +4246,11 @@ async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>(
                     },
                     event_kind: "delegate_queued".to_owned(),
                     actor_session_id: Some(session_context.session_id.clone()),
-                    event_payload_json: execution
-                        .spawn_payload(&delegate_request.task, child_label.as_deref()),
+                    event_payload_json: execution.spawn_payload_with_runtime_self_continuity(
+                        &delegate_request.task,
+                        child_label.as_deref(),
+                        runtime_self_continuity.as_ref(),
+                    ),
                 },
                 execution,
             ))
@@ -4176,6 +4267,7 @@ async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>(
             task: delegate_request.task,
             label: child_label,
             execution,
+            runtime_self_continuity,
             timeout_seconds: delegate_request.timeout_seconds,
             kernel_context: binding.kernel_context().cloned(),
         },

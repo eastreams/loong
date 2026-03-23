@@ -1,15 +1,17 @@
 use crate::runtime_self::RuntimeSelfModel;
+use serde::{Deserialize, Serialize};
 
 const LEGACY_IMPORTED_IDENTITY_HEADINGS: &[&str] =
     &["## imported identity.md", "## imported identity.json"];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum RuntimeIdentitySource {
     WorkspaceSelf,
     LegacyProfileNoteImport,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ResolvedRuntimeIdentity {
     pub source: RuntimeIdentitySource,
     pub content: String,

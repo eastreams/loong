@@ -7,6 +7,7 @@ use serde_json::Value;
 
 use crate::CliResult;
 use crate::KernelContext;
+use crate::runtime_self_continuity::{self, RuntimeSelfContinuity};
 use crate::tools::runtime_config::ToolRuntimeNarrowing;
 use crate::tools::{
     ToolView, delegate_child_tool_view_for_config,
@@ -47,6 +48,7 @@ pub struct SessionContext {
     pub parent_session_id: Option<String>,
     pub tool_view: ToolView,
     pub runtime_narrowing: Option<ToolRuntimeNarrowing>,
+    pub(crate) runtime_self_continuity: Option<RuntimeSelfContinuity>,
 }
 
 impl SessionContext {
@@ -56,6 +58,7 @@ impl SessionContext {
             parent_session_id: None,
             tool_view,
             runtime_narrowing: None,
+            runtime_self_continuity: None,
         }
     }
 
@@ -69,6 +72,7 @@ impl SessionContext {
             parent_session_id: Some(normalize_session_id(parent_session_id.into())),
             tool_view,
             runtime_narrowing: None,
+            runtime_self_continuity: None,
         }
     }
 
@@ -76,6 +80,17 @@ impl SessionContext {
     pub fn with_runtime_narrowing(mut self, runtime_narrowing: ToolRuntimeNarrowing) -> Self {
         if !runtime_narrowing.is_empty() {
             self.runtime_narrowing = Some(runtime_narrowing);
+        }
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_runtime_self_continuity(
+        mut self,
+        runtime_self_continuity: RuntimeSelfContinuity,
+    ) -> Self {
+        if !runtime_self_continuity.is_empty() {
+            self.runtime_self_continuity = Some(runtime_self_continuity);
         }
         self
     }
@@ -111,6 +126,39 @@ fn load_delegate_runtime_narrowing(
     }))
 }
 
+#[cfg(feature = "memory-sqlite")]
+fn load_delegate_runtime_self_continuity(
+    repo: &SessionRepository,
+    session_id: &str,
+) -> Result<Option<RuntimeSelfContinuity>, String> {
+    let events = repo.list_delegate_lifecycle_events(session_id)?;
+    let continuity = events.into_iter().rev().find_map(|event| {
+        runtime_self_continuity::runtime_self_continuity_from_event_payload(&event.payload_json)
+    });
+    Ok(continuity)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn load_session_runtime_self_continuity(
+    repo: &SessionRepository,
+    session_id: &str,
+) -> Result<Option<RuntimeSelfContinuity>, String> {
+    let recent_events = repo.list_recent_events(session_id, 64)?;
+    let continuity = recent_events.into_iter().rev().find_map(|event| {
+        let is_continuity_event =
+            event.event_kind == runtime_self_continuity::RUNTIME_SELF_CONTINUITY_EVENT_KIND;
+        if !is_continuity_event {
+            return None;
+        }
+        runtime_self_continuity::runtime_self_continuity_from_event_payload(&event.payload_json)
+    });
+    if continuity.is_some() {
+        return Ok(continuity);
+    }
+
+    load_delegate_runtime_self_continuity(repo, session_id)
+}
+
 #[derive(Clone)]
 pub struct AsyncDelegateSpawnRequest {
     pub child_session_id: String,
@@ -118,6 +166,7 @@ pub struct AsyncDelegateSpawnRequest {
     pub task: String,
     pub label: Option<String>,
     pub execution: ConstrainedSubagentExecution,
+    pub(crate) runtime_self_continuity: Option<RuntimeSelfContinuity>,
     pub timeout_seconds: u64,
     pub kernel_context: Option<KernelContext>,
 }
@@ -176,7 +225,11 @@ impl AsyncDelegateSpawner for DefaultAsyncDelegateSpawner {
                         actor_session_id: Some(request.parent_session_id.clone()),
                         event_payload_json: request
                             .execution
-                            .spawn_payload(&request.task, request.label.as_deref()),
+                            .spawn_payload_with_runtime_self_continuity(
+                                &request.task,
+                                request.label.as_deref(),
+                                request.runtime_self_continuity.as_ref(),
+                            ),
                     },
                 )?;
                 if started.is_none() {
@@ -420,9 +473,16 @@ where
                 binding,
             )
             .await?;
+        let runtime_self_continuity = include_system_prompt
+            .then(|| runtime_self_continuity_prompt_summary(config, session_context))
+            .flatten();
         let delegate_runtime_contract = include_system_prompt
             .then(|| delegate_child_runtime_contract_prompt_summary(config, session_context))
             .flatten();
+        assembled.system_prompt_addition = merge_system_prompt_additions(
+            assembled.system_prompt_addition.as_deref(),
+            runtime_self_continuity.as_deref(),
+        );
         assembled.system_prompt_addition = merge_system_prompt_additions(
             assembled.system_prompt_addition.as_deref(),
             delegate_runtime_contract.as_deref(),
@@ -762,25 +822,63 @@ where
                 {
                     if let Some(parent_session_id) = session.parent_session_id {
                         let runtime_narrowing = load_delegate_runtime_narrowing(&repo, session_id)?;
-                        return Ok(SessionContext::child(
-                            session.session_id,
-                            parent_session_id,
-                            tool_view,
-                        )
-                        .with_runtime_narrowing(runtime_narrowing.unwrap_or_default()));
+                        let runtime_self_continuity =
+                            load_session_runtime_self_continuity(&repo, session_id)?;
+                        let session_context =
+                            SessionContext::child(session.session_id, parent_session_id, tool_view)
+                                .with_runtime_narrowing(runtime_narrowing.unwrap_or_default());
+                        let session_context = match runtime_self_continuity {
+                            Some(runtime_self_continuity) => session_context
+                                .with_runtime_self_continuity(runtime_self_continuity),
+                            None => session_context,
+                        };
+                        return Ok(session_context);
                     }
+
+                    let runtime_self_continuity =
+                        load_session_runtime_self_continuity(&repo, session_id)?;
+                    let session_context =
+                        SessionContext::root_with_tool_view(session.session_id, tool_view);
+                    let session_context = match runtime_self_continuity {
+                        Some(runtime_self_continuity) => {
+                            session_context.with_runtime_self_continuity(runtime_self_continuity)
+                        }
+                        None => session_context,
+                    };
+                    return Ok(session_context);
                 } else if let Some(summary) = repo
                     .load_session_summary_with_legacy_fallback(session_id)
                     .map_err(|error| format!("load legacy session context failed: {error}"))?
                     && let Some(parent_session_id) = summary.parent_session_id
                 {
                     let runtime_narrowing = load_delegate_runtime_narrowing(&repo, session_id)?;
-                    return Ok(SessionContext::child(
-                        summary.session_id,
-                        parent_session_id,
-                        tool_view,
-                    )
-                    .with_runtime_narrowing(runtime_narrowing.unwrap_or_default()));
+                    let runtime_self_continuity =
+                        load_session_runtime_self_continuity(&repo, session_id)?;
+                    let session_context =
+                        SessionContext::child(summary.session_id, parent_session_id, tool_view)
+                            .with_runtime_narrowing(runtime_narrowing.unwrap_or_default());
+                    let session_context = match runtime_self_continuity {
+                        Some(runtime_self_continuity) => {
+                            session_context.with_runtime_self_continuity(runtime_self_continuity)
+                        }
+                        None => session_context,
+                    };
+                    return Ok(session_context);
+                } else if let Some(summary) = repo
+                    .load_session_summary_with_legacy_fallback(session_id)
+                    .map_err(|error| format!("load legacy session context failed: {error}"))?
+                {
+                    let runtime_self_continuity =
+                        load_session_runtime_self_continuity(&repo, session_id)?;
+                    let session_context =
+                        SessionContext::root_with_tool_view(summary.session_id, tool_view);
+                    let session_context = match runtime_self_continuity {
+                        Some(runtime_self_continuity) => {
+                            session_context.with_runtime_self_continuity(runtime_self_continuity)
+                        }
+                        None => session_context,
+                    };
+                    return Ok(session_context);
                 }
             }
         }
@@ -1093,6 +1191,21 @@ fn delegate_child_runtime_contract_prompt_summary(
     let runtime_narrowing = session_context.runtime_narrowing.as_ref()?;
     crate::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None)
         .delegate_child_prompt_summary(runtime_narrowing)
+}
+
+fn runtime_self_continuity_prompt_summary(
+    config: &LoongClawConfig,
+    session_context: &SessionContext,
+) -> Option<String> {
+    let stored_continuity = session_context.runtime_self_continuity.as_ref()?;
+    let live_continuity =
+        runtime_self_continuity::resolve_runtime_self_continuity_for_config(config);
+    let missing_continuity = runtime_self_continuity::missing_runtime_self_continuity(
+        stored_continuity,
+        live_continuity.as_ref(),
+    )?;
+    let inherited = session_context.parent_session_id.is_some();
+    runtime_self_continuity::render_runtime_self_continuity_section(&missing_continuity, inherited)
 }
 
 fn merge_system_prompt_additions(existing: Option<&str>, extra: Option<&str>) -> Option<String> {

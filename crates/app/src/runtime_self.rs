@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use loongclaw_contracts::ToolCoreRequest;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::tools;
@@ -43,7 +44,7 @@ const RUNTIME_SELF_SOURCE_SPECS: &[RuntimeSelfSourceSpec] = &[
     },
 ];
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RuntimeSelfModel {
     pub standing_instructions: Vec<String>,
     pub soul_guidance: Vec<String>,
