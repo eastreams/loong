@@ -293,6 +293,7 @@ pub fn run_concurrent_cli_host(options: &ConcurrentCliHostOptions) -> CliResult<
         &chat_options,
         "cli-chat-concurrent",
         CliSessionRequirement::RequireExplicit,
+        true,
     )?;
     print_cli_chat_startup(&runtime, &chat_options)?;
 
@@ -321,6 +322,7 @@ fn initialize_cli_turn_runtime(
         options,
         kernel_scope,
         CliSessionRequirement::AllowImplicitDefault,
+        true,
     )
 }
 
@@ -331,12 +333,16 @@ fn initialize_cli_turn_runtime_with_loaded_config(
     options: &CliChatOptions,
     kernel_scope: &'static str,
     session_requirement: CliSessionRequirement,
+    initialize_runtime_environment: bool,
 ) -> CliResult<CliTurnRuntime> {
     if !config.cli.enabled {
         return Err("CLI channel is disabled by config.cli.enabled=false".to_owned());
     }
 
-    crate::runtime_env::initialize_runtime_environment(&config, Some(&resolved_path));
+    let session_id = resolve_cli_session_id(session_hint, session_requirement)?;
+    if initialize_runtime_environment {
+        crate::runtime_env::initialize_runtime_environment(&config, Some(&resolved_path));
+    }
     let kernel_ctx =
         bootstrap_kernel_context_with_config(kernel_scope, DEFAULT_TOKEN_TTL_S, &config)?;
     let explicit_acp_request = options.requests_explicit_acp();
@@ -348,7 +354,6 @@ fn initialize_cli_turn_runtime_with_loaded_config(
         .acp_working_directory
         .clone()
         .or_else(|| config.acp.dispatch.resolved_working_directory());
-    let session_id = resolve_cli_session_id(session_hint, session_requirement)?;
     let session_address = ConversationSessionAddress::from_session_id(session_id.clone());
 
     #[cfg(feature = "memory-sqlite")]
@@ -2261,22 +2266,28 @@ mod tests {
         );
     }
 
-    #[test]
+    #[tokio::test]
     #[cfg(feature = "memory-sqlite")]
-    fn concurrent_cli_host_exits_when_shutdown_is_requested() {
+    async fn concurrent_cli_host_exits_when_shutdown_is_requested() {
         let (mut config, _memory_config, sqlite_path) = init_chat_test_memory("concurrent-host");
         config.audit.mode = crate::config::AuditMode::InMemory;
-
+        let options = CliChatOptions::default();
+        let runtime = initialize_cli_turn_runtime_with_loaded_config(
+            PathBuf::from("/tmp/loongclaw.toml"),
+            config,
+            Some("cli-supervisor"),
+            &options,
+            "cli-chat-concurrent-test",
+            CliSessionRequirement::RequireExplicit,
+            false,
+        )
+        .expect("concurrent host runtime");
         let shutdown = Arc::new(Notify::new());
         shutdown.notify_one();
 
-        run_concurrent_cli_host(&ConcurrentCliHostOptions {
-            resolved_path: PathBuf::from("/tmp/loongclaw.toml"),
-            config,
-            session_id: "cli-supervisor".to_owned(),
-            shutdown,
-        })
-        .expect("concurrent host should stop cleanly when shutdown is requested");
+        run_concurrent_cli_host_loop(&runtime, &options, shutdown.as_ref())
+            .await
+            .expect("concurrent host should stop cleanly when shutdown is requested");
 
         cleanup_chat_test_memory(&sqlite_path);
     }
