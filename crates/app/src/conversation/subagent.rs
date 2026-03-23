@@ -147,6 +147,7 @@ mod tests {
         let continuity = RuntimeSelfContinuity {
             runtime_self: RuntimeSelfModel {
                 standing_instructions: vec!["Keep continuity explicit.".to_owned()],
+                tool_usage_policy: vec!["Search memory before guessing workspace facts.".to_owned()],
                 soul_guidance: vec!["Prefer rigorous execution.".to_owned()],
                 identity_context: vec!["# Identity\n- Name: Child".to_owned()],
                 user_context: vec!["User prefers concise output.".to_owned()],
@@ -173,6 +174,10 @@ mod tests {
                 .as_ref()
                 .expect("resolved identity")
                 .content
+        );
+        assert_eq!(
+            payload["runtime_self_continuity"]["runtime_self"]["tool_usage_policy"][0],
+            "Search memory before guessing workspace facts."
         );
     }
 }

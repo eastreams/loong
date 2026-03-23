@@ -50,6 +50,7 @@ const RUNTIME_SELF_SOURCE_SPECS: &[RuntimeSelfSourceSpec] = &[
 ];
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub(crate) struct RuntimeSelfModel {
     pub standing_instructions: Vec<String>,
     pub tool_usage_policy: Vec<String>,

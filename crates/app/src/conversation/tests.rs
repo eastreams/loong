@@ -1555,6 +1555,9 @@ fn runtime_self_continuity_fixture(identity_text: &str) -> Value {
             "standing_instructions": [
                 "Keep continuity explicit."
             ],
+            "tool_usage_policy": [
+                "Search durable workspace memory before guessing project facts."
+            ],
             "soul_guidance": [
                 "Prefer rigorous execution."
             ],
@@ -1582,15 +1585,18 @@ fn create_runtime_self_workspace(suffix: &str, identity_text: &str) -> PathBuf {
     std::fs::create_dir_all(&workspace_root).expect("create runtime self workspace");
 
     let agents_path = workspace_root.join("AGENTS.md");
+    let tools_path = workspace_root.join("TOOLS.md");
     let soul_path = workspace_root.join("SOUL.md");
     let identity_path = workspace_root.join("IDENTITY.md");
     let user_path = workspace_root.join("USER.md");
 
     let agents_text = "Keep continuity explicit.";
+    let tools_text = "Search durable workspace memory before guessing project facts.";
     let soul_text = "Prefer rigorous execution.";
     let user_text = "The operator prefers concise technical summaries.";
 
     std::fs::write(&agents_path, agents_text).expect("write AGENTS");
+    std::fs::write(&tools_path, tools_text).expect("write TOOLS");
     std::fs::write(&soul_path, soul_text).expect("write SOUL");
     std::fs::write(&identity_path, identity_text).expect("write IDENTITY");
     std::fs::write(&user_path, user_text).expect("write USER");
@@ -2495,6 +2501,10 @@ async fn default_runtime_build_context_rehydrates_runtime_self_continuity_when_l
         system_content.contains("Keep continuity explicit."),
         "expected stored standing instructions in system prompt, got: {system_content}"
     );
+    assert!(
+        system_content.contains("Search durable workspace memory before guessing project facts."),
+        "expected stored tool usage policy in system prompt, got: {system_content}"
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -2547,6 +2557,10 @@ async fn default_runtime_build_context_rehydrates_delegate_child_runtime_self_co
     assert!(
         system_content.contains("Inherited child identity"),
         "expected inherited identity in child system prompt, got: {system_content}"
+    );
+    assert!(
+        system_content.contains("Search durable workspace memory before guessing project facts."),
+        "expected inherited tool usage policy in child system prompt, got: {system_content}"
     );
 }
 
@@ -2704,6 +2718,10 @@ async fn handle_turn_with_runtime_records_runtime_self_continuity_before_compact
     assert!(
         payload_text.contains("Workspace continuity identity"),
         "expected workspace identity in continuity payload, got: {payload_text}"
+    );
+    assert!(
+        payload_text.contains("Search durable workspace memory before guessing project facts."),
+        "expected tool usage policy in continuity payload, got: {payload_text}"
     );
     assert!(
         !payload_text.contains("Temporary Bob"),
