@@ -8,7 +8,8 @@ use crate::runtime_identity;
 #[cfg(feature = "memory-sqlite")]
 use super::sqlite;
 use super::{
-    MEMORY_OP_READ_CONTEXT,
+    MEMORY_OP_READ_CONTEXT, MEMORY_OP_READ_STAGE_ENVELOPE, encode_stage_envelope_payload,
+    hydrate_stage_envelope,
     protocol::{MemoryContextEntry, MemoryContextKind},
     runtime_config::MemoryRuntimeConfig,
 };
@@ -116,6 +117,35 @@ fn read_context_runtime_config(
     Ok(runtime_config)
 }
 
+pub(crate) fn read_stage_envelope(
+    request: MemoryCoreRequest,
+    config: &MemoryRuntimeConfig,
+) -> Result<MemoryCoreOutcome, String> {
+    let payload = request
+        .payload
+        .as_object()
+        .ok_or_else(|| "memory.read_stage_envelope payload must be an object".to_owned())?;
+    let session_id = payload
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "memory.read_stage_envelope requires payload.session_id".to_owned())?;
+    let envelope = hydrate_stage_envelope(session_id, config)?;
+    let mut response_payload = encode_stage_envelope_payload(&envelope);
+
+    if let Some(map) = response_payload.as_object_mut() {
+        map.insert("adapter".to_owned(), json!("sqlite-core"));
+        map.insert("operation".to_owned(), json!(MEMORY_OP_READ_STAGE_ENVELOPE));
+        map.insert("session_id".to_owned(), json!(session_id));
+    }
+
+    Ok(MemoryCoreOutcome {
+        status: "ok".to_owned(),
+        payload: response_payload,
+    })
+}
+
 pub fn load_prompt_context(
     session_id: &str,
     config: &MemoryRuntimeConfig,
@@ -171,6 +201,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+    use crate::memory::{build_read_stage_envelope_request, decode_stage_envelope};
 
     #[cfg(feature = "memory-sqlite")]
     #[test]
@@ -411,6 +442,87 @@ mod tests {
                 .any(|entry| entry.get("kind") == Some(&json!("summary"))),
             "expected read_context payload to include a summary entry"
         );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn read_stage_envelope_operation_serializes_hydrated_entries_and_diagnostics() {
+        use crate::config::{MemoryMode, MemoryProfile};
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-read-stage-envelope-memory-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("read-stage-envelope.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            mode: MemoryMode::WindowPlusSummary,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..MemoryRuntimeConfig::default()
+        };
+
+        super::super::append_turn_direct("read-stage-envelope-session", "user", "turn 1", &config)
+            .expect("append turn 1 should succeed");
+        super::super::append_turn_direct(
+            "read-stage-envelope-session",
+            "assistant",
+            "turn 2",
+            &config,
+        )
+        .expect("append turn 2 should succeed");
+        super::super::append_turn_direct("read-stage-envelope-session", "user", "turn 3", &config)
+            .expect("append turn 3 should succeed");
+
+        let outcome = super::super::execute_memory_core_with_config(
+            build_read_stage_envelope_request("read-stage-envelope-session"),
+            &config,
+        )
+        .expect("read_stage_envelope should succeed");
+
+        let envelope = decode_stage_envelope(&outcome.payload).expect("decode staged envelope");
+        assert!(!envelope.hydrated.entries.is_empty());
+        assert!(!envelope.diagnostics.is_empty());
+        assert_eq!(envelope.hydrated.diagnostics.system_id, "builtin");
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn execute_memory_core_dispatches_read_stage_envelope_operation() {
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-dispatch-stage-envelope-memory-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("dispatch-stage-envelope.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = MemoryRuntimeConfig {
+            sqlite_path: Some(db_path.clone()),
+            ..MemoryRuntimeConfig::default()
+        };
+
+        let outcome = super::super::execute_memory_core_with_config(
+            build_read_stage_envelope_request("dispatch-session"),
+            &config,
+        )
+        .expect("dispatch read_stage_envelope");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(
+            outcome.payload["operation"],
+            json!(MEMORY_OP_READ_STAGE_ENVELOPE)
+        );
+        assert!(decode_stage_envelope(&outcome.payload).is_some());
 
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_dir(&tmp);

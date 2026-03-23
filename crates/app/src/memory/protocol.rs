@@ -14,6 +14,7 @@ pub const MEMORY_OP_WINDOW: &str = "window";
 pub const MEMORY_OP_CLEAR_SESSION: &str = "clear_session";
 pub const MEMORY_OP_READ_CONTEXT: &str = "read_context";
 pub const MEMORY_OP_REPLACE_TURNS: &str = "replace_turns";
+pub const MEMORY_OP_READ_STAGE_ENVELOPE: &str = "read_stage_envelope";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowTurn {
@@ -169,6 +170,15 @@ pub fn build_replace_turns_request_with_expectation(
     MemoryCoreRequest {
         operation: MEMORY_OP_REPLACE_TURNS.to_owned(),
         payload: Value::Object(payload),
+    }
+}
+
+pub fn build_read_stage_envelope_request(session_id: &str) -> MemoryCoreRequest {
+    MemoryCoreRequest {
+        operation: MEMORY_OP_READ_STAGE_ENVELOPE.to_owned(),
+        payload: json!({
+            "session_id": session_id,
+        }),
     }
 }
 

@@ -44,17 +44,18 @@ pub use kernel_adapter::MvpMemoryAdapter;
 pub use orchestrator::{
     BuiltinMemoryOrchestrator, HydratedMemoryContext, MemoryDiagnostics, hydrate_memory_context,
     hydrate_memory_context_with_workspace_root,
+    hydrate_stage_envelope,
 };
 #[cfg(test)]
 pub use orchestrator::{MemoryOrchestratorTestFaults, ScopedMemoryOrchestratorTestFaults};
 pub use protocol::{
     MEMORY_OP_APPEND_TURN, MEMORY_OP_CLEAR_SESSION, MEMORY_OP_READ_CONTEXT,
-    MEMORY_OP_REPLACE_TURNS, MEMORY_OP_WINDOW, MemoryContextEntry, MemoryContextKind, WindowTurn,
-    build_append_turn_request, build_read_context_request, build_replace_turns_request,
-    build_replace_turns_request_with_expectation, build_window_request,
-    decode_memory_context_entries, decode_window_turn_count, decode_window_turns,
-    decode_stage_envelope, decode_window_turns, encode_stage_envelope_payload,
-    encode_stage_envelope_payload,
+    MEMORY_OP_READ_STAGE_ENVELOPE, MEMORY_OP_REPLACE_TURNS, MEMORY_OP_WINDOW,
+    MemoryContextEntry, MemoryContextKind, WindowTurn, build_append_turn_request,
+    build_read_context_request, build_read_stage_envelope_request,
+    build_replace_turns_request, build_replace_turns_request_with_expectation,
+    build_window_request, decode_memory_context_entries, decode_stage_envelope,
+    decode_window_turn_count, decode_window_turns, encode_stage_envelope_payload,
 };
 #[cfg(feature = "memory-sqlite")]
 pub use sqlite::{ConversationTurn, SqliteBootstrapDiagnostics, SqliteContextLoadDiagnostics};
@@ -95,6 +96,8 @@ pub fn execute_memory_core_with_config(
             MEMORY_OP_WINDOW => load_window(request, config),
             MEMORY_OP_CLEAR_SESSION => clear_session(request, config),
             MEMORY_OP_READ_CONTEXT => context::read_context(request, config),
+            MEMORY_OP_REPLACE_TURNS => replace_turns(request, config),
+            MEMORY_OP_READ_STAGE_ENVELOPE => context::read_stage_envelope(request, config),
             MEMORY_OP_REPLACE_TURNS => replace_turns(request, config),
             _ => Ok(MemoryCoreOutcome {
                 status: "ok".to_owned(),
