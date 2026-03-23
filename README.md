@@ -409,6 +409,20 @@ loongclaw matrix-serve --config ~/.loongclaw/config.toml --once
 
 By default, LoongClaw reads `MATRIX_ACCESS_TOKEN`. Matrix room and user IDs often contain `:`, so the runtime preserves structured Matrix route/session IDs without relying on Matrix-specific path hacks.
 
+### Multi-Channel Serve
+
+Use `multi-channel-serve` when you want one process to keep an interactive CLI session in the foreground while supervising Telegram and Feishu surfaces in the same runtime.
+
+```bash
+loongclaw multi-channel-serve \
+  --session cli-supervisor \
+  --telegram-account bot_123456 \
+  --feishu-account alerts \
+  --config ~/.loongclaw/config.toml
+```
+
+`--session` is required. `--telegram-account` and `--feishu-account` are optional selectors for the channel accounts this runtime should supervise.
+
 Tool policy stays explicit:
 
 ```toml

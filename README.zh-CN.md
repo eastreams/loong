@@ -281,6 +281,20 @@ loongclaw feishu-serve --config ~/.loongclaw/config.toml
 
 websocket 模式不需要 webhook secret。如果你接的是 Lark，可以再加上 `domain = "lark"`。
 
+### 多通道运行
+
+当你希望一个进程把交互式 CLI 会话放在前台，同时在同一运行时里监督 Telegram 和飞书通道时，使用 `multi-channel-serve`。
+
+```bash
+loongclaw multi-channel-serve \
+  --session cli-supervisor \
+  --telegram-account bot_123456 \
+  --feishu-account alerts \
+  --config ~/.loongclaw/config.toml
+```
+
+`--session` 是必填项。`--telegram-account` 和 `--feishu-account` 是可选的通道账号选择参数，用来指定这个运行时要监督的账号。
+
 工具策略需要明确配置：
 
 ```toml
