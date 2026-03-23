@@ -9,7 +9,7 @@ use std::{
 };
 
 use loongclaw_spec::CliResult;
-use tokio::{sync::Notify, task::JoinSet};
+use tokio::task::JoinSet;
 
 use crate::{mvp, wait_for_shutdown_signal};
 
@@ -587,11 +587,11 @@ fn now_ms() -> u64 {
 
 fn forward_root_shutdown(
     supervisor: &mut SupervisorState,
-    cli_shutdown: &Arc<Notify>,
+    cli_shutdown: &mvp::chat::ConcurrentCliShutdown,
     stop_handles: &[mvp::channel::ChannelServeStopHandle],
     signal_active: &mut bool,
 ) {
-    cli_shutdown.notify_waiters();
+    cli_shutdown.request_shutdown();
     for stop in stop_handles {
         stop.request_stop();
     }
@@ -620,7 +620,7 @@ pub async fn run_multi_channel_serve_with_hooks_for_test(
     } = (hooks.load_config)(config_path)?;
     let mut supervisor = SupervisorState::new(spec.clone());
 
-    let cli_shutdown = Arc::new(Notify::new());
+    let cli_shutdown = mvp::chat::ConcurrentCliShutdown::new();
     let telegram_stop = mvp::channel::ChannelServeStopHandle::new();
     let feishu_stop = mvp::channel::ChannelServeStopHandle::new();
     let stop_handles = vec![telegram_stop.clone(), feishu_stop.clone()];

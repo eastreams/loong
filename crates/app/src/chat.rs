@@ -2,7 +2,10 @@
 use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 #[cfg(feature = "memory-sqlite")]
 use loongclaw_contracts::Capability;
@@ -56,7 +59,54 @@ pub struct ConcurrentCliHostOptions {
     pub resolved_path: PathBuf,
     pub config: LoongClawConfig,
     pub session_id: String,
-    pub shutdown: Arc<Notify>,
+    pub shutdown: ConcurrentCliShutdown,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConcurrentCliShutdown {
+    requested: Arc<AtomicBool>,
+    notify: Arc<Notify>,
+}
+
+impl Default for ConcurrentCliShutdown {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ConcurrentCliShutdown {
+    pub fn new() -> Self {
+        Self {
+            requested: Arc::new(AtomicBool::new(false)),
+            notify: Arc::new(Notify::new()),
+        }
+    }
+
+    pub fn request_shutdown(&self) {
+        self.requested.store(true, Ordering::SeqCst);
+        self.notify.notify_waiters();
+    }
+
+    pub fn is_requested(&self) -> bool {
+        self.requested.load(Ordering::SeqCst)
+    }
+
+    pub async fn wait(&self) {
+        if self.is_requested() {
+            return;
+        }
+
+        loop {
+            if self.is_requested() {
+                return;
+            }
+            let notified = self.notify.notified();
+            if self.is_requested() {
+                return;
+            }
+            notified.await;
+        }
+    }
 }
 
 impl CliChatOptions {
@@ -304,7 +354,7 @@ pub fn run_concurrent_cli_host(options: &ConcurrentCliHostOptions) -> CliResult<
 
     host_runtime.block_on(async {
         print_turn_checkpoint_startup_health(&runtime).await;
-        run_concurrent_cli_host_loop(&runtime, &chat_options, options.shutdown.as_ref()).await
+        run_concurrent_cli_host_loop(&runtime, &chat_options, &options.shutdown).await
     })
 }
 
@@ -440,7 +490,7 @@ async fn print_turn_checkpoint_startup_health(runtime: &CliTurnRuntime) {
 async fn run_concurrent_cli_host_loop(
     runtime: &CliTurnRuntime,
     options: &CliChatOptions,
-    shutdown: &Notify,
+    shutdown: &ConcurrentCliShutdown,
 ) -> CliResult<()> {
     let mut stdin_lines = BufReader::new(tokio_io::stdin()).lines();
 
@@ -451,7 +501,7 @@ async fn run_concurrent_cli_host_loop(
             .map_err(|error| format!("flush stdout failed: {error}"))?;
 
         let next_line = tokio::select! {
-            _ = shutdown.notified() => None,
+            _ = shutdown.wait() => None,
             line = stdin_lines.next_line() => Some(
                 line.map_err(|error| format!("read stdin failed: {error}"))?
             ),
@@ -1840,8 +1890,6 @@ mod tests {
     };
     #[cfg(feature = "memory-sqlite")]
     use serde_json::{Value, json};
-    use tokio::sync::Notify;
-
     #[test]
     fn cli_chat_options_detect_explicit_acp_requests() {
         assert!(
@@ -2247,7 +2295,7 @@ mod tests {
 
     #[test]
     fn concurrent_cli_host_requires_explicit_session_id() {
-        let shutdown = Arc::new(Notify::new());
+        let shutdown = ConcurrentCliShutdown::new();
         let error = run_concurrent_cli_host(&ConcurrentCliHostOptions {
             resolved_path: PathBuf::from("/tmp/loongclaw.toml"),
             config: LoongClawConfig::default(),
@@ -2278,10 +2326,10 @@ mod tests {
             false,
         )
         .expect("concurrent host runtime");
-        let shutdown = Arc::new(Notify::new());
-        shutdown.notify_one();
+        let shutdown = ConcurrentCliShutdown::new();
+        shutdown.request_shutdown();
 
-        run_concurrent_cli_host_loop(&runtime, &options, shutdown.as_ref())
+        run_concurrent_cli_host_loop(&runtime, &options, &shutdown)
             .await
             .expect("concurrent host should stop cleanly when shutdown is requested");
 
