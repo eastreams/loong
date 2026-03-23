@@ -224,7 +224,7 @@ async fn multi_channel_serve_background_failure_exits_foreground_cli_host_with_s
                             let log = log.clone();
                             boxed_cli_result(async move {
                                 log.push(format!("cli-start session={}", options.session_id));
-                                options.shutdown.notified().await;
+                                options.shutdown.wait().await;
                                 log.push("cli-stop");
                                 Ok(())
                             })
@@ -291,6 +291,88 @@ async fn multi_channel_serve_background_failure_exits_foreground_cli_host_with_s
     assert!(
         log.snapshot().iter().any(|event| event == "cli-stop"),
         "cli host should stop after the background failure"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn multi_channel_serve_background_failure_before_cli_wait_still_stops_foreground_cli_host() {
+    let log = EventLog::default();
+    let state = tokio::time::timeout(
+        Duration::from_millis(250),
+        run_multi_channel_serve_with_hooks_for_test(
+            None,
+            "cli-supervisor",
+            Some("bot_123456"),
+            Some("alerts"),
+            hooks(
+                |_| Ok(loaded_config_fixture()),
+                {
+                    let log = log.clone();
+                    move |options| {
+                        let log = log.clone();
+                        boxed_cli_result(async move {
+                            log.push("cli-start");
+                            sleep(Duration::from_millis(50)).await;
+                            log.push("cli-await-shutdown");
+                            options.shutdown.wait().await;
+                            log.push("cli-stop");
+                            Ok(())
+                        })
+                    }
+                },
+                {
+                    let log = log.clone();
+                    move |request| {
+                        let log = log.clone();
+                        boxed_cli_result(async move {
+                            log.push("telegram-fail");
+                            let _ = request;
+                            Err("telegram task exited unexpectedly".to_owned())
+                        })
+                    }
+                },
+                move |request| {
+                    boxed_cli_result(async move {
+                        while !request.stop.is_requested() {
+                            tokio::task::yield_now().await;
+                        }
+                        Ok(())
+                    })
+                },
+                pending_shutdown_future,
+            ),
+        ),
+    )
+    .await
+    .expect("supervisor should not hang after an early background failure")
+    .expect("run helper");
+
+    let error = state
+        .final_exit_result()
+        .expect_err("surface failure should fail the supervisor");
+    assert!(
+        error.contains(
+            "telegram(account=bot_123456) exited unexpectedly: telegram task exited unexpectedly"
+        ),
+        "error: {error}"
+    );
+
+    let events = log.snapshot();
+    let telegram_fail = events
+        .iter()
+        .position(|event| event == "telegram-fail")
+        .expect("telegram failure logged");
+    let cli_wait = events
+        .iter()
+        .position(|event| event == "cli-await-shutdown")
+        .expect("cli wait logged");
+    assert!(
+        telegram_fail < cli_wait,
+        "expected shutdown to be requested before CLI started waiting: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| event == "cli-stop"),
+        "cli host should still stop after shutdown was requested early: {events:?}"
     );
 }
 
@@ -476,7 +558,7 @@ async fn multi_channel_serve_ctrl_c_waits_for_background_joins_and_reports_shutd
                                 let log = log.clone();
                                 boxed_cli_result(async move {
                                     log.push("cli-start");
-                                    options.shutdown.notified().await;
+                                    options.shutdown.wait().await;
                                     log.push("cli-stop");
                                     Ok(())
                                 })
@@ -585,7 +667,7 @@ async fn multi_channel_serve_cooperative_stop_clears_channel_runtime_running_sta
                     |_| Ok(loaded_config_fixture()),
                     move |options| {
                         boxed_cli_result(async move {
-                            options.shutdown.notified().await;
+                            options.shutdown.wait().await;
                             Ok(())
                         })
                     },
