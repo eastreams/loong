@@ -1143,6 +1143,7 @@ mod tests {
     #[cfg(feature = "tool-shell")]
     #[test]
     fn injected_config_overrides_global() {
+        let _env = ScopedEnv::new();
         let config = ToolRuntimeConfig {
             file_root: Some(PathBuf::from("/tmp/injected-root")),
             shell_allow: BTreeSet::from(["echo".to_owned()]),
