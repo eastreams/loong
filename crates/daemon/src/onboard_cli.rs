@@ -6465,6 +6465,8 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, MutexGuard};
 
+    use crate::test_support::ScopedEnv;
+
     struct TestOnboardUi {
         inputs: VecDeque<String>,
     }
@@ -7295,6 +7297,8 @@ mod tests {
         config.provider.api_key_env = None;
         config.provider.oauth_access_token = None;
         config.provider.oauth_access_token_env = None;
+        let mut env = ScopedEnv::new();
+        env.remove("ARK_API_KEY");
 
         let check = provider_credential_check(&config);
 
