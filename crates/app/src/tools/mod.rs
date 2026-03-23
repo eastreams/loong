@@ -34,6 +34,8 @@ mod feishu;
 mod file;
 pub mod file_policy_ext;
 mod kernel_adapter;
+#[cfg(feature = "tool-file")]
+mod memory_tools;
 pub(crate) mod messaging;
 mod provider_switch;
 pub mod runtime_config;
@@ -474,6 +476,9 @@ fn required_capabilities_for_tool_name_and_payload(
         "file.read" => {
             caps.insert(Capability::FilesystemRead);
         }
+        "memory_search" | "memory_get" => {
+            caps.insert(Capability::FilesystemRead);
+        }
         "file.write" | "file.edit" => {
             caps.insert(Capability::FilesystemWrite);
         }
@@ -729,6 +734,10 @@ fn execute_discoverable_tool_core_with_config(
         }
         "shell.exec" => shell::execute_shell_tool_with_config(request, config),
         "file.read" => file::execute_file_read_tool_with_config(request, config),
+        #[cfg(feature = "tool-file")]
+        "memory_search" => memory_tools::execute_memory_search_tool_with_config(request, config),
+        #[cfg(feature = "tool-file")]
+        "memory_get" => memory_tools::execute_memory_get_tool_with_config(request, config),
         "file.write" => file::execute_file_write_tool_with_config(request, config),
         "file.edit" => file::execute_file_edit_tool_with_config(request, config),
         "provider.switch" => {
@@ -1175,6 +1184,8 @@ fn tool_search_entry_is_runtime_usable(
         | "external_skills.invoke"
         | "external_skills.list"
         | "external_skills.remove" => config.external_skills.enabled,
+        #[cfg(feature = "tool-file")]
+        "memory_search" | "memory_get" => memory_tools::memory_corpus_available(config),
         _ => true,
     }
 }
@@ -1533,6 +1544,21 @@ fn _shape_examples() -> BTreeMap<&'static str, Value> {
             json!({
                 "path": "README.md",
                 "max_bytes": 4096
+            }),
+        ),
+        (
+            "memory_search",
+            json!({
+                "query": "deploy freeze window",
+                "max_results": 3
+            }),
+        ),
+        (
+            "memory_get",
+            json!({
+                "path": "MEMORY.md",
+                "from": 1,
+                "lines": 20
             }),
         ),
         (
@@ -2291,6 +2317,24 @@ mod tests {
             BTreeSet::from([Capability::InvokeTool, Capability::FilesystemWrite])
         );
 
+        let direct_memory_search = ToolCoreRequest {
+            tool_name: "memory_search".to_owned(),
+            payload: json!({"query": "deploy freeze"}),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&direct_memory_search),
+            BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
+        );
+
+        let direct_memory_get = ToolCoreRequest {
+            tool_name: "memory_get".to_owned(),
+            payload: json!({"path": "MEMORY.md"}),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&direct_memory_get),
+            BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
+        );
+
         let invoked_file_read = ToolCoreRequest {
             tool_name: "tool.invoke".to_owned(),
             payload: json!({
@@ -2301,6 +2345,19 @@ mod tests {
         };
         assert_eq!(
             required_capabilities_for_request(&invoked_file_read),
+            BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
+        );
+
+        let invoked_memory_search = ToolCoreRequest {
+            tool_name: "tool.invoke".to_owned(),
+            payload: json!({
+                "tool_id": "memory_search",
+                "lease": "unused",
+                "arguments": {"query": "deploy freeze"}
+            }),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&invoked_memory_search),
             BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
         );
 
@@ -2348,6 +2405,17 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn runtime_tool_view_includes_memory_tools_when_safe_file_root_is_configured() {
+        let root = unique_tool_temp_dir("loongclaw-memory-tool-view");
+        let config = test_tool_runtime_config(root);
+        let tool_view = runtime_tool_view_for_runtime_config(&config);
+
+        assert!(tool_view.contains("memory_search"));
+        assert!(tool_view.contains("memory_get"));
+    }
+
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
     fn tool_search_returns_discoverable_tools_with_leases() {
@@ -2390,6 +2458,134 @@ mod tests {
         );
 
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
+    #[test]
+    fn tool_search_surfaces_memory_tools_when_memory_corpus_is_available() {
+        let root = unique_tool_temp_dir("loongclaw-memory-tool-search");
+        let memory_dir = root.join("memory");
+
+        std::fs::create_dir_all(&memory_dir).expect("create memory dir");
+        std::fs::write(root.join("MEMORY.md"), "Deploy freeze window: Friday.\n")
+            .expect("write root memory");
+        std::fs::write(
+            memory_dir.join("2026-03-23.md"),
+            "Migration starts tomorrow.\n",
+        )
+        .expect("write daily log");
+
+        let config = test_tool_runtime_config(root);
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "query": "search memory recall durable notes",
+                    "limit": 6
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+
+        assert!(
+            results
+                .iter()
+                .any(|entry| entry["tool_id"] == "memory_search")
+        );
+        assert!(results.iter().any(|entry| entry["tool_id"] == "memory_get"));
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn memory_search_tool_returns_structured_hits_from_workspace_memory_files() {
+        let root = unique_tool_temp_dir("loongclaw-memory-search");
+        let memory_dir = root.join("memory");
+
+        std::fs::create_dir_all(&memory_dir).expect("create memory dir");
+        std::fs::write(
+            root.join("MEMORY.md"),
+            "# Durable Notes\nDeploy freeze window is Friday.\n",
+        )
+        .expect("write root memory");
+        std::fs::write(
+            memory_dir.join("2026-03-23.md"),
+            "Customer migration starts tomorrow.\n",
+        )
+        .expect("write daily log");
+
+        let config = test_tool_runtime_config(root);
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "deploy freeze window",
+                    "max_results": 4
+                }),
+            },
+            &config,
+        )
+        .expect("memory search should succeed");
+
+        assert_eq!(outcome.status, "ok");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        assert!(!results.is_empty());
+        assert!(results.iter().any(|entry| entry["path"] == "MEMORY.md"));
+        assert!(
+            results
+                .iter()
+                .all(|entry| entry["start_line"].as_u64().is_some()),
+            "expected structured line spans: {results:?}"
+        );
+        assert!(
+            results
+                .iter()
+                .all(|entry| entry["end_line"].as_u64().is_some()),
+            "expected structured line spans: {results:?}"
+        );
+        assert!(
+            results.iter().all(|entry| entry["snippet"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())),
+            "expected non-empty snippets: {results:?}"
+        );
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn memory_get_tool_returns_bounded_line_window_from_memory_file() {
+        let root = unique_tool_temp_dir("loongclaw-memory-get");
+        let memory_path = root.join("MEMORY.md");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(
+            &memory_path,
+            "line one\nline two\nline three\nline four\nline five\n",
+        )
+        .expect("write root memory");
+
+        let config = test_tool_runtime_config(root);
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_get".to_owned(),
+                payload: json!({
+                    "path": "MEMORY.md",
+                    "from": 2,
+                    "lines": 2
+                }),
+            },
+            &config,
+        )
+        .expect("memory get should succeed");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["path"], "MEMORY.md");
+        assert_eq!(outcome.payload["start_line"], 2);
+        assert_eq!(outcome.payload["end_line"], 3);
+        assert_eq!(outcome.payload["text"], "line two\nline three");
     }
 
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]

@@ -120,9 +120,8 @@ pub fn governance_profile_for_descriptor(descriptor: &ToolDescriptor) -> ToolGov
 
 pub fn scheduling_class_for_tool_name(tool_name: &str) -> ToolSchedulingClass {
     match tool_name {
-        "tool.search" | "file.read" | "web.fetch" | "web.search" | "sessions_list" => {
-            ToolSchedulingClass::ParallelSafe
-        }
+        "tool.search" | "file.read" | "memory_search" | "memory_get" | "web.fetch"
+        | "web.search" | "sessions_list" => ToolSchedulingClass::ParallelSafe,
         _ => ToolSchedulingClass::SerialOnly,
     }
 }
@@ -142,6 +141,7 @@ pub enum ToolVisibilityGate {
     Browser,
     BrowserCompanion,
     ExternalSkills,
+    MemoryFileRoot,
     WebFetch,
     WebSearch,
 }
@@ -621,6 +621,28 @@ pub fn tool_catalog() -> ToolCatalog {
             provider_definition_builder: file_read_definition,
         });
         descriptors.push(ToolDescriptor {
+            name: "memory_search",
+            provider_name: "memory_search",
+            aliases: &[],
+            description: "Search durable workspace memory files with bounded citation-bearing snippets",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::MemoryFileRoot,
+            provider_definition_builder: memory_search_definition,
+        });
+        descriptors.push(ToolDescriptor {
+            name: "memory_get",
+            provider_name: "memory_get",
+            aliases: &[],
+            description: "Read a bounded line window from one durable workspace memory file",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::MemoryFileRoot,
+            provider_definition_builder: memory_get_definition,
+        });
+        descriptors.push(ToolDescriptor {
             name: "file.write",
             provider_name: "file_write",
             aliases: &[],
@@ -988,6 +1010,10 @@ fn tool_visibility_gate_enabled_for_runtime_view(
         ToolVisibilityGate::Browser => config.browser.enabled,
         ToolVisibilityGate::BrowserCompanion => false,
         ToolVisibilityGate::ExternalSkills => external_skills_enabled,
+        ToolVisibilityGate::MemoryFileRoot => config
+            .file_root
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
         ToolVisibilityGate::WebFetch => config.web.enabled,
         ToolVisibilityGate::WebSearch => config.web_search.enabled,
     }
@@ -1005,6 +1031,10 @@ fn tool_visibility_gate_enabled_for_runtime_policy(
         ToolVisibilityGate::Browser => config.browser.enabled,
         ToolVisibilityGate::BrowserCompanion => config.browser_companion.is_runtime_ready(),
         ToolVisibilityGate::ExternalSkills => config.external_skills.enabled,
+        ToolVisibilityGate::MemoryFileRoot => config
+            .file_root
+            .as_ref()
+            .is_some_and(|value| !value.as_os_str().is_empty()),
         ToolVisibilityGate::WebFetch => config.web_fetch.enabled,
         ToolVisibilityGate::WebSearch => config.web_search.enabled,
     }
@@ -1678,6 +1708,65 @@ fn file_write_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+fn memory_search_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural-language lookup query for durable workspace memory."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 8,
+                        "description": "Optional maximum number of memory hits to return. Defaults to 5."
+                    }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn memory_get_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative or absolute durable memory file path within the configured safe file root."
+                    },
+                    "from": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Optional 1-based starting line number. Defaults to 1."
+                    },
+                    "lines": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "description": "Optional number of lines to read. Defaults to 40."
+                    }
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 fn file_edit_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
@@ -2296,6 +2385,8 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "browser.companion.click" => "session_id:string,selector:string",
         "browser.companion.type" => "session_id:string,selector:string,text:string",
         "file.read" => "path:string,max_bytes?:integer",
+        "memory_search" => "query:string,max_results?:integer",
+        "memory_get" => "path:string,from?:integer,lines?:integer",
         "file.write" => "path:string,content:string,create_dirs?:boolean",
         "file.edit" => "path:string,old_string:string,new_string:string,replace_all?:boolean",
         "shell.exec" => "command:string,args?:string[],timeout_ms?:integer,cwd?:string",
@@ -2361,6 +2452,12 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("blocked_domains", "array"),
         ],
         "file.read" => &[("path", "string"), ("max_bytes", "integer")],
+        "memory_search" => &[("query", "string"), ("max_results", "integer")],
+        "memory_get" => &[
+            ("path", "string"),
+            ("from", "integer"),
+            ("lines", "integer"),
+        ],
         "file.write" => &[
             ("path", "string"),
             ("content", "string"),
@@ -2419,6 +2516,8 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "browser.companion.click" => &["session_id", "selector"],
         "browser.companion.type" => &["session_id", "selector", "text"],
         "file.read" => &["path"],
+        "memory_search" => &["query"],
+        "memory_get" => &["path"],
         "file.write" => &["path", "content"],
         "file.edit" => &["path", "old_string", "new_string"],
         "shell.exec" => &["command"],
@@ -2459,6 +2558,8 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
             &["browser", "companion", "write", "approval"]
         }
         "file.read" => &["file", "read", "filesystem", "repo"],
+        "memory_search" => &["memory", "search", "recall", "durable", "workspace"],
+        "memory_get" => &["memory", "read", "recall", "durable", "workspace"],
         "file.write" => &["file", "write", "filesystem"],
         "file.edit" => &["file", "edit", "filesystem"],
         "shell.exec" => &["shell", "command", "process", "exec"],
@@ -2557,6 +2658,41 @@ mod tests {
     }
 
     #[test]
+    fn memory_file_root_visibility_gate_requires_safe_root_configuration() {
+        let hidden_config = ToolConfig::default();
+        assert!(!tool_visibility_gate_enabled_for_runtime_view(
+            ToolVisibilityGate::MemoryFileRoot,
+            &hidden_config,
+            false
+        ));
+
+        let visible_config = ToolConfig {
+            file_root: Some("/tmp/workspace".to_owned()),
+            ..ToolConfig::default()
+        };
+        assert!(tool_visibility_gate_enabled_for_runtime_view(
+            ToolVisibilityGate::MemoryFileRoot,
+            &visible_config,
+            false
+        ));
+
+        let hidden_runtime = ToolRuntimeConfig::default();
+        assert!(!tool_visibility_gate_enabled_for_runtime_policy(
+            ToolVisibilityGate::MemoryFileRoot,
+            &hidden_runtime
+        ));
+
+        let visible_runtime = ToolRuntimeConfig {
+            file_root: Some(std::path::PathBuf::from("/tmp/workspace")),
+            ..ToolRuntimeConfig::default()
+        };
+        assert!(tool_visibility_gate_enabled_for_runtime_policy(
+            ToolVisibilityGate::MemoryFileRoot,
+            &visible_runtime
+        ));
+    }
+
+    #[test]
     fn browser_visibility_gate_is_independent_from_companion_settings() {
         let mut config = ToolRuntimeConfig::default();
         config.browser.enabled = true;
@@ -2595,6 +2731,22 @@ mod tests {
             catalog
                 .descriptor("file.read")
                 .expect("file.read descriptor")
+                .scheduling_class(),
+            ToolSchedulingClass::ParallelSafe
+        );
+        #[cfg(feature = "tool-file")]
+        assert_eq!(
+            catalog
+                .descriptor("memory_search")
+                .expect("memory_search descriptor")
+                .scheduling_class(),
+            ToolSchedulingClass::ParallelSafe
+        );
+        #[cfg(feature = "tool-file")]
+        assert_eq!(
+            catalog
+                .descriptor("memory_get")
+                .expect("memory_get descriptor")
                 .scheduling_class(),
             ToolSchedulingClass::ParallelSafe
         );

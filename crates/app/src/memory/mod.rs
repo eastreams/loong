@@ -27,6 +27,7 @@ mod system;
 mod system_registry;
 #[cfg(test)]
 mod tests;
+mod workspace_files;
 
 pub use canonical::{
     CANONICAL_MEMORY_RECORD_TYPE, CanonicalMemoryKind, CanonicalMemoryRecord,
@@ -64,6 +65,10 @@ pub use system_registry::{
     describe_memory_system, list_memory_system_ids, list_memory_system_metadata,
     memory_system_id_from_env, register_memory_system, resolve_memory_system,
     resolve_memory_system_selection, supported_memory_system_kind_from_env,
+};
+pub(crate) use workspace_files::{
+    WorkspaceMemoryDocumentKind, WorkspaceMemoryDocumentLocation,
+    collect_workspace_memory_document_locations,
 };
 
 pub fn execute_memory_core(request: MemoryCoreRequest) -> Result<MemoryCoreOutcome, String> {

@@ -30,7 +30,9 @@ impl FilePolicyExtension {
 
     fn required_capability(tool_name: &str) -> Option<Capability> {
         match tool_name {
-            "file.read" | "claw.migrate" => Some(Capability::FilesystemRead),
+            "file.read" | "memory_search" | "memory_get" | "claw.migrate" => {
+                Some(Capability::FilesystemRead)
+            }
             "file.write" | "file.edit" => Some(Capability::FilesystemWrite),
             _ => None,
         }
