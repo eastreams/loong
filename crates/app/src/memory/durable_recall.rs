@@ -32,16 +32,19 @@ pub(crate) fn load_durable_recall_entries(
         return Ok(Vec::new());
     };
 
+    let canonical_workspace_root = canonical_workspace_memory_root(workspace_root)?;
     let candidate_roots = runtime_self::candidate_workspace_roots(workspace_root);
     let per_file_char_budget = config.summary_max_chars.max(256);
 
     let curated_documents = collect_curated_memory_documents(
         workspace_root,
+        canonical_workspace_root.as_path(),
         candidate_roots.as_slice(),
         per_file_char_budget,
     )?;
     let daily_documents = collect_recent_daily_log_documents(
         workspace_root,
+        canonical_workspace_root.as_path(),
         candidate_roots.as_slice(),
         per_file_char_budget,
     )?;
@@ -66,6 +69,7 @@ pub(crate) fn load_durable_recall_entries(
 
 fn collect_curated_memory_documents(
     workspace_root: &Path,
+    canonical_workspace_root: &Path,
     candidate_roots: &[PathBuf],
     per_file_char_budget: usize,
 ) -> Result<Vec<DurableRecallDocument>, String> {
@@ -78,6 +82,7 @@ fn collect_curated_memory_documents(
             let candidate_path = root.join(relative_path);
             let maybe_document = load_document_if_present(
                 workspace_root,
+                canonical_workspace_root,
                 candidate_path.as_path(),
                 per_file_char_budget,
                 &mut seen_paths,
@@ -94,6 +99,7 @@ fn collect_curated_memory_documents(
 
 fn collect_recent_daily_log_documents(
     workspace_root: &Path,
+    canonical_workspace_root: &Path,
     candidate_roots: &[PathBuf],
     per_file_char_budget: usize,
 ) -> Result<Vec<DurableRecallDocument>, String> {
@@ -105,6 +111,12 @@ fn collect_recent_daily_log_documents(
         if !memory_dir.is_dir() {
             continue;
         }
+
+        let Some(_canonical_memory_dir) =
+            resolve_workspace_memory_path(canonical_workspace_root, memory_dir.as_path())?
+        else {
+            continue;
+        };
 
         let read_dir = std::fs::read_dir(&memory_dir).map_err(|error| {
             format!(
@@ -124,7 +136,13 @@ fn collect_recent_daily_log_documents(
                 continue;
             };
 
-            let path_key = normalized_path_key(path.as_path());
+            let Some(canonical_path) =
+                resolve_workspace_memory_path(canonical_workspace_root, path.as_path())?
+            else {
+                continue;
+            };
+
+            let path_key = canonical_path_key(canonical_path.as_path());
             let inserted = seen_paths.insert(path_key);
             if !inserted {
                 continue;
@@ -163,6 +181,7 @@ fn collect_recent_daily_log_documents(
 
 fn load_document_if_present(
     workspace_root: &Path,
+    canonical_workspace_root: &Path,
     path: &Path,
     per_file_char_budget: usize,
     seen_paths: &mut BTreeSet<String>,
@@ -171,13 +190,19 @@ fn load_document_if_present(
         return Ok(None);
     }
 
-    let path_key = normalized_path_key(path);
+    let Some(canonical_path) = resolve_workspace_memory_path(canonical_workspace_root, path)?
+    else {
+        return Ok(None);
+    };
+
+    let path_key = canonical_path_key(canonical_path.as_path());
     let inserted = seen_paths.insert(path_key);
     if !inserted {
         return Ok(None);
     }
 
-    let maybe_content = load_trimmed_document_content(path, per_file_char_budget)?;
+    let maybe_content =
+        load_trimmed_document_content(canonical_path.as_path(), per_file_char_budget)?;
     let Some(content) = maybe_content else {
         return Ok(None);
     };
@@ -223,9 +248,35 @@ fn durable_recall_label(workspace_root: &Path, path: &Path) -> String {
     display_path.display().to_string()
 }
 
-fn normalized_path_key(path: &Path) -> String {
-    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    canonical_path.display().to_string()
+fn canonical_workspace_memory_root(workspace_root: &Path) -> Result<PathBuf, String> {
+    workspace_root.canonicalize().map_err(|error| {
+        format!(
+            "canonicalize durable recall workspace root {} failed: {error}",
+            workspace_root.display()
+        )
+    })
+}
+
+fn resolve_workspace_memory_path(
+    canonical_workspace_root: &Path,
+    path: &Path,
+) -> Result<Option<PathBuf>, String> {
+    let canonical_path = path.canonicalize().map_err(|error| {
+        format!(
+            "canonicalize durable recall path {} failed: {error}",
+            path.display()
+        )
+    })?;
+    let is_within_workspace = canonical_path.starts_with(canonical_workspace_root);
+    if !is_within_workspace {
+        return Ok(None);
+    }
+
+    Ok(Some(canonical_path))
+}
+
+fn canonical_path_key(path: &Path) -> String {
+    path.display().to_string()
 }
 
 fn truncate_chars(input: &str, max_chars: usize) -> String {
@@ -264,6 +315,11 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    #[cfg(unix)]
+    fn create_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
     #[test]
     fn collect_recent_daily_log_documents_prefers_newest_dated_logs() {
         let temp_dir = tempdir().expect("tempdir");
@@ -276,9 +332,15 @@ mod tests {
         std::fs::write(memory_dir.join("2026-03-22.md"), "new").expect("write new log");
 
         let candidate_roots = runtime_self::candidate_workspace_roots(workspace_root);
-        let documents =
-            collect_recent_daily_log_documents(workspace_root, candidate_roots.as_slice(), 256)
-                .expect("collect daily log documents");
+        let canonical_workspace_root =
+            canonical_workspace_memory_root(workspace_root).expect("canonical workspace root");
+        let documents = collect_recent_daily_log_documents(
+            workspace_root,
+            canonical_workspace_root.as_path(),
+            candidate_roots.as_slice(),
+            256,
+        )
+        .expect("collect daily log documents");
 
         assert_eq!(documents.len(), 2);
         assert_eq!(documents[0].label, "memory/2026-03-22.md");
@@ -293,10 +355,63 @@ mod tests {
         std::fs::write(workspace_root.join("MEMORY.md"), "   ").expect("write empty memory file");
 
         let candidate_roots = runtime_self::candidate_workspace_roots(workspace_root);
-        let documents =
-            collect_curated_memory_documents(workspace_root, candidate_roots.as_slice(), 256)
-                .expect("collect curated memory documents");
+        let canonical_workspace_root =
+            canonical_workspace_memory_root(workspace_root).expect("canonical workspace root");
+        let documents = collect_curated_memory_documents(
+            workspace_root,
+            canonical_workspace_root.as_path(),
+            candidate_roots.as_slice(),
+            256,
+        )
+        .expect("collect curated memory documents");
 
         assert!(documents.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_durable_recall_entries_ignores_symlinked_memory_file_outside_workspace_root() {
+        let temp_dir = tempdir().expect("tempdir");
+        let sandbox_root = temp_dir.path();
+        let workspace_root = sandbox_root.join("workspace");
+        let outside_root = sandbox_root.join("outside");
+        let outside_memory_path = outside_root.join("secret.md");
+        let linked_memory_path = workspace_root.join("MEMORY.md");
+
+        std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+        std::fs::create_dir_all(&outside_root).expect("create outside root");
+        std::fs::write(&outside_memory_path, "outside durable recall secret")
+            .expect("write outside memory");
+        create_symlink(&outside_memory_path, &linked_memory_path).expect("create symlink");
+
+        let config = MemoryRuntimeConfig::default();
+        let entries = load_durable_recall_entries(Some(workspace_root.as_path()), &config)
+            .expect("load durable recall entries");
+
+        assert!(entries.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_durable_recall_entries_ignores_symlinked_memory_directory_outside_workspace_root() {
+        let temp_dir = tempdir().expect("tempdir");
+        let sandbox_root = temp_dir.path();
+        let workspace_root = sandbox_root.join("workspace");
+        let outside_root = sandbox_root.join("outside");
+        let outside_memory_dir = outside_root.join("logs");
+        let outside_daily_log_path = outside_memory_dir.join("2026-03-24.md");
+        let linked_memory_dir = workspace_root.join("memory");
+
+        std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+        std::fs::create_dir_all(&outside_memory_dir).expect("create outside memory dir");
+        std::fs::write(&outside_daily_log_path, "outside durable recall daily log")
+            .expect("write outside daily log");
+        create_symlink(&outside_memory_dir, &linked_memory_dir).expect("create dir symlink");
+
+        let config = MemoryRuntimeConfig::default();
+        let entries = load_durable_recall_entries(Some(workspace_root.as_path()), &config)
+            .expect("load durable recall entries");
+
+        assert!(entries.is_empty());
     }
 }
