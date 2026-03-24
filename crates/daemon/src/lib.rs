@@ -87,6 +87,7 @@ pub mod migration;
 pub mod next_actions;
 pub mod onboard_cli;
 pub mod onboard_presentation;
+mod provider_credential_policy;
 pub mod provider_presentation;
 mod provider_route_diagnostics;
 pub mod runtime_capability_cli;

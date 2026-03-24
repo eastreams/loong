@@ -16,6 +16,8 @@ use time::OffsetDateTime;
 use time::format_description::FormatItem;
 use time::macros::format_description;
 
+use crate::provider_credential_policy;
+
 const BACKUP_TIMESTAMP_FORMAT: &[FormatItem<'static>] =
     format_description!("[year][month][day]-[hour][minute][second]");
 const ONBOARD_CLEAR_INPUT_TOKEN: &str = ":clear";
@@ -1372,8 +1374,9 @@ pub async fn run_onboard_cli_with_ui(
             return Err(message);
         }
         if !credential_ok {
-            let credential_hint = provider_credential_env_hint(&config.provider)
-                .unwrap_or_else(|| "PROVIDER_API_KEY".to_owned());
+            let credential_hint =
+                provider_credential_policy::provider_credential_env_hint(&config.provider)
+                    .unwrap_or_else(|| "PROVIDER_API_KEY".to_owned());
             return Err(format!(
                 "onboard preflight failed: provider credentials missing. configure inline credentials or set {} in env",
                 credential_hint
@@ -1972,8 +1975,9 @@ fn resolve_api_key_env_selection(
     let initial = explicit_selection
         .as_deref()
         .unwrap_or(default_api_key_env.as_str());
-    let example_env_name = provider_credential_env_hint(&config.provider)
-        .unwrap_or_else(|| "PROVIDER_API_KEY".to_owned());
+    let example_env_name =
+        provider_credential_policy::provider_credential_env_hint(&config.provider)
+            .unwrap_or_else(|| "PROVIDER_API_KEY".to_owned());
     loop {
         print_lines(
             ui,
@@ -2022,12 +2026,15 @@ fn apply_selected_api_key_env(
 
     provider.api_key = None;
     provider.oauth_access_token = None;
-    match selected_provider_credential_env_field(provider, selected_api_key_env) {
-        ProviderCredentialEnvField::ApiKey => {
+    match provider_credential_policy::selected_provider_credential_env_field(
+        provider,
+        selected_api_key_env,
+    ) {
+        provider_credential_policy::ProviderCredentialEnvField::ApiKey => {
             provider.set_oauth_access_token_env(None);
             provider.set_api_key_env(Some(selected_api_key_env.to_owned()));
         }
-        ProviderCredentialEnvField::OAuthAccessToken => {
+        provider_credential_policy::ProviderCredentialEnvField::OAuthAccessToken => {
             provider.set_api_key_env(None);
             provider.set_oauth_access_token_env(Some(selected_api_key_env.to_owned()));
         }
@@ -2507,7 +2514,7 @@ pub fn provider_credential_check(config: &mvp::config::LoongClawConfig) -> Onboa
     }
 
     if provider.authorization_header().is_some() {
-        let detail = provider_credential_env_hint(provider)
+        let detail = provider_credential_policy::provider_credential_env_hint(provider)
             .map(|env_name| format!("{env_name} is available"))
             .unwrap_or_else(|| "provider credentials are available".to_owned());
         return OnboardCheck {
@@ -2518,7 +2525,7 @@ pub fn provider_credential_check(config: &mvp::config::LoongClawConfig) -> Onboa
         };
     }
 
-    let mut detail = provider_credential_env_hint(provider)
+    let mut detail = provider_credential_policy::provider_credential_env_hint(provider)
         .map(|env_name| format!("{env_name} is not set"))
         .unwrap_or_else(|| "provider credentials are not configured".to_owned());
     if let Some(hint) = provider.auth_guidance_hint() {
@@ -2584,31 +2591,6 @@ fn is_explicitly_accepted_non_interactive_warning(
         )
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderCredentialEnvField {
-    ApiKey,
-    OAuthAccessToken,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderCredentialEnvBinding {
-    pub field: ProviderCredentialEnvField,
-    pub env_name: String,
-}
-
-pub fn provider_credential_env_hints(provider: &mvp::config::ProviderConfig) -> Vec<String> {
-    let mut hints = Vec::new();
-    push_provider_credential_env_hint(&mut hints, provider.oauth_access_token_env.as_deref());
-    push_provider_credential_env_hint(&mut hints, provider.api_key_env.as_deref());
-    push_provider_credential_env_hint(&mut hints, provider.kind.default_oauth_access_token_env());
-    push_provider_credential_env_hint(&mut hints, provider.kind.default_api_key_env());
-    hints
-}
-
-pub fn provider_credential_env_hint(provider: &mvp::config::ProviderConfig) -> Option<String> {
-    provider_credential_env_hints(provider).into_iter().next()
-}
-
 fn validate_selected_provider_credential_env(
     config: &mvp::config::LoongClawConfig,
     selected_env_name: &str,
@@ -2623,192 +2605,25 @@ fn validate_selected_provider_credential_env(
     candidate.validate().map(|_| trimmed.to_owned())
 }
 
-pub fn preferred_provider_credential_env_binding(
-    provider: &mvp::config::ProviderConfig,
-) -> Option<ProviderCredentialEnvBinding> {
-    provider
-        .oauth_access_token_env
-        .as_deref()
-        .and_then(normalize_provider_credential_env_name)
-        .map(|env_name| ProviderCredentialEnvBinding {
-            field: ProviderCredentialEnvField::OAuthAccessToken,
-            env_name,
-        })
-        .or_else(|| {
-            provider
-                .api_key_env
-                .as_deref()
-                .and_then(normalize_provider_credential_env_name)
-                .map(|env_name| ProviderCredentialEnvBinding {
-                    field: ProviderCredentialEnvField::ApiKey,
-                    env_name,
-                })
-        })
-        .or_else(|| {
-            provider
-                .kind
-                .default_oauth_access_token_env()
-                .and_then(normalize_provider_credential_env_name)
-                .map(|env_name| ProviderCredentialEnvBinding {
-                    field: ProviderCredentialEnvField::OAuthAccessToken,
-                    env_name,
-                })
-        })
-        .or_else(|| {
-            provider
-                .kind
-                .default_api_key_env()
-                .and_then(normalize_provider_credential_env_name)
-                .map(|env_name| ProviderCredentialEnvBinding {
-                    field: ProviderCredentialEnvField::ApiKey,
-                    env_name,
-                })
-        })
-}
-
-fn configured_provider_credential_env_binding(
-    provider: &mvp::config::ProviderConfig,
-) -> Option<ProviderCredentialEnvBinding> {
-    provider
-        .oauth_access_token_env
-        .as_deref()
-        .and_then(normalize_provider_credential_env_name)
-        .map(|env_name| ProviderCredentialEnvBinding {
-            field: ProviderCredentialEnvField::OAuthAccessToken,
-            env_name,
-        })
-        .or_else(|| {
-            provider
-                .api_key_env
-                .as_deref()
-                .and_then(normalize_provider_credential_env_name)
-                .map(|env_name| ProviderCredentialEnvBinding {
-                    field: ProviderCredentialEnvField::ApiKey,
-                    env_name,
-                })
-        })
-}
-
-fn provider_has_inline_credential(provider: &mvp::config::ProviderConfig) -> bool {
-    secret_ref_has_inline_literal(provider.api_key.as_ref())
-        || secret_ref_has_inline_literal(provider.oauth_access_token.as_ref())
-}
-
-fn selected_provider_credential_env_field(
-    provider: &mvp::config::ProviderConfig,
-    selected_env_name: &str,
-) -> ProviderCredentialEnvField {
-    let normalized = normalize_provider_credential_env_name(selected_env_name);
-    let matches_oauth = normalized.as_deref().is_some_and(|env_name| {
-        provider.kind.default_oauth_access_token_env() == Some(env_name)
-            || provider
-                .kind
-                .oauth_access_token_env_aliases()
-                .contains(&env_name)
-            || provider
-                .oauth_access_token_env
-                .as_deref()
-                .and_then(normalize_provider_credential_env_name)
-                .as_deref()
-                == Some(env_name)
-    });
-    let matches_api_key = normalized.as_deref().is_some_and(|env_name| {
-        provider.kind.default_api_key_env() == Some(env_name)
-            || provider.kind.api_key_env_aliases().contains(&env_name)
-            || provider
-                .api_key_env
-                .as_deref()
-                .and_then(normalize_provider_credential_env_name)
-                .as_deref()
-                == Some(env_name)
-    });
-
-    match (matches_oauth, matches_api_key) {
-        (true, false) => ProviderCredentialEnvField::OAuthAccessToken,
-        (false, true) => ProviderCredentialEnvField::ApiKey,
-        (true, true) => configured_provider_credential_env_binding(provider)
-            .or_else(|| preferred_provider_credential_env_binding(provider))
-            .map(|binding| binding.field)
-            .unwrap_or(ProviderCredentialEnvField::ApiKey),
-        (false, false) => ProviderCredentialEnvField::ApiKey,
-    }
-}
-
-fn push_provider_credential_env_hint(hints: &mut Vec<String>, maybe_env_name: Option<&str>) {
-    let Some(env_name) = maybe_env_name.and_then(normalize_provider_credential_env_name) else {
-        return;
-    };
-    if !hints.iter().any(|existing| existing == &env_name) {
-        hints.push(env_name);
-    }
-}
-
-fn provider_credential_env_name_is_safe(raw: &str) -> bool {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.api_key = None;
-    config.provider.api_key_env = Some(trimmed.to_owned());
-    config.validate().is_ok()
-}
-
-fn normalize_provider_credential_env_name(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || !provider_credential_env_name_is_safe(trimmed) {
-        return None;
-    }
-    Some(trimmed.to_owned())
-}
-
-fn render_provider_credential_source_value(raw: Option<&str>) -> Option<String> {
-    let trimmed = raw?.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    normalize_provider_credential_env_name(trimmed)
-        .or_else(|| Some("environment variable".to_owned()))
-}
-
 fn render_configured_provider_credential_source_value(
     provider: &mvp::config::ProviderConfig,
 ) -> Option<String> {
-    provider
-        .oauth_access_token_env
-        .as_deref()
-        .and_then(|value| render_provider_credential_source_value(Some(value)))
-        .or_else(|| {
-            provider
-                .api_key_env
-                .as_deref()
-                .and_then(|value| render_provider_credential_source_value(Some(value)))
-        })
-}
-
-fn provider_has_configured_credential_env(provider: &mvp::config::ProviderConfig) -> bool {
-    provider
-        .oauth_access_token_env
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty())
-        || provider
-            .api_key_env
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
+    let binding = provider_credential_policy::configured_provider_credential_env_binding(provider)?;
+    let env_name = binding.env_name;
+    provider_credential_policy::render_provider_credential_source_value(Some(env_name.as_str()))
 }
 
 pub fn preferred_api_key_env_default(config: &mvp::config::LoongClawConfig) -> String {
     let provider = &config.provider;
-    if let Some(binding) = configured_provider_credential_env_binding(provider) {
+    if let Some(binding) =
+        provider_credential_policy::configured_provider_credential_env_binding(provider)
+    {
         return binding.env_name;
     }
-    if provider_has_inline_credential(provider) {
+    if provider_credential_policy::provider_has_inline_credential(provider) {
         return String::new();
     }
-    preferred_provider_credential_env_binding(provider)
+    provider_credential_policy::preferred_provider_credential_env_binding(provider)
         .map(|binding| binding.env_name)
         .unwrap_or_default()
 }
@@ -4372,13 +4187,18 @@ fn render_api_key_env_selection_default_hint_line(
     prompt_default: &str,
 ) -> String {
     let prompt_default =
-        render_provider_credential_source_value(Some(prompt_default)).unwrap_or_default();
+        provider_credential_policy::render_provider_credential_source_value(Some(prompt_default))
+            .unwrap_or_default();
     let suggested_env =
-        render_provider_credential_source_value(Some(suggested_env)).unwrap_or_default();
+        provider_credential_policy::render_provider_credential_source_value(Some(suggested_env))
+            .unwrap_or_default();
     let current_env =
-        configured_provider_credential_env_binding(&config.provider).and_then(|binding| {
-            render_provider_credential_source_value(Some(binding.env_name.as_str()))
-        });
+        provider_credential_policy::configured_provider_credential_env_binding(&config.provider)
+            .and_then(|binding| {
+                provider_credential_policy::render_provider_credential_source_value(Some(
+                    binding.env_name.as_str(),
+                ))
+            });
 
     if prompt_default.is_empty() {
         return render_default_input_hint_line("leave this blank");
@@ -5451,13 +5271,16 @@ fn render_api_key_env_selection_screen_lines_with_style(
         context_lines.push(format!("- current source: {current_env}"));
     }
     if let Some(suggested_source) =
-        render_provider_credential_source_value(Some(default_api_key_env))
+        provider_credential_policy::render_provider_credential_source_value(Some(
+            default_api_key_env,
+        ))
     {
         context_lines.push(format!("- suggested source: {suggested_source}"));
     }
 
-    let example_env_name = provider_credential_env_hint(&config.provider)
-        .unwrap_or_else(|| "PROVIDER_API_KEY".to_owned());
+    let example_env_name =
+        provider_credential_policy::provider_credential_env_hint(&config.provider)
+            .unwrap_or_else(|| "PROVIDER_API_KEY".to_owned());
     let mut hint_lines = vec![render_api_key_env_selection_default_hint_line(
         config,
         default_api_key_env,
@@ -5466,7 +5289,7 @@ fn render_api_key_env_selection_screen_lines_with_style(
     hint_lines.push("- enter an env var name, not the secret value itself".to_owned());
     hint_lines.push(format!("- example: {example_env_name}"));
     if prompt_default.trim().is_empty() {
-        if provider_has_inline_credential(&config.provider) {
+        if provider_credential_policy::provider_has_inline_credential(&config.provider) {
             hint_lines.push("- leave this blank to keep inline credentials".to_owned());
         }
     } else if provider_supports_blank_api_key_env(config) {
@@ -5895,9 +5718,11 @@ fn summarize_provider_credential(
             value: "inline api key".to_owned(),
         });
     }
-    preferred_provider_credential_env_binding(provider)
+    provider_credential_policy::preferred_provider_credential_env_binding(provider)
         .and_then(|binding| {
-            render_provider_credential_source_value(Some(binding.env_name.as_str()))
+            provider_credential_policy::render_provider_credential_source_value(Some(
+                binding.env_name.as_str(),
+            ))
         })
         .map(|credential_env| OnboardingCredentialSummary {
             label: "credential source",
@@ -5906,8 +5731,8 @@ fn summarize_provider_credential(
 }
 
 fn provider_supports_blank_api_key_env(config: &mvp::config::LoongClawConfig) -> bool {
-    provider_has_inline_credential(&config.provider)
-        || provider_has_configured_credential_env(&config.provider)
+    provider_credential_policy::provider_has_inline_credential(&config.provider)
+        || provider_credential_policy::provider_has_configured_credential_env(&config.provider)
 }
 
 fn prompt_import_candidate_choice(
