@@ -84,14 +84,9 @@
 "docs":
   - changed-files:
       - any-glob-to-any-file:
+          - "**/*.md"
           - "docs/**"
-          - "README.md"
-          - "README.zh-CN.md"
-          - "CONTRIBUTING.md"
-          - "SECURITY.md"
-          - "CODE_OF_CONDUCT.md"
           - ".github/ISSUE_TEMPLATE/**"
-          - ".github/PULL_REQUEST_TEMPLATE.md"
 
 "ci":
   - changed-files:
@@ -109,13 +104,6 @@
           - "scripts/release_artifact_lib.sh"
           - "scripts/sync_github_labels.py"
           - "scripts/test_*.sh"
-
-"documentation":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "**/*.md"
-          - ".github/ISSUE_TEMPLATE/**"
-          - ".github/PULL_REQUEST_TEMPLATE.md"
 
 "dependencies":
   - changed-files:
