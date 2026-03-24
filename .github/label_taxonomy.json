@@ -303,6 +303,7 @@
       "color": "0075ca",
       "description": "Improvements or additions to documentation.",
       "paths": [
+        "*.md",
         "**/*.md",
         ".github/ISSUE_TEMPLATE/**",
         ".github/PULL_REQUEST_TEMPLATE.md"
