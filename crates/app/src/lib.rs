@@ -1,4 +1,5 @@
 pub mod acp;
+mod advisory_prompt;
 pub mod channel;
 pub mod chat;
 pub mod config;

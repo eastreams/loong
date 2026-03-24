@@ -581,7 +581,6 @@ async fn load_memory_context_entries(
     Ok(memory::decode_memory_context_entries(&outcome.payload))
 }
 
-#[cfg(feature = "memory-sqlite")]
 async fn persist_memory_window(
     session_id: &str,
     turns: &[memory::WindowTurn],
@@ -919,5 +918,66 @@ mod tests {
             }),
             "expected kernel-bound assembly to keep the durable recall block"
         );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn default_engine_kernel_bound_messages_match_provider_governed_profile_projection() {
+        let capabilities = std::collections::BTreeSet::from([
+            loongclaw_contracts::Capability::InvokeTool,
+            loongclaw_contracts::Capability::FilesystemRead,
+            loongclaw_contracts::Capability::FilesystemWrite,
+            loongclaw_contracts::Capability::MemoryRead,
+        ]);
+        let harness = TurnTestHarness::with_capabilities(capabilities);
+        let session_id = "kernel-governed-profile-session";
+        let sqlite_path = harness.temp_dir.join("memory.sqlite3");
+        let sqlite_path_text = sqlite_path.display().to_string();
+        let profile_note = "# Identity\n\n- Name: Advisory shadow";
+        let mut config = LoongClawConfig::default();
+
+        config.tools.file_root = Some(harness.temp_dir.display().to_string());
+        config.memory.profile = MemoryProfile::ProfilePlusWindow;
+        config.memory.profile_note = Some(profile_note.to_owned());
+        config.memory.sliding_window = 2;
+        config.memory.sqlite_path = sqlite_path_text.clone();
+
+        let memory_config =
+            memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+
+        memory::append_turn_direct(session_id, "assistant", "turn 1", &memory_config)
+            .expect("append turn should succeed");
+
+        let binding =
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx));
+        let kernel_messages = DefaultContextEngine
+            .assemble_messages(&config, session_id, true, binding)
+            .await
+            .expect("assemble messages");
+        let provider_messages =
+            crate::provider::build_messages_for_session(&config, session_id, true)
+                .expect("build provider messages");
+
+        assert_eq!(
+            kernel_messages, provider_messages,
+            "kernel-bound assembly should preserve governed profile projection parity"
+        );
+
+        let profile_message = kernel_messages
+            .iter()
+            .find(|message| {
+                message["role"] == "system"
+                    && message["content"]
+                        .as_str()
+                        .is_some_and(|content| content.contains("## Session Profile"))
+            })
+            .expect("profile message");
+        let profile_content = profile_message["content"]
+            .as_str()
+            .expect("profile content");
+
+        assert!(profile_content.contains("Advisory reference heading: Identity"));
+        assert!(profile_content.contains("- Name: Advisory shadow"));
+        assert!(!profile_content.contains("\n# Identity\n"));
     }
 }
