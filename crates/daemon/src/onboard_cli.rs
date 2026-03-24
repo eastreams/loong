@@ -21,6 +21,18 @@ use crate::onboard_finalize::{
 use crate::onboard_finalize::{
     OnboardWriteRecovery, format_backup_timestamp_at, resolve_backup_path_at,
 };
+pub use crate::onboard_preflight::{
+    OnboardCheck, OnboardCheckLevel, OnboardNonInteractiveWarningPolicy,
+    collect_channel_preflight_checks, directory_preflight_check, provider_credential_check,
+    render_current_setup_preflight_summary_screen_lines,
+    render_detected_setup_preflight_summary_screen_lines, render_preflight_summary_screen_lines,
+};
+use crate::onboard_preflight::{
+    config_validation_failure_message,
+    is_explicitly_accepted_non_interactive_warning as preflight_accepts_non_interactive_warning,
+    non_interactive_preflight_failure_message, render_preflight_summary_screen_lines_with_progress,
+    run_preflight_checks,
+};
 use crate::provider_credential_policy;
 #[cfg(test)]
 use time::OffsetDateTime;
@@ -111,6 +123,21 @@ impl OnboardRuntimeContext {
             codex_config_paths: codex_config_paths.into_iter().collect(),
         }
     }
+}
+
+fn is_explicitly_accepted_non_interactive_warning(
+    check: &OnboardCheck,
+    options: &OnboardCommandOptions,
+) -> bool {
+    preflight_accepts_non_interactive_warning(check, options.skip_model_probe)
+}
+
+#[cfg(test)]
+fn provider_model_probe_failure_check(
+    config: &mvp::config::LoongClawConfig,
+    error: String,
+) -> OnboardCheck {
+    crate::onboard_preflight::provider_model_probe_failure_check(config, error)
 }
 
 const MEMORY_PROFILE_CHOICES: [(mvp::config::MemoryProfile, &str, &str); 3] = [
@@ -870,39 +897,6 @@ fn prompt_optional(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OnboardCheckLevel {
-    Pass,
-    Warn,
-    Fail,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum OnboardNonInteractiveWarningPolicy {
-    #[default]
-    Block,
-    AcceptedBySkipModelProbe,
-    AcceptedByExplicitModel,
-    AcceptedByPreferredModels,
-    RequiresExplicitModel,
-    RequiresExplicitModelWithoutReviewedDefault,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-struct OnboardCheckCounts {
-    pass: usize,
-    warn: usize,
-    fail: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OnboardCheck {
-    pub name: &'static str,
-    pub level: OnboardCheckLevel,
-    pub detail: String,
-    pub non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportSurfaceLevel {
     Ready,
     Review,
@@ -1063,11 +1057,11 @@ enum SystemPromptSelection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct OnboardScreenOption {
-    key: String,
-    label: String,
-    detail_lines: Vec<String>,
-    recommended: bool,
+pub(crate) struct OnboardScreenOption {
+    pub(crate) key: String,
+    pub(crate) label: String,
+    pub(crate) detail_lines: Vec<String>,
+    pub(crate) recommended: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2216,340 +2210,6 @@ fn resolve_memory_profile_selection(
     Ok(*profile)
 }
 
-async fn run_preflight_checks(
-    config: &mvp::config::LoongClawConfig,
-    skip_model_probe: bool,
-) -> Vec<OnboardCheck> {
-    let mut checks = Vec::new();
-    if let Some(validation_check) = config_validation_check(config) {
-        checks.push(validation_check);
-    }
-    let credential_check = provider_credential_check(config);
-    let has_credentials = credential_check.level == OnboardCheckLevel::Pass;
-    checks.push(credential_check);
-    checks.push(provider_transport_check(config));
-
-    if skip_model_probe {
-        checks.push(OnboardCheck {
-            name: "provider model probe",
-            level: OnboardCheckLevel::Warn,
-            detail: "skipped by --skip-model-probe".to_owned(),
-            non_interactive_warning_policy:
-                OnboardNonInteractiveWarningPolicy::AcceptedBySkipModelProbe,
-        });
-    } else if !has_credentials {
-        checks.push(OnboardCheck {
-            name: "provider model probe",
-            level: OnboardCheckLevel::Warn,
-            detail: "skipped because credentials are missing".to_owned(),
-            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-        });
-    } else {
-        match mvp::provider::fetch_available_models(config).await {
-            Ok(models) => checks.push(OnboardCheck {
-                name: "provider model probe",
-                level: OnboardCheckLevel::Pass,
-                detail: format!("{} model(s) available", models.len()),
-                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-            }),
-            Err(error) => {
-                let transport_style_failure =
-                    crate::provider_route_diagnostics::is_transport_style_model_probe_failure(
-                        error.as_str(),
-                    );
-                checks.push(provider_model_probe_failure_check(config, error));
-                if transport_style_failure
-                    && let Some(route_probe) =
-                        crate::provider_route_diagnostics::collect_provider_route_probe(
-                            &config.provider,
-                        )
-                        .await
-                {
-                    checks.push(provider_route_probe_preflight_check(&route_probe));
-                }
-            }
-        }
-    }
-
-    let sqlite_path = config.memory.resolved_sqlite_path();
-    let sqlite_parent = sqlite_path.parent().unwrap_or(Path::new("."));
-    checks.push(directory_preflight_check("memory path", sqlite_parent));
-
-    let file_root = config.tools.resolved_file_root();
-    checks.push(directory_preflight_check("tool file root", &file_root));
-
-    checks.extend(collect_browser_companion_preflight_checks(config).await);
-    checks.extend(collect_channel_preflight_checks(config));
-
-    checks
-}
-
-fn config_validation_check(config: &mvp::config::LoongClawConfig) -> Option<OnboardCheck> {
-    config.validate().err().map(|detail| OnboardCheck {
-        name: "config validation",
-        level: OnboardCheckLevel::Fail,
-        detail,
-        non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-    })
-}
-
-fn provider_check_detail_prefix(config: &mvp::config::LoongClawConfig) -> String {
-    crate::provider_presentation::active_provider_detail_label(config)
-}
-
-fn render_onboard_model_candidate_list(models: &[String]) -> String {
-    models
-        .iter()
-        .map(|model| format!("`{model}`"))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn provider_model_probe_failure_check(
-    config: &mvp::config::LoongClawConfig,
-    error: String,
-) -> OnboardCheck {
-    let provider_prefix = provider_check_detail_prefix(config);
-    if crate::provider_route_diagnostics::is_transport_style_model_probe_failure(error.as_str()) {
-        return OnboardCheck {
-            name: "provider model probe",
-            level: OnboardCheckLevel::Fail,
-            detail: format!(
-                "{provider_prefix}: {} ({error}); runtime could not verify the provider route. inspect provider route diagnostics and retry once dns / proxy / TUN routing is stable",
-                crate::provider_route_diagnostics::MODEL_CATALOG_TRANSPORT_FAILED_MARKER
-            ),
-            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-        };
-    }
-    let auth_style_failure = mvp::provider::is_auth_style_failure_message(error.as_str());
-    let append_region_hint = |mut detail: String| {
-        if auth_style_failure && let Some(hint) = config.provider.region_endpoint_failure_hint() {
-            detail.push(' ');
-            detail.push_str(hint.as_str());
-        }
-        detail
-    };
-    let (level, detail, non_interactive_warning_policy) = match config
-        .provider
-        .model_catalog_probe_recovery()
-    {
-        mvp::config::ModelCatalogProbeRecovery::ExplicitModel(model) => (
-            OnboardCheckLevel::Warn,
-            append_region_hint(format!(
-                "{provider_prefix}: model catalog probe failed ({error}); chat may still work because model `{model}` is explicitly configured"
-            )),
-            OnboardNonInteractiveWarningPolicy::AcceptedByExplicitModel,
-        ),
-        mvp::config::ModelCatalogProbeRecovery::ConfiguredPreferredModels(fallback_models) => (
-            OnboardCheckLevel::Warn,
-            append_region_hint(format!(
-                "{provider_prefix}: model catalog probe failed ({error}); runtime will try configured preferred model fallback(s): {}",
-                render_onboard_model_candidate_list(&fallback_models)
-            )),
-            OnboardNonInteractiveWarningPolicy::AcceptedByPreferredModels,
-        ),
-        mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
-            recommended_onboarding_model,
-        } => (
-            OnboardCheckLevel::Fail,
-            append_region_hint(provider_model_probe_requires_explicit_model_detail(
-                provider_prefix.as_str(),
-                error.as_str(),
-                recommended_onboarding_model,
-            )),
-            if recommended_onboarding_model.is_some() {
-                OnboardNonInteractiveWarningPolicy::RequiresExplicitModel
-            } else {
-                OnboardNonInteractiveWarningPolicy::RequiresExplicitModelWithoutReviewedDefault
-            },
-        ),
-    };
-
-    OnboardCheck {
-        name: "provider model probe",
-        level,
-        detail,
-        non_interactive_warning_policy,
-    }
-}
-
-async fn collect_browser_companion_preflight_checks(
-    config: &mvp::config::LoongClawConfig,
-) -> Vec<OnboardCheck> {
-    let Some(diagnostics) =
-        crate::browser_companion_diagnostics::collect_browser_companion_diagnostics(config).await
-    else {
-        return Vec::new();
-    };
-
-    let level = if diagnostics.install_ready() && diagnostics.runtime_ready {
-        OnboardCheckLevel::Pass
-    } else {
-        OnboardCheckLevel::Warn
-    };
-    let detail = if diagnostics.install_ready() {
-        diagnostics
-            .runtime_gate_detail()
-            .unwrap_or_else(|| diagnostics.install_detail())
-    } else {
-        diagnostics.install_detail()
-    };
-
-    vec![OnboardCheck {
-        name: crate::browser_companion_diagnostics::BROWSER_COMPANION_INSTALL_CHECK_NAME,
-        level,
-        detail,
-        non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-    }]
-}
-
-fn provider_model_probe_requires_explicit_model_detail(
-    provider_prefix: &str,
-    error: &str,
-    recommended_onboarding_model: Option<&str>,
-) -> String {
-    match recommended_onboarding_model {
-        Some(model) => format!(
-            "{provider_prefix}: model catalog probe failed ({error}); current config still uses `model = auto`; rerun onboarding and accept reviewed model `{model}`, or set `provider.model` / `preferred_models` explicitly"
-        ),
-        None => format!(
-            "{provider_prefix}: model catalog probe failed ({error}); current config still uses `model = auto`; set `provider.model` explicitly or configure `preferred_models` before retrying"
-        ),
-    }
-}
-
-fn non_interactive_preflight_failure_message(checks: &[OnboardCheck]) -> String {
-    let detail = checks
-        .iter()
-        .find(|check| check.level == OnboardCheckLevel::Fail)
-        .map(|check| {
-            let mut detail = check.detail.clone();
-            if check.name == "provider model probe"
-                && check.detail.contains(
-                    crate::provider_route_diagnostics::MODEL_CATALOG_TRANSPORT_FAILED_MARKER,
-                )
-                && let Some(route_probe) = checks.iter().find(|candidate| {
-                    candidate.name
-                        == crate::provider_route_diagnostics::PROVIDER_ROUTE_PROBE_CHECK_NAME
-                })
-            {
-                detail.push_str(" provider route probe: ");
-                detail.push_str(route_probe.detail.as_str());
-            }
-            detail
-        })
-        .unwrap_or_else(|| "preflight checks failed".to_owned());
-    format!("onboard preflight failed: {detail}")
-}
-
-fn config_validation_failure_message(checks: &[OnboardCheck]) -> Option<String> {
-    checks
-        .iter()
-        .find(|check| check.name == "config validation" && check.level == OnboardCheckLevel::Fail)
-        .map(|check| format!("onboard preflight failed: {}", check.detail))
-}
-
-pub fn provider_credential_check(config: &mvp::config::LoongClawConfig) -> OnboardCheck {
-    let provider = &config.provider;
-    let provider_prefix = provider_check_detail_prefix(config);
-    let inline_oauth = secret_ref_has_inline_literal(provider.oauth_access_token.as_ref());
-    if inline_oauth {
-        return OnboardCheck {
-            name: "provider credentials",
-            level: OnboardCheckLevel::Pass,
-            detail: format!("{provider_prefix}: inline oauth access token configured"),
-            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-        };
-    }
-
-    let inline_api_key = secret_ref_has_inline_literal(provider.api_key.as_ref());
-    if inline_api_key {
-        return OnboardCheck {
-            name: "provider credentials",
-            level: OnboardCheckLevel::Pass,
-            detail: format!("{provider_prefix}: inline api key configured"),
-            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-        };
-    }
-
-    if provider.authorization_header().is_some() {
-        let detail = provider_credential_policy::provider_credential_env_hint(provider)
-            .map(|env_name| format!("{env_name} is available"))
-            .unwrap_or_else(|| "provider credentials are available".to_owned());
-        return OnboardCheck {
-            name: "provider credentials",
-            level: OnboardCheckLevel::Pass,
-            detail: format!("{provider_prefix}: {detail}"),
-            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-        };
-    }
-
-    let mut detail = provider_credential_policy::provider_credential_env_hint(provider)
-        .map(|env_name| format!("{env_name} is not set"))
-        .unwrap_or_else(|| "provider credentials are not configured".to_owned());
-    if let Some(hint) = provider.auth_guidance_hint() {
-        detail.push(' ');
-        detail.push_str(hint.as_str());
-    }
-    OnboardCheck {
-        name: "provider credentials",
-        level: OnboardCheckLevel::Warn,
-        detail: format!("{provider_prefix}: {detail}"),
-        non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-    }
-}
-
-fn provider_transport_check(config: &mvp::config::LoongClawConfig) -> OnboardCheck {
-    let readiness = config.provider.transport_readiness();
-    OnboardCheck {
-        name: "provider transport",
-        level: match readiness.level {
-            mvp::config::ProviderTransportReadinessLevel::Ready => OnboardCheckLevel::Pass,
-            mvp::config::ProviderTransportReadinessLevel::Review => OnboardCheckLevel::Warn,
-            mvp::config::ProviderTransportReadinessLevel::Unsupported => OnboardCheckLevel::Fail,
-        },
-        detail: readiness.detail,
-        non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-    }
-}
-
-fn provider_route_probe_preflight_check(
-    probe: &crate::provider_route_diagnostics::ProviderRouteProbe,
-) -> OnboardCheck {
-    OnboardCheck {
-        name: crate::provider_route_diagnostics::PROVIDER_ROUTE_PROBE_CHECK_NAME,
-        level: match probe.level {
-            crate::provider_route_diagnostics::ProviderRouteProbeLevel::Pass => {
-                OnboardCheckLevel::Pass
-            }
-            crate::provider_route_diagnostics::ProviderRouteProbeLevel::Warn => {
-                OnboardCheckLevel::Warn
-            }
-            crate::provider_route_diagnostics::ProviderRouteProbeLevel::Fail => {
-                OnboardCheckLevel::Fail
-            }
-        },
-        detail: probe.detail.clone(),
-        non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-    }
-}
-
-fn is_explicitly_accepted_non_interactive_warning(
-    check: &OnboardCheck,
-    options: &OnboardCommandOptions,
-) -> bool {
-    (options.skip_model_probe
-        && matches!(
-            check.non_interactive_warning_policy,
-            OnboardNonInteractiveWarningPolicy::AcceptedBySkipModelProbe
-        ))
-        || matches!(
-            check.non_interactive_warning_policy,
-            OnboardNonInteractiveWarningPolicy::AcceptedByExplicitModel
-                | OnboardNonInteractiveWarningPolicy::AcceptedByPreferredModels
-        )
-}
-
 fn validate_selected_provider_credential_env(
     config: &mvp::config::LoongClawConfig,
     selected_env_name: &str,
@@ -2593,83 +2253,6 @@ pub fn preferred_api_key_env_default(config: &mvp::config::LoongClawConfig) -> S
         .unwrap_or_default()
 }
 
-pub fn directory_preflight_check(name: &'static str, target: &Path) -> OnboardCheck {
-    if target.exists() {
-        return match fs::metadata(target) {
-            Ok(metadata) if metadata.is_dir() => OnboardCheck {
-                name,
-                level: OnboardCheckLevel::Pass,
-                detail: target.display().to_string(),
-                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-            },
-            Ok(_) => OnboardCheck {
-                name,
-                level: OnboardCheckLevel::Fail,
-                detail: format!("{} exists but is not a directory", target.display()),
-                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-            },
-            Err(error) => OnboardCheck {
-                name,
-                level: OnboardCheckLevel::Fail,
-                detail: format!("failed to inspect {}: {error}", target.display()),
-                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-            },
-        };
-    }
-
-    let mut ancestor = target;
-    while !ancestor.exists() {
-        let Some(parent) = ancestor.parent() else {
-            return OnboardCheck {
-                name,
-                level: OnboardCheckLevel::Fail,
-                detail: format!("no existing parent found for {}", target.display()),
-                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-            };
-        };
-        ancestor = parent;
-    }
-
-    match fs::metadata(ancestor) {
-        Ok(metadata) if metadata.is_dir() => OnboardCheck {
-            name,
-            level: OnboardCheckLevel::Pass,
-            detail: format!("would create under {}", ancestor.display()),
-            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-        },
-        Ok(_) => OnboardCheck {
-            name,
-            level: OnboardCheckLevel::Fail,
-            detail: format!("{} exists but is not a directory", ancestor.display()),
-            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-        },
-        Err(error) => OnboardCheck {
-            name,
-            level: OnboardCheckLevel::Fail,
-            detail: format!("failed to inspect {}: {error}", ancestor.display()),
-            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-        },
-    }
-}
-
-pub fn collect_channel_preflight_checks(
-    config: &mvp::config::LoongClawConfig,
-) -> Vec<OnboardCheck> {
-    crate::migration::channels::collect_channel_preflight_checks(config)
-        .into_iter()
-        .map(|check| OnboardCheck {
-            name: check.name,
-            level: match check.level {
-                crate::migration::channels::ChannelCheckLevel::Pass => OnboardCheckLevel::Pass,
-                crate::migration::channels::ChannelCheckLevel::Warn => OnboardCheckLevel::Warn,
-                crate::migration::channels::ChannelCheckLevel::Fail => OnboardCheckLevel::Fail,
-            },
-            detail: check.detail,
-            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-        })
-        .collect()
-}
-
 pub fn collect_import_surfaces(config: &mvp::config::LoongClawConfig) -> Vec<ImportSurface> {
     crate::migration::collect_import_surfaces(config)
         .into_iter()
@@ -2688,71 +2271,6 @@ pub fn collect_import_surfaces_with_channel_readiness(
     .into_iter()
     .map(import_surface_from_migration)
     .collect()
-}
-
-fn summarize_onboard_checks(checks: &[OnboardCheck]) -> OnboardCheckCounts {
-    let mut counts = OnboardCheckCounts::default();
-    for check in checks {
-        match check.level {
-            OnboardCheckLevel::Pass => counts.pass += 1,
-            OnboardCheckLevel::Warn => counts.warn += 1,
-            OnboardCheckLevel::Fail => counts.fail += 1,
-        }
-    }
-    counts
-}
-
-fn render_preflight_check_rows(checks: &[OnboardCheck], width: usize) -> Vec<String> {
-    let render_stacked_rows = |checks: &[OnboardCheck], width: usize| {
-        let mut lines = Vec::new();
-        for check in checks {
-            lines.push(format!(
-                "{} {}",
-                check_level_marker(check.level),
-                check.name
-            ));
-            lines.extend(mvp::presentation::render_wrapped_text_line(
-                "  ",
-                &check.detail,
-                width,
-            ));
-        }
-        lines
-    };
-
-    if width < 68 {
-        return render_stacked_rows(checks, width);
-    }
-
-    let name_width = checks
-        .iter()
-        .map(|check| check.name.len())
-        .max()
-        .unwrap_or(0);
-    let rows = checks
-        .iter()
-        .map(|check| {
-            format!(
-                "{} {:width$}  {}",
-                check_level_marker(check.level),
-                check.name,
-                check.detail,
-                width = name_width
-            )
-        })
-        .collect::<Vec<_>>();
-    if rows.iter().any(|row| row.len() > width) {
-        return render_stacked_rows(checks, width);
-    }
-    rows
-}
-
-fn check_level_marker(level: OnboardCheckLevel) -> &'static str {
-    match level {
-        OnboardCheckLevel::Pass => "[OK]",
-        OnboardCheckLevel::Warn => "[WARN]",
-        OnboardCheckLevel::Fail => "[FAIL]",
-    }
 }
 
 fn load_import_starting_config(
@@ -3764,7 +3282,11 @@ fn render_onboard_brand_header(width: usize, subtitle: &str, color_enabled: bool
     )
 }
 
-fn render_onboard_compact_header(width: usize, subtitle: &str, color_enabled: bool) -> Vec<String> {
+pub(crate) fn render_onboard_compact_header(
+    width: usize,
+    subtitle: &str,
+    color_enabled: bool,
+) -> Vec<String> {
     mvp::presentation::style_brand_lines_with_palette(
         &mvp::presentation::render_compact_brand_header(
             width,
@@ -3790,7 +3312,10 @@ fn render_onboard_header(
     }
 }
 
-fn render_onboard_wrapped_display_lines<I, S>(display_lines: I, width: usize) -> Vec<String>
+pub(crate) fn render_onboard_wrapped_display_lines<I, S>(
+    display_lines: I,
+    width: usize,
+) -> Vec<String>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -3801,7 +3326,10 @@ where
         .collect()
 }
 
-fn render_onboard_option_lines(options: &[OnboardScreenOption], width: usize) -> Vec<String> {
+pub(crate) fn render_onboard_option_lines(
+    options: &[OnboardScreenOption],
+    width: usize,
+) -> Vec<String> {
     let mut lines = Vec::new();
     for option in options {
         let suffix = if option.recommended {
@@ -3831,7 +3359,7 @@ fn render_onboard_option_lines(options: &[OnboardScreenOption], width: usize) ->
     lines
 }
 
-fn render_default_choice_footer_line(key: &str, description: &str) -> String {
+pub(crate) fn render_default_choice_footer_line(key: &str, description: &str) -> String {
     format!("press Enter to use default {key}, {description}")
 }
 
@@ -3936,7 +3464,7 @@ fn with_default_choice_footer(
     footer_lines
 }
 
-fn append_escape_cancel_hint(mut lines: Vec<String>) -> Vec<String> {
+pub(crate) fn append_escape_cancel_hint(mut lines: Vec<String>) -> Vec<String> {
     if !lines.iter().any(|line| {
         let lower = line.to_ascii_lowercase();
         lower.contains("esc") && lower.contains("cancel")
@@ -4137,129 +3665,20 @@ fn render_onboarding_risk_screen_lines_with_style(
     )
 }
 
-pub fn render_preflight_summary_screen_lines(checks: &[OnboardCheck], width: usize) -> Vec<String> {
-    render_preflight_summary_screen_lines_with_style(
-        checks,
-        width,
-        ReviewFlowStyle::Guided(GuidedPromptPath::NativePromptPack),
-        false,
-    )
-}
-
-pub fn render_current_setup_preflight_summary_screen_lines(
-    checks: &[OnboardCheck],
-    width: usize,
-) -> Vec<String> {
-    render_preflight_summary_screen_lines_with_style(
-        checks,
-        width,
-        ReviewFlowStyle::QuickCurrentSetup,
-        false,
-    )
-}
-
-pub fn render_detected_setup_preflight_summary_screen_lines(
-    checks: &[OnboardCheck],
-    width: usize,
-) -> Vec<String> {
-    render_preflight_summary_screen_lines_with_style(
-        checks,
-        width,
-        ReviewFlowStyle::QuickDetectedSetup,
-        false,
-    )
-}
-
 fn render_preflight_summary_screen_lines_with_style(
     checks: &[OnboardCheck],
     width: usize,
     flow_style: ReviewFlowStyle,
     color_enabled: bool,
 ) -> Vec<String> {
-    let counts = summarize_onboard_checks(checks);
-    let has_attention = counts.warn > 0 || counts.fail > 0;
-    let mut lines = render_onboard_compact_header(
+    let progress_line = flow_style.progress_line();
+
+    render_preflight_summary_screen_lines_with_progress(
+        checks,
         width,
-        crate::onboard_presentation::preflight_header_title(),
+        progress_line.as_str(),
         color_enabled,
-    );
-    let mut summary_lines = vec![format!(
-        "- status: {} pass · {} warn · {} fail",
-        counts.pass, counts.warn, counts.fail
-    )];
-    if has_attention {
-        summary_lines
-            .push(crate::onboard_presentation::preflight_attention_summary_line().to_owned());
-        if let Some(hint) = preflight_attention_hint_line(checks) {
-            summary_lines.push(hint.to_owned());
-        }
-    } else {
-        summary_lines.push(crate::onboard_presentation::preflight_green_summary_line().to_owned());
-    }
-    lines.push(String::new());
-    lines.extend(render_onboard_wrapped_display_lines(
-        [crate::onboard_presentation::preflight_section_title()],
-        width,
-    ));
-    lines.extend(render_onboard_wrapped_display_lines(
-        [flow_style.progress_line()],
-        width,
-    ));
-    lines.extend(render_onboard_wrapped_display_lines(summary_lines, width));
-    if !checks.is_empty() {
-        lines.push(String::new());
-        lines.extend(render_preflight_check_rows(checks, width));
-    }
-    if has_attention {
-        let options = vec![
-            OnboardScreenOption {
-                key: "y".to_owned(),
-                label: crate::onboard_presentation::preflight_continue_label().to_owned(),
-                detail_lines: vec![
-                    crate::onboard_presentation::preflight_continue_detail().to_owned(),
-                ],
-                recommended: false,
-            },
-            OnboardScreenOption {
-                key: "n".to_owned(),
-                label: crate::onboard_presentation::preflight_cancel_label().to_owned(),
-                detail_lines: vec![
-                    crate::onboard_presentation::preflight_cancel_detail().to_owned(),
-                ],
-                recommended: false,
-            },
-        ];
-        lines.push(String::new());
-        lines.extend(render_onboard_option_lines(&options, width));
-        lines.push(String::new());
-        let footer_lines = append_escape_cancel_hint(vec![render_default_choice_footer_line(
-            "n",
-            crate::onboard_presentation::preflight_default_choice_description(),
-        )]);
-        lines.extend(render_onboard_wrapped_display_lines(footer_lines, width));
-    }
-    lines
-}
-
-fn preflight_attention_hint_line(checks: &[OnboardCheck]) -> Option<&'static str> {
-    if checks.iter().any(|check| {
-        matches!(
-            check.non_interactive_warning_policy,
-            OnboardNonInteractiveWarningPolicy::RequiresExplicitModel
-        )
-    }) {
-        return Some(crate::onboard_presentation::preflight_explicit_model_rerun_hint());
-    }
-
-    if checks.iter().any(|check| {
-        matches!(
-            check.non_interactive_warning_policy,
-            OnboardNonInteractiveWarningPolicy::RequiresExplicitModelWithoutReviewedDefault
-        )
-    }) {
-        return Some(crate::onboard_presentation::preflight_explicit_model_only_rerun_hint());
-    }
-    None
+    )
 }
 
 pub fn render_write_confirmation_screen_lines(

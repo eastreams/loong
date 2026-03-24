@@ -87,6 +87,7 @@ pub mod migration;
 pub mod next_actions;
 pub mod onboard_cli;
 mod onboard_finalize;
+mod onboard_preflight;
 pub mod onboard_presentation;
 mod provider_credential_policy;
 pub mod provider_presentation;
