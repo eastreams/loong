@@ -39,6 +39,9 @@ mixing identity authority with transient task context.
   contract, even when the child has no extra tool narrowing.
 - Durable recall augments advisory context; it does not replace runtime-self
   guidance or resolved runtime identity.
+- Advisory profile, summary, and durable-recall projection must demote
+  runtime-owned or identity-like headings instead of replaying them as
+  authoritative-looking prompt sections.
 - When a safe workspace file root is configured and compaction is about to run,
   LoongClaw may export advisory durable recall into `memory/YYYY-MM-DD.md`
   before compaction proceeds.
@@ -54,6 +57,9 @@ mixing identity authority with transient task context.
   resolved runtime identity, or durable advisory profile context.
 - Session profile projection clearly states that durable recall is advisory and
   does not override resolved runtime identity.
+- Advisory profile, summary, and durable-recall projection demote runtime-owned
+  or identity-like headings rather than preserving them as raw prompt section
+  headings.
 - Delegate child sessions always receive an explicit self-continuity contract.
 - Pre-compaction durable exports, when enabled by workspace configuration, stay
   advisory and do not become an identity override path.
