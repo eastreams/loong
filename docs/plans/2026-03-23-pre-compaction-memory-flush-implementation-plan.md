@@ -35,7 +35,7 @@ cargo test -p loongclaw-app pre_compaction
 Expected:
 - at least one new test fails because no durable flush exists yet
 
-**Step 3: Reproduce the red state locally without committing it**
+**Step 3: Keep the red state local after confirming failure**
 
 Run the failing case locally, capture the command and failure signal, and keep
 that state local while you debug. If you need scratch work, use a private WIP
@@ -43,7 +43,7 @@ branch or an unpushed local commit. Do not commit or push a broken tree. Before
 any shared commit, rerun `cargo test --workspace --all-features` and bring the
 tree back to green.
 
-### Task 2: Add helper plumbing for pre-compaction export
+## Task 2: Add helper plumbing for pre-compaction export
 
 **Files:**
 - Modify: `crates/app/src/memory/mod.rs`
@@ -75,7 +75,7 @@ cargo test -p loongclaw-app durable_flush
 Expected:
 - helper-level tests pass
 
-### Task 3: Wire the helper into the compaction gate
+## Task 3: Wire the helper into the compaction gate
 
 **Files:**
 - Modify: `crates/app/src/conversation/turn_coordinator.rs`
@@ -103,7 +103,7 @@ cargo test -p loongclaw-app pre_compaction
 Expected:
 - new compaction-path tests pass
 
-### Task 4: Document the new behavior
+## Task 4: Document the new behavior
 
 **Files:**
 - Modify: `docs/product-specs/runtime-self-continuity.md`
@@ -120,7 +120,7 @@ Describe:
 
 Do not over-promise retrieval or search behavior.
 
-### Task 5: Verify the full touched surface
+## Task 5: Verify the full touched surface
 
 **Files:**
 - Verify only

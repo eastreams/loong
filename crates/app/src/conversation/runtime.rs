@@ -127,36 +127,11 @@ fn load_delegate_runtime_narrowing(
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn load_delegate_runtime_self_continuity(
-    repo: &SessionRepository,
-    session_id: &str,
-) -> Result<Option<RuntimeSelfContinuity>, String> {
-    let events = repo.list_delegate_lifecycle_events(session_id)?;
-    let continuity = events.into_iter().rev().find_map(|event| {
-        runtime_self_continuity::runtime_self_continuity_from_event_payload(&event.payload_json)
-    });
-    Ok(continuity)
-}
-
-#[cfg(feature = "memory-sqlite")]
 fn load_session_runtime_self_continuity(
     repo: &SessionRepository,
     session_id: &str,
 ) -> Result<Option<RuntimeSelfContinuity>, String> {
-    let recent_events = repo.list_recent_events(session_id, 64)?;
-    let continuity = recent_events.into_iter().rev().find_map(|event| {
-        let is_continuity_event =
-            event.event_kind == runtime_self_continuity::RUNTIME_SELF_CONTINUITY_EVENT_KIND;
-        if !is_continuity_event {
-            return None;
-        }
-        runtime_self_continuity::runtime_self_continuity_from_event_payload(&event.payload_json)
-    });
-    if continuity.is_some() {
-        return Ok(continuity);
-    }
-
-    load_delegate_runtime_self_continuity(repo, session_id)
+    runtime_self_continuity::load_persisted_runtime_self_continuity(repo, session_id)
 }
 
 #[derive(Clone)]

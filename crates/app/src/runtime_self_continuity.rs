@@ -6,6 +6,8 @@ use serde_json::Value;
 use crate::config::LoongClawConfig;
 use crate::runtime_identity::{self, ResolvedRuntimeIdentity};
 use crate::runtime_self::{self, RuntimeSelfModel};
+#[cfg(feature = "memory-sqlite")]
+use crate::session::repository::SessionRepository;
 use crate::tools::runtime_config::ToolRuntimeConfig;
 
 const DURABLE_RECALL_INTRO: &str = concat!(
@@ -92,6 +94,32 @@ pub(crate) fn runtime_self_continuity_from_event_payload(
 ) -> Option<RuntimeSelfContinuity> {
     let continuity = payload.get("runtime_self_continuity")?.clone();
     serde_json::from_value(continuity).ok()
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(crate) fn load_persisted_runtime_self_continuity(
+    repo: &SessionRepository,
+    session_id: &str,
+) -> Result<Option<RuntimeSelfContinuity>, String> {
+    let recent_events = repo.list_recent_events(session_id, 64)?;
+    let recent_continuity = recent_events.into_iter().rev().find_map(|event| {
+        let is_continuity_event = event.event_kind == RUNTIME_SELF_CONTINUITY_EVENT_KIND;
+        if !is_continuity_event {
+            return None;
+        }
+
+        runtime_self_continuity_from_event_payload(&event.payload_json)
+    });
+    if recent_continuity.is_some() {
+        return Ok(recent_continuity);
+    }
+
+    let delegate_events = repo.list_delegate_lifecycle_events(session_id)?;
+    let delegate_continuity = delegate_events
+        .into_iter()
+        .rev()
+        .find_map(|event| runtime_self_continuity_from_event_payload(&event.payload_json));
+    Ok(delegate_continuity)
 }
 
 pub(crate) fn merge_runtime_self_continuity(

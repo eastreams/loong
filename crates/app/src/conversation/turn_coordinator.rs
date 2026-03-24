@@ -2318,7 +2318,15 @@ async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
 
     #[cfg(feature = "memory-sqlite")]
     {
-        persist_runtime_self_continuity_for_compaction(config, session_id)?;
+        if let Err(error) = persist_runtime_self_continuity_for_compaction(config, session_id) {
+            if config.conversation.compaction_fail_open() {
+                return Ok(ContextCompactionOutcome::FailedOpen);
+            }
+
+            return Err(format!(
+                "pre-compaction runtime self continuity persist failed: {error}"
+            ));
+        }
 
         let workspace_root = config
             .tools
@@ -2362,26 +2370,23 @@ fn persist_runtime_self_continuity_for_compaction(
     config: &LoongClawConfig,
     session_id: &str,
 ) -> Result<(), String> {
-    let continuity = runtime_self_continuity::resolve_runtime_self_continuity_for_config(config);
-    let Some(continuity) = continuity else {
-        return Ok(());
-    };
-
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
 
-    ensure_root_session_exists_for_runtime_self_continuity(&repo, session_id)?;
+    ensure_session_exists_for_runtime_self_continuity(&repo, session_id)?;
 
-    let recent_events = repo.list_recent_events(session_id, 8)?;
-    let latest_continuity = recent_events.into_iter().rev().find_map(|event| {
-        let is_continuity_event =
-            event.event_kind == runtime_self_continuity::RUNTIME_SELF_CONTINUITY_EVENT_KIND;
-        if !is_continuity_event {
-            return None;
-        }
-        runtime_self_continuity::runtime_self_continuity_from_event_payload(&event.payload_json)
-    });
-    if latest_continuity.as_ref() == Some(&continuity) {
+    let live_continuity =
+        runtime_self_continuity::resolve_runtime_self_continuity_for_config(config);
+    let stored_continuity =
+        runtime_self_continuity::load_persisted_runtime_self_continuity(&repo, session_id)?;
+    let continuity = runtime_self_continuity::merge_runtime_self_continuity(
+        live_continuity,
+        stored_continuity.as_ref(),
+    );
+    let Some(continuity) = continuity else {
+        return Ok(());
+    };
+    if stored_continuity.as_ref() == Some(&continuity) {
         return Ok(());
     }
 
@@ -2400,7 +2405,7 @@ fn persist_runtime_self_continuity_for_compaction(
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn ensure_root_session_exists_for_runtime_self_continuity(
+fn ensure_session_exists_for_runtime_self_continuity(
     repo: &SessionRepository,
     session_id: &str,
 ) -> Result<(), String> {
@@ -2409,12 +2414,46 @@ fn ensure_root_session_exists_for_runtime_self_continuity(
         return Ok(());
     }
 
+    let summary = repo.load_session_summary_with_legacy_fallback(session_id)?;
+    let delegate_parent_session_id = repo
+        .list_delegate_lifecycle_events(session_id)?
+        .into_iter()
+        .rev()
+        .find_map(|event| event.actor_session_id);
+    let kind = summary.as_ref().map(|value| value.kind).unwrap_or_else(|| {
+        if session_id.starts_with("delegate:") || delegate_parent_session_id.is_some() {
+            SessionKind::DelegateChild
+        } else {
+            SessionKind::Root
+        }
+    });
+    let parent_session_id = match kind {
+        SessionKind::Root => None,
+        SessionKind::DelegateChild => {
+            let stored_parent_session_id = summary
+                .as_ref()
+                .and_then(|value| value.parent_session_id.clone());
+            let reconstructed_parent_session_id =
+                delegate_parent_session_id.or(stored_parent_session_id);
+            let Some(reconstructed_parent_session_id) = reconstructed_parent_session_id else {
+                return Err(format!(
+                    "delegate session `{session_id}` is missing lineage required for runtime self continuity persistence"
+                ));
+            };
+            Some(reconstructed_parent_session_id)
+        }
+    };
+    let label = summary.as_ref().and_then(|value| value.label.clone());
+    let state = summary
+        .as_ref()
+        .map(|value| value.state)
+        .unwrap_or(SessionState::Ready);
     let record = NewSessionRecord {
         session_id: session_id.to_owned(),
-        kind: SessionKind::Root,
-        parent_session_id: None,
-        label: None,
-        state: SessionState::Ready,
+        kind,
+        parent_session_id,
+        label,
+        state,
     };
     let _ = repo.ensure_session(record)?;
     Ok(())
@@ -6711,8 +6750,10 @@ async fn execute_single_tool_intent(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::bootstrap_test_kernel_context;
     use crate::session::repository::FinalizeSessionTerminalResult;
     use std::path::PathBuf;
+    use std::sync::Mutex as StdMutex;
 
     fn unique_sqlite_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -6731,6 +6772,94 @@ mod tests {
         let mut config = LoongClawConfig::default();
         config.memory.sqlite_path = path.display().to_string();
         MemoryRuntimeConfig::from_memory_config(&config.memory)
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn unique_workspace_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "loongclaw-turn-coordinator-workspace-{label}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ))
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[derive(Default)]
+    struct RecordingCompactRuntime {
+        compact_calls: StdMutex<usize>,
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[async_trait]
+    impl ConversationRuntime for RecordingCompactRuntime {
+        async fn build_messages(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _include_system_prompt: bool,
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<Vec<Value>> {
+            Ok(Vec::new())
+        }
+
+        async fn request_completion(
+            &self,
+            _config: &LoongClawConfig,
+            _messages: &[Value],
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<String> {
+            Ok(String::new())
+        }
+
+        async fn request_turn(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<ProviderTurn> {
+            panic!("request_turn should not be called in compaction tests")
+        }
+
+        async fn request_turn_streaming(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+            _on_token: crate::provider::StreamingTokenCallback,
+        ) -> CliResult<ProviderTurn> {
+            panic!("request_turn_streaming should not be called in compaction tests")
+        }
+
+        async fn persist_turn(
+            &self,
+            _session_id: &str,
+            _role: &str,
+            _content: &str,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<()> {
+            Ok(())
+        }
+
+        async fn compact_context(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _messages: &[Value],
+            _kernel_ctx: &KernelContext,
+        ) -> CliResult<()> {
+            let mut compact_calls = self.compact_calls.lock().expect("compact lock");
+            *compact_calls += 1;
+            Ok(())
+        }
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -7118,6 +7247,228 @@ mod tests {
                 .any(|content| content.contains("[tool_result]\n[ok]")),
             "truncated invoke payload should stay as ordinary assistant tool_result content: {messages:?}"
         );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn persist_runtime_self_continuity_for_compaction_merges_live_and_stored_delegate_continuity() {
+        let workspace_root = unique_workspace_root("merged-runtime-self-continuity");
+        let memory_config = sqlite_memory_config("merged-runtime-self-continuity");
+        let repo = SessionRepository::new(&memory_config).expect("session repository");
+        let root_session_id = "root-session";
+        let child_session_id = "delegate:child-session";
+        let live_agents_text = "Keep standing instructions visible.";
+        let stored_identity_text = "# Identity\n\n- Name: Stored continuity identity";
+        let mut config = LoongClawConfig::default();
+
+        let sqlite_path = memory_config
+            .sqlite_path
+            .as_ref()
+            .expect("sqlite path")
+            .display()
+            .to_string();
+        std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+        std::fs::write(workspace_root.join("AGENTS.md"), live_agents_text).expect("write AGENTS");
+        config.memory.sqlite_path = sqlite_path;
+        config.tools.file_root = Some(workspace_root.display().to_string());
+
+        repo.create_session(NewSessionRecord {
+            session_id: root_session_id.to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+        repo.create_session(NewSessionRecord {
+            session_id: child_session_id.to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some(root_session_id.to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create child session");
+
+        let stored_continuity = runtime_self_continuity::RuntimeSelfContinuity {
+            runtime_self: crate::runtime_self::RuntimeSelfModel {
+                identity_context: vec![stored_identity_text.to_owned()],
+                ..Default::default()
+            },
+            resolved_identity: Some(crate::runtime_identity::ResolvedRuntimeIdentity {
+                source: crate::runtime_identity::RuntimeIdentitySource::LegacyProfileNoteImport,
+                content: stored_identity_text.to_owned(),
+            }),
+            session_profile_projection: None,
+        };
+        repo.append_event(NewSessionEvent {
+            session_id: child_session_id.to_owned(),
+            event_kind: "delegate_started".to_owned(),
+            actor_session_id: Some(root_session_id.to_owned()),
+            payload_json: json!({
+                "runtime_self_continuity": stored_continuity,
+            }),
+        })
+        .expect("append delegate event");
+
+        persist_runtime_self_continuity_for_compaction(&config, child_session_id)
+            .expect("persist merged runtime self continuity");
+
+        let recent_events = repo
+            .list_recent_events(child_session_id, 10)
+            .expect("list recent events");
+        let persisted_event = recent_events
+            .iter()
+            .rev()
+            .find(|event| {
+                event.event_kind == runtime_self_continuity::RUNTIME_SELF_CONTINUITY_EVENT_KIND
+            })
+            .expect("persisted continuity event");
+        let persisted_continuity =
+            runtime_self_continuity::runtime_self_continuity_from_event_payload(
+                &persisted_event.payload_json,
+            )
+            .expect("decode persisted continuity payload");
+
+        assert_eq!(
+            persisted_continuity.runtime_self.standing_instructions,
+            vec![live_agents_text.to_owned()]
+        );
+        assert_eq!(
+            persisted_continuity.runtime_self.identity_context,
+            vec![stored_identity_text.to_owned()]
+        );
+        assert_eq!(
+            persisted_continuity
+                .resolved_identity
+                .as_ref()
+                .map(|value| value.content.as_str()),
+            Some(stored_identity_text)
+        );
+
+        let _ = std::fs::remove_dir_all(&workspace_root);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn persist_runtime_self_continuity_for_compaction_reconstructs_legacy_delegate_session_row() {
+        let workspace_root = unique_workspace_root("legacy-delegate-session-row");
+        let memory_config = sqlite_memory_config("legacy-delegate-session-row");
+        let repo = SessionRepository::new(&memory_config).expect("session repository");
+        let root_session_id = "root-session";
+        let child_session_id = "delegate:legacy-child";
+        let mut config = LoongClawConfig::default();
+
+        let sqlite_path = memory_config
+            .sqlite_path
+            .as_ref()
+            .expect("sqlite path")
+            .clone();
+        std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+        std::fs::write(
+            workspace_root.join("AGENTS.md"),
+            "Keep continuity explicit.",
+        )
+        .expect("write AGENTS");
+        config.memory.sqlite_path = sqlite_path.display().to_string();
+        config.tools.file_root = Some(workspace_root.display().to_string());
+
+        repo.create_session(NewSessionRecord {
+            session_id: root_session_id.to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+
+        let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite connection");
+        conn.execute(
+            "INSERT INTO turns(session_id, session_turn_index, role, content, ts)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![child_session_id, 1_i64, "assistant", "legacy turn", 1_i64],
+        )
+        .expect("insert legacy turn");
+        conn.execute(
+            "INSERT INTO session_events(session_id, event_kind, actor_session_id, payload_json, ts)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                child_session_id,
+                "delegate_started",
+                root_session_id,
+                json!({}).to_string(),
+                2_i64
+            ],
+        )
+        .expect("insert legacy delegate event");
+        drop(conn);
+
+        persist_runtime_self_continuity_for_compaction(&config, child_session_id)
+            .expect("persist runtime self continuity");
+
+        let reconstructed_session = repo
+            .load_session(child_session_id)
+            .expect("load reconstructed session")
+            .expect("reconstructed session row");
+
+        assert_eq!(reconstructed_session.kind, SessionKind::DelegateChild);
+        assert_eq!(
+            reconstructed_session.parent_session_id.as_deref(),
+            Some(root_session_id)
+        );
+
+        let _ = std::fs::remove_dir_all(&workspace_root);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn maybe_compact_context_fails_open_when_runtime_self_continuity_persist_cannot_reconstruct_delegate_lineage()
+     {
+        let workspace_root = unique_workspace_root("compaction-fail-open");
+        let sqlite_path = unique_sqlite_path("compaction-fail-open");
+        let runtime = RecordingCompactRuntime::default();
+        let mut config = LoongClawConfig::default();
+
+        std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+        std::fs::write(
+            workspace_root.join("AGENTS.md"),
+            "Keep continuity explicit.",
+        )
+        .expect("write AGENTS");
+        config.memory.sqlite_path = sqlite_path.display().to_string();
+        config.tools.file_root = Some(workspace_root.display().to_string());
+        config.conversation.compact_min_messages = Some(1);
+        config.conversation.compact_trigger_estimated_tokens = Some(1);
+        config.conversation.compact_fail_open = true;
+
+        let kernel_ctx = bootstrap_test_kernel_context("turn-coordinator-compaction", 3600)
+            .expect("bootstrap kernel context");
+        let binding = ConversationRuntimeBinding::from_optional_kernel_context(Some(&kernel_ctx));
+        let runtime_handle = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+        let messages = vec![
+            json!({"role": "system", "content": "sys"}),
+            json!({"role": "user", "content": "trigger compaction"}),
+        ];
+        let outcome = runtime_handle.block_on(maybe_compact_context(
+            &config,
+            &runtime,
+            "delegate:missing-lineage",
+            &messages,
+            Some(16),
+            binding,
+        ));
+
+        assert_eq!(
+            outcome.expect("compaction should fail open"),
+            ContextCompactionOutcome::FailedOpen
+        );
+        let compact_calls = runtime.compact_calls.lock().expect("compact lock");
+        assert_eq!(*compact_calls, 0);
+
+        let _ = std::fs::remove_dir_all(&workspace_root);
+        let _ = std::fs::remove_file(&sqlite_path);
     }
 
     #[test]
