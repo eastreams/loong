@@ -115,3 +115,6 @@ must_use_candidate = "allow"
 doc_markdown = "allow"
 return_self_not_must_use = "allow"
 type_complexity = "allow"
+
+[patch.crates-io]
+dialoguer = { path = "patches/dialoguer-0.12.0" }

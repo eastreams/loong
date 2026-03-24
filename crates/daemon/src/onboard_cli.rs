@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
-use dialoguer::console::{Term, user_attended};
+use dialoguer::console::{Term, user_attended, user_attended_stderr};
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Confirm, Error as DialoguerError, FuzzySelect, Input, Select};
 use loongclaw_app as mvp;
@@ -343,7 +343,7 @@ fn print_dropped_paste_notice(label: &str, dropped_line_count: usize) {
 
 impl OnboardUi for StdioOnboardUi {
     fn print_line(&mut self, line: &str) -> CliResult<()> {
-        println!("{line}");
+        eprintln!("{line}");
         Ok(())
     }
 
@@ -382,7 +382,7 @@ impl OnboardUi for StdioOnboardUi {
         default: Option<usize>,
         interaction_mode: SelectInteractionMode,
     ) -> CliResult<usize> {
-        if rich_prompt_ui_available() {
+        if user_attended_stderr() {
             return select_one_rich(label, options, default, interaction_mode);
         }
         select_one_stdio(self.stdio_line_reader(), label, options, default)
@@ -450,6 +450,10 @@ fn select_one_stdio(
 ) -> CliResult<usize> {
     let default = validate_select_one_state(options.len(), default)?;
     loop {
+        print!("\x1b[2J\x1b[H");
+        io::stdout()
+            .flush()
+            .map_err(|e| format!("flush stdout failed: {e}"))?;
         for (i, opt) in options.iter().enumerate() {
             let num = i + 1;
             let rec = if opt.recommended {
@@ -493,7 +497,7 @@ fn select_one_stdio(
 }
 
 fn rich_prompt_ui_available() -> bool {
-    user_attended()
+    user_attended_stderr()
 }
 
 fn rich_prompt_theme() -> ColorfulTheme {
@@ -501,7 +505,7 @@ fn rich_prompt_theme() -> ColorfulTheme {
 }
 
 fn rich_prompt_term() -> Term {
-    Term::stdout()
+    Term::stderr()
 }
 
 fn render_select_option_item(option: &SelectOption) -> String {
@@ -1638,14 +1642,6 @@ fn resolve_provider_selection(
                         .position(|choice| choice.profile_id == default_id)
                 })
         };
-        print_lines(
-            ui,
-            render_provider_selection_header_lines(
-                provider_selection,
-                guided_prompt_path,
-                context.render_width,
-            ),
-        )?;
         let idx = ui.select_one(
             "Provider",
             &select_options,
@@ -1690,14 +1686,6 @@ fn resolve_provider_selection(
             .iter()
             .position(|kind| *kind == default_provider_kind)
     };
-    print_lines(
-        ui,
-        render_provider_selection_header_lines(
-            provider_selection,
-            guided_prompt_path,
-            context.render_width,
-        ),
-    )?;
     let idx = ui.select_one(
         "Provider",
         &select_options,
@@ -1826,17 +1814,6 @@ fn resolve_model_selection(
     }
 
     let default_model = resolve_onboarding_model_prompt_default(options, config);
-    print_lines(
-        ui,
-        render_model_selection_screen_lines_with_style(
-            config,
-            default_model.as_str(),
-            guided_prompt_path,
-            context.render_width,
-            true,
-            !available_models.is_empty(),
-        ),
-    )?;
     if !available_models.is_empty() {
         let (select_options, default_idx) =
             build_model_selection_options(default_model.as_str(), available_models);
@@ -2115,10 +2092,6 @@ fn resolve_personality_selection(
         .iter()
         .position(|(p, _, _)| *p == default_personality);
 
-    print_lines(
-        ui,
-        render_personality_selection_header_lines(config, context.render_width),
-    )?;
     let idx = ui.select_one(
         "Personality",
         &select_options,
@@ -2237,14 +2210,6 @@ fn resolve_memory_profile_selection(
         .iter()
         .position(|(p, _, _)| *p == default_profile);
 
-    print_lines(
-        ui,
-        render_memory_profile_selection_header_lines(
-            config,
-            guided_prompt_path,
-            context.render_width,
-        ),
-    )?;
     let idx = ui.select_one(
         "Memory profile",
         &select_options,
