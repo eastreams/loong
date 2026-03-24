@@ -84,7 +84,7 @@
 "docs":
   - changed-files:
       - any-glob-to-any-file:
-          - "docs/**"
+          - "docs/references/**"
           - "README.md"
           - "README.zh-CN.md"
           - "CONTRIBUTING.md"
