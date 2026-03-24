@@ -22,7 +22,7 @@ tool-shell = []
 tool-file = []
 tool-browser = ["dep:scraper"]
 tool-webfetch = []
-tool-websearch = ["dep:regex"]
+tool-websearch = []
 test-support = []
 
 [dependencies]
@@ -56,7 +56,7 @@ cbc = { version = "0.1", optional = true }
 wait-timeout = "0.2"
 tempfile = "3"
 which.workspace = true
-regex = { workspace = true, optional = true }
+regex.workspace = true
 prost = { version = "0.13", optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"], optional = true }
