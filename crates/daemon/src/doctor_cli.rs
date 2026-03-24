@@ -40,12 +40,6 @@ struct DoctorSummary {
     fail: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct DoctorChannelCheckSpec {
-    config_name: &'static str,
-    runtime_name: Option<&'static str>,
-}
-
 pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
     let (config_path, mut config) = mvp::config::load(options.config.as_deref())?;
     let mut checks = Vec::new();
@@ -966,23 +960,9 @@ fn build_channel_surface_checks(
             });
         }
         for operation in &snapshot.operations {
-            let Some(spec) = doctor_check_spec(snapshot.id, operation.id) else {
-                continue;
-            };
-            checks.push(DoctorCheck {
-                name: scoped_doctor_check_name(spec.config_name, snapshot, scoped),
-                level: doctor_check_level_for_health(operation.health),
-                detail: operation.detail.clone(),
-            });
-
-            if let Some(runtime_name) = spec.runtime_name
-                && operation.health == mvp::channel::ChannelOperationHealth::Ready
-            {
-                checks.push(build_channel_runtime_check(
-                    scoped_doctor_check_name(runtime_name, snapshot, scoped).as_str(),
-                    operation,
-                ));
-            }
+            let operation_checks =
+                build_channel_operation_doctor_checks(snapshot, scoped, operation);
+            checks.extend(operation_checks);
         }
         if let Some(check) = build_feishu_inbound_support_check(snapshot, scoped) {
             checks.push(check);
@@ -1049,29 +1029,54 @@ fn snapshot_note_value<'a>(
         .find_map(|note| note.strip_prefix(prefix.as_str()))
 }
 
-fn doctor_check_spec(channel_id: &str, operation_id: &str) -> Option<DoctorChannelCheckSpec> {
-    match (channel_id, operation_id) {
-        ("telegram", "serve") => Some(DoctorChannelCheckSpec {
-            config_name: "telegram channel",
-            runtime_name: Some("telegram channel runtime"),
-        }),
-        ("feishu", "send") => Some(DoctorChannelCheckSpec {
-            config_name: "feishu channel",
-            runtime_name: None,
-        }),
-        ("feishu", "serve") => Some(DoctorChannelCheckSpec {
-            config_name: "feishu inbound transport",
-            runtime_name: Some("feishu serve runtime"),
-        }),
-        ("matrix", "send") => Some(DoctorChannelCheckSpec {
-            config_name: "matrix channel",
-            runtime_name: None,
-        }),
-        ("matrix", "serve") => Some(DoctorChannelCheckSpec {
-            config_name: "matrix room sync",
-            runtime_name: Some("matrix channel runtime"),
-        }),
-        _ => None,
+fn build_channel_operation_doctor_checks(
+    snapshot: &mvp::channel::ChannelStatusSnapshot,
+    scoped: bool,
+    operation: &mvp::channel::ChannelOperationStatus,
+) -> Vec<DoctorCheck> {
+    let doctor_spec =
+        mvp::channel::resolve_channel_doctor_operation_spec(snapshot.id, operation.id);
+    let Some(doctor_spec) = doctor_spec else {
+        return Vec::new();
+    };
+
+    let mut checks = Vec::new();
+    for check_spec in doctor_spec.checks {
+        let doctor_check =
+            build_channel_operation_doctor_check(snapshot, scoped, operation, check_spec);
+        if let Some(doctor_check) = doctor_check {
+            checks.push(doctor_check);
+        }
+    }
+    checks
+}
+
+fn build_channel_operation_doctor_check(
+    snapshot: &mvp::channel::ChannelStatusSnapshot,
+    scoped: bool,
+    operation: &mvp::channel::ChannelOperationStatus,
+    check_spec: &mvp::channel::ChannelDoctorCheckSpec,
+) -> Option<DoctorCheck> {
+    let check_name = scoped_doctor_check_name(check_spec.name, snapshot, scoped);
+    match check_spec.trigger {
+        mvp::channel::ChannelDoctorCheckTrigger::OperationHealth => {
+            if operation.health == mvp::channel::ChannelOperationHealth::Disabled {
+                return None;
+            }
+
+            Some(DoctorCheck {
+                name: check_name,
+                level: doctor_check_level_for_health(operation.health),
+                detail: operation.detail.clone(),
+            })
+        }
+        mvp::channel::ChannelDoctorCheckTrigger::ReadyRuntime => {
+            if operation.health != mvp::channel::ChannelOperationHealth::Ready {
+                return None;
+            }
+            let runtime_check = build_channel_runtime_check(check_name.as_str(), operation);
+            Some(runtime_check)
+        }
     }
 }
 
@@ -1351,22 +1356,6 @@ fn provider_model_probe_requires_explicit_model_detail(
             "{provider_prefix}: {MODEL_CATALOG_PROBE_FAILED_MARKER} ({error}); current config still uses `model = auto`; set `provider.model` explicitly or configure `preferred_models` before retrying"
         ),
     }
-}
-
-#[allow(dead_code)]
-fn collect_channel_doctor_checks(config: &mvp::config::LoongClawConfig) -> Vec<DoctorCheck> {
-    crate::migration::channels::collect_channel_doctor_checks(config)
-        .into_iter()
-        .map(|check| DoctorCheck {
-            name: check.name.to_owned(),
-            level: match check.level {
-                crate::migration::channels::ChannelCheckLevel::Pass => DoctorCheckLevel::Pass,
-                crate::migration::channels::ChannelCheckLevel::Warn => DoctorCheckLevel::Warn,
-                crate::migration::channels::ChannelCheckLevel::Fail => DoctorCheckLevel::Fail,
-            },
-            detail: check.detail,
-        })
-        .collect()
 }
 
 async fn collect_browser_companion_doctor_checks(
@@ -1980,8 +1969,9 @@ mod tests {
     }
 
     #[test]
-    fn channel_doctor_checks_omit_disabled_channels() {
-        let checks = collect_channel_doctor_checks(&mvp::config::LoongClawConfig::default());
+    fn check_channel_surfaces_omit_disabled_channels() {
+        let config = mvp::config::LoongClawConfig::default();
+        let checks = check_channel_surfaces(&config);
         assert!(
             checks.is_empty(),
             "disabled optional channels should not generate doctor warnings by default: {checks:#?}"
@@ -2814,6 +2804,62 @@ mod tests {
                     && check.detail.contains("running_instances=2")
             }),
             "duplicate running telegram runtimes should emit runtime warning"
+        );
+    }
+
+    #[test]
+    fn build_channel_surface_checks_resolves_alias_metadata_from_channel_registry() {
+        let snapshots = vec![ChannelStatusSnapshot {
+            id: "lark",
+            configured_account_id: "feishu_main".to_owned(),
+            configured_account_label: "feishu_main".to_owned(),
+            is_default_account: true,
+            default_account_source:
+                mvp::config::ChannelDefaultAccountSelectionSource::ExplicitDefault,
+            label: "Feishu/Lark",
+            aliases: vec!["feishu"],
+            transport: "feishu_openapi_webhook_or_websocket",
+            compiled: true,
+            enabled: true,
+            api_base_url: Some("https://open.feishu.cn".to_owned()),
+            notes: Vec::new(),
+            operations: vec![ChannelOperationStatus {
+                id: "serve",
+                label: "inbound reply service",
+                command: "feishu-serve",
+                health: ChannelOperationHealth::Ready,
+                detail: "ready".to_owned(),
+                issues: Vec::new(),
+                runtime: Some(ChannelOperationRuntime {
+                    running: true,
+                    stale: false,
+                    busy: false,
+                    active_runs: 1,
+                    last_run_activity_at: Some(1_700_000_000_000),
+                    last_heartbeat_at: Some(1_700_000_005_000),
+                    pid: Some(4242),
+                    account_id: Some("feishu_main".to_owned()),
+                    account_label: Some("feishu:main".to_owned()),
+                    instance_count: 1,
+                    running_instances: 1,
+                    stale_instances: 0,
+                }),
+            }],
+        }];
+
+        let checks = build_channel_surface_checks(&snapshots);
+
+        assert!(
+            checks
+                .iter()
+                .any(|check| check.name == "feishu inbound transport"),
+            "alias channel ids should reuse registry-backed operation-health metadata: {checks:#?}"
+        );
+        assert!(
+            checks
+                .iter()
+                .any(|check| check.name == "feishu serve runtime"),
+            "alias channel ids should reuse registry-backed runtime metadata: {checks:#?}"
         );
     }
 
