@@ -229,7 +229,7 @@ def check_semantic_regression_cases(taxonomy: dict) -> list[str]:
 
     for case in cases:
         case_path = case["path"]
-        expected_labels = list(case["labels"])
+        expected_labels = sorted(case["labels"])
         actual_labels = labels_for_path(taxonomy, case_path)
 
         if actual_labels == expected_labels:
