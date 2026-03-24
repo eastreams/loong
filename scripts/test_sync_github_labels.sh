@@ -103,6 +103,34 @@ import sys
 from pathlib import Path
 
 script_path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("sync_github_labels", script_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+unsupported_pattern = "docs/{references,design-docs}/**"
+
+try:
+    module.compile_glob_pattern(unsupported_pattern)
+except ValueError as error:
+    error_message = str(error)
+else:
+    print(
+        f"expected unsupported pattern {unsupported_pattern!r} to fail semantic matcher validation",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+if "semantic matcher only supports" not in error_message:
+    print(f"expected semantic matcher guidance in error, got: {error_message!r}", file=sys.stderr)
+    sys.exit(1)
+PY
+
+python3 - "$SYNC_SCRIPT" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+script_path = Path(sys.argv[1])
 repo_root = script_path.parents[1]
 spec = importlib.util.spec_from_file_location("sync_github_labels", script_path)
 module = importlib.util.module_from_spec(spec)

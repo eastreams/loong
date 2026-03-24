@@ -44,6 +44,47 @@ def normalize_repo_path(repo_path: str) -> str:
     return normalized_path
 
 
+def validate_supported_glob_pattern(pattern: str) -> str:
+    normalized_pattern = normalize_repo_path(pattern)
+
+    if not normalized_pattern:
+        raise ValueError("empty patterns are not supported")
+
+    if "//" in normalized_pattern:
+        raise ValueError("empty path segments are not supported")
+
+    unsupported_characters = "[]{}!+@()"
+    found_unsupported_characters: list[str] = []
+    for character in unsupported_characters:
+        if character not in normalized_pattern:
+            continue
+        found_unsupported_characters.append(character)
+
+    if found_unsupported_characters:
+        unsupported_summary = " ".join(found_unsupported_characters)
+        raise ValueError(
+            "unsupported glob tokens found; "
+            "semantic matcher only supports literals, *, ?, and ** path segments "
+            f"({unsupported_summary})"
+        )
+
+    segments = normalized_pattern.split("/")
+    for segment in segments:
+        if segment:
+            has_double_star = "**" in segment
+            is_double_star_segment = segment == "**"
+            if has_double_star and not is_double_star_segment:
+                raise ValueError(
+                    "semantic matcher only supports ** as a full path segment "
+                    f"(pattern: {normalized_pattern})"
+                )
+            continue
+
+        raise ValueError("empty path segments are not supported")
+
+    return normalized_pattern
+
+
 def glob_segment_to_regex(segment: str) -> str:
     regex_parts: list[str] = []
     for character in segment:
@@ -59,7 +100,7 @@ def glob_segment_to_regex(segment: str) -> str:
 
 def glob_pattern_to_regex(pattern: str) -> str:
     # The managed taxonomy uses a small glob subset, so the matcher stays deliberately narrow.
-    normalized_pattern = normalize_repo_path(pattern)
+    normalized_pattern = validate_supported_glob_pattern(pattern)
     segments = normalized_pattern.split("/")
     regex_parts: list[str] = ["^"]
     segment_count = len(segments)
@@ -109,6 +150,27 @@ def labels_for_path(taxonomy: dict, repo_path: str) -> list[str]:
             break
     matching_labels.sort()
     return matching_labels
+
+
+def check_semantic_matcher_support(taxonomy: dict) -> list[str]:
+    failures: list[str] = []
+    entries = path_labeled_entries(taxonomy)
+
+    for entry in entries:
+        label_name = entry["name"]
+        patterns = entry["paths"]
+
+        for pattern in patterns:
+            try:
+                compile_glob_pattern(pattern)
+            except ValueError as error:
+                failure_message = (
+                    f"unsupported semantic matcher pattern for {label_name}: "
+                    f"{pattern} ({error})"
+                )
+                failures.append(failure_message)
+
+    return failures
 
 
 def semantic_regression_cases() -> list[dict]:
@@ -162,7 +224,7 @@ def semantic_regression_cases() -> list[dict]:
 
 
 def check_semantic_regression_cases(taxonomy: dict) -> list[str]:
-    failures: list[str] = []
+    failures = check_semantic_matcher_support(taxonomy)
     cases = semantic_regression_cases()
 
     for case in cases:
