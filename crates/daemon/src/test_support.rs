@@ -154,20 +154,23 @@ mod tests {
 
     #[test]
     fn scoped_env_remove_restores_original_value() {
-        let original_value = std::env::var_os("ARK_API_KEY");
+        let key = "LOONGCLAW_SCOPED_ENV_REMOVE_TEST_KEY";
+        let sentinel_value = "scoped-env-sentinel";
+        let mut env = ScopedEnv::new();
+        let original_value = std::env::var_os(key);
 
-        {
-            let mut env = ScopedEnv::new();
-            env.remove("ARK_API_KEY");
+        env.set(key, sentinel_value);
+        env.remove(key);
 
-            assert!(
-                std::env::var_os("ARK_API_KEY").is_none(),
-                "ScopedEnv::remove should clear the environment variable while the guard is alive"
-            );
-        }
+        assert!(
+            std::env::var_os(key).is_none(),
+            "ScopedEnv::remove should clear the environment variable while the guard is alive"
+        );
+
+        drop(env);
 
         assert_eq!(
-            std::env::var_os("ARK_API_KEY"),
+            std::env::var_os(key),
             original_value,
             "ScopedEnv should restore the original environment value when dropped"
         );
