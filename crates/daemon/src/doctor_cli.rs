@@ -987,7 +987,7 @@ fn build_feishu_inbound_support_check(
     snapshot: &mvp::channel::ChannelStatusSnapshot,
     scoped: bool,
 ) -> Option<DoctorCheck> {
-    if snapshot.id != "feishu" {
+    if !snapshot_matches_channel_id(snapshot, "feishu") {
         return None;
     }
     let serve = snapshot.operation("serve")?;
@@ -1016,6 +1016,14 @@ fn build_feishu_inbound_support_check(
             "message_types={message_types} non_text_mode={non_text_mode} binary_fetch={binary_fetch} resource_download_tool={resource_download_tool} resource_selection_mode={resource_selection_mode} callback_event_types={callback_event_types} callback_response_mode={callback_response_mode}"
         ),
     })
+}
+
+fn snapshot_matches_channel_id(
+    snapshot: &mvp::channel::ChannelStatusSnapshot,
+    expected_channel_id: &str,
+) -> bool {
+    let normalized_channel_id = mvp::channel::normalize_channel_catalog_id(snapshot.id);
+    normalized_channel_id == Some(expected_channel_id)
 }
 
 fn snapshot_note_value<'a>(
@@ -1979,6 +1987,41 @@ mod tests {
     }
 
     #[test]
+    fn build_channel_surface_checks_omit_disabled_registry_operations() {
+        let snapshots = vec![ChannelStatusSnapshot {
+            id: "telegram",
+            configured_account_id: "ops".to_owned(),
+            configured_account_label: "ops".to_owned(),
+            is_default_account: true,
+            default_account_source:
+                mvp::config::ChannelDefaultAccountSelectionSource::ExplicitDefault,
+            label: "Telegram",
+            aliases: Vec::new(),
+            transport: "telegram_bot_api",
+            compiled: true,
+            enabled: false,
+            api_base_url: Some("https://api.telegram.org".to_owned()),
+            notes: Vec::new(),
+            operations: vec![ChannelOperationStatus {
+                id: "serve",
+                label: "event listener",
+                command: "telegram-serve",
+                health: ChannelOperationHealth::Disabled,
+                detail: "disabled by telegram account configuration".to_owned(),
+                issues: Vec::new(),
+                runtime: None,
+            }],
+        }];
+
+        let checks = build_channel_surface_checks(&snapshots);
+
+        assert!(
+            checks.is_empty(),
+            "disabled registry-backed operations should not emit live doctor checks: {checks:#?}"
+        );
+    }
+
+    #[test]
     fn channel_doctor_checks_report_enabled_channels_from_registry() {
         let mut config = mvp::config::LoongClawConfig::default();
         config.telegram.enabled = true;
@@ -2822,7 +2865,15 @@ mod tests {
             compiled: true,
             enabled: true,
             api_base_url: Some("https://open.feishu.cn".to_owned()),
-            notes: Vec::new(),
+            notes: vec![
+                "webhook_inbound_message_types=text,image,file".to_owned(),
+                "webhook_inbound_non_text_mode=structured_text_summary".to_owned(),
+                "webhook_inbound_binary_fetch=disabled".to_owned(),
+                "webhook_resource_download_tool=feishu.messages.resource.get".to_owned(),
+                "webhook_resource_selection_mode=single_resource_default_or_unique_partial_inference_or_resource_inventory".to_owned(),
+                "webhook_callback_event_types=card.action.trigger".to_owned(),
+                "webhook_callback_response_mode=noop_json".to_owned(),
+            ],
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "inbound reply service",
@@ -2860,6 +2911,12 @@ mod tests {
                 .iter()
                 .any(|check| check.name == "feishu serve runtime"),
             "alias channel ids should reuse registry-backed runtime metadata: {checks:#?}"
+        );
+        assert!(
+            checks
+                .iter()
+                .any(|check| check.name == "feishu webhook inbound support"),
+            "alias channel ids should preserve feishu inbound support checks: {checks:#?}"
         );
     }
 
