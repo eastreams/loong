@@ -929,10 +929,9 @@ mod tests {
                 panic!("stop should interrupt the stalled websocket connect");
             }
         };
-        let session_result = session_result
+        session_result
             .expect("join stalled websocket session")
             .expect("stop should end stalled websocket connect cleanly");
-        assert_eq!(session_result, ());
 
         release_socket.notify_waiters();
         let _ = server.await;
