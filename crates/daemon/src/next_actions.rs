@@ -174,6 +174,16 @@ mod tests {
         fs::set_permissions(&path, permissions).expect("clear executable bit");
     }
 
+    fn assert_channel_catalog_action(action: &SetupNextAction) {
+        assert_eq!(action.kind, SetupNextActionKind::Channel);
+        assert_eq!(action.browser_preview_phase, None);
+        assert_eq!(action.label, "channels");
+        assert_eq!(
+            action.command,
+            "loongclaw channels --config '/tmp/loongclaw.toml'"
+        );
+    }
+
     #[test]
     fn collect_setup_next_actions_promotes_browser_companion_preview_when_ready() {
         let root = unique_temp_dir("loongclaw-next-actions-browser-companion");
@@ -201,14 +211,15 @@ mod tests {
 
         assert_eq!(actions[0].kind, SetupNextActionKind::Ask);
         assert_eq!(actions[1].kind, SetupNextActionKind::Chat);
-        assert_eq!(actions[2].kind, SetupNextActionKind::BrowserPreview);
+        assert_channel_catalog_action(&actions[2]);
+        assert_eq!(actions[3].kind, SetupNextActionKind::BrowserPreview);
         assert_eq!(
-            actions[2].browser_preview_phase,
+            actions[3].browser_preview_phase,
             Some(BrowserPreviewActionPhase::Ready)
         );
-        assert_eq!(actions[2].label, "browser companion preview");
+        assert_eq!(actions[3].label, "browser companion preview");
         assert!(
-            actions[2]
+            actions[3]
                 .command
                 .contains("Use the browser companion preview to open https://example.com"),
             "ready preview action should hand users into a task-shaped first browser recipe: {actions:#?}"
@@ -242,14 +253,15 @@ mod tests {
             Some(bin_dir.as_os_str()),
         );
 
-        assert_eq!(actions[2].kind, SetupNextActionKind::BrowserPreview);
+        assert_channel_catalog_action(&actions[2]);
+        assert_eq!(actions[3].kind, SetupNextActionKind::BrowserPreview);
         assert_eq!(
-            actions[2].browser_preview_phase,
+            actions[3].browser_preview_phase,
             Some(BrowserPreviewActionPhase::Unblock)
         );
-        assert_eq!(actions[2].label, "allow agent-browser");
+        assert_eq!(actions[3].label, "allow agent-browser");
         assert!(
-            actions[2]
+            actions[3]
                 .command
                 .contains("remove `agent-browser` from [tools].shell_deny"),
             "shell hard-deny should produce an unblock step instead of looping back to enable-browser-preview: {actions:#?}"
@@ -273,13 +285,14 @@ mod tests {
             Some(bin_dir.as_os_str()),
         );
 
-        assert_eq!(actions[2].kind, SetupNextActionKind::BrowserPreview);
+        assert_channel_catalog_action(&actions[2]);
+        assert_eq!(actions[3].kind, SetupNextActionKind::BrowserPreview);
         assert_eq!(
-            actions[2].browser_preview_phase,
+            actions[3].browser_preview_phase,
             Some(BrowserPreviewActionPhase::Enable)
         );
         assert!(
-            actions[2].command.contains("enable-browser-preview"),
+            actions[3].command.contains("enable-browser-preview"),
             "browser preview enable action should point operators at the preview bootstrap command: {actions:#?}"
         );
 
@@ -312,17 +325,18 @@ mod tests {
             Some(bin_dir.as_os_str()),
         );
 
-        assert_eq!(actions[2].kind, SetupNextActionKind::BrowserPreview);
+        assert_channel_catalog_action(&actions[2]);
+        assert_eq!(actions[3].kind, SetupNextActionKind::BrowserPreview);
         assert_eq!(
-            actions[2].browser_preview_phase,
+            actions[3].browser_preview_phase,
             Some(BrowserPreviewActionPhase::InstallRuntime)
         );
         assert_eq!(
-            actions[2].label,
+            actions[3].label,
             format!("install {}", mvp::tools::BROWSER_COMPANION_COMMAND)
         );
         assert_eq!(
-            actions[2].command,
+            actions[3].command,
             format!(
                 "npm install -g {} && {} install",
                 mvp::tools::BROWSER_COMPANION_COMMAND,

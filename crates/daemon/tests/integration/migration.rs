@@ -945,6 +945,24 @@ fn channel_registry_collects_serve_actions_for_enabled_channels() {
 }
 
 #[test]
+fn channel_registry_collects_catalog_action_when_no_service_channels_are_enabled() {
+    let config = mvp::config::LoongClawConfig::default();
+
+    let actions = loongclaw_daemon::migration::channels::collect_channel_next_actions(
+        &config,
+        "/tmp/loongclaw-config.toml",
+    );
+
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].id, "channel_catalog");
+    assert_eq!(actions[0].label, "channels");
+    assert_eq!(
+        actions[0].command,
+        "loongclaw channels --config '/tmp/loongclaw-config.toml'"
+    );
+}
+
+#[test]
 fn migration_render_preview_compacts_for_narrow_width() {
     let candidate = loongclaw_daemon::migration::types::ImportCandidate {
         source_kind: loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,

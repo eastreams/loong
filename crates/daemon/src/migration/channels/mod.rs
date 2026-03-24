@@ -45,6 +45,9 @@ pub struct ChannelNextAction {
     pub command: String,
 }
 
+const CHANNEL_CATALOG_ACTION_ID: &str = "channel_catalog";
+const CHANNEL_CATALOG_ACTION_LABEL: &str = "channels";
+
 struct ChannelAdapter {
     id: &'static str,
     collect_preview:
@@ -186,23 +189,60 @@ pub fn collect_channel_next_actions(
     config: &mvp::config::LoongClawConfig,
     config_path: &str,
 ) -> Vec<ChannelNextAction> {
-    enabled_channel_adapters(config)
+    let configured_actions = collect_configured_runtime_channel_next_actions(config, config_path);
+    if !configured_actions.is_empty() {
+        return configured_actions;
+    }
+
+    vec![build_channel_catalog_next_action(config_path)]
+}
+
+fn collect_configured_runtime_channel_next_actions(
+    config: &mvp::config::LoongClawConfig,
+    config_path: &str,
+) -> Vec<ChannelNextAction> {
+    let enabled_channel_ids = collect_enabled_service_channel_ids(config);
+    if enabled_channel_ids.is_empty() {
+        return Vec::new();
+    }
+
+    let inventory = mvp::channel::channel_inventory(config);
+    inventory
+        .channel_surfaces
         .into_iter()
-        .filter_map(|adapter| {
-            mvp::config::channel_descriptor(adapter.id).and_then(|descriptor| {
-                descriptor
-                    .serve_subcommand
-                    .map(|subcommand| ChannelNextAction {
-                        id: adapter.id,
-                        label: descriptor.label,
-                        command: crate::cli_handoff::format_subcommand_with_config(
-                            subcommand,
-                            config_path,
-                        ),
-                    })
+        .filter(|surface| enabled_channel_ids.contains(surface.catalog.id))
+        .filter_map(|surface| {
+            let serve_operation = surface
+                .catalog
+                .operation(mvp::channel::CHANNEL_OPERATION_SERVE_ID)?;
+            if serve_operation.availability
+                != mvp::channel::ChannelCatalogOperationAvailability::Implemented
+            {
+                return None;
+            }
+
+            Some(ChannelNextAction {
+                id: surface.catalog.id,
+                label: surface.catalog.id,
+                command: crate::cli_handoff::format_subcommand_with_config(
+                    serve_operation.command,
+                    config_path,
+                ),
             })
         })
         .collect()
+}
+
+fn collect_enabled_service_channel_ids(config: &mvp::config::LoongClawConfig) -> BTreeSet<String> {
+    config.enabled_service_channel_ids().into_iter().collect()
+}
+
+fn build_channel_catalog_next_action(config_path: &str) -> ChannelNextAction {
+    ChannelNextAction {
+        id: CHANNEL_CATALOG_ACTION_ID,
+        label: CHANNEL_CATALOG_ACTION_LABEL,
+        command: crate::cli_handoff::format_subcommand_with_config("channels", config_path),
+    }
 }
 
 fn enabled_channel_adapters(config: &mvp::config::LoongClawConfig) -> Vec<&'static ChannelAdapter> {

@@ -4766,6 +4766,7 @@ fn onboarding_success_summary_reports_import_source_and_enabled_channels() {
         summary.channels,
         vec!["cli".to_owned(), "telegram".to_owned(), "feishu".to_owned()]
     );
+    assert!(summary.suggested_channels.is_empty());
     assert!(
         summary.next_actions.iter().any(|action| action
             .command
@@ -4809,6 +4810,52 @@ fn onboarding_success_summary_derives_structured_actions() {
     assert_eq!(summary.next_actions[2].label, "telegram");
     assert_eq!(summary.next_actions[3].label, "feishu");
     assert_eq!(summary.next_actions[4].label, "enable browser preview");
+}
+
+#[test]
+fn onboarding_success_summary_suggests_registry_backed_channels_when_none_are_enabled() {
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary = crate::onboard_cli::build_onboarding_success_summary(
+        &path,
+        &mvp::config::LoongClawConfig::default(),
+        None,
+    );
+    let lines = crate::onboard_cli::render_onboarding_success_summary_with_width(&summary, 140);
+    let saved_setup_index = lines
+        .iter()
+        .position(|line| line == "saved setup")
+        .expect("saved setup heading");
+
+    assert_eq!(
+        summary.suggested_channels,
+        vec![
+            "Telegram (personal and group chat bot)".to_owned(),
+            "Feishu/Lark (enterprise chat app)".to_owned(),
+            "Matrix (federated room sync bot)".to_owned(),
+        ]
+    );
+    assert_eq!(
+        summary.next_actions[2].kind,
+        crate::onboard_cli::OnboardingActionKind::Channel
+    );
+    assert_eq!(summary.next_actions[2].label, "channels");
+    assert_eq!(
+        summary.next_actions[2].command,
+        "loongclaw channels --config '/tmp/loongclaw-config.toml'"
+    );
+    assert!(
+        lines
+            .iter()
+            .skip(saved_setup_index + 1)
+            .all(|line| !line.starts_with("- channels: ")),
+        "success summary should not render cli-only channel state as a service-channel list: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| {
+            line == "- suggested channels: Telegram (personal and group chat bot), Feishu/Lark (enterprise chat app), Matrix (federated room sync bot)"
+        }),
+        "success summary should render registry-backed suggested runtime channels when no service channels are enabled: {lines:#?}"
+    );
 }
 
 #[test]
@@ -6359,6 +6406,7 @@ fn onboarding_success_summary_reports_existing_config_kept() {
         memory_profile: "window_only".to_owned(),
         memory_path: None,
         channels: vec!["cli".to_owned()],
+        suggested_channels: Vec::new(),
         domain_outcomes: Vec::new(),
         next_actions: vec![loongclaw_daemon::onboard_cli::OnboardingAction {
             kind: loongclaw_daemon::onboard_cli::OnboardingActionKind::Ask,
@@ -6437,6 +6485,7 @@ fn onboarding_success_summary_groups_domain_outcomes_by_decision() {
         memory_profile: "profile_plus_window".to_owned(),
         memory_path: None,
         channels: vec!["cli".to_owned()],
+        suggested_channels: Vec::new(),
         domain_outcomes: vec![
             loongclaw_daemon::onboard_cli::OnboardingDomainOutcome {
                 kind: loongclaw_daemon::migration::types::SetupDomainKind::Provider,
@@ -6502,6 +6551,7 @@ fn onboarding_success_summary_wraps_domain_outcomes_for_narrow_width() {
         memory_profile: "profile_plus_window".to_owned(),
         memory_path: None,
         channels: vec!["cli".to_owned()],
+        suggested_channels: Vec::new(),
         domain_outcomes: vec![
             loongclaw_daemon::onboard_cli::OnboardingDomainOutcome {
                 kind: loongclaw_daemon::migration::types::SetupDomainKind::Provider,
@@ -6610,6 +6660,33 @@ fn onboarding_success_summary_uses_channel_handoff_when_cli_is_disabled() {
             .iter()
             .all(|line| line != "start here: loongclaw chat --config '/tmp/loongclaw-config.toml'"),
         "success summary should not keep chat as the primary handoff once cli is disabled: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_uses_channel_catalog_handoff_when_cli_is_disabled_and_no_service_channels_are_enabled()
+ {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.cli.enabled = false;
+
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary =
+        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let lines =
+        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+
+    assert_eq!(
+        summary.next_actions[0].kind,
+        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel,
+        "channel catalog should become the primary handoff when cli and service channels are both unavailable: {summary:#?}"
+    );
+    assert_eq!(summary.next_actions[0].label, "channels");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line
+                == "start here: loongclaw channels --config '/tmp/loongclaw-config.toml'"),
+        "success summary should fall back to the channel catalog when no direct cli or service-channel handoff exists: {lines:#?}"
     );
 }
 

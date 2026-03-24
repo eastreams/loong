@@ -9,6 +9,8 @@ use time::macros::format_description;
 
 const BACKUP_TIMESTAMP_FORMAT: &[FormatItem<'static>] =
     format_description!("[year][month][day]-[hour][minute][second]");
+const CLI_CHANNEL_ID: &str = "cli";
+const MAX_SUGGESTED_RUNTIME_CHANNELS: usize = 3;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ConfigWritePlan {
@@ -40,6 +42,7 @@ pub struct OnboardingSuccessSummary {
     pub memory_profile: String,
     pub memory_path: Option<String>,
     pub channels: Vec<String>,
+    pub suggested_channels: Vec<String>,
     pub domain_outcomes: Vec<OnboardingDomainOutcome>,
     pub next_actions: Vec<OnboardingAction>,
 }
@@ -121,6 +124,7 @@ pub(crate) fn build_onboarding_success_summary_with_memory(
     let credential = crate::onboard_cli::summarize_provider_credential(&config.provider);
     let domain_outcomes = collect_onboarding_domain_outcomes(review_candidate);
     let channels = config.enabled_channel_ids();
+    let suggested_channels = collect_onboarding_suggested_channels(config);
 
     OnboardingSuccessSummary {
         import_source: import_source.map(str::to_owned),
@@ -138,6 +142,7 @@ pub(crate) fn build_onboarding_success_summary_with_memory(
         memory_profile: config.memory.profile.as_str().to_owned(),
         memory_path: memory_path.map(str::to_owned),
         channels,
+        suggested_channels,
         domain_outcomes,
         next_actions,
     }
@@ -302,6 +307,40 @@ fn collect_onboarding_domain_outcomes(
                 decision,
             })
         })
+        .collect()
+}
+
+fn collect_onboarding_suggested_channels(config: &mvp::config::LoongClawConfig) -> Vec<String> {
+    let enabled_service_channel_ids = config.enabled_service_channel_ids();
+    if !enabled_service_channel_ids.is_empty() {
+        return Vec::new();
+    }
+
+    let inventory = mvp::channel::channel_inventory(config);
+    inventory
+        .channel_surfaces
+        .into_iter()
+        .filter_map(|surface| {
+            let serve_operation = surface
+                .catalog
+                .operation(mvp::channel::CHANNEL_OPERATION_SERVE_ID)?;
+            let implementation_status = surface.catalog.implementation_status;
+            let availability = serve_operation.availability;
+            if implementation_status
+                != mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
+            {
+                return None;
+            }
+            if availability != mvp::channel::ChannelCatalogOperationAvailability::Implemented {
+                return None;
+            }
+
+            let label = surface.catalog.label;
+            let selection_label = surface.catalog.selection_label;
+            let suggested_channel = format!("{label} ({selection_label})");
+            Some(suggested_channel)
+        })
+        .take(MAX_SUGGESTED_RUNTIME_CHANNELS)
         .collect()
 }
 
@@ -480,16 +519,30 @@ fn render_onboarding_success_summary_with_style(
         ));
     }
 
-    if !summary.channels.is_empty() {
-        let channels = summary
-            .channels
+    let channels = summary
+        .channels
+        .iter()
+        .filter(|channel| channel.as_str() != CLI_CHANNEL_ID)
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if !channels.is_empty() {
+        lines.extend(mvp::presentation::render_wrapped_csv_line(
+            "- channels: ",
+            &channels,
+            width,
+        ));
+    }
+
+    if !summary.suggested_channels.is_empty() {
+        let suggested_channels = summary
+            .suggested_channels
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
 
         lines.extend(mvp::presentation::render_wrapped_csv_line(
-            "- channels: ",
-            &channels,
+            "- suggested channels: ",
+            &suggested_channels,
             width,
         ));
     }
