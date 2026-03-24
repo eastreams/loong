@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use clap::ValueEnum;
-use rand::Rng;
+use rand::RngExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
