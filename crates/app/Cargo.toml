@@ -64,7 +64,7 @@ which.workspace = true
 regex.workspace = true
 prost = { version = "0.14", optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
-tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"], optional = true }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"], optional = true }
 
 [dev-dependencies]
 axum.workspace = true
