@@ -115,16 +115,27 @@ fn truncate_chars(input: &str, max_chars: usize) -> String {
     if char_count <= max_chars {
         return input.to_owned();
     }
-
-    let mut truncated = String::new();
-    let kept_chars = max_chars.saturating_sub(1);
-    for ch in input.chars().take(kept_chars) {
-        truncated.push(ch);
+    if max_chars == 0 {
+        return String::new();
     }
 
-    let removed_chars = char_count.saturating_sub(kept_chars);
-    truncated.push_str(&format!("...(truncated {removed_chars} chars)"));
-    truncated
+    let mut removed_chars = char_count.saturating_sub(max_chars);
+    loop {
+        let suffix = format!("...(truncated {removed_chars} chars)");
+        let suffix_char_count = suffix.chars().count();
+        if suffix_char_count >= max_chars {
+            return suffix.chars().take(max_chars).collect();
+        }
+
+        let kept_chars = max_chars.saturating_sub(suffix_char_count);
+        let next_removed_chars = char_count.saturating_sub(kept_chars);
+        if next_removed_chars == removed_chars {
+            let prefix = input.chars().take(kept_chars).collect::<String>();
+            return format!("{prefix}{suffix}");
+        }
+
+        removed_chars = next_removed_chars;
+    }
 }
 
 fn render_durable_recall_block(documents: &[DurableRecallDocument]) -> String {
@@ -183,5 +194,27 @@ mod tests {
 
         assert_eq!(documents.len(), 1);
         assert_eq!(documents[0].label, "memory/2026-03-22.md");
+    }
+
+    #[test]
+    fn truncate_chars_respects_budget_when_suffix_fits() {
+        let input = "a".repeat(80);
+
+        let truncated = truncate_chars(input.as_str(), 32);
+        let truncated_char_count = truncated.chars().count();
+
+        assert_eq!(truncated_char_count, 32);
+        assert!(truncated.contains("(truncated "));
+    }
+
+    #[test]
+    fn truncate_chars_respects_budget_when_suffix_exceeds_budget() {
+        let input = "a".repeat(80);
+
+        let truncated = truncate_chars(input.as_str(), 8);
+        let truncated_char_count = truncated.chars().count();
+
+        assert_eq!(truncated_char_count, 8);
+        assert!(!truncated.is_empty());
     }
 }

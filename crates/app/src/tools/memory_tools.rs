@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::memory::{WorkspaceMemoryDocumentLocation, collect_workspace_memory_document_locations};
 
@@ -31,6 +31,7 @@ pub(super) fn execute_memory_search_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
+    let tool_name = request.tool_name.as_str();
     let payload = request
         .payload
         .as_object()
@@ -43,11 +44,14 @@ pub(super) fn execute_memory_search_tool_with_config(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "memory_search requires payload.query".to_owned())?;
 
-    let max_results = payload
-        .get("max_results")
-        .and_then(Value::as_u64)
-        .map(|value| value.clamp(1, MAX_MEMORY_SEARCH_RESULTS as u64) as usize)
-        .unwrap_or(DEFAULT_MEMORY_SEARCH_MAX_RESULTS);
+    let max_results = parse_optional_usize_field(
+        payload,
+        tool_name,
+        "max_results",
+        DEFAULT_MEMORY_SEARCH_MAX_RESULTS,
+        1,
+        Some(MAX_MEMORY_SEARCH_RESULTS),
+    )?;
 
     let workspace_root = workspace_root_from_config(config)?;
     let locations = collect_workspace_memory_document_locations(workspace_root)?;
@@ -97,6 +101,7 @@ pub(super) fn execute_memory_get_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
+    let tool_name = request.tool_name.as_str();
     let payload = request
         .payload
         .as_object()
@@ -109,27 +114,19 @@ pub(super) fn execute_memory_get_tool_with_config(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "memory_get requires payload.path".to_owned())?;
 
-    let requested_start_line = payload
-        .get("from")
-        .and_then(Value::as_u64)
-        .map(|value| value.max(1) as usize)
-        .unwrap_or(1);
-
-    let requested_line_count = payload
-        .get("lines")
-        .and_then(Value::as_u64)
-        .map(|value| value.clamp(1, MAX_MEMORY_GET_LINES as u64) as usize)
-        .unwrap_or(DEFAULT_MEMORY_GET_LINES);
+    let requested_start_line = parse_optional_usize_field(payload, tool_name, "from", 1, 1, None)?;
+    let requested_line_count = parse_optional_usize_field(
+        payload,
+        tool_name,
+        "lines",
+        DEFAULT_MEMORY_GET_LINES,
+        1,
+        Some(MAX_MEMORY_GET_LINES),
+    )?;
 
     let workspace_root = workspace_root_from_config(config)?;
     let locations = collect_workspace_memory_document_locations(workspace_root)?;
     let resolved_path = super::file::resolve_safe_file_path_with_config(raw_path, config)?;
-    if !resolved_path.is_file() {
-        return Err(format!(
-            "memory_get target `{raw_path}` is not an existing file under the configured memory corpus"
-        ));
-    }
-
     let matched_location = find_memory_location_for_path(&locations, resolved_path.as_path())?
         .ok_or_else(|| {
             format!(
@@ -200,6 +197,70 @@ fn workspace_root_from_config(
         "memory tools require a configured safe file root before they can access workspace durable memory"
             .to_owned()
     })
+}
+
+fn parse_optional_usize_field(
+    payload: &Map<String, Value>,
+    tool_name: &str,
+    field_name: &str,
+    default_value: usize,
+    min_value: usize,
+    max_value: Option<usize>,
+) -> Result<usize, String> {
+    let Some(raw_value) = payload.get(field_name) else {
+        return Ok(default_value);
+    };
+
+    let maybe_integer = raw_value.as_u64();
+    let Some(integer_value) = maybe_integer else {
+        return Err(invalid_numeric_field_message(
+            tool_name, field_name, min_value, max_value,
+        ));
+    };
+    let parsed_value = usize::try_from(integer_value).map_err(|conversion_error| {
+        format!(
+            "{}: {conversion_error}",
+            invalid_numeric_field_message(tool_name, field_name, min_value, max_value)
+        )
+    })?;
+    if parsed_value < min_value {
+        return Err(invalid_numeric_field_message(
+            tool_name, field_name, min_value, max_value,
+        ));
+    }
+
+    if let Some(max_value) = max_value
+        && parsed_value > max_value
+    {
+        return Err(invalid_numeric_field_message(
+            tool_name,
+            field_name,
+            min_value,
+            Some(max_value),
+        ));
+    }
+
+    Ok(parsed_value)
+}
+
+fn invalid_numeric_field_message(
+    tool_name: &str,
+    field_name: &str,
+    min_value: usize,
+    max_value: Option<usize>,
+) -> String {
+    match max_value {
+        Some(max_value) => {
+            format!(
+                "{tool_name} payload.{field_name} must be an integer between {min_value} and {max_value}"
+            )
+        }
+        None => {
+            format!(
+                "{tool_name} payload.{field_name} must be an integer greater than or equal to {min_value}"
+            )
+        }
+    }
 }
 
 fn search_memory_location(
@@ -317,7 +378,7 @@ fn find_memory_location_for_path<'a>(
     locations: &'a [WorkspaceMemoryDocumentLocation],
     resolved_path: &Path,
 ) -> Result<Option<&'a WorkspaceMemoryDocumentLocation>, String> {
-    let resolved_key = normalized_existing_path_key(resolved_path)?;
+    let resolved_key = normalized_requested_path_key(resolved_path);
 
     for location in locations {
         let location_key = normalized_existing_path_key(location.path.as_path())?;
@@ -327,6 +388,11 @@ fn find_memory_location_for_path<'a>(
     }
 
     Ok(None)
+}
+
+fn normalized_requested_path_key(path: &Path) -> String {
+    let normalized_path = super::normalize_without_fs(path);
+    normalized_path.display().to_string()
 }
 
 fn normalized_existing_path_key(path: &Path) -> Result<String, String> {

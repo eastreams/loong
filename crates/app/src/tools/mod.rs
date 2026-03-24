@@ -2484,7 +2484,7 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
-    #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
+    #[cfg(feature = "tool-file")]
     #[test]
     fn tool_search_surfaces_memory_tools_when_memory_corpus_is_available() {
         let root = unique_tool_temp_dir("loongclaw-memory-tool-search");
@@ -2522,7 +2522,7 @@ mod tests {
         assert!(results.iter().any(|entry| entry["tool_id"] == "memory_get"));
     }
 
-    #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
+    #[cfg(feature = "tool-file")]
     #[test]
     fn tool_search_hides_memory_tools_when_memory_corpus_is_empty() {
         let root = unique_tool_temp_dir("loongclaw-memory-tool-search-empty");
@@ -2640,6 +2640,119 @@ mod tests {
         assert_eq!(outcome.payload["start_line"], 2);
         assert_eq!(outcome.payload["end_line"], 3);
         assert_eq!(outcome.payload["text"], "line two\nline three");
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn memory_search_tool_rejects_invalid_max_results_values() {
+        let root = unique_tool_temp_dir("loongclaw-memory-search-invalid-max-results");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(root.join("MEMORY.md"), "deploy freeze window\n").expect("write memory");
+
+        let config = test_tool_runtime_config(root);
+        let non_numeric_error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "deploy",
+                    "max_results": "3"
+                }),
+            },
+            &config,
+        )
+        .expect_err("non-numeric max_results should fail");
+        let out_of_range_error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "deploy",
+                    "max_results": 0
+                }),
+            },
+            &config,
+        )
+        .expect_err("out-of-range max_results should fail");
+
+        assert!(non_numeric_error.contains("payload.max_results"));
+        assert!(out_of_range_error.contains("payload.max_results"));
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn memory_get_tool_rejects_invalid_window_arguments() {
+        let root = unique_tool_temp_dir("loongclaw-memory-get-invalid-window");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(root.join("MEMORY.md"), "line one\nline two\n").expect("write memory");
+
+        let config = test_tool_runtime_config(root);
+        let invalid_from_error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_get".to_owned(),
+                payload: json!({
+                    "path": "MEMORY.md",
+                    "from": "2"
+                }),
+            },
+            &config,
+        )
+        .expect_err("non-numeric from should fail");
+        let invalid_lines_error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_get".to_owned(),
+                payload: json!({
+                    "path": "MEMORY.md",
+                    "lines": 0
+                }),
+            },
+            &config,
+        )
+        .expect_err("out-of-range lines should fail");
+
+        assert!(invalid_from_error.contains("payload.from"));
+        assert!(invalid_lines_error.contains("payload.lines"));
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn memory_get_tool_hides_non_corpus_file_existence() {
+        let root = unique_tool_temp_dir("loongclaw-memory-get-corpus-boundary");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(root.join("MEMORY.md"), "line one\nline two\n").expect("write memory");
+        std::fs::write(root.join("README.md"), "not in corpus\n").expect("write readme");
+
+        let config = test_tool_runtime_config(root);
+        let existing_non_corpus_error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_get".to_owned(),
+                payload: json!({
+                    "path": "README.md"
+                }),
+            },
+            &config,
+        )
+        .expect_err("existing non-corpus file should fail");
+        let missing_non_corpus_error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_get".to_owned(),
+                payload: json!({
+                    "path": "missing.md"
+                }),
+            },
+            &config,
+        )
+        .expect_err("missing non-corpus file should fail");
+
+        assert!(
+            existing_non_corpus_error.contains("not part of the workspace durable memory corpus")
+        );
+        assert!(
+            missing_non_corpus_error.contains("not part of the workspace durable memory corpus")
+        );
+        assert!(!existing_non_corpus_error.contains("not an existing file"));
+        assert!(!missing_non_corpus_error.contains("not an existing file"));
     }
 
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]

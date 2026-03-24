@@ -2474,10 +2474,14 @@ async fn default_runtime_build_context_rehydrates_runtime_self_continuity_when_l
     let runtime = DefaultConversationRuntime::default();
     let session_id = unique_acp_test_id("default-runtime-context", "stored-self-fallback");
     let sqlite_path = unique_memory_sqlite_path("stored-self-fallback");
+    let empty_workspace_root =
+        crate::test_support::unique_temp_dir("stored-self-fallback-empty-workspace");
     let mut config = test_config();
     let identity_text = "# Identity\n\n- Name: Stored continuity identity";
 
+    std::fs::create_dir_all(&empty_workspace_root).expect("create empty workspace root");
     config.memory.sqlite_path = sqlite_path.clone();
+    config.tools.file_root = Some(empty_workspace_root.display().to_string());
 
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
@@ -2535,10 +2539,14 @@ async fn default_runtime_build_context_rehydrates_delegate_child_runtime_self_co
     let root_session_id = unique_acp_test_id("default-runtime-context", "delegate-parent");
     let child_session_id = unique_acp_test_id("default-runtime-context", "delegate-child");
     let sqlite_path = unique_memory_sqlite_path("delegate-self-fallback");
+    let empty_workspace_root =
+        crate::test_support::unique_temp_dir("delegate-self-fallback-empty-workspace");
     let mut config = test_config();
     let identity_text = "# Identity\n\n- Name: Inherited child identity";
 
+    std::fs::create_dir_all(&empty_workspace_root).expect("create empty workspace root");
     config.memory.sqlite_path = sqlite_path.clone();
+    config.tools.file_root = Some(empty_workspace_root.display().to_string());
 
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
@@ -2766,11 +2774,8 @@ async fn handle_turn_with_runtime_records_runtime_self_continuity_before_compact
     let session_id_for_hook = session_id.clone();
     let memory_config_for_hook = memory_config.clone();
     let compact_hook: CompactHook = Arc::new(move |hook_session_id, _messages| {
-        let hook_repo =
-            SessionRepository::new(&memory_config_for_hook).map_err(|error| error.to_string())?;
-        let events = hook_repo
-            .list_recent_events(&session_id_for_hook, 20)
-            .map_err(|error| error.to_string())?;
+        let hook_repo = SessionRepository::new(&memory_config_for_hook)?;
+        let events = hook_repo.list_recent_events(&session_id_for_hook, 20)?;
         let continuity_event = events
             .iter()
             .find(|event| event.event_kind == "runtime_self_continuity_refreshed");
