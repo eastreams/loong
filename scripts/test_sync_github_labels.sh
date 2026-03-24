@@ -97,6 +97,26 @@ if "out of date" not in output:
     sys.exit(1)
 PY
 
+python3 - "$SYNC_SCRIPT" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+script_path = Path(sys.argv[1])
+repo_root = script_path.parents[1]
+spec = importlib.util.spec_from_file_location("sync_github_labels", script_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+taxonomy = module.load_taxonomy(repo_root)
+failures = module.check_semantic_regression_cases(taxonomy)
+
+if failures:
+    for failure in failures:
+        print(failure, file=sys.stderr)
+    sys.exit(1)
+PY
+
 assert_not_contains_regex "$REPO_ROOT/.github/labeler.yml" '(^|[[:space:]])"?rust"?[[:space:]]*:'
 assert_not_contains "$REPO_ROOT/docs/references/github-collaboration.md" "area:"
 assert_not_contains "$REPO_ROOT/docs/references/github-collaboration.md" "domain:"

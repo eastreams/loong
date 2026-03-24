@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import json
+import re
 import sys
 from pathlib import Path
 from textwrap import dedent, indent
@@ -33,6 +35,151 @@ def path_labeled_entries(taxonomy: dict) -> list[dict]:
             if entry.get("paths"):
                 entries.append(entry)
     return entries
+
+
+def normalize_repo_path(repo_path: str) -> str:
+    normalized_path = repo_path.replace("\\", "/")
+    while normalized_path.startswith("./"):
+        normalized_path = normalized_path[2:]
+    return normalized_path
+
+
+def glob_segment_to_regex(segment: str) -> str:
+    regex_parts: list[str] = []
+    for character in segment:
+        if character == "*":
+            regex_parts.append("[^/]*")
+            continue
+        if character == "?":
+            regex_parts.append("[^/]")
+            continue
+        regex_parts.append(re.escape(character))
+    return "".join(regex_parts)
+
+
+def glob_pattern_to_regex(pattern: str) -> str:
+    # The managed taxonomy uses a small glob subset, so the matcher stays deliberately narrow.
+    normalized_pattern = normalize_repo_path(pattern)
+    segments = normalized_pattern.split("/")
+    regex_parts: list[str] = ["^"]
+    segment_count = len(segments)
+
+    for index, segment in enumerate(segments):
+        is_last_segment = index == segment_count - 1
+
+        if segment == "**":
+            if is_last_segment:
+                regex_parts.append(".*")
+            else:
+                regex_parts.append("(?:[^/]+/)*")
+            continue
+
+        segment_regex = glob_segment_to_regex(segment)
+        regex_parts.append(segment_regex)
+
+        if not is_last_segment:
+            regex_parts.append("/")
+
+    regex_parts.append("$")
+    return "".join(regex_parts)
+
+
+@functools.lru_cache(maxsize=None)
+def compile_glob_pattern(pattern: str) -> re.Pattern[str]:
+    regex_text = glob_pattern_to_regex(pattern)
+    return re.compile(regex_text)
+
+
+def path_matches_pattern(repo_path: str, pattern: str) -> bool:
+    normalized_path = normalize_repo_path(repo_path)
+    compiled_pattern = compile_glob_pattern(pattern)
+    return compiled_pattern.match(normalized_path) is not None
+
+
+def labels_for_path(taxonomy: dict, repo_path: str) -> list[str]:
+    matching_labels: list[str] = []
+    entries = path_labeled_entries(taxonomy)
+    for entry in entries:
+        patterns = entry["paths"]
+        for pattern in patterns:
+            does_match = path_matches_pattern(repo_path, pattern)
+            if not does_match:
+                continue
+            matching_labels.append(entry["name"])
+            break
+    matching_labels.sort()
+    return matching_labels
+
+
+def semantic_regression_cases() -> list[dict]:
+    # These representative paths lock the intended routing semantics without duplicating the full repo tree.
+    cases: list[dict] = []
+
+    cases.append(
+        {
+            "path": "README.md",
+            "labels": ["docs", "documentation"],
+        }
+    )
+    cases.append(
+        {
+            "path": "docs/references/github-collaboration.md",
+            "labels": ["docs", "documentation"],
+        }
+    )
+    cases.append(
+        {
+            "path": "docs/design-docs/provider-runtime-roadmap.md",
+            "labels": ["documentation", "spec"],
+        }
+    )
+    cases.append(
+        {
+            "path": "docs/releases/v0.1.0-alpha.2.md",
+            "labels": ["documentation"],
+        }
+    )
+    cases.append(
+        {
+            "path": ".github/workflows/labeler.yml",
+            "labels": ["ci", "github_actions"],
+        }
+    )
+    cases.append(
+        {
+            "path": "Cargo.toml",
+            "labels": ["dependencies"],
+        }
+    )
+    cases.append(
+        {
+            "path": "crates/app/Cargo.toml",
+            "labels": ["dependencies"],
+        }
+    )
+
+    return cases
+
+
+def check_semantic_regression_cases(taxonomy: dict) -> list[str]:
+    failures: list[str] = []
+    cases = semantic_regression_cases()
+
+    for case in cases:
+        case_path = case["path"]
+        expected_labels = list(case["labels"])
+        actual_labels = labels_for_path(taxonomy, case_path)
+
+        if actual_labels == expected_labels:
+            continue
+
+        failure_message = (
+            f"semantic label mismatch for {case_path}: "
+            f"expected {expected_labels}, got {actual_labels}"
+        )
+        failures.append(failure_message)
+
+    return failures
 
 
 def render_labeler(taxonomy: dict) -> str:
