@@ -371,7 +371,10 @@ mod tests {
         let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
         let messages = build_base_messages_with_binding(&config, false, binding).await;
 
-        assert!(messages.is_empty(), "disabled system prompts should emit no base messages");
+        assert!(
+            messages.is_empty(),
+            "disabled system prompts should emit no base messages"
+        );
 
         let audit_events = harness.audit.snapshot();
         let has_tool_plane_event = audit_events.iter().any(|event| {

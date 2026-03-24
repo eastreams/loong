@@ -307,8 +307,8 @@ mod tests {
     fn legacy_identity_import_keeps_nested_headings_out_of_advisory_profile() {
         let profile_note = "## Imported IDENTITY.md\n# Identity\n\n- Name: Legacy build copilot\n\n## Traits\n- careful\n- explicit\n\n## Imported External Skills Artifacts\n- kind=skills_catalog";
 
-        let resolved = resolve_runtime_identity(None, Some(profile_note))
-            .expect("resolved runtime identity");
+        let resolved =
+            resolve_runtime_identity(None, Some(profile_note)).expect("resolved runtime identity");
         let rendered =
             render_session_profile_section(Some(profile_note)).expect("session profile section");
 

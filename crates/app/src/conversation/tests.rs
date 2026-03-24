@@ -10692,7 +10692,35 @@ impl CoreMemoryAdapter for SharedTestMemoryAdapter {
         &self,
         request: MemoryCoreRequest,
     ) -> Result<MemoryCoreOutcome, MemoryPlaneError> {
-        let payload = if request.operation == crate::memory::MEMORY_OP_WINDOW {
+        let payload = if request.operation == crate::memory::MEMORY_OP_READ_CONTEXT {
+            let entries = self
+                .window_turns
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|turn| {
+                    let role = turn
+                        .get("role")
+                        .and_then(Value::as_str)
+                        .unwrap_or("assistant");
+                    let content = turn
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+
+                    json!({
+                        "kind": "turn",
+                        "role": role,
+                        "content": content,
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            json!({
+                "entries": entries
+            })
+        } else if request.operation == crate::memory::MEMORY_OP_WINDOW {
             json!({
                 "turns": self.window_turns.clone()
             })
@@ -11005,7 +11033,7 @@ async fn persist_turn_routes_through_kernel_when_context_provided() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn build_messages_routes_memory_window_through_kernel_when_context_provided() {
+async fn build_messages_routes_memory_context_through_kernel_when_context_provided() {
     let audit = Arc::new(InMemoryAuditSink::default());
     let (ctx, invocations) = build_kernel_context(audit.clone());
     let runtime = DefaultConversationRuntime::default();
@@ -11033,11 +11061,19 @@ async fn build_messages_routes_memory_window_through_kernel_when_context_provide
 
     let captured = invocations.lock().expect("invocations lock");
     assert_eq!(captured.len(), 1);
-    assert_eq!(captured[0].operation, crate::memory::MEMORY_OP_WINDOW);
+    assert_eq!(captured[0].operation, crate::memory::MEMORY_OP_READ_CONTEXT);
     assert_eq!(captured[0].payload["session_id"], "session-k-window");
     assert_eq!(
-        captured[0].payload["limit"],
+        captured[0].payload["profile"],
+        config.memory.profile.as_str()
+    );
+    assert_eq!(
+        captured[0].payload["sliding_window"],
         json!(config.memory.sliding_window)
+    );
+    assert_eq!(
+        captured[0].payload["summary_max_chars"],
+        json!(config.memory.summary_char_budget())
     );
 
     let events = audit.snapshot();

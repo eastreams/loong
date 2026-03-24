@@ -1,8 +1,8 @@
 use loongclaw_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
 use serde_json::{Value, json};
 
-use crate::config::MemoryProfile;
 use crate::config::MemoryMode;
+use crate::config::MemoryProfile;
 use crate::runtime_identity;
 
 #[cfg(feature = "memory-sqlite")]
@@ -52,9 +52,7 @@ fn read_context_runtime_config(
             .as_str()
             .ok_or_else(|| "memory.read_context payload.profile must be a string".to_owned())?;
         let profile = MemoryProfile::parse_id(profile_text).ok_or_else(|| {
-            format!(
-                "memory.read_context payload.profile `{profile_text}` is unsupported"
-            )
+            format!("memory.read_context payload.profile `{profile_text}` is unsupported")
         })?;
         let mode = profile.mode();
 
@@ -66,13 +64,11 @@ fn read_context_runtime_config(
         let sliding_window = sliding_window_value.as_u64().ok_or_else(|| {
             "memory.read_context payload.sliding_window must be a positive integer".to_owned()
         })?;
-        let sliding_window = usize::try_from(sliding_window).map_err(|_| {
-            "memory.read_context payload.sliding_window exceeds usize".to_owned()
+        let sliding_window = usize::try_from(sliding_window).map_err(|conversion_error| {
+            format!("memory.read_context payload.sliding_window exceeds usize: {conversion_error}")
         })?;
         if sliding_window == 0 {
-            return Err(
-                "memory.read_context payload.sliding_window must be at least 1".to_owned(),
-            );
+            return Err("memory.read_context payload.sliding_window must be at least 1".to_owned());
         }
 
         runtime_config.sliding_window = sliding_window;
@@ -82,8 +78,10 @@ fn read_context_runtime_config(
         let summary_max_chars = summary_max_chars_value.as_u64().ok_or_else(|| {
             "memory.read_context payload.summary_max_chars must be a positive integer".to_owned()
         })?;
-        let summary_max_chars = usize::try_from(summary_max_chars).map_err(|_| {
-            "memory.read_context payload.summary_max_chars exceeds usize".to_owned()
+        let summary_max_chars = usize::try_from(summary_max_chars).map_err(|conversion_error| {
+            format!(
+                "memory.read_context payload.summary_max_chars exceeds usize: {conversion_error}"
+            )
         })?;
         if summary_max_chars == 0 {
             return Err(
@@ -105,7 +103,7 @@ fn read_context_runtime_config(
                     Some(trimmed_value.to_owned())
                 }
             }
-            _ => {
+            Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => {
                 return Err(
                     "memory.read_context payload.profile_note must be a string or null".to_owned(),
                 );

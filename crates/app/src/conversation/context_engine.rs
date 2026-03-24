@@ -718,7 +718,8 @@ mod tests {
         memory::append_turn_direct(session_id, "assistant", "turn 4", &memory_config)
             .expect("append turn 4 should succeed");
 
-        let binding = ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx));
+        let binding =
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx));
         let kernel_messages = DefaultContextEngine
             .assemble_messages(&config, session_id, true, binding)
             .await
@@ -770,7 +771,8 @@ mod tests {
         memory::append_turn_direct(session_id, "assistant", "turn 1", &memory_config)
             .expect("append turn should succeed");
 
-        let binding = ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx));
+        let binding =
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx));
         let kernel_messages = DefaultContextEngine
             .assemble_messages(&config, session_id, true, binding)
             .await
