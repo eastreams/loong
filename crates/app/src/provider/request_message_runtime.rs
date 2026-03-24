@@ -1022,6 +1022,35 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[test]
+    fn push_memory_context_entry_only_preserves_first_summary_container_heading() {
+        let mut messages = Vec::new();
+        let entry = memory::MemoryContextEntry {
+            kind: memory::MemoryContextKind::Summary,
+            role: "system".to_owned(),
+            content: concat!(
+                "## Memory Summary\n",
+                "Earlier session context condensed from turns outside the active window:\n",
+                "- keep the root container\n\n",
+                "## Memory Summary\n",
+                "- demote repeated summary headings",
+            )
+            .to_owned(),
+        };
+
+        push_memory_context_entry(&mut messages, &entry);
+
+        assert_eq!(messages.len(), 1);
+
+        let content = messages[0]["content"].as_str().expect("message content");
+
+        assert!(content.starts_with("## Memory Summary\n"));
+        assert_eq!(content.matches("## Memory Summary").count(), 1);
+        assert!(content.contains("Advisory reference heading: Memory Summary"));
+        assert!(content.contains("- demote repeated summary headings"));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
     fn message_builder_skips_durable_recall_without_explicit_safe_file_root() {
         let temp_dir = tempdir().expect("tempdir");
         let workspace_root = temp_dir.path();
