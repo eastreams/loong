@@ -170,11 +170,11 @@ On Linux x86_64, the installer now treats GNU and musl as distinct release artif
 <summary>Linux / macOS</summary>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/loongclaw-ai/loongclaw/main/scripts/install.sh | bash -s -- --onboard
+curl -fsSL https://raw.githubusercontent.com/loongclaw-ai/loongclaw/dev/scripts/install.sh | bash -s -- --onboard
 ```
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/loongclaw-ai/loongclaw/main/scripts/install.sh | bash -s -- --target-libc musl
+curl -fsSL https://raw.githubusercontent.com/loongclaw-ai/loongclaw/dev/scripts/install.sh | bash -s -- --target-libc musl
 ```
 
 </details>
@@ -184,7 +184,7 @@ curl -fsSL https://raw.githubusercontent.com/loongclaw-ai/loongclaw/main/scripts
 
 ```powershell
 $script = Join-Path $env:TEMP "loongclaw-install.ps1"
-Invoke-WebRequest https://raw.githubusercontent.com/loongclaw-ai/loongclaw/main/scripts/install.ps1 -OutFile $script
+Invoke-WebRequest https://raw.githubusercontent.com/loongclaw-ai/loongclaw/dev/scripts/install.ps1 -OutFile $script
 pwsh $script -Onboard
 ```
 
