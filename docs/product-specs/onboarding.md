@@ -27,6 +27,12 @@ next.
 - [ ] The credential-source step asks for an environment variable name,
       rejects pasted secret literals or shell assignment syntax, and never
       echoes rejected secret-like input in review or success output.
+- [ ] Interactive onboarding lets the user choose a default web search provider
+      and asks for a web-search credential env source immediately when that
+      provider requires a key.
+- [ ] Non-interactive onboarding supports `--web-search-provider` and
+      `--web-search-api-key`, and explicit web-search choices are not silently
+      replaced by heuristic fallbacks.
 - [ ] When provider credentials are already available and catalog discovery
       succeeds, model selection offers a searchable model list while still
       allowing a manual custom model override.

@@ -335,6 +335,15 @@ pub enum Commands {
         /// Provider credential environment variable name, for example OPENAI_API_KEY
         #[arg(long = "api-key", alias = "api-key-env")]
         api_key_env: Option<String>,
+        #[arg(
+            long = "web-search-provider",
+            value_name = "PROVIDER",
+            help = mvp::config::WEB_SEARCH_PROVIDER_VALID_VALUES
+        )]
+        web_search_provider: Option<String>,
+        /// Web search credential environment variable name, for example TAVILY_API_KEY
+        #[arg(long = "web-search-api-key", alias = "web-search-api-key-env")]
+        web_search_api_key_env: Option<String>,
         /// Select a native prompt personality in non-interactive mode
         #[arg(long)]
         personality: Option<String>,
@@ -784,6 +793,8 @@ fn default_onboard_command() -> Commands {
         provider: None,
         model: None,
         api_key_env: None,
+        web_search_provider: None,
+        web_search_api_key_env: None,
         personality: None,
         memory_profile: None,
         system_prompt: None,

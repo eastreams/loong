@@ -197,18 +197,104 @@ pub struct WebToolConfig {
 
 pub const DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS: u64 = 30;
 pub const DEFAULT_WEB_SEARCH_MAX_RESULTS: usize = 5;
-pub(crate) const WEB_SEARCH_PROVIDER_DUCKDUCKGO: &str = "duckduckgo";
+pub const WEB_SEARCH_PROVIDER_DUCKDUCKGO: &str = "duckduckgo";
+pub const WEB_SEARCH_PROVIDER_BRAVE: &str = "brave";
+pub const WEB_SEARCH_PROVIDER_TAVILY: &str = "tavily";
+pub const WEB_SEARCH_PROVIDER_PERPLEXITY: &str = "perplexity";
+pub const WEB_SEARCH_PROVIDER_EXA: &str = "exa";
+pub const WEB_SEARCH_PROVIDER_JINA: &str = "jina";
 pub const DEFAULT_WEB_SEARCH_PROVIDER: &str = WEB_SEARCH_PROVIDER_DUCKDUCKGO;
 #[cfg(feature = "tool-websearch")]
-pub(crate) const WEB_SEARCH_PROVIDER_SCHEMA_VALUES: &[&str] =
-    &[WEB_SEARCH_PROVIDER_DUCKDUCKGO, "ddg", "brave", "tavily"];
-pub(crate) const WEB_SEARCH_PROVIDER_VALID_VALUES: &str = "duckduckgo (or ddg), brave, tavily";
-pub(crate) const WEB_SEARCH_BRAVE_API_KEY_ENV: &str = "BRAVE_API_KEY";
-pub(crate) const WEB_SEARCH_TAVILY_API_KEY_ENV: &str = "TAVILY_API_KEY";
+pub(crate) const WEB_SEARCH_PROVIDER_SCHEMA_VALUES: &[&str] = &[
+    WEB_SEARCH_PROVIDER_DUCKDUCKGO,
+    "ddg",
+    WEB_SEARCH_PROVIDER_BRAVE,
+    WEB_SEARCH_PROVIDER_TAVILY,
+    WEB_SEARCH_PROVIDER_PERPLEXITY,
+    WEB_SEARCH_PROVIDER_EXA,
+    WEB_SEARCH_PROVIDER_JINA,
+];
+pub const WEB_SEARCH_PROVIDER_VALID_VALUES: &str =
+    "duckduckgo (or ddg), brave, tavily, perplexity, exa, jina";
+pub const WEB_SEARCH_BRAVE_API_KEY_ENV: &str = "BRAVE_API_KEY";
+pub const WEB_SEARCH_TAVILY_API_KEY_ENV: &str = "TAVILY_API_KEY";
+pub const WEB_SEARCH_PERPLEXITY_API_KEY_ENV: &str = "PERPLEXITY_API_KEY";
+pub const WEB_SEARCH_EXA_API_KEY_ENV: &str = "EXA_API_KEY";
+pub const WEB_SEARCH_JINA_API_KEY_ENV: &str = "JINA_API_KEY";
+pub const WEB_SEARCH_JINA_AUTH_TOKEN_ENV: &str = "JINA_AUTH_TOKEN";
 pub(crate) const MIN_WEB_SEARCH_TIMEOUT_SECONDS: usize = 1;
 pub(crate) const MAX_WEB_SEARCH_TIMEOUT_SECONDS: usize = 60;
 pub(crate) const MIN_WEB_SEARCH_MAX_RESULTS: usize = 1;
 pub(crate) const MAX_WEB_SEARCH_MAX_RESULTS: usize = 10;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WebSearchProviderDescriptor {
+    pub id: &'static str,
+    pub display_name: &'static str,
+    pub description: &'static str,
+    pub requires_api_key: bool,
+    pub default_api_key_env: Option<&'static str>,
+    pub api_key_env_names: &'static [&'static str],
+}
+
+const WEB_SEARCH_EMPTY_API_KEY_ENV_NAMES: &[&str] = &[];
+const WEB_SEARCH_BRAVE_API_KEY_ENV_NAMES: &[&str] = &[WEB_SEARCH_BRAVE_API_KEY_ENV];
+const WEB_SEARCH_TAVILY_API_KEY_ENV_NAMES: &[&str] = &[WEB_SEARCH_TAVILY_API_KEY_ENV];
+const WEB_SEARCH_PERPLEXITY_API_KEY_ENV_NAMES: &[&str] = &[WEB_SEARCH_PERPLEXITY_API_KEY_ENV];
+const WEB_SEARCH_EXA_API_KEY_ENV_NAMES: &[&str] = &[WEB_SEARCH_EXA_API_KEY_ENV];
+const WEB_SEARCH_JINA_API_KEY_ENV_NAMES: &[&str] =
+    &[WEB_SEARCH_JINA_API_KEY_ENV, WEB_SEARCH_JINA_AUTH_TOKEN_ENV];
+
+const WEB_SEARCH_PROVIDER_DESCRIPTORS: &[WebSearchProviderDescriptor] = &[
+    WebSearchProviderDescriptor {
+        id: WEB_SEARCH_PROVIDER_DUCKDUCKGO,
+        display_name: "DuckDuckGo",
+        description: "key-free HTML search fallback",
+        requires_api_key: false,
+        default_api_key_env: None,
+        api_key_env_names: WEB_SEARCH_EMPTY_API_KEY_ENV_NAMES,
+    },
+    WebSearchProviderDescriptor {
+        id: WEB_SEARCH_PROVIDER_BRAVE,
+        display_name: "Brave Search",
+        description: "fast web API with structured results",
+        requires_api_key: true,
+        default_api_key_env: Some(WEB_SEARCH_BRAVE_API_KEY_ENV),
+        api_key_env_names: WEB_SEARCH_BRAVE_API_KEY_ENV_NAMES,
+    },
+    WebSearchProviderDescriptor {
+        id: WEB_SEARCH_PROVIDER_TAVILY,
+        display_name: "Tavily",
+        description: "search API that works well as a grounded research backend",
+        requires_api_key: true,
+        default_api_key_env: Some(WEB_SEARCH_TAVILY_API_KEY_ENV),
+        api_key_env_names: WEB_SEARCH_TAVILY_API_KEY_ENV_NAMES,
+    },
+    WebSearchProviderDescriptor {
+        id: WEB_SEARCH_PROVIDER_PERPLEXITY,
+        display_name: "Perplexity Search",
+        description: "grounded search API with returned snippets and citations",
+        requires_api_key: true,
+        default_api_key_env: Some(WEB_SEARCH_PERPLEXITY_API_KEY_ENV),
+        api_key_env_names: WEB_SEARCH_PERPLEXITY_API_KEY_ENV_NAMES,
+    },
+    WebSearchProviderDescriptor {
+        id: WEB_SEARCH_PROVIDER_EXA,
+        display_name: "Exa",
+        description: "semantic search API with highlights and result text",
+        requires_api_key: true,
+        default_api_key_env: Some(WEB_SEARCH_EXA_API_KEY_ENV),
+        api_key_env_names: WEB_SEARCH_EXA_API_KEY_ENV_NAMES,
+    },
+    WebSearchProviderDescriptor {
+        id: WEB_SEARCH_PROVIDER_JINA,
+        display_name: "Jina Search",
+        description: "grounded search digest via s.jina.ai",
+        requires_api_key: true,
+        default_api_key_env: Some(WEB_SEARCH_JINA_API_KEY_ENV),
+        api_key_env_names: WEB_SEARCH_JINA_API_KEY_ENV_NAMES,
+    },
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WebSearchToolConfig {
@@ -224,6 +310,12 @@ pub struct WebSearchToolConfig {
     pub brave_api_key: Option<String>,
     #[serde(default)]
     pub tavily_api_key: Option<String>,
+    #[serde(default)]
+    pub perplexity_api_key: Option<String>,
+    #[serde(default)]
+    pub exa_api_key: Option<String>,
+    #[serde(default)]
+    pub jina_api_key: Option<String>,
 }
 
 fn default_shell_default_mode() -> String {
@@ -382,6 +474,9 @@ impl Default for WebSearchToolConfig {
             max_results: default_web_search_max_results(),
             brave_api_key: None,
             tavily_api_key: None,
+            perplexity_api_key: None,
+            exa_api_key: None,
+            jina_api_key: None,
         }
     }
 }
@@ -571,19 +666,43 @@ impl ToolConfig {
     }
 }
 
-pub(crate) fn normalize_web_search_provider(raw: &str) -> Option<&'static str> {
+pub fn normalize_web_search_provider(raw: &str) -> Option<&'static str> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "duckduckgo" | "ddg" => Some(WEB_SEARCH_PROVIDER_DUCKDUCKGO),
-        "brave" => Some("brave"),
-        "tavily" => Some("tavily"),
+        "brave" => Some(WEB_SEARCH_PROVIDER_BRAVE),
+        "tavily" => Some(WEB_SEARCH_PROVIDER_TAVILY),
+        "perplexity" | "perplexity_search" => Some(WEB_SEARCH_PROVIDER_PERPLEXITY),
+        "exa" => Some(WEB_SEARCH_PROVIDER_EXA),
+        "jina" | "jinaai" | "jina-ai" => Some(WEB_SEARCH_PROVIDER_JINA),
         _ => None,
     }
+}
+
+pub fn web_search_provider_descriptors() -> &'static [WebSearchProviderDescriptor] {
+    WEB_SEARCH_PROVIDER_DESCRIPTORS
+}
+
+pub fn web_search_provider_descriptor(raw: &str) -> Option<&'static WebSearchProviderDescriptor> {
+    let normalized = normalize_web_search_provider(raw)?;
+    WEB_SEARCH_PROVIDER_DESCRIPTORS
+        .iter()
+        .find(|descriptor| descriptor.id == normalized)
+}
+
+pub fn web_search_provider_default_api_key_env(raw: &str) -> Option<&'static str> {
+    web_search_provider_descriptor(raw).and_then(|descriptor| descriptor.default_api_key_env)
+}
+
+pub fn web_search_provider_api_key_env_names(raw: &str) -> &'static [&'static str] {
+    web_search_provider_descriptor(raw)
+        .map(|descriptor| descriptor.api_key_env_names)
+        .unwrap_or(WEB_SEARCH_EMPTY_API_KEY_ENV_NAMES)
 }
 
 #[cfg(feature = "tool-websearch")]
 pub(crate) fn web_search_provider_parameter_description() -> String {
     format!(
-        "Search provider. Defaults to '{DEFAULT_WEB_SEARCH_PROVIDER}'. Supported providers: {WEB_SEARCH_PROVIDER_VALID_VALUES}. Brave and Tavily require a configured API key; use tools.web_search.brave_api_key / tools.web_search.tavily_api_key or the {WEB_SEARCH_BRAVE_API_KEY_ENV} / {WEB_SEARCH_TAVILY_API_KEY_ENV} environment variable fallbacks."
+        "Search provider. Defaults to '{DEFAULT_WEB_SEARCH_PROVIDER}'. Supported providers: {WEB_SEARCH_PROVIDER_VALID_VALUES}. DuckDuckGo works without a key. Brave, Tavily, Perplexity, Exa, and Jina use tools.web_search.brave_api_key / tools.web_search.tavily_api_key / tools.web_search.perplexity_api_key / tools.web_search.exa_api_key / tools.web_search.jina_api_key or the {WEB_SEARCH_BRAVE_API_KEY_ENV} / {WEB_SEARCH_TAVILY_API_KEY_ENV} / {WEB_SEARCH_PERPLEXITY_API_KEY_ENV} / {WEB_SEARCH_EXA_API_KEY_ENV} / {WEB_SEARCH_JINA_API_KEY_ENV} environment variable fallbacks."
     )
 }
 
@@ -793,6 +912,9 @@ mod tests {
         );
         assert!(config.web_search.brave_api_key.is_none());
         assert!(config.web_search.tavily_api_key.is_none());
+        assert!(config.web_search.perplexity_api_key.is_none());
+        assert!(config.web_search.exa_api_key.is_none());
+        assert!(config.web_search.jina_api_key.is_none());
     }
 
     #[test]
@@ -807,8 +929,31 @@ mod tests {
         );
         assert_eq!(normalize_web_search_provider("brave"), Some("brave"));
         assert_eq!(normalize_web_search_provider("tavily"), Some("tavily"));
+        assert_eq!(
+            normalize_web_search_provider("perplexity"),
+            Some("perplexity")
+        );
+        assert_eq!(normalize_web_search_provider("exa"), Some("exa"));
+        assert_eq!(normalize_web_search_provider("jina-ai"), Some("jina"));
         assert_eq!(normalize_web_search_provider("unknown"), None);
         assert_eq!(DEFAULT_WEB_SEARCH_PROVIDER, WEB_SEARCH_PROVIDER_DUCKDUCKGO);
+    }
+
+    #[test]
+    fn web_search_provider_descriptor_reports_metadata() {
+        let ddg = web_search_provider_descriptor("ddg").expect("duckduckgo descriptor");
+        assert_eq!(ddg.id, WEB_SEARCH_PROVIDER_DUCKDUCKGO);
+        assert_eq!(ddg.display_name, "DuckDuckGo");
+        assert!(!ddg.requires_api_key);
+
+        let tavily = web_search_provider_descriptor("tavily").expect("tavily descriptor");
+        assert_eq!(
+            tavily.default_api_key_env,
+            Some(WEB_SEARCH_TAVILY_API_KEY_ENV)
+        );
+
+        let jina = web_search_provider_descriptor("jina").expect("jina descriptor");
+        assert_eq!(jina.api_key_env_names, WEB_SEARCH_JINA_API_KEY_ENV_NAMES);
     }
 
     #[cfg(feature = "tool-websearch")]
@@ -818,8 +963,14 @@ mod tests {
 
         assert!(description.contains("tools.web_search.brave_api_key"));
         assert!(description.contains("tools.web_search.tavily_api_key"));
+        assert!(description.contains("tools.web_search.perplexity_api_key"));
+        assert!(description.contains("tools.web_search.exa_api_key"));
+        assert!(description.contains("tools.web_search.jina_api_key"));
         assert!(description.contains(WEB_SEARCH_BRAVE_API_KEY_ENV));
         assert!(description.contains(WEB_SEARCH_TAVILY_API_KEY_ENV));
+        assert!(description.contains(WEB_SEARCH_PERPLEXITY_API_KEY_ENV));
+        assert!(description.contains(WEB_SEARCH_EXA_API_KEY_ENV));
+        assert!(description.contains(WEB_SEARCH_JINA_API_KEY_ENV));
         assert!(description.contains(DEFAULT_WEB_SEARCH_PROVIDER));
         assert!(description.contains(WEB_SEARCH_PROVIDER_VALID_VALUES));
     }

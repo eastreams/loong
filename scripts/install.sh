@@ -346,6 +346,201 @@ lowercase_value() {
   printf '%s' "${1:?value is required}" | tr '[:upper:]' '[:lower:]'
 }
 
+install_web_search_provider_display_name() {
+  local provider="${1:-}"
+  case "$(lowercase_value "${provider:-unknown}")" in
+    ddg|duckduckgo) printf 'DuckDuckGo\n' ;;
+    tavily) printf 'Tavily\n' ;;
+    brave) printf 'Brave Search\n' ;;
+    perplexity) printf 'Perplexity Search\n' ;;
+    exa) printf 'Exa\n' ;;
+    jina) printf 'Jina Search\n' ;;
+    *) printf '%s\n' "${provider}" ;;
+  esac
+}
+
+install_locale_looks_domestic_cn() {
+  local value normalized
+
+  for value in "${LC_ALL:-}" "${LC_MESSAGES:-}" "${LANG:-}"; do
+    if [[ -n "${value}" ]]; then
+      normalized="$(lowercase_value "${value}")"
+      if [[ "${normalized}" == *"zh_cn"* || "${normalized}" == *"zh-hans"* || "${normalized}" == zh-cn* ]]; then
+        return 0
+      fi
+    fi
+  done
+
+  normalized="$(lowercase_value "${TZ:-}")"
+  case "${normalized}" in
+    asia/shanghai|asia/chongqing|asia/harbin|asia/urumqi|asia/beijing) return 0 ;;
+  esac
+
+  return 1
+}
+
+probe_install_duckduckgo_route() {
+  if ! command -v curl >/dev/null 2>&1; then
+    return 1
+  fi
+
+  curl -fsSL \
+    --retry 0 \
+    --max-time 2 \
+    -o /dev/null \
+    "https://html.duckduckgo.com/html/?q=loongclaw" >/dev/null 2>&1
+}
+
+probe_install_tavily_route() {
+  local http_code
+
+  if ! command -v curl >/dev/null 2>&1; then
+    return 1
+  fi
+
+  http_code="$(
+    curl -sS \
+      --retry 0 \
+      --max-time 2 \
+      -o /dev/null \
+      -w '%{http_code}' \
+      -H 'Content-Type: application/json' \
+      -d '{"query":"loongclaw","max_results":1}' \
+      "https://api.tavily.com/search" 2>/dev/null || true
+  )"
+
+  case "${http_code}" in
+    2??|3??|4??) return 0 ;;
+  esac
+
+  return 1
+}
+
+install_env_has_non_empty_value() {
+  local env_name="${1:?env_name is required}"
+  local value="${!env_name:-}"
+
+  [[ -n "${value}" && -n "${value//[[:space:]]/}" ]]
+}
+
+install_web_search_provider_has_ready_credential() {
+  local provider="${1:?provider is required}"
+
+  case "$provider" in
+    brave)
+      install_env_has_non_empty_value "BRAVE_API_KEY"
+      ;;
+    tavily)
+      install_env_has_non_empty_value "TAVILY_API_KEY"
+      ;;
+    perplexity)
+      install_env_has_non_empty_value "PERPLEXITY_API_KEY"
+      ;;
+    exa)
+      install_env_has_non_empty_value "EXA_API_KEY"
+      ;;
+    jina)
+      install_env_has_non_empty_value "JINA_API_KEY" \
+        || install_env_has_non_empty_value "JINA_AUTH_TOKEN"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+recommend_onboard_web_search_provider_from_credentials() {
+  local ready_provider=""
+  local ready_count=0
+  local provider=""
+
+  for provider in brave tavily perplexity exa jina; do
+    if ! install_web_search_provider_has_ready_credential "$provider"; then
+      continue
+    fi
+
+    ready_provider="$provider"
+    ready_count=$((ready_count + 1))
+  done
+
+  if [[ "$ready_count" -ne 1 ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "$ready_provider"
+}
+
+recommend_onboard_web_search_provider() {
+  local domestic_locale_hint=0
+  local duckduckgo_reachable=0
+  local tavily_reachable=0
+  local credential_provider=""
+
+  if install_locale_looks_domestic_cn; then
+    domestic_locale_hint=1
+  fi
+  credential_provider="$(recommend_onboard_web_search_provider_from_credentials || true)"
+  if [[ -n "$credential_provider" ]]; then
+    printf '%s\n' "$credential_provider"
+    return 0
+  fi
+  if probe_install_duckduckgo_route; then
+    duckduckgo_reachable=1
+  fi
+  if probe_install_tavily_route; then
+    tavily_reachable=1
+  fi
+
+  if [[ "${domestic_locale_hint}" -eq 1 ]] && [[ "${tavily_reachable}" -eq 1 || "${duckduckgo_reachable}" -eq 0 ]]; then
+    printf 'tavily\n'
+    return 0
+  fi
+
+  if [[ "${duckduckgo_reachable}" -eq 1 ]]; then
+    printf 'duckduckgo\n'
+    return 0
+  fi
+
+  if [[ "${tavily_reachable}" -eq 1 ]]; then
+    printf 'tavily\n'
+    return 0
+  fi
+
+  if [[ "${domestic_locale_hint}" -eq 1 ]]; then
+    printf 'tavily\n'
+    return 0
+  fi
+
+  printf 'duckduckgo\n'
+}
+
+run_guided_onboarding() {
+  local selected_provider
+  local provider_source
+
+  if [[ -n "${LOONGCLAW_WEB_SEARCH_PROVIDER:-}" ]]; then
+    selected_provider="${LOONGCLAW_WEB_SEARCH_PROVIDER}"
+    provider_source="preconfigured"
+  else
+    selected_provider="$(recommend_onboard_web_search_provider)"
+    if install_web_search_provider_has_ready_credential "$selected_provider"; then
+      provider_source="detected credential"
+    else
+      provider_source="detected"
+    fi
+  fi
+
+  if [[ -n "${selected_provider}" ]]; then
+    printf '==> Onboarding web search default: %s (%s)\n' \
+      "$(install_web_search_provider_display_name "${selected_provider}")" \
+      "${provider_source}"
+    "${prefix}/${bin_name}" onboard --web-search-provider "${selected_provider}"
+    return 0
+  fi
+
+  "${prefix}/${bin_name}" onboard
+}
+
 normalize_target_libc() {
   local raw="${1:-auto}"
   local normalized
@@ -623,7 +818,7 @@ printf '==> Installed loongclaw to %s\n' "${prefix}/${bin_name}"
 
 if [[ "${run_onboard}" -eq 1 ]]; then
   printf '==> Running guided onboarding\n'
-  "${prefix}/${bin_name}" onboard
+  run_guided_onboarding
 fi
 
 case ":${PATH}:" in

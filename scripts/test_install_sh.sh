@@ -56,7 +56,21 @@ write_release_fixture_asset() {
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "\${1:-}" == "onboard" ]]; then
-  printf 'onboard\n' >> "\${ONBOARD_MARKER:?}"
+  shift
+  selected_provider="\${LOONGCLAW_WEB_SEARCH_PROVIDER:-}"
+  while [[ "\$#" -gt 0 ]]; do
+    case "\${1:-}" in
+      --web-search-provider)
+        shift
+        selected_provider="\${1:-}"
+        ;;
+    esac
+    shift || true
+  done
+  {
+    printf 'onboard\n'
+    printf 'web_search_provider=%s\n' "\${selected_provider:-}"
+  } >> "\${ONBOARD_MARKER:?}"
 fi
 printf '%s\n' "$binary_label"
 EOF
@@ -105,6 +119,39 @@ cat >&2 <<ERR
 unexpected curl request: $url
 ERR
 exit 1
+EOF
+  chmod +x "$fixture/fake-bin/curl"
+}
+
+make_install_curl_stub_bin() {
+  local fixture="$1"
+  local duckduckgo_mode="${2:?duckduckgo_mode is required}"
+  local tavily_result="${3:?tavily_result is required}"
+  local real_curl
+  real_curl="$(command -v curl)"
+  mkdir -p "$fixture/fake-bin"
+  cat >"$fixture/fake-bin/curl" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+url="\${@: -1}"
+case "\$url" in
+  https://html.duckduckgo.com/html/*)
+    if [[ "$duckduckgo_mode" == "success" ]]; then
+      exit 0
+    fi
+    exit 22
+    ;;
+  https://api.tavily.com/search)
+    if [[ "$tavily_result" == "__FAIL__" ]]; then
+      exit 7
+    fi
+    printf '%s' "$tavily_result"
+    exit 0
+    ;;
+esac
+
+exec "$real_curl" "\$@"
 EOF
   chmod +x "$fixture/fake-bin/curl"
 }
@@ -573,6 +620,79 @@ run_release_override_install_and_onboard_test() {
   assert_contains "$marker" "onboard"
 }
 
+run_release_override_install_and_onboard_detects_duckduckgo_default_test() {
+  local fixture install_dir output_file marker
+  fixture="$(make_release_fixture "v0.1.2")"
+  trap 'rm -rf "$fixture"' RETURN
+  install_dir="$fixture/install"
+  output_file="$fixture/install-web-search-ddg.out"
+  marker="$fixture/onboard-web-search-ddg.log"
+  : >"$marker"
+  make_install_curl_stub_bin "$fixture" "success" "__FAIL__"
+
+  (
+    cd "$REPO_ROOT"
+    PATH="$fixture/fake-bin:$PATH" \
+      LANG="C.UTF-8" \
+      TZ="UTC" \
+      ONBOARD_MARKER="$marker" \
+      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" --onboard >"$output_file" 2>&1
+  )
+
+  assert_contains "$output_file" "Onboarding web search default: DuckDuckGo (detected)"
+  assert_contains "$marker" "web_search_provider=duckduckgo"
+}
+
+run_release_override_install_and_onboard_prefers_tavily_for_domestic_hosts_test() {
+  local fixture install_dir output_file marker
+  fixture="$(make_release_fixture "v0.1.2")"
+  trap 'rm -rf "$fixture"' RETURN
+  install_dir="$fixture/install"
+  output_file="$fixture/install-web-search-tavily.out"
+  marker="$fixture/onboard-web-search-tavily.log"
+  : >"$marker"
+  make_install_curl_stub_bin "$fixture" "__FAIL__" "401"
+
+  (
+    cd "$REPO_ROOT"
+    PATH="$fixture/fake-bin:$PATH" \
+      LANG="zh_CN.UTF-8" \
+      TZ="Asia/Shanghai" \
+      ONBOARD_MARKER="$marker" \
+      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" --onboard >"$output_file" 2>&1
+  )
+
+  assert_contains "$output_file" "Onboarding web search default: Tavily (detected)"
+  assert_contains "$marker" "web_search_provider=tavily"
+}
+
+run_release_override_install_and_onboard_prefers_unique_ready_credential_test() {
+  local fixture install_dir output_file marker
+  fixture="$(make_release_fixture "v0.1.2")"
+  trap 'rm -rf "$fixture"' RETURN
+  install_dir="$fixture/install"
+  output_file="$fixture/install-web-search-perplexity.out"
+  marker="$fixture/onboard-web-search-perplexity.log"
+  : >"$marker"
+  make_install_curl_stub_bin "$fixture" "success" "__FAIL__"
+
+  (
+    cd "$REPO_ROOT"
+    PATH="$fixture/fake-bin:$PATH" \
+      LANG="C.UTF-8" \
+      TZ="UTC" \
+      PERPLEXITY_API_KEY="perplexity-test-token" \
+      ONBOARD_MARKER="$marker" \
+      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" --onboard >"$output_file" 2>&1
+  )
+
+  assert_contains "$output_file" "Onboarding web search default: Perplexity Search (detected credential)"
+  assert_contains "$marker" "web_search_provider=perplexity"
+}
+
 run_checksum_mismatch_fails_test() {
   local fixture install_dir output_file tag target checksum_name
   fixture="$(make_release_fixture "v0.1.2")"
@@ -648,6 +768,9 @@ run_standalone_linux_arm64_install_rejects_missing_glibc_test() {
 }
 
 run_release_override_install_and_onboard_test
+run_release_override_install_and_onboard_detects_duckduckgo_default_test
+run_release_override_install_and_onboard_prefers_tavily_for_domestic_hosts_test
+run_release_override_install_and_onboard_prefers_unique_ready_credential_test
 run_checksum_mismatch_fails_test
 run_missing_release_guidance_test
 run_linux_x86_64_prefers_gnu_when_glibc_is_supported_test

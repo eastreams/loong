@@ -160,6 +160,14 @@ solving team problems earlier instead of postponing them.
 The install script prefers the matching GitHub Release binary, verifies its SHA256 checksum,
 installs `loongclaw`, and can drop you straight into guided onboarding.
 
+When you pass `--onboard`, the installer now seeds onboarding with a recommended
+web search default. It keeps DuckDuckGo as the general key-free fallback, and
+prefers Tavily when domestic Chinese locale/network hints suggest that direct
+DuckDuckGo access may be a worse default. If the shell already exposes exactly
+one ready credential-backed search provider such as `PERPLEXITY_API_KEY` or
+`TAVILY_API_KEY`, the installer prefers that provider before falling back to
+locale and route heuristics.
+
 On Linux x86_64, the installer now treats GNU and musl as distinct release artifacts:
 
 - it prefers `x86_64-unknown-linux-gnu` when the host glibc satisfies the declared GNU floor
@@ -327,6 +335,29 @@ active_provider = "openai"
 [providers.openai]
 kind = "openai"
 api_key_env = "PROVIDER_API_KEY"
+```
+
+Guided onboarding now also lets you choose the default web search backend.
+Supported providers are `duckduckgo`, `brave`, `tavily`, `perplexity`, `exa`,
+and `jina`. If you keep the default choice, LoongClaw uses DuckDuckGo for the
+general case, or Tavily when domestic Chinese locale/network hints suggest it
+is the safer first-run default. When the selected provider requires a key,
+onboarding immediately asks which environment variable should back that
+credential and writes the config as an env reference such as
+`"${TAVILY_API_KEY}"`, instead of asking users to paste the secret inline.
+Non-interactive onboarding also accepts `--web-search-provider <provider>` and
+`--web-search-api-key <ENV_NAME>`. Explicit choices stay explicit: LoongClaw no
+longer silently falls back to DuckDuckGo when the operator explicitly selected
+a credential-backed provider.
+
+```toml
+[tools.web_search]
+default_provider = "duckduckgo"
+# brave_api_key = "${BRAVE_API_KEY}"
+# tavily_api_key = "${TAVILY_API_KEY}"
+# perplexity_api_key = "${PERPLEXITY_API_KEY}"
+# exa_api_key = "${EXA_API_KEY}"
+# jina_api_key = "${JINA_API_KEY}"
 ```
 
 Volcengine / ARK example:

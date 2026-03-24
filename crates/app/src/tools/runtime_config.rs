@@ -12,6 +12,7 @@ use crate::config::LoongClawConfig;
 use crate::config::{FeishuChannelConfig, FeishuIntegrationConfig};
 #[cfg(feature = "feishu-integration")]
 use crate::secrets::has_configured_secret_ref;
+use crate::secrets::{SecretLookup, resolve_secret_lookup};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct BrowserRuntimeNarrowing {
@@ -193,6 +194,9 @@ pub struct WebSearchRuntimePolicy {
     pub default_provider: String,
     pub brave_api_key: Option<String>,
     pub tavily_api_key: Option<String>,
+    pub perplexity_api_key: Option<String>,
+    pub exa_api_key: Option<String>,
+    pub jina_api_key: Option<String>,
     pub timeout_seconds: u64,
     pub max_results: usize,
 }
@@ -204,6 +208,9 @@ impl Default for WebSearchRuntimePolicy {
             default_provider: crate::config::DEFAULT_WEB_SEARCH_PROVIDER.to_owned(),
             brave_api_key: None,
             tavily_api_key: None,
+            perplexity_api_key: None,
+            exa_api_key: None,
+            jina_api_key: None,
             timeout_seconds: crate::config::DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS,
             max_results: crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS,
         }
@@ -343,18 +350,36 @@ impl ToolRuntimeConfig {
                 )
                 .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_PROVIDER)
                 .to_owned(),
-                brave_api_key: config
-                    .tools
-                    .web_search
-                    .brave_api_key
-                    .clone()
-                    .or_else(|| std::env::var(crate::config::WEB_SEARCH_BRAVE_API_KEY_ENV).ok()),
-                tavily_api_key: config
-                    .tools
-                    .web_search
-                    .tavily_api_key
-                    .clone()
-                    .or_else(|| std::env::var(crate::config::WEB_SEARCH_TAVILY_API_KEY_ENV).ok()),
+                brave_api_key: resolve_web_search_secret_binding(
+                    config.tools.web_search.brave_api_key.as_deref(),
+                    crate::config::web_search_provider_api_key_env_names(
+                        crate::config::WEB_SEARCH_PROVIDER_BRAVE,
+                    ),
+                ),
+                tavily_api_key: resolve_web_search_secret_binding(
+                    config.tools.web_search.tavily_api_key.as_deref(),
+                    crate::config::web_search_provider_api_key_env_names(
+                        crate::config::WEB_SEARCH_PROVIDER_TAVILY,
+                    ),
+                ),
+                perplexity_api_key: resolve_web_search_secret_binding(
+                    config.tools.web_search.perplexity_api_key.as_deref(),
+                    crate::config::web_search_provider_api_key_env_names(
+                        crate::config::WEB_SEARCH_PROVIDER_PERPLEXITY,
+                    ),
+                ),
+                exa_api_key: resolve_web_search_secret_binding(
+                    config.tools.web_search.exa_api_key.as_deref(),
+                    crate::config::web_search_provider_api_key_env_names(
+                        crate::config::WEB_SEARCH_PROVIDER_EXA,
+                    ),
+                ),
+                jina_api_key: resolve_web_search_secret_binding(
+                    config.tools.web_search.jina_api_key.as_deref(),
+                    crate::config::web_search_provider_api_key_env_names(
+                        crate::config::WEB_SEARCH_PROVIDER_JINA,
+                    ),
+                ),
                 timeout_seconds: config.tools.web_search.timeout_seconds,
                 max_results: config.tools.web_search.max_results,
             },
@@ -427,10 +452,36 @@ impl ToolRuntimeConfig {
             .and_then(crate::config::normalize_web_search_provider)
             .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_PROVIDER)
             .to_owned();
-        let web_search_brave_api_key =
-            std::env::var(crate::config::WEB_SEARCH_BRAVE_API_KEY_ENV).ok();
-        let web_search_tavily_api_key =
-            std::env::var(crate::config::WEB_SEARCH_TAVILY_API_KEY_ENV).ok();
+        let web_search_brave_api_key = resolve_web_search_secret_binding(
+            None,
+            crate::config::web_search_provider_api_key_env_names(
+                crate::config::WEB_SEARCH_PROVIDER_BRAVE,
+            ),
+        );
+        let web_search_tavily_api_key = resolve_web_search_secret_binding(
+            None,
+            crate::config::web_search_provider_api_key_env_names(
+                crate::config::WEB_SEARCH_PROVIDER_TAVILY,
+            ),
+        );
+        let web_search_perplexity_api_key = resolve_web_search_secret_binding(
+            None,
+            crate::config::web_search_provider_api_key_env_names(
+                crate::config::WEB_SEARCH_PROVIDER_PERPLEXITY,
+            ),
+        );
+        let web_search_exa_api_key = resolve_web_search_secret_binding(
+            None,
+            crate::config::web_search_provider_api_key_env_names(
+                crate::config::WEB_SEARCH_PROVIDER_EXA,
+            ),
+        );
+        let web_search_jina_api_key = resolve_web_search_secret_binding(
+            None,
+            crate::config::web_search_provider_api_key_env_names(
+                crate::config::WEB_SEARCH_PROVIDER_JINA,
+            ),
+        );
         let web_search_timeout_seconds = parse_env_u64("LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS")
             .map(|seconds| seconds.clamp(1, 60))
             .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS);
@@ -482,6 +533,9 @@ impl ToolRuntimeConfig {
                 default_provider: web_search_default_provider,
                 brave_api_key: web_search_brave_api_key,
                 tavily_api_key: web_search_tavily_api_key,
+                perplexity_api_key: web_search_perplexity_api_key,
+                exa_api_key: web_search_exa_api_key,
+                jina_api_key: web_search_jina_api_key,
                 timeout_seconds: web_search_timeout_seconds,
                 max_results: web_search_max_results,
             },
@@ -697,6 +751,29 @@ impl ToolRuntimeConfig {
     pub fn browser_companion_execution_security_tier(&self) -> ExecutionSecurityTier {
         self.browser_companion.execution_security_tier()
     }
+}
+
+fn resolve_web_search_secret_binding(
+    configured_value: Option<&str>,
+    env_names: &[&str],
+) -> Option<String> {
+    if let Some(secret_ref) = configured_value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| SecretRef::Inline(value.to_owned()))
+    {
+        match resolve_secret_lookup(Some(&secret_ref)) {
+            SecretLookup::Value(value) => return Some(value),
+            SecretLookup::Missing => return None,
+            SecretLookup::Absent => {}
+        }
+    }
+
+    env_names
+        .iter()
+        .find_map(|env_name| std::env::var(env_name).ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 pub(crate) fn browser_companion_runtime_policy_from_tool_config(
@@ -918,6 +995,10 @@ mod tests {
             "LOONGCLAW_WEB_SEARCH_MAX_RESULTS",
             "BRAVE_API_KEY",
             "TAVILY_API_KEY",
+            "PERPLEXITY_API_KEY",
+            "EXA_API_KEY",
+            "JINA_API_KEY",
+            "JINA_AUTH_TOKEN",
             "LOONGCLAW_EXTERNAL_SKILLS_ENABLED",
             "LOONGCLAW_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL",
             "LOONGCLAW_EXTERNAL_SKILLS_ALLOWED_DOMAINS",
@@ -965,6 +1046,9 @@ mod tests {
         );
         assert!(config.web_search.brave_api_key.is_none());
         assert!(config.web_search.tavily_api_key.is_none());
+        assert!(config.web_search.perplexity_api_key.is_none());
+        assert!(config.web_search.exa_api_key.is_none());
+        assert!(config.web_search.jina_api_key.is_none());
         assert_eq!(
             config.web_search.timeout_seconds,
             crate::config::DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS
@@ -1316,6 +1400,15 @@ mod tests {
             crate::config::WEB_SEARCH_TAVILY_API_KEY_ENV,
             "tavily-test-key",
         );
+        env.set(
+            crate::config::WEB_SEARCH_PERPLEXITY_API_KEY_ENV,
+            "perplexity-test-key",
+        );
+        env.set(crate::config::WEB_SEARCH_EXA_API_KEY_ENV, "exa-test-key");
+        env.set(
+            crate::config::WEB_SEARCH_JINA_AUTH_TOKEN_ENV,
+            "jina-test-key",
+        );
 
         let config = ToolRuntimeConfig::from_env();
 
@@ -1332,6 +1425,43 @@ mod tests {
         assert_eq!(
             config.web_search.tavily_api_key.as_deref(),
             Some("tavily-test-key")
+        );
+        assert_eq!(
+            config.web_search.perplexity_api_key.as_deref(),
+            Some("perplexity-test-key")
+        );
+        assert_eq!(
+            config.web_search.exa_api_key.as_deref(),
+            Some("exa-test-key")
+        );
+        assert_eq!(
+            config.web_search.jina_api_key.as_deref(),
+            Some("jina-test-key")
+        );
+    }
+
+    #[test]
+    fn from_loongclaw_config_resolves_inline_env_refs_for_web_search_credentials() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        #[cfg(feature = "feishu-integration")]
+        clear_feishu_runtime_env(&mut env);
+        env.set("TEAM_EXA_KEY", "exa-inline-env");
+
+        let mut config = LoongClawConfig::default();
+        config.tools.web_search.default_provider =
+            crate::config::WEB_SEARCH_PROVIDER_EXA.to_owned();
+        config.tools.web_search.exa_api_key = Some("${TEAM_EXA_KEY}".to_owned());
+
+        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+
+        assert_eq!(
+            runtime.web_search.default_provider,
+            crate::config::WEB_SEARCH_PROVIDER_EXA
+        );
+        assert_eq!(
+            runtime.web_search.exa_api_key.as_deref(),
+            Some("exa-inline-env")
         );
     }
 

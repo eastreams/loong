@@ -23,6 +23,9 @@ or `chat` without reverse-engineering release or source workflows.
       the explicit `--source` fallback from a local checkout.
 - [x] The install path can hand users directly into `loongclaw onboard` after a
       successful install.
+- [x] When the shell already exposes exactly one ready credential-backed web
+      search provider, the installer prefers that provider before falling back
+      to locale and route heuristics.
 - [x] Linux users can explicitly override the libc variant when they need a
       specific GNU or musl artifact.
 

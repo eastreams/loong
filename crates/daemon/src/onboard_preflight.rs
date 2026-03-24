@@ -51,6 +51,7 @@ pub(crate) async fn run_preflight_checks(
     let has_credentials = credential_check.level == OnboardCheckLevel::Pass;
     checks.push(credential_check);
     checks.push(provider_transport_check(config));
+    checks.push(web_search_provider_check(config));
 
     if skip_model_probe {
         checks.push(OnboardCheck {
@@ -217,6 +218,47 @@ pub fn provider_credential_check(config: &mvp::config::LoongClawConfig) -> Onboa
         name: "provider credentials",
         level: OnboardCheckLevel::Warn,
         detail: format!("{provider_prefix}: {detail}"),
+        non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+    }
+}
+
+fn web_search_provider_check(config: &mvp::config::LoongClawConfig) -> OnboardCheck {
+    let provider = mvp::config::normalize_web_search_provider(
+        config.tools.web_search.default_provider.as_str(),
+    )
+    .unwrap_or(mvp::config::DEFAULT_WEB_SEARCH_PROVIDER);
+    let provider_label = crate::onboard_cli::web_search_provider_display_name(provider);
+    let credential_summary =
+        crate::onboard_cli::summarize_web_search_provider_credential(config, provider);
+
+    let has_available_credential =
+        crate::onboard_cli::web_search_provider_has_available_credential(config, provider);
+    if has_available_credential {
+        let detail = credential_summary
+            .map(|summary| format!("{provider_label}: {}", summary.value))
+            .unwrap_or_else(|| provider_label.clone());
+
+        return OnboardCheck {
+            name: "web search provider",
+            level: OnboardCheckLevel::Pass,
+            detail,
+            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+        };
+    }
+
+    let detail = credential_summary
+        .map(|summary| {
+            format!(
+                "{provider_label}: {}. web.search will stay unavailable until the provider credential is supplied",
+                summary.value
+            )
+        })
+        .unwrap_or_else(|| provider_label.clone());
+
+    OnboardCheck {
+        name: "web search provider",
+        level: OnboardCheckLevel::Warn,
+        detail,
         non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
     }
 }

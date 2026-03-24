@@ -126,6 +126,48 @@ impl Drop for DetectedEnvironmentGuard {
     }
 }
 
+struct EnvVarGuard {
+    _lock: Option<MutexGuard<'static, ()>>,
+    key: String,
+    saved: Option<OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &str, value: &str) -> Self {
+        let lock = super::lock_daemon_test_environment();
+        Self::set_inner(Some(lock), key, value)
+    }
+
+    fn set_unlocked(key: &str, value: &str) -> Self {
+        Self::set_inner(None, key, value)
+    }
+
+    fn set_inner(lock: Option<MutexGuard<'static, ()>>, key: &str, value: &str) -> Self {
+        let saved = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self {
+            _lock: lock,
+            key: key.to_owned(),
+            saved,
+        }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match self.saved.take() {
+            Some(value) => unsafe {
+                std::env::set_var(&self.key, value);
+            },
+            None => unsafe {
+                std::env::remove_var(&self.key);
+            },
+        }
+    }
+}
+
 fn import_candidate_with_kind(
     source_kind: loongclaw_daemon::migration::types::ImportSourceKind,
     source: &str,
@@ -389,6 +431,8 @@ fn default_non_interactive_onboard_options(
         provider: None,
         model: None,
         api_key_env: None,
+        web_search_provider: None,
+        web_search_api_key_env: None,
         personality: None,
         memory_profile: None,
         system_prompt: None,
@@ -637,6 +681,8 @@ async fn non_interactive_personality_and_memory_profile_are_persisted() {
             provider: Some("openai".to_owned()),
             model: Some("openai/gpt-5.1".to_owned()),
             api_key_env: Some("OPENAI_API_KEY".to_owned()),
+            web_search_provider: None,
+            web_search_api_key_env: None,
             personality: Some("friendly_collab".to_owned()),
             memory_profile: Some("profile_plus_window".to_owned()),
             system_prompt: None,
@@ -685,6 +731,8 @@ async fn non_interactive_system_prompt_override_disables_prompt_pack() {
             provider: Some("openai".to_owned()),
             model: Some("openai/gpt-5.1".to_owned()),
             api_key_env: Some("OPENAI_API_KEY".to_owned()),
+            web_search_provider: None,
+            web_search_api_key_env: None,
             personality: None,
             memory_profile: None,
             system_prompt: Some("Stay concise and technical.".to_owned()),
@@ -746,7 +794,11 @@ async fn non_interactive_onboard_rejects_unresolved_preflight_warnings() {
         .expect_err("non-interactive onboarding should stop on unresolved warnings");
 
     assert!(
-        error.contains("unresolved") && error.contains("warning"),
+        error.contains("provider transport:"),
+        "non-interactive warning-gate errors should surface the first blocking warning detail: {error}"
+    );
+    assert!(
+        error.contains("rerun without --non-interactive"),
         "unexpected warning-gate error: {error}"
     );
 
@@ -758,6 +810,47 @@ async fn non_interactive_onboard_rejects_unresolved_preflight_warnings() {
                 && normalized.contains("authorization: bearer test-openai-key")
         }),
         "warning reproduction should still perform the model probe before the warning gate: {requests:#?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn non_interactive_explicit_web_search_provider_does_not_silently_fall_back() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let output = unique_temp_path("non-interactive-explicit-web-search.toml");
+    unsafe {
+        std::env::set_var("OPENAI_API_KEY", "openai-test-token");
+    }
+
+    let error = run_scripted_onboard_flow(
+        crate::onboard_cli::OnboardCommandOptions {
+            output: output.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: true,
+            accept_risk: true,
+            provider: Some("openai".to_owned()),
+            model: Some("openai/gpt-5.1".to_owned()),
+            api_key_env: Some("OPENAI_API_KEY".to_owned()),
+            web_search_provider: Some("tavily".to_owned()),
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        std::iter::empty::<String>(),
+        None,
+        None,
+    )
+    .await
+    .expect_err("missing Tavily credentials should fail instead of silently falling back");
+
+    assert!(
+        error.contains("Tavily") || error.contains("TAVILY_API_KEY"),
+        "preflight should keep the explicit Tavily selection visible in the failure path: {error}"
+    );
+    assert!(
+        !error.contains("DuckDuckGo"),
+        "explicit web-search selection should not be silently replaced by DuckDuckGo in the failure path: {error}"
     );
 }
 
@@ -1215,6 +1308,8 @@ async fn interactive_onboard_clear_token_keeps_inline_provider_credential() {
             provider: None,
             model: None,
             api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
             personality: None,
             memory_profile: None,
             system_prompt: None,
@@ -1226,6 +1321,7 @@ async fn interactive_onboard_clear_token_keeps_inline_provider_credential() {
             provider_choice_input(mvp::config::ProviderKind::Openai),
             "gpt-4.1".to_owned(),
             ":clear".to_owned(),
+            String::new(),
             String::new(),
             String::new(),
             String::new(),
@@ -1288,6 +1384,7 @@ async fn interactive_onboard_clear_token_restores_builtin_system_prompt() {
         String::new(),
         ":clear".to_owned(),
         String::new(),
+        String::new(),
         "y".to_owned(),
         "y".to_owned(),
         "o".to_owned(),
@@ -1303,6 +1400,8 @@ async fn interactive_onboard_clear_token_restores_builtin_system_prompt() {
             provider: None,
             model: None,
             api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
             personality: None,
             memory_profile: None,
             system_prompt: Some(existing.cli.system_prompt.clone()),
@@ -1329,6 +1428,137 @@ async fn interactive_onboard_clear_token_restores_builtin_system_prompt() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn interactive_onboard_web_search_custom_env_persists_explicit_env_reference() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let _openai_env = EnvVarGuard::set_unlocked("OPENAI_API_KEY", "openai-test-token");
+    let _tavily_env = EnvVarGuard::set_unlocked("TEAM_TAVILY_KEY", "tavily-test-token");
+    let output_path = unique_temp_path("interactive-web-search-env.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        vec![
+            "1".to_owned(),
+            "2".to_owned(),
+            provider_choice_input(mvp::config::ProviderKind::Openai),
+            "gpt-4.1".to_owned(),
+            "OPENAI_API_KEY".to_owned(),
+            String::new(),
+            String::new(),
+            String::new(),
+            "tavily".to_owned(),
+            "TEAM_TAVILY_KEY".to_owned(),
+            "y".to_owned(),
+            "y".to_owned(),
+            "o".to_owned(),
+        ],
+        None,
+        None,
+    )
+    .await
+    .expect("run scripted onboarding with custom web search env");
+
+    let joined = transcript.join("\n");
+    assert!(
+        joined.contains("choose web search credential"),
+        "interactive onboarding should prompt for a web-search credential source when the selected provider requires one: {transcript:#?}"
+    );
+
+    let (_, config) =
+        mvp::config::load(output_path.to_str()).expect("load onboarding config with web search");
+    assert_eq!(
+        config.tools.web_search.default_provider,
+        mvp::config::WEB_SEARCH_PROVIDER_TAVILY
+    );
+    assert_eq!(
+        config.tools.web_search.tavily_api_key.as_deref(),
+        Some("${TEAM_TAVILY_KEY}"),
+        "interactive onboarding should persist the selected web-search env as an explicit env reference"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn interactive_onboard_web_search_blank_input_keeps_inline_credential() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let _openai_env = EnvVarGuard::set_unlocked("OPENAI_API_KEY", "openai-test-token");
+    let output_path = unique_temp_path("interactive-web-search-inline.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
+    existing.tools.web_search.default_provider = mvp::config::WEB_SEARCH_PROVIDER_TAVILY.to_owned();
+    existing.tools.web_search.tavily_api_key = Some("inline-web-search-secret".to_owned());
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        vec![
+            "1".to_owned(),
+            "2".to_owned(),
+            provider_choice_input(mvp::config::ProviderKind::Openai),
+            "gpt-4.1".to_owned(),
+            "OPENAI_API_KEY".to_owned(),
+            String::new(),
+            String::new(),
+            String::new(),
+            "tavily".to_owned(),
+            String::new(),
+            "y".to_owned(),
+            "y".to_owned(),
+            "o".to_owned(),
+        ],
+        None,
+        None,
+    )
+    .await
+    .expect("run scripted onboarding while keeping inline web search credential");
+
+    let joined = transcript.join("\n");
+    assert!(
+        joined.contains("leave this blank to keep inline credentials"),
+        "web-search credential onboarding should explain how blank input preserves inline credentials: {transcript:#?}"
+    );
+
+    let (_, config) = mvp::config::load(output_path.to_str())
+        .expect("load onboarding config with inline web search credential");
+    assert_eq!(
+        config.tools.web_search.tavily_api_key.as_deref(),
+        Some("inline-web-search-secret"),
+        "blank web-search credential input should preserve the existing inline credential"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn interactive_onboard_only_shows_large_logo_on_the_initial_screen() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     unsafe {
@@ -1350,12 +1580,14 @@ async fn interactive_onboard_only_shows_large_logo_on_the_initial_screen() {
             provider: None,
             model: None,
             api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
             personality: None,
             memory_profile: None,
             system_prompt: None,
             skip_model_probe: true,
         },
-        ["y", "1", "2", "", "", "", "", "", "", "y"],
+        ["y", "1", "2", "", "", "", "", "", "", "", "y"],
         None,
         None,
     )
@@ -1449,6 +1681,8 @@ requires_openai_auth = true
             provider: None,
             model: None,
             api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
             personality: None,
             memory_profile: None,
             system_prompt: None,
@@ -1490,6 +1724,8 @@ requires_openai_auth = true
             provider: None,
             model: None,
             api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
             personality: None,
             memory_profile: None,
             system_prompt: None,
@@ -2275,7 +2511,7 @@ fn onboard_presentation_review_and_shortcut_copy_stays_canonical() {
     let guided = loongclaw_daemon::onboard_presentation::review_flow_copy(
         loongclaw_daemon::onboard_presentation::ReviewFlowKind::Guided,
     );
-    assert_eq!(guided.progress_line, "step 7 of 7 · review");
+    assert_eq!(guided.progress_line, "step 8 of 8 · review");
     assert_eq!(guided.header_subtitle, "review setup");
 
     let quick_current = loongclaw_daemon::onboard_presentation::review_flow_copy(
@@ -3012,7 +3248,7 @@ fn onboard_provider_selection_screen_includes_focus_title_and_choices() {
         "provider choice screen should use a focused decision title: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line == "step 1 of 7 · provider"),
+        lines.iter().any(|line| line == "step 1 of 8 · provider"),
         "provider choice screen should keep the guided-flow progress context inside the screen: {lines:#?}"
     );
     assert!(
@@ -3436,6 +3672,8 @@ fn onboard_current_setup_shortcut_is_limited_to_healthy_interactive_keep_flow() 
         provider: None,
         model: None,
         api_key_env: None,
+        web_search_provider: None,
+        web_search_api_key_env: None,
         personality: None,
         memory_profile: None,
         system_prompt: None,
@@ -3469,6 +3707,63 @@ fn onboard_current_setup_shortcut_is_limited_to_healthy_interactive_keep_flow() 
             loongclaw_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup,
         ),
         "repairable setups should stay on the explicit review/edit path"
+    );
+}
+
+#[test]
+fn onboard_current_setup_shortcut_is_disabled_by_web_search_provider_override_env() {
+    let _guard = EnvVarGuard::set("LOONGCLAW_WEB_SEARCH_PROVIDER", "tavily");
+    let options = loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+        output: None,
+        force: false,
+        non_interactive: false,
+        accept_risk: false,
+        provider: None,
+        model: None,
+        api_key_env: None,
+        web_search_provider: None,
+        web_search_api_key_env: None,
+        personality: None,
+        memory_profile: None,
+        system_prompt: None,
+        skip_model_probe: false,
+    };
+
+    assert!(
+        !loongclaw_daemon::onboard_cli::should_offer_current_setup_shortcut(
+            &options,
+            loongclaw_daemon::migration::types::CurrentSetupState::Healthy,
+            loongclaw_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup,
+        ),
+        "an explicit web-search provider override should force the detailed onboarding path"
+    );
+}
+
+#[test]
+fn onboard_current_setup_shortcut_is_disabled_by_web_search_provider_option() {
+    let options = loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+        output: None,
+        force: false,
+        non_interactive: false,
+        accept_risk: false,
+        provider: None,
+        model: None,
+        api_key_env: None,
+        web_search_provider: Some("tavily".to_owned()),
+        web_search_api_key_env: None,
+        personality: None,
+        memory_profile: None,
+        system_prompt: None,
+        skip_model_probe: false,
+    };
+
+    assert!(
+        !loongclaw_daemon::onboard_cli::should_offer_current_setup_shortcut(
+            &options,
+            loongclaw_daemon::migration::types::CurrentSetupState::Healthy,
+            loongclaw_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup,
+        ),
+        "an explicit --web-search-provider option should force the detailed onboarding path"
     );
 }
 
@@ -3552,6 +3847,8 @@ fn onboard_detected_setup_shortcut_is_limited_to_interactive_import_flow_with_de
         provider: None,
         model: None,
         api_key_env: None,
+        web_search_provider: None,
+        web_search_api_key_env: None,
         personality: None,
         memory_profile: None,
         system_prompt: None,
@@ -3606,6 +3903,75 @@ fn onboard_detected_setup_shortcut_is_limited_to_interactive_import_flow_with_de
             &default_provider_plan,
         ),
         "the detected-setup fast lane should stay scoped to detected-setup entry choices"
+    );
+}
+
+#[test]
+fn onboard_detected_setup_shortcut_is_disabled_by_web_search_provider_override_env() {
+    let _guard = EnvVarGuard::set("LOONGCLAW_WEB_SEARCH_PROVIDER", "tavily");
+    let options = loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+        output: None,
+        force: false,
+        non_interactive: false,
+        accept_risk: false,
+        provider: None,
+        model: None,
+        api_key_env: None,
+        web_search_provider: None,
+        web_search_api_key_env: None,
+        personality: None,
+        memory_profile: None,
+        system_prompt: None,
+        skip_model_probe: false,
+    };
+    let plan = loongclaw_daemon::migration::ProviderSelectionPlan {
+        imported_choices: Vec::new(),
+        default_kind: Some(mvp::config::ProviderKind::Openai),
+        default_profile_id: Some("openai".to_owned()),
+        requires_explicit_choice: false,
+    };
+
+    assert!(
+        !loongclaw_daemon::onboard_cli::should_offer_detected_setup_shortcut(
+            &options,
+            loongclaw_daemon::onboard_cli::OnboardEntryChoice::ImportDetectedSetup,
+            &plan,
+        ),
+        "an explicit web-search provider override should force the detailed detected-setup path"
+    );
+}
+
+#[test]
+fn onboard_detected_setup_shortcut_is_disabled_by_web_search_provider_option() {
+    let options = loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+        output: None,
+        force: false,
+        non_interactive: false,
+        accept_risk: false,
+        provider: None,
+        model: None,
+        api_key_env: None,
+        web_search_provider: Some("tavily".to_owned()),
+        web_search_api_key_env: None,
+        personality: None,
+        memory_profile: None,
+        system_prompt: None,
+        skip_model_probe: false,
+    };
+    let plan = loongclaw_daemon::migration::ProviderSelectionPlan {
+        imported_choices: Vec::new(),
+        default_kind: Some(mvp::config::ProviderKind::Openai),
+        default_profile_id: Some("openai".to_owned()),
+        requires_explicit_choice: false,
+    };
+
+    assert!(
+        !loongclaw_daemon::onboard_cli::should_offer_detected_setup_shortcut(
+            &options,
+            loongclaw_daemon::onboard_cli::OnboardEntryChoice::ImportDetectedSetup,
+            &plan,
+        ),
+        "an explicit --web-search-provider option should force the detailed detected-setup path"
     );
 }
 
@@ -4224,7 +4590,7 @@ fn onboard_model_selection_screen_keeps_provider_context() {
         "model screen should use a focused title: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line == "step 2 of 7 · model"),
+        lines.iter().any(|line| line == "step 2 of 8 · model"),
         "model screen should include guided progress context without relying on an external step header: {lines:#?}"
     );
     assert!(
@@ -4302,7 +4668,7 @@ fn onboard_model_selection_screen_wraps_compact_header_and_progress_on_narrow_wi
         "narrow model screen should split the compact header instead of forcing brand and version onto one line: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line == "step 2 of 7 · model"),
+        lines.iter().any(|line| line == "step 2 of 8 · model"),
         "narrow model screen should still keep the step context visible: {lines:#?}"
     );
 }
@@ -4328,7 +4694,7 @@ fn onboard_api_key_env_screen_explains_suggested_env_and_blank_behavior() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "step 3 of 7 · credential source"),
+            .any(|line| line == "step 3 of 8 · credential source"),
         "credential-env screen should include guided progress context inside the screen: {lines:#?}"
     );
     assert!(
@@ -4436,7 +4802,7 @@ fn onboard_api_key_env_screen_wraps_progress_line_on_narrow_width() {
         "credential-env screen should keep the progress line within narrow terminal widths: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line == "step 3 of 7 ·"),
+        lines.iter().any(|line| line == "step 3 of 8 ·"),
         "narrow credential-env screen should keep the step label on the first wrapped line: {lines:#?}"
     );
     assert!(
@@ -4492,7 +4858,7 @@ fn onboard_system_prompt_screen_explains_blank_behavior() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "step 4 of 6 · system prompt"),
+            .any(|line| line == "step 4 of 7 · system prompt"),
         "system-prompt screen should include guided progress context inside the screen: {lines:#?}"
     );
     assert!(
@@ -4582,7 +4948,7 @@ fn onboard_personality_selection_screen_shows_native_personality_choices() {
         "personality screen should use a focused title: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line == "step 4 of 7 · personality"),
+        lines.iter().any(|line| line == "step 4 of 8 · personality"),
         "personality screen should surface the native prompt-pack progress step: {lines:#?}"
     );
     assert!(
@@ -4609,7 +4975,7 @@ fn onboard_prompt_addendum_screen_explains_keep_and_clear_behavior() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "step 5 of 7 · prompt addendum"),
+            .any(|line| line == "step 5 of 8 · prompt addendum"),
         "prompt-addendum screen should surface the native prompt-pack progress step: {lines:#?}"
     );
     assert!(
@@ -4645,7 +5011,7 @@ fn onboard_memory_profile_screen_shows_supported_profiles() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "step 6 of 7 · memory profile"),
+            .any(|line| line == "step 6 of 8 · memory profile"),
         "memory-profile screen should surface the native prompt-pack progress step: {lines:#?}"
     );
     assert!(
@@ -4974,7 +5340,7 @@ fn onboard_preflight_screen_summarizes_status_counts_and_guidance() {
         "preflight screen should use a focused title: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line == "step 7 of 7 · review"),
+        lines.iter().any(|line| line == "step 8 of 8 · review"),
         "preflight screen should stay anchored to the review step: {lines:#?}"
     );
     assert!(
@@ -5095,7 +5461,7 @@ fn current_setup_preflight_screen_uses_quick_review_progress_copy() {
         "current-setup preflight should use quick-review progress copy: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| line != "step 7 of 7 · review"),
+        lines.iter().all(|line| line != "step 8 of 8 · review"),
         "current-setup preflight should not reuse the guided step progress copy: {lines:#?}"
     );
 }
@@ -5121,7 +5487,7 @@ fn detected_setup_preflight_screen_uses_quick_review_progress_copy() {
         "detected-setup preflight should use quick-review progress copy: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| line != "step 7 of 7 · review"),
+        lines.iter().all(|line| line != "step 8 of 8 · review"),
         "detected-setup preflight should not reuse the guided step progress copy: {lines:#?}"
     );
 }
@@ -5208,7 +5574,7 @@ fn current_setup_write_confirmation_screen_uses_quick_review_progress_copy() {
         "current-setup write-confirm should use quick-review progress copy: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| line != "step 7 of 7 · review"),
+        lines.iter().all(|line| line != "step 8 of 8 · review"),
         "current-setup write-confirm should not reuse the guided step progress copy: {lines:#?}"
     );
 }
@@ -5229,7 +5595,7 @@ fn detected_setup_write_confirmation_screen_uses_quick_review_progress_copy() {
         "detected-setup write-confirm should use quick-review progress copy: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| line != "step 7 of 7 · review"),
+        lines.iter().all(|line| line != "step 8 of 8 · review"),
         "detected-setup write-confirm should not reuse the guided step progress copy: {lines:#?}"
     );
 }
@@ -5262,6 +5628,8 @@ async fn onboard_current_setup_shortcut_flow_skips_detailed_edit_screens() {
             provider: None,
             model: None,
             api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
             personality: None,
             memory_profile: None,
             system_prompt: None,
@@ -5364,6 +5732,8 @@ requires_openai_auth = true
             provider: None,
             model: None,
             api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
             personality: None,
             memory_profile: None,
             system_prompt: None,
@@ -5461,6 +5831,8 @@ requires_openai_auth = true
             provider: None,
             model: None,
             api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
             personality: None,
             memory_profile: None,
             system_prompt: None,
@@ -5517,6 +5889,8 @@ requires_openai_auth = true
             provider: None,
             model: None,
             api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
             personality: None,
             memory_profile: None,
             system_prompt: None,
@@ -5573,6 +5947,8 @@ async fn onboard_current_setup_adjustments_preserve_unchanged_domain_actions_in_
             provider: None,
             model: None,
             api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
             personality: None,
             memory_profile: None,
             system_prompt: None,
@@ -5587,6 +5963,7 @@ async fn onboard_current_setup_adjustments_preserve_unchanged_domain_actions_in_
             String::new(),
             "custom review prompt".to_owned(),
             String::new(),
+            String::new(),
             "y".to_owned(),
             "y".to_owned(),
             "o".to_owned(),
@@ -5597,7 +5974,7 @@ async fn onboard_current_setup_adjustments_preserve_unchanged_domain_actions_in_
     .await
     .expect("run scripted current-setup onboarding with adjustments");
 
-    let review_lines = extract_review_section_lines(&transcript, "step 7 of 7 · review");
+    let review_lines = extract_review_section_lines(&transcript, "step 8 of 8 · review");
     let has_domain_action = |domain_label: &str, action_label: &str| {
         review_lines.iter().enumerate().any(|(index, line)| {
             line.contains(&format!("- {domain_label} ["))
@@ -5674,6 +6051,8 @@ async fn onboard_current_setup_adjustments_capture_personality_and_memory_profil
             provider: None,
             model: None,
             api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
             personality: None,
             memory_profile: None,
             system_prompt: None,
@@ -5688,6 +6067,7 @@ async fn onboard_current_setup_adjustments_capture_personality_and_memory_profil
             "2".to_owned(),
             String::new(),
             "3".to_owned(),
+            String::new(),
             "y".to_owned(),
             "y".to_owned(),
             "o".to_owned(),
@@ -5700,15 +6080,15 @@ async fn onboard_current_setup_adjustments_capture_personality_and_memory_profil
 
     let joined = transcript.join("\n");
     assert!(
-        joined.contains("step 4 of 7 · personality"),
+        joined.contains("step 4 of 8 · personality"),
         "guided current-setup adjustments should expose a dedicated personality step: {transcript:#?}"
     );
     assert!(
-        joined.contains("step 5 of 7 · prompt addendum"),
+        joined.contains("step 5 of 8 · prompt addendum"),
         "guided current-setup adjustments should expose a dedicated prompt-addendum step: {transcript:#?}"
     );
     assert!(
-        joined.contains("step 6 of 7 · memory profile"),
+        joined.contains("step 6 of 8 · memory profile"),
         "guided current-setup adjustments should expose a dedicated memory-profile step: {transcript:#?}"
     );
 
@@ -5741,6 +6121,8 @@ fn onboard_interactive_flow_defaults_back_to_native_prompt_pack_even_from_inline
             provider: None,
             model: None,
             api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
             personality: None,
             memory_profile: None,
             system_prompt: None,
@@ -5787,6 +6169,8 @@ requires_openai_auth = true
             provider: None,
             model: None,
             api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
             personality: None,
             memory_profile: None,
             system_prompt: None,
@@ -5802,6 +6186,7 @@ requires_openai_auth = true
             "",
             "",
             "",
+            "",
             "y",
             "y",
         ],
@@ -5811,7 +6196,7 @@ requires_openai_auth = true
     .await
     .expect("run scripted detected-setup onboarding with adjustments");
 
-    let review_lines = extract_review_section_lines(&transcript, "step 7 of 7 · review");
+    let review_lines = extract_review_section_lines(&transcript, "step 8 of 8 · review");
     let has_domain_action = |domain_label: &str, action_label: &str| {
         review_lines.iter().enumerate().any(|(index, line)| {
             line.contains(&format!("- {domain_label} ["))
@@ -5944,7 +6329,7 @@ fn onboard_review_lines_use_compact_header() {
         "review screen should retain a clear review heading under the brand block: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line == "step 7 of 7 · review"),
+        lines.iter().any(|line| line == "step 8 of 8 · review"),
         "review screen should include guided progress context inside the screen: {lines:#?}"
     );
 }
@@ -5989,6 +6374,18 @@ fn onboard_review_lines_include_core_setup_summary_for_fresh_setup() {
             .iter()
             .any(|line| line.contains("- memory profile: window_only")),
         "review should surface the selected memory profile during onboarding: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- web search: DuckDuckGo")),
+        "review should surface the selected web-search provider during onboarding: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("- web search credential: not required")),
+        "review should explain when the chosen web-search provider does not require credentials: {lines:#?}"
     );
 }
 
@@ -6075,7 +6472,7 @@ fn current_setup_review_lines_use_quick_review_progress_copy() {
         "current-setup review should use quick-review progress copy: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| line != "step 7 of 7 · review"),
+        lines.iter().all(|line| line != "step 8 of 8 · review"),
         "current-setup review should not reuse the guided step progress copy: {lines:#?}"
     );
 }
@@ -6096,7 +6493,7 @@ fn detected_setup_review_lines_use_quick_review_progress_copy() {
         "detected-setup review should use quick-review progress copy: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| line != "step 7 of 7 · review"),
+        lines.iter().all(|line| line != "step 8 of 8 · review"),
         "detected-setup review should not reuse the guided step progress copy: {lines:#?}"
     );
 }
@@ -6404,6 +6801,11 @@ fn onboarding_success_summary_reports_existing_config_kept() {
         personality: Some("calm_engineering".to_owned()),
         prompt_addendum: None,
         memory_profile: "window_only".to_owned(),
+        web_search_provider: "DuckDuckGo".to_owned(),
+        web_search_credential: Some(loongclaw_daemon::onboard_cli::OnboardingCredentialSummary {
+            label: "web search credential",
+            value: "not required".to_owned(),
+        }),
         memory_path: None,
         channels: vec!["cli".to_owned()],
         suggested_channels: Vec::new(),
@@ -6465,6 +6867,29 @@ fn onboarding_success_summary_reports_active_provider_and_saved_profiles() {
 }
 
 #[test]
+fn onboarding_success_summary_reports_web_search_provider_and_credential() {
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary = loongclaw_daemon::onboard_cli::build_onboarding_success_summary(
+        &path,
+        &mvp::config::LoongClawConfig::default(),
+        None,
+    );
+    let lines =
+        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+
+    assert!(
+        lines.iter().any(|line| line == "- web search: DuckDuckGo"),
+        "success summary should surface the selected web-search provider: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- web search credential: not required"),
+        "success summary should explain when the selected web-search provider does not need a credential: {lines:#?}"
+    );
+}
+
+#[test]
 fn onboarding_success_summary_groups_domain_outcomes_by_decision() {
     let summary = loongclaw_daemon::onboard_cli::OnboardingSuccessSummary {
         import_source: Some("suggested starting point".to_owned()),
@@ -6483,6 +6908,11 @@ fn onboarding_success_summary_groups_domain_outcomes_by_decision() {
         personality: Some("friendly_collab".to_owned()),
         prompt_addendum: Some("Keep answers direct.".to_owned()),
         memory_profile: "profile_plus_window".to_owned(),
+        web_search_provider: "DuckDuckGo".to_owned(),
+        web_search_credential: Some(loongclaw_daemon::onboard_cli::OnboardingCredentialSummary {
+            label: "web search credential",
+            value: "not required".to_owned(),
+        }),
         memory_path: None,
         channels: vec!["cli".to_owned()],
         suggested_channels: Vec::new(),
@@ -6549,6 +6979,11 @@ fn onboarding_success_summary_wraps_domain_outcomes_for_narrow_width() {
         personality: Some("friendly_collab".to_owned()),
         prompt_addendum: Some("Keep answers direct.".to_owned()),
         memory_profile: "profile_plus_window".to_owned(),
+        web_search_provider: "DuckDuckGo".to_owned(),
+        web_search_credential: Some(loongclaw_daemon::onboard_cli::OnboardingCredentialSummary {
+            label: "web search credential",
+            value: "not required".to_owned(),
+        }),
         memory_path: None,
         channels: vec!["cli".to_owned()],
         suggested_channels: Vec::new(),

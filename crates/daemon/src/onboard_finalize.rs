@@ -40,6 +40,8 @@ pub struct OnboardingSuccessSummary {
     pub personality: Option<String>,
     pub prompt_addendum: Option<String>,
     pub memory_profile: String,
+    pub web_search_provider: String,
+    pub web_search_credential: Option<OnboardingCredentialSummary>,
     pub memory_path: Option<String>,
     pub channels: Vec<String>,
     pub suggested_channels: Vec<String>,
@@ -122,6 +124,13 @@ pub(crate) fn build_onboarding_success_summary_with_memory(
     let prompt_mode = crate::onboard_cli::summarize_prompt_mode(config);
     let prompt_addendum = crate::onboard_cli::summarize_prompt_addendum(config);
     let credential = crate::onboard_cli::summarize_provider_credential(&config.provider);
+    let web_search_provider = crate::onboard_cli::web_search_provider_display_name(
+        config.tools.web_search.default_provider.as_str(),
+    );
+    let web_search_credential = crate::onboard_cli::summarize_web_search_provider_credential(
+        config,
+        config.tools.web_search.default_provider.as_str(),
+    );
     let domain_outcomes = collect_onboarding_domain_outcomes(review_candidate);
     let channels = config.enabled_channel_ids();
     let suggested_channels = collect_onboarding_suggested_channels(config);
@@ -140,6 +149,8 @@ pub(crate) fn build_onboarding_success_summary_with_memory(
         personality,
         prompt_addendum,
         memory_profile: config.memory.profile.as_str().to_owned(),
+        web_search_provider,
+        web_search_credential,
         memory_path: memory_path.map(str::to_owned),
         channels,
         suggested_channels,
@@ -510,6 +521,22 @@ fn render_onboarding_success_summary_with_style(
         &summary.memory_profile,
         width,
     ));
+
+    lines.extend(mvp::presentation::render_wrapped_text_line(
+        "- web search: ",
+        &summary.web_search_provider,
+        width,
+    ));
+
+    if let Some(web_search_credential) = summary.web_search_credential.as_ref() {
+        let prefix = format!("- {}: ", web_search_credential.label);
+
+        lines.extend(mvp::presentation::render_wrapped_text_line(
+            &prefix,
+            &web_search_credential.value,
+            width,
+        ));
+    }
 
     if let Some(memory_path) = summary.memory_path.as_deref() {
         lines.extend(mvp::presentation::render_wrapped_text_line(

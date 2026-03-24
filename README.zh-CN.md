@@ -139,6 +139,13 @@ LoongClaw 的目标不只是个人助手。
 安装脚本会优先下载与当前平台匹配的 GitHub Release 二进制，校验 SHA256，
 安装 `loongclaw`，并在需要时直接进入引导式初始化。
 
+当你传入 `--onboard` 时，安装脚本现在会先为 onboarding 注入一个推荐的
+web search 默认 provider。通用默认仍然是无需密钥的 DuckDuckGo；如果本地
+语言/时区/网络探测更像中国大陆环境，则会优先把 Tavily 作为更稳妥的首次默认值。
+如果当前 shell 里已经只暴露出一个可直接使用的搜索凭证，例如
+`PERPLEXITY_API_KEY` 或 `TAVILY_API_KEY`，安装脚本会先优先选择那个
+provider，再退回到地区和连通性启发式。
+
 <details>
 <summary>Linux / macOS</summary>
 
@@ -221,6 +228,26 @@ active_provider = "openai"
 [providers.openai]
 kind = "openai"
 api_key_env = "PROVIDER_API_KEY"
+```
+
+现在 onboarding 也支持选择默认的 web search backend。当前支持
+`duckduckgo`、`brave`、`tavily`、`perplexity`、`exa`、`jina`。
+如果你直接接受默认值，LoongClaw 会在通用场景下使用 DuckDuckGo；当本地
+语言/时区/网络特征更像中国大陆环境时，会优先推荐 Tavily。若你选择的
+provider 需要密钥，onboarding 会立刻继续询问“用哪个环境变量承载这份凭据”，
+并把配置写成 `"${TAVILY_API_KEY}"` 这种 env 引用，而不是要求把密钥明文写进
+配置文件。非交互 onboarding 现在也支持
+`--web-search-provider <provider>` 和 `--web-search-api-key <ENV_NAME>`；
+一旦你显式指定了 provider，LoongClaw 不会再静默回退到 DuckDuckGo。
+
+```toml
+[tools.web_search]
+default_provider = "duckduckgo"
+# brave_api_key = "${BRAVE_API_KEY}"
+# tavily_api_key = "${TAVILY_API_KEY}"
+# perplexity_api_key = "${PERPLEXITY_API_KEY}"
+# exa_api_key = "${EXA_API_KEY}"
+# jina_api_key = "${JINA_API_KEY}"
 ```
 
 Volcengine Coding Plan / ARK 示例：

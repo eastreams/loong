@@ -221,6 +221,52 @@ fn onboard_cli_keeps_legacy_api_key_env_alias() {
 }
 
 #[test]
+fn onboard_cli_accepts_web_search_provider_flag() {
+    let cli = Cli::try_parse_from([
+        "loongclaw",
+        "onboard",
+        "--non-interactive",
+        "--accept-risk",
+        "--web-search-provider",
+        "tavily",
+    ])
+    .expect("`--web-search-provider` should parse");
+
+    match cli.command {
+        Some(Commands::Onboard {
+            web_search_provider,
+            ..
+        }) => {
+            assert_eq!(web_search_provider.as_deref(), Some("tavily"));
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn onboard_cli_accepts_web_search_api_key_flag() {
+    let cli = Cli::try_parse_from([
+        "loongclaw",
+        "onboard",
+        "--non-interactive",
+        "--accept-risk",
+        "--web-search-api-key",
+        "TAVILY_API_KEY",
+    ])
+    .expect("`--web-search-api-key` should parse");
+
+    match cli.command {
+        Some(Commands::Onboard {
+            web_search_api_key_env,
+            ..
+        }) => {
+            assert_eq!(web_search_api_key_env.as_deref(), Some("TAVILY_API_KEY"));
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
 fn onboard_cli_accepts_personality_flag() {
     let cli = Cli::try_parse_from([
         "loongclaw",

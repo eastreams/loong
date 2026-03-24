@@ -66,15 +66,18 @@ pub use tools::{
     DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS, ExternalSkillsConfig, GovernedToolApprovalConfig,
     GovernedToolApprovalMode, MAX_BROWSER_MAX_LINKS, MAX_BROWSER_MAX_SESSIONS,
     MAX_BROWSER_MAX_TEXT_CHARS, MAX_WEB_FETCH_MAX_BYTES, SessionVisibility, ToolConfig,
-    WebSearchToolConfig, WebToolConfig,
-};
-pub(crate) use tools::{
-    WEB_SEARCH_BRAVE_API_KEY_ENV, WEB_SEARCH_TAVILY_API_KEY_ENV, normalize_web_search_provider,
+    WEB_SEARCH_BRAVE_API_KEY_ENV, WEB_SEARCH_EXA_API_KEY_ENV, WEB_SEARCH_JINA_API_KEY_ENV,
+    WEB_SEARCH_JINA_AUTH_TOKEN_ENV, WEB_SEARCH_PERPLEXITY_API_KEY_ENV, WEB_SEARCH_PROVIDER_BRAVE,
+    WEB_SEARCH_PROVIDER_DUCKDUCKGO, WEB_SEARCH_PROVIDER_EXA, WEB_SEARCH_PROVIDER_JINA,
+    WEB_SEARCH_PROVIDER_PERPLEXITY, WEB_SEARCH_PROVIDER_TAVILY, WEB_SEARCH_PROVIDER_VALID_VALUES,
+    WEB_SEARCH_TAVILY_API_KEY_ENV, WebSearchProviderDescriptor, WebSearchToolConfig, WebToolConfig,
+    normalize_web_search_provider, web_search_provider_api_key_env_names,
+    web_search_provider_default_api_key_env, web_search_provider_descriptor,
+    web_search_provider_descriptors,
 };
 #[cfg(feature = "tool-websearch")]
 pub(crate) use tools::{
-    WEB_SEARCH_PROVIDER_DUCKDUCKGO, WEB_SEARCH_PROVIDER_SCHEMA_VALUES,
-    WEB_SEARCH_PROVIDER_VALID_VALUES, web_search_provider_parameter_description,
+    WEB_SEARCH_PROVIDER_SCHEMA_VALUES, web_search_provider_parameter_description,
 };
 
 #[cfg(test)]
