@@ -1,3 +1,5 @@
+//! Shared cryptographic helpers for webhook verification and lease signing.
+
 mod hmac;
 mod timing;
 

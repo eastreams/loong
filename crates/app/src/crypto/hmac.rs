@@ -5,6 +5,10 @@ use crate::crypto::timing_safe_eq;
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// Computes the 32-byte HMAC-SHA256 tag for `message`.
+///
+/// The `Option` mirrors the `Mac::new_from_slice` constructor even though
+/// HMAC-SHA256 is expected to accept arbitrary key lengths.
 #[must_use]
 pub fn compute_hmac_sha256(secret: &[u8], message: &[u8]) -> Option<[u8; 32]> {
     let mut mac = HmacSha256::new_from_slice(secret).ok()?;
@@ -12,6 +16,9 @@ pub fn compute_hmac_sha256(secret: &[u8], message: &[u8]) -> Option<[u8; 32]> {
     Some(mac.finalize().into_bytes().into())
 }
 
+/// Verifies a hex-encoded HMAC-SHA256 signature with constant-time equality.
+///
+/// Malformed hex input returns `false`.
 #[must_use]
 pub fn verify_hmac_sha256(secret: &[u8], message: &[u8], expected_signature_hex: &str) -> bool {
     let Ok(expected_signature) = hex::decode(expected_signature_hex) else {
@@ -39,6 +46,15 @@ mod tests {
     #[test]
     fn verify_hmac_sha256_rejects_malformed_hex() {
         assert!(!verify_hmac_sha256(b"secret", b"payload", "not-hex"));
+    }
+
+    #[test]
+    fn verify_hmac_sha256_rejects_well_formed_mismatch() {
+        let key = [0x0b_u8; 20];
+        let message = b"Hi There";
+        let incorrect = "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff6";
+
+        assert!(!verify_hmac_sha256(&key, message, incorrect));
     }
 
     #[test]

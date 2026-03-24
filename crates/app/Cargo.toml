@@ -59,6 +59,8 @@ cbc = { version = "0.1", optional = true }
 wait-timeout = "0.2"
 tempfile = "3"
 which.workspace = true
+# Kept unconditional because conversation/turn_shared.rs uses Regex to strip
+# leaked <think> tags even when tool-websearch is compiled out.
 regex.workspace = true
 prost = { version = "0.13", optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
