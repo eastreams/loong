@@ -1514,14 +1514,17 @@ pub fn build_channel_onboarding_follow_up_lines(
             .map(|command| format!("\"{command}\""))
             .unwrap_or_else(|| "-".to_owned());
         lines.push(format!(
-            "- {} [{}] strategy={} aliases={} status_command=\"{}\" repair_command={} setup_hint=\"{}\"",
+            "- {} [{}] selection_order={} selection_label=\"{}\" strategy={} aliases={} status_command=\"{}\" repair_command={} setup_hint=\"{}\" blurb=\"{}\"",
             surface.catalog.label,
             surface.catalog.id,
+            surface.catalog.selection_order,
+            surface.catalog.selection_label,
             surface.catalog.onboarding.strategy.as_str(),
             aliases,
             surface.catalog.onboarding.status_command,
             repair_command,
             surface.catalog.onboarding.setup_hint,
+            surface.catalog.blurb,
         ));
     }
 

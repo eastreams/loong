@@ -6763,6 +6763,8 @@ fn build_channel_onboarding_follow_up_lines_reports_manual_and_planned_channels(
     );
     assert!(lines.iter().any(|line| {
         line.contains("Telegram [telegram]")
+            && line.contains("selection_order=10")
+            && line.contains("selection_label=\"personal and group chat bot\"")
             && line.contains("strategy=manual_config")
             && line.contains("status_command=\"loongclaw doctor\"")
             && line.contains("repair_command=\"loongclaw doctor --fix\"")
@@ -6774,8 +6776,17 @@ fn build_channel_onboarding_follow_up_lines_reports_manual_and_planned_channels(
     }));
     assert!(lines.iter().any(|line| {
         line.contains("Discord [discord]")
+            && line.contains("selection_order=40")
+            && line.contains("selection_label=\"community server bot\"")
             && line.contains("strategy=planned")
             && line.contains("repair_command=-")
             && line.contains("status_command=\"loongclaw channels --json\"")
+            && line.contains("blurb=\"Planned Discord gateway")
+    }));
+    assert!(lines.iter().any(|line| {
+        line.contains("Webhook [webhook]")
+            && line.contains("selection_order=110")
+            && line.contains("selection_label=\"generic http integration\"")
+            && line.contains("strategy=planned")
     }));
 }

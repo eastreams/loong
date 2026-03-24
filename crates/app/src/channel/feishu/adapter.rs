@@ -172,10 +172,11 @@ impl FeishuAdapter {
                 .await?;
                 Ok(())
             }
-            ChannelOutboundTargetKind::Conversation => Err(
-                "feishu adapter does not support conversation targets for outbound sends"
-                    .to_owned(),
-            ),
+            ChannelOutboundTargetKind::Conversation
+            | ChannelOutboundTargetKind::Address
+            | ChannelOutboundTargetKind::Endpoint => {
+                Err("feishu adapter only supports message_reply or receive_id targets".to_owned())
+            }
         }
     }
 }

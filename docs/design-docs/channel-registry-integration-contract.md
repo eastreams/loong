@@ -41,6 +41,8 @@ The registry is responsible for:
 
 - canonical `id`
 - `label`
+- selection ordering metadata
+- selection-facing summary text
 - `aliases`
 - `transport`
 - implementation status
@@ -62,11 +64,17 @@ Current required fields are:
 - CLI `command`
 - `availability`
 - `tracks_runtime`
+- supported target kinds
 - static `requirements`
 
 Requirement metadata exists to describe what the operation needs before runtime
 state is even considered. That includes config keys and environment-pointer
 paths such as Telegram bot tokens or Feishu webhook secrets.
+
+Target-kind metadata exists to describe the operator contract for each command
+without pretending every surface routes through a conversation id. Some planned
+surfaces need `address` or `endpoint` targets even before a runtime adapter
+exists.
 
 ### 3. Doctor Metadata Lives Next To Operation Metadata
 
@@ -123,10 +131,12 @@ A stub channel is still expected to be a first-class catalog entry.
 High-quality stubs should include:
 
 - stable canonical id and aliases
+- selection order, selection label, and short blurb
 - transport family
 - operation list
 - capability flags
 - implementation status
+- supported target kinds
 - requirement metadata when known
 
 This keeps future channels visible to operators and avoids later invasive
@@ -174,8 +184,9 @@ When the runtime implementation does not exist yet:
 4. Do not add placeholder runtime builders or fake health logic.
 5. Verify the channel appears correctly in catalog and grouped surfaces.
 
-This is the preferred path for channels such as Discord or Slack before full
-runtime support lands.
+This is the preferred path for channels such as Discord, Slack, LINE, WeCom,
+DingTalk, WhatsApp, Email, or generic Webhook surfaces before full runtime
+support lands.
 
 ## Anti-Patterns
 

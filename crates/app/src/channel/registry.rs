@@ -14,6 +14,29 @@ use super::{ChannelCatalogTargetKind, ChannelOperationRuntime, ChannelPlatform, 
 pub const CHANNEL_OPERATION_SEND_ID: &str = "send";
 pub const CHANNEL_OPERATION_SERVE_ID: &str = "serve";
 
+const DISCORD_BOT_TOKEN_ENV: &str = "DISCORD_BOT_TOKEN";
+const DISCORD_APPLICATION_ID_ENV: &str = "DISCORD_APPLICATION_ID";
+const SLACK_BOT_TOKEN_ENV: &str = "SLACK_BOT_TOKEN";
+const SLACK_APP_TOKEN_ENV: &str = "SLACK_APP_TOKEN";
+const SLACK_SIGNING_SECRET_ENV: &str = "SLACK_SIGNING_SECRET";
+const LINE_CHANNEL_ACCESS_TOKEN_ENV: &str = "LINE_CHANNEL_ACCESS_TOKEN";
+const LINE_CHANNEL_SECRET_ENV: &str = "LINE_CHANNEL_SECRET";
+const WECOM_CORP_ID_ENV: &str = "WECOM_CORP_ID";
+const WECOM_AGENT_ID_ENV: &str = "WECOM_AGENT_ID";
+const WECOM_CORP_SECRET_ENV: &str = "WECOM_CORP_SECRET";
+const DINGTALK_APP_KEY_ENV: &str = "DINGTALK_APP_KEY";
+const DINGTALK_APP_SECRET_ENV: &str = "DINGTALK_APP_SECRET";
+const DINGTALK_ROBOT_CODE_ENV: &str = "DINGTALK_ROBOT_CODE";
+const WHATSAPP_ACCESS_TOKEN_ENV: &str = "WHATSAPP_ACCESS_TOKEN";
+const WHATSAPP_PHONE_NUMBER_ID_ENV: &str = "WHATSAPP_PHONE_NUMBER_ID";
+const WHATSAPP_VERIFY_TOKEN_ENV: &str = "WHATSAPP_VERIFY_TOKEN";
+const EMAIL_SMTP_USERNAME_ENV: &str = "EMAIL_SMTP_USERNAME";
+const EMAIL_SMTP_PASSWORD_ENV: &str = "EMAIL_SMTP_PASSWORD";
+const EMAIL_IMAP_USERNAME_ENV: &str = "EMAIL_IMAP_USERNAME";
+const EMAIL_IMAP_PASSWORD_ENV: &str = "EMAIL_IMAP_PASSWORD";
+const WEBHOOK_AUTH_TOKEN_ENV: &str = "WEBHOOK_AUTH_TOKEN";
+const WEBHOOK_SIGNING_SECRET_ENV: &str = "WEBHOOK_SIGNING_SECRET";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelRuntimeCommandDescriptor {
     pub channel_id: &'static str,
@@ -209,6 +232,9 @@ impl ChannelCatalogImplementationStatus {
 pub struct ChannelCatalogEntry {
     pub id: &'static str,
     pub label: &'static str,
+    pub selection_order: u16,
+    pub selection_label: &'static str,
+    pub blurb: &'static str,
     pub implementation_status: ChannelCatalogImplementationStatus,
     pub capabilities: Vec<ChannelCapability>,
     pub aliases: Vec<&'static str>,
@@ -318,6 +344,9 @@ type ChannelSnapshotBuilder =
 struct ChannelRegistryDescriptor {
     id: &'static str,
     runtime: Option<ChannelRuntimeDescriptor>,
+    selection_order: u16,
+    selection_label: &'static str,
+    blurb: &'static str,
     implementation_status: ChannelCatalogImplementationStatus,
     capabilities: &'static [ChannelCapability],
     label: &'static str,
@@ -734,13 +763,72 @@ const MATRIX_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboard
     repair_command: Some("loongclaw doctor --fix"),
 };
 
+const PLANNED_CHANNEL_CAPABILITIES: &[ChannelCapability] = &[
+    ChannelCapability::MultiAccount,
+    ChannelCapability::Send,
+    ChannelCapability::Serve,
+    ChannelCapability::RuntimeTracking,
+];
+
+const DISCORD_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["discord.enabled", "discord.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const DISCORD_BOT_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "bot_token",
+        label: "bot token",
+        config_paths: &["discord.bot_token", "discord.accounts.<account>.bot_token"],
+        env_pointer_paths: &[
+            "discord.bot_token_env",
+            "discord.accounts.<account>.bot_token_env",
+        ],
+        default_env_var: Some(DISCORD_BOT_TOKEN_ENV),
+    };
+const DISCORD_APPLICATION_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "application_id",
+        label: "application id",
+        config_paths: &[
+            "discord.application_id",
+            "discord.accounts.<account>.application_id",
+        ],
+        env_pointer_paths: &[
+            "discord.application_id_env",
+            "discord.accounts.<account>.application_id_env",
+        ],
+        default_env_var: Some(DISCORD_APPLICATION_ID_ENV),
+    };
+const DISCORD_ALLOWED_GUILD_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_guild_ids",
+        label: "allowed guild ids",
+        config_paths: &[
+            "discord.allowed_guild_ids",
+            "discord.accounts.<account>.allowed_guild_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const DISCORD_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] =
+    &[DISCORD_ENABLED_REQUIREMENT, DISCORD_BOT_TOKEN_REQUIREMENT];
+const DISCORD_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    DISCORD_ENABLED_REQUIREMENT,
+    DISCORD_BOT_TOKEN_REQUIREMENT,
+    DISCORD_APPLICATION_ID_REQUIREMENT,
+    DISCORD_ALLOWED_GUILD_IDS_REQUIREMENT,
+];
 const DISCORD_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "direct send",
     command: "discord-send",
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: false,
-    requirements: &[],
+    requirements: DISCORD_SEND_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
@@ -750,7 +838,7 @@ const DISCORD_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
     command: "discord-serve",
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
-    requirements: &[],
+    requirements: DISCORD_SERVE_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
@@ -764,25 +852,84 @@ const DISCORD_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
         doctor_checks: &[],
     },
 ];
-const DISCORD_CAPABILITIES: &[ChannelCapability] = &[
-    ChannelCapability::Send,
-    ChannelCapability::Serve,
-    ChannelCapability::RuntimeTracking,
-];
 const DISCORD_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::Planned,
-    setup_hint: "stub surface only; runtime adapter and onboarding flow are not implemented yet",
+    setup_hint: "planned Discord gateway surface; catalog metadata reflects the intended bot token, application id, and guild allowlist contract, but no runtime adapter is implemented yet",
     status_command: "loongclaw channels --json",
     repair_command: None,
 };
 
+const SLACK_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["slack.enabled", "slack.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const SLACK_BOT_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "bot_token",
+        label: "bot token",
+        config_paths: &["slack.bot_token", "slack.accounts.<account>.bot_token"],
+        env_pointer_paths: &[
+            "slack.bot_token_env",
+            "slack.accounts.<account>.bot_token_env",
+        ],
+        default_env_var: Some(SLACK_BOT_TOKEN_ENV),
+    };
+const SLACK_APP_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "app_token",
+        label: "socket mode app token",
+        config_paths: &["slack.app_token", "slack.accounts.<account>.app_token"],
+        env_pointer_paths: &[
+            "slack.app_token_env",
+            "slack.accounts.<account>.app_token_env",
+        ],
+        default_env_var: Some(SLACK_APP_TOKEN_ENV),
+    };
+const SLACK_SIGNING_SECRET_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "signing_secret",
+        label: "signing secret",
+        config_paths: &[
+            "slack.signing_secret",
+            "slack.accounts.<account>.signing_secret",
+        ],
+        env_pointer_paths: &[
+            "slack.signing_secret_env",
+            "slack.accounts.<account>.signing_secret_env",
+        ],
+        default_env_var: Some(SLACK_SIGNING_SECRET_ENV),
+    };
+const SLACK_ALLOWED_CHANNEL_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_channel_ids",
+        label: "allowed channel ids",
+        config_paths: &[
+            "slack.allowed_channel_ids",
+            "slack.accounts.<account>.allowed_channel_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const SLACK_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] =
+    &[SLACK_ENABLED_REQUIREMENT, SLACK_BOT_TOKEN_REQUIREMENT];
+const SLACK_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    SLACK_ENABLED_REQUIREMENT,
+    SLACK_BOT_TOKEN_REQUIREMENT,
+    SLACK_APP_TOKEN_REQUIREMENT,
+    SLACK_SIGNING_SECRET_REQUIREMENT,
+    SLACK_ALLOWED_CHANNEL_IDS_REQUIREMENT,
+];
 const SLACK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "direct send",
     command: "slack-send",
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: false,
-    requirements: &[],
+    requirements: SLACK_SEND_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
@@ -792,7 +939,7 @@ const SLACK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     command: "slack-serve",
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
-    requirements: &[],
+    requirements: SLACK_SERVE_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
@@ -806,14 +953,641 @@ const SLACK_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
         doctor_checks: &[],
     },
 ];
-const SLACK_CAPABILITIES: &[ChannelCapability] = &[
-    ChannelCapability::Send,
-    ChannelCapability::Serve,
-    ChannelCapability::RuntimeTracking,
-];
 const SLACK_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::Planned,
-    setup_hint: "stub surface only; runtime adapter and onboarding flow are not implemented yet",
+    setup_hint: "planned Slack Events API or Socket Mode surface; catalog metadata reflects the intended bot token, app token, signing secret, and allowlist contract, but no runtime adapter is implemented yet",
+    status_command: "loongclaw channels --json",
+    repair_command: None,
+};
+
+const LINE_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["line.enabled", "line.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const LINE_CHANNEL_ACCESS_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "channel_access_token",
+        label: "channel access token",
+        config_paths: &[
+            "line.channel_access_token",
+            "line.accounts.<account>.channel_access_token",
+        ],
+        env_pointer_paths: &[
+            "line.channel_access_token_env",
+            "line.accounts.<account>.channel_access_token_env",
+        ],
+        default_env_var: Some(LINE_CHANNEL_ACCESS_TOKEN_ENV),
+    };
+const LINE_CHANNEL_SECRET_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "channel_secret",
+        label: "channel secret",
+        config_paths: &[
+            "line.channel_secret",
+            "line.accounts.<account>.channel_secret",
+        ],
+        env_pointer_paths: &[
+            "line.channel_secret_env",
+            "line.accounts.<account>.channel_secret_env",
+        ],
+        default_env_var: Some(LINE_CHANNEL_SECRET_ENV),
+    };
+const LINE_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    LINE_ENABLED_REQUIREMENT,
+    LINE_CHANNEL_ACCESS_TOKEN_REQUIREMENT,
+];
+const LINE_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    LINE_ENABLED_REQUIREMENT,
+    LINE_CHANNEL_ACCESS_TOKEN_REQUIREMENT,
+    LINE_CHANNEL_SECRET_REQUIREMENT,
+];
+const LINE_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "push send",
+    command: "line-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: LINE_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
+};
+const LINE_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "webhook reply loop",
+    command: "line-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: LINE_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
+};
+const LINE_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: LINE_SEND_OPERATION,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: LINE_SERVE_OPERATION,
+        doctor_checks: &[],
+    },
+];
+const LINE_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::Planned,
+    setup_hint: "planned LINE Messaging API surface; catalog metadata reflects the intended channel access token and webhook secret contract, but no runtime adapter is implemented yet",
+    status_command: "loongclaw channels --json",
+    repair_command: None,
+};
+
+const WECOM_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["wecom.enabled", "wecom.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const WECOM_CORP_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "corp_id",
+        label: "corp id",
+        config_paths: &["wecom.corp_id", "wecom.accounts.<account>.corp_id"],
+        env_pointer_paths: &["wecom.corp_id_env", "wecom.accounts.<account>.corp_id_env"],
+        default_env_var: Some(WECOM_CORP_ID_ENV),
+    };
+const WECOM_AGENT_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "agent_id",
+        label: "agent id",
+        config_paths: &["wecom.agent_id", "wecom.accounts.<account>.agent_id"],
+        env_pointer_paths: &[
+            "wecom.agent_id_env",
+            "wecom.accounts.<account>.agent_id_env",
+        ],
+        default_env_var: Some(WECOM_AGENT_ID_ENV),
+    };
+const WECOM_CORP_SECRET_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "corp_secret",
+        label: "corp secret",
+        config_paths: &["wecom.corp_secret", "wecom.accounts.<account>.corp_secret"],
+        env_pointer_paths: &[
+            "wecom.corp_secret_env",
+            "wecom.accounts.<account>.corp_secret_env",
+        ],
+        default_env_var: Some(WECOM_CORP_SECRET_ENV),
+    };
+const WECOM_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "token",
+        label: "callback token",
+        config_paths: &["wecom.token", "wecom.accounts.<account>.token"],
+        env_pointer_paths: &["wecom.token_env", "wecom.accounts.<account>.token_env"],
+        default_env_var: None,
+    };
+const WECOM_ENCODING_AES_KEY_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "encoding_aes_key",
+        label: "encoding aes key",
+        config_paths: &[
+            "wecom.encoding_aes_key",
+            "wecom.accounts.<account>.encoding_aes_key",
+        ],
+        env_pointer_paths: &[
+            "wecom.encoding_aes_key_env",
+            "wecom.accounts.<account>.encoding_aes_key_env",
+        ],
+        default_env_var: None,
+    };
+const WECOM_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    WECOM_ENABLED_REQUIREMENT,
+    WECOM_CORP_ID_REQUIREMENT,
+    WECOM_AGENT_ID_REQUIREMENT,
+    WECOM_CORP_SECRET_REQUIREMENT,
+];
+const WECOM_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    WECOM_ENABLED_REQUIREMENT,
+    WECOM_CORP_ID_REQUIREMENT,
+    WECOM_AGENT_ID_REQUIREMENT,
+    WECOM_CORP_SECRET_REQUIREMENT,
+    WECOM_TOKEN_REQUIREMENT,
+    WECOM_ENCODING_AES_KEY_REQUIREMENT,
+];
+const WECOM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "app message send",
+    command: "wecom-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: WECOM_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
+};
+const WECOM_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "callback reply service",
+    command: "wecom-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: WECOM_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
+};
+const WECOM_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: WECOM_SEND_OPERATION,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: WECOM_SERVE_OPERATION,
+        doctor_checks: &[],
+    },
+];
+const WECOM_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::Planned,
+    setup_hint: "planned WeCom callback surface; catalog metadata reflects the intended corp id, agent id, corp secret, and callback secret contract, but no runtime adapter is implemented yet",
+    status_command: "loongclaw channels --json",
+    repair_command: None,
+};
+
+const DINGTALK_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["dingtalk.enabled", "dingtalk.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const DINGTALK_APP_KEY_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "app_key",
+        label: "app key",
+        config_paths: &["dingtalk.app_key", "dingtalk.accounts.<account>.app_key"],
+        env_pointer_paths: &[
+            "dingtalk.app_key_env",
+            "dingtalk.accounts.<account>.app_key_env",
+        ],
+        default_env_var: Some(DINGTALK_APP_KEY_ENV),
+    };
+const DINGTALK_APP_SECRET_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "app_secret",
+        label: "app secret",
+        config_paths: &[
+            "dingtalk.app_secret",
+            "dingtalk.accounts.<account>.app_secret",
+        ],
+        env_pointer_paths: &[
+            "dingtalk.app_secret_env",
+            "dingtalk.accounts.<account>.app_secret_env",
+        ],
+        default_env_var: Some(DINGTALK_APP_SECRET_ENV),
+    };
+const DINGTALK_ROBOT_CODE_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "robot_code",
+        label: "robot code",
+        config_paths: &[
+            "dingtalk.robot_code",
+            "dingtalk.accounts.<account>.robot_code",
+        ],
+        env_pointer_paths: &[
+            "dingtalk.robot_code_env",
+            "dingtalk.accounts.<account>.robot_code_env",
+        ],
+        default_env_var: Some(DINGTALK_ROBOT_CODE_ENV),
+    };
+const DINGTALK_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    DINGTALK_ENABLED_REQUIREMENT,
+    DINGTALK_APP_KEY_REQUIREMENT,
+    DINGTALK_APP_SECRET_REQUIREMENT,
+    DINGTALK_ROBOT_CODE_REQUIREMENT,
+];
+const DINGTALK_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] =
+    DINGTALK_SEND_REQUIREMENTS;
+const DINGTALK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "robot send",
+    command: "dingtalk-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: DINGTALK_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
+};
+const DINGTALK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "event callback service",
+    command: "dingtalk-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: DINGTALK_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
+};
+const DINGTALK_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: DINGTALK_SEND_OPERATION,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: DINGTALK_SERVE_OPERATION,
+        doctor_checks: &[],
+    },
+];
+const DINGTALK_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::Planned,
+    setup_hint: "planned DingTalk robot surface; catalog metadata reflects the intended app key, app secret, and robot code contract, but no runtime adapter is implemented yet",
+    status_command: "loongclaw channels --json",
+    repair_command: None,
+};
+
+const WHATSAPP_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["whatsapp.enabled", "whatsapp.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const WHATSAPP_ACCESS_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "access_token",
+        label: "cloud api access token",
+        config_paths: &[
+            "whatsapp.access_token",
+            "whatsapp.accounts.<account>.access_token",
+        ],
+        env_pointer_paths: &[
+            "whatsapp.access_token_env",
+            "whatsapp.accounts.<account>.access_token_env",
+        ],
+        default_env_var: Some(WHATSAPP_ACCESS_TOKEN_ENV),
+    };
+const WHATSAPP_PHONE_NUMBER_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "phone_number_id",
+        label: "phone number id",
+        config_paths: &[
+            "whatsapp.phone_number_id",
+            "whatsapp.accounts.<account>.phone_number_id",
+        ],
+        env_pointer_paths: &[
+            "whatsapp.phone_number_id_env",
+            "whatsapp.accounts.<account>.phone_number_id_env",
+        ],
+        default_env_var: Some(WHATSAPP_PHONE_NUMBER_ID_ENV),
+    };
+const WHATSAPP_VERIFY_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "verify_token",
+        label: "webhook verify token",
+        config_paths: &[
+            "whatsapp.verify_token",
+            "whatsapp.accounts.<account>.verify_token",
+        ],
+        env_pointer_paths: &[
+            "whatsapp.verify_token_env",
+            "whatsapp.accounts.<account>.verify_token_env",
+        ],
+        default_env_var: Some(WHATSAPP_VERIFY_TOKEN_ENV),
+    };
+const WHATSAPP_APP_SECRET_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "app_secret",
+        label: "meta app secret",
+        config_paths: &[
+            "whatsapp.app_secret",
+            "whatsapp.accounts.<account>.app_secret",
+        ],
+        env_pointer_paths: &[
+            "whatsapp.app_secret_env",
+            "whatsapp.accounts.<account>.app_secret_env",
+        ],
+        default_env_var: None,
+    };
+const WHATSAPP_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    WHATSAPP_ENABLED_REQUIREMENT,
+    WHATSAPP_ACCESS_TOKEN_REQUIREMENT,
+    WHATSAPP_PHONE_NUMBER_ID_REQUIREMENT,
+];
+const WHATSAPP_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    WHATSAPP_ENABLED_REQUIREMENT,
+    WHATSAPP_ACCESS_TOKEN_REQUIREMENT,
+    WHATSAPP_PHONE_NUMBER_ID_REQUIREMENT,
+    WHATSAPP_VERIFY_TOKEN_REQUIREMENT,
+    WHATSAPP_APP_SECRET_REQUIREMENT,
+];
+const WHATSAPP_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "business send",
+    command: "whatsapp-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: WHATSAPP_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
+};
+const WHATSAPP_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "cloud webhook service",
+    command: "whatsapp-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: WHATSAPP_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
+};
+const WHATSAPP_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: WHATSAPP_SEND_OPERATION,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: WHATSAPP_SERVE_OPERATION,
+        doctor_checks: &[],
+    },
+];
+const WHATSAPP_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::Planned,
+    setup_hint: "planned WhatsApp Cloud API surface; catalog metadata reflects the intended access token, phone number id, webhook verify token, and app secret contract, but no runtime adapter is implemented yet",
+    status_command: "loongclaw channels --json",
+    repair_command: None,
+};
+
+const EMAIL_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["email.enabled", "email.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const EMAIL_SMTP_HOST_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "smtp_host",
+        label: "smtp host",
+        config_paths: &["email.smtp_host", "email.accounts.<account>.smtp_host"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const EMAIL_SMTP_USERNAME_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "smtp_username",
+        label: "smtp username",
+        config_paths: &[
+            "email.smtp_username",
+            "email.accounts.<account>.smtp_username",
+        ],
+        env_pointer_paths: &[
+            "email.smtp_username_env",
+            "email.accounts.<account>.smtp_username_env",
+        ],
+        default_env_var: Some(EMAIL_SMTP_USERNAME_ENV),
+    };
+const EMAIL_SMTP_PASSWORD_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "smtp_password",
+        label: "smtp password",
+        config_paths: &[
+            "email.smtp_password",
+            "email.accounts.<account>.smtp_password",
+        ],
+        env_pointer_paths: &[
+            "email.smtp_password_env",
+            "email.accounts.<account>.smtp_password_env",
+        ],
+        default_env_var: Some(EMAIL_SMTP_PASSWORD_ENV),
+    };
+const EMAIL_FROM_ADDRESS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "from_address",
+        label: "from address",
+        config_paths: &[
+            "email.from_address",
+            "email.accounts.<account>.from_address",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const EMAIL_IMAP_HOST_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "imap_host",
+        label: "imap host",
+        config_paths: &["email.imap_host", "email.accounts.<account>.imap_host"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const EMAIL_IMAP_USERNAME_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "imap_username",
+        label: "imap username",
+        config_paths: &[
+            "email.imap_username",
+            "email.accounts.<account>.imap_username",
+        ],
+        env_pointer_paths: &[
+            "email.imap_username_env",
+            "email.accounts.<account>.imap_username_env",
+        ],
+        default_env_var: Some(EMAIL_IMAP_USERNAME_ENV),
+    };
+const EMAIL_IMAP_PASSWORD_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "imap_password",
+        label: "imap password",
+        config_paths: &[
+            "email.imap_password",
+            "email.accounts.<account>.imap_password",
+        ],
+        env_pointer_paths: &[
+            "email.imap_password_env",
+            "email.accounts.<account>.imap_password_env",
+        ],
+        default_env_var: Some(EMAIL_IMAP_PASSWORD_ENV),
+    };
+const EMAIL_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    EMAIL_ENABLED_REQUIREMENT,
+    EMAIL_SMTP_HOST_REQUIREMENT,
+    EMAIL_SMTP_USERNAME_REQUIREMENT,
+    EMAIL_SMTP_PASSWORD_REQUIREMENT,
+    EMAIL_FROM_ADDRESS_REQUIREMENT,
+];
+const EMAIL_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    EMAIL_ENABLED_REQUIREMENT,
+    EMAIL_IMAP_HOST_REQUIREMENT,
+    EMAIL_IMAP_USERNAME_REQUIREMENT,
+    EMAIL_IMAP_PASSWORD_REQUIREMENT,
+];
+const EMAIL_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "smtp send",
+    command: "email-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: EMAIL_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
+};
+const EMAIL_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "imap reply loop",
+    command: "email-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: EMAIL_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
+};
+const EMAIL_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: EMAIL_SEND_OPERATION,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: EMAIL_SERVE_OPERATION,
+        doctor_checks: &[],
+    },
+];
+const EMAIL_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::Planned,
+    setup_hint: "planned email surface; catalog metadata reflects the intended SMTP send and IMAP reply-loop contract, but no runtime adapter is implemented yet",
+    status_command: "loongclaw channels --json",
+    repair_command: None,
+};
+
+const WEBHOOK_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["webhook.enabled", "webhook.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const WEBHOOK_ENDPOINT_URL_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "endpoint_url",
+        label: "endpoint url",
+        config_paths: &[
+            "webhook.endpoint_url",
+            "webhook.accounts.<account>.endpoint_url",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const WEBHOOK_AUTH_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "auth_token",
+        label: "auth token",
+        config_paths: &[
+            "webhook.auth_token",
+            "webhook.accounts.<account>.auth_token",
+        ],
+        env_pointer_paths: &[
+            "webhook.auth_token_env",
+            "webhook.accounts.<account>.auth_token_env",
+        ],
+        default_env_var: Some(WEBHOOK_AUTH_TOKEN_ENV),
+    };
+const WEBHOOK_PUBLIC_BASE_URL_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "public_base_url",
+        label: "public base url",
+        config_paths: &[
+            "webhook.public_base_url",
+            "webhook.accounts.<account>.public_base_url",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const WEBHOOK_SIGNING_SECRET_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "signing_secret",
+        label: "signing secret",
+        config_paths: &[
+            "webhook.signing_secret",
+            "webhook.accounts.<account>.signing_secret",
+        ],
+        env_pointer_paths: &[
+            "webhook.signing_secret_env",
+            "webhook.accounts.<account>.signing_secret_env",
+        ],
+        default_env_var: Some(WEBHOOK_SIGNING_SECRET_ENV),
+    };
+const WEBHOOK_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    WEBHOOK_ENABLED_REQUIREMENT,
+    WEBHOOK_ENDPOINT_URL_REQUIREMENT,
+    WEBHOOK_AUTH_TOKEN_REQUIREMENT,
+];
+const WEBHOOK_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    WEBHOOK_ENABLED_REQUIREMENT,
+    WEBHOOK_PUBLIC_BASE_URL_REQUIREMENT,
+    WEBHOOK_SIGNING_SECRET_REQUIREMENT,
+];
+const WEBHOOK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "http post send",
+    command: "webhook-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: WEBHOOK_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Endpoint],
+};
+const WEBHOOK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "inbound webhook service",
+    command: "webhook-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: WEBHOOK_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Endpoint],
+};
+const WEBHOOK_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: WEBHOOK_SEND_OPERATION,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: WEBHOOK_SERVE_OPERATION,
+        doctor_checks: &[],
+    },
+];
+const WEBHOOK_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::Planned,
+    setup_hint: "planned generic webhook surface; catalog metadata reflects the intended outbound endpoint and inbound signing-secret contract, but no runtime adapter is implemented yet",
     status_command: "loongclaw channels --json",
     repair_command: None,
 };
@@ -825,6 +1599,9 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
             family: TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
             snapshot_builder: build_telegram_snapshots,
         }),
+        selection_order: 10,
+        selection_label: "personal and group chat bot",
+        blurb: "Shipped Telegram Bot API surface with direct send and reply-loop runtime support.",
         implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
         capabilities: TELEGRAM_CAPABILITIES,
         label: "Telegram",
@@ -839,6 +1616,9 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
             family: FEISHU_COMMAND_FAMILY_DESCRIPTOR,
             snapshot_builder: build_feishu_snapshots,
         }),
+        selection_order: 20,
+        selection_label: "enterprise chat app",
+        blurb: "Shipped Feishu/Lark app surface with webhook or websocket ingress and account-aware runtime state.",
         implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
         capabilities: FEISHU_CAPABILITIES,
         label: "Feishu/Lark",
@@ -853,6 +1633,9 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
             family: MATRIX_COMMAND_FAMILY_DESCRIPTOR,
             snapshot_builder: build_matrix_snapshots,
         }),
+        selection_order: 30,
+        selection_label: "federated room sync bot",
+        blurb: "Shipped Matrix surface with direct send and sync-based reply-loop support.",
         implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
         capabilities: MATRIX_CAPABILITIES,
         label: "Matrix",
@@ -864,8 +1647,11 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "discord",
         runtime: None,
+        selection_order: 40,
+        selection_label: "community server bot",
+        blurb: "Planned Discord gateway and thread-aware bot surface with documented credential expectations.",
         implementation_status: ChannelCatalogImplementationStatus::Stub,
-        capabilities: DISCORD_CAPABILITIES,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
         label: "Discord",
         aliases: &["discord-bot"],
         transport: "discord_gateway",
@@ -875,13 +1661,100 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "slack",
         runtime: None,
+        selection_order: 50,
+        selection_label: "workspace event bot",
+        blurb: "Planned Slack Events API or Socket Mode surface with richer bot-token and signing metadata.",
         implementation_status: ChannelCatalogImplementationStatus::Stub,
-        capabilities: SLACK_CAPABILITIES,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
         label: "Slack",
         aliases: &["slack-bot"],
         transport: "slack_events_api",
         onboarding: SLACK_ONBOARDING_DESCRIPTOR,
         operations: SLACK_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "line",
+        runtime: None,
+        selection_order: 60,
+        selection_label: "consumer messaging bot",
+        blurb: "Planned LINE Messaging API surface for push sends and webhook-driven reply loops.",
+        implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        label: "LINE",
+        aliases: &["line-bot"],
+        transport: "line_messaging_api",
+        onboarding: LINE_ONBOARDING_DESCRIPTOR,
+        operations: LINE_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "wecom",
+        runtime: None,
+        selection_order: 70,
+        selection_label: "wechat work app",
+        blurb: "Planned WeCom enterprise callback surface aligned with corp-app credentials and encrypted callbacks.",
+        implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        label: "WeCom",
+        aliases: &["wechat-work", "qywx"],
+        transport: "wecom_callback_api",
+        onboarding: WECOM_ONBOARDING_DESCRIPTOR,
+        operations: WECOM_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "dingtalk",
+        runtime: None,
+        selection_order: 80,
+        selection_label: "dingtalk robot app",
+        blurb: "Planned DingTalk robot and event-callback surface with explicit app and robot credential metadata.",
+        implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        label: "DingTalk",
+        aliases: &["ding", "ding-bot"],
+        transport: "dingtalk_stream_or_callback_api",
+        onboarding: DINGTALK_ONBOARDING_DESCRIPTOR,
+        operations: DINGTALK_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "whatsapp",
+        runtime: None,
+        selection_order: 90,
+        selection_label: "business messaging app",
+        blurb: "Planned WhatsApp Cloud API surface covering outbound business sends and inbound webhook events.",
+        implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        label: "WhatsApp",
+        aliases: &["wa", "whatsapp-cloud"],
+        transport: "whatsapp_cloud_api",
+        onboarding: WHATSAPP_ONBOARDING_DESCRIPTOR,
+        operations: WHATSAPP_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "email",
+        runtime: None,
+        selection_order: 100,
+        selection_label: "mailbox agent",
+        blurb: "Planned email surface for SMTP outbound delivery and IMAP-backed reply loops.",
+        implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        label: "Email",
+        aliases: &["smtp", "imap"],
+        transport: "smtp_imap",
+        onboarding: EMAIL_ONBOARDING_DESCRIPTOR,
+        operations: EMAIL_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "webhook",
+        runtime: None,
+        selection_order: 110,
+        selection_label: "generic http integration",
+        blurb: "Planned generic webhook surface for outbound POST delivery and signed inbound callback handling.",
+        implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        label: "Webhook",
+        aliases: &["http-webhook"],
+        transport: "generic_webhook",
+        onboarding: WEBHOOK_ONBOARDING_DESCRIPTOR,
+        operations: WEBHOOK_OPERATIONS,
     },
 ];
 
@@ -901,6 +1774,12 @@ fn find_channel_registry_descriptor(raw: &str) -> Option<&'static ChannelRegistr
     })
 }
 
+fn sorted_channel_registry_descriptors() -> Vec<&'static ChannelRegistryDescriptor> {
+    let mut descriptors = CHANNEL_REGISTRY.iter().collect::<Vec<_>>();
+    descriptors.sort_by_key(|descriptor| (descriptor.selection_order, descriptor.id));
+    descriptors
+}
+
 fn channel_catalog_entry_from_descriptor(
     descriptor: &ChannelRegistryDescriptor,
 ) -> ChannelCatalogEntry {
@@ -916,6 +1795,9 @@ fn channel_catalog_entry_from_descriptor(
     ChannelCatalogEntry {
         id: descriptor.id,
         label: descriptor.label,
+        selection_order: descriptor.selection_order,
+        selection_label: descriptor.selection_label,
+        blurb: descriptor.blurb,
         implementation_status: descriptor.implementation_status,
         capabilities: descriptor.capabilities.to_vec(),
         aliases: descriptor.aliases.to_vec(),
@@ -935,8 +1817,8 @@ pub fn resolve_channel_onboarding_descriptor(raw: &str) -> Option<ChannelOnboard
 }
 
 pub fn list_channel_catalog() -> Vec<ChannelCatalogEntry> {
-    CHANNEL_REGISTRY
-        .iter()
+    sorted_channel_registry_descriptors()
+        .into_iter()
         .map(channel_catalog_entry_from_descriptor)
         .collect()
 }
@@ -1126,8 +2008,8 @@ fn channel_status_snapshots_with_now(
 }
 
 fn runtime_backed_channel_registry_descriptors() -> Vec<&'static ChannelRegistryDescriptor> {
-    CHANNEL_REGISTRY
-        .iter()
+    sorted_channel_registry_descriptors()
+        .into_iter()
         .filter(|descriptor| descriptor.runtime.is_some())
         .collect()
 }
@@ -2109,6 +2991,9 @@ mod tests {
         let encoded = serde_json::to_value(&discord).expect("serialize discord entry");
 
         assert_eq!(discord.id, "discord");
+        assert_eq!(discord.selection_order, 40);
+        assert_eq!(discord.selection_label, "community server bot");
+        assert!(discord.blurb.contains("Discord gateway"));
         assert_eq!(
             discord.implementation_status,
             ChannelCatalogImplementationStatus::Stub
@@ -2166,7 +3051,12 @@ mod tests {
             ChannelOnboardingStrategy::Planned
         );
         assert_eq!(discord.onboarding.repair_command, None);
-        assert!(discord.onboarding.setup_hint.contains("stub surface"));
+        assert!(
+            discord
+                .onboarding
+                .setup_hint
+                .contains("planned Discord gateway")
+        );
     }
 
     #[test]
@@ -2305,6 +3195,8 @@ mod tests {
         );
         assert_eq!(discord.transport, "discord_gateway");
         assert_eq!(discord.aliases, vec!["discord-bot"]);
+        assert_eq!(discord.selection_order, 40);
+        assert_eq!(discord.selection_label, "community server bot");
         assert_eq!(discord.operations.len(), 2);
         assert_eq!(discord.operations[0].command, "discord-send");
         assert_eq!(discord.operations[1].command, "discord-serve");
@@ -2365,7 +3257,7 @@ mod tests {
                         .filter_map(serde_json::Value::as_str)
                         .collect::<Vec<_>>()
                 }),
-            Some(vec!["send", "serve", "runtime_tracking"])
+            Some(vec!["multi_account", "send", "serve", "runtime_tracking"])
         );
         assert_eq!(
             slack_json
@@ -2377,7 +3269,7 @@ mod tests {
                         .filter_map(serde_json::Value::as_str)
                         .collect::<Vec<_>>()
                 }),
-            Some(vec!["send", "serve", "runtime_tracking"])
+            Some(vec!["multi_account", "send", "serve", "runtime_tracking"])
         );
     }
 
@@ -2458,11 +3350,30 @@ mod tests {
             Some("FEISHU_ENCRYPT_KEY")
         );
 
-        assert!(
-            discord
-                .operations
+        assert_eq!(
+            discord.operations[0]
+                .requirements
                 .iter()
-                .all(|operation| operation.requirements.is_empty())
+                .map(|requirement| requirement.id)
+                .collect::<Vec<_>>(),
+            vec!["enabled", "bot_token"]
+        );
+        assert_eq!(
+            discord.operations[1]
+                .requirements
+                .iter()
+                .map(|requirement| requirement.id)
+                .collect::<Vec<_>>(),
+            vec![
+                "enabled",
+                "bot_token",
+                "application_id",
+                "allowed_guild_ids"
+            ]
+        );
+        assert_eq!(
+            discord.operations[1].requirements[2].default_env_var,
+            Some("DISCORD_APPLICATION_ID")
         );
     }
 
@@ -2517,6 +3428,8 @@ mod tests {
             resolve_channel_catalog_operation("telegram", "send").expect("telegram send operation");
         let feishu =
             resolve_channel_catalog_operation("feishu", "send").expect("feishu send operation");
+        let webhook =
+            resolve_channel_catalog_operation("webhook", "send").expect("webhook send operation");
 
         assert_eq!(
             telegram.default_target_kind(),
@@ -2530,6 +3443,12 @@ mod tests {
         assert!(feishu.supports_target_kind(ChannelCatalogTargetKind::ReceiveId));
         assert!(feishu.supports_target_kind(ChannelCatalogTargetKind::MessageReply));
         assert!(!feishu.supports_target_kind(ChannelCatalogTargetKind::Conversation));
+        assert_eq!(
+            webhook.default_target_kind(),
+            Some(ChannelCatalogTargetKind::Endpoint)
+        );
+        assert!(webhook.supports_target_kind(ChannelCatalogTargetKind::Endpoint));
+        assert!(!webhook.supports_target_kind(ChannelCatalogTargetKind::Conversation));
     }
 
     #[test]
@@ -2576,12 +3495,16 @@ mod tests {
                 .iter()
                 .map(|entry| entry.id)
                 .collect::<Vec<_>>(),
-            vec!["discord", "slack"]
+            vec![
+                "discord", "slack", "line", "wecom", "dingtalk", "whatsapp", "email", "webhook",
+            ]
         );
         assert_eq!(catalog_only[0].operations[0].command, "discord-send");
         assert_eq!(catalog_only[0].operations[1].command, "discord-serve");
         assert_eq!(catalog_only[1].operations[0].command, "slack-send");
         assert_eq!(catalog_only[1].operations[1].command, "slack-serve");
+        assert_eq!(catalog_only[2].operations[0].command, "line-send");
+        assert_eq!(catalog_only[7].operations[1].command, "webhook-serve");
     }
 
     #[test]
@@ -2603,7 +3526,9 @@ mod tests {
                 .iter()
                 .map(|entry| entry.id)
                 .collect::<Vec<_>>(),
-            vec!["discord", "slack"]
+            vec![
+                "discord", "slack", "line", "wecom", "dingtalk", "whatsapp", "email", "webhook",
+            ]
         );
         assert_eq!(
             inventory
@@ -2611,7 +3536,10 @@ mod tests {
                 .iter()
                 .map(|entry| entry.id)
                 .collect::<Vec<_>>(),
-            vec!["telegram", "feishu", "matrix", "discord", "slack"]
+            vec![
+                "telegram", "feishu", "matrix", "discord", "slack", "line", "wecom", "dingtalk",
+                "whatsapp", "email", "webhook",
+            ]
         );
     }
 
@@ -2629,7 +3557,10 @@ mod tests {
                 .iter()
                 .map(|surface| surface.catalog.id)
                 .collect::<Vec<_>>(),
-            vec!["telegram", "feishu", "matrix", "discord", "slack"]
+            vec![
+                "telegram", "feishu", "matrix", "discord", "slack", "line", "wecom", "dingtalk",
+                "whatsapp", "email", "webhook",
+            ]
         );
 
         let telegram = inventory
@@ -2663,6 +3594,9 @@ mod tests {
             ChannelCatalogEntry {
                 id: "telegram",
                 label: "Telegram",
+                selection_order: 10,
+                selection_label: "personal and group chat bot",
+                blurb: "Shipped Telegram Bot API surface with direct send and reply-loop runtime support.",
                 implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
                 capabilities: vec![
                     ChannelCapability::RuntimeBacked,
@@ -2698,6 +3632,9 @@ mod tests {
             ChannelCatalogEntry {
                 id: "discord",
                 label: "Discord",
+                selection_order: 40,
+                selection_label: "community server bot",
+                blurb: "Planned Discord gateway and thread-aware bot surface with documented credential expectations.",
                 implementation_status: ChannelCatalogImplementationStatus::Stub,
                 capabilities: vec![
                     ChannelCapability::Send,

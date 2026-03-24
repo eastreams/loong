@@ -337,6 +337,8 @@ pub enum ChannelOutboundTargetKind {
     Conversation,
     MessageReply,
     ReceiveId,
+    Address,
+    Endpoint,
 }
 
 #[cfg(any(
@@ -350,6 +352,8 @@ impl ChannelOutboundTargetKind {
             Self::Conversation => "conversation",
             Self::MessageReply => "message_reply",
             Self::ReceiveId => "receive_id",
+            Self::Address => "address",
+            Self::Endpoint => "endpoint",
         }
     }
 }
@@ -369,8 +373,10 @@ impl FromStr for ChannelOutboundTargetKind {
             "conversation" => Ok(Self::Conversation),
             "message_reply" => Ok(Self::MessageReply),
             "receive_id" => Ok(Self::ReceiveId),
+            "address" => Ok(Self::Address),
+            "endpoint" => Ok(Self::Endpoint),
             _ => Err(format!(
-                "unsupported channel target kind `{value}`; expected conversation, message_reply, or receive_id"
+                "unsupported channel target kind `{value}`; expected conversation, message_reply, receive_id, address, or endpoint"
             )),
         }
     }
@@ -2074,17 +2080,20 @@ pub(crate) async fn send_text_to_known_session(
                         text: Some(text.to_owned()),
                         ..FeishuChannelSendRequest::default()
                     },
-                    ChannelOutboundTargetKind::ReceiveId => FeishuChannelSendRequest {
+                    ChannelOutboundTargetKind::ReceiveId
+                    | ChannelOutboundTargetKind::Conversation
+                    | ChannelOutboundTargetKind::Address => FeishuChannelSendRequest {
                         receive_id: target.clone(),
                         receive_id_type: Some("chat_id".to_owned()),
                         text: Some(text.to_owned()),
                         ..FeishuChannelSendRequest::default()
                     },
-                    ChannelOutboundTargetKind::Conversation => FeishuChannelSendRequest {
-                        receive_id: target.clone(),
-                        text: Some(text.to_owned()),
-                        ..FeishuChannelSendRequest::default()
-                    },
+                    ChannelOutboundTargetKind::Endpoint => {
+                        return Err(
+                            "sessions_send_invalid_target_kind: feishu session sends do not support endpoint targets"
+                                .to_owned(),
+                        );
+                    }
                 };
                 feishu::run_feishu_send(&resolved, &request).await?;
                 Ok(ChannelSendReceipt {

@@ -474,31 +474,43 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
 
     assert!(rendered.contains("catalog-only channels:"));
     assert!(rendered.contains(
-        "Discord [discord] implementation_status=stub capabilities=send,serve,runtime_tracking aliases=discord-bot transport=discord_gateway target_kinds=conversation"
+        "Discord [discord] implementation_status=stub selection_order=40 selection_label=\"community server bot\" capabilities=multi_account,send,serve,runtime_tracking aliases=discord-bot transport=discord_gateway target_kinds=conversation"
+    ));
+    assert!(rendered.contains(
+        "blurb: Planned Discord gateway and thread-aware bot surface with documented credential expectations."
     ));
     assert!(rendered.contains(&format!(
-        "catalog op send ({}) availability=stub tracks_runtime=false target_kinds=conversation requirements=-",
+        "catalog op send ({}) availability=stub tracks_runtime=false target_kinds=conversation requirements=enabled,bot_token",
         channel_send_command("discord")
     )));
     assert!(rendered.contains(&format!(
-        "catalog op serve ({}) availability=stub tracks_runtime=true target_kinds=conversation requirements=-",
+        "catalog op serve ({}) availability=stub tracks_runtime=true target_kinds=conversation requirements=enabled,bot_token,application_id,allowed_guild_ids",
         channel_serve_command("discord")
     )));
     assert!(rendered.contains(
-        "Slack [slack] implementation_status=stub capabilities=send,serve,runtime_tracking aliases=slack-bot transport=slack_events_api target_kinds=conversation"
+        "Slack [slack] implementation_status=stub selection_order=50 selection_label=\"workspace event bot\" capabilities=multi_account,send,serve,runtime_tracking aliases=slack-bot transport=slack_events_api target_kinds=conversation"
     ));
     assert!(rendered.contains(&format!(
-        "catalog op send ({}) availability=stub tracks_runtime=false target_kinds=conversation requirements=-",
+        "catalog op send ({}) availability=stub tracks_runtime=false target_kinds=conversation requirements=enabled,bot_token",
         channel_send_command("slack")
     )));
     assert!(rendered.contains(&format!(
-        "catalog op serve ({}) availability=stub tracks_runtime=true target_kinds=conversation requirements=-",
+        "catalog op serve ({}) availability=stub tracks_runtime=true target_kinds=conversation requirements=enabled,bot_token,app_token,signing_secret,allowed_channel_ids",
         channel_serve_command("slack")
     )));
     assert!(rendered.contains(
+        "LINE [line] implementation_status=stub selection_order=60 selection_label=\"consumer messaging bot\""
+    ));
+    assert!(rendered.contains(
+        "Webhook [webhook] implementation_status=stub selection_order=110 selection_label=\"generic http integration\""
+    ));
+    assert!(rendered.contains(
+        "catalog op send (webhook-send) availability=stub tracks_runtime=false target_kinds=endpoint requirements=enabled,endpoint_url,auth_token"
+    ));
+    assert!(rendered.contains(
         "onboarding strategy=planned status_command=\"loongclaw channels --json\" repair_command=-"
     ));
-    assert!(rendered.contains("setup_hint=\"stub surface only"));
+    assert!(rendered.contains("setup_hint=\"planned Discord gateway surface"));
 }
 
 #[test]
@@ -843,6 +855,41 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                                 .collect::<Vec<_>>()
                         })
                         == Some(vec!["conversation"])
+                    && entry
+                        .get("selection_order")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(40)
+                    && entry
+                        .get("selection_label")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("community server bot")
+                    && entry
+                        .get("blurb")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|value| value.contains("Discord gateway"))
+            })
+    );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("webhook")
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["endpoint"])
+                    && entry
+                        .get("selection_order")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(110)
             })
     );
 }
@@ -974,6 +1021,35 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
                         .collect::<Vec<_>>()
                 })
                 == Some(channel_supported_target_kinds("discord"))
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("selection_order"))
+                .and_then(serde_json::Value::as_u64)
+                == Some(40)
+            && surface
+                .get("configured_accounts")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len)
+                == Some(0)
+    }));
+
+    assert!(surfaces.iter().any(|surface| {
+        surface
+            .get("catalog")
+            .and_then(|catalog| catalog.get("id"))
+            .and_then(serde_json::Value::as_str)
+            == Some("webhook")
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("supported_target_kinds"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_supported_target_kinds("webhook"))
             && surface
                 .get("configured_accounts")
                 .and_then(serde_json::Value::as_array)

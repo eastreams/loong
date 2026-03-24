@@ -241,12 +241,29 @@ compare_prerelease_identifiers() {
 version_is_greater() {
   local left="${1:?left version is required}"
   local right="${2:?right version is required}"
+  local left_parts=()
+  local right_parts=()
+  local parsed_part
   local left_major left_minor left_patch left_prerelease
   local right_major right_minor right_patch right_prerelease
   local prerelease_cmp
 
-  mapfile -t left_parts < <(parse_release_version "$left")
-  mapfile -t right_parts < <(parse_release_version "$right")
+  while IFS= read -r parsed_part; do
+    left_parts+=("$parsed_part")
+  done < <(parse_release_version "$left")
+  while IFS= read -r parsed_part; do
+    right_parts+=("$parsed_part")
+  done < <(parse_release_version "$right")
+
+  if (( ${#left_parts[@]} != 4 )); then
+    echo "invalid parsed release version: ${left}" >&2
+    return 1
+  fi
+  if (( ${#right_parts[@]} != 4 )); then
+    echo "invalid parsed release version: ${right}" >&2
+    return 1
+  fi
+
   left_major="${left_parts[0]}"
   left_minor="${left_parts[1]}"
   left_patch="${left_parts[2]}"

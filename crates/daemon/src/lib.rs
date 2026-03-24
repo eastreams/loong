@@ -2717,10 +2717,12 @@ pub fn push_channel_surface_header(
     };
     let target_kinds = render_channel_target_kind_ids(&surface.catalog.supported_target_kinds);
     lines.push(format!(
-        "{} [{}] implementation_status={} capabilities={} aliases={} transport={} target_kinds={} configured_accounts={} default_configured_account={}",
+        "{} [{}] implementation_status={} selection_order={} selection_label=\"{}\" capabilities={} aliases={} transport={} target_kinds={} configured_accounts={} default_configured_account={}",
         surface.catalog.label,
         surface.catalog.id,
         surface.catalog.implementation_status.as_str(),
+        surface.catalog.selection_order,
+        surface.catalog.selection_label,
         capabilities,
         aliases,
         surface.catalog.transport,
@@ -2731,6 +2733,7 @@ pub fn push_channel_surface_header(
             .as_deref()
             .unwrap_or("-")
     ));
+    lines.push(format!("  blurb: {}", surface.catalog.blurb));
 }
 
 pub fn run_list_context_engines_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
