@@ -2012,10 +2012,18 @@ fn runtime_snapshot_migrate_provider_env_reference(
     let configured_env_name = env_name.as_deref();
     let configured_env_name = configured_env_name.map(str::trim);
     let configured_env_name = configured_env_name.filter(|value| !value.is_empty());
-    if configured_env_name.is_none() {
-        *env_name = Some(explicit_env_name);
+
+    match configured_env_name {
+        None => {
+            *env_name = Some(explicit_env_name);
+            *inline_secret = None;
+        }
+        Some(configured_env_name) if configured_env_name == explicit_env_name => {
+            *env_name = Some(explicit_env_name);
+            *inline_secret = None;
+        }
+        Some(_) => {}
     }
-    *inline_secret = None;
 }
 
 fn runtime_snapshot_is_env_reference_literal(raw: &str) -> bool {
@@ -2235,7 +2243,44 @@ mod runtime_snapshot_restore_spec_tests {
     }
 
     #[test]
-    fn runtime_snapshot_restore_normalization_prefers_existing_env_name_fields() {
+    fn runtime_snapshot_restore_normalization_canonicalizes_matching_explicit_env_reference() {
+        let mut warnings = Vec::new();
+        let mut profile = mvp::config::ProviderProfileConfig {
+            default_for_kind: true,
+            provider: mvp::config::ProviderConfig {
+                kind: mvp::config::ProviderKind::Openai,
+                model: "openai/gpt-5.1-codex".to_owned(),
+                api_key: Some(SecretRef::Inline("${INLINE_OPENAI_API_KEY}".to_owned())),
+                api_key_env: Some(" INLINE_OPENAI_API_KEY ".to_owned()),
+                oauth_access_token: Some(SecretRef::Inline(
+                    "$INLINE_OPENAI_OAUTH_TOKEN".to_owned(),
+                )),
+                oauth_access_token_env: Some("INLINE_OPENAI_OAUTH_TOKEN".to_owned()),
+                ..Default::default()
+            },
+        };
+
+        normalize_runtime_snapshot_restore_provider_profile(
+            "openai-main",
+            &mut profile,
+            &mut warnings,
+        );
+
+        assert_eq!(profile.provider.api_key, None);
+        assert_eq!(
+            profile.provider.api_key_env.as_deref(),
+            Some("INLINE_OPENAI_API_KEY")
+        );
+        assert_eq!(profile.provider.oauth_access_token, None);
+        assert_eq!(
+            profile.provider.oauth_access_token_env.as_deref(),
+            Some("INLINE_OPENAI_OAUTH_TOKEN")
+        );
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn runtime_snapshot_restore_normalization_keeps_conflicting_explicit_env_reference() {
         let mut warnings = Vec::new();
         let mut profile = mvp::config::ProviderProfileConfig {
             default_for_kind: true,
@@ -2258,12 +2303,18 @@ mod runtime_snapshot_restore_spec_tests {
             &mut warnings,
         );
 
-        assert_eq!(profile.provider.api_key, None);
+        assert_eq!(
+            profile.provider.api_key,
+            Some(SecretRef::Inline("${INLINE_OPENAI_API_KEY}".to_owned()))
+        );
         assert_eq!(
             profile.provider.api_key_env.as_deref(),
             Some("CONFIGURED_OPENAI_API_KEY")
         );
-        assert_eq!(profile.provider.oauth_access_token, None);
+        assert_eq!(
+            profile.provider.oauth_access_token,
+            Some(SecretRef::Inline("$INLINE_OPENAI_OAUTH_TOKEN".to_owned()))
+        );
         assert_eq!(
             profile.provider.oauth_access_token_env.as_deref(),
             Some("CONFIGURED_OPENAI_OAUTH_TOKEN")

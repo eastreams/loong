@@ -1758,6 +1758,50 @@ bot_token = { file = "/run/secrets/telegram" }
     }
 
     #[test]
+    fn config_validation_rejects_invalid_typed_secret_ref_env_names() {
+        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "provider": {
+                "api_key": {
+                    "env": "$OPENAI_API_KEY"
+                }
+            },
+            "telegram": {
+                "bot_token": {
+                    "env": "123456789:AAEZZ_exampleTokenValue"
+                },
+                "accounts": {
+                    "Work Bot": {
+                        "bot_token": {
+                            "env": "export WORK_TELEGRAM_TOKEN=demo"
+                        }
+                    }
+                }
+            },
+            "feishu": {
+                "app_secret": {
+                    "env": "FEISHU APP SECRET"
+                }
+            },
+            "matrix": {
+                "access_token": {
+                    "env": "%MATRIX_ACCESS_TOKEN%"
+                }
+            }
+        }))
+        .expect("deserialize config with invalid typed env refs");
+
+        let error = config
+            .validate()
+            .expect_err("invalid typed env refs should be rejected");
+
+        assert!(error.contains("provider.api_key.env"));
+        assert!(error.contains("telegram.bot_token.env"));
+        assert!(error.contains("telegram.accounts.work-bot.bot_token.env"));
+        assert!(error.contains("feishu.app_secret.env"));
+        assert!(error.contains("matrix.access_token.env"));
+    }
+
+    #[test]
     fn config_validation_rejects_telegram_like_token_in_env_pointer() {
         let mut config = LoongClawConfig::default();
         config.telegram.bot_token_env = Some("123456789:AAEZZ_exampleTokenValue".to_owned());

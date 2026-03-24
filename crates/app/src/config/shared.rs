@@ -4,6 +4,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use loongclaw_contracts::SecretRef;
+
 pub(super) const DEFAULT_CONFIG_FILE: &str = "config.toml";
 pub(super) const DEFAULT_SQLITE_FILE: &str = "memory.sqlite3";
 pub const CLI_COMMAND_NAME: &str = "loongclaw";
@@ -542,6 +544,23 @@ pub(super) fn validate_env_pointer_field(
     }
 
     Ok(())
+}
+
+pub(super) fn validate_secret_ref_env_pointer_field(
+    field_path: &str,
+    secret_ref: Option<&SecretRef>,
+    hint: EnvPointerValidationHint<'_>,
+) -> Result<(), Box<ConfigValidationIssue>> {
+    let Some(secret_ref) = secret_ref else {
+        return Ok(());
+    };
+
+    let Some(env_name) = secret_ref.explicit_env_name() else {
+        return Ok(());
+    };
+
+    let env_field_path = format!("{field_path}.env");
+    validate_env_pointer_field(env_field_path.as_str(), Some(env_name.as_str()), hint)
 }
 
 pub(super) fn validate_numeric_range(

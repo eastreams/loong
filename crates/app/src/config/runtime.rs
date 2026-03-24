@@ -1983,6 +1983,38 @@ api_key_env = "$OPENAI_API_KEY"
 
     #[test]
     #[cfg(feature = "config-toml")]
+    fn validate_file_returns_typed_secret_ref_env_diagnostics() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("loongclaw-config-typed-env-diagnostics-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("create temp directory");
+        let config_path = temp_dir.join("config.toml");
+        let raw = r#"
+[provider]
+api_key = { env = "$OPENAI_API_KEY" }
+"#;
+        std::fs::write(&config_path, raw).expect("write test config");
+
+        let (_, diagnostics) = validate_file(Some(config_path.to_string_lossy().as_ref()))
+            .expect("validate_file should parse and return diagnostics");
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].severity, "error");
+        assert_eq!(diagnostics[0].code, "config.env_pointer.dollar_prefix");
+        assert_eq!(diagnostics[0].field_path, "providers.openai.api_key.env");
+        assert!(
+            diagnostics[0].message.contains("without `$`"),
+            "expected dollar-prefix guidance for typed env refs"
+        );
+
+        std::fs::remove_file(&config_path).ok();
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
     fn validate_file_returns_channel_account_diagnostics() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)

@@ -273,7 +273,7 @@ fn runtime_snapshot_json_payload_marks_x_api_key_profiles_as_credential_resolved
             default_for_kind: false,
             provider: mvp::config::ProviderConfig {
                 kind: mvp::config::ProviderKind::Anthropic,
-                model: "claude-3-7-sonnet".to_owned(),
+                model: "claude-3-7-sonnet-latest".to_owned(),
                 api_key: Some(loongclaw_contracts::SecretRef::Inline(
                     "${RUNTIME_SNAPSHOT_ANTHROPIC_KEY}".to_owned(),
                 )),

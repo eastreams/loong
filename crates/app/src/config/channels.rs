@@ -12,7 +12,7 @@ use crate::prompt::{
 use super::runtime::LoongClawConfig;
 use super::shared::{
     ConfigValidationCode, ConfigValidationIssue, EnvPointerValidationHint,
-    validate_env_pointer_field,
+    validate_env_pointer_field, validate_secret_ref_env_pointer_field,
 };
 use crate::secrets::resolve_secret_with_legacy_env;
 
@@ -711,6 +711,11 @@ impl TelegramChannelConfig {
             self.bot_token_env.as_deref(),
             "telegram.bot_token",
         );
+        validate_telegram_secret_ref_env_pointer(
+            &mut issues,
+            "telegram.bot_token",
+            self.bot_token.as_ref(),
+        );
         for (raw_account_id, account) in &self.accounts {
             let account_id = normalize_channel_account_id(raw_account_id);
             let field_path = format!("telegram.accounts.{account_id}.bot_token_env");
@@ -720,6 +725,11 @@ impl TelegramChannelConfig {
                 field_path.as_str(),
                 account.bot_token_env.as_deref(),
                 inline_field_path.as_str(),
+            );
+            validate_telegram_secret_ref_env_pointer(
+                &mut issues,
+                inline_field_path.as_str(),
+                account.bot_token.as_ref(),
             );
         }
         issues
@@ -939,11 +949,17 @@ impl FeishuChannelConfig {
             self.app_id_env.as_deref(),
             "feishu.app_id",
         );
+        validate_feishu_secret_ref_env_pointer(&mut issues, "feishu.app_id", self.app_id.as_ref());
         validate_feishu_env_pointer(
             &mut issues,
             "feishu.app_secret_env",
             self.app_secret_env.as_deref(),
             "feishu.app_secret",
+        );
+        validate_feishu_secret_ref_env_pointer(
+            &mut issues,
+            "feishu.app_secret",
+            self.app_secret.as_ref(),
         );
         validate_feishu_env_pointer(
             &mut issues,
@@ -951,37 +967,72 @@ impl FeishuChannelConfig {
             self.verification_token_env.as_deref(),
             "feishu.verification_token",
         );
+        validate_feishu_secret_ref_env_pointer(
+            &mut issues,
+            "feishu.verification_token",
+            self.verification_token.as_ref(),
+        );
         validate_feishu_env_pointer(
             &mut issues,
             "feishu.encrypt_key_env",
             self.encrypt_key_env.as_deref(),
             "feishu.encrypt_key",
         );
+        validate_feishu_secret_ref_env_pointer(
+            &mut issues,
+            "feishu.encrypt_key",
+            self.encrypt_key.as_ref(),
+        );
         for (raw_account_id, account) in &self.accounts {
             let account_id = normalize_channel_account_id(raw_account_id);
+            let app_id_field_path = format!("feishu.accounts.{account_id}.app_id");
             validate_feishu_env_pointer(
                 &mut issues,
-                format!("feishu.accounts.{account_id}.app_id_env").as_str(),
+                format!("{app_id_field_path}_env").as_str(),
                 account.app_id_env.as_deref(),
-                format!("feishu.accounts.{account_id}.app_id").as_str(),
+                app_id_field_path.as_str(),
             );
+            validate_feishu_secret_ref_env_pointer(
+                &mut issues,
+                app_id_field_path.as_str(),
+                account.app_id.as_ref(),
+            );
+            let app_secret_field_path = format!("feishu.accounts.{account_id}.app_secret");
             validate_feishu_env_pointer(
                 &mut issues,
-                format!("feishu.accounts.{account_id}.app_secret_env").as_str(),
+                format!("{app_secret_field_path}_env").as_str(),
                 account.app_secret_env.as_deref(),
-                format!("feishu.accounts.{account_id}.app_secret").as_str(),
+                app_secret_field_path.as_str(),
             );
+            validate_feishu_secret_ref_env_pointer(
+                &mut issues,
+                app_secret_field_path.as_str(),
+                account.app_secret.as_ref(),
+            );
+            let verification_token_field_path =
+                format!("feishu.accounts.{account_id}.verification_token");
             validate_feishu_env_pointer(
                 &mut issues,
-                format!("feishu.accounts.{account_id}.verification_token_env").as_str(),
+                format!("{verification_token_field_path}_env").as_str(),
                 account.verification_token_env.as_deref(),
-                format!("feishu.accounts.{account_id}.verification_token").as_str(),
+                verification_token_field_path.as_str(),
             );
+            validate_feishu_secret_ref_env_pointer(
+                &mut issues,
+                verification_token_field_path.as_str(),
+                account.verification_token.as_ref(),
+            );
+            let encrypt_key_field_path = format!("feishu.accounts.{account_id}.encrypt_key");
             validate_feishu_env_pointer(
                 &mut issues,
-                format!("feishu.accounts.{account_id}.encrypt_key_env").as_str(),
+                format!("{encrypt_key_field_path}_env").as_str(),
                 account.encrypt_key_env.as_deref(),
-                format!("feishu.accounts.{account_id}.encrypt_key").as_str(),
+                encrypt_key_field_path.as_str(),
+            );
+            validate_feishu_secret_ref_env_pointer(
+                &mut issues,
+                encrypt_key_field_path.as_str(),
+                account.encrypt_key.as_ref(),
             );
         }
         issues
@@ -1219,13 +1270,24 @@ impl MatrixChannelConfig {
             self.access_token_env.as_deref(),
             "matrix.access_token",
         );
+        validate_matrix_secret_ref_env_pointer(
+            &mut issues,
+            "matrix.access_token",
+            self.access_token.as_ref(),
+        );
         for (raw_account_id, account) in &self.accounts {
             let account_id = normalize_channel_account_id(raw_account_id);
+            let access_token_field_path = format!("matrix.accounts.{account_id}.access_token");
             validate_matrix_env_pointer(
                 &mut issues,
-                format!("matrix.accounts.{account_id}.access_token_env").as_str(),
+                format!("{access_token_field_path}_env").as_str(),
                 account.access_token_env.as_deref(),
-                format!("matrix.accounts.{account_id}.access_token").as_str(),
+                access_token_field_path.as_str(),
+            );
+            validate_matrix_secret_ref_env_pointer(
+                &mut issues,
+                access_token_field_path.as_str(),
+                account.access_token.as_ref(),
             );
         }
         issues
@@ -1511,6 +1573,24 @@ fn validate_telegram_env_pointer(
     }
 }
 
+fn validate_telegram_secret_ref_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    secret_ref: Option<&SecretRef>,
+) {
+    if let Err(issue) = validate_secret_ref_env_pointer_field(
+        field_path,
+        secret_ref,
+        EnvPointerValidationHint {
+            inline_field_path: field_path,
+            example_env_name: TELEGRAM_BOT_TOKEN_ENV,
+            detect_telegram_token_shape: true,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
 fn validate_feishu_env_pointer(
     issues: &mut Vec<ConfigValidationIssue>,
     field_path: &str,
@@ -1539,6 +1619,33 @@ fn validate_feishu_env_pointer(
     }
 }
 
+fn validate_feishu_secret_ref_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    secret_ref: Option<&SecretRef>,
+) {
+    let example_env_name = if field_path.ends_with("app_id") {
+        FEISHU_APP_ID_ENV
+    } else if field_path.ends_with("app_secret") {
+        FEISHU_APP_SECRET_ENV
+    } else if field_path.ends_with("verification_token") {
+        FEISHU_VERIFICATION_TOKEN_ENV
+    } else {
+        FEISHU_ENCRYPT_KEY_ENV
+    };
+    if let Err(issue) = validate_secret_ref_env_pointer_field(
+        field_path,
+        secret_ref,
+        EnvPointerValidationHint {
+            inline_field_path: field_path,
+            example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
 fn validate_matrix_env_pointer(
     issues: &mut Vec<ConfigValidationIssue>,
     field_path: &str,
@@ -1550,6 +1657,24 @@ fn validate_matrix_env_pointer(
         env_key,
         EnvPointerValidationHint {
             inline_field_path,
+            example_env_name: MATRIX_ACCESS_TOKEN_ENV,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_matrix_secret_ref_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    secret_ref: Option<&SecretRef>,
+) {
+    if let Err(issue) = validate_secret_ref_env_pointer_field(
+        field_path,
+        secret_ref,
+        EnvPointerValidationHint {
+            inline_field_path: field_path,
             example_env_name: MATRIX_ACCESS_TOKEN_ENV,
             detect_telegram_token_shape: false,
         },

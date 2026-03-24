@@ -241,15 +241,12 @@ fn parse_dollar_env_reference(raw: &str) -> Option<String> {
 
 fn parse_env_prefix_reference(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
-    if trimmed.len() < 4 {
-        return None;
-    }
-    let prefix = &trimmed[..4];
+    let prefix = trimmed.get(..4)?;
     if !prefix.eq_ignore_ascii_case("env:") {
         return None;
     }
 
-    let candidate = &trimmed[4..];
+    let candidate = trimmed.get(4..)?;
     normalize_env_name(candidate)
 }
 
@@ -280,4 +277,29 @@ fn looks_like_compatible_env_name(raw: &str) -> bool {
         return false;
     }
     chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deserializes_env_prefixed_strings_as_env_refs() {
+        let parsed =
+            serde_json::from_str::<SecretRef>("\"env:OPENAI_API_KEY\"").expect("parse env ref");
+
+        assert_eq!(
+            parsed,
+            SecretRef::Env {
+                env: "OPENAI_API_KEY".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn deserializing_non_ascii_inline_string_does_not_panic() {
+        let parsed = serde_json::from_str::<SecretRef>("\"हéx\"").expect("parse inline secret");
+
+        assert_eq!(parsed, SecretRef::Inline("हéx".to_owned()));
+    }
 }

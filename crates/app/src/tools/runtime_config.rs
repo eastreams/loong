@@ -837,8 +837,20 @@ fn account_has_feishu_runtime_credentials(account: &crate::config::FeishuAccount
 
 #[cfg(feature = "feishu-integration")]
 fn has_secret_binding(secret_ref: Option<&SecretRef>, env_name: Option<&str>) -> bool {
-    if has_configured_secret_ref(secret_ref) {
-        return true;
+    if let Some(secret_ref) = secret_ref {
+        let explicit_env_name = secret_ref.explicit_env_name();
+        if let Some(explicit_env_name) = explicit_env_name {
+            let resolved_env_value = std::env::var(explicit_env_name.as_str()).ok();
+            let has_resolved_env_value = resolved_env_value
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty());
+            return has_resolved_env_value;
+        }
+
+        if has_configured_secret_ref(Some(secret_ref)) {
+            return true;
+        }
     }
 
     env_name
@@ -1883,6 +1895,42 @@ Treat these as enforced limits for this child session."
         assert!(
             FeishuToolRuntimeConfig::from_loongclaw_config(&config).is_none(),
             "disabled Feishu accounts should not enable Feishu tool runtime on their own"
+        );
+    }
+
+    #[cfg(feature = "feishu-integration")]
+    #[test]
+    fn from_loongclaw_config_requires_resolved_env_values_for_typed_feishu_secret_refs() {
+        let mut env = ScopedEnv::new();
+        clear_feishu_runtime_env(&mut env);
+
+        let config = crate::config::LoongClawConfig {
+            feishu: crate::config::FeishuChannelConfig {
+                enabled: true,
+                app_id: Some(loongclaw_contracts::SecretRef::Env {
+                    env: "FEISHU_APP_ID".to_owned(),
+                }),
+                app_secret: Some(loongclaw_contracts::SecretRef::Env {
+                    env: "FEISHU_APP_SECRET".to_owned(),
+                }),
+                app_id_env: None,
+                app_secret_env: None,
+                ..crate::config::FeishuChannelConfig::default()
+            },
+            ..crate::config::LoongClawConfig::default()
+        };
+
+        assert!(
+            FeishuToolRuntimeConfig::from_loongclaw_config(&config).is_none(),
+            "missing env values should not enable Feishu runtime for typed env refs"
+        );
+
+        env.set("FEISHU_APP_ID", "cli_env_a1b2c3");
+        env.set("FEISHU_APP_SECRET", "env-secret");
+
+        assert!(
+            FeishuToolRuntimeConfig::from_loongclaw_config(&config).is_some(),
+            "resolved env values should enable Feishu runtime for typed env refs"
         );
     }
 }

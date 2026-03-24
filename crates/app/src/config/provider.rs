@@ -5,7 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use super::shared::{
     ConfigValidationIssue, EnvPointerValidationHint, default_loongclaw_home, expand_path,
-    validate_env_pointer_field,
+    validate_env_pointer_field, validate_secret_ref_env_pointer_field,
 };
 use crate::secrets::{
     SecretLookup, has_configured_secret_ref, resolve_secret_lookup, secret_ref_env_name,
@@ -886,6 +886,17 @@ impl ProviderConfig {
         ) {
             issues.push(*issue);
         }
+        if let Err(issue) = validate_secret_ref_env_pointer_field(
+            api_key_inline_field_path.as_str(),
+            self.api_key.as_ref(),
+            EnvPointerValidationHint {
+                inline_field_path: api_key_inline_field_path.as_str(),
+                example_env_name: api_key_example,
+                detect_telegram_token_shape: false,
+            },
+        ) {
+            issues.push(*issue);
+        }
         let oauth_env_field_path = format!("{field_prefix}.oauth_access_token_env");
         let oauth_inline_field_path = format!("{field_prefix}.oauth_access_token");
         let oauth_example = self
@@ -895,6 +906,17 @@ impl ProviderConfig {
         if let Err(issue) = validate_env_pointer_field(
             oauth_env_field_path.as_str(),
             self.oauth_access_token_env.as_deref(),
+            EnvPointerValidationHint {
+                inline_field_path: oauth_inline_field_path.as_str(),
+                example_env_name: oauth_example,
+                detect_telegram_token_shape: false,
+            },
+        ) {
+            issues.push(*issue);
+        }
+        if let Err(issue) = validate_secret_ref_env_pointer_field(
+            oauth_inline_field_path.as_str(),
+            self.oauth_access_token.as_ref(),
             EnvPointerValidationHint {
                 inline_field_path: oauth_inline_field_path.as_str(),
                 example_env_name: oauth_example,

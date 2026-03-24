@@ -1,5 +1,7 @@
 use std::fs;
+use std::io::{self, Read};
 use std::process::{Command, Stdio};
+use std::thread;
 use std::time::Duration;
 
 use loongclaw_contracts::{SecretRef, SecretResolutionError, SecretResolver, SecretValue};
@@ -122,6 +124,18 @@ impl DefaultSecretResolver {
                 message: error.to_string(),
             })?;
 
+        let stdout_pipe = child.stdout.take().ok_or(SecretResolutionError::ExecWait {
+            program: trimmed_program.to_owned(),
+            message: "stdout pipe unavailable".to_owned(),
+        })?;
+        let stderr_pipe = child.stderr.take().ok_or(SecretResolutionError::ExecWait {
+            program: trimmed_program.to_owned(),
+            message: "stderr pipe unavailable".to_owned(),
+        })?;
+
+        let stdout_reader = spawn_exec_output_reader(stdout_pipe);
+        let stderr_reader = spawn_exec_output_reader(stderr_pipe);
+
         let timeout = Duration::from_millis(self.exec_timeout_ms);
         let status =
             child
@@ -134,26 +148,29 @@ impl DefaultSecretResolver {
         if status.is_none() {
             let _ = child.kill();
             let _ = child.wait();
+            let _ = join_exec_output_reader(stdout_reader, trimmed_program, "stdout");
+            let _ = join_exec_output_reader(stderr_reader, trimmed_program, "stderr");
             return Err(SecretResolutionError::ExecTimeout {
                 program: trimmed_program.to_owned(),
                 timeout_ms: self.exec_timeout_ms,
             });
         }
 
-        let output = child
-            .wait_with_output()
-            .map_err(|error| SecretResolutionError::ExecWait {
+        let Some(status) = status else {
+            return Err(SecretResolutionError::ExecTimeout {
                 program: trimmed_program.to_owned(),
-                message: error.to_string(),
-            })?;
+                timeout_ms: self.exec_timeout_ms,
+            });
+        };
+        let stdout = join_exec_output_reader(stdout_reader, trimmed_program, "stdout")?;
+        let stderr = join_exec_output_reader(stderr_reader, trimmed_program, "stderr")?;
 
-        if !output.status.success() {
-            let status_string = output
-                .status
+        if !status.success() {
+            let status_string = status
                 .code()
                 .map(|code| code.to_string())
                 .unwrap_or_else(|| "signal".to_owned());
-            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr = String::from_utf8_lossy(stderr.as_slice());
             let trimmed_stderr = stderr.trim().to_owned();
             return Err(SecretResolutionError::ExecFailed {
                 program: trimmed_program.to_owned(),
@@ -162,7 +179,7 @@ impl DefaultSecretResolver {
             });
         }
 
-        let stdout = String::from_utf8(output.stdout).map_err(|_utf8_error| {
+        let stdout = String::from_utf8(stdout).map_err(|_utf8_error| {
             SecretResolutionError::ExecInvalidUtf8 {
                 program: trimmed_program.to_owned(),
             }
@@ -281,4 +298,32 @@ fn read_non_empty_env_value(env_name: Option<&str>) -> Option<String> {
 
 fn trim_trailing_newlines(raw: &str) -> &str {
     raw.trim_end_matches(['\r', '\n'])
+}
+
+fn spawn_exec_output_reader<R>(mut reader: R) -> thread::JoinHandle<io::Result<Vec<u8>>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    })
+}
+
+fn join_exec_output_reader(
+    reader: thread::JoinHandle<io::Result<Vec<u8>>>,
+    program: &str,
+    stream_name: &str,
+) -> Result<Vec<u8>, SecretResolutionError> {
+    let bytes = reader
+        .join()
+        .map_err(|_panic_payload| SecretResolutionError::ExecWait {
+            program: program.to_owned(),
+            message: format!("reading {stream_name} output panicked"),
+        })?;
+    bytes.map_err(|error| SecretResolutionError::ExecWait {
+        program: program.to_owned(),
+        message: format!("reading {stream_name} output failed: {error}"),
+    })
 }

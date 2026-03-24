@@ -63,4 +63,22 @@ mod secret_runtime_tests {
         fs::remove_file(&secret_path).ok();
         fs::remove_dir_all(&temp_dir).ok();
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_secret_resolver_reads_exec_secret_output() {
+        let resolver = crate::secrets::DefaultSecretResolver::default();
+        let secret = resolver
+            .resolve(&SecretRef::Exec {
+                exec: vec![
+                    "/bin/sh".to_owned(),
+                    "-c".to_owned(),
+                    "printf 'exec-secret-value\\n'".to_owned(),
+                ],
+            })
+            .expect("exec secret should resolve")
+            .expect("exec secret should not be empty");
+
+        assert_eq!(secret.expose(), "exec-secret-value");
+    }
 }
