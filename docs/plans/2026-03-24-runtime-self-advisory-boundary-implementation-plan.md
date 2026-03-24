@@ -1,7 +1,5 @@
 # Runtime-Self Advisory Boundary Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
 **Goal:** Harden prompt-time authority boundaries so advisory profile, summary, and durable-recall content cannot masquerade as runtime-self or runtime-identity authority.
 
 **Architecture:** Add one small shared advisory-governance helper, apply it to session-profile rendering and shared memory-entry projection, and lock the behavior with red-green regression tests. Keep the existing prompt topology and avoid overlap with `#464` staged hydration internals.
@@ -10,12 +8,14 @@
 
 ---
 
+## Implementation Tasks
+
 ### Task 1: Write the failing advisory-boundary tests
 
 **Files:**
 - Modify: `crates/app/src/runtime_identity.rs`
 - Modify: `crates/app/src/provider/request_message_runtime.rs`
-- Modify: `crates/app/src/conversation/tests.rs`
+- Modify: `crates/app/src/conversation/context_engine.rs`
 
 **Step 1: Add a failing profile test**
 
@@ -63,7 +63,7 @@ Expected:
 **Step 1: Add governed heading recognition**
 
 Implement a small deterministic helper that:
-- detects markdown heading lines
+- detects Markdown heading lines
 - normalizes heading text
 - identifies runtime-owned or identity-like headings
 
@@ -113,13 +113,13 @@ Expected:
 
 **Files:**
 - Modify: `crates/app/src/provider/request_message_runtime.rs`
-- Modify: `crates/app/src/provider/mod.rs`
 - Modify: `crates/app/src/conversation/context_engine.rs`
 
-**Step 1: Add one shared memory-entry projection helper**
+**Step 1: Reuse the current shared memory projection path**
 
-Move the duplicated advisory-entry projection match into one provider-shared
-helper.
+Keep advisory entry projection inside the current shared hydrated-memory path so
+provider-direct and context-engine assembly continue to share the same
+sanitization behavior and artifact metadata.
 
 **Step 2: Sanitize advisory entries during prompt projection**
 
@@ -212,9 +212,7 @@ git add crates/app/src/advisory_prompt.rs
 git add crates/app/src/lib.rs
 git add crates/app/src/runtime_identity.rs
 git add crates/app/src/provider/request_message_runtime.rs
-git add crates/app/src/provider/mod.rs
 git add crates/app/src/conversation/context_engine.rs
-git add crates/app/src/conversation/tests.rs
 git add docs/product-specs/runtime-self-continuity.md
 git commit -m "fix(app): harden advisory runtime-self prompt boundaries"
 ```

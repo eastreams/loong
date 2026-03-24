@@ -1022,8 +1022,9 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[test]
-    fn push_memory_context_entry_only_preserves_first_summary_container_heading() {
+    fn append_advisory_memory_message_only_preserves_first_summary_container_heading() {
         let mut messages = Vec::new();
+        let mut artifacts = Vec::new();
         let entry = memory::MemoryContextEntry {
             kind: memory::MemoryContextKind::Summary,
             role: "system".to_owned(),
@@ -1037,9 +1038,11 @@ mod tests {
             .to_owned(),
         };
 
-        push_memory_context_entry(&mut messages, &entry);
+        append_advisory_memory_message(&mut messages, &mut artifacts, &entry);
 
         assert_eq!(messages.len(), 1);
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].artifact_kind, ContextArtifactKind::Summary);
 
         let content = messages[0]["content"].as_str().expect("message content");
 
