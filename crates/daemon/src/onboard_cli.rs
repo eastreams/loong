@@ -13,7 +13,6 @@ use loongclaw_app as mvp;
 use loongclaw_contracts::SecretRef;
 use loongclaw_spec::CliResult;
 
-use crate::provider_credential_policy;
 use crate::onboard_finalize::{
     ConfigWritePlan, build_onboarding_success_summary_with_memory, prepare_output_path_for_write,
     render_onboarding_success_summary_lines, resolve_backup_path, rollback_onboard_write_failure,
@@ -22,6 +21,7 @@ use crate::onboard_finalize::{
 use crate::onboard_finalize::{
     OnboardWriteRecovery, format_backup_timestamp_at, resolve_backup_path_at,
 };
+use crate::provider_credential_policy;
 #[cfg(test)]
 use time::OffsetDateTime;
 
