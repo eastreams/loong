@@ -1389,9 +1389,12 @@ pub async fn run_onboard_cli_with_ui(
     } else {
         let write_plan = resolve_write_plan(&output_path, &options, ui, context)?;
         let write_recovery = prepare_output_path_for_write(&output_path, &write_plan)?;
-        if let Some(backup_path) = write_plan.backup_path.as_deref() {
-            let backup_message = format!("Backed up existing config to: {}", backup_path.display());
-            print_message(ui, backup_message)?;
+        if write_recovery.keep_backup_on_success {
+            if let Some(backup_path) = write_recovery.backup_path.as_deref() {
+                let backup_message =
+                    format!("Backed up existing config to: {}", backup_path.display());
+                print_message(ui, backup_message)?;
+            }
         }
         let path = match mvp::config::write(options.output.as_deref(), &config, write_plan.force) {
             Ok(path) => path,
