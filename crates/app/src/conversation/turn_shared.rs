@@ -76,6 +76,12 @@ fn think_tag_prefix_len(input: &str, tag: &str) -> Option<usize> {
 
     Some(tag_length)
 }
+
+fn sanitize_reply_text(text: &str) -> String {
+    let stripped_text = strip_think_tags(text);
+    let trimmed_text = stripped_text.trim();
+    trimmed_text.to_owned()
+}
 pub fn next_conversation_turn_id() -> String {
     static NEXT_CONVERSATION_TURN_SEQ: AtomicU64 = AtomicU64::new(1);
     let seq = NEXT_CONVERSATION_TURN_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -139,7 +145,10 @@ pub fn tool_driven_followup_payload(
         TurnResult::FinalText(text)
         | TurnResult::StreamingText(text)
         | TurnResult::StreamingDone(text) => {
-            Some(ToolDrivenFollowupPayload::ToolResult { text: text.clone() })
+            let sanitized_text = sanitize_reply_text(text);
+            Some(ToolDrivenFollowupPayload::ToolResult {
+                text: sanitized_text,
+            })
         }
         TurnResult::NeedsApproval(_) => None,
         TurnResult::ToolDenied(failure) | TurnResult::ToolError(failure) => {
@@ -299,10 +308,12 @@ impl<'a> ToolDrivenReplyKernel<'a> {
         match self.turn_result {
             TurnResult::FinalText(text)
             | TurnResult::StreamingText(text)
-            | TurnResult::StreamingDone(text) => Some(join_non_empty_lines(&[
-                self.assistant_preface,
-                text.as_str(),
-            ])),
+            | TurnResult::StreamingDone(text) => {
+                let sanitized_text = sanitize_reply_text(text);
+                let reply =
+                    join_non_empty_lines(&[self.assistant_preface, sanitized_text.as_str()]);
+                Some(reply)
+            }
             TurnResult::NeedsApproval(requirement) => Some(format_approval_required_reply(
                 self.assistant_preface,
                 requirement,
@@ -362,10 +373,11 @@ pub fn compose_assistant_reply(
         TurnResult::FinalText(text)
         | TurnResult::StreamingText(text)
         | TurnResult::StreamingDone(text) => {
+            let sanitized_text = sanitize_reply_text(text.as_str());
             if had_tool_intents {
-                join_non_empty_lines(&[assistant_preface, text.as_str()])
+                join_non_empty_lines(&[assistant_preface, sanitized_text.as_str()])
             } else {
-                text
+                sanitized_text
             }
         }
         TurnResult::NeedsApproval(requirement) => {
@@ -918,14 +930,14 @@ pub async fn request_completion_with_raw_fallback<R: ConversationRuntime + ?Size
 ) -> String {
     match runtime.request_completion(config, messages, binding).await {
         Ok(final_reply) => {
-            let trimmed = final_reply.trim();
-            if trimmed.is_empty() {
-                raw_reply.to_owned()
+            let sanitized_reply = sanitize_reply_text(final_reply.as_str());
+            if sanitized_reply.is_empty() {
+                sanitize_reply_text(raw_reply)
             } else {
-                trimmed.to_owned()
+                sanitized_reply
             }
         }
-        Err(_) => raw_reply.to_owned(),
+        Err(_) => sanitize_reply_text(raw_reply),
     }
 }
 
@@ -1103,6 +1115,17 @@ mod tests {
     }
 
     #[test]
+    fn compose_assistant_reply_strips_think_tags_from_final_text() {
+        let reply = compose_assistant_reply(
+            "preface",
+            false,
+            TurnResult::FinalText("<think>internal reasoning</think>visible reply".to_owned()),
+        );
+
+        assert_eq!(reply, "visible reply");
+    }
+
+    #[test]
     fn tool_driven_reply_kernel_extracts_raw_reply_and_result_followup() {
         let result = TurnResult::FinalText("tool output".to_owned());
         let kernel = ToolDrivenReplyKernel::new("preface", true, &result);
@@ -1114,6 +1137,19 @@ mod tests {
             Some(ToolDrivenFollowupPayload::ToolResult {
                 text: "tool output".to_owned(),
             })
+        );
+    }
+
+    #[test]
+    fn tool_driven_reply_kernel_strips_think_tags_from_raw_reply() {
+        let result = TurnResult::FinalText(
+            "<think>internal reasoning</think>visible tool output".to_owned(),
+        );
+        let kernel = ToolDrivenReplyKernel::new("preface", true, &result);
+
+        assert_eq!(
+            kernel.raw_reply(),
+            Some("preface\nvisible tool output".to_owned())
         );
     }
 
@@ -1161,6 +1197,20 @@ mod tests {
 
         assert_eq!(payload.kind(), ToolDrivenFollowupKind::ToolResult);
         assert_eq!(payload.message_context(), ("tool_result", "tool output"));
+    }
+
+    #[test]
+    fn tool_driven_followup_payload_strips_think_tags_from_tool_result_text() {
+        let turn_result = TurnResult::FinalText(
+            "<think>internal reasoning</think>visible tool output".to_owned(),
+        );
+
+        assert_eq!(
+            tool_driven_followup_payload(true, &turn_result),
+            Some(ToolDrivenFollowupPayload::ToolResult {
+                text: "visible tool output".to_owned(),
+            })
+        );
     }
 
     #[test]
@@ -2021,8 +2071,6 @@ mod tests {
         assert_eq!(reduced.as_ref(), tool_result);
         assert_eq!(reduced.as_ptr(), tool_result.as_ptr());
     }
-<<<<<<< HEAD
-=======
 
     #[test]
     fn strip_think_tags_removes_think_content() {
@@ -2072,5 +2120,4 @@ mod tests {
         let input = "Answer</think>";
         assert_eq!(strip_think_tags(input), "Answer");
     }
->>>>>>> e36c634f (fix(ci): unblock self continuity checks)
 }
