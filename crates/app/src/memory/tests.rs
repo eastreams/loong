@@ -272,6 +272,10 @@ fn pre_compaction_durable_flush_deduplicates_repeated_summary_exports() {
     let _guard = core_dispatch_test_lock()
         .lock()
         .expect("core dispatch test lock");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("current-thread runtime");
 
     let (workspace_root, config) =
         isolated_memory_workspace("loongclaw-pre-compaction-durable-flush");
@@ -295,8 +299,8 @@ fn pre_compaction_durable_flush_deduplicates_repeated_summary_exports() {
         "durable-flush-session",
         Some(workspace_root.as_path()),
         &config,
-    )
-    .expect("first durable flush");
+    );
+    let first = runtime.block_on(first).expect("first durable flush");
     let first_path = match first {
         super::durable_flush::PreCompactionDurableFlushOutcome::Flushed { path, .. } => path,
         other @ super::durable_flush::PreCompactionDurableFlushOutcome::SkippedMissingWorkspaceRoot
@@ -310,8 +314,8 @@ fn pre_compaction_durable_flush_deduplicates_repeated_summary_exports() {
         "durable-flush-session",
         Some(workspace_root.as_path()),
         &config,
-    )
-    .expect("second durable flush");
+    );
+    let second = runtime.block_on(second).expect("second durable flush");
     assert_eq!(
         second,
         super::durable_flush::PreCompactionDurableFlushOutcome::SkippedDuplicate
@@ -334,6 +338,10 @@ fn pre_compaction_durable_flush_skips_when_no_summary_checkpoint_exists() {
     let _guard = core_dispatch_test_lock()
         .lock()
         .expect("core dispatch test lock");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("current-thread runtime");
 
     let (workspace_root, config) =
         isolated_memory_workspace("loongclaw-pre-compaction-durable-flush-empty");
@@ -350,8 +358,10 @@ fn pre_compaction_durable_flush_skips_when_no_summary_checkpoint_exists() {
         "durable-flush-empty-session",
         Some(workspace_root.as_path()),
         &config,
-    )
-    .expect("durable flush without summary should succeed");
+    );
+    let outcome = runtime
+        .block_on(outcome)
+        .expect("durable flush without summary should succeed");
 
     assert_eq!(
         outcome,

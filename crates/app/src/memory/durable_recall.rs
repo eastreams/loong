@@ -1,3 +1,5 @@
+use std::fs::File;
+use std::io::{BufReader, Read};
 use std::path::Path;
 
 use crate::runtime_self_continuity;
@@ -9,6 +11,7 @@ use super::{
 };
 
 const RECENT_DAILY_LOG_LIMIT: usize = 2;
+const DURABLE_RECALL_READ_SLACK_BYTES: usize = 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DurableRecallDocument {
@@ -95,12 +98,33 @@ fn load_trimmed_document_content(
     path: &Path,
     per_file_char_budget: usize,
 ) -> Result<Option<String>, String> {
-    let raw_content = std::fs::read_to_string(path).map_err(|error| {
+    let read_limit = per_file_char_budget.saturating_add(DURABLE_RECALL_READ_SLACK_BYTES);
+    let file = File::open(path).map_err(|error| {
         format!(
             "read durable recall file {} failed: {error}",
             path.display()
         )
     })?;
+    let reader = BufReader::new(file);
+    let mut limited_reader = reader.take(read_limit as u64);
+    let mut raw_bytes = Vec::new();
+
+    limited_reader
+        .read_to_end(&mut raw_bytes)
+        .map_err(|error| {
+            format!(
+                "read durable recall file {} failed: {error}",
+                path.display()
+            )
+        })?;
+
+    let raw_content = String::from_utf8(raw_bytes).map_err(|error| {
+        format!(
+            "read durable recall file {} failed: {error}",
+            path.display()
+        )
+    })?;
+
     let trimmed_content = raw_content.trim();
     if trimmed_content.is_empty() {
         return Ok(None);
@@ -194,6 +218,25 @@ mod tests {
 
         assert_eq!(documents.len(), 1);
         assert_eq!(documents[0].label, "memory/2026-03-22.md");
+    }
+
+    #[test]
+    fn load_trimmed_document_content_ignores_invalid_tail_beyond_budget() {
+        let temp_dir = tempdir().expect("tempdir");
+        let document_path = temp_dir.path().join("MEMORY.md");
+        let mut bytes = vec![b'a'; 1600];
+
+        bytes.push(0xff);
+        bytes.push(0xfe);
+
+        std::fs::write(&document_path, bytes).expect("write memory fixture");
+
+        let content = load_trimmed_document_content(&document_path, 64)
+            .expect("bounded durable recall read should succeed")
+            .expect("content should be present");
+
+        assert!(content.starts_with("aaaaaaaa"));
+        assert!(content.contains("(truncated "));
     }
 
     #[test]

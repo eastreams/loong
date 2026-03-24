@@ -1,4 +1,5 @@
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
@@ -25,6 +26,12 @@ struct MemorySearchResult {
 struct BestLineMatch {
     line_number: usize,
     score: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MemoryFileWindow {
+    total_lines: usize,
+    selected_lines: Vec<String>,
 }
 
 pub(super) fn execute_memory_search_tool_with_config(
@@ -134,34 +141,29 @@ pub(super) fn execute_memory_get_tool_with_config(
             )
         })?;
 
-    let content = fs::read_to_string(matched_location.path.as_path()).map_err(|error| {
-        format!(
-            "failed to read memory file {}: {error}",
-            matched_location.path.display()
-        )
-    })?;
-    let lines = content.lines().collect::<Vec<_>>();
-    if lines.is_empty() {
+    let file_window = read_memory_file_window(
+        matched_location.path.as_path(),
+        requested_start_line,
+        requested_line_count,
+    )?;
+    let total_lines = file_window.total_lines;
+    let selected_lines = file_window.selected_lines;
+
+    if total_lines == 0 {
         return Err(format!("memory file `{}` is empty", matched_location.label));
     }
-    if requested_start_line > lines.len() {
+    if requested_start_line > total_lines {
         return Err(format!(
             "memory_get start line {} exceeds file length {} for `{}`",
-            requested_start_line,
-            lines.len(),
-            matched_location.label
+            requested_start_line, total_lines, matched_location.label
         ));
     }
 
-    let start_index = requested_start_line.saturating_sub(1);
-    let end_index = start_index
-        .saturating_add(requested_line_count)
-        .min(lines.len());
-    let start_line = start_index.saturating_add(1);
-    let end_line = end_index;
-    let selected_lines = lines
-        .get(start_index..end_index)
-        .ok_or_else(|| "memory_get selected line window is out of bounds".to_owned())?;
+    let start_line = requested_start_line;
+    let selected_line_count = selected_lines.len();
+    let end_line = start_line
+        .saturating_add(selected_line_count)
+        .saturating_sub(1);
     let text = selected_lines.join("\n");
 
     Ok(ToolCoreOutcome {
@@ -188,6 +190,55 @@ pub(super) fn memory_corpus_available(config: &super::runtime_config::ToolRuntim
     };
 
     !locations.is_empty()
+}
+
+fn read_memory_file_window(
+    path: &Path,
+    requested_start_line: usize,
+    requested_line_count: usize,
+) -> Result<MemoryFileWindow, String> {
+    let file = File::open(path)
+        .map_err(|error| format!("failed to read memory file {}: {error}", path.display()))?;
+    let mut reader = BufReader::new(file);
+    let mut total_lines = 0usize;
+    let mut selected_lines = Vec::new();
+    let mut buffer = String::new();
+
+    loop {
+        buffer.clear();
+
+        let bytes_read = reader
+            .read_line(&mut buffer)
+            .map_err(|error| format!("failed to read memory file {}: {error}", path.display()))?;
+        if bytes_read == 0 {
+            break;
+        }
+
+        total_lines = total_lines.saturating_add(1);
+
+        if total_lines < requested_start_line {
+            continue;
+        }
+        if selected_lines.len() >= requested_line_count {
+            break;
+        }
+
+        let line = trim_trailing_line_endings(&buffer);
+        let owned_line = line.to_owned();
+
+        selected_lines.push(owned_line);
+
+        if selected_lines.len() >= requested_line_count {
+            break;
+        }
+    }
+
+    let file_window = MemoryFileWindow {
+        total_lines,
+        selected_lines,
+    };
+
+    Ok(file_window)
 }
 
 fn workspace_root_from_config(
@@ -413,4 +464,10 @@ fn memory_search_result_payload(result: &MemorySearchResult) -> Value {
         "snippet": result.snippet,
         "score": result.score,
     })
+}
+
+fn trim_trailing_line_endings(line: &str) -> &str {
+    let without_newline = line.strip_suffix('\n').unwrap_or(line);
+    let without_carriage_return = without_newline.strip_suffix('\r');
+    without_carriage_return.unwrap_or(without_newline)
 }

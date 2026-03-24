@@ -2341,7 +2341,8 @@ async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
             session_id,
             workspace_root.as_deref(),
             &memory_config,
-        );
+        )
+        .await;
         match durable_flush_result {
             Ok(_) => {}
             Err(_error) if config.conversation.compaction_fail_open() => {
