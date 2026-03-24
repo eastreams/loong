@@ -10,6 +10,8 @@ use loongclaw_contracts::SecretRef;
 use loongclaw_spec::CliResult;
 use serde_json::json;
 
+use crate::provider_credential_policy;
+
 const MODEL_CATALOG_PROBE_FAILED_MARKER: &str = "model catalog probe failed";
 
 #[derive(Debug, Clone)]
@@ -1172,24 +1174,26 @@ fn maybe_apply_provider_env_fix(
     if !fix {
         return false;
     }
-    let Some(binding) =
-        crate::onboard_cli::preferred_provider_credential_env_binding(&config.provider)
-    else {
+    let binding =
+        provider_credential_policy::preferred_provider_credential_env_binding(&config.provider);
+    let Some(binding) = binding else {
         return false;
     };
     match binding.field {
-        crate::onboard_cli::ProviderCredentialEnvField::ApiKey => ensure_env_binding(
+        provider_credential_policy::ProviderCredentialEnvField::ApiKey => ensure_env_binding(
             &mut config.provider.api_key_env,
             &binding.env_name,
             fixes,
             "set provider.api_key_env",
         ),
-        crate::onboard_cli::ProviderCredentialEnvField::OAuthAccessToken => ensure_env_binding(
-            &mut config.provider.oauth_access_token_env,
-            &binding.env_name,
-            fixes,
-            "set provider.oauth_access_token_env",
-        ),
+        provider_credential_policy::ProviderCredentialEnvField::OAuthAccessToken => {
+            ensure_env_binding(
+                &mut config.provider.oauth_access_token_env,
+                &binding.env_name,
+                fixes,
+                "set provider.oauth_access_token_env",
+            )
+        }
     }
 }
 
@@ -1272,7 +1276,7 @@ fn provider_credentials_doctor_check(
         };
     }
 
-    let hints = crate::onboard_cli::provider_credential_env_hints(&config.provider);
+    let hints = provider_credential_policy::provider_credential_env_hints(&config.provider);
     let mut detail = if hints.is_empty() {
         "provider credentials are missing".to_owned()
     } else {
@@ -1514,7 +1518,7 @@ fn build_doctor_next_steps_with_path_env(
         .iter()
         .any(|check| check.name == "provider credentials" && check.level != DoctorCheckLevel::Pass)
     {
-        let hints = crate::onboard_cli::provider_credential_env_hints(&config.provider);
+        let hints = provider_credential_policy::provider_credential_env_hints(&config.provider);
         if !hints.is_empty() {
             push_unique_step(
                 &mut steps,
@@ -2112,9 +2116,8 @@ mod tests {
 
     #[test]
     fn provider_credential_env_hints_prioritize_oauth_defaults() {
-        let hints = crate::onboard_cli::provider_credential_env_hints(
-            &mvp::config::ProviderConfig::default(),
-        );
+        let provider = mvp::config::ProviderConfig::default();
+        let hints = provider_credential_policy::provider_credential_env_hints(&provider);
 
         assert!(
             hints.contains(&"OPENAI_CODEX_OAUTH_TOKEN".to_owned()),
