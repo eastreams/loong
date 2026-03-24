@@ -1,4 +1,5 @@
 pub mod analytics;
+mod compaction;
 mod context_engine;
 mod context_engine_registry;
 mod ingress;
