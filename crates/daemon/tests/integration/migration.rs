@@ -475,8 +475,13 @@ fn migration_domain_previews_preserve_source_attribution() {
 fn migration_classify_current_setup_distinguishes_basic_states() {
     let home = unique_temp_dir("classify-home");
     std::fs::create_dir_all(&home).expect("create classify home");
-    let _env_guard =
-        MigrationEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
+    let _env_guard = MigrationEnvironmentGuard::set(&[
+        ("HOME", Some(home.to_string_lossy().as_ref())),
+        ("OPENAI_API_KEY", None),
+        ("OPENAI_CODEX_OAUTH_TOKEN", None),
+        ("OPENAI_OAUTH_ACCESS_TOKEN", None),
+        ("TELEGRAM_BOT_TOKEN", None),
+    ]);
 
     let missing = unique_temp_dir("missing").join("config.toml");
     assert_eq!(
@@ -582,8 +587,13 @@ fn migration_classify_current_setup_ignores_home_drift_for_default_memory_path()
 
     let path = unique_temp_dir("classify-home-drift").join("config.toml");
     {
-        let _guard =
-            MigrationEnvironmentGuard::set(&[("HOME", Some(home_a.to_string_lossy().as_ref()))]);
+        let _guard = MigrationEnvironmentGuard::set(&[
+            ("HOME", Some(home_a.to_string_lossy().as_ref())),
+            ("OPENAI_API_KEY", None),
+            ("OPENAI_CODEX_OAUTH_TOKEN", None),
+            ("OPENAI_OAUTH_ACCESS_TOKEN", None),
+            ("TELEGRAM_BOT_TOKEN", None),
+        ]);
 
         let mut config = mvp::config::LoongClawConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Ollama;
@@ -596,8 +606,13 @@ fn migration_classify_current_setup_ignores_home_drift_for_default_memory_path()
             .expect("write legacy-style config under first home");
     }
 
-    let _guard =
-        MigrationEnvironmentGuard::set(&[("HOME", Some(home_b.to_string_lossy().as_ref()))]);
+    let _guard = MigrationEnvironmentGuard::set(&[
+        ("HOME", Some(home_b.to_string_lossy().as_ref())),
+        ("OPENAI_API_KEY", None),
+        ("OPENAI_CODEX_OAUTH_TOKEN", None),
+        ("OPENAI_OAUTH_ACCESS_TOKEN", None),
+        ("TELEGRAM_BOT_TOKEN", None),
+    ]);
 
     assert_eq!(
         crate::migration::discovery::classify_current_setup(&path),
@@ -1720,8 +1735,13 @@ fn migration_compose_recommended_candidate_ignores_home_drift_for_default_memory
     std::fs::create_dir_all(&home_b).expect("create second home");
 
     let (codex, env) = {
-        let _guard =
-            MigrationEnvironmentGuard::set(&[("HOME", Some(home_a.to_string_lossy().as_ref()))]);
+        let _guard = MigrationEnvironmentGuard::set(&[
+            ("HOME", Some(home_a.to_string_lossy().as_ref())),
+            ("OPENAI_API_KEY", None),
+            ("OPENAI_CODEX_OAUTH_TOKEN", None),
+            ("OPENAI_OAUTH_ACCESS_TOKEN", None),
+            ("TELEGRAM_BOT_TOKEN", None),
+        ]);
 
         let mut codex = mvp::config::LoongClawConfig::default();
         codex.provider.model = "openai/gpt-5.1-codex".to_owned();
@@ -1737,8 +1757,13 @@ fn migration_compose_recommended_candidate_ignores_home_drift_for_default_memory
         (codex, env)
     };
 
-    let _guard =
-        MigrationEnvironmentGuard::set(&[("HOME", Some(home_b.to_string_lossy().as_ref()))]);
+    let _guard = MigrationEnvironmentGuard::set(&[
+        ("HOME", Some(home_b.to_string_lossy().as_ref())),
+        ("OPENAI_API_KEY", None),
+        ("OPENAI_CODEX_OAUTH_TOKEN", None),
+        ("OPENAI_OAUTH_ACCESS_TOKEN", None),
+        ("TELEGRAM_BOT_TOKEN", None),
+    ]);
 
     let codex_candidate = crate::migration::discovery::build_import_candidate(
         crate::migration::types::ImportSourceKind::CodexConfig,

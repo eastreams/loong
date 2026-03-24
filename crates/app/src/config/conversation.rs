@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+const fn default_compact_preserve_recent_turns() -> usize {
+    6
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ConversationConfig {
     #[serde(default)]
@@ -12,6 +16,8 @@ pub struct ConversationConfig {
     pub compact_min_messages: Option<usize>,
     #[serde(default)]
     pub compact_trigger_estimated_tokens: Option<usize>,
+    #[serde(default = "default_compact_preserve_recent_turns")]
+    pub compact_preserve_recent_turns: usize,
     #[serde(default = "default_true")]
     pub compact_fail_open: bool,
     #[serde(default)]
@@ -120,6 +126,7 @@ impl Default for ConversationConfig {
             compact_enabled: default_true(),
             compact_min_messages: None,
             compact_trigger_estimated_tokens: None,
+            compact_preserve_recent_turns: default_compact_preserve_recent_turns(),
             compact_fail_open: default_true(),
             turn_loop: ConversationTurnLoopConfig::default(),
             hybrid_lane_enabled: default_true(),
@@ -269,6 +276,10 @@ impl ConversationConfig {
             .filter(|value| *value > 0)
     }
 
+    pub fn compact_preserve_recent_turns(&self) -> usize {
+        self.compact_preserve_recent_turns.max(1)
+    }
+
     pub fn should_compact(&self, message_count: usize) -> bool {
         self.should_compact_with_estimate(message_count, None)
     }
@@ -284,17 +295,17 @@ impl ConversationConfig {
 
         let min_messages = self.compact_min_messages();
         let trigger_tokens = self.compact_trigger_estimated_tokens();
+
         if min_messages.is_none() && trigger_tokens.is_none() {
-            return true;
+            return false;
         }
 
-        let message_threshold_hit = min_messages.is_some_and(|min| message_count >= min);
-        let token_threshold_hit = match (trigger_tokens, estimated_tokens) {
-            (Some(threshold), Some(tokens)) => tokens >= threshold,
-            _ => false,
-        };
+        let messages_triggered = min_messages.is_some_and(|threshold| message_count >= threshold);
+        let tokens_triggered = trigger_tokens
+            .zip(estimated_tokens)
+            .is_some_and(|(threshold, actual)| actual >= threshold);
 
-        message_threshold_hit || token_threshold_hit
+        messages_triggered || tokens_triggered
     }
 
     pub fn compaction_fail_open(&self) -> bool {

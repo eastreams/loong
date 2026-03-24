@@ -2538,12 +2538,15 @@ async fn handle_turn_with_runtime_success_with_kernel_runs_lifecycle_hooks() {
         vec![json!({"role": "system", "content": "sys"})],
         Ok("assistant-reply".to_owned()),
     );
+    let mut config = test_config();
+    config.conversation.compact_min_messages = Some(1);
+    config.conversation.compact_trigger_estimated_tokens = Some(1);
     let coordinator = ConversationTurnCoordinator::new();
     let kernel_ctx = crate::context::bootstrap_test_kernel_context("test-handle-turn-success", 60)
         .expect("bootstrap kernel context");
     let reply = coordinator
         .handle_turn_with_runtime(
-            &test_config(),
+            &config,
             "session-1",
             "hello",
             ProviderErrorMode::Propagate,
@@ -4234,6 +4237,8 @@ async fn handle_turn_with_runtime_compaction_error_is_ignored_when_fail_open() {
     );
     runtime.compact_result = Err("compact failure".to_owned());
     let mut config = test_config();
+    config.conversation.compact_min_messages = Some(1);
+    config.conversation.compact_trigger_estimated_tokens = Some(1);
     config.conversation.compact_fail_open = true;
 
     let coordinator = ConversationTurnCoordinator::new();
@@ -4263,6 +4268,8 @@ async fn handle_turn_with_runtime_compaction_error_propagates_when_fail_closed()
     );
     runtime.compact_result = Err("compact failure".to_owned());
     let mut config = test_config();
+    config.conversation.compact_min_messages = Some(1);
+    config.conversation.compact_trigger_estimated_tokens = Some(1);
     config.conversation.compact_fail_open = false;
 
     let coordinator = ConversationTurnCoordinator::new();
@@ -10545,6 +10552,92 @@ fn build_kernel_context_with_raw_window_payload(
     (ctx, invocations)
 }
 
+fn build_kernel_context_with_compaction_conflict(
+    audit: Arc<InMemoryAuditSink>,
+) -> (KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::MemoryWrite, Capability::MemoryRead]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+
+    let invocations = Arc::new(Mutex::new(Vec::new()));
+    let adapter = ConflictOnFirstReplaceMemoryAdapter {
+        invocations: invocations.clone(),
+        state: Mutex::new(ConflictOnFirstReplaceState::default()),
+    };
+    kernel.register_core_memory_adapter(adapter);
+    kernel
+        .set_default_core_memory_adapter("test-memory-conflict-retry")
+        .expect("set default memory adapter");
+
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+
+    let ctx = KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    (ctx, invocations)
+}
+
+fn build_kernel_context_with_incomplete_compaction_snapshot(
+    audit: Arc<InMemoryAuditSink>,
+    window_turns: Value,
+    turn_count: usize,
+) -> (KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::MemoryWrite, Capability::MemoryRead]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+
+    let invocations = Arc::new(Mutex::new(Vec::new()));
+    kernel.register_core_memory_adapter(IncompleteCompactionSnapshotMemoryAdapter {
+        invocations: invocations.clone(),
+        window_turns,
+        turn_count,
+    });
+    kernel
+        .set_default_core_memory_adapter("test-memory-incomplete-compaction-snapshot")
+        .expect("set default memory adapter");
+
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+
+    let ctx = KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    (ctx, invocations)
+}
+
 #[cfg(feature = "memory-sqlite")]
 fn prepare_discovery_first_summary_test(
     db_scope: &str,
@@ -10712,6 +10805,165 @@ impl CoreMemoryAdapter for RawWindowPayloadMemoryAdapter {
             status: "ok".to_owned(),
             payload: json!({}),
         })
+    }
+}
+
+struct ConflictOnFirstReplaceState {
+    turn_count: usize,
+    window_turns: Vec<Value>,
+    conflict_emitted: bool,
+}
+
+impl Default for ConflictOnFirstReplaceState {
+    fn default() -> Self {
+        Self {
+            turn_count: 6,
+            window_turns: vec![
+                json!({"role": "user", "content": "ask 1", "ts": 1}),
+                json!({"role": "assistant", "content": "reply 1", "ts": 2}),
+                json!({"role": "user", "content": "ask 2", "ts": 3}),
+                json!({"role": "assistant", "content": "reply 2", "ts": 4}),
+                json!({"role": "user", "content": "recent ask", "ts": 5}),
+                json!({"role": "assistant", "content": "recent reply", "ts": 6}),
+            ],
+            conflict_emitted: false,
+        }
+    }
+}
+
+struct ConflictOnFirstReplaceMemoryAdapter {
+    invocations: Arc<Mutex<Vec<MemoryCoreRequest>>>,
+    state: Mutex<ConflictOnFirstReplaceState>,
+}
+
+#[async_trait]
+impl CoreMemoryAdapter for ConflictOnFirstReplaceMemoryAdapter {
+    fn name(&self) -> &str {
+        "test-memory-conflict-retry"
+    }
+
+    async fn execute_core_memory(
+        &self,
+        request: MemoryCoreRequest,
+    ) -> Result<MemoryCoreOutcome, MemoryPlaneError> {
+        self.invocations
+            .lock()
+            .expect("invocations lock")
+            .push(request.clone());
+
+        let mut state = self.state.lock().expect("conflict state lock");
+        match request.operation.as_str() {
+            crate::memory::MEMORY_OP_READ_CONTEXT => Ok(MemoryCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({"entries": []}),
+            }),
+            crate::memory::MEMORY_OP_WINDOW => Ok(MemoryCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "turns": state.window_turns.clone(),
+                    "turn_count": state.turn_count,
+                }),
+            }),
+            crate::memory::MEMORY_OP_REPLACE_TURNS => {
+                let expected_turn_count = request
+                    .payload
+                    .get("expected_turn_count")
+                    .and_then(Value::as_u64)
+                    .map(|value| value as usize);
+
+                if !state.conflict_emitted {
+                    state.turn_count += 1;
+                    let concurrent_ts = state.turn_count as i64;
+                    state.window_turns.push(json!({
+                        "role": "user",
+                        "content": "concurrent ask",
+                        "ts": concurrent_ts,
+                    }));
+                    state.conflict_emitted = true;
+                    return Ok(MemoryCoreOutcome {
+                        status: "conflict".to_owned(),
+                        payload: json!({
+                            "expected_turn_count": expected_turn_count,
+                            "actual_turn_count": state.turn_count,
+                        }),
+                    });
+                }
+
+                if expected_turn_count != Some(state.turn_count) {
+                    return Ok(MemoryCoreOutcome {
+                        status: "conflict".to_owned(),
+                        payload: json!({
+                            "expected_turn_count": expected_turn_count,
+                            "actual_turn_count": state.turn_count,
+                        }),
+                    });
+                }
+
+                let turns = request
+                    .payload
+                    .get("turns")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                state.turn_count = turns.len();
+                state.window_turns = turns;
+                Ok(MemoryCoreOutcome {
+                    status: "ok".to_owned(),
+                    payload: json!({
+                        "replaced_turns": state.turn_count,
+                    }),
+                })
+            }
+            _ => Ok(MemoryCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({}),
+            }),
+        }
+    }
+}
+
+struct IncompleteCompactionSnapshotMemoryAdapter {
+    invocations: Arc<Mutex<Vec<MemoryCoreRequest>>>,
+    window_turns: Value,
+    turn_count: usize,
+}
+
+#[async_trait]
+impl CoreMemoryAdapter for IncompleteCompactionSnapshotMemoryAdapter {
+    fn name(&self) -> &str {
+        "test-memory-incomplete-compaction-snapshot"
+    }
+
+    async fn execute_core_memory(
+        &self,
+        request: MemoryCoreRequest,
+    ) -> Result<MemoryCoreOutcome, MemoryPlaneError> {
+        self.invocations
+            .lock()
+            .expect("invocations lock")
+            .push(request.clone());
+
+        match request.operation.as_str() {
+            crate::memory::MEMORY_OP_READ_CONTEXT => Ok(MemoryCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({"entries": []}),
+            }),
+            crate::memory::MEMORY_OP_WINDOW => Ok(MemoryCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "turns": self.window_turns.clone(),
+                    "turn_count": self.turn_count,
+                }),
+            }),
+            crate::memory::MEMORY_OP_REPLACE_TURNS => Err(MemoryPlaneError::Execution(
+                "replace_turns should not run when the compaction snapshot is incomplete"
+                    .to_owned(),
+            )),
+            _ => Ok(MemoryCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({}),
+            }),
+        }
     }
 }
 
@@ -17296,6 +17548,1028 @@ async fn durable_turn_checkpoint_repair_persists_failed_terminal_checkpoint_then
             .len(),
         1,
         "finalized durable checkpoint must not trigger another compaction"
+    );
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[test]
+fn compact_window_preserves_recent_turns_and_summarizes_history() {
+    use super::compaction::{CompactPolicy, compact_window};
+
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "ask 1".into(),
+            ts: Some(1),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "reply 1".into(),
+            ts: Some(2),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "ask 2".into(),
+            ts: Some(3),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "reply 2".into(),
+            ts: Some(4),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "recent ask".into(),
+            ts: Some(5),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "recent reply".into(),
+            ts: Some(6),
+        },
+    ];
+
+    let compacted = compact_window(&turns, CompactPolicy::new(2)).expect("should compact");
+
+    assert_eq!(compacted.len(), 3);
+    assert_eq!(compacted[0].role, "user");
+    assert!(compacted[0].content.contains("Compacted 4 earlier turns"));
+    assert_eq!(compacted[1].content, "recent ask");
+    assert_eq!(compacted[2].content, "recent reply");
+}
+
+#[test]
+fn compact_window_skips_small_histories() {
+    use super::compaction::{CompactPolicy, compact_window};
+
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "short".into(),
+            ts: Some(1),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "reply".into(),
+            ts: Some(2),
+        },
+    ];
+
+    assert!(compact_window(&turns, CompactPolicy::new(2)).is_none());
+}
+
+#[test]
+fn compact_window_skips_recompacting_single_prior_summary() {
+    use super::compaction::{CompactPolicy, compact_window};
+
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "Compacted 4 earlier turns\nuser: ask 1".into(),
+            ts: Some(4),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "recent ask".into(),
+            ts: Some(5),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "recent reply".into(),
+            ts: Some(6),
+        },
+    ];
+
+    assert!(compact_window(&turns, CompactPolicy::new(2)).is_none());
+}
+
+#[test]
+fn compact_window_bounds_summary_content_and_prior_summaries() {
+    use super::compaction::{CompactPolicy, compact_window};
+
+    let prior_summary = format!("Compacted 9 earlier turns\nuser: {}", "history ".repeat(64));
+    let long_payload = "payload ".repeat(96);
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: prior_summary,
+            ts: Some(1),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: long_payload.clone(),
+            ts: Some(2),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: long_payload.clone(),
+            ts: Some(3),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: long_payload.clone(),
+            ts: Some(4),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: long_payload,
+            ts: Some(5),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "recent ask".into(),
+            ts: Some(6),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "recent reply".into(),
+            ts: Some(7),
+        },
+    ];
+
+    let compacted = compact_window(&turns, CompactPolicy::new(2)).expect("should compact");
+    let summary = &compacted[0].content;
+
+    assert!(summary.contains("history"));
+    assert!(summary.contains("earlier turns omitted"));
+    assert!(
+        summary.len() < 512,
+        "summary should stay bounded: {}",
+        summary.len()
+    );
+    assert_eq!(compacted[1].content, "recent ask");
+    assert_eq!(compacted[2].content, "recent reply");
+}
+
+#[test]
+fn compact_window_retains_prior_summary_details_across_repeated_compaction() {
+    use super::compaction::{CompactPolicy, compact_window};
+
+    let prior_summary = "Compacted 1 earlier turns\nuser: For this test, remember these facts exactly: - codename: NIMBUS-17 - owner: Mina - budget: 47";
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: prior_summary.into(),
+            ts: Some(1),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "ack-1".into(),
+            ts: Some(2),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "Add these facts too: - launch month: October - fallback code: RIVER-9".into(),
+            ts: Some(3),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "ack-2".into(),
+            ts: Some(4),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "recent ask".into(),
+            ts: Some(5),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "recent reply".into(),
+            ts: Some(6),
+        },
+    ];
+
+    let compacted = compact_window(&turns, CompactPolicy::new(2)).expect("should compact");
+    let summary = &compacted[0].content;
+
+    assert!(summary.contains("NIMBUS-17"));
+    assert!(summary.contains("Mina"));
+    assert!(summary.contains("47"));
+    assert!(summary.contains("October"));
+    assert!(summary.contains("RIVER-9"));
+    assert!(
+        !summary.contains("[prior compacted summary]"),
+        "repeated compaction should retain prior summary details: {summary}"
+    );
+}
+
+#[test]
+fn compact_window_prioritizes_user_fact_turns_when_summary_budget_is_limited() {
+    use super::compaction::{CompactPolicy, compact_window};
+
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "codename: NIMBUS-17 owner: Mina budget: 47".into(),
+            ts: Some(1),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "ack-1".into(),
+            ts: Some(2),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "launch month: October fallback code: RIVER-9".into(),
+            ts: Some(3),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "ack-2".into(),
+            ts: Some(4),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "escalation contact: Owen".into(),
+            ts: Some(5),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "ack-3".into(),
+            ts: Some(6),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "recent ask".into(),
+            ts: Some(7),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "recent reply".into(),
+            ts: Some(8),
+        },
+    ];
+
+    let compacted = compact_window(&turns, CompactPolicy::new(2)).expect("should compact");
+    let summary = &compacted[0].content;
+
+    assert!(summary.contains("NIMBUS-17"));
+    assert!(summary.contains("October"));
+    assert!(summary.contains("RIVER-9"));
+    assert!(summary.contains("Owen"));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn default_context_engine_metadata_advertises_context_compaction() {
+    use super::context_engine::{
+        ContextEngineCapability, ConversationContextEngine, DefaultContextEngine,
+    };
+
+    let engine = DefaultContextEngine;
+    let metadata = engine.metadata();
+
+    assert!(
+        metadata
+            .capabilities
+            .contains(&ContextEngineCapability::KernelMemoryWindowRead)
+    );
+    assert!(
+        metadata
+            .capabilities
+            .contains(&ContextEngineCapability::ContextCompaction)
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_context_engine_compact_context_rewrites_persisted_window() {
+    use super::context_engine::{ConversationContextEngine, DefaultContextEngine};
+
+    let mut config = test_config();
+    let db_path = unique_memory_sqlite_path("default-context-engine-compaction");
+    let _ = std::fs::remove_file(&db_path);
+    config.memory.sqlite_path = db_path.clone();
+    config.memory.sliding_window = 32;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let kernel_ctx =
+        test_kernel_context_with_memory("test-default-context-engine-compaction", &memory_config);
+    let session_id = "default-context-engine-compaction";
+
+    for (role, content) in [
+        ("user", "ask 1"),
+        ("assistant", "reply 1"),
+        ("user", "ask 2"),
+        ("assistant", "reply 2"),
+        ("user", "ask 3"),
+        ("assistant", "reply 3"),
+        ("user", "recent ask"),
+        ("assistant", "recent reply"),
+    ] {
+        crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+            .expect("seed turns should succeed");
+    }
+
+    let engine = DefaultContextEngine;
+    engine
+        .compact_context(&config, session_id, &[], &kernel_ctx)
+        .await
+        .expect("default engine compaction should succeed");
+
+    let turns = crate::memory::window_direct(session_id, 32, &memory_config)
+        .expect("window load should succeed");
+
+    assert_eq!(turns.len(), 7);
+    assert_eq!(turns[0].role, "user");
+    assert!(turns[0].content.contains("Compacted 2 earlier turns"));
+    assert_eq!(turns[1].content, "ask 2");
+    assert_eq!(turns[2].content, "reply 2");
+    assert_eq!(turns[5].content, "recent ask");
+    assert_eq!(turns[6].content, "recent reply");
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_context_engine_compact_context_compacts_full_session_but_assembles_within_sliding_window()
+ {
+    use super::context_engine::{ConversationContextEngine, DefaultContextEngine};
+
+    let mut config = test_config();
+    let db_path = unique_memory_sqlite_path("default-context-engine-compaction-clamp");
+    let _ = std::fs::remove_file(&db_path);
+    config.memory.sqlite_path = db_path.clone();
+    config.memory.sliding_window = 4;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let kernel_ctx = test_kernel_context_with_memory(
+        "test-default-context-engine-compaction-clamp",
+        &memory_config,
+    );
+    let session_id = "default-context-engine-compaction-clamp";
+
+    for (role, content) in [
+        ("user", "ask 1"),
+        ("assistant", "reply 1"),
+        ("user", "ask 2"),
+        ("assistant", "reply 2"),
+        ("user", "recent ask"),
+        ("assistant", "recent reply"),
+    ] {
+        crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+            .expect("seed turns should succeed");
+    }
+
+    let engine = DefaultContextEngine;
+    engine
+        .compact_context(&config, session_id, &[], &kernel_ctx)
+        .await
+        .expect("default engine compaction should succeed");
+
+    let turns = crate::memory::window_direct(session_id, 32, &memory_config)
+        .expect("window load should succeed");
+    assert_eq!(turns.len(), 4);
+    assert_eq!(turns[0].role, "user");
+    assert!(turns[0].content.contains("Compacted 3 earlier turns"));
+    assert_eq!(turns[1].content, "reply 2");
+    assert_eq!(turns[2].content, "recent ask");
+    assert_eq!(turns[3].content, "recent reply");
+
+    let messages = engine
+        .assemble_messages(
+            &config,
+            session_id,
+            false,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("assemble messages should preserve summary inside sliding window");
+    assert_eq!(messages.len(), 4);
+    assert!(
+        messages[0]["content"]
+            .as_str()
+            .expect("summary content")
+            .contains("Compacted 3 earlier turns")
+    );
+    assert_eq!(
+        messages[3]["content"]
+            .as_str()
+            .expect("recent reply content"),
+        "recent reply"
+    );
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_context_engine_compact_context_rewrites_from_full_session_snapshot() {
+    use super::context_engine::{ConversationContextEngine, DefaultContextEngine};
+
+    let mut config = test_config();
+    let db_path =
+        unique_memory_sqlite_path("default-context-engine-compaction-full-session-snapshot");
+    let _ = std::fs::remove_file(&db_path);
+    config.memory.sqlite_path = db_path.clone();
+    config.memory.sliding_window = 4;
+    config.conversation.compact_preserve_recent_turns = 2;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let kernel_ctx = test_kernel_context_with_memory(
+        "test-default-context-engine-compaction-full-session-snapshot",
+        &memory_config,
+    );
+    let session_id = "default-context-engine-compaction-full-session-snapshot";
+
+    for (role, content) in [
+        ("user", "turn 1"),
+        ("assistant", "turn 2"),
+        ("user", "turn 3"),
+        ("assistant", "turn 4"),
+        ("user", "turn 5"),
+        ("assistant", "turn 6"),
+        ("user", "turn 7"),
+        ("assistant", "turn 8"),
+        ("user", "turn 9"),
+        ("assistant", "turn 10"),
+    ] {
+        crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+            .expect("seed turns should succeed");
+    }
+
+    let engine = DefaultContextEngine;
+    engine
+        .compact_context(&config, session_id, &[], &kernel_ctx)
+        .await
+        .expect("default engine compaction should succeed");
+
+    let turns = crate::memory::window_direct(session_id, 32, &memory_config)
+        .expect("window load should succeed");
+    assert_eq!(turns.len(), 3);
+    assert_eq!(turns[0].role, "user");
+    assert!(turns[0].content.contains("Compacted 8 earlier turns"));
+    assert!(turns[0].content.contains("turn 1"));
+    assert_eq!(turns[1].content, "turn 9");
+    assert_eq!(turns[2].content, "turn 10");
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_context_engine_compact_context_summarizes_visible_history_not_checkpoint_noise() {
+    use super::context_engine::{ConversationContextEngine, DefaultContextEngine};
+
+    let mut config = test_config();
+    let db_path = unique_memory_sqlite_path("default-context-engine-compaction-visible-history");
+    let _ = std::fs::remove_file(&db_path);
+    config.memory.sqlite_path = db_path.clone();
+    config.memory.sliding_window = 32;
+    config.conversation.compact_preserve_recent_turns = 2;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let kernel_ctx = test_kernel_context_with_memory(
+        "test-default-context-engine-compaction-visible-history",
+        &memory_config,
+    );
+    let session_id = "default-context-engine-compaction-visible-history";
+    let checkpoint_event = crate::memory::build_conversation_event_content(
+        "turn_checkpoint",
+        json!({
+            "stage": "finalized",
+            "checkpoint": {
+                "lane": {
+                    "lane": "safe",
+                    "result_kind": "final_reply",
+                },
+            },
+        }),
+    );
+
+    for (role, content) in [
+        (
+            "user",
+            "For this test, remember these facts exactly:\n- codename: NIMBUS-17\n- owner: Mina\n- budget: 47",
+        ),
+        ("assistant", "ack-1"),
+        ("assistant", checkpoint_event.as_str()),
+        (
+            "user",
+            "Add these facts too:\n- launch month: October\n- fallback code: RIVER-9",
+        ),
+        ("assistant", "ack-2"),
+        ("assistant", checkpoint_event.as_str()),
+        ("user", "recent ask"),
+        ("assistant", "recent reply"),
+    ] {
+        crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+            .expect("seed turns should succeed");
+    }
+
+    let engine = DefaultContextEngine;
+    engine
+        .compact_context(&config, session_id, &[], &kernel_ctx)
+        .await
+        .expect("default engine compaction should succeed");
+
+    let messages = engine
+        .assemble_messages(
+            &config,
+            session_id,
+            false,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("assemble messages should preserve visible history");
+    let summary = messages[0]["content"].as_str().expect("summary content");
+
+    assert!(summary.contains("NIMBUS-17"));
+    assert!(summary.contains("Mina"));
+    assert!(summary.contains("47"));
+    assert!(summary.contains("October"));
+    assert!(summary.contains("RIVER-9"));
+    assert!(
+        !summary.contains("turn_checkpoint"),
+        "summary should exclude internal checkpoint payloads: {summary}"
+    );
+    assert!(
+        !summary.contains("conversation_event"),
+        "summary should exclude internal event envelopes: {summary}"
+    );
+    assert_eq!(messages[1]["content"], json!("recent ask"));
+    assert_eq!(messages[2]["content"], json!("recent reply"));
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_context_engine_compact_context_retries_conflict_and_preserves_concurrent_turn() {
+    use super::context_engine::{ConversationContextEngine, DefaultContextEngine};
+
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let (kernel_ctx, invocations) = build_kernel_context_with_compaction_conflict(audit);
+    let mut config = test_config();
+    config.memory.sliding_window = 32;
+    config.conversation.compact_preserve_recent_turns = 3;
+
+    let engine = DefaultContextEngine;
+    engine
+        .compact_context(
+            &config,
+            "default-context-engine-conflict-retry",
+            &[],
+            &kernel_ctx,
+        )
+        .await
+        .expect("default engine compaction should retry conflict and succeed");
+
+    let captured = invocations.lock().expect("invocations lock").clone();
+    let replace_requests = captured
+        .iter()
+        .filter(|request| request.operation == crate::memory::MEMORY_OP_REPLACE_TURNS)
+        .collect::<Vec<_>>();
+    let window_requests = captured
+        .iter()
+        .filter(|request| request.operation == crate::memory::MEMORY_OP_WINDOW)
+        .collect::<Vec<_>>();
+
+    assert_eq!(window_requests.len(), 2);
+    for request in &window_requests {
+        assert_eq!(request.payload["allow_extended_limit"], json!(true));
+        assert_eq!(request.payload["limit"], json!(512));
+    }
+    assert_eq!(replace_requests.len(), 2);
+    assert_eq!(replace_requests[0].payload["expected_turn_count"], 6);
+    assert_eq!(replace_requests[1].payload["expected_turn_count"], 7);
+    assert!(
+        replace_requests[1].payload["turns"]
+            .as_array()
+            .expect("replacement turns payload")
+            .iter()
+            .any(|turn| turn["content"] == "concurrent ask"),
+        "retry should preserve the turn appended during the conflict window"
+    );
+    assert!(
+        replace_requests[1].payload["turns"]
+            .as_array()
+            .expect("replacement turns payload")
+            .iter()
+            .any(|turn| turn["content"] == "recent ask"),
+        "retry should preserve the most recent user turn as well as the concurrent append"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_context_engine_compact_context_skips_incomplete_extended_snapshot() {
+    use super::context_engine::{ConversationContextEngine, DefaultContextEngine};
+
+    let window_turns = json!(
+        (1..=512)
+            .map(|turn| {
+                let role = if turn % 2 == 0 { "assistant" } else { "user" };
+                json!({
+                    "role": role,
+                    "content": format!("turn {turn}"),
+                    "ts": turn,
+                })
+            })
+            .collect::<Vec<_>>()
+    );
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let (kernel_ctx, invocations) =
+        build_kernel_context_with_incomplete_compaction_snapshot(audit, window_turns, 513);
+    let mut config = test_config();
+    config.memory.sliding_window = 32;
+
+    let engine = DefaultContextEngine;
+    engine
+        .compact_context(
+            &config,
+            "default-context-engine-incomplete-compaction-snapshot",
+            &[],
+            &kernel_ctx,
+        )
+        .await
+        .expect("default engine should skip incomplete compaction snapshots");
+
+    let captured = invocations.lock().expect("invocations lock").clone();
+    let window_requests = captured
+        .iter()
+        .filter(|request| request.operation == crate::memory::MEMORY_OP_WINDOW)
+        .collect::<Vec<_>>();
+    let replace_requests = captured
+        .iter()
+        .filter(|request| request.operation == crate::memory::MEMORY_OP_REPLACE_TURNS)
+        .collect::<Vec<_>>();
+
+    assert_eq!(window_requests.len(), 1);
+    assert_eq!(
+        window_requests[0].payload["allow_extended_limit"],
+        json!(true)
+    );
+    assert_eq!(window_requests[0].payload["limit"], json!(512));
+    assert!(
+        replace_requests.is_empty(),
+        "compaction should fail closed instead of rewriting from an incomplete snapshot"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_context_engine_compact_context_preserves_existing_summarized_history() {
+    use super::context_engine::{ConversationContextEngine, DefaultContextEngine};
+
+    let mut config = test_config();
+    let db_path = unique_memory_sqlite_path("default-context-engine-preserve-summary-history");
+    let _ = std::fs::remove_file(&db_path);
+    config.memory.sqlite_path = db_path.clone();
+    config.memory.profile = MemoryProfile::WindowPlusSummary;
+    config.memory.sliding_window = 2;
+    config.conversation.compact_preserve_recent_turns = 1;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let kernel_ctx = test_kernel_context_with_memory(
+        "test-default-context-engine-preserve-summary-history",
+        &memory_config,
+    );
+    let session_id = "default-context-engine-preserve-summary-history";
+
+    for (role, content) in [
+        ("user", "turn 1"),
+        ("assistant", "turn 2"),
+        ("user", "turn 3"),
+        ("assistant", "turn 4"),
+    ] {
+        crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+            .expect("seed turns should succeed");
+    }
+
+    let before = crate::provider::build_messages_for_session(&config, session_id, false)
+        .expect("provider history before compaction");
+    assert!(
+        before.iter().any(|message| {
+            message["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("turn 1"))
+        }),
+        "precondition: summarized history should include the earliest turn"
+    );
+
+    let engine = DefaultContextEngine;
+    engine
+        .compact_context(&config, session_id, &[], &kernel_ctx)
+        .await
+        .expect("default engine compaction should succeed");
+
+    let after = crate::provider::build_messages_for_session(&config, session_id, false)
+        .expect("provider history after compaction");
+    assert!(
+        after.iter().any(|message| {
+            message["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("turn 1"))
+        }),
+        "compaction should preserve preexisting summarized history"
+    );
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+struct DefaultCompactingRuntime {
+    inner: FakeRuntime,
+    context_runtime: DefaultConversationRuntime,
+}
+
+#[cfg(feature = "memory-sqlite")]
+impl DefaultCompactingRuntime {
+    fn new(inner: FakeRuntime) -> Self {
+        Self {
+            inner,
+            context_runtime: DefaultConversationRuntime::default(),
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[async_trait]
+impl ConversationRuntime for DefaultCompactingRuntime {
+    async fn build_messages(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        include_system_prompt: bool,
+        tool_view: &crate::tools::ToolView,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<Vec<Value>> {
+        self.context_runtime
+            .build_messages(
+                config,
+                session_id,
+                include_system_prompt,
+                tool_view,
+                binding,
+            )
+            .await
+    }
+
+    async fn request_completion(
+        &self,
+        config: &LoongClawConfig,
+        messages: &[Value],
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<String> {
+        self.inner
+            .request_completion(config, messages, binding)
+            .await
+    }
+
+    async fn request_turn(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        turn_id: &str,
+        messages: &[Value],
+        tool_view: &crate::tools::ToolView,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<ProviderTurn> {
+        self.inner
+            .request_turn(config, session_id, turn_id, messages, tool_view, binding)
+            .await
+    }
+
+    async fn request_turn_streaming(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        turn_id: &str,
+        messages: &[Value],
+        tool_view: &crate::tools::ToolView,
+        binding: ConversationRuntimeBinding<'_>,
+        on_token: crate::provider::StreamingTokenCallback,
+    ) -> CliResult<ProviderTurn> {
+        self.inner
+            .request_turn_streaming(
+                config, session_id, turn_id, messages, tool_view, binding, on_token,
+            )
+            .await
+    }
+
+    async fn persist_turn(
+        &self,
+        session_id: &str,
+        role: &str,
+        content: &str,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<()> {
+        self.inner
+            .persist_turn(session_id, role, content, binding)
+            .await
+    }
+
+    async fn after_turn(
+        &self,
+        session_id: &str,
+        user_input: &str,
+        assistant_reply: &str,
+        messages: &[Value],
+        kernel_ctx: &KernelContext,
+    ) -> CliResult<()> {
+        self.inner
+            .after_turn(
+                session_id,
+                user_input,
+                assistant_reply,
+                messages,
+                kernel_ctx,
+            )
+            .await
+    }
+
+    async fn compact_context(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        messages: &[Value],
+        kernel_ctx: &KernelContext,
+    ) -> CliResult<()> {
+        self.context_runtime
+            .compact_context(config, session_id, messages, kernel_ctx)
+            .await
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_persists_completed_compaction_checkpoint_when_default_context_engine_compacts_history()
+ {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-turn-checkpoint", "default-engine-compaction")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.memory.sliding_window = 32;
+    config.conversation.compact_enabled = true;
+    config.conversation.compact_min_messages = Some(1);
+    config.conversation.compact_trigger_estimated_tokens = Some(1);
+    config.conversation.compact_fail_open = false;
+
+    let session_id = "session-turn-checkpoint-default-engine-compaction";
+    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+
+    for (role, content) in [
+        ("user", "ask 1"),
+        ("assistant", "reply 1"),
+        ("user", "ask 2"),
+        ("assistant", "reply 2"),
+        ("user", "ask 3"),
+        ("assistant", "reply 3"),
+        ("user", "recent ask"),
+        ("assistant", "recent reply"),
+    ] {
+        crate::memory::append_turn_direct(session_id, role, content, &mem_config)
+            .expect("seed turn should succeed");
+    }
+
+    let runtime = DefaultCompactingRuntime::new(
+        FakeRuntime::with_turns_and_completions(
+            vec![],
+            vec![Ok(ProviderTurn {
+                assistant_text: "fresh reply".to_owned(),
+                tool_intents: vec![],
+                raw_meta: Value::Null,
+            })],
+            vec![],
+        )
+        .with_durable_memory_config(mem_config.clone()),
+    );
+    let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context_with_memory(
+        "test-turn-checkpoint-default-engine-compaction",
+        &mem_config,
+    );
+
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            session_id,
+            "latest ask",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("turn should succeed with durable compaction");
+    assert_eq!(reply, "fresh reply");
+
+    let turns =
+        crate::memory::window_direct(session_id, 32, &mem_config).expect("load compacted turns");
+    let assistant_contents = turns
+        .iter()
+        .filter_map(|turn| (turn.role == "assistant").then_some(turn.content.as_str()))
+        .collect::<Vec<_>>();
+    let checkpoint_summary = summarize_turn_checkpoint_events(assistant_contents.iter().copied());
+    assert_eq!(checkpoint_summary.checkpoint_events, 2);
+    assert_eq!(
+        checkpoint_summary.latest_stage,
+        Some(TurnCheckpointStage::Finalized)
+    );
+    assert_eq!(
+        checkpoint_summary.latest_compaction,
+        Some(TurnCheckpointProgressStatus::Completed)
+    );
+
+    let prompt_messages = DefaultConversationRuntime::default()
+        .build_messages(
+            &config,
+            session_id,
+            true,
+            &crate::tools::runtime_tool_view_for_config(&config.tools),
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("load prompt history after compaction");
+    assert!(prompt_messages.iter().any(|message| {
+        message["content"]
+            .as_str()
+            .is_some_and(|content| content.contains("Compacted "))
+    }));
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_persists_failed_open_compaction_checkpoint_when_compaction_fails()
+{
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-turn-checkpoint", "compaction-failed-open")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.memory.sliding_window = 16;
+    config.conversation.compact_enabled = true;
+    config.conversation.compact_min_messages = Some(1);
+    config.conversation.compact_trigger_estimated_tokens = Some(1);
+    config.conversation.compact_fail_open = true;
+
+    let session_id = "session-turn-checkpoint-compaction-failed-open";
+    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+
+    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+        .expect("persist user turn");
+    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+        .expect("persist assistant turn");
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![
+            json!({"role": "system", "content": "sys"}),
+            json!({"role": "user", "content": "hello"}),
+            json!({"role": "assistant", "content": "assistant-reply"}),
+        ],
+        vec![Ok(ProviderTurn {
+            assistant_text: "assistant-reply-2".to_owned(),
+            tool_intents: vec![],
+            raw_meta: Value::Null,
+        })],
+        vec![],
+    )
+    .with_durable_memory_config(mem_config.clone())
+    .with_compact_result(Err("compact failure".to_owned()));
+    let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx =
+        test_kernel_context_with_memory("test-turn-checkpoint-compaction-failed-open", &mem_config);
+
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            session_id,
+            "hello again",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("fail-open compaction should keep turn successful");
+    assert_eq!(reply, "assistant-reply-2");
+    assert_eq!(runtime.compact_calls.lock().expect("compact lock").len(), 1);
+
+    let turns =
+        crate::memory::window_direct(session_id, 16, &mem_config).expect("load fail-open turns");
+    let assistant_contents = turns
+        .iter()
+        .filter_map(|turn| (turn.role == "assistant").then_some(turn.content.as_str()))
+        .collect::<Vec<_>>();
+    let checkpoint_summary = summarize_turn_checkpoint_events(assistant_contents.iter().copied());
+    assert_eq!(checkpoint_summary.checkpoint_events, 2);
+    assert_eq!(
+        checkpoint_summary.latest_stage,
+        Some(TurnCheckpointStage::Finalized)
+    );
+    assert_eq!(
+        checkpoint_summary.latest_compaction,
+        Some(TurnCheckpointProgressStatus::FailedOpen)
     );
 
     let _ = std::fs::remove_file(&db_path);

@@ -2112,6 +2112,7 @@ system = " LuCid "
 compact_enabled = true
 compact_min_messages = 6
 compact_trigger_estimated_tokens = 120
+compact_preserve_recent_turns = 4
 compact_fail_open = false
 "#;
         let parsed =
@@ -2122,6 +2123,7 @@ compact_fail_open = false
             parsed.conversation.compact_trigger_estimated_tokens(),
             Some(120)
         );
+        assert_eq!(parsed.conversation.compact_preserve_recent_turns(), 4);
         assert!(!parsed.conversation.compaction_fail_open());
         assert!(!parsed.conversation.should_compact(5));
         assert!(parsed.conversation.should_compact(6));
@@ -2138,14 +2140,31 @@ compact_fail_open = false
     }
 
     #[test]
-    fn conversation_compaction_defaults_are_backward_compatible() {
+    fn conversation_compaction_defaults_require_explicit_thresholds() {
         let config = ConversationConfig::default();
         assert!(config.turn_middleware_ids().is_empty());
         assert!(config.compact_enabled);
         assert!(config.compaction_fail_open());
+        assert_eq!(config.compact_preserve_recent_turns(), 6);
         assert_eq!(config.compact_trigger_estimated_tokens(), None);
-        assert!(config.should_compact(0));
-        assert!(config.should_compact_with_estimate(0, None));
+        assert!(!config.should_compact(0));
+        assert!(!config.should_compact_with_estimate(0, None));
+        assert!(!config.should_compact_with_estimate(100, Some(10_000)));
+    }
+
+    #[test]
+    fn conversation_compaction_enabled_without_thresholds_does_not_trigger() {
+        let config = ConversationConfig {
+            compact_enabled: true,
+            compact_min_messages: None,
+            compact_trigger_estimated_tokens: None,
+            compact_fail_open: true,
+            context_engine: None,
+            ..ConversationConfig::default()
+        };
+
+        assert!(!config.should_compact(1));
+        assert!(!config.should_compact_with_estimate(100, Some(10_000)));
     }
 
     #[test]

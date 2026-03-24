@@ -221,16 +221,16 @@ fn append_turn_direct_bypasses_core_dispatch() {
         ..runtime_config::MemoryRuntimeConfig::default()
     };
 
-    begin_core_dispatch_capture_for_tests();
+    super::test_support::begin_core_dispatch_capture();
     append_turn_direct("append-fast-path-session", "user", "hello", &config)
         .expect("append_turn_direct should succeed");
 
     assert_eq!(
-        core_dispatch_count_for_tests(),
+        super::test_support::core_dispatch_count(),
         0,
         "append_turn_direct should bypass core dispatch"
     );
-    end_core_dispatch_capture_for_tests();
+    super::test_support::end_core_dispatch_capture();
 
     let _ = fs::remove_file(&db_path);
     let _ = fs::remove_dir(&tmp);
@@ -260,18 +260,104 @@ fn window_direct_bypasses_core_dispatch() {
 
     append_turn_direct("window-fast-path-session", "user", "hello", &config)
         .expect("seed append_turn_direct should succeed");
-    begin_core_dispatch_capture_for_tests();
+    super::test_support::begin_core_dispatch_capture();
 
     let turns = window_direct("window-fast-path-session", 10, &config)
         .expect("window_direct should succeed");
 
     assert_eq!(turns.len(), 1);
     assert_eq!(
-        core_dispatch_count_for_tests(),
+        super::test_support::core_dispatch_count(),
         0,
         "window_direct should bypass core dispatch"
     );
-    end_core_dispatch_capture_for_tests();
+    super::test_support::end_core_dispatch_capture();
+
+    let _ = fs::remove_file(&db_path);
+    let _ = fs::remove_dir(&tmp);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn replace_session_turns_direct_rewrites_window() {
+    use std::fs;
+
+    let tmp = std::env::temp_dir().join(format!(
+        "loongclaw-test-memory-replace-turns-{}",
+        std::process::id()
+    ));
+    let _ = fs::create_dir_all(&tmp);
+    let db_path = tmp.join("replace-turns.sqlite3");
+    let _ = fs::remove_file(&db_path);
+
+    let config = runtime_config::MemoryRuntimeConfig {
+        sqlite_path: Some(db_path.clone()),
+        ..runtime_config::MemoryRuntimeConfig::default()
+    };
+
+    append_turn_direct("replace-turns-session", "user", "turn 1", &config)
+        .expect("seed turn 1 should succeed");
+    append_turn_direct("replace-turns-session", "assistant", "turn 2", &config)
+        .expect("seed turn 2 should succeed");
+
+    replace_session_turns_direct(
+        "replace-turns-session",
+        &[
+            WindowTurn {
+                role: "assistant".into(),
+                content: "summary".into(),
+                ts: Some(2),
+            },
+            WindowTurn {
+                role: "user".into(),
+                content: "recent".into(),
+                ts: Some(3),
+            },
+        ],
+        &config,
+    )
+    .expect("replace_session_turns_direct should succeed");
+
+    let turns = window_direct("replace-turns-session", 10, &config)
+        .expect("window_direct should read rewritten turns");
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[0].content, "summary");
+    assert_eq!(turns[1].content, "recent");
+
+    let _ = fs::remove_file(&db_path);
+    let _ = fs::remove_dir(&tmp);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn replace_session_turns_direct_requires_explicit_timestamps() {
+    use std::fs;
+
+    let tmp = std::env::temp_dir().join(format!(
+        "loongclaw-test-memory-replace-turns-ts-{}",
+        std::process::id()
+    ));
+    let _ = fs::create_dir_all(&tmp);
+    let db_path = tmp.join("replace-turns-missing-ts.sqlite3");
+    let _ = fs::remove_file(&db_path);
+
+    let config = runtime_config::MemoryRuntimeConfig {
+        sqlite_path: Some(db_path.clone()),
+        ..runtime_config::MemoryRuntimeConfig::default()
+    };
+
+    let error = replace_session_turns_direct(
+        "replace-turns-session",
+        &[WindowTurn {
+            role: "assistant".into(),
+            content: "summary".into(),
+            ts: None,
+        }],
+        &config,
+    )
+    .expect_err("replace_session_turns_direct should require explicit timestamps");
+
+    assert!(error.contains("turns[*].ts"), "unexpected error: {error}");
 
     let _ = fs::remove_file(&db_path);
     let _ = fs::remove_dir(&tmp);

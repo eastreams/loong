@@ -21,32 +21,6 @@ const FILE_READ_FOLLOWUP_CONTENT_PREVIEW_CHARS: usize = 384;
 const SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS: usize = 384;
 const SHELL_FOLLOWUP_STDIO_OMISSION_MARKER: &str = "\n[... omitted ...]\n";
 
-/// Strips <think>...</think> tags from model response text to prevent
-/// internal reasoning chains from leaking to user-facing output.
-/// This handles both standard think tags and case-insensitive variants.
-#[allow(clippy::expect_used)]
-fn strip_think_tags(text: &str) -> String {
-    use regex::Regex;
-    static BALANCED_THINK_TAG_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-        // Match <think> ... </think> tags (case-insensitive, multiline)
-        Regex::new(r"(?is)<think>.*?</think>").expect("static regex should always compile")
-    });
-    static OPEN_THINK_TAG_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-        // Match an unterminated <think> tag through end-of-string.
-        Regex::new(r"(?is)<think>.*$").expect("static regex should always compile")
-    });
-    static CLOSE_THINK_TAG_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-        // Match any stray closing </think> tag.
-        Regex::new(r"(?i)</think>").expect("static regex should always compile")
-    });
-
-    let without_balanced_tags = BALANCED_THINK_TAG_RE.replace_all(text, "");
-    let without_open_tags = OPEN_THINK_TAG_RE.replace_all(&without_balanced_tags, "");
-    CLOSE_THINK_TAG_RE
-        .replace_all(&without_open_tags, "")
-        .to_string()
-}
-
 pub fn next_conversation_turn_id() -> String {
     static NEXT_CONVERSATION_TURN_SEQ: AtomicU64 = AtomicU64::new(1);
     let seq = NEXT_CONVERSATION_TURN_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -270,15 +244,10 @@ impl<'a> ToolDrivenReplyKernel<'a> {
         match self.turn_result {
             TurnResult::FinalText(text)
             | TurnResult::StreamingText(text)
-            | TurnResult::StreamingDone(text) => {
-                let trimmed_reply = text.trim();
-                let cleaned_reply = strip_think_tags(trimmed_reply);
-                let cleaned_reply = cleaned_reply.trim().to_owned();
-                Some(join_non_empty_lines(&[
-                    self.assistant_preface,
-                    cleaned_reply.as_str(),
-                ]))
-            }
+            | TurnResult::StreamingDone(text) => Some(join_non_empty_lines(&[
+                self.assistant_preface,
+                text.as_str(),
+            ])),
             TurnResult::NeedsApproval(requirement) => Some(format_approval_required_reply(
                 self.assistant_preface,
                 requirement,
@@ -338,11 +307,10 @@ pub fn compose_assistant_reply(
         TurnResult::FinalText(text)
         | TurnResult::StreamingText(text)
         | TurnResult::StreamingDone(text) => {
-            let cleaned_text = strip_think_tags(text.trim());
             if had_tool_intents {
-                join_non_empty_lines(&[assistant_preface, cleaned_text.as_str()])
+                join_non_empty_lines(&[assistant_preface, text.as_str()])
             } else {
-                cleaned_text.trim().to_string()
+                text
             }
         }
         TurnResult::NeedsApproval(requirement) => {
@@ -1091,19 +1059,6 @@ mod tests {
             Some(ToolDrivenFollowupPayload::ToolResult {
                 text: "tool output".to_owned(),
             })
-        );
-    }
-
-    #[test]
-    fn tool_driven_reply_kernel_strips_think_tags_from_raw_reply() {
-        let result = TurnResult::FinalText(
-            "<think>internal reasoning</think>\nvisible tool output".to_owned(),
-        );
-        let kernel = ToolDrivenReplyKernel::new("preface", true, &result);
-
-        assert_eq!(
-            kernel.raw_reply(),
-            Some("preface\nvisible tool output".to_owned())
         );
     }
 
@@ -2010,48 +1965,5 @@ mod tests {
 
         assert_eq!(reduced.as_ref(), tool_result);
         assert_eq!(reduced.as_ptr(), tool_result.as_ptr());
-    }
-
-    #[test]
-    fn strip_think_tags_removes_think_content() {
-        let input = "<think>Let me think about this...\nThe user wants to know the weather.\nI should check the forecast.</think>The weather today is sunny.";
-        let expected = "The weather today is sunny.";
-        assert_eq!(strip_think_tags(input), expected);
-    }
-
-    #[test]
-    fn strip_think_tags_handles_empty_tags() {
-        let input = "Hello <think></think>world";
-        assert_eq!(strip_think_tags(input), "Hello world");
-    }
-
-    #[test]
-    fn strip_think_tags_handles_multiple_tags() {
-        let input = "<think>First thought</think>Middle<think>Second thought</think>End";
-        assert_eq!(strip_think_tags(input), "MiddleEnd");
-    }
-
-    #[test]
-    fn strip_think_tags_handles_nested_content() {
-        let input = "<think>Think content with <tag> inside</think>Real response";
-        assert_eq!(strip_think_tags(input), "Real response");
-    }
-
-    #[test]
-    fn strip_think_tags_case_insensitive() {
-        let input = "<ThInK>think content</tHiNk>Result";
-        assert_eq!(strip_think_tags(input), "Result");
-    }
-
-    #[test]
-    fn strip_think_tags_drops_unterminated_opening_tag() {
-        let input = "Answer<think>internal reasoning";
-        assert_eq!(strip_think_tags(input), "Answer");
-    }
-
-    #[test]
-    fn strip_think_tags_drops_stray_closing_tag() {
-        let input = "Answer</think>";
-        assert_eq!(strip_think_tags(input), "Answer");
     }
 }
