@@ -2644,6 +2644,39 @@ mod tests {
 
     #[cfg(feature = "tool-file")]
     #[test]
+    fn memory_get_tool_reads_requested_window_without_loading_invalid_tail() {
+        let root = unique_tool_temp_dir("loongclaw-memory-get-invalid-tail");
+        let memory_path = root.join("MEMORY.md");
+        let mut bytes = b"line one\nline two\n".to_vec();
+
+        bytes.push(0xff);
+        bytes.push(0xfe);
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(&memory_path, bytes).expect("write root memory");
+
+        let config = test_tool_runtime_config(root);
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_get".to_owned(),
+                payload: json!({
+                    "path": "MEMORY.md",
+                    "from": 1,
+                    "lines": 2
+                }),
+            },
+            &config,
+        )
+        .expect("memory get should ignore invalid bytes beyond requested window");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["start_line"], 1);
+        assert_eq!(outcome.payload["end_line"], 2);
+        assert_eq!(outcome.payload["text"], "line one\nline two");
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
     fn memory_search_tool_rejects_invalid_max_results_values() {
         let root = unique_tool_temp_dir("loongclaw-memory-search-invalid-max-results");
 

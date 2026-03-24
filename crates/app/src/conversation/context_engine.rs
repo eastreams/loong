@@ -544,7 +544,9 @@ fn append_memory_context_messages(
         let content = entry.content;
 
         match entry.kind {
-            memory::MemoryContextKind::Profile | memory::MemoryContextKind::Summary => {
+            memory::MemoryContextKind::Profile
+            | memory::MemoryContextKind::Summary
+            | memory::MemoryContextKind::RetrievedMemory => {
                 let message = json!({
                     "role": role,
                     "content": content,

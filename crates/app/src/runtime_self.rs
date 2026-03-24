@@ -59,7 +59,17 @@ pub(crate) struct RuntimeSelfModel {
     pub user_context: Vec<String>,
 }
 
-#[cfg(test)]
+impl RuntimeSelfModel {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.standing_instructions.is_empty()
+            && self.tool_usage_policy.is_empty()
+            && self.soul_guidance.is_empty()
+            && self.identity_context.is_empty()
+            && self.user_context.is_empty()
+    }
+}
+
 pub(crate) fn load_runtime_self_model(workspace_root: &Path) -> RuntimeSelfModel {
     let tool_runtime_config = crate::tools::runtime_config::ToolRuntimeConfig {
         file_root: Some(workspace_root.to_path_buf()),
@@ -128,10 +138,7 @@ pub(crate) fn render_runtime_self_section(model: &RuntimeSelfModel) -> Option<St
 pub(crate) fn runtime_self_source_candidates(
     workspace_root: &Path,
 ) -> Vec<(PathBuf, RuntimeSelfLane)> {
-    let candidate_roots = [
-        workspace_root.to_path_buf(),
-        workspace_root.join("workspace"),
-    ];
+    let candidate_roots = candidate_workspace_roots(workspace_root);
     let mut source_candidates = Vec::new();
 
     for root in candidate_roots {
@@ -142,6 +149,19 @@ pub(crate) fn runtime_self_source_candidates(
     }
 
     source_candidates
+}
+
+pub(crate) fn candidate_workspace_roots(workspace_root: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let nested_workspace_root = workspace_root.join("workspace");
+
+    roots.push(workspace_root.to_path_buf());
+
+    if nested_workspace_root.is_dir() {
+        roots.push(nested_workspace_root);
+    }
+
+    roots
 }
 
 fn read_runtime_self_source(
@@ -349,6 +369,20 @@ mod tests {
         let rendered = render_runtime_self_section(&model);
 
         assert_eq!(rendered, None);
+    }
+
+    #[test]
+    fn render_runtime_self_section_keeps_tool_usage_policy_only_models() {
+        let model = RuntimeSelfModel {
+            tool_usage_policy: vec!["Prefer audited tool paths.".to_owned()],
+            ..RuntimeSelfModel::default()
+        };
+
+        let rendered = render_runtime_self_section(&model).expect("rendered runtime self");
+
+        assert!(rendered.contains("## Runtime Self Context"));
+        assert!(rendered.contains("### Tool Usage Policy"));
+        assert!(rendered.contains("Prefer audited tool paths."));
     }
 
     #[test]
