@@ -1,5 +1,4 @@
 use std::env;
-use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -34,6 +33,8 @@ use crate::onboard_preflight::{
     run_preflight_checks,
 };
 use crate::provider_credential_policy;
+#[cfg(test)]
+use std::fs;
 #[cfg(test)]
 use time::OffsetDateTime;
 
