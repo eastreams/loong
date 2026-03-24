@@ -306,7 +306,7 @@ async fn run_feishu_websocket_session(
                     .encode(&mut bytes)
                     .map_err(|error| format!("encode Feishu websocket ping frame failed: {error}"))?;
                 stream
-                    .send(Message::Binary(bytes))
+                    .send(Message::Binary(bytes.into()))
                     .await
                     .map_err(|error| format!("send Feishu websocket ping failed: {error}"))?;
             }
@@ -360,7 +360,7 @@ async fn run_feishu_websocket_session(
                         let response_bytes = encode_ws_response_frame(&mut frame, &response)?;
                         let deferred_updates = response.deferred_updates;
                         stream
-                            .send(Message::Binary(response_bytes))
+                            .send(Message::Binary(response_bytes.into()))
                             .await
                             .map_err(|error| format!("send Feishu websocket response failed: {error}"))?;
                         state.dispatch_deferred_updates(deferred_updates);
@@ -657,7 +657,7 @@ mod tests {
                 .encode(&mut bytes)
                 .map_err(|error| format!("encode websocket frame failed: {error}"))?;
             stream
-                .send(Message::Binary(bytes))
+                .send(Message::Binary(bytes.into()))
                 .await
                 .map_err(|error| format!("send websocket frame failed: {error}"))?;
 
