@@ -1,22 +1,22 @@
-# Runtime Self Continuity
+# Runtime-Self Continuity
 
 ## User Story
 
-As a LoongClaw operator, I want runtime self continuity to survive compaction,
+As a LoongClaw operator, I want runtime-self continuity to survive compaction,
 delegation, and future durable recall so that the agent stays coherent without
 mixing identity authority with transient task context.
 
 ## Continuity Lanes
 
 - `Runtime Self Context`
-  Standing instructions and soul guidance loaded from runtime self sources such
+  Standing instructions and soul guidance loaded from runtime-self sources such
   as `AGENTS.md`, `CLAUDE.md`, and `SOUL.md`. This lane remains runtime
   guidance. It is reloaded through the normal runtime path instead of being
   copied into durable memory.
 
 - `Resolved Runtime Identity`
   The identity authority for the active session chain. It is resolved from
-  runtime self sources first and can fall back to legacy imported identity from
+  runtime-self sources first and can fall back to legacy imported identity from
   `profile_note`. Compaction, session profile projection, and future retrieval
   must not override this lane.
 
@@ -37,7 +37,7 @@ mixing identity authority with transient task context.
   session-local recall only.
 - Delegate child sessions inherit continuity through one explicit runtime
   contract, even when the child has no extra tool narrowing.
-- Durable recall augments advisory context; it does not replace runtime self
+- Durable recall augments advisory context; it does not replace runtime-self
   guidance or resolved runtime identity.
 - When a safe workspace file root is configured and compaction is about to run,
   LoongClaw may export advisory durable recall into `memory/YYYY-MM-DD.md`
@@ -46,15 +46,15 @@ mixing identity authority with transient task context.
   present, LoongClaw may bootstrap advisory durable recall from `MEMORY.md`,
   `memory/MEMORY.md`, and recent `memory/YYYY-MM-DD.md` logs into runtime
   context.
-- Session-local content is never promoted into durable self state implicitly.
+- Session-local content is never promoted into durable self-state implicitly.
 
 ## Acceptance Criteria
 
-- Summary blocks clearly state that they do not replace runtime self guidance,
+- Summary blocks clearly state that they do not replace runtime-self guidance,
   resolved runtime identity, or durable advisory profile context.
 - Session profile projection clearly states that durable recall is advisory and
   does not override resolved runtime identity.
-- Delegate child sessions always receive an explicit self continuity contract.
+- Delegate child sessions always receive an explicit self-continuity contract.
 - Pre-compaction durable exports, when enabled by workspace configuration, stay
   advisory and do not become an identity override path.
 - Runtime durable-recall bootstrap, when enabled by workspace configuration,

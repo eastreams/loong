@@ -29,14 +29,14 @@ const THINK_CLOSE_TAG: &str = "</think>";
 fn strip_think_tags(text: &str) -> String {
     let mut cleaned_text = String::with_capacity(text.len());
     let mut cursor = 0;
-    let mut inside_think_block = false;
+    let mut think_depth = 0usize;
 
     while cursor < text.len() {
         let remaining_text = &text[cursor..];
         let open_tag_length = think_tag_prefix_len(remaining_text, THINK_OPEN_TAG);
 
         if let Some(tag_length) = open_tag_length {
-            inside_think_block = true;
+            think_depth = think_depth.saturating_add(1);
             cursor += tag_length;
             continue;
         }
@@ -44,7 +44,7 @@ fn strip_think_tags(text: &str) -> String {
         let close_tag_length = think_tag_prefix_len(remaining_text, THINK_CLOSE_TAG);
 
         if let Some(tag_length) = close_tag_length {
-            inside_think_block = false;
+            think_depth = think_depth.saturating_sub(1);
             cursor += tag_length;
             continue;
         }
@@ -55,7 +55,7 @@ fn strip_think_tags(text: &str) -> String {
         };
         let current_char_length = current_char.len_utf8();
 
-        if !inside_think_block {
+        if think_depth == 0 {
             cleaned_text.push(current_char);
         }
 
@@ -2100,7 +2100,7 @@ mod tests {
     #[test]
     fn strip_think_tags_handles_nested_think_tags() {
         let input = "<think>outer<think>inner</think>visible</think>done";
-        assert_eq!(strip_think_tags(input), "visibledone");
+        assert_eq!(strip_think_tags(input), "done");
     }
 
     #[test]
