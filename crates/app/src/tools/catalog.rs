@@ -87,43 +87,72 @@ pub struct ToolGovernanceProfile {
     pub approval_mode: ToolApprovalMode,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+struct ToolPolicyDescriptor {
+    scheduling_class: ToolSchedulingClass,
+    governance_profile: ToolGovernanceProfile,
+}
+
+const ROUTINE_LOW_GOVERNANCE_PROFILE: ToolGovernanceProfile = ToolGovernanceProfile {
+    scope: ToolGovernanceScope::Routine,
+    risk_class: ToolRiskClass::Low,
+    approval_mode: ToolApprovalMode::Never,
+};
+
+const ROUTINE_ELEVATED_GOVERNANCE_PROFILE: ToolGovernanceProfile = ToolGovernanceProfile {
+    scope: ToolGovernanceScope::Routine,
+    risk_class: ToolRiskClass::Elevated,
+    approval_mode: ToolApprovalMode::PolicyDriven,
+};
+
+const ROUTINE_HIGH_GOVERNANCE_PROFILE: ToolGovernanceProfile = ToolGovernanceProfile {
+    scope: ToolGovernanceScope::Routine,
+    risk_class: ToolRiskClass::High,
+    approval_mode: ToolApprovalMode::PolicyDriven,
+};
+
+const TOPOLOGY_MUTATION_GOVERNANCE_PROFILE: ToolGovernanceProfile = ToolGovernanceProfile {
+    scope: ToolGovernanceScope::TopologyMutation,
+    risk_class: ToolRiskClass::High,
+    approval_mode: ToolApprovalMode::PolicyDriven,
+};
+
+const DEFAULT_TOOL_POLICY_DESCRIPTOR: ToolPolicyDescriptor = ToolPolicyDescriptor {
+    scheduling_class: ToolSchedulingClass::SerialOnly,
+    governance_profile: ROUTINE_LOW_GOVERNANCE_PROFILE,
+};
+
+const PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR: ToolPolicyDescriptor = ToolPolicyDescriptor {
+    scheduling_class: ToolSchedulingClass::ParallelSafe,
+    governance_profile: ROUTINE_LOW_GOVERNANCE_PROFILE,
+};
+
+const ELEVATED_TOOL_POLICY_DESCRIPTOR: ToolPolicyDescriptor = ToolPolicyDescriptor {
+    scheduling_class: ToolSchedulingClass::SerialOnly,
+    governance_profile: ROUTINE_ELEVATED_GOVERNANCE_PROFILE,
+};
+
+const HIGH_RISK_TOOL_POLICY_DESCRIPTOR: ToolPolicyDescriptor = ToolPolicyDescriptor {
+    scheduling_class: ToolSchedulingClass::SerialOnly,
+    governance_profile: ROUTINE_HIGH_GOVERNANCE_PROFILE,
+};
+
+const TOPOLOGY_MUTATION_TOOL_POLICY_DESCRIPTOR: ToolPolicyDescriptor = ToolPolicyDescriptor {
+    scheduling_class: ToolSchedulingClass::SerialOnly,
+    governance_profile: TOPOLOGY_MUTATION_GOVERNANCE_PROFILE,
+};
+
 pub fn governance_profile_for_tool_name(tool_name: &str) -> ToolGovernanceProfile {
-    match tool_name {
-        "delegate" | "delegate_async" => ToolGovernanceProfile {
-            scope: ToolGovernanceScope::TopologyMutation,
-            risk_class: ToolRiskClass::High,
-            approval_mode: ToolApprovalMode::PolicyDriven,
-        },
-        "browser.companion.click" | "browser.companion.type" => ToolGovernanceProfile {
-            scope: ToolGovernanceScope::Routine,
-            risk_class: ToolRiskClass::High,
-            approval_mode: ToolApprovalMode::PolicyDriven,
-        },
-        "session_archive" | "session_cancel" | "session_recover" | "sessions_send" => {
-            ToolGovernanceProfile {
-                scope: ToolGovernanceScope::Routine,
-                risk_class: ToolRiskClass::Elevated,
-                approval_mode: ToolApprovalMode::PolicyDriven,
-            }
-        }
-        _ => ToolGovernanceProfile {
-            scope: ToolGovernanceScope::Routine,
-            risk_class: ToolRiskClass::Low,
-            approval_mode: ToolApprovalMode::Never,
-        },
-    }
+    let catalog = tool_catalog();
+    let descriptor = catalog.resolve(tool_name);
+    let Some(descriptor) = descriptor else {
+        return ROUTINE_LOW_GOVERNANCE_PROFILE;
+    };
+    descriptor.governance_profile()
 }
 
 pub fn governance_profile_for_descriptor(descriptor: &ToolDescriptor) -> ToolGovernanceProfile {
-    governance_profile_for_tool_name(descriptor.name)
-}
-
-pub fn scheduling_class_for_tool_name(tool_name: &str) -> ToolSchedulingClass {
-    match tool_name {
-        "tool.search" | "file.read" | "memory_search" | "memory_get" | "web.fetch"
-        | "web.search" | "sessions_list" => ToolSchedulingClass::ParallelSafe,
-        _ => ToolSchedulingClass::SerialOnly,
-    }
+    descriptor.governance_profile()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -156,6 +185,7 @@ pub struct ToolDescriptor {
     pub availability: ToolAvailability,
     pub exposure: ToolExposureClass,
     pub visibility_gate: ToolVisibilityGate,
+    policy: ToolPolicyDescriptor,
     provider_definition_builder: fn(&ToolDescriptor) -> Value,
 }
 
@@ -193,7 +223,11 @@ impl ToolDescriptor {
     }
 
     pub fn scheduling_class(&self) -> ToolSchedulingClass {
-        scheduling_class_for_tool_name(self.name)
+        self.policy.scheduling_class
+    }
+
+    pub fn governance_profile(&self) -> ToolGovernanceProfile {
+        self.policy.governance_profile
     }
 }
 
@@ -339,6 +373,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::ProviderCore,
             visibility_gate: ToolVisibilityGate::Always,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: tool_search_definition,
         },
         ToolDescriptor {
@@ -350,6 +385,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::ProviderCore,
             visibility_gate: ToolVisibilityGate::Always,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: tool_invoke_definition,
         },
         ToolDescriptor {
@@ -361,6 +397,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: claw_migrate_definition,
         },
         ToolDescriptor {
@@ -372,6 +409,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: external_skills_fetch_definition,
         },
         ToolDescriptor {
@@ -383,6 +421,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: external_skills_inspect_definition,
         },
         ToolDescriptor {
@@ -394,6 +433,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: external_skills_install_definition,
         },
         ToolDescriptor {
@@ -405,6 +445,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: external_skills_invoke_definition,
         },
         ToolDescriptor {
@@ -416,6 +457,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: external_skills_list_definition,
         },
         ToolDescriptor {
@@ -427,6 +469,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: external_skills_policy_definition,
         },
         ToolDescriptor {
@@ -438,6 +481,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: external_skills_remove_definition,
         },
         ToolDescriptor {
@@ -449,6 +493,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: provider_switch_definition,
         },
         ToolDescriptor {
@@ -460,6 +505,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: approval_request_resolve_definition,
         },
         ToolDescriptor {
@@ -471,6 +517,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: approval_request_status_definition,
         },
         ToolDescriptor {
@@ -482,6 +529,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: approval_requests_list_definition,
         },
         ToolDescriptor {
@@ -493,6 +541,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Delegate,
+            policy: TOPOLOGY_MUTATION_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: delegate_definition,
         },
         ToolDescriptor {
@@ -504,6 +553,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Delegate,
+            policy: TOPOLOGY_MUTATION_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: delegate_async_definition,
         },
         ToolDescriptor {
@@ -515,6 +565,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
+            policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: session_archive_definition,
         },
         ToolDescriptor {
@@ -526,6 +577,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
+            policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: session_cancel_definition,
         },
         ToolDescriptor {
@@ -537,6 +589,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: session_events_definition,
         },
         ToolDescriptor {
@@ -548,6 +601,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
+            policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: session_recover_definition,
         },
         ToolDescriptor {
@@ -559,6 +613,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: session_status_definition,
         },
         ToolDescriptor {
@@ -570,6 +625,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: session_wait_definition,
         },
         ToolDescriptor {
@@ -581,6 +637,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: sessions_history_definition,
         },
         ToolDescriptor {
@@ -592,6 +649,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: sessions_list_definition,
         },
         ToolDescriptor {
@@ -603,6 +661,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_messaging_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Messages,
+            policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: sessions_send_definition,
         },
     ];
@@ -618,6 +677,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: file_read_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -629,6 +689,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::MemoryFileRoot,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: memory_search_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -640,6 +701,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::MemoryFileRoot,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: memory_get_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -651,6 +713,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: file_write_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -662,6 +725,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: file_edit_definition,
         });
     }
@@ -677,6 +741,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: shell_exec_definition,
         });
     }
@@ -692,6 +757,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Browser,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: browser_click_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -703,6 +769,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: browser_companion_click_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -714,6 +781,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: browser_companion_navigate_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -725,6 +793,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: browser_companion_session_start_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -736,6 +805,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: browser_companion_session_stop_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -747,6 +817,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: browser_companion_snapshot_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -758,6 +829,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: browser_companion_type_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -769,6 +841,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: browser_companion_wait_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -780,6 +853,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Browser,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: browser_extract_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -792,6 +866,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Browser,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: browser_open_definition,
         });
     }
@@ -807,6 +882,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::WebFetch,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: web_fetch_definition,
         });
     }
@@ -823,6 +899,7 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::WebSearch,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: web_search_definition,
         });
     }
@@ -2807,6 +2884,49 @@ mod tests {
                 .scheduling_class(),
             ToolSchedulingClass::SerialOnly
         );
+    }
+
+    #[test]
+    fn governance_profile_follows_descriptor_declared_policy() {
+        let catalog = tool_catalog();
+
+        let delegate_async = catalog
+            .descriptor("delegate_async")
+            .expect("delegate_async descriptor");
+        let delegate_async_policy = governance_profile_for_descriptor(delegate_async);
+
+        assert_eq!(
+            delegate_async_policy.scope,
+            ToolGovernanceScope::TopologyMutation
+        );
+        assert_eq!(delegate_async_policy.risk_class, ToolRiskClass::High);
+        assert_eq!(
+            delegate_async_policy.approval_mode,
+            ToolApprovalMode::PolicyDriven
+        );
+
+        let sessions_send_policy = governance_profile_for_tool_name("sessions_send");
+
+        assert_eq!(sessions_send_policy.scope, ToolGovernanceScope::Routine);
+        assert_eq!(sessions_send_policy.risk_class, ToolRiskClass::Elevated);
+        assert_eq!(
+            sessions_send_policy.approval_mode,
+            ToolApprovalMode::PolicyDriven
+        );
+
+        let unknown_policy = governance_profile_for_tool_name("unknown.tool");
+
+        assert_eq!(unknown_policy, ROUTINE_LOW_GOVERNANCE_PROFILE);
+    }
+
+    #[cfg(feature = "tool-browser")]
+    #[test]
+    fn governance_profile_resolves_alias_backed_tool_metadata() {
+        let policy = governance_profile_for_tool_name("browser_companion_click");
+
+        assert_eq!(policy.scope, ToolGovernanceScope::Routine);
+        assert_eq!(policy.risk_class, ToolRiskClass::High);
+        assert_eq!(policy.approval_mode, ToolApprovalMode::PolicyDriven);
     }
 
     #[test]
