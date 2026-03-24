@@ -273,9 +273,12 @@ async fn run_feishu_websocket_session(
     // Install the same process default once so websocket TLS does not panic when other crates
     // also link rustls with aws-lc-rs enabled.
     ensure_feishu_websocket_rustls_provider();
-    let (mut stream, _) = connect_async(parsed_url.as_str())
-        .await
-        .map_err(|error| format!("connect Feishu websocket failed: {error}"))?;
+    let connect_result = tokio::select! {
+        _ = stop.wait() => return Ok(()),
+        result = connect_async(parsed_url.as_str()) => result,
+    };
+    let (mut stream, _) =
+        connect_result.map_err(|error| format!("connect Feishu websocket failed: {error}"))?;
     let mut ping_interval = tokio::time::interval(Duration::from_secs(ping_interval_s));
     ping_interval.tick().await;
     let mut fragments = FeishuWsFragments::default();
@@ -450,7 +453,7 @@ mod tests {
     use futures_util::{SinkExt, StreamExt};
     use serde_json::{Value, json};
     use tokio::net::TcpListener;
-    use tokio::sync::Mutex;
+    use tokio::sync::{Mutex, Notify};
     use tokio_tungstenite::accept_async;
 
     use super::*;
@@ -845,6 +848,94 @@ mod tests {
 
         accept_task.abort();
         let _ = accept_task.await;
+        provider_server.abort();
+        feishu_server.abort();
+    }
+
+    #[tokio::test]
+    async fn feishu_websocket_session_stop_interrupts_stalled_initial_connect() {
+        let provider_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+        let feishu_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+        let (provider_base_url, provider_server) =
+            spawn_mock_provider_server(provider_requests.clone()).await;
+        let (feishu_base_url, feishu_server) =
+            spawn_mock_feishu_api_server(feishu_requests.clone(), "om_reply_ws_stop_1").await;
+
+        let config = test_websocket_config(&provider_base_url, &feishu_base_url);
+        let resolved = config
+            .feishu
+            .resolve_account(None)
+            .expect("resolve websocket feishu account");
+        let mut adapter = FeishuAdapter::new(&resolved).expect("build feishu adapter");
+        adapter
+            .refresh_tenant_token()
+            .await
+            .expect("refresh tenant token before websocket stop test");
+        let kernel_ctx =
+            bootstrap_test_kernel_context("feishu-websocket-stop-test", DEFAULT_TOKEN_TTL_S)
+                .expect("bootstrap kernel context");
+        let runtime = Arc::new(
+            ChannelOperationRuntimeTracker::start(
+                ChannelPlatform::Feishu,
+                "serve",
+                resolved.account.id.as_str(),
+                resolved.account.label.as_str(),
+            )
+            .await
+            .expect("start runtime tracker"),
+        );
+        let state = FeishuWebhookState::new(config, &resolved, adapter, kernel_ctx, runtime);
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind stalled websocket listener");
+        let address = listener
+            .local_addr()
+            .expect("stalled websocket listener addr");
+        let accepted = Arc::new(Notify::new());
+        let release_socket = Arc::new(Notify::new());
+        let accepted_for_server = accepted.clone();
+        let release_for_server = release_socket.clone();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener
+                .accept()
+                .await
+                .expect("accept stalled websocket socket");
+            accepted_for_server.notify_waiters();
+            release_for_server.notified().await;
+            drop(socket);
+        });
+
+        let stop = ChannelServeStopHandle::new();
+        let stop_for_session = stop.clone();
+        let session_url = format!("ws://{address}/events?service_id=42");
+        let mut session = tokio::spawn(async move {
+            run_feishu_websocket_session(
+                &state,
+                session_url.as_str(),
+                &FeishuWsEndpointClientConfig::default(),
+                stop_for_session,
+            )
+            .await
+        });
+
+        accepted.notified().await;
+        stop.request_stop();
+
+        let session_result = tokio::select! {
+            result = &mut session => result,
+            _ = tokio::time::sleep(Duration::from_secs(2)) => {
+                session.abort();
+                panic!("stop should interrupt the stalled websocket connect");
+            }
+        };
+        let session_result = session_result
+            .expect("join stalled websocket session")
+            .expect("stop should end stalled websocket connect cleanly");
+        assert_eq!(session_result, ());
+
+        release_socket.notify_waiters();
+        let _ = server.await;
         provider_server.abort();
         feishu_server.abort();
     }

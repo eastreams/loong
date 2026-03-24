@@ -528,12 +528,15 @@ pub struct BackgroundChannelRunnerRequest {
     pub config: mvp::config::LoongClawConfig,
     pub account_id: Option<String>,
     pub stop: mvp::channel::ChannelServeStopHandle,
+    pub initialize_runtime_environment: bool,
 }
 
 #[derive(Clone)]
 pub struct SupervisorRuntimeHooks {
     pub load_config:
         Arc<dyn Fn(Option<&str>) -> CliResult<LoadedSupervisorConfig> + Send + Sync + 'static>,
+    pub initialize_runtime_environment:
+        Arc<dyn Fn(&LoadedSupervisorConfig) + Send + Sync + 'static>,
     pub run_cli_host: Arc<
         dyn Fn(mvp::chat::ConcurrentCliHostOptions) -> BoxedSupervisorFuture
             + Send
@@ -559,6 +562,12 @@ impl SupervisorRuntimeHooks {
                     config,
                 })
             }),
+            initialize_runtime_environment: Arc::new(|loaded_config| {
+                mvp::runtime_env::initialize_runtime_environment(
+                    &loaded_config.config,
+                    Some(loaded_config.resolved_path.as_path()),
+                );
+            }),
             run_cli_host: Arc::new(|options| {
                 Box::pin(async move {
                     tokio::task::spawn_blocking(move || {
@@ -576,6 +585,7 @@ impl SupervisorRuntimeHooks {
                         false,
                         request.account_id.as_deref(),
                         request.stop,
+                        request.initialize_runtime_environment,
                     )
                     .await
                 })
@@ -589,6 +599,7 @@ impl SupervisorRuntimeHooks {
                         None,
                         None,
                         request.stop,
+                        request.initialize_runtime_environment,
                     )
                     .await
                 })
@@ -666,10 +677,12 @@ pub async fn run_multi_channel_serve_with_hooks_for_test(
     feishu_account: Option<&str>,
     hooks: SupervisorRuntimeHooks,
 ) -> CliResult<SupervisorState> {
+    let loaded_config = (hooks.load_config)(config_path)?;
+    (hooks.initialize_runtime_environment)(&loaded_config);
     let LoadedSupervisorConfig {
         resolved_path,
         config,
-    } = (hooks.load_config)(config_path)?;
+    } = loaded_config;
     let spec = SupervisorSpec::from_loaded_multi_channel_serve(
         session,
         &config,
@@ -695,6 +708,7 @@ pub async fn run_multi_channel_serve_with_hooks_for_test(
                     config: config.clone(),
                     account_id: account_id.clone(),
                     stop: telegram_stop.clone(),
+                    initialize_runtime_environment: false,
                 };
                 let run_telegram = hooks.run_telegram.clone();
                 let tracked_surface = surface.clone();
@@ -715,6 +729,7 @@ pub async fn run_multi_channel_serve_with_hooks_for_test(
                     config: config.clone(),
                     account_id: account_id.clone(),
                     stop: feishu_stop.clone(),
+                    initialize_runtime_environment: false,
                 };
                 let run_feishu = hooks.run_feishu.clone();
                 let tracked_surface = surface.clone();
@@ -737,6 +752,7 @@ pub async fn run_multi_channel_serve_with_hooks_for_test(
         config: config.clone(),
         session_id: session.to_owned(),
         shutdown: cli_shutdown.clone(),
+        initialize_runtime_environment: false,
     }));
     let mut cli_active = true;
 

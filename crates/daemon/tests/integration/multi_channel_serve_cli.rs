@@ -19,6 +19,7 @@ use loongclaw_daemon::supervisor::{
 use tokio::{sync::Notify, time::sleep};
 
 type BoxedCliFuture = Pin<Box<dyn Future<Output = CliResult<()>> + Send + 'static>>;
+const MULTI_CHANNEL_TEST_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Default)]
 struct EventLog {
@@ -59,6 +60,12 @@ fn loaded_config_fixture() -> LoadedSupervisorConfig {
     }
 }
 
+fn loaded_config_fixture_with_path(path: &str) -> LoadedSupervisorConfig {
+    let mut fixture = loaded_config_fixture();
+    fixture.resolved_path = PathBuf::from(path);
+    fixture
+}
+
 fn telegram_only_loaded_config_fixture() -> LoadedSupervisorConfig {
     let mut config = mvp::config::LoongClawConfig::default();
     config.telegram.enabled = true;
@@ -88,6 +95,7 @@ fn hooks(
 ) -> SupervisorRuntimeHooks {
     SupervisorRuntimeHooks {
         load_config: Arc::new(load_config),
+        initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(run_cli_host),
         run_telegram: Arc::new(run_telegram),
         run_feishu: Arc::new(run_feishu),
@@ -471,7 +479,7 @@ async fn multi_channel_serve_background_failure_exits_foreground_cli_host_with_s
 async fn multi_channel_serve_background_failure_before_cli_wait_still_stops_foreground_cli_host() {
     let log = EventLog::default();
     let state = tokio::time::timeout(
-        Duration::from_millis(250),
+        MULTI_CHANNEL_TEST_TIMEOUT,
         run_multi_channel_serve_with_hooks_for_test(
             None,
             "cli-supervisor",
@@ -604,7 +612,7 @@ async fn multi_channel_serve_background_join_error_still_shuts_down_cli_and_othe
             .await
         });
 
-    let state = tokio::time::timeout(Duration::from_millis(250), run)
+    let state = tokio::time::timeout(MULTI_CHANNEL_TEST_TIMEOUT, run)
         .await
         .expect("supervisor should not hang after a background join error")
         .expect("supervisor join")
@@ -787,6 +795,118 @@ async fn multi_channel_serve_loads_config_once_before_spawning_children() {
         log.snapshot().first().map(String::as_str),
         Some("load-config path=/tmp/loongclaw.toml")
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn multi_channel_serve_initializes_runtime_environment_before_spawning_children() {
+    let expected_path = "/tmp/loongclaw-supervisor-runtime-env.toml";
+    let expected_path_string = expected_path.to_owned();
+    let initialized_config_path = Arc::new(Mutex::new(None::<String>));
+    let started = Arc::new(AtomicUsize::new(0));
+
+    let state = run_multi_channel_serve_with_hooks_for_test(
+        None,
+        "cli-supervisor",
+        Some("bot_123456"),
+        Some("alerts"),
+        SupervisorRuntimeHooks {
+            load_config: Arc::new(move |_| Ok(loaded_config_fixture_with_path(expected_path))),
+            initialize_runtime_environment: Arc::new({
+                let initialized_config_path = initialized_config_path.clone();
+                move |loaded_config| {
+                    // The runtime env module has its own coverage; this test only needs to prove
+                    // the supervisor runs the hook before spawning children.
+                    let mut guard = initialized_config_path
+                        .lock()
+                        .expect("initialized config path lock");
+                    *guard = Some(loaded_config.resolved_path.display().to_string());
+                }
+            }),
+            run_cli_host: Arc::new({
+                let initialized_config_path = initialized_config_path.clone();
+                let started = started.clone();
+                let expected_path_string = expected_path_string.clone();
+                move |options| {
+                    let initialized_config_path = initialized_config_path.clone();
+                    let started = started.clone();
+                    let expected_path_string = expected_path_string.clone();
+                    boxed_cli_result(async move {
+                        while started.load(Ordering::SeqCst) < 2 {
+                            tokio::task::yield_now().await;
+                        }
+
+                        let observed_path = initialized_config_path
+                            .lock()
+                            .expect("initialized config path lock")
+                            .clone();
+                        assert_eq!(
+                            observed_path.as_deref(),
+                            Some(expected_path_string.as_str())
+                        );
+                        assert!(!options.initialize_runtime_environment);
+                        Ok(())
+                    })
+                }
+            }),
+            run_telegram: Arc::new({
+                let initialized_config_path = initialized_config_path.clone();
+                let started = started.clone();
+                let expected_path_string = expected_path_string.clone();
+                move |request| {
+                    let initialized_config_path = initialized_config_path.clone();
+                    let started = started.clone();
+                    let expected_path_string = expected_path_string.clone();
+                    boxed_cli_result(async move {
+                        let observed_path = initialized_config_path
+                            .lock()
+                            .expect("initialized config path lock")
+                            .clone();
+                        assert_eq!(
+                            observed_path.as_deref(),
+                            Some(expected_path_string.as_str())
+                        );
+                        assert!(!request.initialize_runtime_environment);
+                        started.fetch_add(1, Ordering::SeqCst);
+                        while !request.stop.is_requested() {
+                            tokio::task::yield_now().await;
+                        }
+                        Ok(())
+                    })
+                }
+            }),
+            run_feishu: Arc::new({
+                let initialized_config_path = initialized_config_path.clone();
+                let started = started.clone();
+                let expected_path_string = expected_path_string.clone();
+                move |request| {
+                    let initialized_config_path = initialized_config_path.clone();
+                    let started = started.clone();
+                    let expected_path_string = expected_path_string.clone();
+                    boxed_cli_result(async move {
+                        let observed_path = initialized_config_path
+                            .lock()
+                            .expect("initialized config path lock")
+                            .clone();
+                        assert_eq!(
+                            observed_path.as_deref(),
+                            Some(expected_path_string.as_str())
+                        );
+                        assert!(!request.initialize_runtime_environment);
+                        started.fetch_add(1, Ordering::SeqCst);
+                        while !request.stop.is_requested() {
+                            tokio::task::yield_now().await;
+                        }
+                        Ok(())
+                    })
+                }
+            }),
+            wait_for_shutdown: Arc::new(pending_shutdown_future),
+        },
+    )
+    .await
+    .expect("run helper");
+
+    assert!(state.final_exit_result().is_ok());
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -60,6 +60,7 @@ pub struct ConcurrentCliHostOptions {
     pub config: LoongClawConfig,
     pub session_id: String,
     pub shutdown: ConcurrentCliShutdown,
+    pub initialize_runtime_environment: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -343,7 +344,7 @@ pub fn run_concurrent_cli_host(options: &ConcurrentCliHostOptions) -> CliResult<
         &chat_options,
         "cli-chat-concurrent",
         CliSessionRequirement::RequireExplicit,
-        true,
+        options.initialize_runtime_environment,
     )?;
     print_cli_chat_startup(&runtime, &chat_options)?;
 
@@ -2301,6 +2302,7 @@ mod tests {
             config: LoongClawConfig::default(),
             session_id: "   ".to_owned(),
             shutdown,
+            initialize_runtime_environment: false,
         })
         .expect_err("concurrent host should reject an implicit session id");
 

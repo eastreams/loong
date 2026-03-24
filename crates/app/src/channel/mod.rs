@@ -1338,6 +1338,7 @@ where
         spec,
         validate,
         ChannelServeStopHandle::new(),
+        true,
         move |context, kernel_ctx, runtime, _stop| run(context, kernel_ctx, runtime),
     )
     .await
@@ -1353,6 +1354,7 @@ async fn run_channel_serve_command_with_stop<R, V, F>(
     spec: ChannelServeCommandSpec,
     validate: V,
     stop: ChannelServeStopHandle,
+    initialize_runtime_environment: bool,
     run: F,
 ) -> CliResult<()>
 where
@@ -1366,10 +1368,12 @@ where
     ) -> ChannelCommandFuture<'a>,
 {
     validate(&context.resolved)?;
-    crate::runtime_env::initialize_runtime_environment(
-        &context.config,
-        Some(context.resolved_path.as_path()),
-    );
+    if initialize_runtime_environment {
+        crate::runtime_env::initialize_runtime_environment(
+            &context.config,
+            Some(context.resolved_path.as_path()),
+        );
+    }
     let kernel_ctx = bootstrap_kernel_context_with_config(
         spec.family.runtime.serve_bootstrap_agent_id,
         DEFAULT_TOKEN_TTL_S,
@@ -1400,12 +1404,15 @@ async fn run_telegram_channel_with_context(
     context: ChannelCommandContext<ResolvedTelegramChannelConfig>,
     once: bool,
     stop: ChannelServeStopHandle,
+    initialize_runtime_environment: bool,
 ) -> CliResult<()> {
     validate_telegram_security_config(&context.resolved)?;
-    crate::runtime_env::initialize_runtime_environment(
-        &context.config,
-        Some(context.resolved_path.as_path()),
-    );
+    if initialize_runtime_environment {
+        crate::runtime_env::initialize_runtime_environment(
+            &context.config,
+            Some(context.resolved_path.as_path()),
+        );
+    }
     let kernel_ctx = bootstrap_kernel_context_with_config(
         "channel-telegram",
         DEFAULT_TOKEN_TTL_S,
@@ -1500,9 +1507,10 @@ pub async fn run_telegram_channel_with_stop(
     once: bool,
     account_id: Option<&str>,
     stop: ChannelServeStopHandle,
+    initialize_runtime_environment: bool,
 ) -> CliResult<()> {
     let context = build_telegram_command_context(resolved_path, config, account_id)?;
-    run_telegram_channel_with_context(context, once, stop).await
+    run_telegram_channel_with_context(context, once, stop, initialize_runtime_environment).await
 }
 
 #[cfg(test)]
@@ -1558,7 +1566,7 @@ pub async fn run_telegram_channel(
     #[cfg(feature = "channel-telegram")]
     {
         let context = load_telegram_command_context(config_path, account_id)?;
-        run_telegram_channel_with_context(context, once, ChannelServeStopHandle::new()).await
+        run_telegram_channel_with_context(context, once, ChannelServeStopHandle::new(), true).await
     }
 }
 
@@ -1699,6 +1707,7 @@ pub async fn run_feishu_channel(
             bind_override,
             path_override,
             ChannelServeStopHandle::new(),
+            true,
         )
         .await
     }
@@ -1710,6 +1719,7 @@ async fn run_feishu_channel_with_context(
     bind_override: Option<&str>,
     path_override: Option<&str>,
     stop: ChannelServeStopHandle,
+    initialize_runtime_environment: bool,
 ) -> CliResult<()> {
     let bind_override = bind_override.map(str::to_owned);
     let path_override = path_override.map(str::to_owned);
@@ -1720,6 +1730,7 @@ async fn run_feishu_channel_with_context(
         },
         validate_feishu_security_config,
         stop,
+        initialize_runtime_environment,
         move |context, kernel_ctx, runtime, stop| {
             Box::pin(async move {
                 let route = context.route.clone();
@@ -1753,9 +1764,17 @@ pub async fn run_feishu_channel_with_stop(
     bind_override: Option<&str>,
     path_override: Option<&str>,
     stop: ChannelServeStopHandle,
+    initialize_runtime_environment: bool,
 ) -> CliResult<()> {
     let context = build_feishu_command_context(resolved_path, config, account_id)?;
-    run_feishu_channel_with_context(context, bind_override, path_override, stop).await
+    run_feishu_channel_with_context(
+        context,
+        bind_override,
+        path_override,
+        stop,
+        initialize_runtime_environment,
+    )
+    .await
 }
 
 #[doc(hidden)]
