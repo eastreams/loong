@@ -145,8 +145,117 @@ impl ConversationTurnPhaseEvent {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversationTurnToolState {
+    Running,
+    Completed,
+    NeedsApproval,
+    Denied,
+    Failed,
+    Interrupted,
+}
+
+impl ConversationTurnToolState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::NeedsApproval => "needs_approval",
+            Self::Denied => "denied",
+            Self::Failed => "failed",
+            Self::Interrupted => "interrupted",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationTurnToolEvent {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub state: ConversationTurnToolState,
+    pub detail: Option<String>,
+}
+
+impl ConversationTurnToolEvent {
+    pub fn running(tool_call_id: impl Into<String>, tool_name: impl Into<String>) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            tool_name: tool_name.into(),
+            state: ConversationTurnToolState::Running,
+            detail: None,
+        }
+    }
+
+    pub fn completed(
+        tool_call_id: impl Into<String>,
+        tool_name: impl Into<String>,
+        detail: Option<String>,
+    ) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            tool_name: tool_name.into(),
+            state: ConversationTurnToolState::Completed,
+            detail,
+        }
+    }
+
+    pub fn needs_approval(
+        tool_call_id: impl Into<String>,
+        tool_name: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            tool_name: tool_name.into(),
+            state: ConversationTurnToolState::NeedsApproval,
+            detail: Some(detail.into()),
+        }
+    }
+
+    pub fn denied(
+        tool_call_id: impl Into<String>,
+        tool_name: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            tool_name: tool_name.into(),
+            state: ConversationTurnToolState::Denied,
+            detail: Some(detail.into()),
+        }
+    }
+
+    pub fn failed(
+        tool_call_id: impl Into<String>,
+        tool_name: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            tool_name: tool_name.into(),
+            state: ConversationTurnToolState::Failed,
+            detail: Some(detail.into()),
+        }
+    }
+
+    pub fn interrupted(
+        tool_call_id: impl Into<String>,
+        tool_name: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            tool_name: tool_name.into(),
+            state: ConversationTurnToolState::Interrupted,
+            detail: Some(detail.into()),
+        }
+    }
+}
+
 pub trait ConversationTurnObserver: Send + Sync {
     fn on_phase(&self, _event: ConversationTurnPhaseEvent) {}
+
+    fn on_tool(&self, _event: ConversationTurnToolEvent) {}
 
     fn on_streaming_token(&self, _event: StreamingTokenEvent) {}
 }

@@ -814,7 +814,7 @@ fn effective_payload_summary_limit(intent: &ToolIntent, default_limit: usize) ->
     default_limit
 }
 
-fn effective_result_tool_name(intent: &ToolIntent) -> String {
+pub(crate) fn effective_result_tool_name(intent: &ToolIntent) -> String {
     let canonical_tool_name = crate::tools::canonical_tool_name(intent.tool_name.as_str());
     if canonical_tool_name != "tool.invoke" {
         return canonical_tool_name.to_owned();
@@ -830,6 +830,59 @@ fn effective_result_tool_name(intent: &ToolIntent) -> String {
         .filter(|tool_name| !crate::tools::is_provider_exposed_tool_name(tool_name))
         .unwrap_or(canonical_tool_name)
         .to_owned()
+}
+
+fn build_tool_intent_completed_trace(
+    intent: &ToolIntent,
+    outcome: &ToolCoreOutcome,
+) -> ToolBatchExecutionIntentTrace {
+    let tool_name = effective_result_tool_name(intent);
+    let normalized_status = outcome.status.trim();
+    let detail = if normalized_status.is_empty() || normalized_status == "ok" {
+        None
+    } else {
+        Some(normalized_status.to_owned())
+    };
+
+    ToolBatchExecutionIntentTrace {
+        tool_call_id: intent.tool_call_id.clone(),
+        tool_name,
+        status: ToolBatchExecutionIntentStatus::Completed,
+        detail,
+    }
+}
+
+fn build_tool_intent_failure_trace(
+    intent: &ToolIntent,
+    turn_result: &TurnResult,
+) -> Option<ToolBatchExecutionIntentTrace> {
+    let tool_name = effective_result_tool_name(intent);
+
+    match turn_result {
+        TurnResult::NeedsApproval(requirement) => Some(ToolBatchExecutionIntentTrace {
+            tool_call_id: intent.tool_call_id.clone(),
+            tool_name,
+            status: ToolBatchExecutionIntentStatus::NeedsApproval,
+            detail: Some(requirement.reason.clone()),
+        }),
+        TurnResult::ToolDenied(failure) => Some(ToolBatchExecutionIntentTrace {
+            tool_call_id: intent.tool_call_id.clone(),
+            tool_name,
+            status: ToolBatchExecutionIntentStatus::Denied,
+            detail: Some(failure.reason.clone()),
+        }),
+        TurnResult::ToolError(failure) | TurnResult::ProviderError(failure) => {
+            Some(ToolBatchExecutionIntentTrace {
+                tool_call_id: intent.tool_call_id.clone(),
+                tool_name,
+                status: ToolBatchExecutionIntentStatus::Failed,
+                detail: Some(failure.reason.clone()),
+            })
+        }
+        TurnResult::FinalText(_) | TurnResult::StreamingText(_) | TurnResult::StreamingDone(_) => {
+            None
+        }
+    }
 }
 
 fn truncate_by_chars(value: &str, limit: usize) -> (String, usize, bool) {
@@ -976,6 +1029,22 @@ pub(crate) struct ToolBatchExecutionSegmentTrace {
     pub observed_wall_time_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolBatchExecutionIntentStatus {
+    Completed,
+    NeedsApproval,
+    Denied,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ToolBatchExecutionIntentTrace {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub status: ToolBatchExecutionIntentStatus,
+    pub detail: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ToolBatchExecutionTrace {
     pub total_intents: usize,
@@ -984,6 +1053,7 @@ pub(crate) struct ToolBatchExecutionTrace {
     pub observed_peak_in_flight: usize,
     pub observed_wall_time_ms: u64,
     pub segments: Vec<ToolBatchExecutionSegmentTrace>,
+    pub intent_outcomes: Vec<ToolBatchExecutionIntentTrace>,
 }
 
 impl ToolBatchExecutionSegmentTrace {
@@ -1374,6 +1444,7 @@ impl TurnEngine {
                             session_context,
                             app_dispatcher,
                             binding,
+                            &mut trace.intent_outcomes,
                             trace_segment,
                         )
                         .await?
@@ -1384,6 +1455,7 @@ impl TurnEngine {
                             session_context,
                             app_dispatcher,
                             binding,
+                            &mut trace.intent_outcomes,
                             trace_segment,
                         )
                         .await?
@@ -1423,6 +1495,7 @@ impl TurnEngine {
                     observed_wall_time_ms: None,
                 })
                 .collect(),
+            intent_outcomes: Vec::new(),
         }
     }
 
@@ -1471,20 +1544,35 @@ impl TurnEngine {
         session_context: &SessionContext,
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
+        intent_outcomes: &mut Vec<ToolBatchExecutionIntentTrace>,
         trace_segment: &mut ToolBatchExecutionSegmentTrace,
     ) -> Result<Vec<String>, TurnResult> {
         let started_at = Instant::now();
         let result = async {
             let mut outputs = Vec::with_capacity(prepared.len());
             for prepared_intent in prepared {
-                let outcome = self
+                let outcome = match self
                     .execute_prepared_tool_intent(
                         prepared_intent,
                         session_context,
                         app_dispatcher,
                         binding,
                     )
-                    .await?;
+                    .await
+                {
+                    Ok(outcome) => outcome,
+                    Err(turn_result) => {
+                        let intent_outcome =
+                            build_tool_intent_failure_trace(&prepared_intent.intent, &turn_result);
+                        if let Some(intent_outcome) = intent_outcome {
+                            intent_outcomes.push(intent_outcome);
+                        }
+                        return Err(turn_result);
+                    }
+                };
+                let intent_outcome =
+                    build_tool_intent_completed_trace(&prepared_intent.intent, &outcome);
+                intent_outcomes.push(intent_outcome);
                 outputs.push(format_tool_result_line_with_limit(
                     &prepared_intent.intent,
                     &outcome,
@@ -1507,6 +1595,7 @@ impl TurnEngine {
         session_context: &SessionContext,
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
+        intent_outcomes: &mut Vec<ToolBatchExecutionIntentTrace>,
         trace_segment: &mut ToolBatchExecutionSegmentTrace,
     ) -> Result<Vec<String>, TurnResult> {
         let started_at = Instant::now();
@@ -1530,11 +1619,23 @@ impl TurnEngine {
                         )
                         .await
                         .map(|outcome| {
-                            format_tool_result_line_with_limit(
+                            let output = format_tool_result_line_with_limit(
                                 &prepared_intent.intent,
                                 &outcome,
                                 payload_summary_limit_chars,
-                            )
+                            );
+                            let intent_outcome = build_tool_intent_completed_trace(
+                                &prepared_intent.intent,
+                                &outcome,
+                            );
+                            (output, intent_outcome)
+                        })
+                        .map_err(|turn_result| {
+                            let intent_outcome = build_tool_intent_failure_trace(
+                                &prepared_intent.intent,
+                                &turn_result,
+                            );
+                            (turn_result, intent_outcome)
                         });
                     in_flight.fetch_sub(1, Ordering::Relaxed);
                     (index, result)
@@ -1546,8 +1647,16 @@ impl TurnEngine {
         let result = async {
             while let Some((index, result)) = executions.next().await {
                 match result {
-                    Ok(output) => results.push((index, output)),
-                    Err(turn_result) => return Err(turn_result),
+                    Ok((output, intent_outcome)) => {
+                        intent_outcomes.push(intent_outcome);
+                        results.push((index, output));
+                    }
+                    Err((turn_result, intent_outcome)) => {
+                        if let Some(intent_outcome) = intent_outcome {
+                            intent_outcomes.push(intent_outcome);
+                        }
+                        return Err(turn_result);
+                    }
                 }
             }
             Ok(())
@@ -1908,6 +2017,53 @@ mod tests {
                     "session_id": session_context.session_id,
                 }),
             })
+        }
+    }
+
+    fn partially_failing_observed_execution_turn(session_id: &str, turn_id: &str) -> ProviderTurn {
+        ProviderTurn {
+            assistant_text: "observing a partial tool failure".to_owned(),
+            tool_intents: vec![
+                provider_app_tool_intent(
+                    "sessions_list",
+                    json!({}),
+                    session_id,
+                    turn_id,
+                    "call-partial-1",
+                ),
+                provider_app_tool_intent(
+                    "session_status",
+                    json!({"session_id": session_id}),
+                    session_id,
+                    turn_id,
+                    "call-partial-2",
+                ),
+            ],
+            raw_meta: json!({}),
+        }
+    }
+
+    struct PartiallyFailingObservedExecutionDispatcher;
+
+    #[async_trait::async_trait]
+    impl AppToolDispatcher for PartiallyFailingObservedExecutionDispatcher {
+        async fn execute_app_tool(
+            &self,
+            session_context: &SessionContext,
+            request: ToolCoreRequest,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> Result<ToolCoreOutcome, String> {
+            match request.tool_name.as_str() {
+                "sessions_list" => Ok(ToolCoreOutcome {
+                    status: "ok".to_owned(),
+                    payload: json!({
+                        "tool": request.tool_name,
+                        "session_id": session_context.session_id,
+                    }),
+                }),
+                "session_status" => Err("simulated observed tool failure".to_owned()),
+                other => Err(format!("app_tool_not_found: {other}")),
+            }
         }
     }
 
@@ -2641,6 +2797,56 @@ mod tests {
                 .segments
                 .iter()
                 .all(|segment| segment.execution_mode == ToolBatchExecutionMode::Sequential)
+        );
+    }
+
+    #[tokio::test]
+    async fn observed_fast_lane_execution_trace_records_partial_tool_failure_outcomes() {
+        let turn = partially_failing_observed_execution_turn(
+            "session-observed-partial-failure",
+            "turn-observed-partial-failure",
+        );
+        let session_context = SessionContext::root_with_tool_view(
+            "session-observed-partial-failure",
+            runtime_tool_view(),
+        );
+        let dispatcher = PartiallyFailingObservedExecutionDispatcher;
+        let engine = TurnEngine::with_parallel_tool_execution(4, 512, false, 1);
+
+        let (result, trace) = engine
+            .execute_turn_in_context_with_trace(
+                &turn,
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::direct(),
+                None,
+            )
+            .await;
+
+        assert!(
+            matches!(result, TurnResult::ToolError(_)),
+            "expected ToolError, got {result:?}"
+        );
+
+        let trace = trace.expect("trace should exist");
+        assert_eq!(trace.intent_outcomes.len(), 2);
+        assert_eq!(
+            trace.intent_outcomes[0].status,
+            ToolBatchExecutionIntentStatus::Completed
+        );
+        assert_eq!(trace.intent_outcomes[0].tool_call_id, "call-partial-1");
+        assert_eq!(
+            trace.intent_outcomes[1].status,
+            ToolBatchExecutionIntentStatus::Failed
+        );
+        assert_eq!(trace.intent_outcomes[1].tool_call_id, "call-partial-2");
+        assert!(
+            trace.intent_outcomes[1]
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("simulated observed tool failure")),
+            "expected failure detail in trace, got {:?}",
+            trace.intent_outcomes[1].detail
         );
     }
 

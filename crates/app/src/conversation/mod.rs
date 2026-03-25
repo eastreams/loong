@@ -104,7 +104,7 @@ pub use turn_middleware_registry::{
 };
 pub use turn_observer::{
     ConversationTurnObserver, ConversationTurnObserverHandle, ConversationTurnPhase,
-    ConversationTurnPhaseEvent,
+    ConversationTurnPhaseEvent, ConversationTurnToolEvent, ConversationTurnToolState,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

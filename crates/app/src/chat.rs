@@ -27,7 +27,8 @@ use super::conversation::TurnCheckpointTailRepairRuntimeProbe;
 use super::conversation::{
     ConversationRuntimeBinding, ConversationSessionAddress, ConversationTurnCoordinator,
     ConversationTurnObserver, ConversationTurnObserverHandle, ConversationTurnPhase,
-    ConversationTurnPhaseEvent, ExecutionLane, ProviderErrorMode, resolve_context_engine_selection,
+    ConversationTurnPhaseEvent, ConversationTurnToolEvent, ConversationTurnToolState,
+    ExecutionLane, ProviderErrorMode, resolve_context_engine_selection,
 };
 #[cfg(any(test, feature = "memory-sqlite"))]
 use super::conversation::{
@@ -248,18 +249,36 @@ struct CliChatLiveSurfaceSnapshot {
     tool_activity_lines: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct CliChatLiveToolState {
+    tool_call_id: String,
+    display_order: usize,
     name: Option<String>,
-    id: Option<String>,
     args: String,
+    status: ConversationTurnToolState,
+    detail: Option<String>,
+}
+
+impl CliChatLiveToolState {
+    fn new(tool_call_id: String, display_order: usize) -> Self {
+        Self {
+            tool_call_id,
+            display_order,
+            name: None,
+            args: String::new(),
+            status: ConversationTurnToolState::Running,
+            detail: None,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
 struct CliChatLiveSurfaceState {
     latest_phase_event: Option<ConversationTurnPhaseEvent>,
     draft_preview: String,
-    tool_states: BTreeMap<usize, CliChatLiveToolState>,
+    tool_states: BTreeMap<String, CliChatLiveToolState>,
+    tool_call_index_map: BTreeMap<usize, String>,
+    next_tool_display_order: usize,
     total_text_chars_seen: usize,
     last_preview_emit_chars_seen: usize,
     last_emitted_snapshot: Option<CliChatLiveSurfaceSnapshot>,
@@ -1105,10 +1124,31 @@ impl CliChatLiveSurfaceObserver {
         let lines_to_render = {
             let mut state = self.lock_state();
             state.latest_phase_event = Some(event.clone());
+            reconcile_cli_chat_live_tool_states_for_phase(&mut state.tool_states, event.phase);
             if !should_render_cli_chat_live_phase(event.phase) {
                 None
             } else {
                 self.prepare_live_surface_lines(&mut state)
+            }
+        };
+
+        if let Some(lines) = lines_to_render {
+            (self.render_sink)(lines);
+        }
+    }
+
+    fn record_tool_event(&self, event: ConversationTurnToolEvent) {
+        let lines_to_render = {
+            let mut state = self.lock_state();
+            apply_cli_chat_live_tool_event(&mut state, &event, self.render_width);
+            let current_phase = match state.latest_phase_event.as_ref() {
+                Some(phase_event) => phase_event.phase,
+                None => return,
+            };
+            if should_render_cli_chat_live_phase(current_phase) {
+                self.prepare_live_surface_lines(&mut state)
+            } else {
+                None
             }
         };
 
@@ -1155,7 +1195,7 @@ impl CliChatLiveSurfaceObserver {
 
             if let Some((tool_call_delta, index)) = tool_call_update {
                 update_cli_chat_live_tool_state(
-                    &mut state.tool_states,
+                    &mut state,
                     index,
                     &tool_call_delta,
                     self.render_width,
@@ -1199,6 +1239,10 @@ impl CliChatLiveSurfaceObserver {
 impl ConversationTurnObserver for CliChatLiveSurfaceObserver {
     fn on_phase(&self, event: ConversationTurnPhaseEvent) {
         self.record_phase_event(event);
+    }
+
+    fn on_tool(&self, event: ConversationTurnToolEvent) {
+        self.record_tool_event(event);
     }
 
     fn on_streaming_token(&self, event: crate::acp::StreamingTokenEvent) {
@@ -1291,25 +1335,146 @@ fn trim_cli_chat_live_buffer(buffer: &mut String, char_limit: usize) {
     buffer.push_str(trimmed_tail.as_str());
 }
 
+fn truncate_cli_chat_live_text(value: &str, char_limit: usize) -> String {
+    let mut truncated = value.to_owned();
+    trim_cli_chat_live_buffer(&mut truncated, char_limit);
+    truncated
+}
+
+fn cli_chat_live_pending_tool_call_id(index: usize) -> String {
+    format!("pending-stream-tool-{index}")
+}
+
+fn ensure_cli_chat_live_tool_state<'a>(
+    state: &'a mut CliChatLiveSurfaceState,
+    tool_call_id: &str,
+) -> &'a mut CliChatLiveToolState {
+    let tool_call_key = tool_call_id.to_owned();
+    let entry = state.tool_states.entry(tool_call_key.clone());
+
+    match entry {
+        std::collections::btree_map::Entry::Occupied(occupied_entry) => occupied_entry.into_mut(),
+        std::collections::btree_map::Entry::Vacant(vacant_entry) => {
+            let display_order = state.next_tool_display_order;
+            let tool_state = CliChatLiveToolState::new(tool_call_key, display_order);
+            state.next_tool_display_order = state.next_tool_display_order.saturating_add(1);
+            vacant_entry.insert(tool_state)
+        }
+    }
+}
+
+fn merge_cli_chat_live_pending_tool_state(
+    state: &mut CliChatLiveSurfaceState,
+    pending_tool_call_id: &str,
+    tool_call_id: &str,
+) {
+    if pending_tool_call_id == tool_call_id {
+        return;
+    }
+
+    let pending_state = match state.tool_states.remove(pending_tool_call_id) {
+        Some(pending_state) => pending_state,
+        None => return,
+    };
+    let target_state = ensure_cli_chat_live_tool_state(state, tool_call_id);
+
+    if target_state.name.is_none() {
+        target_state.name = pending_state.name;
+    }
+    if target_state.args.is_empty() {
+        target_state.args = pending_state.args;
+    }
+    if target_state.detail.is_none() {
+        target_state.detail = pending_state.detail;
+    }
+    if target_state.status == ConversationTurnToolState::Running {
+        target_state.status = pending_state.status;
+    }
+}
+
 fn update_cli_chat_live_tool_state(
-    tool_states: &mut BTreeMap<usize, CliChatLiveToolState>,
+    state: &mut CliChatLiveSurfaceState,
     index: usize,
     delta: &crate::acp::ToolCallDelta,
     render_width: usize,
 ) {
-    let tool_state = tool_states.entry(index).or_default();
+    let pending_tool_call_id = cli_chat_live_pending_tool_call_id(index);
+    let tool_call_id = delta.id.clone().unwrap_or_else(|| {
+        state
+            .tool_call_index_map
+            .get(&index)
+            .cloned()
+            .unwrap_or_else(|| pending_tool_call_id.clone())
+    });
+    let args_char_limit = cli_chat_live_tool_args_char_limit(render_width);
+
+    state
+        .tool_call_index_map
+        .insert(index, tool_call_id.clone());
+    merge_cli_chat_live_pending_tool_state(
+        state,
+        pending_tool_call_id.as_str(),
+        tool_call_id.as_str(),
+    );
+
+    let tool_state = ensure_cli_chat_live_tool_state(state, tool_call_id.as_str());
+    tool_state.status = ConversationTurnToolState::Running;
+    tool_state.detail = None;
 
     if let Some(name) = delta.name.as_ref() {
         tool_state.name = Some(name.clone());
     }
 
-    if let Some(id) = delta.id.as_ref() {
-        tool_state.id = Some(id.clone());
-    }
-
     if let Some(args) = delta.args.as_ref() {
-        let args_char_limit = cli_chat_live_tool_args_char_limit(render_width);
         append_cli_chat_live_buffer(&mut tool_state.args, args.as_str(), args_char_limit);
+    }
+}
+
+fn apply_cli_chat_live_tool_event(
+    state: &mut CliChatLiveSurfaceState,
+    event: &ConversationTurnToolEvent,
+    render_width: usize,
+) {
+    let tool_state = ensure_cli_chat_live_tool_state(state, event.tool_call_id.as_str());
+    let detail_char_limit = cli_chat_live_tool_args_char_limit(render_width);
+
+    tool_state.name = Some(event.tool_name.clone());
+    tool_state.status = event.state;
+    tool_state.detail = event
+        .detail
+        .as_deref()
+        .map(|detail| truncate_cli_chat_live_text(detail, detail_char_limit));
+}
+
+fn reconcile_cli_chat_live_tool_states_for_phase(
+    tool_states: &mut BTreeMap<String, CliChatLiveToolState>,
+    phase: ConversationTurnPhase,
+) {
+    let fallback_status = match phase {
+        ConversationTurnPhase::RequestingFollowupProvider
+        | ConversationTurnPhase::FinalizingReply
+        | ConversationTurnPhase::Completed => Some(ConversationTurnToolState::Completed),
+        ConversationTurnPhase::Failed => Some(ConversationTurnToolState::Interrupted),
+        ConversationTurnPhase::Preparing
+        | ConversationTurnPhase::ContextReady
+        | ConversationTurnPhase::RequestingProvider
+        | ConversationTurnPhase::RunningTools => None,
+    };
+    let Some(fallback_status) = fallback_status else {
+        return;
+    };
+
+    for tool_state in tool_states.values_mut() {
+        if tool_state.status != ConversationTurnToolState::Running {
+            continue;
+        }
+
+        tool_state.status = fallback_status;
+        if fallback_status == ConversationTurnToolState::Interrupted && tool_state.detail.is_none()
+        {
+            tool_state.detail =
+                Some("turn failed before a terminal tool result was recorded".to_owned());
+        }
     }
 }
 
@@ -1337,18 +1502,25 @@ fn build_cli_chat_live_surface_snapshot(
 }
 
 fn format_cli_chat_live_tool_activity_lines(
-    tool_states: &BTreeMap<usize, CliChatLiveToolState>,
+    tool_states: &BTreeMap<String, CliChatLiveToolState>,
 ) -> Vec<String> {
     let mut lines = Vec::new();
+    let mut ordered_states = tool_states.values().collect::<Vec<_>>();
+    ordered_states.sort_by_key(|tool_state| tool_state.display_order);
 
-    for (index, tool_state) in tool_states {
+    for tool_state in ordered_states {
+        let status = tool_state.status.as_str().replace('_', " ");
         let name = tool_state.name.as_deref().unwrap_or("pending");
-        let id = tool_state.id.as_deref().unwrap_or("-");
-        let tool_line = format!("tool {index}: {name} (id={id})");
+        let tool_call_id = tool_state.tool_call_id.as_str();
+        let tool_line = if let Some(detail) = tool_state.detail.as_deref() {
+            format!("[{status}] {name} (id={tool_call_id}) - {detail}")
+        } else {
+            format!("[{status}] {name} (id={tool_call_id})")
+        };
         lines.push(tool_line);
 
         if !tool_state.args.is_empty() {
-            let args_line = format!("args {index}: {}", tool_state.args);
+            let args_line = format!("args: {}", tool_state.args);
             lines.push(args_line);
         }
     }
@@ -5640,6 +5812,93 @@ println!(\"{value}\");
         assert!(
             preview_batch.iter().any(|line| line == "Draft response"),
             "preview batch should include the streamed text: {preview_batch:#?}"
+        );
+    }
+
+    #[test]
+    fn cli_chat_live_surface_observer_renders_tool_lifecycle_updates() {
+        let captured_batches = Arc::new(StdMutex::new(Vec::<Vec<String>>::new()));
+        let render_sink: CliChatLiveSurfaceSink = {
+            let captured_batches = Arc::clone(&captured_batches);
+            Arc::new(move |lines| {
+                let mut batches = captured_batches
+                    .lock()
+                    .expect("captured batches lock should not be poisoned");
+                batches.push(lines);
+            })
+        };
+        let observer = CliChatLiveSurfaceObserver::new(72, render_sink);
+
+        observer.on_phase(ConversationTurnPhaseEvent::running_tools(
+            1,
+            ExecutionLane::Fast,
+            1,
+        ));
+        observer.on_streaming_token(crate::acp::StreamingTokenEvent {
+            event_type: "tool_call_start".to_owned(),
+            delta: crate::acp::TokenDelta {
+                text: None,
+                tool_call: Some(crate::acp::ToolCallDelta {
+                    name: Some("file.read".to_owned()),
+                    args: None,
+                    id: Some("call-tool-1".to_owned()),
+                }),
+            },
+            index: Some(0),
+        });
+        observer.on_streaming_token(crate::acp::StreamingTokenEvent {
+            event_type: "tool_call_input_delta".to_owned(),
+            delta: crate::acp::TokenDelta {
+                text: None,
+                tool_call: Some(crate::acp::ToolCallDelta {
+                    name: None,
+                    args: Some("{\"path\":\"README.md\"}".to_owned()),
+                    id: None,
+                }),
+            },
+            index: Some(0),
+        });
+        observer.on_tool(ConversationTurnToolEvent::completed(
+            "call-tool-1",
+            "file.read",
+            Some("ok".to_owned()),
+        ));
+
+        let batches = captured_batches
+            .lock()
+            .expect("captured batches lock should not be poisoned");
+        let running_batch = batches
+            .iter()
+            .find(|lines| lines.iter().any(|line| line == "tool activity"))
+            .expect("running tool batch");
+        let completed_batch = batches
+            .iter()
+            .rev()
+            .find(|lines| {
+                lines
+                    .iter()
+                    .any(|line| line == "[completed] file.read (id=call-tool-1) - ok")
+            })
+            .expect("completed tool batch");
+
+        assert!(
+            running_batch
+                .iter()
+                .any(|line| line == "[running] file.read (id=call-tool-1)"),
+            "tool batch should surface the running tool state: {running_batch:#?}"
+        );
+
+        assert!(
+            completed_batch
+                .iter()
+                .any(|line| line == "[completed] file.read (id=call-tool-1) - ok"),
+            "tool batch should surface the completed tool state: {completed_batch:#?}"
+        );
+        assert!(
+            completed_batch
+                .iter()
+                .any(|line| line == "args: {\"path\":\"README.md\"}"),
+            "tool batch should preserve streamed tool args: {completed_batch:#?}"
         );
     }
 

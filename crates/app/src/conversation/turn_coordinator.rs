@@ -1,6 +1,6 @@
 #[cfg(feature = "memory-sqlite")]
 use std::any::Any;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 #[cfg(feature = "memory-sqlite")]
 use std::future::Future;
 #[cfg(feature = "memory-sqlite")]
@@ -80,11 +80,12 @@ use super::turn_budget::{
     SafeLaneFailureRouteReason, SafeLaneReplanBudget,
 };
 use super::turn_engine::{
-    AppToolDispatcher, DefaultAppToolDispatcher, ProviderTurn, ToolBatchExecutionTrace, ToolIntent,
-    TurnEngine, TurnFailure, TurnFailureKind, TurnResult, TurnValidation,
+    AppToolDispatcher, DefaultAppToolDispatcher, ProviderTurn, ToolBatchExecutionIntentStatus,
+    ToolBatchExecutionTrace, ToolIntent, TurnEngine, TurnFailure, TurnFailureKind, TurnResult,
+    TurnValidation, effective_result_tool_name,
 };
 use super::turn_observer::{
-    ConversationTurnObserverHandle, ConversationTurnPhaseEvent,
+    ConversationTurnObserverHandle, ConversationTurnPhaseEvent, ConversationTurnToolEvent,
     build_observer_streaming_token_callback,
 };
 use super::turn_shared::{
@@ -896,6 +897,7 @@ struct ProviderTurnLaneExecution {
     raw_tool_output_requested: bool,
     turn_result: TurnResult,
     safe_lane_terminal_route: Option<SafeLaneFailureRoute>,
+    tool_events: Vec<ConversationTurnToolEvent>,
 }
 
 impl ProviderTurnLaneExecution {
@@ -1089,7 +1091,6 @@ impl ProviderTurnContinuePhase {
         binding: ConversationRuntimeBinding<'_>,
         observer: Option<&ConversationTurnObserverHandle>,
     ) -> ResolvedProviderTurn {
-        observe_provider_turn_continue_phase(observer, self, 1);
         resolve_provider_turn_reply(
             runtime,
             &self.followup_config,
@@ -2637,19 +2638,151 @@ fn observe_turn_phase(
     observer.on_phase(event);
 }
 
-fn observe_provider_turn_continue_phase(
+fn observe_provider_turn_tool_batch_started(
     observer: Option<&ConversationTurnObserverHandle>,
-    continue_phase: &ProviderTurnContinuePhase,
-    provider_round: usize,
+    turn: &ProviderTurn,
 ) {
-    let tool_call_count = continue_phase.tool_intent_count();
-    if tool_call_count == 0 {
+    let Some(observer) = observer else {
         return;
+    };
+
+    for intent in &turn.tool_intents {
+        let tool_name = effective_result_tool_name(intent);
+        let event = ConversationTurnToolEvent::running(intent.tool_call_id.clone(), tool_name);
+        observer.on_tool(event);
+    }
+}
+
+fn observe_provider_turn_tool_batch_terminal(
+    observer: Option<&ConversationTurnObserverHandle>,
+    tool_events: &[ConversationTurnToolEvent],
+) {
+    let Some(observer) = observer else {
+        return;
+    };
+
+    for tool_event in tool_events {
+        observer.on_tool(tool_event.clone());
+    }
+}
+
+fn build_provider_turn_tool_terminal_events(
+    turn: &ProviderTurn,
+    turn_result: &TurnResult,
+    trace: Option<&ToolBatchExecutionTrace>,
+) -> Vec<ConversationTurnToolEvent> {
+    let mut trace_events = BTreeMap::new();
+    if let Some(trace) = trace {
+        for intent_outcome in &trace.intent_outcomes {
+            let event = match intent_outcome.status {
+                ToolBatchExecutionIntentStatus::Completed => ConversationTurnToolEvent::completed(
+                    intent_outcome.tool_call_id.clone(),
+                    intent_outcome.tool_name.clone(),
+                    intent_outcome.detail.clone(),
+                ),
+                ToolBatchExecutionIntentStatus::NeedsApproval => {
+                    let detail = intent_outcome.detail.clone().unwrap_or_default();
+                    ConversationTurnToolEvent::needs_approval(
+                        intent_outcome.tool_call_id.clone(),
+                        intent_outcome.tool_name.clone(),
+                        detail,
+                    )
+                }
+                ToolBatchExecutionIntentStatus::Denied => {
+                    let detail = intent_outcome.detail.clone().unwrap_or_default();
+                    ConversationTurnToolEvent::denied(
+                        intent_outcome.tool_call_id.clone(),
+                        intent_outcome.tool_name.clone(),
+                        detail,
+                    )
+                }
+                ToolBatchExecutionIntentStatus::Failed => {
+                    let detail = intent_outcome.detail.clone().unwrap_or_default();
+                    ConversationTurnToolEvent::failed(
+                        intent_outcome.tool_call_id.clone(),
+                        intent_outcome.tool_name.clone(),
+                        detail,
+                    )
+                }
+            };
+            trace_events.insert(intent_outcome.tool_call_id.clone(), event);
+        }
     }
 
-    let lane = continue_phase.lane_execution.lane;
-    let event = ConversationTurnPhaseEvent::running_tools(provider_round, lane, tool_call_count);
-    observe_turn_phase(observer, event);
+    let mut events = Vec::new();
+    let mut unresolved_failure_emitted = false;
+
+    for intent in &turn.tool_intents {
+        if let Some(event) = trace_events.remove(intent.tool_call_id.as_str()) {
+            events.push(event);
+            continue;
+        }
+
+        let tool_name = effective_result_tool_name(intent);
+        let fallback_event = match turn_result {
+            TurnResult::FinalText(_)
+            | TurnResult::StreamingText(_)
+            | TurnResult::StreamingDone(_) => Some(ConversationTurnToolEvent::completed(
+                intent.tool_call_id.clone(),
+                tool_name,
+                None,
+            )),
+            TurnResult::NeedsApproval(requirement) => {
+                if unresolved_failure_emitted {
+                    None
+                } else {
+                    unresolved_failure_emitted = true;
+                    Some(ConversationTurnToolEvent::needs_approval(
+                        intent.tool_call_id.clone(),
+                        tool_name,
+                        requirement.reason.clone(),
+                    ))
+                }
+            }
+            TurnResult::ToolDenied(failure) => {
+                if unresolved_failure_emitted {
+                    None
+                } else {
+                    unresolved_failure_emitted = true;
+                    Some(ConversationTurnToolEvent::denied(
+                        intent.tool_call_id.clone(),
+                        tool_name,
+                        failure.reason.clone(),
+                    ))
+                }
+            }
+            TurnResult::ToolError(failure) => {
+                if unresolved_failure_emitted {
+                    None
+                } else {
+                    unresolved_failure_emitted = true;
+                    Some(ConversationTurnToolEvent::failed(
+                        intent.tool_call_id.clone(),
+                        tool_name,
+                        failure.reason.clone(),
+                    ))
+                }
+            }
+            TurnResult::ProviderError(failure) => {
+                if unresolved_failure_emitted {
+                    None
+                } else {
+                    unresolved_failure_emitted = true;
+                    Some(ConversationTurnToolEvent::interrupted(
+                        intent.tool_call_id.clone(),
+                        tool_name,
+                        failure.reason.clone(),
+                    ))
+                }
+            }
+        };
+
+        if let Some(fallback_event) = fallback_event {
+            events.push(fallback_event);
+        }
+    }
+
+    events
 }
 
 fn provider_turn_observer_supports_streaming(
@@ -2729,6 +2862,8 @@ async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
                 &mut turn_loop_state,
                 binding,
                 ingress,
+                observer,
+                1,
             )
             .await;
             continue_phase
@@ -2810,8 +2945,17 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
     turn_loop_state: &mut ProviderTurnLoopState,
     binding: ConversationRuntimeBinding<'_>,
     ingress: Option<&ConversationIngressContext>,
+    observer: Option<&ConversationTurnObserverHandle>,
+    provider_round: usize,
 ) -> ProviderTurnContinuePhase {
     let tool_intents = turn.tool_intents.len();
+    let lane = preparation.lane_plan.decision.lane;
+    if tool_intents > 0 {
+        let running_tools_event =
+            ConversationTurnPhaseEvent::running_tools(provider_round, lane, tool_intents);
+        observe_turn_phase(observer, running_tools_event);
+        observe_provider_turn_tool_batch_started(observer, &turn);
+    }
     let lane_execution = execute_provider_turn_lane(
         config,
         runtime,
@@ -2822,6 +2966,7 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
         ingress,
     )
     .await;
+    observe_provider_turn_tool_batch_terminal(observer, &lane_execution.tool_events);
     let loop_verdict = turn_loop_state.observe_turn(turn_loop_policy, &turn);
     let followup_config =
         ConversationTurnCoordinator::reload_followup_provider_config_after_tool_turn(config, &turn);
@@ -3087,15 +3232,12 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                                 turn_loop_state,
                                 binding,
                                 ingress,
+                                observer,
+                                next_provider_round,
                             )
                             .await;
                             current_preparation = followup_preparation;
                             provider_round_index = provider_round_index.saturating_add(1);
-                            observe_provider_turn_continue_phase(
-                                observer,
-                                &current_continue_phase,
-                                next_provider_round,
-                            );
                             continue;
                         }
                         ProviderTurnRequestAction::FinalizeInlineProviderError { .. }
@@ -5125,14 +5267,17 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     let session_context = match runtime.session_context(config, session_id, binding) {
         Ok(session_context) => session_context,
         Err(error) => {
+            let turn_result = TurnResult::non_retryable_tool_error("session_context_failed", error);
+            let tool_events = build_provider_turn_tool_terminal_events(turn, &turn_result, None);
             return ProviderTurnLaneExecution {
                 lane,
                 assistant_preface,
                 had_tool_intents,
                 requires_provider_turn_followup,
                 raw_tool_output_requested: preparation.raw_tool_output_requested,
-                turn_result: TurnResult::non_retryable_tool_error("session_context_failed", error),
+                turn_result,
                 safe_lane_terminal_route: None,
+                tool_events,
             };
         }
     };
@@ -5226,6 +5371,12 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         );
     }
 
+    let tool_events = build_provider_turn_tool_terminal_events(
+        turn,
+        &turn_result,
+        fast_lane_tool_batch_trace.as_ref(),
+    );
+
     ProviderTurnLaneExecution {
         lane,
         assistant_preface,
@@ -5234,6 +5385,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         raw_tool_output_requested: preparation.raw_tool_output_requested,
         turn_result,
         safe_lane_terminal_route,
+        tool_events,
     }
 }
 
@@ -6973,7 +7125,10 @@ async fn execute_single_tool_intent(
 mod tests {
     use super::*;
     use crate::context::bootstrap_test_kernel_context;
-    use crate::conversation::{ConversationTurnObserver, ConversationTurnPhase};
+    use crate::conversation::turn_engine::ToolBatchExecutionIntentTrace;
+    use crate::conversation::{
+        ConversationTurnObserver, ConversationTurnPhase, ConversationTurnToolState,
+    };
     use crate::session::repository::FinalizeSessionTerminalResult;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -7171,6 +7326,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingTurnObserver {
         phase_events: StdMutex<Vec<ConversationTurnPhaseEvent>>,
+        tool_events: StdMutex<Vec<ConversationTurnToolEvent>>,
         token_events: StdMutex<Vec<crate::acp::StreamingTokenEvent>>,
     }
 
@@ -7181,6 +7337,14 @@ mod tests {
                 .lock()
                 .expect("phase event lock should not be poisoned");
             phase_events.push(event);
+        }
+
+        fn on_tool(&self, event: ConversationTurnToolEvent) {
+            let mut tool_events = self
+                .tool_events
+                .lock()
+                .expect("tool event lock should not be poisoned");
+            tool_events.push(event);
         }
 
         fn on_streaming_token(&self, event: crate::acp::StreamingTokenEvent) {
@@ -7251,6 +7415,67 @@ mod tests {
         assert_eq!(token_events.len(), 1);
         assert_eq!(token_events[0].event_type, "text_delta");
         assert_eq!(token_events[0].delta.text.as_deref(), Some("draft"));
+    }
+
+    #[test]
+    fn build_provider_turn_tool_terminal_events_prefers_trace_outcomes_over_generic_fallbacks() {
+        let turn = ProviderTurn {
+            assistant_text: String::new(),
+            tool_intents: vec![
+                ToolIntent {
+                    tool_name: "sessions_list".to_owned(),
+                    args_json: json!({}),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "session-a".to_owned(),
+                    turn_id: "turn-a".to_owned(),
+                    tool_call_id: "call-1".to_owned(),
+                },
+                ToolIntent {
+                    tool_name: "session_status".to_owned(),
+                    args_json: json!({"session_id": "session-a"}),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "session-a".to_owned(),
+                    turn_id: "turn-a".to_owned(),
+                    tool_call_id: "call-2".to_owned(),
+                },
+            ],
+            raw_meta: Value::Null,
+        };
+        let turn_result = TurnResult::ToolError(TurnFailure::retryable(
+            "tool_execution_failed",
+            "second tool failed",
+        ));
+        let trace = ToolBatchExecutionTrace {
+            total_intents: 2,
+            parallel_execution_enabled: false,
+            parallel_execution_max_in_flight: 1,
+            observed_peak_in_flight: 1,
+            observed_wall_time_ms: 10,
+            segments: Vec::new(),
+            intent_outcomes: vec![
+                ToolBatchExecutionIntentTrace {
+                    tool_call_id: "call-1".to_owned(),
+                    tool_name: "sessions_list".to_owned(),
+                    status: ToolBatchExecutionIntentStatus::Completed,
+                    detail: None,
+                },
+                ToolBatchExecutionIntentTrace {
+                    tool_call_id: "call-2".to_owned(),
+                    tool_name: "session_status".to_owned(),
+                    status: ToolBatchExecutionIntentStatus::Failed,
+                    detail: Some("second tool failed".to_owned()),
+                },
+            ],
+        };
+
+        let events = build_provider_turn_tool_terminal_events(&turn, &turn_result, Some(&trace));
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].tool_call_id, "call-1");
+        assert_eq!(events[0].state, ConversationTurnToolState::Completed);
+        assert_eq!(events[1].tool_call_id, "call-2");
+        assert_eq!(events[1].state, ConversationTurnToolState::Failed);
+        assert_eq!(events[1].detail.as_deref(), Some("second tool failed"));
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -8349,6 +8574,7 @@ mod tests {
                     reason: SafeLaneFailureRouteReason::SessionGovernorNoReplan,
                     source: SafeLaneFailureRouteSource::SessionGovernor,
                 }),
+                tool_events: Vec::new(),
             },
             None,
             config,
@@ -8560,6 +8786,7 @@ mod tests {
                 raw_tool_output_requested: false,
                 turn_result: TurnResult::FinalText("hello there".to_owned()),
                 safe_lane_terminal_route: None,
+                tool_events: Vec::new(),
             },
             None,
             LoongClawConfig::default(),
