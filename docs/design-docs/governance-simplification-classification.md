@@ -126,7 +126,7 @@ The app layer now makes governed versus direct mode explicit through:
 
 - `ConversationRuntimeBinding`
 - `ProviderRuntimeBinding`
-- a small number of outer `Option<&KernelContext>` wrappers that normalize into
+- a few outer `Option<&KernelContext>` wrappers that normalize into
   bindings
 
 The audit pass for `#458` still found `optional_kernel_context` hotspots and
@@ -185,7 +185,7 @@ in another.
 | --- | --- | --- | --- |
 | `KernelContext` in `crates/app/src/context.rs` | App-owned bridge from runtime entrypoints into the current kernel authority model. | `transitional` | Keep for now, but avoid expanding it into a second parallel governance system. |
 | `ConversationRuntimeBinding` and `ProviderRuntimeBinding` | They make governed versus direct mode explicit instead of hiding `None` semantics inside deeper runtime code. | `transitional` | Keep the binding-first shape. Push direct behavior outward over time. |
-| Outer `Option<&KernelContext>` compatibility wrappers | A small number of ingress-facing helpers still normalize optional kernel authority into an explicit binding. | `transitional` | Keep only where the wrapper immediately normalizes into a binding. Avoid carrying raw optional authority deeper. |
+| Outer `Option<&KernelContext>` compatibility wrappers | A few ingress-facing helpers still normalize optional kernel authority into an explicit binding. | `transitional` | Keep only where the wrapper immediately normalizes into a binding. Avoid carrying raw optional authority deeper. |
 | `KernelBuilder<P> = LoongClawKernel<P>` and `.build() -> Kernel<P>` | Additive migration seam inside the kernel surface. | `transitional` | Keep it small and forward-compatible. Do not treat it as proof that handle-model replacement has already happened. |
 | `NoopAuditSink` | Explicit drop-audit lane reserved for narrow fixture paths. | `transitional` | Keep only as an explicit opt-in seam. It should not spread into production-shaped runtime code. |
 
