@@ -129,10 +129,10 @@ pub(crate) fn build_onboarding_success_summary_with_memory(
     let prompt_mode = crate::onboard_cli::summarize_prompt_mode(config);
     let prompt_addendum = crate::onboard_cli::summarize_prompt_addendum(config);
     let credential = crate::onboard_cli::summarize_provider_credential(&config.provider);
-    let web_search_provider = crate::onboard_cli::web_search_provider_display_name(
+    let web_search_provider = crate::onboard_web_search::web_search_provider_display_name(
         config.tools.web_search.default_provider.as_str(),
     );
-    let web_search_credential = crate::onboard_cli::summarize_web_search_provider_credential(
+    let web_search_credential = crate::onboard_web_search::summarize_web_search_provider_credential(
         config,
         config.tools.web_search.default_provider.as_str(),
     );

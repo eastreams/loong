@@ -233,16 +233,15 @@ pub fn provider_credential_check(config: &mvp::config::LoongClawConfig) -> Onboa
 }
 
 fn web_search_provider_check(config: &mvp::config::LoongClawConfig) -> OnboardCheck {
-    let provider = mvp::config::normalize_web_search_provider(
+    let normalized_provider = mvp::config::normalize_web_search_provider(
         config.tools.web_search.default_provider.as_str(),
-    )
-    .unwrap_or(mvp::config::DEFAULT_WEB_SEARCH_PROVIDER);
-    let provider_label = crate::onboard_cli::web_search_provider_display_name(provider);
+    );
+    let provider = normalized_provider.unwrap_or(mvp::config::DEFAULT_WEB_SEARCH_PROVIDER);
+    let provider_label = crate::onboard_web_search::web_search_provider_display_name(provider);
     let credential_summary =
-        crate::onboard_cli::summarize_web_search_provider_credential(config, provider);
-
+        crate::onboard_web_search::summarize_web_search_provider_credential(config, provider);
     let has_available_credential =
-        crate::onboard_cli::web_search_provider_has_available_credential(config, provider);
+        crate::onboard_web_search::web_search_provider_has_available_credential(config, provider);
     if has_available_credential {
         let detail = credential_summary
             .map(|summary| format!("{provider_label}: {}", summary.value))
