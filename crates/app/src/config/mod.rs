@@ -2228,6 +2228,18 @@ system = " Builtin "
 
     #[test]
     #[cfg(feature = "config-toml")]
+    fn memory_system_id_field_parses_and_normalizes() {
+        let raw = r#"
+[memory]
+system_id = " LuCid "
+"#;
+        let parsed = toml::from_str::<LoongClawConfig>(raw).expect("parse memory.system_id");
+        assert_eq!(parsed.memory.system_id.as_deref(), Some("lucid"));
+        assert_eq!(parsed.memory.resolved_system_id(), "lucid");
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
     fn memory_system_field_rejects_unimplemented_future_variant() {
         let raw = r#"
 [memory]

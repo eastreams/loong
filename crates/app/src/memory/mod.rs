@@ -74,6 +74,9 @@ pub use system_registry::{
     memory_system_id_from_env, register_memory_system, resolve_memory_system,
     resolve_memory_system_selection, supported_memory_system_kind_from_env,
 };
+pub(crate) use system_registry::{
+    registered_memory_system_id, registered_memory_system_id_from_env,
+};
 pub(crate) use workspace_files::{
     WorkspaceMemoryDocumentKind, WorkspaceMemoryDocumentLocation,
     collect_workspace_memory_document_locations,

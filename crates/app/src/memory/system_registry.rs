@@ -183,21 +183,39 @@ pub fn memory_system_id_from_env() -> Option<String> {
         .and_then(|value| super::normalize_system_id(value.as_str()))
 }
 
+pub(crate) fn registered_memory_system_id(id: Option<&str>) -> Option<String> {
+    let normalized = id.and_then(super::normalize_system_id)?;
+    let guard = registry().read().ok()?;
+    guard.contains_key(&normalized).then_some(normalized)
+}
+
+pub(crate) fn registered_memory_system_id_from_env() -> Option<String> {
+    let env_id = memory_system_id_from_env();
+    registered_memory_system_id(env_id.as_deref())
+}
+
 pub fn supported_memory_system_kind_from_env() -> Option<MemorySystemKind> {
-    memory_system_id_from_env()
+    registered_memory_system_id_from_env()
         .as_deref()
         .and_then(MemorySystemKind::parse_id)
 }
 
 pub fn resolve_memory_system_selection(config: &LoongClawConfig) -> MemorySystemSelection {
-    if let Some(system) = supported_memory_system_kind_from_env() {
+    if let Some(system_id) = registered_memory_system_id_from_env() {
         return MemorySystemSelection {
-            id: system.as_str().to_owned(),
+            id: system_id,
             source: MemorySystemSelectionSource::Env,
         };
     }
 
-    if config.memory.resolved_system() != MemorySystemKind::default() {
+    if let Some(config_system_id) = config.memory.system_id.as_deref() {
+        if let Some(system_id) = registered_memory_system_id(Some(config_system_id)) {
+            return MemorySystemSelection {
+                id: system_id,
+                source: MemorySystemSelectionSource::Config,
+            };
+        }
+    } else if config.memory.resolved_system() != MemorySystemKind::default() {
         return MemorySystemSelection {
             id: config.memory.resolved_system().as_str().to_owned(),
             source: MemorySystemSelectionSource::Config,
@@ -289,6 +307,44 @@ mod tests {
                 [MemorySystemCapability::PromptHydration],
                 "Mismatched registry system",
             )
+        }
+    }
+
+    struct StageAwareRegistrySystem;
+
+    impl MemorySystem for StageAwareRegistrySystem {
+        fn id(&self) -> &'static str {
+            "registry-stage-aware-snapshot"
+        }
+
+        fn metadata(&self) -> MemorySystemMetadata {
+            MemorySystemMetadata::new(
+                "registry-stage-aware-snapshot",
+                [MemorySystemCapability::PromptHydration],
+                "Registry snapshot system",
+            )
+            .with_supported_pre_assembly_stage_families([
+                crate::memory::MemoryStageFamily::Retrieve,
+            ])
+        }
+    }
+
+    struct StageAwareRegistrySystemForConfigSelection;
+
+    impl MemorySystem for StageAwareRegistrySystemForConfigSelection {
+        fn id(&self) -> &'static str {
+            "registry-stage-aware-snapshot-config"
+        }
+
+        fn metadata(&self) -> MemorySystemMetadata {
+            MemorySystemMetadata::new(
+                "registry-stage-aware-snapshot-config",
+                [MemorySystemCapability::PromptHydration],
+                "Registry config snapshot system",
+            )
+            .with_supported_pre_assembly_stage_families([
+                crate::memory::MemoryStageFamily::Retrieve,
+            ])
         }
     }
 
@@ -456,12 +512,115 @@ mod tests {
     }
 
     #[test]
+    fn registry_backed_memory_system_env_surfaces_in_runtime_snapshot() {
+        let mut env = ScopedEnv::new();
+        clear_memory_runtime_env_overrides(&mut env);
+        register_memory_system("registry-custom", || Box::new(MatchingRegistrySystem))
+            .expect("register custom registry system");
+        env.set(MEMORY_SYSTEM_ENV, "registry-custom");
+
+        let config = LoongClawConfig::default();
+        let snapshot =
+            collect_memory_system_runtime_snapshot(&config).expect("collect runtime snapshot");
+
+        assert_eq!(snapshot.selected.id, "registry-custom");
+        assert_eq!(snapshot.selected.source, MemorySystemSelectionSource::Env);
+    }
+
+    #[test]
     fn invalid_memory_system_env_is_ignored_so_snapshot_matches_runtime_behavior() {
         let mut env = ScopedEnv::new();
         clear_memory_runtime_env_overrides(&mut env);
         env.set(MEMORY_SYSTEM_ENV, "lucid");
 
         let config = LoongClawConfig::default();
+        let snapshot =
+            collect_memory_system_runtime_snapshot(&config).expect("collect runtime snapshot");
+
+        assert_eq!(snapshot.selected.id, DEFAULT_MEMORY_SYSTEM_ID);
+        assert_eq!(
+            snapshot.selected.source,
+            MemorySystemSelectionSource::Default
+        );
+    }
+
+    #[test]
+    fn memory_system_field_surfaces_registry_backed_selection_and_stage_metadata_in_snapshot() {
+        register_memory_system("registry-stage-aware-snapshot", || {
+            Box::new(StageAwareRegistrySystem)
+        })
+        .expect("register stage-aware registry system");
+
+        let mut env = ScopedEnv::new();
+        clear_memory_runtime_env_overrides(&mut env);
+        env.set(MEMORY_SYSTEM_ENV, "registry-stage-aware-snapshot");
+
+        let config = LoongClawConfig::default();
+        let snapshot =
+            collect_memory_system_runtime_snapshot(&config).expect("collect runtime snapshot");
+
+        assert_eq!(snapshot.selected.id, "registry-stage-aware-snapshot");
+        assert_eq!(snapshot.selected.source, MemorySystemSelectionSource::Env);
+        assert_eq!(
+            snapshot.selected_metadata.id,
+            "registry-stage-aware-snapshot"
+        );
+        assert_eq!(
+            snapshot
+                .selected_metadata
+                .supported_pre_assembly_stage_families,
+            vec![crate::memory::MemoryStageFamily::Retrieve]
+        );
+    }
+
+    #[test]
+    fn registry_backed_memory_system_config_selection_surfaces_in_runtime_snapshot() {
+        let mut env = ScopedEnv::new();
+        clear_memory_runtime_env_overrides(&mut env);
+        register_memory_system("registry-stage-aware-snapshot-config", || {
+            Box::new(StageAwareRegistrySystemForConfigSelection)
+        })
+        .expect("register config-selected registry system");
+
+        let config = LoongClawConfig {
+            memory: crate::config::MemoryConfig {
+                system_id: Some("registry-stage-aware-snapshot-config".to_owned()),
+                ..crate::config::MemoryConfig::default()
+            },
+            ..LoongClawConfig::default()
+        };
+        let snapshot =
+            collect_memory_system_runtime_snapshot(&config).expect("collect runtime snapshot");
+
+        assert_eq!(snapshot.selected.id, "registry-stage-aware-snapshot-config");
+        assert_eq!(
+            snapshot.selected.source,
+            MemorySystemSelectionSource::Config
+        );
+        assert_eq!(
+            snapshot.selected_metadata.id,
+            "registry-stage-aware-snapshot-config"
+        );
+        assert_eq!(
+            snapshot
+                .selected_metadata
+                .supported_pre_assembly_stage_families,
+            vec![crate::memory::MemoryStageFamily::Retrieve]
+        );
+    }
+
+    #[test]
+    fn unknown_config_selected_memory_system_falls_back_to_builtin_snapshot() {
+        let mut env = ScopedEnv::new();
+        clear_memory_runtime_env_overrides(&mut env);
+
+        let config = LoongClawConfig {
+            memory: crate::config::MemoryConfig {
+                system_id: Some("lucid".to_owned()),
+                ..crate::config::MemoryConfig::default()
+            },
+            ..LoongClawConfig::default()
+        };
         let snapshot =
             collect_memory_system_runtime_snapshot(&config).expect("collect runtime snapshot");
 
