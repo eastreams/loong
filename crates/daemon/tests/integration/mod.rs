@@ -492,28 +492,28 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
 
     assert!(rendered.contains("catalog-only channels:"));
     assert!(rendered.contains(
-        "Discord [discord] implementation_status=stub selection_order=40 selection_label=\"community server bot\" capabilities=multi_account,send,serve,runtime_tracking aliases=discord-bot transport=discord_gateway target_kinds=conversation"
+        "Discord [discord] implementation_status=config_backed selection_order=40 selection_label=\"community server bot\" capabilities=multi_account,send aliases=discord-bot transport=discord_http_api target_kinds=conversation configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(
-        "blurb: Planned Discord gateway and thread-aware bot surface with documented credential expectations."
+        "blurb: Shipped Discord outbound message surface with config-backed direct sends; inbound gateway/runtime support remains planned."
     ));
     assert!(rendered.contains(&format!(
-        "catalog op send ({}) availability=stub tracks_runtime=false target_kinds=conversation requirements=enabled,bot_token",
+        "op send ({}) disabled: disabled by discord account configuration target_kinds=conversation requirements=enabled,bot_token",
         channel_send_command("discord")
     )));
     assert!(rendered.contains(&format!(
-        "catalog op serve ({}) availability=stub tracks_runtime=true target_kinds=conversation requirements=enabled,bot_token,application_id,allowed_guild_ids",
+        "op serve ({}) unsupported: discord serve runtime is not implemented yet target_kinds=conversation requirements=enabled,bot_token,application_id,allowed_guild_ids",
         channel_serve_command("discord")
     )));
     assert!(rendered.contains(
-        "Slack [slack] implementation_status=stub selection_order=50 selection_label=\"workspace event bot\" capabilities=multi_account,send,serve,runtime_tracking aliases=slack-bot transport=slack_events_api target_kinds=conversation"
+        "Slack [slack] implementation_status=config_backed selection_order=50 selection_label=\"workspace event bot\" capabilities=multi_account,send aliases=slack-bot transport=slack_web_api target_kinds=conversation configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(&format!(
-        "catalog op send ({}) availability=stub tracks_runtime=false target_kinds=conversation requirements=enabled,bot_token",
+        "op send ({}) disabled: disabled by slack account configuration target_kinds=conversation requirements=enabled,bot_token",
         channel_send_command("slack")
     )));
     assert!(rendered.contains(&format!(
-        "catalog op serve ({}) availability=stub tracks_runtime=true target_kinds=conversation requirements=enabled,bot_token,app_token,signing_secret,allowed_channel_ids",
+        "op serve ({}) unsupported: slack serve runtime is not implemented yet target_kinds=conversation requirements=enabled,bot_token,app_token,signing_secret,allowed_channel_ids",
         channel_serve_command("slack")
     )));
     assert!(rendered.contains(
@@ -526,10 +526,10 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         "catalog op send (google-chat-send) availability=stub tracks_runtime=false target_kinds=conversation requirements=enabled,service_account_json,space_id"
     ));
     assert!(rendered.contains(
-        "Signal [signal] implementation_status=stub selection_order=130 selection_label=\"private messenger bridge\""
+        "Signal [signal] implementation_status=config_backed selection_order=130 selection_label=\"private messenger bridge\" capabilities=multi_account,send aliases=signal-cli transport=signal_cli_rest_api target_kinds=address configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(
-        "catalog op send (signal-send) availability=stub tracks_runtime=false target_kinds=address requirements=enabled,service_url,account"
+        "op send (signal-send) disabled: disabled by signal account configuration target_kinds=address requirements=enabled,service_url,account"
     ));
     assert!(rendered.contains(
         "Webhook [webhook] implementation_status=stub selection_order=110 selection_label=\"generic http integration\""
@@ -541,9 +541,11 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         "catalog op send (webhook-send) availability=stub tracks_runtime=false target_kinds=endpoint requirements=enabled,endpoint_url,auth_token"
     ));
     assert!(rendered.contains(
-        "onboarding strategy=planned status_command=\"loongclaw channels --json\" repair_command=-"
+        "onboarding strategy=manual_config status_command=\"loongclaw doctor\" repair_command=\"loongclaw doctor --fix\""
     ));
-    assert!(rendered.contains("setup_hint=\"planned Discord gateway surface"));
+    assert!(rendered.contains(
+        "setup_hint=\"configure discord bot credentials in loongclaw.toml under discord or discord.accounts.<account>; outbound direct send is shipped, while gateway-based serve support remains planned\""
+    ));
 }
 
 #[test]
@@ -748,18 +750,19 @@ fn build_channels_cli_json_payload_includes_onboarding_metadata() {
                         .and_then(|catalog| catalog.get("onboarding"))
                         .and_then(|onboarding| onboarding.get("strategy"))
                         .and_then(serde_json::Value::as_str)
-                        == Some("planned")
+                        == Some("manual_config")
                     && surface
                         .get("catalog")
                         .and_then(|catalog| catalog.get("onboarding"))
                         .and_then(|onboarding| onboarding.get("status_command"))
                         .and_then(serde_json::Value::as_str)
-                        == Some("loongclaw channels --json")
+                        == Some("loongclaw doctor")
                     && surface
                         .get("catalog")
                         .and_then(|catalog| catalog.get("onboarding"))
                         .and_then(|onboarding| onboarding.get("repair_command"))
-                        .is_some_and(serde_json::Value::is_null)
+                        .and_then(serde_json::Value::as_str)
+                        == Some("loongclaw doctor --fix")
             })
     );
 }
@@ -902,7 +905,7 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                     && entry
                         .get("implementation_status")
                         .and_then(serde_json::Value::as_str)
-                        == Some("stub")
+                        == Some("config_backed")
                     && entry
                         .get("operations")
                         .and_then(serde_json::Value::as_array)
@@ -913,7 +916,7 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                                 .filter_map(serde_json::Value::as_str)
                                 .collect::<Vec<_>>()
                         })
-                        == Some(vec!["stub", "stub"])
+                        == Some(vec!["implemented", "stub"])
                     && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)
@@ -935,7 +938,7 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                     && entry
                         .get("blurb")
                         .and_then(serde_json::Value::as_str)
-                        .is_some_and(|value| value.contains("Discord gateway"))
+                        .is_some_and(|value| value.contains("config-backed direct sends"))
             })
     );
     assert!(
@@ -1184,7 +1187,7 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
                 .get("configured_accounts")
                 .and_then(serde_json::Value::as_array)
                 .map(Vec::len)
-                == Some(0)
+                == Some(1)
     }));
 
     assert!(surfaces.iter().any(|surface| {

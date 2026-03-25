@@ -151,7 +151,7 @@ pub struct ChannelServeCliArgs<'a> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ChannelSendCliSpec {
-    pub family: mvp::channel::ChannelCommandFamilyDescriptor,
+    pub family: mvp::channel::ChannelCatalogCommandFamilyDescriptor,
     pub run: for<'a> fn(ChannelSendCliArgs<'a>) -> ChannelCliCommandFuture<'a>,
 }
 
@@ -788,6 +788,74 @@ pub enum Commands {
         config: Option<String>,
         #[arg(long)]
         account: Option<String>,
+    },
+    /// Send one Discord channel message
+    DiscordSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_discord_send_target_kind(),
+            value_parser = parse_discord_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Send one Slack channel message
+    SlackSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_slack_send_target_kind(),
+            value_parser = parse_slack_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Send one WhatsApp business message
+    WhatsappSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_whatsapp_send_target_kind(),
+            value_parser = parse_whatsapp_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Send one Signal direct message
+    SignalSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_signal_send_target_kind(),
+            value_parser = parse_signal_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
     },
     /// Run the multi-channel supervisor for coordinated runtime-backed service-channel serving
     MultiChannelServe {
@@ -3808,23 +3876,43 @@ pub async fn wait_for_shutdown_signal() -> CliResult<()> {
 }
 
 pub const TELEGRAM_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
+    family: mvp::channel::TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_telegram_send_cli_impl,
 };
 
 pub const FEISHU_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::FEISHU_COMMAND_FAMILY_DESCRIPTOR,
+    family: mvp::channel::FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_feishu_send_cli_impl,
 };
 
 pub const MATRIX_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::MATRIX_COMMAND_FAMILY_DESCRIPTOR,
+    family: mvp::channel::MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_matrix_send_cli_impl,
 };
 
 pub const WECOM_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::WECOM_COMMAND_FAMILY_DESCRIPTOR,
+    family: mvp::channel::WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_wecom_send_cli_impl,
+};
+
+pub const DISCORD_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::DISCORD_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_discord_send_cli_impl,
+};
+
+pub const SLACK_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::SLACK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_slack_send_cli_impl,
+};
+
+pub const WHATSAPP_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_whatsapp_send_cli_impl,
+};
+
+pub const SIGNAL_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_signal_send_cli_impl,
 };
 
 pub const TELEGRAM_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
@@ -3928,6 +4016,62 @@ pub fn run_wecom_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliComman
     })
 }
 
+pub fn run_discord_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        mvp::channel::run_discord_send(
+            args.config_path,
+            args.account,
+            args.target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_slack_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        mvp::channel::run_slack_send(
+            args.config_path,
+            args.account,
+            args.target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_whatsapp_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        mvp::channel::run_whatsapp_send(
+            args.config_path,
+            args.account,
+            args.target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_signal_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        mvp::channel::run_signal_send(
+            args.config_path,
+            args.account,
+            args.target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
 pub fn run_telegram_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = (args.bind_override, args.path_override);
@@ -3943,7 +4087,7 @@ pub fn run_telegram_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliC
 pub fn default_channel_send_target_kind(
     spec: ChannelSendCliSpec,
 ) -> mvp::channel::ChannelOutboundTargetKind {
-    spec.family.default_send_target_kind()
+    spec.family.default_send_target_kind
 }
 
 pub fn parse_channel_send_target_kind(
@@ -3951,8 +4095,8 @@ pub fn parse_channel_send_target_kind(
     raw: &str,
 ) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
     let target_kind = raw.parse::<mvp::channel::ChannelOutboundTargetKind>()?;
-    let channel_id = spec.family.channel_id();
-    let operation = spec.family.send();
+    let channel_id = spec.family.channel_id;
+    let operation = spec.family.send;
     if !operation.supports_target_kind(target_kind) {
         let supported = operation
             .supported_target_kinds
@@ -4007,6 +4151,46 @@ pub fn parse_feishu_send_target_kind(
     raw: &str,
 ) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
     parse_channel_send_target_kind(FEISHU_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_discord_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(DISCORD_SEND_CLI_SPEC)
+}
+
+pub fn parse_discord_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(DISCORD_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_slack_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(SLACK_SEND_CLI_SPEC)
+}
+
+pub fn parse_slack_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(SLACK_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_whatsapp_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(WHATSAPP_SEND_CLI_SPEC)
+}
+
+pub fn parse_whatsapp_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(WHATSAPP_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_signal_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(SIGNAL_SEND_CLI_SPEC)
+}
+
+pub fn parse_signal_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(SIGNAL_SEND_CLI_SPEC, raw)
 }
 
 pub fn run_feishu_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {

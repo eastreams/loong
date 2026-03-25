@@ -12,8 +12,9 @@ use crate::CliResult;
 use super::{
     audit::AuditConfig,
     channels::{
-        CliChannelConfig, FeishuChannelConfig, MatrixChannelConfig, TelegramChannelConfig,
-        WecomChannelConfig,
+        CliChannelConfig, DiscordChannelConfig, FeishuChannelConfig, MatrixChannelConfig,
+        SignalChannelConfig, SlackChannelConfig, TelegramChannelConfig, WecomChannelConfig,
+        WhatsappChannelConfig,
     },
     conversation::ConversationConfig,
     feishu_integration::FeishuIntegrationConfig,
@@ -91,6 +92,14 @@ pub struct LoongClawConfig {
     pub matrix: MatrixChannelConfig,
     #[serde(default)]
     pub wecom: WecomChannelConfig,
+    #[serde(default)]
+    pub discord: DiscordChannelConfig,
+    #[serde(default)]
+    pub slack: SlackChannelConfig,
+    #[serde(default)]
+    pub signal: SignalChannelConfig,
+    #[serde(default)]
+    pub whatsapp: WhatsappChannelConfig,
     #[serde(default)]
     pub feishu_integration: FeishuIntegrationConfig,
     #[serde(default)]

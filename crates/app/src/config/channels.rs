@@ -19,11 +19,19 @@ use super::shared::{
 use crate::secrets::resolve_secret_with_legacy_env;
 
 pub(crate) const TELEGRAM_BOT_TOKEN_ENV: &str = "TELEGRAM_BOT_TOKEN";
+pub(crate) const DISCORD_BOT_TOKEN_ENV: &str = "DISCORD_BOT_TOKEN";
 pub(crate) const FEISHU_APP_ID_ENV: &str = "FEISHU_APP_ID";
 pub(crate) const FEISHU_APP_SECRET_ENV: &str = "FEISHU_APP_SECRET";
 pub(crate) const FEISHU_VERIFICATION_TOKEN_ENV: &str = "FEISHU_VERIFICATION_TOKEN";
 pub(crate) const FEISHU_ENCRYPT_KEY_ENV: &str = "FEISHU_ENCRYPT_KEY";
 pub(crate) const MATRIX_ACCESS_TOKEN_ENV: &str = "MATRIX_ACCESS_TOKEN";
+pub(crate) const SIGNAL_SERVICE_URL_ENV: &str = "SIGNAL_SERVICE_URL";
+pub(crate) const SIGNAL_ACCOUNT_ENV: &str = "SIGNAL_ACCOUNT";
+pub(crate) const SLACK_BOT_TOKEN_ENV: &str = "SLACK_BOT_TOKEN";
+pub(crate) const WHATSAPP_ACCESS_TOKEN_ENV: &str = "WHATSAPP_ACCESS_TOKEN";
+pub(crate) const WHATSAPP_PHONE_NUMBER_ID_ENV: &str = "WHATSAPP_PHONE_NUMBER_ID";
+pub(crate) const WHATSAPP_VERIFY_TOKEN_ENV: &str = "WHATSAPP_VERIFY_TOKEN";
+pub(crate) const WHATSAPP_APP_SECRET_ENV: &str = "WHATSAPP_APP_SECRET";
 pub(crate) const WECOM_BOT_ID_ENV: &str = "WECOM_BOT_ID";
 pub(crate) const WECOM_SECRET_ENV: &str = "WECOM_SECRET";
 
@@ -591,6 +599,286 @@ pub struct WecomChannelConfig {
     pub accounts: BTreeMap<String, WecomAccountConfig>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiscordAccountConfig {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub bot_token: Option<SecretRef>,
+    #[serde(default)]
+    pub bot_token_env: Option<String>,
+    #[serde(default)]
+    pub api_base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedDiscordChannelConfig {
+    pub configured_account_id: String,
+    pub configured_account_label: String,
+    pub account: ChannelAccountIdentity,
+    pub enabled: bool,
+    pub bot_token: Option<SecretRef>,
+    pub bot_token_env: Option<String>,
+    pub api_base_url: Option<String>,
+}
+
+impl ResolvedDiscordChannelConfig {
+    pub fn bot_token(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.bot_token.as_ref(), self.bot_token_env.as_deref())
+    }
+
+    pub fn resolved_api_base_url(&self) -> String {
+        self.api_base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(default_discord_api_base_url)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SlackAccountConfig {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub bot_token: Option<SecretRef>,
+    #[serde(default)]
+    pub bot_token_env: Option<String>,
+    #[serde(default)]
+    pub api_base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedSlackChannelConfig {
+    pub configured_account_id: String,
+    pub configured_account_label: String,
+    pub account: ChannelAccountIdentity,
+    pub enabled: bool,
+    pub bot_token: Option<SecretRef>,
+    pub bot_token_env: Option<String>,
+    pub api_base_url: Option<String>,
+}
+
+impl ResolvedSlackChannelConfig {
+    pub fn bot_token(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.bot_token.as_ref(), self.bot_token_env.as_deref())
+    }
+
+    pub fn resolved_api_base_url(&self) -> String {
+        self.api_base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(default_slack_api_base_url)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SignalAccountConfig {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default, rename = "account")]
+    pub signal_account: Option<String>,
+    #[serde(default, rename = "account_env")]
+    pub signal_account_env: Option<String>,
+    #[serde(default)]
+    pub service_url: Option<String>,
+    #[serde(default)]
+    pub service_url_env: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedSignalChannelConfig {
+    pub configured_account_id: String,
+    pub configured_account_label: String,
+    pub account: ChannelAccountIdentity,
+    pub enabled: bool,
+    pub signal_account: Option<String>,
+    pub signal_account_env: Option<String>,
+    pub service_url: Option<String>,
+    pub service_url_env: Option<String>,
+}
+
+impl ResolvedSignalChannelConfig {
+    pub fn signal_account(&self) -> Option<String> {
+        resolve_string_with_legacy_env(
+            self.signal_account.as_deref(),
+            self.signal_account_env.as_deref(),
+        )
+    }
+
+    pub fn service_url(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.service_url.as_deref(), self.service_url_env.as_deref())
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WhatsappAccountConfig {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub access_token: Option<SecretRef>,
+    #[serde(default)]
+    pub access_token_env: Option<String>,
+    #[serde(default)]
+    pub phone_number_id: Option<String>,
+    #[serde(default)]
+    pub phone_number_id_env: Option<String>,
+    #[serde(default)]
+    pub verify_token: Option<SecretRef>,
+    #[serde(default)]
+    pub verify_token_env: Option<String>,
+    #[serde(default)]
+    pub app_secret: Option<SecretRef>,
+    #[serde(default)]
+    pub app_secret_env: Option<String>,
+    #[serde(default)]
+    pub api_base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedWhatsappChannelConfig {
+    pub configured_account_id: String,
+    pub configured_account_label: String,
+    pub account: ChannelAccountIdentity,
+    pub enabled: bool,
+    pub access_token: Option<SecretRef>,
+    pub access_token_env: Option<String>,
+    pub phone_number_id: Option<String>,
+    pub phone_number_id_env: Option<String>,
+    pub verify_token: Option<SecretRef>,
+    pub verify_token_env: Option<String>,
+    pub app_secret: Option<SecretRef>,
+    pub app_secret_env: Option<String>,
+    pub api_base_url: Option<String>,
+}
+
+impl ResolvedWhatsappChannelConfig {
+    pub fn access_token(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.access_token.as_ref(), self.access_token_env.as_deref())
+    }
+
+    pub fn phone_number_id(&self) -> Option<String> {
+        resolve_string_with_legacy_env(
+            self.phone_number_id.as_deref(),
+            self.phone_number_id_env.as_deref(),
+        )
+    }
+
+    pub fn verify_token(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.verify_token.as_ref(), self.verify_token_env.as_deref())
+    }
+
+    pub fn app_secret(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.app_secret.as_ref(), self.app_secret_env.as_deref())
+    }
+
+    pub fn resolved_api_base_url(&self) -> String {
+        self.api_base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(default_whatsapp_api_base_url)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiscordChannelConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub default_account: Option<String>,
+    #[serde(default)]
+    pub bot_token: Option<SecretRef>,
+    #[serde(default)]
+    pub bot_token_env: Option<String>,
+    #[serde(default)]
+    pub api_base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub accounts: BTreeMap<String, DiscordAccountConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SlackChannelConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub default_account: Option<String>,
+    #[serde(default)]
+    pub bot_token: Option<SecretRef>,
+    #[serde(default)]
+    pub bot_token_env: Option<String>,
+    #[serde(default)]
+    pub api_base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub accounts: BTreeMap<String, SlackAccountConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SignalChannelConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub default_account: Option<String>,
+    #[serde(default, rename = "account")]
+    pub signal_account: Option<String>,
+    #[serde(default, rename = "account_env")]
+    pub signal_account_env: Option<String>,
+    #[serde(default)]
+    pub service_url: Option<String>,
+    #[serde(default)]
+    pub service_url_env: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub accounts: BTreeMap<String, SignalAccountConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WhatsappChannelConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub default_account: Option<String>,
+    #[serde(default)]
+    pub access_token: Option<SecretRef>,
+    #[serde(default)]
+    pub access_token_env: Option<String>,
+    #[serde(default)]
+    pub phone_number_id: Option<String>,
+    #[serde(default)]
+    pub phone_number_id_env: Option<String>,
+    #[serde(default)]
+    pub verify_token: Option<SecretRef>,
+    #[serde(default)]
+    pub verify_token_env: Option<String>,
+    #[serde(default)]
+    pub app_secret: Option<SecretRef>,
+    #[serde(default)]
+    pub app_secret_env: Option<String>,
+    #[serde(default)]
+    pub api_base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub accounts: BTreeMap<String, WhatsappAccountConfig>,
+}
+
 impl Default for CliChannelConfig {
     fn default() -> Self {
         Self {
@@ -919,6 +1207,69 @@ impl Default for WecomChannelConfig {
             reconnect_interval_s: default_wecom_reconnect_interval_seconds(),
             allowed_conversation_ids: Vec::new(),
             acp: ChannelAcpConfig::default(),
+            accounts: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for DiscordChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_id: None,
+            default_account: None,
+            bot_token: None,
+            bot_token_env: Some(DISCORD_BOT_TOKEN_ENV.to_owned()),
+            api_base_url: None,
+            accounts: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for SlackChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_id: None,
+            default_account: None,
+            bot_token: None,
+            bot_token_env: Some(SLACK_BOT_TOKEN_ENV.to_owned()),
+            api_base_url: None,
+            accounts: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for SignalChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_id: None,
+            default_account: None,
+            signal_account: None,
+            signal_account_env: Some(SIGNAL_ACCOUNT_ENV.to_owned()),
+            service_url: Some(default_signal_service_url()),
+            service_url_env: Some(SIGNAL_SERVICE_URL_ENV.to_owned()),
+            accounts: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for WhatsappChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_id: None,
+            default_account: None,
+            access_token: None,
+            access_token_env: Some(WHATSAPP_ACCESS_TOKEN_ENV.to_owned()),
+            phone_number_id: None,
+            phone_number_id_env: Some(WHATSAPP_PHONE_NUMBER_ID_ENV.to_owned()),
+            verify_token: None,
+            verify_token_env: Some(WHATSAPP_VERIFY_TOKEN_ENV.to_owned()),
+            app_secret: None,
+            app_secret_env: Some(WHATSAPP_APP_SECRET_ENV.to_owned()),
+            api_base_url: Some(default_whatsapp_api_base_url()),
             accounts: BTreeMap::new(),
         }
     }
@@ -1655,6 +2006,787 @@ impl WecomChannelConfig {
     }
 }
 
+impl DiscordChannelConfig {
+    pub(crate) fn validate(&self) -> Vec<ConfigValidationIssue> {
+        let mut issues = Vec::new();
+        validate_channel_account_integrity(
+            &mut issues,
+            "discord",
+            self.default_account.as_deref(),
+            self.accounts.keys(),
+        );
+        validate_discord_env_pointer(
+            &mut issues,
+            "discord.bot_token_env",
+            self.bot_token_env.as_deref(),
+            "discord.bot_token",
+        );
+        validate_discord_secret_ref_env_pointer(
+            &mut issues,
+            "discord.bot_token",
+            self.bot_token.as_ref(),
+        );
+        for (raw_account_id, account) in &self.accounts {
+            let account_id = normalize_channel_account_id(raw_account_id);
+            let bot_token_field_path = format!("discord.accounts.{account_id}.bot_token");
+            let bot_token_env_field_path = format!("{bot_token_field_path}_env");
+            validate_discord_env_pointer(
+                &mut issues,
+                bot_token_env_field_path.as_str(),
+                account.bot_token_env.as_deref(),
+                bot_token_field_path.as_str(),
+            );
+            validate_discord_secret_ref_env_pointer(
+                &mut issues,
+                bot_token_field_path.as_str(),
+                account.bot_token.as_ref(),
+            );
+        }
+        issues
+    }
+
+    pub fn bot_token(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.bot_token.as_ref(), self.bot_token_env.as_deref())
+    }
+
+    pub fn configured_account_ids(&self) -> Vec<String> {
+        let ids = configured_account_ids(self.accounts.keys());
+        if ids.is_empty() {
+            return vec![self.default_configured_account_id()];
+        }
+        ids
+    }
+
+    pub fn default_configured_account_selection(&self) -> ChannelDefaultAccountSelection {
+        resolve_default_configured_account_selection(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+
+    pub fn default_configured_account_id(&self) -> String {
+        self.default_configured_account_selection().id
+    }
+
+    pub fn resolved_account_route(
+        &self,
+        requested_account_id: Option<&str>,
+        selected_configured_account_id: &str,
+    ) -> ChannelResolvedAccountRoute {
+        resolve_channel_account_route(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+            requested_account_id,
+            selected_configured_account_id,
+        )
+    }
+
+    pub fn resolve_account(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedDiscordChannelConfig> {
+        let configured = self.resolve_configured_account_selection(requested_account_id)?;
+        let account_override = configured
+            .account_key
+            .as_deref()
+            .and_then(|key| self.accounts.get(key));
+
+        let merged = DiscordChannelConfig {
+            enabled: self.enabled
+                && account_override
+                    .and_then(|account| account.enabled)
+                    .unwrap_or(true),
+            account_id: account_override
+                .and_then(|account| account.account_id.clone())
+                .or_else(|| self.account_id.clone()),
+            default_account: None,
+            bot_token: account_override
+                .and_then(|account| account.bot_token.clone())
+                .or_else(|| self.bot_token.clone()),
+            bot_token_env: account_override
+                .and_then(|account| account.bot_token_env.clone())
+                .or_else(|| self.bot_token_env.clone()),
+            api_base_url: account_override
+                .and_then(|account| account.api_base_url.clone())
+                .or_else(|| self.api_base_url.clone()),
+            accounts: BTreeMap::new(),
+        };
+        let account = merged.resolved_account_identity();
+
+        Ok(ResolvedDiscordChannelConfig {
+            configured_account_id: configured.id,
+            configured_account_label: configured.label,
+            account,
+            enabled: merged.enabled,
+            bot_token: merged.bot_token,
+            bot_token_env: merged.bot_token_env,
+            api_base_url: merged.api_base_url,
+        })
+    }
+
+    pub fn resolve_account_for_session_account_id(
+        &self,
+        session_account_id: Option<&str>,
+    ) -> CliResult<ResolvedDiscordChannelConfig> {
+        resolve_account_for_session_account_id(
+            session_account_id,
+            || self.resolve_account(session_account_id),
+            || self.configured_account_ids(),
+            |configured_id| self.resolve_account(Some(configured_id)),
+            |resolved| resolved.account.id.as_str(),
+        )
+    }
+
+    pub fn resolved_account_identity(&self) -> ChannelAccountIdentity {
+        if let Some((id, label)) = resolve_configured_account_identity(self.account_id.as_deref()) {
+            return ChannelAccountIdentity {
+                id,
+                label,
+                source: ChannelAccountIdentitySource::Configured,
+            };
+        }
+
+        default_channel_account_identity()
+    }
+
+    fn resolve_configured_account_selection(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedConfiguredAccount> {
+        resolve_configured_account_selection(
+            self.accounts.keys(),
+            requested_account_id,
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+}
+
+impl SlackChannelConfig {
+    pub(crate) fn validate(&self) -> Vec<ConfigValidationIssue> {
+        let mut issues = Vec::new();
+        validate_channel_account_integrity(
+            &mut issues,
+            "slack",
+            self.default_account.as_deref(),
+            self.accounts.keys(),
+        );
+        validate_slack_env_pointer(
+            &mut issues,
+            "slack.bot_token_env",
+            self.bot_token_env.as_deref(),
+            "slack.bot_token",
+        );
+        validate_slack_secret_ref_env_pointer(
+            &mut issues,
+            "slack.bot_token",
+            self.bot_token.as_ref(),
+        );
+        for (raw_account_id, account) in &self.accounts {
+            let account_id = normalize_channel_account_id(raw_account_id);
+            let bot_token_field_path = format!("slack.accounts.{account_id}.bot_token");
+            let bot_token_env_field_path = format!("{bot_token_field_path}_env");
+            validate_slack_env_pointer(
+                &mut issues,
+                bot_token_env_field_path.as_str(),
+                account.bot_token_env.as_deref(),
+                bot_token_field_path.as_str(),
+            );
+            validate_slack_secret_ref_env_pointer(
+                &mut issues,
+                bot_token_field_path.as_str(),
+                account.bot_token.as_ref(),
+            );
+        }
+        issues
+    }
+
+    pub fn bot_token(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.bot_token.as_ref(), self.bot_token_env.as_deref())
+    }
+
+    pub fn configured_account_ids(&self) -> Vec<String> {
+        let ids = configured_account_ids(self.accounts.keys());
+        if ids.is_empty() {
+            return vec![self.default_configured_account_id()];
+        }
+        ids
+    }
+
+    pub fn default_configured_account_selection(&self) -> ChannelDefaultAccountSelection {
+        resolve_default_configured_account_selection(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+
+    pub fn default_configured_account_id(&self) -> String {
+        self.default_configured_account_selection().id
+    }
+
+    pub fn resolved_account_route(
+        &self,
+        requested_account_id: Option<&str>,
+        selected_configured_account_id: &str,
+    ) -> ChannelResolvedAccountRoute {
+        resolve_channel_account_route(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+            requested_account_id,
+            selected_configured_account_id,
+        )
+    }
+
+    pub fn resolve_account(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedSlackChannelConfig> {
+        let configured = self.resolve_configured_account_selection(requested_account_id)?;
+        let account_override = configured
+            .account_key
+            .as_deref()
+            .and_then(|key| self.accounts.get(key));
+
+        let merged = SlackChannelConfig {
+            enabled: self.enabled
+                && account_override
+                    .and_then(|account| account.enabled)
+                    .unwrap_or(true),
+            account_id: account_override
+                .and_then(|account| account.account_id.clone())
+                .or_else(|| self.account_id.clone()),
+            default_account: None,
+            bot_token: account_override
+                .and_then(|account| account.bot_token.clone())
+                .or_else(|| self.bot_token.clone()),
+            bot_token_env: account_override
+                .and_then(|account| account.bot_token_env.clone())
+                .or_else(|| self.bot_token_env.clone()),
+            api_base_url: account_override
+                .and_then(|account| account.api_base_url.clone())
+                .or_else(|| self.api_base_url.clone()),
+            accounts: BTreeMap::new(),
+        };
+        let account = merged.resolved_account_identity();
+
+        Ok(ResolvedSlackChannelConfig {
+            configured_account_id: configured.id,
+            configured_account_label: configured.label,
+            account,
+            enabled: merged.enabled,
+            bot_token: merged.bot_token,
+            bot_token_env: merged.bot_token_env,
+            api_base_url: merged.api_base_url,
+        })
+    }
+
+    pub fn resolve_account_for_session_account_id(
+        &self,
+        session_account_id: Option<&str>,
+    ) -> CliResult<ResolvedSlackChannelConfig> {
+        resolve_account_for_session_account_id(
+            session_account_id,
+            || self.resolve_account(session_account_id),
+            || self.configured_account_ids(),
+            |configured_id| self.resolve_account(Some(configured_id)),
+            |resolved| resolved.account.id.as_str(),
+        )
+    }
+
+    pub fn resolved_account_identity(&self) -> ChannelAccountIdentity {
+        if let Some((id, label)) = resolve_configured_account_identity(self.account_id.as_deref()) {
+            return ChannelAccountIdentity {
+                id,
+                label,
+                source: ChannelAccountIdentitySource::Configured,
+            };
+        }
+
+        default_channel_account_identity()
+    }
+
+    fn resolve_configured_account_selection(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedConfiguredAccount> {
+        resolve_configured_account_selection(
+            self.accounts.keys(),
+            requested_account_id,
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+}
+
+impl SignalChannelConfig {
+    pub(crate) fn validate(&self) -> Vec<ConfigValidationIssue> {
+        let mut issues = Vec::new();
+        validate_channel_account_integrity(
+            &mut issues,
+            "signal",
+            self.default_account.as_deref(),
+            self.accounts.keys(),
+        );
+        validate_signal_env_pointer(
+            &mut issues,
+            "signal.account_env",
+            self.signal_account_env.as_deref(),
+            "signal.account",
+        );
+        validate_signal_env_pointer(
+            &mut issues,
+            "signal.service_url_env",
+            self.service_url_env.as_deref(),
+            "signal.service_url",
+        );
+        for (raw_account_id, account) in &self.accounts {
+            let account_id = normalize_channel_account_id(raw_account_id);
+            let signal_account_field_path = format!("signal.accounts.{account_id}.account");
+            let signal_account_env_field_path = format!("{signal_account_field_path}_env");
+            validate_signal_env_pointer(
+                &mut issues,
+                signal_account_env_field_path.as_str(),
+                account.signal_account_env.as_deref(),
+                signal_account_field_path.as_str(),
+            );
+            let service_url_field_path = format!("signal.accounts.{account_id}.service_url");
+            let service_url_env_field_path = format!("{service_url_field_path}_env");
+            validate_signal_env_pointer(
+                &mut issues,
+                service_url_env_field_path.as_str(),
+                account.service_url_env.as_deref(),
+                service_url_field_path.as_str(),
+            );
+        }
+        issues
+    }
+
+    pub fn signal_account(&self) -> Option<String> {
+        resolve_string_with_legacy_env(
+            self.signal_account.as_deref(),
+            self.signal_account_env.as_deref(),
+        )
+    }
+
+    pub fn service_url(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.service_url.as_deref(), self.service_url_env.as_deref())
+    }
+
+    pub fn configured_account_ids(&self) -> Vec<String> {
+        let ids = configured_account_ids(self.accounts.keys());
+        if ids.is_empty() {
+            return vec![self.default_configured_account_id()];
+        }
+        ids
+    }
+
+    pub fn default_configured_account_selection(&self) -> ChannelDefaultAccountSelection {
+        resolve_default_configured_account_selection(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+
+    pub fn default_configured_account_id(&self) -> String {
+        self.default_configured_account_selection().id
+    }
+
+    pub fn resolved_account_route(
+        &self,
+        requested_account_id: Option<&str>,
+        selected_configured_account_id: &str,
+    ) -> ChannelResolvedAccountRoute {
+        resolve_channel_account_route(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+            requested_account_id,
+            selected_configured_account_id,
+        )
+    }
+
+    pub fn resolve_account(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedSignalChannelConfig> {
+        let configured = self.resolve_configured_account_selection(requested_account_id)?;
+        let account_override = configured
+            .account_key
+            .as_deref()
+            .and_then(|key| self.accounts.get(key));
+
+        let merged = SignalChannelConfig {
+            enabled: self.enabled
+                && account_override
+                    .and_then(|account| account.enabled)
+                    .unwrap_or(true),
+            account_id: account_override
+                .and_then(|account| account.account_id.clone())
+                .or_else(|| self.account_id.clone()),
+            default_account: None,
+            signal_account: account_override
+                .and_then(|account| account.signal_account.clone())
+                .or_else(|| self.signal_account.clone()),
+            signal_account_env: account_override
+                .and_then(|account| account.signal_account_env.clone())
+                .or_else(|| self.signal_account_env.clone()),
+            service_url: account_override
+                .and_then(|account| account.service_url.clone())
+                .or_else(|| self.service_url.clone()),
+            service_url_env: account_override
+                .and_then(|account| account.service_url_env.clone())
+                .or_else(|| self.service_url_env.clone()),
+            accounts: BTreeMap::new(),
+        };
+        let account = merged.resolved_account_identity();
+
+        Ok(ResolvedSignalChannelConfig {
+            configured_account_id: configured.id,
+            configured_account_label: configured.label,
+            account,
+            enabled: merged.enabled,
+            signal_account: merged.signal_account,
+            signal_account_env: merged.signal_account_env,
+            service_url: merged.service_url,
+            service_url_env: merged.service_url_env,
+        })
+    }
+
+    pub fn resolve_account_for_session_account_id(
+        &self,
+        session_account_id: Option<&str>,
+    ) -> CliResult<ResolvedSignalChannelConfig> {
+        resolve_account_for_session_account_id(
+            session_account_id,
+            || self.resolve_account(session_account_id),
+            || self.configured_account_ids(),
+            |configured_id| self.resolve_account(Some(configured_id)),
+            |resolved| resolved.account.id.as_str(),
+        )
+    }
+
+    pub fn resolved_account_identity(&self) -> ChannelAccountIdentity {
+        if let Some((id, label)) = resolve_configured_account_identity(self.account_id.as_deref()) {
+            return ChannelAccountIdentity {
+                id,
+                label,
+                source: ChannelAccountIdentitySource::Configured,
+            };
+        }
+
+        let signal_account = self.signal_account();
+        let signal_account = signal_account
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(signal_account) = signal_account {
+            let normalized_account_id = normalize_channel_account_id(signal_account);
+            let account_id = format!("signal_{normalized_account_id}");
+            let account_label = format!("signal:{signal_account}");
+            return ChannelAccountIdentity {
+                id: account_id,
+                label: account_label,
+                source: ChannelAccountIdentitySource::DerivedCredential,
+            };
+        }
+
+        default_channel_account_identity()
+    }
+
+    fn resolve_configured_account_selection(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedConfiguredAccount> {
+        resolve_configured_account_selection(
+            self.accounts.keys(),
+            requested_account_id,
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+}
+
+impl WhatsappChannelConfig {
+    pub(crate) fn validate(&self) -> Vec<ConfigValidationIssue> {
+        let mut issues = Vec::new();
+        validate_channel_account_integrity(
+            &mut issues,
+            "whatsapp",
+            self.default_account.as_deref(),
+            self.accounts.keys(),
+        );
+        validate_whatsapp_env_pointer(
+            &mut issues,
+            "whatsapp.access_token_env",
+            self.access_token_env.as_deref(),
+            "whatsapp.access_token",
+        );
+        validate_whatsapp_secret_ref_env_pointer(
+            &mut issues,
+            "whatsapp.access_token",
+            self.access_token.as_ref(),
+        );
+        validate_whatsapp_env_pointer(
+            &mut issues,
+            "whatsapp.phone_number_id_env",
+            self.phone_number_id_env.as_deref(),
+            "whatsapp.phone_number_id",
+        );
+        validate_whatsapp_env_pointer(
+            &mut issues,
+            "whatsapp.verify_token_env",
+            self.verify_token_env.as_deref(),
+            "whatsapp.verify_token",
+        );
+        validate_whatsapp_secret_ref_env_pointer(
+            &mut issues,
+            "whatsapp.verify_token",
+            self.verify_token.as_ref(),
+        );
+        validate_whatsapp_env_pointer(
+            &mut issues,
+            "whatsapp.app_secret_env",
+            self.app_secret_env.as_deref(),
+            "whatsapp.app_secret",
+        );
+        validate_whatsapp_secret_ref_env_pointer(
+            &mut issues,
+            "whatsapp.app_secret",
+            self.app_secret.as_ref(),
+        );
+        for (raw_account_id, account) in &self.accounts {
+            let account_id = normalize_channel_account_id(raw_account_id);
+            let access_token_field_path = format!("whatsapp.accounts.{account_id}.access_token");
+            let access_token_env_field_path = format!("{access_token_field_path}_env");
+            validate_whatsapp_env_pointer(
+                &mut issues,
+                access_token_env_field_path.as_str(),
+                account.access_token_env.as_deref(),
+                access_token_field_path.as_str(),
+            );
+            validate_whatsapp_secret_ref_env_pointer(
+                &mut issues,
+                access_token_field_path.as_str(),
+                account.access_token.as_ref(),
+            );
+            let phone_number_id_field_path =
+                format!("whatsapp.accounts.{account_id}.phone_number_id");
+            let phone_number_id_env_field_path = format!("{phone_number_id_field_path}_env");
+            validate_whatsapp_env_pointer(
+                &mut issues,
+                phone_number_id_env_field_path.as_str(),
+                account.phone_number_id_env.as_deref(),
+                phone_number_id_field_path.as_str(),
+            );
+            let verify_token_field_path = format!("whatsapp.accounts.{account_id}.verify_token");
+            let verify_token_env_field_path = format!("{verify_token_field_path}_env");
+            validate_whatsapp_env_pointer(
+                &mut issues,
+                verify_token_env_field_path.as_str(),
+                account.verify_token_env.as_deref(),
+                verify_token_field_path.as_str(),
+            );
+            validate_whatsapp_secret_ref_env_pointer(
+                &mut issues,
+                verify_token_field_path.as_str(),
+                account.verify_token.as_ref(),
+            );
+            let app_secret_field_path = format!("whatsapp.accounts.{account_id}.app_secret");
+            let app_secret_env_field_path = format!("{app_secret_field_path}_env");
+            validate_whatsapp_env_pointer(
+                &mut issues,
+                app_secret_env_field_path.as_str(),
+                account.app_secret_env.as_deref(),
+                app_secret_field_path.as_str(),
+            );
+            validate_whatsapp_secret_ref_env_pointer(
+                &mut issues,
+                app_secret_field_path.as_str(),
+                account.app_secret.as_ref(),
+            );
+        }
+        issues
+    }
+
+    pub fn access_token(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.access_token.as_ref(), self.access_token_env.as_deref())
+    }
+
+    pub fn phone_number_id(&self) -> Option<String> {
+        resolve_string_with_legacy_env(
+            self.phone_number_id.as_deref(),
+            self.phone_number_id_env.as_deref(),
+        )
+    }
+
+    pub fn verify_token(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.verify_token.as_ref(), self.verify_token_env.as_deref())
+    }
+
+    pub fn app_secret(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.app_secret.as_ref(), self.app_secret_env.as_deref())
+    }
+
+    pub fn configured_account_ids(&self) -> Vec<String> {
+        let ids = configured_account_ids(self.accounts.keys());
+        if ids.is_empty() {
+            return vec![self.default_configured_account_id()];
+        }
+        ids
+    }
+
+    pub fn default_configured_account_selection(&self) -> ChannelDefaultAccountSelection {
+        resolve_default_configured_account_selection(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+
+    pub fn default_configured_account_id(&self) -> String {
+        self.default_configured_account_selection().id
+    }
+
+    pub fn resolved_account_route(
+        &self,
+        requested_account_id: Option<&str>,
+        selected_configured_account_id: &str,
+    ) -> ChannelResolvedAccountRoute {
+        resolve_channel_account_route(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+            requested_account_id,
+            selected_configured_account_id,
+        )
+    }
+
+    pub fn resolve_account(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedWhatsappChannelConfig> {
+        let configured = self.resolve_configured_account_selection(requested_account_id)?;
+        let account_override = configured
+            .account_key
+            .as_deref()
+            .and_then(|key| self.accounts.get(key));
+
+        let merged = WhatsappChannelConfig {
+            enabled: self.enabled
+                && account_override
+                    .and_then(|account| account.enabled)
+                    .unwrap_or(true),
+            account_id: account_override
+                .and_then(|account| account.account_id.clone())
+                .or_else(|| self.account_id.clone()),
+            default_account: None,
+            access_token: account_override
+                .and_then(|account| account.access_token.clone())
+                .or_else(|| self.access_token.clone()),
+            access_token_env: account_override
+                .and_then(|account| account.access_token_env.clone())
+                .or_else(|| self.access_token_env.clone()),
+            phone_number_id: account_override
+                .and_then(|account| account.phone_number_id.clone())
+                .or_else(|| self.phone_number_id.clone()),
+            phone_number_id_env: account_override
+                .and_then(|account| account.phone_number_id_env.clone())
+                .or_else(|| self.phone_number_id_env.clone()),
+            verify_token: account_override
+                .and_then(|account| account.verify_token.clone())
+                .or_else(|| self.verify_token.clone()),
+            verify_token_env: account_override
+                .and_then(|account| account.verify_token_env.clone())
+                .or_else(|| self.verify_token_env.clone()),
+            app_secret: account_override
+                .and_then(|account| account.app_secret.clone())
+                .or_else(|| self.app_secret.clone()),
+            app_secret_env: account_override
+                .and_then(|account| account.app_secret_env.clone())
+                .or_else(|| self.app_secret_env.clone()),
+            api_base_url: account_override
+                .and_then(|account| account.api_base_url.clone())
+                .or_else(|| self.api_base_url.clone()),
+            accounts: BTreeMap::new(),
+        };
+        let account = merged.resolved_account_identity();
+
+        Ok(ResolvedWhatsappChannelConfig {
+            configured_account_id: configured.id,
+            configured_account_label: configured.label,
+            account,
+            enabled: merged.enabled,
+            access_token: merged.access_token,
+            access_token_env: merged.access_token_env,
+            phone_number_id: merged.phone_number_id,
+            phone_number_id_env: merged.phone_number_id_env,
+            verify_token: merged.verify_token,
+            verify_token_env: merged.verify_token_env,
+            app_secret: merged.app_secret,
+            app_secret_env: merged.app_secret_env,
+            api_base_url: merged.api_base_url,
+        })
+    }
+
+    pub fn resolve_account_for_session_account_id(
+        &self,
+        session_account_id: Option<&str>,
+    ) -> CliResult<ResolvedWhatsappChannelConfig> {
+        resolve_account_for_session_account_id(
+            session_account_id,
+            || self.resolve_account(session_account_id),
+            || self.configured_account_ids(),
+            |configured_id| self.resolve_account(Some(configured_id)),
+            |resolved| resolved.account.id.as_str(),
+        )
+    }
+
+    pub fn resolved_account_identity(&self) -> ChannelAccountIdentity {
+        if let Some((id, label)) = resolve_configured_account_identity(self.account_id.as_deref()) {
+            return ChannelAccountIdentity {
+                id,
+                label,
+                source: ChannelAccountIdentitySource::Configured,
+            };
+        }
+
+        let phone_number_id = self.phone_number_id();
+        let phone_number_id = phone_number_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(phone_number_id) = phone_number_id {
+            let normalized_account_id = normalize_channel_account_id(phone_number_id);
+            let account_id = format!("whatsapp_{normalized_account_id}");
+            let account_label = format!("whatsapp:{phone_number_id}");
+            return ChannelAccountIdentity {
+                id: account_id,
+                label: account_label,
+                source: ChannelAccountIdentitySource::DerivedCredential,
+            };
+        }
+
+        default_channel_account_identity()
+    }
+
+    fn resolve_configured_account_selection(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedConfiguredAccount> {
+        resolve_configured_account_selection(
+            self.accounts.keys(),
+            requested_account_id,
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+}
+
 fn default_telegram_base_url() -> String {
     "https://api.telegram.org".to_owned()
 }
@@ -1693,6 +2825,22 @@ const fn default_wecom_ping_interval_seconds() -> u64 {
 
 const fn default_wecom_reconnect_interval_seconds() -> u64 {
     5
+}
+
+fn default_discord_api_base_url() -> String {
+    "https://discord.com/api/v10".to_owned()
+}
+
+fn default_signal_service_url() -> String {
+    "http://127.0.0.1:8080".to_owned()
+}
+
+fn default_slack_api_base_url() -> String {
+    "https://slack.com/api".to_owned()
+}
+
+fn default_whatsapp_api_base_url() -> String {
+    "https://graph.facebook.com/v25.0".to_owned()
 }
 
 fn default_system_prompt() -> String {
@@ -1740,6 +2888,24 @@ fn resolve_telegram_bot_id_from_token(token: &str) -> Option<&str> {
         return None;
     }
     Some(bot_id)
+}
+
+fn resolve_string_with_legacy_env(raw: Option<&str>, env_key: Option<&str>) -> Option<String> {
+    let inline = raw
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    if inline.is_some() {
+        return inline;
+    }
+
+    let env_name = env_key.map(str::trim).filter(|value| !value.is_empty())?;
+    let env_value = std::env::var(env_name).ok()?;
+    let trimmed_value = env_value.trim();
+    if trimmed_value.is_empty() {
+        return None;
+    }
+    Some(trimmed_value.to_owned())
 }
 
 pub(crate) fn normalize_channel_account_id(raw: &str) -> String {
@@ -1942,6 +3108,157 @@ fn validate_wecom_secret_ref_env_pointer(
         WECOM_BOT_ID_ENV
     } else {
         WECOM_SECRET_ENV
+    };
+    if let Err(issue) = validate_secret_ref_env_pointer_field(
+        field_path,
+        secret_ref,
+        EnvPointerValidationHint {
+            inline_field_path: field_path,
+            example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_discord_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    env_key: Option<&str>,
+    inline_field_path: &str,
+) {
+    if let Err(issue) = validate_env_pointer_field(
+        field_path,
+        env_key,
+        EnvPointerValidationHint {
+            inline_field_path,
+            example_env_name: DISCORD_BOT_TOKEN_ENV,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_discord_secret_ref_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    secret_ref: Option<&SecretRef>,
+) {
+    if let Err(issue) = validate_secret_ref_env_pointer_field(
+        field_path,
+        secret_ref,
+        EnvPointerValidationHint {
+            inline_field_path: field_path,
+            example_env_name: DISCORD_BOT_TOKEN_ENV,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_signal_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    env_key: Option<&str>,
+    inline_field_path: &str,
+) {
+    let example_env_name = if field_path.ends_with("service_url_env") {
+        SIGNAL_SERVICE_URL_ENV
+    } else {
+        SIGNAL_ACCOUNT_ENV
+    };
+    if let Err(issue) = validate_env_pointer_field(
+        field_path,
+        env_key,
+        EnvPointerValidationHint {
+            inline_field_path,
+            example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_slack_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    env_key: Option<&str>,
+    inline_field_path: &str,
+) {
+    if let Err(issue) = validate_env_pointer_field(
+        field_path,
+        env_key,
+        EnvPointerValidationHint {
+            inline_field_path,
+            example_env_name: SLACK_BOT_TOKEN_ENV,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_slack_secret_ref_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    secret_ref: Option<&SecretRef>,
+) {
+    if let Err(issue) = validate_secret_ref_env_pointer_field(
+        field_path,
+        secret_ref,
+        EnvPointerValidationHint {
+            inline_field_path: field_path,
+            example_env_name: SLACK_BOT_TOKEN_ENV,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_whatsapp_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    env_key: Option<&str>,
+    inline_field_path: &str,
+) {
+    let example_env_name = if field_path.ends_with("access_token_env") {
+        WHATSAPP_ACCESS_TOKEN_ENV
+    } else if field_path.ends_with("phone_number_id_env") {
+        WHATSAPP_PHONE_NUMBER_ID_ENV
+    } else if field_path.ends_with("verify_token_env") {
+        WHATSAPP_VERIFY_TOKEN_ENV
+    } else {
+        WHATSAPP_APP_SECRET_ENV
+    };
+    if let Err(issue) = validate_env_pointer_field(
+        field_path,
+        env_key,
+        EnvPointerValidationHint {
+            inline_field_path,
+            example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_whatsapp_secret_ref_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    secret_ref: Option<&SecretRef>,
+) {
+    let example_env_name = if field_path.ends_with("access_token") {
+        WHATSAPP_ACCESS_TOKEN_ENV
+    } else if field_path.ends_with("verify_token") {
+        WHATSAPP_VERIFY_TOKEN_ENV
+    } else {
+        WHATSAPP_APP_SECRET_ENV
     };
     if let Err(issue) = validate_secret_ref_env_pointer_field(
         field_path,
@@ -2877,6 +4194,168 @@ mod tests {
         assert_eq!(
             resolved.acp.resolved_working_directory(),
             Some(std::path::PathBuf::from("/workspace/work-bot"))
+        );
+    }
+
+    #[test]
+    fn signal_resolves_account_and_service_url_from_env_pointers() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("TEST_SIGNAL_ACCOUNT", "+15550001111");
+        env.set("TEST_SIGNAL_SERVICE_URL", "http://signal.example.test:8080");
+
+        let config_value = json!({
+            "enabled": true,
+            "account_env": "TEST_SIGNAL_ACCOUNT",
+            "service_url_env": "TEST_SIGNAL_SERVICE_URL"
+        });
+        let config: SignalChannelConfig =
+            serde_json::from_value(config_value).expect("deserialize signal config");
+
+        let resolved = config
+            .resolve_account(None)
+            .expect("resolve default signal account");
+        let signal_account = resolved.signal_account();
+        let service_url = resolved.service_url();
+
+        assert_eq!(resolved.configured_account_id, "signal_15550001111");
+        assert_eq!(resolved.account.id, "signal_15550001111");
+        assert_eq!(resolved.account.label, "signal:+15550001111");
+        assert_eq!(signal_account.as_deref(), Some("+15550001111"));
+        assert_eq!(
+            service_url.as_deref(),
+            Some("http://signal.example.test:8080")
+        );
+    }
+
+    #[test]
+    fn signal_multi_account_resolution_merges_base_and_account_overrides() {
+        let config_value = json!({
+            "enabled": true,
+            "account": "+15550001111",
+            "service_url": "http://127.0.0.1:8080",
+            "default_account": "Alerts",
+            "accounts": {
+                "Alerts": {
+                    "account_id": "Signal-Alerts",
+                    "account": "+15550002222"
+                },
+                "Backup": {
+                    "enabled": false,
+                    "service_url": "http://backup.example.test:8080"
+                }
+            }
+        });
+        let config: SignalChannelConfig =
+            serde_json::from_value(config_value).expect("deserialize signal multi-account config");
+
+        assert_eq!(config.configured_account_ids(), vec!["alerts", "backup"]);
+        assert_eq!(config.default_configured_account_id(), "alerts");
+
+        let alerts = config
+            .resolve_account(None)
+            .expect("resolve default signal account");
+        let alerts_signal_account = alerts.signal_account();
+        let alerts_service_url = alerts.service_url();
+
+        assert_eq!(alerts.configured_account_id, "alerts");
+        assert_eq!(alerts.account.id, "signal-alerts");
+        assert_eq!(alerts.account.label, "Signal-Alerts");
+        assert_eq!(alerts_signal_account.as_deref(), Some("+15550002222"));
+        assert_eq!(alerts_service_url.as_deref(), Some("http://127.0.0.1:8080"));
+
+        let backup = config
+            .resolve_account(Some("Backup"))
+            .expect("resolve explicit signal account");
+        let backup_signal_account = backup.signal_account();
+        let backup_service_url = backup.service_url();
+
+        assert_eq!(backup.configured_account_id, "backup");
+        assert!(!backup.enabled);
+        assert_eq!(backup_signal_account.as_deref(), Some("+15550001111"));
+        assert_eq!(
+            backup_service_url.as_deref(),
+            Some("http://backup.example.test:8080")
+        );
+    }
+
+    #[test]
+    fn whatsapp_resolves_phone_number_id_from_env_pointer() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("TEST_WHATSAPP_PHONE_NUMBER_ID", "1234567890");
+
+        let config_value = json!({
+            "enabled": true,
+            "access_token": "whatsapp-token",
+            "phone_number_id_env": "TEST_WHATSAPP_PHONE_NUMBER_ID"
+        });
+        let config: WhatsappChannelConfig =
+            serde_json::from_value(config_value).expect("deserialize whatsapp config");
+
+        let resolved = config
+            .resolve_account(None)
+            .expect("resolve default whatsapp account");
+        let phone_number_id = resolved.phone_number_id();
+
+        assert_eq!(resolved.configured_account_id, "whatsapp_1234567890");
+        assert_eq!(resolved.account.id, "whatsapp_1234567890");
+        assert_eq!(resolved.account.label, "whatsapp:1234567890");
+        assert_eq!(phone_number_id.as_deref(), Some("1234567890"));
+    }
+
+    #[test]
+    fn whatsapp_multi_account_resolution_merges_base_and_account_overrides() {
+        let config_value = json!({
+            "enabled": true,
+            "access_token": "base-access-token",
+            "api_base_url": "https://graph.facebook.com/v25.0",
+            "default_account": "Business",
+            "accounts": {
+                "Business": {
+                    "account_id": "WhatsApp-Biz",
+                    "phone_number_id": "1111111111"
+                },
+                "Backup": {
+                    "enabled": false,
+                    "phone_number_id": "2222222222",
+                    "api_base_url": "https://graph.facebook.com/v26.0"
+                }
+            }
+        });
+        let config: WhatsappChannelConfig = serde_json::from_value(config_value)
+            .expect("deserialize whatsapp multi-account config");
+
+        assert_eq!(config.configured_account_ids(), vec!["backup", "business"]);
+        assert_eq!(config.default_configured_account_id(), "business");
+
+        let business = config
+            .resolve_account(None)
+            .expect("resolve default whatsapp account");
+        let business_access_token = business.access_token();
+        let business_phone_number_id = business.phone_number_id();
+
+        assert_eq!(business.configured_account_id, "business");
+        assert_eq!(business.account.id, "whatsapp-biz");
+        assert_eq!(business.account.label, "WhatsApp-Biz");
+        assert_eq!(business_access_token.as_deref(), Some("base-access-token"));
+        assert_eq!(business_phone_number_id.as_deref(), Some("1111111111"));
+        assert_eq!(
+            business.resolved_api_base_url(),
+            "https://graph.facebook.com/v25.0"
+        );
+
+        let backup = config
+            .resolve_account(Some("Backup"))
+            .expect("resolve explicit whatsapp account");
+        let backup_access_token = backup.access_token();
+        let backup_phone_number_id = backup.phone_number_id();
+
+        assert_eq!(backup.configured_account_id, "backup");
+        assert!(!backup.enabled);
+        assert_eq!(backup_access_token.as_deref(), Some("base-access-token"));
+        assert_eq!(backup_phone_number_id.as_deref(), Some("2222222222"));
+        assert_eq!(
+            backup.resolved_api_base_url(),
+            "https://graph.facebook.com/v26.0"
         );
     }
 

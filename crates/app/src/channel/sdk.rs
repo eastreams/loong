@@ -4,11 +4,9 @@ use crate::{
 };
 
 use super::registry::{
-    ChannelRegistryDescriptor, ChannelRuntimeCommandDescriptor,
-    FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR, FEISHU_CHANNEL_REGISTRY_DESCRIPTOR,
-    MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR, MATRIX_CHANNEL_REGISTRY_DESCRIPTOR,
-    TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_CHANNEL_REGISTRY_DESCRIPTOR,
-    WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WECOM_CHANNEL_REGISTRY_DESCRIPTOR,
+    ChannelRuntimeCommandDescriptor, FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
 };
 
 #[cfg(feature = "channel-feishu")]
@@ -45,7 +43,6 @@ type BackgroundSurfaceEnabledFn = fn(&LoongClawConfig, Option<&str>) -> CliResul
 #[derive(Clone, Copy)]
 pub(crate) struct ChannelIntegrationDescriptor {
     pub descriptor: &'static ChannelDescriptor,
-    pub registry_descriptor: Option<&'static ChannelRegistryDescriptor>,
     pub background_runtime: Option<ChannelRuntimeCommandDescriptor>,
     pub is_enabled: ChannelEnabledFn,
     pub collect_validation_issues: ChannelValidationFn,
@@ -92,9 +89,40 @@ const WECOM_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     serve_subcommand: Some(WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve.command),
 };
 
+const DISCORD_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
+    id: "discord",
+    label: "discord",
+    surface_label: "discord channel",
+    runtime_kind: ChannelRuntimeKind::Service,
+    serve_subcommand: None,
+};
+
+const SLACK_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
+    id: "slack",
+    label: "slack",
+    surface_label: "slack channel",
+    runtime_kind: ChannelRuntimeKind::Service,
+    serve_subcommand: None,
+};
+
+const WHATSAPP_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
+    id: "whatsapp",
+    label: "whatsapp",
+    surface_label: "whatsapp channel",
+    runtime_kind: ChannelRuntimeKind::Service,
+    serve_subcommand: None,
+};
+
+const SIGNAL_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
+    id: "signal",
+    label: "signal",
+    surface_label: "signal channel",
+    runtime_kind: ChannelRuntimeKind::Service,
+    serve_subcommand: None,
+};
+
 const CLI_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     descriptor: &CLI_CHANNEL_DESCRIPTOR,
-    registry_descriptor: None,
     background_runtime: None,
     is_enabled: cli_channel_is_enabled,
     collect_validation_issues: collect_cli_channel_validation_issues,
@@ -110,7 +138,6 @@ const TELEGRAM_BACKGROUND_RUNTIME: Option<ChannelRuntimeCommandDescriptor> = Non
 
 const TELEGRAM_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     descriptor: &TELEGRAM_CHANNEL_DESCRIPTOR,
-    registry_descriptor: Some(&TELEGRAM_CHANNEL_REGISTRY_DESCRIPTOR),
     background_runtime: TELEGRAM_BACKGROUND_RUNTIME,
     is_enabled: telegram_channel_is_enabled,
     collect_validation_issues: collect_telegram_channel_validation_issues,
@@ -126,7 +153,6 @@ const FEISHU_BACKGROUND_RUNTIME: Option<ChannelRuntimeCommandDescriptor> = None;
 
 const FEISHU_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     descriptor: &FEISHU_CHANNEL_DESCRIPTOR,
-    registry_descriptor: Some(&FEISHU_CHANNEL_REGISTRY_DESCRIPTOR),
     background_runtime: FEISHU_BACKGROUND_RUNTIME,
     is_enabled: feishu_channel_is_enabled,
     collect_validation_issues: collect_feishu_channel_validation_issues,
@@ -142,7 +168,6 @@ const MATRIX_BACKGROUND_RUNTIME: Option<ChannelRuntimeCommandDescriptor> = None;
 
 const MATRIX_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     descriptor: &MATRIX_CHANNEL_DESCRIPTOR,
-    registry_descriptor: Some(&MATRIX_CHANNEL_REGISTRY_DESCRIPTOR),
     background_runtime: MATRIX_BACKGROUND_RUNTIME,
     is_enabled: matrix_channel_is_enabled,
     collect_validation_issues: collect_matrix_channel_validation_issues,
@@ -158,11 +183,42 @@ const WECOM_BACKGROUND_RUNTIME: Option<ChannelRuntimeCommandDescriptor> = None;
 
 const WECOM_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     descriptor: &WECOM_CHANNEL_DESCRIPTOR,
-    registry_descriptor: Some(&WECOM_CHANNEL_REGISTRY_DESCRIPTOR),
     background_runtime: WECOM_BACKGROUND_RUNTIME,
     is_enabled: wecom_channel_is_enabled,
     collect_validation_issues: collect_wecom_channel_validation_issues,
     background_surface_is_enabled: Some(wecom_background_surface_is_enabled),
+};
+
+const DISCORD_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
+    descriptor: &DISCORD_CHANNEL_DESCRIPTOR,
+    background_runtime: None,
+    is_enabled: discord_channel_is_enabled,
+    collect_validation_issues: collect_discord_channel_validation_issues,
+    background_surface_is_enabled: None,
+};
+
+const SLACK_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
+    descriptor: &SLACK_CHANNEL_DESCRIPTOR,
+    background_runtime: None,
+    is_enabled: slack_channel_is_enabled,
+    collect_validation_issues: collect_slack_channel_validation_issues,
+    background_surface_is_enabled: None,
+};
+
+const WHATSAPP_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
+    descriptor: &WHATSAPP_CHANNEL_DESCRIPTOR,
+    background_runtime: None,
+    is_enabled: whatsapp_channel_is_enabled,
+    collect_validation_issues: collect_whatsapp_channel_validation_issues,
+    background_surface_is_enabled: None,
+};
+
+const SIGNAL_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
+    descriptor: &SIGNAL_CHANNEL_DESCRIPTOR,
+    background_runtime: None,
+    is_enabled: signal_channel_is_enabled,
+    collect_validation_issues: collect_signal_channel_validation_issues,
+    background_surface_is_enabled: None,
 };
 
 const CHANNEL_INTEGRATIONS: &[ChannelIntegrationDescriptor] = &[
@@ -171,6 +227,10 @@ const CHANNEL_INTEGRATIONS: &[ChannelIntegrationDescriptor] = &[
     FEISHU_CHANNEL_INTEGRATION,
     MATRIX_CHANNEL_INTEGRATION,
     WECOM_CHANNEL_INTEGRATION,
+    DISCORD_CHANNEL_INTEGRATION,
+    SLACK_CHANNEL_INTEGRATION,
+    WHATSAPP_CHANNEL_INTEGRATION,
+    SIGNAL_CHANNEL_INTEGRATION,
 ];
 
 pub(crate) fn channel_descriptor(id: &str) -> Option<&'static ChannelDescriptor> {
@@ -208,14 +268,6 @@ pub(crate) fn collect_channel_validation_issues(
     CHANNEL_INTEGRATIONS
         .iter()
         .flat_map(|integration| (integration.collect_validation_issues)(config))
-        .collect()
-}
-
-pub(crate) fn runtime_backed_channel_registry_descriptors()
--> Vec<&'static ChannelRegistryDescriptor> {
-    CHANNEL_INTEGRATIONS
-        .iter()
-        .filter_map(|integration| integration.registry_descriptor)
         .collect()
 }
 
@@ -275,6 +327,22 @@ fn wecom_channel_is_enabled(config: &LoongClawConfig) -> bool {
     config.wecom.enabled
 }
 
+fn discord_channel_is_enabled(config: &LoongClawConfig) -> bool {
+    config.discord.enabled
+}
+
+fn slack_channel_is_enabled(config: &LoongClawConfig) -> bool {
+    config.slack.enabled
+}
+
+fn whatsapp_channel_is_enabled(config: &LoongClawConfig) -> bool {
+    config.whatsapp.enabled
+}
+
+fn signal_channel_is_enabled(config: &LoongClawConfig) -> bool {
+    config.signal.enabled
+}
+
 fn collect_cli_channel_validation_issues(_config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
     Vec::new()
 }
@@ -299,6 +367,28 @@ fn collect_matrix_channel_validation_issues(
 
 fn collect_wecom_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
     config.wecom.validate()
+}
+
+fn collect_discord_channel_validation_issues(
+    config: &LoongClawConfig,
+) -> Vec<ConfigValidationIssue> {
+    config.discord.validate()
+}
+
+fn collect_slack_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+    config.slack.validate()
+}
+
+fn collect_whatsapp_channel_validation_issues(
+    config: &LoongClawConfig,
+) -> Vec<ConfigValidationIssue> {
+    config.whatsapp.validate()
+}
+
+fn collect_signal_channel_validation_issues(
+    config: &LoongClawConfig,
+) -> Vec<ConfigValidationIssue> {
+    config.signal.validate()
 }
 
 fn telegram_background_surface_is_enabled(
@@ -380,7 +470,12 @@ mod tests {
             .map(|descriptor| descriptor.id)
             .collect::<Vec<_>>();
 
-        assert_eq!(ids, vec!["telegram", "feishu", "matrix", "wecom"]);
+        assert_eq!(
+            ids,
+            vec![
+                "telegram", "feishu", "matrix", "wecom", "discord", "slack", "whatsapp", "signal",
+            ]
+        );
     }
 
     #[test]

@@ -3,23 +3,22 @@ use std::{collections::BTreeSet, path::Path};
 use serde::Serialize;
 
 use crate::config::{
-    ChannelDefaultAccountSelectionSource, FEISHU_APP_ID_ENV, FEISHU_APP_SECRET_ENV,
-    FEISHU_ENCRYPT_KEY_ENV, FEISHU_VERIFICATION_TOKEN_ENV, FeishuChannelServeMode, LoongClawConfig,
-    MATRIX_ACCESS_TOKEN_ENV, ResolvedFeishuChannelConfig, ResolvedMatrixChannelConfig,
-    ResolvedTelegramChannelConfig, ResolvedWecomChannelConfig, TELEGRAM_BOT_TOKEN_ENV,
-    WECOM_BOT_ID_ENV, WECOM_SECRET_ENV,
+    ChannelDefaultAccountSelectionSource, DISCORD_BOT_TOKEN_ENV, FEISHU_APP_ID_ENV,
+    FEISHU_APP_SECRET_ENV, FEISHU_ENCRYPT_KEY_ENV, FEISHU_VERIFICATION_TOKEN_ENV,
+    FeishuChannelServeMode, LoongClawConfig, MATRIX_ACCESS_TOKEN_ENV, ResolvedDiscordChannelConfig,
+    ResolvedFeishuChannelConfig, ResolvedMatrixChannelConfig, ResolvedSignalChannelConfig,
+    ResolvedSlackChannelConfig, ResolvedTelegramChannelConfig, ResolvedWecomChannelConfig,
+    ResolvedWhatsappChannelConfig, SIGNAL_ACCOUNT_ENV, SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV,
+    TELEGRAM_BOT_TOKEN_ENV, WECOM_BOT_ID_ENV, WECOM_SECRET_ENV, WHATSAPP_ACCESS_TOKEN_ENV,
+    WHATSAPP_APP_SECRET_ENV, WHATSAPP_PHONE_NUMBER_ID_ENV, WHATSAPP_VERIFY_TOKEN_ENV,
 };
 
-use super::{
-    ChannelCatalogTargetKind, ChannelOperationRuntime, ChannelPlatform, runtime_state, sdk,
-};
+use super::{ChannelCatalogTargetKind, ChannelOperationRuntime, ChannelPlatform, runtime_state};
 
 pub const CHANNEL_OPERATION_SEND_ID: &str = "send";
 pub const CHANNEL_OPERATION_SERVE_ID: &str = "serve";
 
-const DISCORD_BOT_TOKEN_ENV: &str = "DISCORD_BOT_TOKEN";
 const DISCORD_APPLICATION_ID_ENV: &str = "DISCORD_APPLICATION_ID";
-const SLACK_BOT_TOKEN_ENV: &str = "SLACK_BOT_TOKEN";
 const SLACK_APP_TOKEN_ENV: &str = "SLACK_APP_TOKEN";
 const SLACK_SIGNING_SECRET_ENV: &str = "SLACK_SIGNING_SECRET";
 const LINE_CHANNEL_ACCESS_TOKEN_ENV: &str = "LINE_CHANNEL_ACCESS_TOKEN";
@@ -27,9 +26,6 @@ const LINE_CHANNEL_SECRET_ENV: &str = "LINE_CHANNEL_SECRET";
 const DINGTALK_APP_KEY_ENV: &str = "DINGTALK_APP_KEY";
 const DINGTALK_APP_SECRET_ENV: &str = "DINGTALK_APP_SECRET";
 const DINGTALK_ROBOT_CODE_ENV: &str = "DINGTALK_ROBOT_CODE";
-const WHATSAPP_ACCESS_TOKEN_ENV: &str = "WHATSAPP_ACCESS_TOKEN";
-const WHATSAPP_PHONE_NUMBER_ID_ENV: &str = "WHATSAPP_PHONE_NUMBER_ID";
-const WHATSAPP_VERIFY_TOKEN_ENV: &str = "WHATSAPP_VERIFY_TOKEN";
 const EMAIL_SMTP_USERNAME_ENV: &str = "EMAIL_SMTP_USERNAME";
 const EMAIL_SMTP_PASSWORD_ENV: &str = "EMAIL_SMTP_PASSWORD";
 const EMAIL_IMAP_USERNAME_ENV: &str = "EMAIL_IMAP_USERNAME";
@@ -38,8 +34,6 @@ const WEBHOOK_AUTH_TOKEN_ENV: &str = "WEBHOOK_AUTH_TOKEN";
 const WEBHOOK_SIGNING_SECRET_ENV: &str = "WEBHOOK_SIGNING_SECRET";
 const GOOGLE_CHAT_SERVICE_ACCOUNT_JSON_ENV: &str = "GOOGLE_CHAT_SERVICE_ACCOUNT_JSON";
 const GOOGLE_CHAT_VERIFICATION_TOKEN_ENV: &str = "GOOGLE_CHAT_VERIFICATION_TOKEN";
-const SIGNAL_SERVICE_URL_ENV: &str = "SIGNAL_SERVICE_URL";
-const SIGNAL_ACCOUNT_ENV: &str = "SIGNAL_ACCOUNT";
 const TEAMS_APP_ID_ENV: &str = "TEAMS_APP_ID";
 const TEAMS_APP_PASSWORD_ENV: &str = "TEAMS_APP_PASSWORD";
 const TEAMS_TENANT_ID_ENV: &str = "TEAMS_TENANT_ID";
@@ -254,6 +248,7 @@ pub struct ChannelOperationDescriptor {
 #[serde(rename_all = "snake_case")]
 pub enum ChannelCatalogImplementationStatus {
     RuntimeBacked,
+    ConfigBacked,
     Stub,
 }
 
@@ -261,6 +256,7 @@ impl ChannelCatalogImplementationStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::RuntimeBacked => "runtime_backed",
+            Self::ConfigBacked => "config_backed",
             Self::Stub => "stub",
         }
     }
@@ -366,7 +362,6 @@ pub struct ChannelSurface {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ChannelRuntimeDescriptor {
     family: ChannelCommandFamilyDescriptor,
-    snapshot_builder: ChannelSnapshotBuilder,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -382,6 +377,7 @@ pub(crate) type ChannelSnapshotBuilder =
 pub(crate) struct ChannelRegistryDescriptor {
     id: &'static str,
     runtime: Option<ChannelRuntimeDescriptor>,
+    snapshot_builder: Option<ChannelSnapshotBuilder>,
     selection_order: u16,
     selection_label: &'static str,
     blurb: &'static str,
@@ -842,6 +838,9 @@ const PLANNED_CHANNEL_CAPABILITIES: &[ChannelCapability] = &[
     ChannelCapability::RuntimeTracking,
 ];
 
+const CONFIG_BACKED_SEND_CHANNEL_CAPABILITIES: &[ChannelCapability] =
+    &[ChannelCapability::MultiAccount, ChannelCapability::Send];
+
 const DISCORD_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
     ChannelCatalogOperationRequirement {
         id: "enabled",
@@ -898,7 +897,7 @@ const DISCORD_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
     id: CHANNEL_OPERATION_SEND_ID,
     label: "direct send",
     command: "discord-send",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: DISCORD_SEND_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
@@ -914,21 +913,29 @@ const DISCORD_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
+pub const DISCORD_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
+    ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "discord",
+        default_send_target_kind: ChannelCatalogTargetKind::Conversation,
+        send: DISCORD_SEND_OPERATION,
+        serve: DISCORD_SERVE_OPERATION,
+    };
+
 const DISCORD_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
-        operation: DISCORD_SEND_OPERATION,
+        operation: DISCORD_CATALOG_COMMAND_FAMILY_DESCRIPTOR.send,
         doctor_checks: &[],
     },
     ChannelRegistryOperationDescriptor {
-        operation: DISCORD_SERVE_OPERATION,
+        operation: DISCORD_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
         doctor_checks: &[],
     },
 ];
 const DISCORD_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::Planned,
-    setup_hint: "planned Discord gateway surface; catalog metadata reflects the intended bot token, application id, and guild allowlist contract, but no runtime adapter is implemented yet",
-    status_command: "loongclaw channels --json",
-    repair_command: None,
+    strategy: ChannelOnboardingStrategy::ManualConfig,
+    setup_hint: "configure discord bot credentials in loongclaw.toml under discord or discord.accounts.<account>; outbound direct send is shipped, while gateway-based serve support remains planned",
+    status_command: "loongclaw doctor",
+    repair_command: Some("loongclaw doctor --fix"),
 };
 
 const SLACK_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -999,7 +1006,7 @@ const SLACK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "direct send",
     command: "slack-send",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: SLACK_SEND_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
@@ -1015,21 +1022,29 @@ const SLACK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
+pub const SLACK_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
+    ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "slack",
+        default_send_target_kind: ChannelCatalogTargetKind::Conversation,
+        send: SLACK_SEND_OPERATION,
+        serve: SLACK_SERVE_OPERATION,
+    };
+
 const SLACK_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
-        operation: SLACK_SEND_OPERATION,
+        operation: SLACK_CATALOG_COMMAND_FAMILY_DESCRIPTOR.send,
         doctor_checks: &[],
     },
     ChannelRegistryOperationDescriptor {
-        operation: SLACK_SERVE_OPERATION,
+        operation: SLACK_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
         doctor_checks: &[],
     },
 ];
 const SLACK_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::Planned,
-    setup_hint: "planned Slack Events API or Socket Mode surface; catalog metadata reflects the intended bot token, app token, signing secret, and allowlist contract, but no runtime adapter is implemented yet",
-    status_command: "loongclaw channels --json",
-    repair_command: None,
+    strategy: ChannelOnboardingStrategy::ManualConfig,
+    setup_hint: "configure slack bot credentials in loongclaw.toml under slack or slack.accounts.<account>; outbound direct send is shipped, while Events API or Socket Mode serve support remains planned",
+    status_command: "loongclaw doctor",
+    repair_command: Some("loongclaw doctor --fix"),
 };
 
 const LINE_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -1373,7 +1388,7 @@ const WHATSAPP_APP_SECRET_REQUIREMENT: ChannelCatalogOperationRequirement =
             "whatsapp.app_secret_env",
             "whatsapp.accounts.<account>.app_secret_env",
         ],
-        default_env_var: None,
+        default_env_var: Some(WHATSAPP_APP_SECRET_ENV),
     };
 const WHATSAPP_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
     WHATSAPP_ENABLED_REQUIREMENT,
@@ -1391,7 +1406,7 @@ const WHATSAPP_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
     id: CHANNEL_OPERATION_SEND_ID,
     label: "business send",
     command: "whatsapp-send",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: WHATSAPP_SEND_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
@@ -1405,21 +1420,28 @@ const WHATSAPP_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperatio
     requirements: WHATSAPP_SERVE_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
+pub const WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
+    ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "whatsapp",
+        default_send_target_kind: ChannelCatalogTargetKind::Address,
+        send: WHATSAPP_SEND_OPERATION,
+        serve: WHATSAPP_SERVE_OPERATION,
+    };
 const WHATSAPP_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
-        operation: WHATSAPP_SEND_OPERATION,
+        operation: WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR.send,
         doctor_checks: &[],
     },
     ChannelRegistryOperationDescriptor {
-        operation: WHATSAPP_SERVE_OPERATION,
+        operation: WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
         doctor_checks: &[],
     },
 ];
 const WHATSAPP_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::Planned,
-    setup_hint: "planned WhatsApp Cloud API surface; catalog metadata reflects the intended access token, phone number id, webhook verify token, and app secret contract, but no runtime adapter is implemented yet",
-    status_command: "loongclaw channels --json",
-    repair_command: None,
+    strategy: ChannelOnboardingStrategy::ManualConfig,
+    setup_hint: "configure whatsapp cloud api credentials in loongclaw.toml under whatsapp or whatsapp.accounts.<account>; outbound business send is shipped, while inbound webhook serve support remains planned",
+    status_command: "loongclaw doctor",
+    repair_command: Some("loongclaw doctor --fix"),
 };
 
 const EMAIL_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -1831,7 +1853,7 @@ const SIGNAL_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "direct message send",
     command: "signal-send",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: SIGNAL_SEND_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
@@ -1845,21 +1867,28 @@ const SIGNAL_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
     requirements: SIGNAL_SERVE_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
+pub const SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
+    ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "signal",
+        default_send_target_kind: ChannelCatalogTargetKind::Address,
+        send: SIGNAL_SEND_OPERATION,
+        serve: SIGNAL_SERVE_OPERATION,
+    };
 const SIGNAL_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
-        operation: SIGNAL_SEND_OPERATION,
+        operation: SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR.send,
         doctor_checks: &[],
     },
     ChannelRegistryOperationDescriptor {
-        operation: SIGNAL_SERVE_OPERATION,
+        operation: SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
         doctor_checks: &[],
     },
 ];
 const SIGNAL_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::Planned,
-    setup_hint: "planned Signal bridge surface; catalog metadata reflects the intended service endpoint, linked-account identity, and sender allowlist contract, but no runtime adapter is implemented yet",
-    status_command: "loongclaw channels --json",
-    repair_command: None,
+    strategy: ChannelOnboardingStrategy::ManualConfig,
+    setup_hint: "configure signal bridge connection details in loongclaw.toml under signal or signal.accounts.<account>; outbound direct send is shipped, while inbound listener support remains planned",
+    status_command: "loongclaw doctor",
+    repair_command: Some("loongclaw doctor --fix"),
 };
 
 const TEAMS_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -2961,8 +2990,8 @@ pub(crate) const TELEGRAM_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor
         id: "telegram",
         runtime: Some(ChannelRuntimeDescriptor {
             family: TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
-            snapshot_builder: build_telegram_snapshots,
         }),
+        snapshot_builder: Some(build_telegram_snapshots),
         selection_order: 10,
         selection_label: "personal and group chat bot",
         blurb: "Shipped Telegram Bot API surface with direct send and reply-loop runtime support.",
@@ -2980,8 +3009,8 @@ pub(crate) const FEISHU_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
         id: "feishu",
         runtime: Some(ChannelRuntimeDescriptor {
             family: FEISHU_COMMAND_FAMILY_DESCRIPTOR,
-            snapshot_builder: build_feishu_snapshots,
         }),
+        snapshot_builder: Some(build_feishu_snapshots),
         selection_order: 20,
         selection_label: "enterprise chat app",
         blurb: "Shipped Feishu/Lark app surface with webhook or websocket ingress and account-aware runtime state.",
@@ -2999,8 +3028,8 @@ pub(crate) const MATRIX_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
         id: "matrix",
         runtime: Some(ChannelRuntimeDescriptor {
             family: MATRIX_COMMAND_FAMILY_DESCRIPTOR,
-            snapshot_builder: build_matrix_snapshots,
         }),
+        snapshot_builder: Some(build_matrix_snapshots),
         selection_order: 30,
         selection_label: "federated room sync bot",
         blurb: "Shipped Matrix surface with direct send and sync-based reply-loop support.",
@@ -3018,8 +3047,8 @@ pub(crate) const WECOM_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
         id: "wecom",
         runtime: Some(ChannelRuntimeDescriptor {
             family: WECOM_COMMAND_FAMILY_DESCRIPTOR,
-            snapshot_builder: build_wecom_snapshots,
         }),
+        snapshot_builder: Some(build_wecom_snapshots),
         selection_order: 35,
         selection_label: "enterprise aibot",
         blurb: "Shipped WeCom AIBot long-connection surface with proactive send and account-aware runtime state.",
@@ -3032,42 +3061,85 @@ pub(crate) const WECOM_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
         operations: WECOM_OPERATIONS,
     };
 
+pub(crate) const DISCORD_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
+    ChannelRegistryDescriptor {
+        id: "discord",
+        runtime: None,
+        snapshot_builder: Some(build_discord_snapshots),
+        selection_order: 40,
+        selection_label: "community server bot",
+        blurb: "Shipped Discord outbound message surface with config-backed direct sends; inbound gateway/runtime support remains planned.",
+        implementation_status: ChannelCatalogImplementationStatus::ConfigBacked,
+        capabilities: CONFIG_BACKED_SEND_CHANNEL_CAPABILITIES,
+        label: "Discord",
+        aliases: &["discord-bot"],
+        transport: "discord_http_api",
+        onboarding: DISCORD_ONBOARDING_DESCRIPTOR,
+        operations: DISCORD_OPERATIONS,
+    };
+
+pub(crate) const SLACK_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
+    ChannelRegistryDescriptor {
+        id: "slack",
+        runtime: None,
+        snapshot_builder: Some(build_slack_snapshots),
+        selection_order: 50,
+        selection_label: "workspace event bot",
+        blurb: "Shipped Slack outbound message surface with config-backed direct sends; inbound Events API or Socket Mode support remains planned.",
+        implementation_status: ChannelCatalogImplementationStatus::ConfigBacked,
+        capabilities: CONFIG_BACKED_SEND_CHANNEL_CAPABILITIES,
+        label: "Slack",
+        aliases: &["slack-bot"],
+        transport: "slack_web_api",
+        onboarding: SLACK_ONBOARDING_DESCRIPTOR,
+        operations: SLACK_OPERATIONS,
+    };
+
+pub(crate) const WHATSAPP_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
+    ChannelRegistryDescriptor {
+        id: "whatsapp",
+        runtime: None,
+        snapshot_builder: Some(build_whatsapp_snapshots),
+        selection_order: 90,
+        selection_label: "business messaging app",
+        blurb: "Shipped WhatsApp Cloud API outbound surface with config-backed business sends; inbound webhook support remains planned.",
+        implementation_status: ChannelCatalogImplementationStatus::ConfigBacked,
+        capabilities: CONFIG_BACKED_SEND_CHANNEL_CAPABILITIES,
+        label: "WhatsApp",
+        aliases: &["wa", "whatsapp-cloud"],
+        transport: "whatsapp_cloud_api",
+        onboarding: WHATSAPP_ONBOARDING_DESCRIPTOR,
+        operations: WHATSAPP_OPERATIONS,
+    };
+
+pub(crate) const SIGNAL_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
+    ChannelRegistryDescriptor {
+        id: "signal",
+        runtime: None,
+        snapshot_builder: Some(build_signal_snapshots),
+        selection_order: 130,
+        selection_label: "private messenger bridge",
+        blurb: "Shipped Signal bridge outbound surface with config-backed direct sends; inbound listener support remains planned.",
+        implementation_status: ChannelCatalogImplementationStatus::ConfigBacked,
+        capabilities: CONFIG_BACKED_SEND_CHANNEL_CAPABILITIES,
+        label: "Signal",
+        aliases: &["signal-cli"],
+        transport: "signal_cli_rest_api",
+        onboarding: SIGNAL_ONBOARDING_DESCRIPTOR,
+        operations: SIGNAL_OPERATIONS,
+    };
+
 const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     TELEGRAM_CHANNEL_REGISTRY_DESCRIPTOR,
     FEISHU_CHANNEL_REGISTRY_DESCRIPTOR,
     MATRIX_CHANNEL_REGISTRY_DESCRIPTOR,
     WECOM_CHANNEL_REGISTRY_DESCRIPTOR,
-    ChannelRegistryDescriptor {
-        id: "discord",
-        runtime: None,
-        selection_order: 40,
-        selection_label: "community server bot",
-        blurb: "Planned Discord gateway and thread-aware bot surface with documented credential expectations.",
-        implementation_status: ChannelCatalogImplementationStatus::Stub,
-        capabilities: PLANNED_CHANNEL_CAPABILITIES,
-        label: "Discord",
-        aliases: &["discord-bot"],
-        transport: "discord_gateway",
-        onboarding: DISCORD_ONBOARDING_DESCRIPTOR,
-        operations: DISCORD_OPERATIONS,
-    },
-    ChannelRegistryDescriptor {
-        id: "slack",
-        runtime: None,
-        selection_order: 50,
-        selection_label: "workspace event bot",
-        blurb: "Planned Slack Events API or Socket Mode surface with richer bot-token and signing metadata.",
-        implementation_status: ChannelCatalogImplementationStatus::Stub,
-        capabilities: PLANNED_CHANNEL_CAPABILITIES,
-        label: "Slack",
-        aliases: &["slack-bot"],
-        transport: "slack_events_api",
-        onboarding: SLACK_ONBOARDING_DESCRIPTOR,
-        operations: SLACK_OPERATIONS,
-    },
+    DISCORD_CHANNEL_REGISTRY_DESCRIPTOR,
+    SLACK_CHANNEL_REGISTRY_DESCRIPTOR,
     ChannelRegistryDescriptor {
         id: "line",
         runtime: None,
+        snapshot_builder: None,
         selection_order: 60,
         selection_label: "consumer messaging bot",
         blurb: "Planned LINE Messaging API surface for push sends and webhook-driven reply loops.",
@@ -3082,6 +3154,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "dingtalk",
         runtime: None,
+        snapshot_builder: None,
         selection_order: 80,
         selection_label: "dingtalk robot app",
         blurb: "Planned DingTalk robot and event-callback surface with explicit app and robot credential metadata.",
@@ -3093,23 +3166,11 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
         onboarding: DINGTALK_ONBOARDING_DESCRIPTOR,
         operations: DINGTALK_OPERATIONS,
     },
-    ChannelRegistryDescriptor {
-        id: "whatsapp",
-        runtime: None,
-        selection_order: 90,
-        selection_label: "business messaging app",
-        blurb: "Planned WhatsApp Cloud API surface covering outbound business sends and inbound webhook events.",
-        implementation_status: ChannelCatalogImplementationStatus::Stub,
-        capabilities: PLANNED_CHANNEL_CAPABILITIES,
-        label: "WhatsApp",
-        aliases: &["wa", "whatsapp-cloud"],
-        transport: "whatsapp_cloud_api",
-        onboarding: WHATSAPP_ONBOARDING_DESCRIPTOR,
-        operations: WHATSAPP_OPERATIONS,
-    },
+    WHATSAPP_CHANNEL_REGISTRY_DESCRIPTOR,
     ChannelRegistryDescriptor {
         id: "email",
         runtime: None,
+        snapshot_builder: None,
         selection_order: 100,
         selection_label: "mailbox agent",
         blurb: "Planned email surface for SMTP outbound delivery and IMAP-backed reply loops.",
@@ -3124,6 +3185,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "webhook",
         runtime: None,
+        snapshot_builder: None,
         selection_order: 110,
         selection_label: "generic http integration",
         blurb: "Planned generic webhook surface for outbound POST delivery and signed inbound callback handling.",
@@ -3138,6 +3200,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "google-chat",
         runtime: None,
+        snapshot_builder: None,
         selection_order: 120,
         selection_label: "workspace thread bot",
         blurb: "Planned Google Chat surface for space-targeted sends and verified event delivery.",
@@ -3149,23 +3212,11 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
         onboarding: GOOGLE_CHAT_ONBOARDING_DESCRIPTOR,
         operations: GOOGLE_CHAT_OPERATIONS,
     },
-    ChannelRegistryDescriptor {
-        id: "signal",
-        runtime: None,
-        selection_order: 130,
-        selection_label: "private messenger bridge",
-        blurb: "Planned Signal surface for linked-device sends and inbound contact routing.",
-        implementation_status: ChannelCatalogImplementationStatus::Stub,
-        capabilities: PLANNED_CHANNEL_CAPABILITIES,
-        label: "Signal",
-        aliases: &["signal-cli"],
-        transport: "signal_service_bridge",
-        onboarding: SIGNAL_ONBOARDING_DESCRIPTOR,
-        operations: SIGNAL_OPERATIONS,
-    },
+    SIGNAL_CHANNEL_REGISTRY_DESCRIPTOR,
     ChannelRegistryDescriptor {
         id: "teams",
         runtime: None,
+        snapshot_builder: None,
         selection_order: 140,
         selection_label: "enterprise meeting bot",
         blurb: "Planned Microsoft Teams surface for bot-framework conversations and tenant-scoped routing.",
@@ -3180,6 +3231,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "mattermost",
         runtime: None,
+        snapshot_builder: None,
         selection_order: 150,
         selection_label: "self-hosted workspace bot",
         blurb: "Planned Mattermost surface for self-hosted team chat sends and websocket event handling.",
@@ -3194,6 +3246,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "nextcloud-talk",
         runtime: None,
+        snapshot_builder: None,
         selection_order: 160,
         selection_label: "self-hosted room bot",
         blurb: "Planned Nextcloud Talk surface for room delivery on self-hosted collaboration stacks.",
@@ -3208,6 +3261,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "synology-chat",
         runtime: None,
+        snapshot_builder: None,
         selection_order: 165,
         selection_label: "nas webhook bot",
         blurb: "Planned Synology Chat surface for self-hosted NAS chat delivery through outgoing and incoming webhooks.",
@@ -3222,6 +3276,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "irc",
         runtime: None,
+        snapshot_builder: None,
         selection_order: 170,
         selection_label: "relay and channel bot",
         blurb: "Planned IRC surface for classic channel relays and direct nick interactions.",
@@ -3236,6 +3291,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "imessage",
         runtime: None,
+        snapshot_builder: None,
         selection_order: 180,
         selection_label: "apple message bridge",
         blurb: "Planned BlueBubbles-backed iMessage surface for Apple message delivery and sync.",
@@ -3250,6 +3306,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "nostr",
         runtime: None,
+        snapshot_builder: None,
         selection_order: 190,
         selection_label: "relay-signed social bot",
         blurb: "Planned Nostr surface for relay publication, inbound subscriptions, and key-based routing.",
@@ -3264,6 +3321,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "twitch",
         runtime: None,
+        snapshot_builder: None,
         selection_order: 200,
         selection_label: "livestream chat bot",
         blurb: "Planned Twitch surface for stream chat participation and channel-scoped routing.",
@@ -3278,6 +3336,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "tlon",
         runtime: None,
+        snapshot_builder: None,
         selection_order: 205,
         selection_label: "urbit ship bot",
         blurb: "Planned Tlon surface for Urbit DMs and group mentions with ship-backed routing.",
@@ -3292,6 +3351,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "zalo",
         runtime: None,
+        snapshot_builder: None,
         selection_order: 210,
         selection_label: "official account bot",
         blurb: "Planned Zalo official account surface for business messaging and webhook-backed delivery.",
@@ -3306,6 +3366,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "zalo-personal",
         runtime: None,
+        snapshot_builder: None,
         selection_order: 220,
         selection_label: "personal chat bridge",
         blurb: "Planned Zalo personal bridge surface for direct personal-message automation flows.",
@@ -3320,6 +3381,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "webchat",
         runtime: None,
+        snapshot_builder: None,
         selection_order: 230,
         selection_label: "embedded web inbox",
         blurb: "Planned web chat surface for browser-hosted sessions with signed conversation routing.",
@@ -3568,24 +3630,22 @@ fn channel_status_snapshots_with_now(
     now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let mut snapshots = Vec::new();
-    for descriptor in runtime_backed_channel_registry_descriptors() {
-        let Some(runtime) = descriptor.runtime else {
+    for descriptor in sorted_channel_registry_descriptors() {
+        let Some(snapshot_builder) = descriptor.snapshot_builder else {
             continue;
         };
-        snapshots.extend((runtime.snapshot_builder)(
-            descriptor,
-            config,
-            runtime_dir,
-            now_ms,
-        ));
+        let built_snapshots = snapshot_builder(descriptor, config, runtime_dir, now_ms);
+        snapshots.extend(built_snapshots);
     }
     snapshots
 }
 
+#[cfg(test)]
 fn runtime_backed_channel_registry_descriptors() -> Vec<&'static ChannelRegistryDescriptor> {
-    let mut descriptors = sdk::runtime_backed_channel_registry_descriptors();
-    descriptors.sort_by_key(|descriptor| (descriptor.selection_order, descriptor.id));
-    descriptors
+    sorted_channel_registry_descriptors()
+        .into_iter()
+        .filter(|descriptor| descriptor.runtime.is_some())
+        .collect()
 }
 
 fn build_telegram_snapshots(
@@ -3867,6 +3927,486 @@ fn build_wecom_snapshots(
             }
         })
         .collect()
+}
+
+fn build_discord_snapshots(
+    descriptor: &ChannelRegistryDescriptor,
+    config: &LoongClawConfig,
+    _runtime_dir: &Path,
+    _now_ms: u64,
+) -> Vec<ChannelStatusSnapshot> {
+    let compiled = cfg!(feature = "channel-discord");
+    let default_selection = config.discord.default_configured_account_selection();
+    let default_configured_account_id = default_selection.id.clone();
+    let default_account_source = default_selection.source;
+    config
+        .discord
+        .configured_account_ids()
+        .into_iter()
+        .map(|configured_account_id| {
+            let is_default_account = configured_account_id == default_configured_account_id;
+            match config
+                .discord
+                .resolve_account(Some(configured_account_id.as_str()))
+            {
+                Ok(resolved) => build_discord_snapshot_for_account(
+                    descriptor,
+                    compiled,
+                    resolved,
+                    is_default_account,
+                    default_account_source,
+                ),
+                Err(error) => build_invalid_discord_snapshot(
+                    descriptor,
+                    compiled,
+                    configured_account_id.as_str(),
+                    is_default_account,
+                    default_account_source,
+                    error,
+                ),
+            }
+        })
+        .collect()
+}
+
+fn build_slack_snapshots(
+    descriptor: &ChannelRegistryDescriptor,
+    config: &LoongClawConfig,
+    _runtime_dir: &Path,
+    _now_ms: u64,
+) -> Vec<ChannelStatusSnapshot> {
+    let compiled = cfg!(feature = "channel-slack");
+    let default_selection = config.slack.default_configured_account_selection();
+    let default_configured_account_id = default_selection.id.clone();
+    let default_account_source = default_selection.source;
+    config
+        .slack
+        .configured_account_ids()
+        .into_iter()
+        .map(|configured_account_id| {
+            let is_default_account = configured_account_id == default_configured_account_id;
+            match config
+                .slack
+                .resolve_account(Some(configured_account_id.as_str()))
+            {
+                Ok(resolved) => build_slack_snapshot_for_account(
+                    descriptor,
+                    compiled,
+                    resolved,
+                    is_default_account,
+                    default_account_source,
+                ),
+                Err(error) => build_invalid_slack_snapshot(
+                    descriptor,
+                    compiled,
+                    configured_account_id.as_str(),
+                    is_default_account,
+                    default_account_source,
+                    error,
+                ),
+            }
+        })
+        .collect()
+}
+
+fn build_whatsapp_snapshots(
+    descriptor: &ChannelRegistryDescriptor,
+    config: &LoongClawConfig,
+    _runtime_dir: &Path,
+    _now_ms: u64,
+) -> Vec<ChannelStatusSnapshot> {
+    let compiled = cfg!(feature = "channel-whatsapp");
+    let default_selection = config.whatsapp.default_configured_account_selection();
+    let default_configured_account_id = default_selection.id.clone();
+    let default_account_source = default_selection.source;
+    config
+        .whatsapp
+        .configured_account_ids()
+        .into_iter()
+        .map(|configured_account_id| {
+            let is_default_account = configured_account_id == default_configured_account_id;
+            match config
+                .whatsapp
+                .resolve_account(Some(configured_account_id.as_str()))
+            {
+                Ok(resolved) => build_whatsapp_snapshot_for_account(
+                    descriptor,
+                    compiled,
+                    resolved,
+                    is_default_account,
+                    default_account_source,
+                ),
+                Err(error) => build_invalid_whatsapp_snapshot(
+                    descriptor,
+                    compiled,
+                    configured_account_id.as_str(),
+                    is_default_account,
+                    default_account_source,
+                    error,
+                ),
+            }
+        })
+        .collect()
+}
+
+fn build_signal_snapshots(
+    descriptor: &ChannelRegistryDescriptor,
+    config: &LoongClawConfig,
+    _runtime_dir: &Path,
+    _now_ms: u64,
+) -> Vec<ChannelStatusSnapshot> {
+    let compiled = cfg!(feature = "channel-signal");
+    let default_selection = config.signal.default_configured_account_selection();
+    let default_configured_account_id = default_selection.id.clone();
+    let default_account_source = default_selection.source;
+    config
+        .signal
+        .configured_account_ids()
+        .into_iter()
+        .map(|configured_account_id| {
+            let is_default_account = configured_account_id == default_configured_account_id;
+            match config
+                .signal
+                .resolve_account(Some(configured_account_id.as_str()))
+            {
+                Ok(resolved) => build_signal_snapshot_for_account(
+                    descriptor,
+                    compiled,
+                    resolved,
+                    is_default_account,
+                    default_account_source,
+                ),
+                Err(error) => build_invalid_signal_snapshot(
+                    descriptor,
+                    compiled,
+                    configured_account_id.as_str(),
+                    is_default_account,
+                    default_account_source,
+                    error,
+                ),
+            }
+        })
+        .collect()
+}
+
+fn build_discord_snapshot_for_account(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    resolved: ResolvedDiscordChannelConfig,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+) -> ChannelStatusSnapshot {
+    let mut send_issues = Vec::new();
+    if resolved.bot_token().is_none() {
+        send_issues.push("bot_token is missing".to_owned());
+    }
+
+    let api_base_url = resolved.resolved_api_base_url();
+    let api_base_url_parse = reqwest::Url::parse(api_base_url.as_str());
+    if let Err(error) = api_base_url_parse {
+        send_issues.push(format!("api_base_url is invalid: {error}"));
+    }
+
+    let send_operation = if !compiled {
+        unsupported_operation(
+            DISCORD_SEND_OPERATION,
+            "binary built without feature `channel-discord`".to_owned(),
+        )
+    } else if !resolved.enabled {
+        disabled_operation(
+            DISCORD_SEND_OPERATION,
+            "disabled by discord account configuration".to_owned(),
+        )
+    } else if !send_issues.is_empty() {
+        misconfigured_operation(DISCORD_SEND_OPERATION, send_issues)
+    } else {
+        ready_operation(DISCORD_SEND_OPERATION)
+    };
+
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            DISCORD_SERVE_OPERATION,
+            "binary built without feature `channel-discord`".to_owned(),
+        )
+    } else {
+        unsupported_operation(
+            DISCORD_SERVE_OPERATION,
+            "discord serve runtime is not implemented yet".to_owned(),
+        )
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={}", resolved.configured_account_id),
+        format!("configured_account={}", resolved.configured_account_label),
+        format!("account_id={}", resolved.account.id),
+        format!("account={}", resolved.account.label),
+    ];
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: resolved.configured_account_id.clone(),
+        configured_account_label: resolved.configured_account_label.clone(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: resolved.enabled,
+        api_base_url: Some(api_base_url),
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
+fn build_slack_snapshot_for_account(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    resolved: ResolvedSlackChannelConfig,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+) -> ChannelStatusSnapshot {
+    let mut send_issues = Vec::new();
+    if resolved.bot_token().is_none() {
+        send_issues.push("bot_token is missing".to_owned());
+    }
+
+    let api_base_url = resolved.resolved_api_base_url();
+    let api_base_url_parse = reqwest::Url::parse(api_base_url.as_str());
+    if let Err(error) = api_base_url_parse {
+        send_issues.push(format!("api_base_url is invalid: {error}"));
+    }
+
+    let send_operation = if !compiled {
+        unsupported_operation(
+            SLACK_SEND_OPERATION,
+            "binary built without feature `channel-slack`".to_owned(),
+        )
+    } else if !resolved.enabled {
+        disabled_operation(
+            SLACK_SEND_OPERATION,
+            "disabled by slack account configuration".to_owned(),
+        )
+    } else if !send_issues.is_empty() {
+        misconfigured_operation(SLACK_SEND_OPERATION, send_issues)
+    } else {
+        ready_operation(SLACK_SEND_OPERATION)
+    };
+
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            SLACK_SERVE_OPERATION,
+            "binary built without feature `channel-slack`".to_owned(),
+        )
+    } else {
+        unsupported_operation(
+            SLACK_SERVE_OPERATION,
+            "slack serve runtime is not implemented yet".to_owned(),
+        )
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={}", resolved.configured_account_id),
+        format!("configured_account={}", resolved.configured_account_label),
+        format!("account_id={}", resolved.account.id),
+        format!("account={}", resolved.account.label),
+    ];
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: resolved.configured_account_id.clone(),
+        configured_account_label: resolved.configured_account_label.clone(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: resolved.enabled,
+        api_base_url: Some(api_base_url),
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
+fn build_whatsapp_snapshot_for_account(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    resolved: ResolvedWhatsappChannelConfig,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+) -> ChannelStatusSnapshot {
+    let mut send_issues = Vec::new();
+    if resolved.access_token().is_none() {
+        send_issues.push("access_token is missing".to_owned());
+    }
+    if resolved.phone_number_id().is_none() {
+        send_issues.push("phone_number_id is missing".to_owned());
+    }
+
+    let api_base_url = resolved.resolved_api_base_url();
+    let api_base_url_parse = reqwest::Url::parse(api_base_url.as_str());
+    if let Err(error) = api_base_url_parse {
+        send_issues.push(format!("api_base_url is invalid: {error}"));
+    }
+
+    let send_operation = if !compiled {
+        unsupported_operation(
+            WHATSAPP_SEND_OPERATION,
+            "binary built without feature `channel-whatsapp`".to_owned(),
+        )
+    } else if !resolved.enabled {
+        disabled_operation(
+            WHATSAPP_SEND_OPERATION,
+            "disabled by whatsapp account configuration".to_owned(),
+        )
+    } else if !send_issues.is_empty() {
+        misconfigured_operation(WHATSAPP_SEND_OPERATION, send_issues)
+    } else {
+        ready_operation(WHATSAPP_SEND_OPERATION)
+    };
+
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            WHATSAPP_SERVE_OPERATION,
+            "binary built without feature `channel-whatsapp`".to_owned(),
+        )
+    } else {
+        unsupported_operation(
+            WHATSAPP_SERVE_OPERATION,
+            "whatsapp serve runtime is not implemented yet".to_owned(),
+        )
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={}", resolved.configured_account_id),
+        format!("configured_account={}", resolved.configured_account_label),
+        format!("account_id={}", resolved.account.id),
+        format!("account={}", resolved.account.label),
+    ];
+    if let Some(phone_number_id) = resolved.phone_number_id() {
+        notes.push(format!("phone_number_id={phone_number_id}"));
+    }
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: resolved.configured_account_id.clone(),
+        configured_account_label: resolved.configured_account_label.clone(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: resolved.enabled,
+        api_base_url: Some(api_base_url),
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
+fn build_signal_snapshot_for_account(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    resolved: ResolvedSignalChannelConfig,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+) -> ChannelStatusSnapshot {
+    let mut send_issues = Vec::new();
+    if resolved.signal_account().is_none() {
+        send_issues.push("account is missing".to_owned());
+    }
+
+    let service_url = resolved.service_url();
+    if service_url.is_none() {
+        send_issues.push("service_url is missing".to_owned());
+    }
+    let parsed_service_url = service_url.as_deref().map(reqwest::Url::parse).transpose();
+    if let Err(error) = parsed_service_url {
+        send_issues.push(format!("service_url is invalid: {error}"));
+    }
+
+    let send_operation = if !compiled {
+        unsupported_operation(
+            SIGNAL_SEND_OPERATION,
+            "binary built without feature `channel-signal`".to_owned(),
+        )
+    } else if !resolved.enabled {
+        disabled_operation(
+            SIGNAL_SEND_OPERATION,
+            "disabled by signal account configuration".to_owned(),
+        )
+    } else if !send_issues.is_empty() {
+        misconfigured_operation(SIGNAL_SEND_OPERATION, send_issues)
+    } else {
+        ready_operation(SIGNAL_SEND_OPERATION)
+    };
+
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            SIGNAL_SERVE_OPERATION,
+            "binary built without feature `channel-signal`".to_owned(),
+        )
+    } else {
+        unsupported_operation(
+            SIGNAL_SERVE_OPERATION,
+            "signal serve runtime is not implemented yet".to_owned(),
+        )
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={}", resolved.configured_account_id),
+        format!("configured_account={}", resolved.configured_account_label),
+        format!("account_id={}", resolved.account.id),
+        format!("account={}", resolved.account.label),
+    ];
+    if let Some(signal_account) = resolved.signal_account() {
+        notes.push(format!("signal_account={signal_account}"));
+    }
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: resolved.configured_account_id.clone(),
+        configured_account_label: resolved.configured_account_label.clone(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: resolved.enabled,
+        api_base_url: service_url,
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
 }
 
 fn build_feishu_snapshot_for_account(
@@ -4484,6 +5024,234 @@ fn build_invalid_wecom_snapshot(
     }
 }
 
+fn build_invalid_discord_snapshot(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    configured_account_id: &str,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+    error: String,
+) -> ChannelStatusSnapshot {
+    let send_operation = if !compiled {
+        unsupported_operation(
+            DISCORD_SEND_OPERATION,
+            "binary built without feature `channel-discord`".to_owned(),
+        )
+    } else {
+        misconfigured_operation(DISCORD_SEND_OPERATION, vec![error.clone()])
+    };
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            DISCORD_SERVE_OPERATION,
+            "binary built without feature `channel-discord`".to_owned(),
+        )
+    } else {
+        unsupported_operation(
+            DISCORD_SERVE_OPERATION,
+            "discord serve runtime is not implemented yet".to_owned(),
+        )
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={configured_account_id}"),
+        format!("selection_error={error}"),
+    ];
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: configured_account_id.to_owned(),
+        configured_account_label: configured_account_id.to_owned(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: false,
+        api_base_url: None,
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
+fn build_invalid_slack_snapshot(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    configured_account_id: &str,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+    error: String,
+) -> ChannelStatusSnapshot {
+    let send_operation = if !compiled {
+        unsupported_operation(
+            SLACK_SEND_OPERATION,
+            "binary built without feature `channel-slack`".to_owned(),
+        )
+    } else {
+        misconfigured_operation(SLACK_SEND_OPERATION, vec![error.clone()])
+    };
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            SLACK_SERVE_OPERATION,
+            "binary built without feature `channel-slack`".to_owned(),
+        )
+    } else {
+        unsupported_operation(
+            SLACK_SERVE_OPERATION,
+            "slack serve runtime is not implemented yet".to_owned(),
+        )
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={configured_account_id}"),
+        format!("selection_error={error}"),
+    ];
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: configured_account_id.to_owned(),
+        configured_account_label: configured_account_id.to_owned(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: false,
+        api_base_url: None,
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
+fn build_invalid_whatsapp_snapshot(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    configured_account_id: &str,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+    error: String,
+) -> ChannelStatusSnapshot {
+    let send_operation = if !compiled {
+        unsupported_operation(
+            WHATSAPP_SEND_OPERATION,
+            "binary built without feature `channel-whatsapp`".to_owned(),
+        )
+    } else {
+        misconfigured_operation(WHATSAPP_SEND_OPERATION, vec![error.clone()])
+    };
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            WHATSAPP_SERVE_OPERATION,
+            "binary built without feature `channel-whatsapp`".to_owned(),
+        )
+    } else {
+        unsupported_operation(
+            WHATSAPP_SERVE_OPERATION,
+            "whatsapp serve runtime is not implemented yet".to_owned(),
+        )
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={configured_account_id}"),
+        format!("selection_error={error}"),
+    ];
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: configured_account_id.to_owned(),
+        configured_account_label: configured_account_id.to_owned(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: false,
+        api_base_url: None,
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
+fn build_invalid_signal_snapshot(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    configured_account_id: &str,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+    error: String,
+) -> ChannelStatusSnapshot {
+    let send_operation = if !compiled {
+        unsupported_operation(
+            SIGNAL_SEND_OPERATION,
+            "binary built without feature `channel-signal`".to_owned(),
+        )
+    } else {
+        misconfigured_operation(SIGNAL_SEND_OPERATION, vec![error.clone()])
+    };
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            SIGNAL_SERVE_OPERATION,
+            "binary built without feature `channel-signal`".to_owned(),
+        )
+    } else {
+        unsupported_operation(
+            SIGNAL_SERVE_OPERATION,
+            "signal serve runtime is not implemented yet".to_owned(),
+        )
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={configured_account_id}"),
+        format!("selection_error={error}"),
+    ];
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: configured_account_id.to_owned(),
+        configured_account_label: configured_account_id.to_owned(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: false,
+        api_base_url: None,
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
 fn ready_operation(operation: ChannelCatalogOperation) -> ChannelOperationStatus {
     ChannelOperationStatus {
         id: operation.id,
@@ -4863,19 +5631,19 @@ mod tests {
     }
 
     #[test]
-    fn resolve_channel_catalog_entry_returns_stub_metadata_for_alias_lookup() {
-        let discord = resolve_channel_catalog_entry("discord-bot").expect("discord stub entry");
+    fn resolve_channel_catalog_entry_returns_config_backed_metadata_for_alias_lookup() {
+        let discord = resolve_channel_catalog_entry("discord-bot").expect("discord entry");
         let encoded = serde_json::to_value(&discord).expect("serialize discord entry");
 
         assert_eq!(discord.id, "discord");
         assert_eq!(discord.selection_order, 40);
         assert_eq!(discord.selection_label, "community server bot");
-        assert!(discord.blurb.contains("Discord gateway"));
+        assert!(discord.blurb.contains("outbound message surface"));
         assert_eq!(
             discord.implementation_status,
-            ChannelCatalogImplementationStatus::Stub
+            ChannelCatalogImplementationStatus::ConfigBacked
         );
-        assert_eq!(discord.transport, "discord_gateway");
+        assert_eq!(discord.transport, "discord_http_api");
         assert_eq!(discord.operations[0].command, "discord-send");
         assert_eq!(discord.operations[1].command, "discord-serve");
         assert_eq!(
@@ -4889,14 +5657,14 @@ mod tests {
                         .filter_map(serde_json::Value::as_str)
                         .collect::<Vec<_>>()
                 }),
-            Some(vec!["stub", "stub"])
+            Some(vec!["implemented", "stub"])
         );
         assert_eq!(
             encoded
                 .get("onboarding")
                 .and_then(|onboarding| onboarding.get("strategy"))
                 .and_then(serde_json::Value::as_str),
-            Some("planned")
+            Some("manual_config")
         );
     }
 
@@ -4925,14 +5693,17 @@ mod tests {
 
         assert_eq!(
             discord.onboarding.strategy,
-            ChannelOnboardingStrategy::Planned
+            ChannelOnboardingStrategy::ManualConfig
         );
-        assert_eq!(discord.onboarding.repair_command, None);
+        assert_eq!(
+            discord.onboarding.repair_command,
+            Some("loongclaw doctor --fix")
+        );
         assert!(
             discord
                 .onboarding
                 .setup_hint
-                .contains("planned Discord gateway")
+                .contains("outbound direct send is shipped")
         );
     }
 
@@ -5032,7 +5803,7 @@ mod tests {
     }
 
     #[test]
-    fn channel_catalog_includes_discord_and_slack_stub_surfaces() {
+    fn channel_catalog_includes_discord_and_slack_config_backed_surfaces() {
         let catalog = list_channel_catalog();
         let telegram = catalog
             .iter()
@@ -5068,9 +5839,9 @@ mod tests {
         assert_eq!(matrix.operations[1].command, "matrix-serve");
         assert_eq!(
             discord.implementation_status,
-            ChannelCatalogImplementationStatus::Stub
+            ChannelCatalogImplementationStatus::ConfigBacked
         );
-        assert_eq!(discord.transport, "discord_gateway");
+        assert_eq!(discord.transport, "discord_http_api");
         assert_eq!(discord.aliases, vec!["discord-bot"]);
         assert_eq!(discord.selection_order, 40);
         assert_eq!(discord.selection_label, "community server bot");
@@ -5080,9 +5851,9 @@ mod tests {
 
         assert_eq!(
             slack.implementation_status,
-            ChannelCatalogImplementationStatus::Stub
+            ChannelCatalogImplementationStatus::ConfigBacked
         );
-        assert_eq!(slack.transport, "slack_events_api");
+        assert_eq!(slack.transport, "slack_web_api");
         assert_eq!(slack.aliases, vec!["slack-bot"]);
         assert_eq!(slack.operations.len(), 2);
         assert_eq!(slack.operations[0].command, "slack-send");
@@ -5134,7 +5905,7 @@ mod tests {
                         .filter_map(serde_json::Value::as_str)
                         .collect::<Vec<_>>()
                 }),
-            Some(vec!["multi_account", "send", "serve", "runtime_tracking"])
+            Some(vec!["multi_account", "send"])
         );
         assert_eq!(
             slack_json
@@ -5146,7 +5917,7 @@ mod tests {
                         .filter_map(serde_json::Value::as_str)
                         .collect::<Vec<_>>()
                 }),
-            Some(vec!["multi_account", "send", "serve", "runtime_tracking"])
+            Some(vec!["multi_account", "send"])
         );
     }
 
@@ -5512,14 +6283,6 @@ mod tests {
         let config = LoongClawConfig::default();
         let snapshots = channel_status_snapshots(&config);
         let catalog_only = catalog_only_channel_entries(&snapshots);
-        let discord = catalog_only
-            .iter()
-            .find(|entry| entry.id == "discord")
-            .expect("discord catalog entry");
-        let slack = catalog_only
-            .iter()
-            .find(|entry| entry.id == "slack")
-            .expect("slack catalog entry");
         let line = catalog_only
             .iter()
             .find(|entry| entry.id == "line")
@@ -5551,15 +6314,11 @@ mod tests {
                 .map(|entry| entry.id)
                 .collect::<Vec<_>>(),
             vec![
-                "discord",
-                "slack",
                 "line",
                 "dingtalk",
-                "whatsapp",
                 "email",
                 "webhook",
                 "google-chat",
-                "signal",
                 "teams",
                 "mattermost",
                 "nextcloud-talk",
@@ -5574,10 +6333,10 @@ mod tests {
                 "webchat",
             ]
         );
-        assert_eq!(discord.operations[0].command, "discord-send");
-        assert_eq!(discord.operations[1].command, "discord-serve");
-        assert_eq!(slack.operations[0].command, "slack-send");
-        assert_eq!(slack.operations[1].command, "slack-serve");
+        assert!(!catalog_only.iter().any(|entry| entry.id == "discord"));
+        assert!(!catalog_only.iter().any(|entry| entry.id == "slack"));
+        assert!(!catalog_only.iter().any(|entry| entry.id == "whatsapp"));
+        assert!(!catalog_only.iter().any(|entry| entry.id == "signal"));
         assert_eq!(line.operations[0].command, "line-send");
         assert_eq!(webhook.operations[1].command, "webhook-serve");
         assert_eq!(google_chat.operations[0].command, "google-chat-send");
@@ -5597,7 +6356,9 @@ mod tests {
                 .iter()
                 .map(|snapshot| snapshot.id)
                 .collect::<Vec<_>>(),
-            vec!["telegram", "feishu", "matrix", "wecom"]
+            vec![
+                "telegram", "feishu", "matrix", "wecom", "discord", "slack", "whatsapp", "signal",
+            ]
         );
         assert_eq!(
             inventory
@@ -5606,15 +6367,11 @@ mod tests {
                 .map(|entry| entry.id)
                 .collect::<Vec<_>>(),
             vec![
-                "discord",
-                "slack",
                 "line",
                 "dingtalk",
-                "whatsapp",
                 "email",
                 "webhook",
                 "google-chat",
-                "signal",
                 "teams",
                 "mattermost",
                 "nextcloud-talk",
@@ -5727,10 +6484,14 @@ mod tests {
             .expect("discord surface");
         assert_eq!(
             discord.catalog.implementation_status,
-            ChannelCatalogImplementationStatus::Stub
+            ChannelCatalogImplementationStatus::ConfigBacked
         );
-        assert!(discord.configured_accounts.is_empty());
-        assert_eq!(discord.default_configured_account_id, None);
+        assert_eq!(discord.configured_accounts.len(), 1);
+        assert_eq!(
+            discord.default_configured_account_id.as_deref(),
+            Some("default")
+        );
+        assert_eq!(discord.configured_accounts[0].id, "discord");
 
         let wecom = inventory
             .channel_surfaces
@@ -5807,26 +6568,33 @@ mod tests {
                 label: "Discord",
                 selection_order: 40,
                 selection_label: "community server bot",
-                blurb: "Planned Discord gateway and thread-aware bot surface with documented credential expectations.",
-                implementation_status: ChannelCatalogImplementationStatus::Stub,
-                capabilities: vec![
-                    ChannelCapability::Send,
-                    ChannelCapability::Serve,
-                    ChannelCapability::RuntimeTracking,
-                ],
+                blurb: "Shipped Discord outbound message surface with config-backed direct sends; inbound gateway/runtime support remains planned.",
+                implementation_status: ChannelCatalogImplementationStatus::ConfigBacked,
+                capabilities: vec![ChannelCapability::MultiAccount, ChannelCapability::Send],
                 aliases: vec![],
-                transport: "discord_gateway",
+                transport: "discord_http_api",
                 onboarding: DISCORD_ONBOARDING_DESCRIPTOR,
                 supported_target_kinds: vec![ChannelCatalogTargetKind::Conversation],
-                operations: vec![ChannelCatalogOperation {
-                    id: "send",
-                    label: "direct send",
-                    command: "discord-send",
-                    availability: ChannelCatalogOperationAvailability::Stub,
-                    tracks_runtime: false,
-                    requirements: &[],
-                    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
-                }],
+                operations: vec![
+                    ChannelCatalogOperation {
+                        id: "send",
+                        label: "direct send",
+                        command: "discord-send",
+                        availability: ChannelCatalogOperationAvailability::Implemented,
+                        tracks_runtime: false,
+                        requirements: &[],
+                        supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+                    },
+                    ChannelCatalogOperation {
+                        id: "serve",
+                        label: "reply loop",
+                        command: "discord-serve",
+                        availability: ChannelCatalogOperationAvailability::Stub,
+                        tracks_runtime: false,
+                        requirements: &[],
+                        supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+                    },
+                ],
             },
         ];
         let snapshots = vec![ChannelStatusSnapshot {
@@ -5859,7 +6627,7 @@ mod tests {
         assert_eq!(catalog_only[0].id, "discord");
         assert_eq!(
             catalog_only[0].implementation_status,
-            ChannelCatalogImplementationStatus::Stub
+            ChannelCatalogImplementationStatus::ConfigBacked
         );
         assert_eq!(catalog_only[0].operations[0].command, "discord-send");
     }
@@ -6001,6 +6769,133 @@ mod tests {
             serve.issues.iter().any(|issue| issue.contains("user_id")),
             "serve issues should require user_id when ignore_self_messages is enabled"
         );
+    }
+
+    #[test]
+    fn discord_status_splits_config_backed_send_and_stub_serve() {
+        let mut config = LoongClawConfig::default();
+        config.discord.enabled = true;
+
+        let snapshots = channel_status_snapshots(&config);
+        let discord = snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == "discord")
+            .expect("discord snapshot");
+        let send = discord.operation("send").expect("discord send operation");
+        let serve = discord.operation("serve").expect("discord serve operation");
+
+        assert_eq!(send.health, ChannelOperationHealth::Misconfigured);
+        assert!(
+            send.issues.iter().any(|issue| issue.contains("bot_token")),
+            "send issues should mention the missing discord bot token"
+        );
+        assert_eq!(serve.health, ChannelOperationHealth::Unsupported);
+        assert!(
+            serve
+                .issues
+                .iter()
+                .any(|issue| issue.contains("not implemented")),
+            "serve issues should explain that discord serve is not implemented"
+        );
+        assert_eq!(
+            discord.api_base_url.as_deref(),
+            Some("https://discord.com/api/v10")
+        );
+        assert!(send.runtime.is_none());
+        assert!(serve.runtime.is_none());
+    }
+
+    #[test]
+    fn slack_status_reports_ready_send_and_stub_serve() {
+        let mut config = LoongClawConfig::default();
+        config.slack.enabled = true;
+        config.slack.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+            "xoxb-test-token".to_owned(),
+        ));
+
+        let snapshots = channel_status_snapshots(&config);
+        let slack = snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == "slack")
+            .expect("slack snapshot");
+        let send = slack.operation("send").expect("slack send operation");
+        let serve = slack.operation("serve").expect("slack serve operation");
+
+        assert_eq!(send.health, ChannelOperationHealth::Ready);
+        assert_eq!(serve.health, ChannelOperationHealth::Unsupported);
+        assert_eq!(slack.api_base_url.as_deref(), Some("https://slack.com/api"));
+        assert!(send.runtime.is_none());
+        assert!(serve.runtime.is_none());
+    }
+
+    #[test]
+    fn signal_status_requires_account_for_send() {
+        let mut config = LoongClawConfig::default();
+        config.signal.enabled = true;
+
+        let snapshots = channel_status_snapshots(&config);
+        let signal = snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == "signal")
+            .expect("signal snapshot");
+        let send = signal.operation("send").expect("signal send operation");
+        let serve = signal.operation("serve").expect("signal serve operation");
+
+        assert_eq!(send.health, ChannelOperationHealth::Misconfigured);
+        assert!(
+            send.issues
+                .iter()
+                .any(|issue| issue.contains("account is missing")),
+            "send issues should require a signal account"
+        );
+        assert!(
+            send.issues
+                .iter()
+                .all(|issue| !issue.contains("service_url is missing")),
+            "default signal service URL should satisfy the service endpoint requirement"
+        );
+        assert_eq!(serve.health, ChannelOperationHealth::Unsupported);
+        assert_eq!(
+            signal.api_base_url.as_deref(),
+            Some("http://127.0.0.1:8080")
+        );
+        assert!(serve.runtime.is_none());
+    }
+
+    #[test]
+    fn whatsapp_status_reports_ready_send_when_access_token_and_phone_number_id_are_configured() {
+        let mut config = LoongClawConfig::default();
+        config.whatsapp.enabled = true;
+        config.whatsapp.access_token = Some(loongclaw_contracts::SecretRef::Inline(
+            "whatsapp-access-token".to_owned(),
+        ));
+        config.whatsapp.phone_number_id = Some("1234567890".to_owned());
+
+        let snapshots = channel_status_snapshots(&config);
+        let whatsapp = snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == "whatsapp")
+            .expect("whatsapp snapshot");
+        let send = whatsapp.operation("send").expect("whatsapp send operation");
+        let serve = whatsapp
+            .operation("serve")
+            .expect("whatsapp serve operation");
+
+        assert_eq!(send.health, ChannelOperationHealth::Ready);
+        assert_eq!(serve.health, ChannelOperationHealth::Unsupported);
+        assert_eq!(
+            whatsapp.api_base_url.as_deref(),
+            Some("https://graph.facebook.com/v25.0")
+        );
+        assert!(
+            whatsapp
+                .notes
+                .iter()
+                .any(|note| note == "phone_number_id=1234567890"),
+            "status notes should expose the resolved phone number id"
+        );
+        assert!(send.runtime.is_none());
+        assert!(serve.runtime.is_none());
     }
 
     #[test]

@@ -7368,10 +7368,10 @@ fn build_channel_onboarding_follow_up_lines_reports_manual_and_planned_channels(
         line.contains("Discord [discord]")
             && line.contains("selection_order=40")
             && line.contains("selection_label=\"community server bot\"")
-            && line.contains("strategy=planned")
-            && line.contains("repair_command=-")
-            && line.contains("status_command=\"loongclaw channels --json\"")
-            && line.contains("blurb=\"Planned Discord gateway")
+            && line.contains("strategy=manual_config")
+            && line.contains("repair_command=\"loongclaw doctor --fix\"")
+            && line.contains("status_command=\"loongclaw doctor\"")
+            && line.contains("blurb=\"Shipped Discord outbound message surface")
     }));
     assert!(lines.iter().any(|line| {
         line.contains("Webhook [webhook]")

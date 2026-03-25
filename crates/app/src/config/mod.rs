@@ -14,17 +14,22 @@ pub use audit::{AuditConfig, AuditMode};
 pub use channels::{
     ChannelAcpConfig, ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource,
     ChannelDescriptor, ChannelResolvedAccountRoute, ChannelRuntimeKind, CliChannelConfig,
-    FeishuAccountConfig, FeishuChannelConfig, FeishuChannelServeMode, FeishuDomain,
-    MatrixAccountConfig, MatrixChannelConfig, ResolvedFeishuChannelConfig,
-    ResolvedMatrixChannelConfig, ResolvedTelegramChannelConfig, ResolvedWecomChannelConfig,
-    TelegramAccountConfig, TelegramChannelConfig, TelegramStreamingMode, WecomAccountConfig,
-    WecomChannelConfig, channel_descriptor, service_channel_descriptors,
+    DiscordAccountConfig, DiscordChannelConfig, FeishuAccountConfig, FeishuChannelConfig,
+    FeishuChannelServeMode, FeishuDomain, MatrixAccountConfig, MatrixChannelConfig,
+    ResolvedDiscordChannelConfig, ResolvedFeishuChannelConfig, ResolvedMatrixChannelConfig,
+    ResolvedSignalChannelConfig, ResolvedSlackChannelConfig, ResolvedTelegramChannelConfig,
+    ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig, SignalAccountConfig,
+    SignalChannelConfig, SlackAccountConfig, SlackChannelConfig, TelegramAccountConfig,
+    TelegramChannelConfig, TelegramStreamingMode, WecomAccountConfig, WecomChannelConfig,
+    WhatsappAccountConfig, WhatsappChannelConfig, channel_descriptor, service_channel_descriptors,
 };
 #[allow(unused_imports)]
 pub(crate) use channels::{
-    FEISHU_APP_ID_ENV, FEISHU_APP_SECRET_ENV, FEISHU_ENCRYPT_KEY_ENV,
-    FEISHU_VERIFICATION_TOKEN_ENV, MATRIX_ACCESS_TOKEN_ENV, TELEGRAM_BOT_TOKEN_ENV,
-    WECOM_BOT_ID_ENV, WECOM_SECRET_ENV, normalize_channel_account_id,
+    DISCORD_BOT_TOKEN_ENV, FEISHU_APP_ID_ENV, FEISHU_APP_SECRET_ENV, FEISHU_ENCRYPT_KEY_ENV,
+    FEISHU_VERIFICATION_TOKEN_ENV, MATRIX_ACCESS_TOKEN_ENV, SIGNAL_ACCOUNT_ENV,
+    SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV, TELEGRAM_BOT_TOKEN_ENV, WECOM_BOT_ID_ENV,
+    WECOM_SECRET_ENV, WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV,
+    WHATSAPP_PHONE_NUMBER_ID_ENV, WHATSAPP_VERIFY_TOKEN_ENV, normalize_channel_account_id,
 };
 #[allow(unused_imports)]
 pub use conversation::{ConversationConfig, ConversationTurnLoopConfig};
@@ -133,6 +138,30 @@ mod tests {
         assert_eq!(wecom.runtime_kind, ChannelRuntimeKind::Service);
         assert_eq!(wecom.serve_subcommand, Some("wecom-serve"));
 
+        let discord = channel_descriptor("discord").expect("discord descriptor");
+        assert_eq!(discord.id, "discord");
+        assert_eq!(discord.surface_label, "discord channel");
+        assert_eq!(discord.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(discord.serve_subcommand, None);
+
+        let slack = channel_descriptor("slack").expect("slack descriptor");
+        assert_eq!(slack.id, "slack");
+        assert_eq!(slack.surface_label, "slack channel");
+        assert_eq!(slack.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(slack.serve_subcommand, None);
+
+        let whatsapp = channel_descriptor("whatsapp").expect("whatsapp descriptor");
+        assert_eq!(whatsapp.id, "whatsapp");
+        assert_eq!(whatsapp.surface_label, "whatsapp channel");
+        assert_eq!(whatsapp.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(whatsapp.serve_subcommand, None);
+
+        let signal = channel_descriptor("signal").expect("signal descriptor");
+        assert_eq!(signal.id, "signal");
+        assert_eq!(signal.surface_label, "signal channel");
+        assert_eq!(signal.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(signal.serve_subcommand, None);
+
         assert!(channel_descriptor("unknown").is_none());
     }
 
@@ -146,21 +175,35 @@ mod tests {
         config.feishu.enabled = true;
         config.matrix.enabled = true;
         config.wecom.enabled = true;
+        config.discord.enabled = true;
+        config.slack.enabled = true;
+        config.whatsapp.enabled = true;
+        config.signal.enabled = true;
 
         assert_eq!(
             config.enabled_channel_ids(),
-            vec!["cli", "telegram", "feishu", "matrix", "wecom"]
+            vec![
+                "cli", "telegram", "feishu", "matrix", "wecom", "discord", "slack", "whatsapp",
+                "signal",
+            ]
         );
         assert_eq!(
             config.enabled_service_channel_ids(),
-            vec!["telegram", "feishu", "matrix", "wecom"]
+            vec![
+                "telegram", "feishu", "matrix", "wecom", "discord", "slack", "whatsapp", "signal",
+            ]
         );
 
         let service_ids = service_channel_descriptors()
             .into_iter()
             .map(|descriptor| descriptor.id)
             .collect::<Vec<_>>();
-        assert_eq!(service_ids, vec!["telegram", "feishu", "matrix", "wecom"]);
+        assert_eq!(
+            service_ids,
+            vec![
+                "telegram", "feishu", "matrix", "wecom", "discord", "slack", "whatsapp", "signal",
+            ]
+        );
     }
 
     #[test]
@@ -178,7 +221,12 @@ mod tests {
             .into_iter()
             .map(|descriptor| descriptor.id)
             .collect::<Vec<_>>();
-        assert_eq!(service_ids, vec!["telegram", "feishu", "matrix", "wecom"]);
+        assert_eq!(
+            service_ids,
+            vec![
+                "telegram", "feishu", "matrix", "wecom", "discord", "slack", "whatsapp", "signal",
+            ]
+        );
     }
 
     #[test]

@@ -17,6 +17,7 @@ runtime paths. That was acceptable while LoongClaw only needed two concrete
 channels, but it does not scale to:
 
 - more runtime-backed channels
+- more config-backed outbound channels
 - higher-quality stubs for not-yet-implemented channels
 - machine-readable operator surfaces
 - future plugin or hotplug expansion
@@ -112,18 +113,22 @@ When adding metadata to a channel, the desired flow is:
 
 Do not start by teaching each CLI surface the new metadata independently.
 
-### 5. Runtime Builders Are Only For Runtime-Backed Channels
+### 5. Snapshot Builders Are For Concrete Surfaces, Not Just Runtime Loops
 
-A channel only needs a runtime snapshot builder when it has real account-aware
-or runtime-aware state to report.
+A channel only needs a snapshot builder when it has real account-aware state to
+report.
 
 That means the registry should cleanly separate:
 
-- runtime-backed channels, which provide snapshot builders
+- runtime-backed channels, which provide snapshot builders and may attach
+  background runtime state
+- config-backed channels, which provide snapshot builders for config and account
+  readiness but do not pretend they have a serve runtime
 - stub channels, which only provide catalog metadata
 
-This lets LoongClaw expose future channels early without pretending they already
-have runtime support.
+This lets LoongClaw expose shipped send-only integrations without inventing fake
+runtime ownership, while still exposing future channels early without
+pretending they already have concrete config or runtime support.
 
 ### 6. Runtime Owners Must Bind Through Runtime Registries
 
@@ -147,23 +152,23 @@ catalog, doctor, and inventory views.
 
 LoongClaw now uses an internal compile-time channel SDK at
 `crates/app/src/channel/sdk.rs` for channels that have real config, validation,
-or background runtime support.
+or background/runtime support.
 
 That SDK is intentionally smaller than a dynamic plugin system. It owns:
 
 - shared `ChannelDescriptor` metadata used by config and migration surfaces
 - config enablement and validation hooks for concrete channel integrations
 - background runtime eligibility checks for multi-channel supervisors
-- the runtime-backed registry descriptors that should participate in account
-  snapshots and runtime status views
+- the concrete channel integrations that should participate in account
+  snapshots and runtime or config status views
 
 This means:
 
-- runtime-backed channels must be added through the SDK instead of daemon-local
-  registration tables
+- runtime-backed and config-backed channels must be added through the SDK
+  instead of daemon-local registration tables
 - `cli` can stay SDK-managed without appearing in the channel catalog
-- planned or stub channels stay registry-only until there is real config or
-  runtime ownership to wire up
+- pure stubs stay registry-only until there is real config or runtime ownership
+  to wire up
 
 The goal is to minimize future channel-integration edits without prematurely
 committing LoongClaw to a dynamic external plugin boundary.
@@ -224,6 +229,25 @@ If the new channel uses an exclusive long-connection transport, the runtime
 contract should also make that exclusivity visible in operator status and send
 behavior instead of hiding it behind ad hoc command-specific logic.
 
+### Adding A New Config-Backed Channel
+
+When introducing a real send-only or config-only integration without a
+background runtime:
+
+1. Add static operation descriptors with capability, availability, doctor, and
+   requirement metadata.
+2. Add an SDK integration descriptor that wires shared config metadata,
+   validation, enablement, and the registry descriptor.
+3. Implement a snapshot builder that emits per-account config readiness without
+   attaching fake runtime state.
+4. Mark shipped operations as `implemented` and unshipped runtime operations as
+   `stub` or `unsupported`, depending on whether the capability is planned or
+   impossible in the current architecture.
+5. Verify that `channel_catalog`, `channel_surfaces`, text rendering, and
+   `doctor` all pick up the new metadata through shared inventory assembly.
+6. Add regression tests for registry lookup, JSON surfaces, text rendering,
+   and config/service descriptor order.
+
 ### Adding A New Stub Channel
 
 When the runtime implementation does not exist yet:
@@ -235,11 +259,10 @@ When the runtime implementation does not exist yet:
 4. Do not add placeholder runtime builders or fake health logic.
 5. Verify the channel appears correctly in catalog and grouped surfaces.
 
-This is the preferred path for channels such as Discord, Slack, LINE,
-DingTalk, WhatsApp, Email, generic Webhook, Google Chat, Signal, Microsoft
-Teams, Mattermost, Nextcloud Talk, Synology Chat, IRC, iMessage /
-BlueBubbles, Nostr, Twitch, Tlon, Zalo, Zalo Personal, or WebChat surfaces
-before full runtime support lands.
+This is the preferred path for channels such as LINE, DingTalk, Email, generic
+Webhook, Google Chat, Microsoft Teams, Mattermost, Nextcloud Talk, Synology
+Chat, IRC, iMessage / BlueBubbles, Nostr, Twitch, Tlon, Zalo, Zalo Personal,
+or WebChat surfaces before real config or runtime support lands.
 
 ## Anti-Patterns
 
@@ -254,7 +277,8 @@ The following patterns violate the contract:
 - adding new daemon-local background registration tables for channels that are
   already described by the SDK
 - hiding stub channels from catalog surfaces until runtime code exists
-- introducing runtime builders for channels that have no runtime state
+- attaching fake runtime-tracking semantics to channels that only have
+  config-backed send support
 - modeling a shipped long-connection surface as webhook-style static metadata
   after the runtime contract has already moved to account-aware session state
 

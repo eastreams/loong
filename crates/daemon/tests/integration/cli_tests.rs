@@ -1414,7 +1414,7 @@ fn run_channel_send_cli_forwards_common_arguments_to_runner() {
     let error = runtime
         .block_on(run_channel_send_cli(
             ChannelSendCliSpec {
-                family: mvp::channel::FEISHU_COMMAND_FAMILY_DESCRIPTOR,
+                family: mvp::channel::FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
                 run: fake_send_cli_runner,
             },
             ChannelSendCliArgs {
@@ -1550,28 +1550,28 @@ fn multi_channel_serve_cli_help_mentions_session_and_channel_account_flags() {
 fn default_channel_send_target_kind_uses_command_family_send_metadata() {
     assert_eq!(
         default_channel_send_target_kind(ChannelSendCliSpec {
-            family: mvp::channel::FEISHU_COMMAND_FAMILY_DESCRIPTOR,
+            family: mvp::channel::FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
             run: fake_send_cli_runner,
         }),
         mvp::channel::ChannelOutboundTargetKind::ReceiveId
     );
     assert_eq!(
         default_channel_send_target_kind(ChannelSendCliSpec {
-            family: mvp::channel::TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
+            family: mvp::channel::TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
             run: fake_send_cli_runner,
         }),
         mvp::channel::ChannelOutboundTargetKind::Conversation
     );
     assert_eq!(
         default_channel_send_target_kind(ChannelSendCliSpec {
-            family: mvp::channel::MATRIX_COMMAND_FAMILY_DESCRIPTOR,
+            family: mvp::channel::MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
             run: fake_send_cli_runner,
         }),
         mvp::channel::ChannelOutboundTargetKind::Conversation
     );
     assert_eq!(
         default_channel_send_target_kind(ChannelSendCliSpec {
-            family: mvp::channel::WECOM_COMMAND_FAMILY_DESCRIPTOR,
+            family: mvp::channel::WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
             run: fake_send_cli_runner,
         }),
         mvp::channel::ChannelOutboundTargetKind::Conversation
