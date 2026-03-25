@@ -214,6 +214,13 @@ This contract should explicitly preserve LoongClaw's preferred extension lanes:
 - ACP bridge/runtime lanes
 - HTTP JSON bridge lane when policy allows it
 
+`NativeFfi` is intentionally not part of that preferred default lane set. The
+current bootstrap policy keeps `allow_native_ffi_auto_apply` disabled by
+default, because direct FFI bindings weaken the runtime isolation boundary that
+WASM, process bridge, MCP, ACP, and policy-allowed HTTP JSON preserve. Native
+FFI can remain an explicit operator-controlled opt-in for trusted cases, but it
+should not be the default target for third-party plugin packages.
+
 It should explicitly reject the assumption that third-party plugins should run
 in-process with the daemon by default.
 
