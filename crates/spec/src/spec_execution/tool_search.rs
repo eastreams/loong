@@ -78,6 +78,12 @@ pub(super) fn execute_tool_search(
                 connector_name: provider.connector_name.clone(),
                 provider_id: provider.provider_id.clone(),
                 source_path: provider.metadata.get("plugin_source_path").cloned(),
+                source_kind: provider.metadata.get("plugin_source_kind").cloned(),
+                package_root: provider.metadata.get("plugin_package_root").cloned(),
+                package_manifest_path: provider
+                    .metadata
+                    .get("plugin_package_manifest_path")
+                    .cloned(),
                 bridge_kind: resolved_bridge_kind,
                 adapter_family,
                 entrypoint_hint,
@@ -113,6 +119,9 @@ pub(super) fn execute_tool_search(
                     connector_name: manifest.connector_name.clone(),
                     provider_id: manifest.provider_id.clone(),
                     source_path: Some(descriptor.path.clone()),
+                    source_kind: Some(descriptor.source_kind.as_str().to_owned()),
+                    package_root: Some(descriptor.package_root.clone()),
+                    package_manifest_path: descriptor.package_manifest_path.clone(),
                     bridge_kind,
                     adapter_family: adapter_family.clone(),
                     entrypoint_hint: entrypoint_hint.clone(),
@@ -130,6 +139,15 @@ pub(super) fn execute_tool_search(
             }
             if entry.source_path.is_none() {
                 entry.source_path = Some(descriptor.path.clone());
+            }
+            if entry.source_kind.is_none() {
+                entry.source_kind = Some(descriptor.source_kind.as_str().to_owned());
+            }
+            if entry.package_root.is_none() {
+                entry.package_root = Some(descriptor.package_root.clone());
+            }
+            if entry.package_manifest_path.is_none() {
+                entry.package_manifest_path = descriptor.package_manifest_path.clone();
             }
             if entry.summary.is_none() {
                 entry.summary = manifest.summary.clone();
@@ -199,6 +217,9 @@ pub(super) fn execute_tool_search(
             connector_name: entry.connector_name,
             provider_id: entry.provider_id,
             source_path: entry.source_path,
+            source_kind: entry.source_kind,
+            package_root: entry.package_root,
+            package_manifest_path: entry.package_manifest_path,
             bridge_kind: entry.bridge_kind.as_str().to_owned(),
             adapter_family: entry.adapter_family,
             entrypoint_hint: entry.entrypoint_hint,
@@ -276,6 +297,21 @@ fn tool_search_score(entry: &ToolSearchEntry, query: &str, tokens: &[String]) ->
         .as_deref()
         .unwrap_or_default()
         .to_ascii_lowercase();
+    let source_kind = entry
+        .source_kind
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let package_root = entry
+        .package_root
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let package_manifest_path = entry
+        .package_manifest_path
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     let adapter_family = entry
         .adapter_family
         .as_deref()
@@ -317,6 +353,15 @@ fn tool_search_score(entry: &ToolSearchEntry, query: &str, tokens: &[String]) ->
     if source_path.contains(query) {
         score = score.saturating_add(35);
     }
+    if source_kind.contains(query) {
+        score = score.saturating_add(12);
+    }
+    if package_root.contains(query) {
+        score = score.saturating_add(20);
+    }
+    if package_manifest_path.contains(query) {
+        score = score.saturating_add(20);
+    }
     if adapter_family.contains(query) {
         score = score.saturating_add(18);
     }
@@ -333,11 +378,15 @@ fn tool_search_score(entry: &ToolSearchEntry, query: &str, tokens: &[String]) ->
     }
 
     let haystack = format!(
-        "{} {} {} {} {} {} {} {}",
+        "{} {} {} {} {} {} {} {} {} {} {} {}",
         connector,
         provider,
         tool_id,
         summary,
+        source_path,
+        source_kind,
+        package_root,
+        package_manifest_path,
         adapter_family,
         entrypoint_hint,
         source_language,
@@ -353,4 +402,49 @@ fn tool_search_score(entry: &ToolSearchEntry, query: &str, tokens: &[String]) ->
         score = score.saturating_add(4);
     }
     score
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kernel::{IntegrationCatalog, ProviderConfig};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn execute_tool_search_surfaces_plugin_provenance_metadata() {
+        let mut catalog = IntegrationCatalog::new();
+        let provider = ProviderConfig {
+            provider_id: "tavily".to_owned(),
+            connector_name: "tavily-http".to_owned(),
+            version: "1.0.0".to_owned(),
+            metadata: BTreeMap::from([
+                ("plugin_id".to_owned(), "tavily-search".to_owned()),
+                (
+                    "plugin_source_path".to_owned(),
+                    "/tmp/tavily/loongclaw.plugin.json".to_owned(),
+                ),
+                (
+                    "plugin_source_kind".to_owned(),
+                    "package_manifest".to_owned(),
+                ),
+                ("plugin_package_root".to_owned(), "/tmp/tavily".to_owned()),
+                (
+                    "plugin_package_manifest_path".to_owned(),
+                    "/tmp/tavily/loongclaw.plugin.json".to_owned(),
+                ),
+                ("bridge_kind".to_owned(), "http_json".to_owned()),
+            ]),
+        };
+        catalog.upsert_provider(provider);
+
+        let results = execute_tool_search(&catalog, &[], &[], "tavily", 10, true, false);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].source_kind.as_deref(), Some("package_manifest"));
+        assert_eq!(results[0].package_root.as_deref(), Some("/tmp/tavily"));
+        assert_eq!(
+            results[0].package_manifest_path.as_deref(),
+            Some("/tmp/tavily/loongclaw.plugin.json")
+        );
+    }
 }

@@ -590,13 +590,16 @@ fn descriptor_wasm_artifact(descriptor: &PluginDescriptor) -> Option<String> {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use kernel::{Capability, PluginManifest};
+    use kernel::{Capability, PluginManifest, PluginSourceKind};
 
     use super::*;
 
     fn test_descriptor(plugin_id: &str, bridge_kind: PluginBridgeKind) -> PluginDescriptor {
         PluginDescriptor {
             path: format!("/tmp/{plugin_id}.plugin.json"),
+            source_kind: PluginSourceKind::PackageManifest,
+            package_root: "/tmp".to_owned(),
+            package_manifest_path: Some(format!("/tmp/{plugin_id}.plugin.json")),
             language: "json".to_owned(),
             manifest: PluginManifest {
                 plugin_id: plugin_id.to_owned(),

@@ -37,9 +37,29 @@ pub struct PluginManifest {
     pub defer_loading: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginSourceKind {
+    PackageManifest,
+    EmbeddedSource,
+}
+
+impl PluginSourceKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PackageManifest => "package_manifest",
+            Self::EmbeddedSource => "embedded_source",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginDescriptor {
     pub path: String,
+    pub source_kind: PluginSourceKind,
+    pub package_root: String,
+    pub package_manifest_path: Option<String>,
     pub language: String,
     pub manifest: PluginManifest,
 }
@@ -344,11 +364,12 @@ fn push_descriptor(report: &mut PluginScanReport, descriptor: PluginDescriptor) 
 
 fn parse_package_manifest_descriptor(path: &Path) -> Result<PluginDescriptor, IntegrationError> {
     let manifest = parse_package_manifest_file(path)?;
-    let descriptor = PluginDescriptor {
-        path: path.display().to_string(),
-        language: detect_language(path),
+    let descriptor = build_plugin_descriptor(
+        path,
+        PluginSourceKind::PackageManifest,
+        Some(path),
         manifest,
-    };
+    );
 
     Ok(descriptor)
 }
@@ -406,13 +427,41 @@ fn parse_source_manifest_descriptor(
         return Ok(None);
     };
 
-    let descriptor = PluginDescriptor {
-        path: path.display().to_string(),
-        language: detect_language(path),
-        manifest,
-    };
+    let descriptor =
+        build_plugin_descriptor(path, PluginSourceKind::EmbeddedSource, None, manifest);
 
     Ok(Some(descriptor))
+}
+
+fn build_plugin_descriptor(
+    path: &Path,
+    source_kind: PluginSourceKind,
+    package_manifest_path: Option<&Path>,
+    manifest: PluginManifest,
+) -> PluginDescriptor {
+    let path_string = path_to_string(path);
+    let package_root = package_root_for_path(path);
+    let package_manifest_path = package_manifest_path.map(path_to_string);
+    let language = detect_language(path);
+
+    PluginDescriptor {
+        path: path_string,
+        source_kind,
+        package_root,
+        package_manifest_path,
+        language,
+        manifest,
+    }
+}
+
+fn package_root_for_path(path: &Path) -> String {
+    let package_root = path.parent().unwrap_or(path);
+
+    path_to_string(package_root)
+}
+
+fn path_to_string(path: &Path) -> String {
+    path.display().to_string()
 }
 
 fn is_package_manifest_file(path: &Path) -> bool {
@@ -782,6 +831,18 @@ mod tests {
             report
                 .descriptors
                 .iter()
+                .all(|descriptor| descriptor.source_kind == PluginSourceKind::EmbeddedSource)
+        );
+        assert!(
+            report
+                .descriptors
+                .iter()
+                .all(|descriptor| descriptor.package_manifest_path.is_none())
+        );
+        assert!(
+            report
+                .descriptors
+                .iter()
                 .any(|descriptor| descriptor.manifest.provider_id == "slack")
         );
     }
@@ -834,6 +895,18 @@ mod tests {
                 .get("version")
                 .map(String::as_str),
             Some("0.3.0")
+        );
+        assert_eq!(
+            report.descriptors[0].source_kind,
+            PluginSourceKind::PackageManifest
+        );
+        assert_eq!(
+            report.descriptors[0].package_root,
+            root.display().to_string()
+        );
+        assert_eq!(
+            report.descriptors[0].package_manifest_path,
+            Some(manifest_file.display().to_string())
         );
     }
 
@@ -890,6 +963,18 @@ mod tests {
         assert_eq!(
             report.descriptors[0].path,
             manifest_file.display().to_string()
+        );
+        assert_eq!(
+            report.descriptors[0].source_kind,
+            PluginSourceKind::PackageManifest
+        );
+        assert_eq!(
+            report.descriptors[0].package_root,
+            package_root.display().to_string()
+        );
+        assert_eq!(
+            report.descriptors[0].package_manifest_path,
+            Some(manifest_file.display().to_string())
         );
         assert_eq!(report.descriptors[0].manifest.plugin_id, "package-plugin");
         assert_eq!(
@@ -1077,6 +1162,15 @@ mod tests {
             report.descriptors[0].path,
             source_file.display().to_string()
         );
+        assert_eq!(
+            report.descriptors[0].source_kind,
+            PluginSourceKind::EmbeddedSource
+        );
+        assert_eq!(
+            report.descriptors[0].package_root,
+            package_root.display().to_string()
+        );
+        assert_eq!(report.descriptors[0].package_manifest_path, None);
         assert_eq!(report.descriptors[0].language, "py");
         assert_eq!(report.descriptors[0].manifest.plugin_id, "source-plugin");
         assert_eq!(
@@ -1092,6 +1186,9 @@ mod tests {
             matched_plugins: 1,
             descriptors: vec![PluginDescriptor {
                 path: "/tmp/openai.rs".to_owned(),
+                source_kind: PluginSourceKind::EmbeddedSource,
+                package_root: "/tmp".to_owned(),
+                package_manifest_path: None,
                 language: "rs".to_owned(),
                 manifest: PluginManifest {
                     plugin_id: "openai-rs".to_owned(),
@@ -1158,6 +1255,9 @@ mod tests {
             descriptors: vec![
                 PluginDescriptor {
                     path: "/tmp/good.rs".to_owned(),
+                    source_kind: PluginSourceKind::EmbeddedSource,
+                    package_root: "/tmp".to_owned(),
+                    package_manifest_path: None,
                     language: "rs".to_owned(),
                     manifest: PluginManifest {
                         plugin_id: "good-plugin".to_owned(),
@@ -1176,6 +1276,9 @@ mod tests {
                 },
                 PluginDescriptor {
                     path: "/tmp/bad.rs".to_owned(),
+                    source_kind: PluginSourceKind::EmbeddedSource,
+                    package_root: "/tmp".to_owned(),
+                    package_manifest_path: None,
                     language: "rs".to_owned(),
                     manifest: PluginManifest {
                         plugin_id: "bad-plugin".to_owned(),

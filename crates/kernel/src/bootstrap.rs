@@ -172,6 +172,7 @@ fn bridge_auto_apply_allowed(bridge: PluginBridgeKind, policy: &BootstrapPolicy)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PluginSourceKind;
     use crate::plugin_ir::{
         PluginActivationCandidate, PluginActivationPlan, PluginActivationStatus, PluginBridgeKind,
     };
@@ -185,6 +186,9 @@ mod tests {
                 PluginActivationCandidate {
                     plugin_id: "http-plugin".to_owned(),
                     source_path: "/tmp/http.rs".to_owned(),
+                    source_kind: PluginSourceKind::EmbeddedSource,
+                    package_root: "/tmp".to_owned(),
+                    package_manifest_path: None,
                     bridge_kind: PluginBridgeKind::HttpJson,
                     adapter_family: "http-adapter".to_owned(),
                     status: PluginActivationStatus::Ready,
@@ -194,6 +198,9 @@ mod tests {
                 PluginActivationCandidate {
                     plugin_id: "ffi-plugin".to_owned(),
                     source_path: "/tmp/ffi.rs".to_owned(),
+                    source_kind: PluginSourceKind::EmbeddedSource,
+                    package_root: "/tmp".to_owned(),
+                    package_manifest_path: None,
                     bridge_kind: PluginBridgeKind::NativeFfi,
                     adapter_family: "rust-ffi-adapter".to_owned(),
                     status: PluginActivationStatus::Ready,
@@ -262,6 +269,9 @@ mod tests {
                 PluginActivationCandidate {
                     plugin_id: "acp-bridge-plugin".to_owned(),
                     source_path: "/tmp/acp-bridge.rs".to_owned(),
+                    source_kind: PluginSourceKind::EmbeddedSource,
+                    package_root: "/tmp".to_owned(),
+                    package_manifest_path: None,
                     bridge_kind: PluginBridgeKind::AcpBridge,
                     adapter_family: "acp-bridge-adapter".to_owned(),
                     status: PluginActivationStatus::Ready,
@@ -271,6 +281,9 @@ mod tests {
                 PluginActivationCandidate {
                     plugin_id: "acpx-runtime-plugin".to_owned(),
                     source_path: "/tmp/acpx-runtime.rs".to_owned(),
+                    source_kind: PluginSourceKind::EmbeddedSource,
+                    package_root: "/tmp".to_owned(),
+                    package_manifest_path: None,
                     bridge_kind: PluginBridgeKind::AcpRuntime,
                     adapter_family: "acp-runtime-adapter".to_owned(),
                     status: PluginActivationStatus::Ready,

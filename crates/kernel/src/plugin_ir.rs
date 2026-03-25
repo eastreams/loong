@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     contracts::Capability,
-    plugin::{PluginDescriptor, PluginManifest, PluginScanReport},
+    plugin::{PluginDescriptor, PluginManifest, PluginScanReport, PluginSourceKind},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -54,6 +54,9 @@ pub struct PluginIR {
     pub capabilities: BTreeSet<Capability>,
     pub metadata: BTreeMap<String, String>,
     pub source_path: String,
+    pub source_kind: PluginSourceKind,
+    pub package_root: String,
+    pub package_manifest_path: Option<String>,
     pub runtime: PluginRuntimeProfile,
 }
 
@@ -76,6 +79,9 @@ pub enum PluginActivationStatus {
 pub struct PluginActivationCandidate {
     pub plugin_id: String,
     pub source_path: String,
+    pub source_kind: PluginSourceKind,
+    pub package_root: String,
+    pub package_manifest_path: Option<String>,
     pub bridge_kind: PluginBridgeKind,
     pub adapter_family: String,
     pub status: PluginActivationStatus,
@@ -171,6 +177,9 @@ impl PluginTranslator {
             capabilities: descriptor.manifest.capabilities.clone(),
             metadata: descriptor.manifest.metadata.clone(),
             source_path: descriptor.path.clone(),
+            source_kind: descriptor.source_kind,
+            package_root: descriptor.package_root.clone(),
+            package_manifest_path: descriptor.package_manifest_path.clone(),
             runtime,
         }
     }
@@ -222,6 +231,9 @@ impl PluginTranslator {
             plan.candidates.push(PluginActivationCandidate {
                 plugin_id: ir.plugin_id.clone(),
                 source_path: ir.source_path.clone(),
+                source_kind: ir.source_kind,
+                package_root: ir.package_root.clone(),
+                package_manifest_path: ir.package_manifest_path.clone(),
                 bridge_kind: ir.runtime.bridge_kind,
                 adapter_family: ir.runtime.adapter_family.clone(),
                 status,
@@ -384,11 +396,30 @@ fn bootstrap_hint(ir: &PluginIR) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::PluginManifest;
+    use crate::plugin::{PluginManifest, PluginSourceKind};
 
     fn descriptor(language: &str, metadata: BTreeMap<String, String>) -> PluginDescriptor {
+        let source_kind = if language == "manifest" {
+            PluginSourceKind::PackageManifest
+        } else {
+            PluginSourceKind::EmbeddedSource
+        };
+        let path = if language == "manifest" {
+            "/tmp/loongclaw.plugin.json".to_owned()
+        } else {
+            format!("/tmp/plugin.{language}")
+        };
+        let package_manifest_path = if matches!(source_kind, PluginSourceKind::PackageManifest) {
+            Some(path.clone())
+        } else {
+            None
+        };
+
         PluginDescriptor {
-            path: format!("/tmp/plugin.{language}"),
+            path,
+            source_kind,
+            package_root: "/tmp".to_owned(),
+            package_manifest_path,
             language: language.to_owned(),
             manifest: PluginManifest {
                 plugin_id: format!("sample-{language}"),
@@ -460,6 +491,12 @@ mod tests {
         assert_eq!(ir.runtime.source_language, "manifest");
         assert_eq!(ir.runtime.bridge_kind, PluginBridgeKind::HttpJson);
         assert_eq!(ir.runtime.adapter_family, "http-adapter");
+        assert_eq!(ir.source_kind, PluginSourceKind::PackageManifest);
+        assert_eq!(ir.package_root, "/tmp");
+        assert_eq!(
+            ir.package_manifest_path,
+            Some("/tmp/loongclaw.plugin.json".to_owned())
+        );
     }
 
     #[test]
@@ -514,6 +551,12 @@ mod tests {
         assert_eq!(plan.total_plugins, 1);
         assert_eq!(plan.ready_plugins, 0);
         assert_eq!(plan.blocked_plugins, 1);
+        assert_eq!(
+            plan.candidates[0].source_kind,
+            PluginSourceKind::EmbeddedSource
+        );
+        assert_eq!(plan.candidates[0].package_root, "/tmp");
+        assert_eq!(plan.candidates[0].package_manifest_path, None);
         assert!(matches!(
             plan.candidates[0].status,
             PluginActivationStatus::BlockedUnsupportedBridge

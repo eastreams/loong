@@ -1853,7 +1853,27 @@ async fn execute_spec_wasm_component_bridge_executes_when_runtime_enabled() {
         .integration_catalog
         .provider("wasm-runtime-provider")
         .expect("provider should exist");
+    let plugin_root_string = plugin_root.display().to_string();
     assert!(provider.metadata.contains_key("plugin_source_path"));
+    assert_eq!(
+        provider
+            .metadata
+            .get("plugin_source_kind")
+            .map(String::as_str),
+        Some("embedded_source")
+    );
+    assert_eq!(
+        provider
+            .metadata
+            .get("plugin_package_root")
+            .map(String::as_str),
+        Some(plugin_root_string.as_str())
+    );
+    assert!(
+        !provider
+            .metadata
+            .contains_key("plugin_package_manifest_path")
+    );
     assert!(provider.metadata.contains_key("component_resolved_path"));
 
     let cached_report = execute_spec(&spec, true).await;

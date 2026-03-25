@@ -921,6 +921,23 @@ fn enrich_scan_report_with_translation(
             descriptor
                 .manifest
                 .metadata
+                .entry("plugin_source_kind".to_owned())
+                .or_insert_with(|| descriptor.source_kind.as_str().to_owned());
+            descriptor
+                .manifest
+                .metadata
+                .entry("plugin_package_root".to_owned())
+                .or_insert_with(|| descriptor.package_root.clone());
+            if let Some(package_manifest_path) = descriptor.package_manifest_path.clone() {
+                descriptor
+                    .manifest
+                    .metadata
+                    .entry("plugin_package_manifest_path".to_owned())
+                    .or_insert(package_manifest_path);
+            }
+            descriptor
+                .manifest
+                .metadata
                 .entry("plugin_id".to_owned())
                 .or_insert_with(|| descriptor.manifest.plugin_id.clone());
             descriptor
@@ -1475,5 +1492,134 @@ mod bootstrap_policy_tests {
         let policy = bootstrap_policy(&spec).expect("bootstrap policy should resolve");
         assert!(policy.allow_acp_bridge_auto_apply);
         assert!(!policy.allow_acp_runtime_auto_apply);
+    }
+}
+
+#[cfg(test)]
+mod plugin_metadata_tests {
+    use super::*;
+    use kernel::{
+        Capability, PluginBridgeKind, PluginDescriptor, PluginIR, PluginManifest,
+        PluginRuntimeProfile, PluginScanReport, PluginSourceKind, PluginTranslationReport,
+    };
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn test_descriptor(source_kind: PluginSourceKind) -> PluginDescriptor {
+        let path = match source_kind {
+            PluginSourceKind::PackageManifest => "/tmp/pkg/loongclaw.plugin.json".to_owned(),
+            PluginSourceKind::EmbeddedSource => "/tmp/pkg/plugin.py".to_owned(),
+        };
+        let package_manifest_path = match source_kind {
+            PluginSourceKind::PackageManifest => Some(path.clone()),
+            PluginSourceKind::EmbeddedSource => None,
+        };
+        let language = match source_kind {
+            PluginSourceKind::PackageManifest => "manifest".to_owned(),
+            PluginSourceKind::EmbeddedSource => "py".to_owned(),
+        };
+
+        PluginDescriptor {
+            path,
+            source_kind,
+            package_root: "/tmp/pkg".to_owned(),
+            package_manifest_path,
+            language,
+            manifest: PluginManifest {
+                plugin_id: "search-plugin".to_owned(),
+                provider_id: "search-provider".to_owned(),
+                connector_name: "search-connector".to_owned(),
+                channel_id: Some("primary".to_owned()),
+                endpoint: Some("https://example.com/search".to_owned()),
+                capabilities: BTreeSet::from([Capability::InvokeConnector]),
+                metadata: BTreeMap::new(),
+                summary: Some("Search plugin".to_owned()),
+                tags: vec!["search".to_owned()],
+                input_examples: Vec::new(),
+                output_examples: Vec::new(),
+                defer_loading: false,
+            },
+        }
+    }
+
+    fn test_translation(descriptor: &PluginDescriptor) -> PluginTranslationReport {
+        PluginTranslationReport {
+            translated_plugins: 1,
+            bridge_distribution: BTreeMap::from([("http_json".to_owned(), 1)]),
+            entries: vec![PluginIR {
+                plugin_id: descriptor.manifest.plugin_id.clone(),
+                provider_id: descriptor.manifest.provider_id.clone(),
+                connector_name: descriptor.manifest.connector_name.clone(),
+                channel_id: descriptor.manifest.channel_id.clone(),
+                endpoint: descriptor.manifest.endpoint.clone(),
+                capabilities: descriptor.manifest.capabilities.clone(),
+                metadata: descriptor.manifest.metadata.clone(),
+                source_path: descriptor.path.clone(),
+                source_kind: descriptor.source_kind,
+                package_root: descriptor.package_root.clone(),
+                package_manifest_path: descriptor.package_manifest_path.clone(),
+                runtime: PluginRuntimeProfile {
+                    source_language: descriptor.language.clone(),
+                    bridge_kind: PluginBridgeKind::HttpJson,
+                    adapter_family: "http-adapter".to_owned(),
+                    entrypoint_hint: "https://example.com/search".to_owned(),
+                },
+            }],
+        }
+    }
+
+    #[test]
+    fn enrich_scan_report_adds_package_manifest_provenance_metadata() {
+        let descriptor = test_descriptor(PluginSourceKind::PackageManifest);
+        let report = PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            descriptors: vec![descriptor.clone()],
+        };
+        let translation = test_translation(&descriptor);
+
+        let enriched = enrich_scan_report_with_translation(&report, &translation);
+        let metadata = &enriched.descriptors[0].manifest.metadata;
+
+        assert_eq!(
+            metadata.get("plugin_source_kind").map(String::as_str),
+            Some("package_manifest")
+        );
+        assert_eq!(
+            metadata.get("plugin_package_root").map(String::as_str),
+            Some("/tmp/pkg")
+        );
+        assert_eq!(
+            metadata
+                .get("plugin_package_manifest_path")
+                .map(String::as_str),
+            Some("/tmp/pkg/loongclaw.plugin.json")
+        );
+    }
+
+    #[test]
+    fn enrich_scan_report_omits_package_manifest_path_for_source_fallback() {
+        let descriptor = test_descriptor(PluginSourceKind::EmbeddedSource);
+        let report = PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            descriptors: vec![descriptor.clone()],
+        };
+        let translation = test_translation(&descriptor);
+
+        let enriched = enrich_scan_report_with_translation(&report, &translation);
+        let metadata = &enriched.descriptors[0].manifest.metadata;
+
+        assert_eq!(
+            metadata.get("plugin_source_kind").map(String::as_str),
+            Some("embedded_source")
+        );
+        assert_eq!(
+            metadata.get("plugin_package_root").map(String::as_str),
+            Some("/tmp/pkg")
+        );
+        assert!(
+            !metadata.contains_key("plugin_package_manifest_path"),
+            "source fallback should not synthesize a package manifest path"
+        );
     }
 }
