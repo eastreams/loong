@@ -61,6 +61,16 @@ pub struct ToolConfig {
     pub web: WebToolConfig,
     #[serde(default)]
     pub web_search: WebSearchToolConfig,
+    #[serde(default)]
+    pub tool_execution: ToolExecutionToolConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ToolExecutionToolConfig {
+    #[serde(default)]
+    pub default_timeout_seconds: Option<u64>,
+    #[serde(default)]
+    pub per_tool_timeout: std::collections::HashMap<String, u64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -404,6 +414,7 @@ impl Default for ToolConfig {
             browser_companion: BrowserCompanionToolConfig::default(),
             web: WebToolConfig::default(),
             web_search: WebSearchToolConfig::default(),
+            tool_execution: ToolExecutionToolConfig::default(),
         }
     }
 }

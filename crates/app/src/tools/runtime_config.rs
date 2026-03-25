@@ -286,8 +286,9 @@ pub struct ToolExecutionConfig {
 
 impl ToolExecutionConfig {
     pub fn timeout_for_tool(&self, tool_name: &str) -> Option<u64> {
+        let key = tool_name.to_lowercase();
         self.per_tool_timeout
-            .get(tool_name)
+            .get(&key)
             .copied()
             .or(self.default_timeout_seconds)
     }
@@ -456,7 +457,16 @@ impl ToolRuntimeConfig {
                 install_root: config.external_skills.resolved_install_root(),
                 auto_expose_installed: config.external_skills.auto_expose_installed,
             },
-            tool_execution: ToolExecutionConfig::default(),
+            tool_execution: ToolExecutionConfig {
+                default_timeout_seconds: config.tools.tool_execution.default_timeout_seconds,
+                per_tool_timeout: config
+                    .tools
+                    .tool_execution
+                    .per_tool_timeout
+                    .iter()
+                    .map(|(k, v): (&String, &u64)| (k.to_lowercase(), *v))
+                    .collect(),
+            },
             #[cfg(feature = "feishu-integration")]
             feishu: FeishuToolRuntimeConfig::from_loongclaw_config(config),
         }

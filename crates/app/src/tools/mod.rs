@@ -75,6 +75,8 @@ pub const BROWSER_COMPANION_PREVIEW_SKILL_ID: &str =
     bundled_skills::BROWSER_COMPANION_PREVIEW_SKILL_ID;
 pub const BROWSER_COMPANION_COMMAND: &str = bundled_skills::BROWSER_COMPANION_COMMAND;
 
+pub(crate) const SHELL_EXEC_TOOL_NAME: &str = "shell.exec";
+
 pub(crate) const LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY: &str = "_loongclaw";
 const LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY: &str = "tool_search";
 const LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY: &str = "visible_tool_ids";
@@ -706,7 +708,7 @@ fn execute_discoverable_tool_core_with_config(
     };
 
     match timeout_seconds {
-        Some(seconds) if seconds > 0 && tool_name != "shell.exec" => {
+        Some(seconds) if seconds > 0 && tool_name != SHELL_EXEC_TOOL_NAME => {
             run_blocking_with_timeout(inner, seconds, &tool_name)
         }
         _ => inner(),
@@ -785,10 +787,14 @@ where
     let timeout = tokio::time::Duration::from_secs(timeout_seconds);
     let tool_name = tool_name.to_owned();
 
-    let handle = tokio::runtime::Handle::current();
-    let join_handle = handle.spawn_blocking(f);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("failed to create tokio runtime for timeout: {error}"))?;
 
-    handle.block_on(async move {
+    rt.block_on(async move {
+        let join_handle = tokio::task::spawn_blocking(f);
+
         match tokio::time::timeout(timeout, join_handle).await {
             Ok(Ok(Ok(result))) => Ok(result),
             Ok(Ok(Err(e))) => Err(e),
