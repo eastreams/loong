@@ -43,6 +43,7 @@ async fn execute_spec_allows_execution_with_clean_architecture_guard() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-guard-clean".to_owned(),
             objective: "run with clean guard".to_owned(),
@@ -111,6 +112,7 @@ async fn execute_spec_blocks_when_architecture_guard_detects_core_mutation() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-guard".to_owned(),
             objective: "should not run".to_owned(),

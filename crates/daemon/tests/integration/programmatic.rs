@@ -28,6 +28,7 @@ async fn execute_spec_programmatic_tool_call_supports_templates_and_steps() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-alpha".to_owned(),
             max_calls: 3,
@@ -115,6 +116,7 @@ async fn execute_spec_programmatic_tool_call_enforces_max_call_budget() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-beta".to_owned(),
             max_calls: 1,
@@ -237,6 +239,7 @@ async fn execute_spec_programmatic_tool_call_blocks_when_caller_not_allowlisted(
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-denied".to_owned(),
             max_calls: 2,
@@ -301,6 +304,7 @@ async fn execute_spec_programmatic_tool_call_connector_batch_parallel_succeeds()
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-batch".to_owned(),
             max_calls: 4,
@@ -394,6 +398,7 @@ async fn execute_spec_programmatic_tool_call_connector_batch_continue_on_error()
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-batch-errors".to_owned(),
             max_calls: 5,
@@ -502,6 +507,7 @@ async fn execute_spec_programmatic_tool_call_conditional_step_routes_branch() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-conditional".to_owned(),
             max_calls: 2,
@@ -589,6 +595,7 @@ async fn execute_spec_programmatic_tool_call_connector_batch_budget_checks_total
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-batch-budget".to_owned(),
             max_calls: 1,
@@ -679,6 +686,7 @@ async fn execute_spec_programmatic_tool_call_retry_recovers_transient_failure() 
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-retry".to_owned(),
             max_calls: 2,
@@ -754,6 +762,7 @@ async fn execute_spec_programmatic_tool_call_applies_connector_rate_limits() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-rate".to_owned(),
             max_calls: 2,
@@ -835,6 +844,7 @@ async fn execute_spec_programmatic_tool_call_rejects_invalid_rate_limit_policy()
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-rate-invalid".to_owned(),
             max_calls: 1,
@@ -911,6 +921,7 @@ async fn execute_spec_programmatic_tool_call_circuit_breaker_blocks_followup_bat
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-circuit-open".to_owned(),
             max_calls: 2,
@@ -1017,6 +1028,7 @@ async fn execute_spec_programmatic_tool_call_rejects_invalid_circuit_policy() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-circuit-invalid".to_owned(),
             max_calls: 1,
@@ -1098,6 +1110,7 @@ async fn execute_spec_programmatic_tool_call_retry_jitter_tracks_backoff_budget(
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-retry-jitter".to_owned(),
             max_calls: 1,
@@ -1180,6 +1193,7 @@ async fn execute_spec_programmatic_tool_call_parallel_batch_caps_peak_inflight_b
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-concurrency-cap".to_owned(),
             max_calls: 6,
@@ -1304,6 +1318,7 @@ async fn execute_spec_programmatic_tool_call_weighted_fairness_avoids_low_priori
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-fairness".to_owned(),
             max_calls: 8,
@@ -1431,6 +1446,7 @@ async fn execute_spec_programmatic_tool_call_adaptive_budget_reduces_on_failures
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-adaptive-budget".to_owned(),
             max_calls: 8,
@@ -1565,6 +1581,7 @@ async fn execute_spec_programmatic_tool_call_default_adaptive_policy_skips_not_f
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-adaptive-skip-not-found".to_owned(),
             max_calls: 6,
@@ -1678,6 +1695,7 @@ async fn execute_spec_programmatic_tool_call_adaptive_policy_can_reduce_on_any_e
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-adaptive-any-error".to_owned(),
             max_calls: 6,
@@ -1794,6 +1812,7 @@ async fn execute_spec_programmatic_tool_call_rejects_invalid_concurrency_policy(
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-concurrency-invalid".to_owned(),
             max_calls: 1,
@@ -1869,6 +1888,7 @@ async fn execute_spec_programmatic_tool_call_rejects_empty_adaptive_reduce_on_po
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-concurrency-empty-reduce-on".to_owned(),
             max_calls: 1,
@@ -2015,6 +2035,7 @@ async fn execute_spec_programmatic_tool_call_adaptive_budget_respects_min_floor_
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ProgrammaticToolCall {
             caller: "planner-adaptive-floor-recover".to_owned(),
             max_calls: 8,

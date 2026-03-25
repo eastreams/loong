@@ -525,6 +525,8 @@ pub struct RunnerSpec {
     pub defaults: Option<DefaultCoreSelection>,
     pub self_awareness: Option<SelfAwarenessSpec>,
     pub plugin_scan: Option<PluginScanSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_setup_readiness: Option<PluginSetupReadinessSpec>,
     pub bridge_support: Option<BridgeSupportSpec>,
     pub bootstrap: Option<BootstrapSpec>,
     pub auto_provision: Option<AutoProvisionSpec>,
@@ -686,6 +688,26 @@ pub struct SelfAwarenessSpec {
 pub struct PluginScanSpec {
     pub enabled: bool,
     pub roots: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PluginSetupReadinessSpec {
+    #[serde(default = "default_true")]
+    pub inherit_process_env: bool,
+    #[serde(default)]
+    pub verified_env_vars: Vec<String>,
+    #[serde(default)]
+    pub verified_config_keys: Vec<String>,
+}
+
+impl Default for PluginSetupReadinessSpec {
+    fn default() -> Self {
+        Self {
+            inherit_process_env: true,
+            verified_env_vars: Vec::new(),
+            verified_config_keys: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1048,6 +1070,11 @@ impl RunnerSpec {
             }),
             self_awareness: None,
             plugin_scan: None,
+            plugin_setup_readiness: Some(PluginSetupReadinessSpec {
+                inherit_process_env: true,
+                verified_env_vars: Vec::new(),
+                verified_config_keys: Vec::new(),
+            }),
             bridge_support: None,
             bootstrap: None,
             auto_provision: Some(AutoProvisionSpec {

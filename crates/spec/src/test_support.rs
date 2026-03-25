@@ -24,6 +24,7 @@ pub fn make_runner_spec(operation: OperationSpec) -> RunnerSpec {
         defaults: None,
         self_awareness: None,
         plugin_scan: None,
+        plugin_setup_readiness: None,
         bridge_support: None,
         bootstrap: None,
         auto_provision: None,

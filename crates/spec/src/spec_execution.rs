@@ -92,7 +92,9 @@ pub async fn execute_spec_with_native_tool_executor(
         .as_ref()
         .map(|_| SecurityScanReport::default());
     let mut auto_provision_plan = None;
-    let setup_readiness_context = plugin_setup_readiness_context_from_process_env();
+    let plugin_setup_readiness = spec.plugin_setup_readiness.as_ref();
+    let setup_readiness_context =
+        resolve_plugin_setup_readiness_context(plugin_setup_readiness, std::env::vars_os());
 
     if !approval_guard.approved {
         blocked_reason = Some(approval_guard.reason.clone());
@@ -765,12 +767,35 @@ fn bridge_support_matrix(spec: &RunnerSpec) -> (BridgeSupportMatrix, bool) {
     }
 }
 
-fn plugin_setup_readiness_context_from_process_env() -> PluginSetupReadinessContext {
-    let verified_env_vars = collect_verified_env_var_names(std::env::vars_os());
+fn resolve_plugin_setup_readiness_context<I>(
+    readiness_spec: Option<&PluginSetupReadinessSpec>,
+    env_vars: I,
+) -> PluginSetupReadinessContext
+where
+    I: IntoIterator<Item = (OsString, OsString)>,
+{
+    let Some(readiness_spec) = readiness_spec else {
+        let verified_env_vars = collect_verified_env_var_names(env_vars);
+
+        return PluginSetupReadinessContext {
+            verified_env_vars,
+            verified_config_keys: BTreeSet::new(),
+        };
+    };
+
+    let mut verified_env_vars = BTreeSet::new();
+    if readiness_spec.inherit_process_env {
+        verified_env_vars = collect_verified_env_var_names(env_vars);
+    }
+
+    let explicit_verified_env_vars = collect_verified_name_list(&readiness_spec.verified_env_vars);
+    verified_env_vars.extend(explicit_verified_env_vars);
+
+    let verified_config_keys = collect_verified_name_list(&readiness_spec.verified_config_keys);
 
     PluginSetupReadinessContext {
         verified_env_vars,
-        verified_config_keys: BTreeSet::new(),
+        verified_config_keys,
     }
 }
 
@@ -797,6 +822,21 @@ where
     }
 
     verified_env_vars
+}
+
+fn collect_verified_name_list(values: &[String]) -> BTreeSet<String> {
+    let mut verified_names = BTreeSet::new();
+
+    for raw_value in values {
+        let value = raw_value.trim().to_owned();
+        if value.is_empty() {
+            continue;
+        }
+
+        verified_names.insert(value);
+    }
+
+    verified_names
 }
 
 fn bridge_runtime_policy(
@@ -1612,6 +1652,7 @@ mod bootstrap_policy_tests {
 #[cfg(test)]
 mod setup_readiness_context_tests {
     use super::*;
+    use crate::PluginSetupReadinessSpec;
 
     #[test]
     fn collect_verified_env_var_names_ignores_blank_names_and_values() {
@@ -1638,6 +1679,67 @@ mod setup_readiness_context_tests {
         assert_eq!(
             verified_env_vars,
             BTreeSet::from([" TAVILY_API_KEY".to_owned()])
+        );
+    }
+
+    #[test]
+    fn resolve_plugin_setup_readiness_context_falls_back_to_process_env_when_unspecified() {
+        let env_vars = vec![
+            (OsString::from("TAVILY_API_KEY"), OsString::from("secret")),
+            (OsString::from("EMPTY_VALUE"), OsString::from("   ")),
+        ];
+
+        let context = resolve_plugin_setup_readiness_context(None, env_vars);
+
+        assert_eq!(
+            context.verified_env_vars,
+            BTreeSet::from(["TAVILY_API_KEY".to_owned()])
+        );
+        assert!(context.verified_config_keys.is_empty());
+    }
+
+    #[test]
+    fn resolve_plugin_setup_readiness_context_uses_explicit_values_without_env_inheritance() {
+        let readiness_spec = PluginSetupReadinessSpec {
+            inherit_process_env: false,
+            verified_env_vars: vec![" TAVILY_API_KEY ".to_owned(), "".to_owned()],
+            verified_config_keys: vec![
+                " tools.web_search.default_provider ".to_owned(),
+                "   ".to_owned(),
+            ],
+        };
+        let env_vars = vec![(OsString::from("SHOULD_NOT_BE_USED"), OsString::from("set"))];
+
+        let context = resolve_plugin_setup_readiness_context(Some(&readiness_spec), env_vars);
+
+        assert_eq!(
+            context.verified_env_vars,
+            BTreeSet::from(["TAVILY_API_KEY".to_owned()])
+        );
+        assert_eq!(
+            context.verified_config_keys,
+            BTreeSet::from(["tools.web_search.default_provider".to_owned()])
+        );
+    }
+
+    #[test]
+    fn resolve_plugin_setup_readiness_context_merges_process_env_when_requested() {
+        let readiness_spec = PluginSetupReadinessSpec {
+            inherit_process_env: true,
+            verified_env_vars: vec!["TAVILY_API_KEY".to_owned()],
+            verified_config_keys: vec!["tools.web_search.default_provider".to_owned()],
+        };
+        let env_vars = vec![(OsString::from("OPENAI_API_KEY"), OsString::from("set"))];
+
+        let context = resolve_plugin_setup_readiness_context(Some(&readiness_spec), env_vars);
+
+        assert_eq!(
+            context.verified_env_vars,
+            BTreeSet::from(["OPENAI_API_KEY".to_owned(), "TAVILY_API_KEY".to_owned(),])
+        );
+        assert_eq!(
+            context.verified_config_keys,
+            BTreeSet::from(["tools.web_search.default_provider".to_owned()])
         );
     }
 }
