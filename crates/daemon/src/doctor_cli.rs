@@ -1328,30 +1328,24 @@ fn provider_model_probe_failure_check(
 fn is_provider_model_probe_failure_check(check: &DoctorCheck) -> bool {
     let is_provider_model_probe = check.name == "provider model probe";
     let is_failure = check.level != DoctorCheckLevel::Pass;
-    let has_probe_failure_detail =
+    let matches_probe_failure_detail =
         provider_model_probe_policy::provider_model_probe_failed_detail(check.detail.as_str());
 
-    is_provider_model_probe && is_failure && has_probe_failure_detail
+    is_provider_model_probe && is_failure && matches_probe_failure_detail
 }
 
-fn is_transport_style_provider_model_probe_failure_check(check: &DoctorCheck) -> bool {
-    let is_provider_model_probe_failure = is_provider_model_probe_failure_check(check);
-    if !is_provider_model_probe_failure {
-        return false;
-    }
-
-    provider_model_probe_policy::provider_model_probe_transport_failure_detail(
-        check.detail.as_str(),
-    )
-}
-
-fn is_auth_style_provider_model_probe_failure_check(check: &DoctorCheck) -> bool {
-    let is_provider_model_probe_failure = is_provider_model_probe_failure_check(check);
-    if !is_provider_model_probe_failure {
-        return false;
-    }
-
-    provider_model_probe_policy::provider_model_probe_auth_failure_detail(check.detail.as_str())
+fn provider_model_probe_recovery_advice_for_checks(
+    checks: &[DoctorCheck],
+    config: &mvp::config::LoongClawConfig,
+) -> Option<provider_model_probe_policy::ProviderModelProbeRecoveryAdvice> {
+    let probe_failure_check = checks
+        .iter()
+        .find(|check| is_provider_model_probe_failure_check(check))?;
+    let recovery_advice = provider_model_probe_policy::provider_model_probe_recovery_advice(
+        config,
+        probe_failure_check.detail.as_str(),
+    )?;
+    Some(recovery_advice)
 }
 
 async fn collect_browser_companion_doctor_checks(
@@ -1510,12 +1504,18 @@ fn build_doctor_next_steps_with_path_env(
         }
     }
 
-    let has_provider_model_probe_failure = checks.iter().any(is_provider_model_probe_failure_check);
-    if has_provider_model_probe_failure {
-        let provider_model_probe_transport_failure = checks
-            .iter()
-            .any(is_transport_style_provider_model_probe_failure_check);
-        if provider_model_probe_transport_failure {
+    let provider_model_probe_recovery =
+        provider_model_probe_recovery_advice_for_checks(checks, config);
+    if let Some(provider_model_probe_recovery) = provider_model_probe_recovery {
+        let provider_model_probe_policy::ProviderModelProbeRecoveryAdvice {
+            kind: provider_model_probe_kind,
+            region_endpoint_hint,
+        } = provider_model_probe_recovery;
+        let is_transport_failure = matches!(
+            provider_model_probe_kind,
+            provider_model_probe_policy::ProviderModelProbeFailureKind::TransportFailure
+        );
+        if is_transport_failure {
             if checks.iter().any(|check| {
                 check.name == crate::provider_route_diagnostics::PROVIDER_ROUTE_PROBE_CHECK_NAME
                     && check.level != DoctorCheckLevel::Pass
@@ -1544,11 +1544,9 @@ fn build_doctor_next_steps_with_path_env(
                 );
             }
         } else {
-            let provider_model_probe_auth_failure = checks
-                .iter()
-                .any(is_auth_style_provider_model_probe_failure_check);
-            match config.provider.model_catalog_probe_recovery() {
-                mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
+            match provider_model_probe_kind {
+                provider_model_probe_policy::ProviderModelProbeFailureKind::TransportFailure => {}
+                provider_model_probe_policy::ProviderModelProbeFailureKind::RequiresExplicitModel {
                     recommended_onboarding_model: Some(model),
                 } => {
                     push_unique_step(
@@ -1564,7 +1562,7 @@ fn build_doctor_next_steps_with_path_env(
                         ),
                     );
                 }
-                mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
+                provider_model_probe_policy::ProviderModelProbeFailureKind::RequiresExplicitModel {
                     recommended_onboarding_model: None,
                 } => {
                     push_unique_step(
@@ -1574,8 +1572,10 @@ fn build_doctor_next_steps_with_path_env(
                         ),
                     );
                 }
-                mvp::config::ModelCatalogProbeRecovery::ExplicitModel(_)
-                | mvp::config::ModelCatalogProbeRecovery::ConfiguredPreferredModels(_) => {
+                provider_model_probe_policy::ProviderModelProbeFailureKind::ExplicitModel { .. }
+                | provider_model_probe_policy::ProviderModelProbeFailureKind::PreferredModels {
+                    ..
+                } => {
                     push_unique_step(
                         &mut steps,
                         format!(
@@ -1590,9 +1590,7 @@ fn build_doctor_next_steps_with_path_env(
                     );
                 }
             }
-            if provider_model_probe_auth_failure
-                && let Some(hint) = config.provider.region_endpoint_failure_hint()
-            {
+            if let Some(hint) = region_endpoint_hint {
                 push_unique_step(&mut steps, hint);
             }
         }

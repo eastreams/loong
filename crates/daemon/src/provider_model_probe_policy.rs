@@ -29,6 +29,12 @@ pub(crate) struct ProviderModelProbeFailure {
     pub(crate) kind: ProviderModelProbeFailureKind,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProviderModelProbeRecoveryAdvice {
+    pub(crate) kind: ProviderModelProbeFailureKind,
+    pub(crate) region_endpoint_hint: Option<String>,
+}
+
 pub(crate) fn provider_model_probe_failure(
     config: &mvp::config::LoongClawConfig,
     error: &str,
@@ -77,6 +83,29 @@ pub(crate) fn provider_model_probe_auth_failure_detail(detail: &str) -> bool {
     }
 
     mvp::provider::is_auth_style_failure_message(detail)
+}
+
+pub(crate) fn provider_model_probe_recovery_advice(
+    config: &mvp::config::LoongClawConfig,
+    detail: &str,
+) -> Option<ProviderModelProbeRecoveryAdvice> {
+    let matches_probe_failure_detail = provider_model_probe_failed_detail(detail);
+    if !matches_probe_failure_detail {
+        return None;
+    }
+
+    let kind = if provider_model_probe_transport_failure_detail(detail) {
+        ProviderModelProbeFailureKind::TransportFailure
+    } else {
+        let configured_recovery = config.provider.model_catalog_probe_recovery();
+        configured_recovery_kind(configured_recovery)
+    };
+    let region_endpoint_hint = provider_model_probe_region_endpoint_hint(config, detail);
+
+    Some(ProviderModelProbeRecoveryAdvice {
+        kind,
+        region_endpoint_hint,
+    })
 }
 
 fn configured_recovery_kind(
@@ -187,6 +216,18 @@ fn append_region_hint(
     detail
 }
 
+fn provider_model_probe_region_endpoint_hint(
+    config: &mvp::config::LoongClawConfig,
+    detail: &str,
+) -> Option<String> {
+    let is_auth_style_failure = provider_model_probe_auth_failure_detail(detail);
+    if !is_auth_style_failure {
+        return None;
+    }
+
+    config.provider.region_endpoint_failure_hint()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,6 +283,57 @@ mod tests {
         assert!(
             provider_model_probe_auth_failure_detail(failure.detail.as_str()),
             "the shared detail classifier should recognize auth-style model probe failures"
+        );
+    }
+
+    #[test]
+    fn provider_model_probe_recovery_advice_reconstructs_transport_failures_from_detail() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.model = "custom-explicit-model".to_owned();
+
+        let failure = provider_model_probe_failure(
+            &config,
+            "provider model-list request failed on attempt 3/3: operation timed out",
+        );
+        let advice =
+            provider_model_probe_recovery_advice(&config, failure.detail.as_str()).unwrap();
+
+        assert_eq!(advice.kind, ProviderModelProbeFailureKind::TransportFailure);
+        assert_eq!(advice.region_endpoint_hint, None);
+    }
+
+    #[test]
+    fn provider_model_probe_recovery_advice_preserves_reviewed_default_recovery() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Deepseek;
+        config.provider.model = "auto".to_owned();
+
+        let failure = provider_model_probe_failure(&config, "provider returned status 401");
+        let advice =
+            provider_model_probe_recovery_advice(&config, failure.detail.as_str()).unwrap();
+
+        assert_eq!(
+            advice.kind,
+            ProviderModelProbeFailureKind::RequiresExplicitModel {
+                recommended_onboarding_model: Some("deepseek-chat".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn provider_model_probe_recovery_advice_keeps_region_hint_for_auth_failures() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Minimax;
+        config.provider.model = "auto".to_owned();
+
+        let failure = provider_model_probe_failure(&config, "provider returned status 401");
+        let advice =
+            provider_model_probe_recovery_advice(&config, failure.detail.as_str()).unwrap();
+        let region_endpoint_hint = advice.region_endpoint_hint.unwrap();
+
+        assert!(
+            region_endpoint_hint.contains("https://api.minimax.io"),
+            "recovery advice should keep provider-specific region guidance for auth-style failures"
         );
     }
 }
