@@ -392,13 +392,9 @@ fn is_package_manifest_file(path: &Path) -> bool {
 }
 
 fn path_is_covered_by_package_manifest(path: &Path, package_roots: &BTreeSet<PathBuf>) -> bool {
-    for package_root in package_roots {
-        if path.starts_with(package_root) {
-            return true;
-        }
-    }
-
-    false
+    package_roots
+        .iter()
+        .any(|package_root| path.starts_with(package_root))
 }
 
 fn should_skip_dir(path: &Path) -> bool {
