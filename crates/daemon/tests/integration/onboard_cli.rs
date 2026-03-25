@@ -207,7 +207,10 @@ fn import_candidate_with_provider(
     candidate.config.provider.base_url = profile.base_url.to_owned();
     candidate.config.provider.chat_completions_path = profile.chat_completions_path.to_owned();
     candidate.config.provider.model = model.to_owned();
-    candidate.config.provider.api_key_env = Some(credential_env.to_owned());
+    candidate
+        .config
+        .provider
+        .set_api_key_env_binding(Some(credential_env.to_owned()));
     candidate
         .domains
         .push(loongclaw_daemon::migration::types::DomainPreview {
@@ -5096,7 +5099,13 @@ fn onboard_provider_selection_uses_imported_provider_config_for_selected_choice(
 
     assert_eq!(resolved.kind, mvp::config::ProviderKind::Deepseek);
     assert_eq!(resolved.model, "deepseek-chat");
-    assert_eq!(resolved.api_key_env.as_deref(), Some("DEEPSEEK_API_KEY"));
+    assert_eq!(
+        resolved.api_key,
+        Some(loongclaw_contracts::SecretRef::Env {
+            env: "DEEPSEEK_API_KEY".to_owned(),
+        })
+    );
+    assert_eq!(resolved.api_key_env, None);
 }
 
 #[test]

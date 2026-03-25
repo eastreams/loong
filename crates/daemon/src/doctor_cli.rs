@@ -1253,6 +1253,9 @@ fn ensure_provider_env_binding(
     if configured.is_some() {
         return false;
     }
+    if provider_credential_policy::provider_has_inline_credential(provider) {
+        return false;
+    }
 
     match field {
         provider_credential_policy::ProviderCredentialEnvField::ApiKey => {
@@ -2218,6 +2221,30 @@ mod tests {
             fixes,
             vec!["set provider.oauth_access_token.env=OPENAI_CODEX_OAUTH_TOKEN".to_owned()]
         );
+    }
+
+    #[test]
+    fn provider_env_fix_does_not_overwrite_inline_api_key() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+            "inline-secret".to_owned(),
+        ));
+        config.provider.api_key_env = None;
+        config.provider.oauth_access_token = None;
+        config.provider.oauth_access_token_env = None;
+
+        let mut fixes = Vec::new();
+        let changed = maybe_apply_provider_env_fix(&mut config, true, &mut fixes);
+
+        assert!(!changed);
+        assert_eq!(
+            config.provider.api_key,
+            Some(loongclaw_contracts::SecretRef::Inline(
+                "inline-secret".to_owned(),
+            ))
+        );
+        assert_eq!(config.provider.api_key_env, None);
+        assert!(fixes.is_empty());
     }
 
     #[test]

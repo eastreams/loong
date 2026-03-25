@@ -889,14 +889,18 @@ impl ProviderConfig {
 
     pub fn canonicalize_configured_auth_env_bindings(&mut self) {
         let configured_api_key_env = self.configured_api_key_env_override();
-        if self.api_key.is_some() {
+        let api_key_has_non_env_secret =
+            self.api_key.is_some() && secret_ref_env_name(self.api_key.as_ref()).is_none();
+        if api_key_has_non_env_secret {
             self.set_api_key_env(None);
         } else {
             self.set_api_key_env_binding(configured_api_key_env);
         }
 
         let configured_oauth_env = self.configured_oauth_access_token_env_override();
-        if self.oauth_access_token.is_some() {
+        let oauth_has_non_env_secret = self.oauth_access_token.is_some()
+            && secret_ref_env_name(self.oauth_access_token.as_ref()).is_none();
+        if oauth_has_non_env_secret {
             self.set_oauth_access_token_env(None);
         } else {
             self.set_oauth_access_token_env_binding(configured_oauth_env);
@@ -3628,6 +3632,23 @@ api_key_env = "OPENAI_API_KEY"
             })
         );
         assert_eq!(normalized.api_key_env, None);
+    }
+
+    #[test]
+    fn canonicalize_configured_auth_env_bindings_rewrites_inline_env_templates() {
+        let mut config = ProviderConfig::fresh_for_kind(ProviderKind::Openai);
+        config.set_api_key_env(Some("OPENAI_API_KEY".to_owned()));
+        config.api_key = Some(SecretRef::Inline("${OPENAI_API_KEY}".to_owned()));
+
+        config.canonicalize_configured_auth_env_bindings();
+
+        assert_eq!(
+            config.api_key,
+            Some(SecretRef::Env {
+                env: "OPENAI_API_KEY".to_owned(),
+            })
+        );
+        assert_eq!(config.api_key_env, None);
     }
 
     #[test]
