@@ -253,6 +253,51 @@ fn run_rank_stage(entries: Vec<MemoryContextEntry>) -> StageRunResult {
     }
 }
 
+pub async fn run_compact_stage(
+    session_id: &str,
+    workspace_root: Option<&Path>,
+    config: &MemoryRuntimeConfig,
+) -> Result<StageDiagnostics, String> {
+    match config.system {
+        MemorySystemKind::Builtin => {
+            run_builtin_compact_stage(session_id, workspace_root, config).await
+        }
+    }
+}
+
+async fn run_builtin_compact_stage(
+    session_id: &str,
+    workspace_root: Option<&Path>,
+    config: &MemoryRuntimeConfig,
+) -> Result<StageDiagnostics, String> {
+    match super::flush_pre_compaction_durable_memory(session_id, workspace_root, config).await {
+        Ok(super::durable_flush::PreCompactionDurableFlushOutcome::Flushed { .. })
+        | Ok(super::durable_flush::PreCompactionDurableFlushOutcome::SkippedDuplicate) => {
+            Ok(StageDiagnostics::succeeded(MemoryStageFamily::Compact))
+        }
+        Ok(super::durable_flush::PreCompactionDurableFlushOutcome::SkippedMissingWorkspaceRoot)
+        | Ok(super::durable_flush::PreCompactionDurableFlushOutcome::SkippedNoSummary) => {
+            Ok(StageDiagnostics {
+                family: MemoryStageFamily::Compact,
+                outcome: StageOutcome::Skipped,
+                budget_ms: None,
+                elapsed_ms: None,
+                fallback_activated: false,
+                message: None,
+            })
+        }
+        Err(error) if config.effective_fail_open() => Ok(StageDiagnostics {
+            family: MemoryStageFamily::Compact,
+            outcome: StageOutcome::Fallback,
+            budget_ms: None,
+            elapsed_ms: None,
+            fallback_activated: true,
+            message: Some(error),
+        }),
+        Err(error) => Err(format!("memory compact stage failed: {error}")),
+    }
+}
+
 fn build_builtin_retrieval_request(
     session_id: &str,
     config: &MemoryRuntimeConfig,
@@ -717,6 +762,75 @@ mod tests {
 
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn compact_stage_emits_succeeded_diagnostics_when_durable_flush_runs() {
+        let tmp = hydrated_memory_temp_dir("loongclaw-compact-stage-succeeded");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("compact-stage.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            mode: MemoryMode::WindowPlusSummary,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+
+        append_turn_direct("compact-stage-succeeded", "user", "turn 1", &config)
+            .expect("append turn 1 should succeed");
+        append_turn_direct("compact-stage-succeeded", "assistant", "turn 2", &config)
+            .expect("append turn 2 should succeed");
+        append_turn_direct("compact-stage-succeeded", "user", "turn 3", &config)
+            .expect("append turn 3 should succeed");
+
+        let diagnostics =
+            run_compact_stage("compact-stage-succeeded", Some(tmp.as_path()), &config)
+                .await
+                .expect("run compact stage");
+
+        assert_eq!(diagnostics.family, MemoryStageFamily::Compact);
+        assert_eq!(diagnostics.outcome, StageOutcome::Succeeded);
+        assert!(!diagnostics.fallback_activated);
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn compact_stage_skips_when_workspace_root_is_absent() {
+        let tmp = hydrated_memory_temp_dir("loongclaw-compact-stage-skipped");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("compact-stage-skipped.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            mode: MemoryMode::WindowPlusSummary,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+
+        append_turn_direct("compact-stage-skipped", "user", "turn 1", &config)
+            .expect("append turn 1 should succeed");
+        append_turn_direct("compact-stage-skipped", "assistant", "turn 2", &config)
+            .expect("append turn 2 should succeed");
+
+        let diagnostics = run_compact_stage("compact-stage-skipped", None, &config)
+            .await
+            .expect("run compact stage");
+
+        assert_eq!(diagnostics.family, MemoryStageFamily::Compact);
+        assert_eq!(diagnostics.outcome, StageOutcome::Skipped);
+        assert!(!diagnostics.fallback_activated);
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[cfg(feature = "memory-sqlite")]

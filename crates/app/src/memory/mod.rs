@@ -43,7 +43,7 @@ pub(crate) use durable_recall::load_durable_recall_entries;
 pub use kernel_adapter::MvpMemoryAdapter;
 pub use orchestrator::{
     BuiltinMemoryOrchestrator, HydratedMemoryContext, MemoryDiagnostics, hydrate_memory_context,
-    hydrate_memory_context_with_workspace_root, hydrate_stage_envelope,
+    hydrate_memory_context_with_workspace_root, hydrate_stage_envelope, run_compact_stage,
 };
 #[cfg(test)]
 pub use orchestrator::{MemoryOrchestratorTestFaults, ScopedMemoryOrchestratorTestFaults};

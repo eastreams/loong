@@ -2337,13 +2337,25 @@ async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
             .map(|_| config.tools.resolved_file_root());
 
         let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-        let durable_flush_result = crate::memory::flush_pre_compaction_durable_memory(
-            session_id,
-            workspace_root.as_deref(),
-            &memory_config,
-        )
-        .await;
-        match durable_flush_result {
+        let compact_stage_result =
+            crate::memory::run_compact_stage(session_id, workspace_root.as_deref(), &memory_config)
+                .await;
+        match compact_stage_result {
+            Ok(diagnostics)
+                if matches!(diagnostics.outcome, crate::memory::StageOutcome::Fallback) =>
+            {
+                if config.conversation.compaction_fail_open() {
+                    return Ok(ContextCompactionOutcome::FailedOpen);
+                }
+
+                return Err(format!(
+                    "pre-compaction durable memory flush failed: {}",
+                    diagnostics
+                        .message
+                        .as_deref()
+                        .unwrap_or("compact stage fallback without error detail")
+                ));
+            }
             Ok(_) => {}
             Err(_error) if config.conversation.compaction_fail_open() => {
                 return Ok(ContextCompactionOutcome::FailedOpen);
