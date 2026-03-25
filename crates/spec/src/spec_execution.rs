@@ -913,28 +913,7 @@ fn enrich_scan_report_with_translation(
         .iter()
         .cloned()
         .map(|mut descriptor| {
-            descriptor
-                .manifest
-                .metadata
-                .entry("plugin_source_path".to_owned())
-                .or_insert_with(|| descriptor.path.clone());
-            descriptor
-                .manifest
-                .metadata
-                .entry("plugin_source_kind".to_owned())
-                .or_insert_with(|| descriptor.source_kind.as_str().to_owned());
-            descriptor
-                .manifest
-                .metadata
-                .entry("plugin_package_root".to_owned())
-                .or_insert_with(|| descriptor.package_root.clone());
-            if let Some(package_manifest_path) = descriptor.package_manifest_path.clone() {
-                descriptor
-                    .manifest
-                    .metadata
-                    .entry("plugin_package_manifest_path".to_owned())
-                    .or_insert(package_manifest_path);
-            }
+            stamp_plugin_provenance_metadata(&mut descriptor);
             descriptor
                 .manifest
                 .metadata
@@ -1026,6 +1005,29 @@ fn enrich_scan_report_with_translation(
         scanned_files: report.scanned_files,
         matched_plugins: descriptors.len(),
         descriptors,
+    }
+}
+
+fn stamp_plugin_provenance_metadata(descriptor: &mut PluginDescriptor) {
+    let source_path_key = "plugin_source_path".to_owned();
+    let source_path_value = descriptor.path.clone();
+    let source_kind_key = "plugin_source_kind".to_owned();
+    let source_kind_value = descriptor.source_kind.as_str().to_owned();
+    let package_root_key = "plugin_package_root".to_owned();
+    let package_root_value = descriptor.package_root.clone();
+    let package_manifest_path_value = descriptor.package_manifest_path.clone();
+    let metadata = &mut descriptor.manifest.metadata;
+
+    metadata.insert(source_path_key, source_path_value);
+    metadata.insert(source_kind_key, source_kind_value);
+    metadata.insert(package_root_key, package_root_value);
+
+    if let Some(package_manifest_path_value) = package_manifest_path_value {
+        let package_manifest_path_key = "plugin_package_manifest_path".to_owned();
+
+        metadata.insert(package_manifest_path_key, package_manifest_path_value);
+    } else {
+        metadata.remove("plugin_package_manifest_path");
     }
 }
 
@@ -1620,6 +1622,106 @@ mod plugin_metadata_tests {
         assert!(
             !metadata.contains_key("plugin_package_manifest_path"),
             "source fallback should not synthesize a package manifest path"
+        );
+    }
+
+    #[test]
+    fn enrich_scan_report_overwrites_forged_package_manifest_provenance_metadata() {
+        let mut descriptor = test_descriptor(PluginSourceKind::PackageManifest);
+
+        descriptor.manifest.metadata.insert(
+            "plugin_source_path".to_owned(),
+            "/forged/source-path".to_owned(),
+        );
+        descriptor.manifest.metadata.insert(
+            "plugin_source_kind".to_owned(),
+            "embedded_source".to_owned(),
+        );
+        descriptor.manifest.metadata.insert(
+            "plugin_package_root".to_owned(),
+            "/forged/package-root".to_owned(),
+        );
+        descriptor.manifest.metadata.insert(
+            "plugin_package_manifest_path".to_owned(),
+            "/forged/package-manifest".to_owned(),
+        );
+
+        let report = PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            descriptors: vec![descriptor.clone()],
+        };
+        let translation = test_translation(&descriptor);
+
+        let enriched = enrich_scan_report_with_translation(&report, &translation);
+        let metadata = &enriched.descriptors[0].manifest.metadata;
+
+        assert_eq!(
+            metadata.get("plugin_source_path").map(String::as_str),
+            Some("/tmp/pkg/loongclaw.plugin.json")
+        );
+        assert_eq!(
+            metadata.get("plugin_source_kind").map(String::as_str),
+            Some("package_manifest")
+        );
+        assert_eq!(
+            metadata.get("plugin_package_root").map(String::as_str),
+            Some("/tmp/pkg")
+        );
+        assert_eq!(
+            metadata
+                .get("plugin_package_manifest_path")
+                .map(String::as_str),
+            Some("/tmp/pkg/loongclaw.plugin.json")
+        );
+    }
+
+    #[test]
+    fn enrich_scan_report_clears_forged_package_manifest_path_for_source_fallback() {
+        let mut descriptor = test_descriptor(PluginSourceKind::EmbeddedSource);
+
+        descriptor.manifest.metadata.insert(
+            "plugin_source_path".to_owned(),
+            "/forged/source-path".to_owned(),
+        );
+        descriptor.manifest.metadata.insert(
+            "plugin_source_kind".to_owned(),
+            "package_manifest".to_owned(),
+        );
+        descriptor.manifest.metadata.insert(
+            "plugin_package_root".to_owned(),
+            "/forged/package-root".to_owned(),
+        );
+        descriptor.manifest.metadata.insert(
+            "plugin_package_manifest_path".to_owned(),
+            "/forged/package-manifest".to_owned(),
+        );
+
+        let report = PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            descriptors: vec![descriptor.clone()],
+        };
+        let translation = test_translation(&descriptor);
+
+        let enriched = enrich_scan_report_with_translation(&report, &translation);
+        let metadata = &enriched.descriptors[0].manifest.metadata;
+
+        assert_eq!(
+            metadata.get("plugin_source_path").map(String::as_str),
+            Some("/tmp/pkg/plugin.py")
+        );
+        assert_eq!(
+            metadata.get("plugin_source_kind").map(String::as_str),
+            Some("embedded_source")
+        );
+        assert_eq!(
+            metadata.get("plugin_package_root").map(String::as_str),
+            Some("/tmp/pkg")
+        );
+        assert!(
+            !metadata.contains_key("plugin_package_manifest_path"),
+            "source fallback should remove forged package manifest paths"
         );
     }
 }
