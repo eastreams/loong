@@ -115,4 +115,16 @@ mod tests {
         let payload = json!({"limit": 0});
         assert_eq!(optional_payload_limit(&payload, "limit", 10, 20), 1);
     }
+
+    #[test]
+    fn optional_limit_returns_value_in_normal_range() {
+        let payload = json!({"limit": 5});
+        assert_eq!(optional_payload_limit(&payload, "limit", 10, 20), 5);
+    }
+
+    #[test]
+    fn optional_limit_returns_default_for_negative() {
+        let payload = json!({"limit": -3});
+        assert_eq!(optional_payload_limit(&payload, "limit", 10, 20), 10);
+    }
 }
