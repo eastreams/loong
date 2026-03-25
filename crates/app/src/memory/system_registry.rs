@@ -246,21 +246,6 @@ pub fn collect_memory_system_runtime_snapshot(
 }
 
 #[cfg(test)]
-pub(crate) fn set_memory_system_env_override(value: Option<&str>) {
-    let normalized = value.and_then(super::normalize_system_id);
-    if let Ok(mut guard) = env_override().lock() {
-        *guard = Some(normalized);
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn clear_memory_system_env_override() {
-    if let Ok(mut guard) = env_override().lock() {
-        *guard = None;
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::memory::{MEMORY_SYSTEM_API_VERSION, MemorySystemCapability};
@@ -414,13 +399,13 @@ mod tests {
 
     #[test]
     fn memory_system_env_overrides_default_selection() {
-        let _env = ScopedEnv::new();
-        set_memory_system_env_override(Some("builtin"));
+        let mut env = ScopedEnv::new();
+        clear_memory_runtime_env_overrides(&mut env);
+        env.set(MEMORY_SYSTEM_ENV, "builtin");
         let config = LoongClawConfig::default();
         let selection = resolve_memory_system_selection(&config);
         assert_eq!(selection.id, DEFAULT_MEMORY_SYSTEM_ID);
         assert_eq!(selection.source, MemorySystemSelectionSource::Env);
-        clear_memory_system_env_override();
     }
 
     #[test]
