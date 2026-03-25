@@ -1127,6 +1127,125 @@ async fn execute_spec_skips_blocked_plugins_when_bridge_enforcement_is_disabled(
 }
 
 #[tokio::test]
+async fn execute_spec_surfaces_setup_incomplete_plugins_without_marking_them_ready() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-plugin-setup-incomplete-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    let plugin_file = plugin_root.join("tavily_search.py");
+    fs::write(
+        &plugin_file,
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "tavily-search",
+#   "provider_id": "tavily-search",
+#   "connector_name": "tavily-http",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/tavily",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
+#   "summary": "Tavily web search",
+#   "setup": {
+#     "mode": "metadata_only",
+#     "surface": "web_search",
+#     "required_env_vars": ["TAVILY_API_KEY"],
+#     "required_config_keys": ["tools.web_search.default_provider"],
+#     "remediation": "configure tavily before enabling search"
+#   }
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write plugin file");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-plugin-setup-incomplete".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-plugin-setup-incomplete".to_owned(),
+        ttl_s: 120,
+        approval: Some(HumanApprovalSpec {
+            mode: HumanApprovalMode::Disabled,
+            ..HumanApprovalSpec::default()
+        }),
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: Some(BridgeSupportSpec {
+            enabled: true,
+            supported_bridges: vec![PluginBridgeKind::HttpJson],
+            supported_adapter_families: Vec::new(),
+            enforce_supported: true,
+            policy_version: None,
+            expected_checksum: None,
+            expected_sha256: None,
+            execute_process_stdio: false,
+            execute_http_json: false,
+            allowed_process_commands: Vec::new(),
+            enforce_execution_success: false,
+            security_scan: None,
+        }),
+        bootstrap: None,
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        operation: OperationSpec::ToolSearch {
+            query: "tavily".to_owned(),
+            limit: 5,
+            include_deferred: true,
+            include_examples: false,
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+
+    assert_eq!(report.operation_kind, "tool_search");
+    assert_eq!(report.plugin_activation_plans.len(), 1);
+    assert_eq!(report.plugin_activation_plans[0].ready_plugins, 0);
+    assert_eq!(
+        report.plugin_activation_plans[0].setup_incomplete_plugins,
+        1
+    );
+    assert_eq!(report.plugin_activation_plans[0].blocked_plugins, 0);
+    assert!(report.plugin_bootstrap_queue.is_empty());
+    assert_eq!(report.outcome["returned"], 1);
+    assert_eq!(report.outcome["results"][0]["provider_id"], "tavily-search");
+    assert_eq!(report.outcome["results"][0]["setup_ready"], false);
+    assert_eq!(
+        report.outcome["results"][0]["missing_required_env_vars"][0],
+        "TAVILY_API_KEY"
+    );
+    assert_eq!(
+        report.outcome["results"][0]["missing_required_config_keys"][0],
+        "tools.web_search.default_provider"
+    );
+    assert!(
+        report
+            .integration_catalog
+            .provider("tavily-search")
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn execute_spec_bootstrap_applies_only_bridges_allowed_by_bootstrap_policy() {
     use std::time::{SystemTime, UNIX_EPOCH};
 

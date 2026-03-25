@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use kernel::{IntegrationCatalog, PluginBridgeKind, PluginScanReport, PluginTranslationReport};
+use kernel::{
+    IntegrationCatalog, PluginBridgeKind, PluginScanReport, PluginSetupReadinessContext,
+    PluginTranslationReport, evaluate_plugin_setup_requirements,
+};
 use serde_json::Value;
 
 use super::descriptor_bridge_kind;
@@ -10,6 +13,7 @@ pub(super) fn execute_tool_search(
     integration_catalog: &IntegrationCatalog,
     plugin_scan_reports: &[PluginScanReport],
     plugin_translation_reports: &[PluginTranslationReport],
+    setup_readiness_context: &PluginSetupReadinessContext,
     query: &str,
     limit: usize,
     include_deferred: bool,
@@ -110,6 +114,9 @@ pub(super) fn execute_tool_search(
                 setup_default_env_var,
                 setup_docs_urls,
                 setup_remediation,
+                setup_ready: true,
+                missing_required_env_vars: Vec::new(),
+                missing_required_config_keys: Vec::new(),
                 summary,
                 tags,
                 input_examples,
@@ -184,6 +191,9 @@ pub(super) fn execute_tool_search(
                         .setup
                         .as_ref()
                         .and_then(|setup| setup.remediation.clone()),
+                    setup_ready: true,
+                    missing_required_env_vars: Vec::new(),
+                    missing_required_config_keys: Vec::new(),
                     summary: manifest.summary.clone(),
                     tags: manifest.tags.clone(),
                     input_examples: manifest.input_examples.clone(),
@@ -289,6 +299,17 @@ pub(super) fn execute_tool_search(
         }
     }
 
+    for entry in entries.values_mut() {
+        let readiness = evaluate_plugin_setup_requirements(
+            &entry.setup_required_env_vars,
+            &entry.setup_required_config_keys,
+            setup_readiness_context,
+        );
+        entry.setup_ready = readiness.ready;
+        entry.missing_required_env_vars = readiness.missing_required_env_vars;
+        entry.missing_required_config_keys = readiness.missing_required_config_keys;
+    }
+
     let query_normalized = query.trim().to_ascii_lowercase();
     let tokens: Vec<String> = query_normalized
         .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
@@ -342,6 +363,9 @@ pub(super) fn execute_tool_search(
             setup_default_env_var: entry.setup_default_env_var,
             setup_docs_urls: entry.setup_docs_urls,
             setup_remediation: entry.setup_remediation,
+            setup_ready: entry.setup_ready,
+            missing_required_env_vars: entry.missing_required_env_vars,
+            missing_required_config_keys: entry.missing_required_config_keys,
             score,
             deferred: entry.deferred,
             loaded: entry.loaded,
@@ -625,7 +649,7 @@ fn tool_search_score(entry: &ToolSearchEntry, query: &str, tokens: &[String]) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kernel::{IntegrationCatalog, ProviderConfig};
+    use kernel::{IntegrationCatalog, PluginSetupReadinessContext, ProviderConfig};
     use std::collections::BTreeMap;
 
     #[test]
@@ -681,7 +705,16 @@ mod tests {
         };
         catalog.upsert_provider(provider);
 
-        let results = execute_tool_search(&catalog, &[], &[], "TAVILY_API_KEY", 10, true, false);
+        let results = execute_tool_search(
+            &catalog,
+            &[],
+            &[],
+            &PluginSetupReadinessContext::default(),
+            "TAVILY_API_KEY",
+            10,
+            true,
+            false,
+        );
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].source_kind.as_deref(), Some("package_manifest"));
@@ -700,5 +733,58 @@ mod tests {
             results[0].setup_required_env_vars,
             vec!["TAVILY_API_KEY".to_owned()]
         );
+        assert!(!results[0].setup_ready);
+        assert_eq!(
+            results[0].missing_required_env_vars,
+            vec!["TAVILY_API_KEY".to_owned()]
+        );
+        assert_eq!(
+            results[0].missing_required_config_keys,
+            vec!["tools.web_search.default_provider".to_owned()]
+        );
+    }
+
+    #[test]
+    fn execute_tool_search_marks_setup_ready_when_requirements_are_verified() {
+        let mut catalog = IntegrationCatalog::new();
+        let provider = ProviderConfig {
+            provider_id: "tavily".to_owned(),
+            connector_name: "tavily-http".to_owned(),
+            version: "1.0.0".to_owned(),
+            metadata: BTreeMap::from([
+                (
+                    "plugin_setup_required_env_vars_json".to_owned(),
+                    "[\"TAVILY_API_KEY\"]".to_owned(),
+                ),
+                (
+                    "plugin_setup_required_config_keys_json".to_owned(),
+                    "[\"tools.web_search.default_provider\"]".to_owned(),
+                ),
+            ]),
+        };
+        catalog.upsert_provider(provider);
+
+        let setup_readiness_context = PluginSetupReadinessContext {
+            verified_env_vars: std::collections::BTreeSet::from(["TAVILY_API_KEY".to_owned()]),
+            verified_config_keys: std::collections::BTreeSet::from([
+                "tools.web_search.default_provider".to_owned(),
+            ]),
+        };
+
+        let results = execute_tool_search(
+            &catalog,
+            &[],
+            &[],
+            &setup_readiness_context,
+            "tavily",
+            10,
+            true,
+            false,
+        );
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].setup_ready);
+        assert!(results[0].missing_required_env_vars.is_empty());
+        assert!(results[0].missing_required_config_keys.is_empty());
     }
 }

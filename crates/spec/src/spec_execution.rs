@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    ffi::OsString,
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -13,9 +14,10 @@ use kernel::{
     CodebaseAwarenessSnapshot, ConnectorCommand, InMemoryAuditSink, IntegrationCatalog,
     LoongClawKernel, MemoryCoreRequest, MemoryExtensionRequest, PluginAbsorbReport,
     PluginActivationPlan, PluginActivationStatus, PluginBootstrapExecutor, PluginBridgeKind,
-    PluginDescriptor, PluginScanReport, PluginScanner, PluginSetup, PluginTranslationReport,
-    PluginTranslator, ProvisionPlan, RuntimeCoreRequest, RuntimeExtensionRequest,
-    StaticPolicyEngine, SystemClock, TaskIntent, ToolCoreRequest, ToolExtensionRequest,
+    PluginDescriptor, PluginScanReport, PluginScanner, PluginSetup, PluginSetupReadinessContext,
+    PluginTranslationReport, PluginTranslator, ProvisionPlan, RuntimeCoreRequest,
+    RuntimeExtensionRequest, StaticPolicyEngine, SystemClock, TaskIntent, ToolCoreRequest,
+    ToolExtensionRequest,
 };
 use serde_json::{Value, json};
 
@@ -90,6 +92,7 @@ pub async fn execute_spec_with_native_tool_executor(
         .as_ref()
         .map(|_| SecurityScanReport::default());
     let mut auto_provision_plan = None;
+    let setup_readiness_context = plugin_setup_readiness_context_from_process_env();
 
     if !approval_guard.approved {
         blocked_reason = Some(approval_guard.reason.clone());
@@ -210,7 +213,8 @@ pub async fn execute_spec_with_native_tool_executor(
                 }
             };
             let translation = translator.translate_scan_report(&report);
-            let activation = translator.plan_activation(&translation, &bridge_matrix);
+            let activation =
+                translator.plan_activation(&translation, &bridge_matrix, &setup_readiness_context);
 
             if enforce_bridge_support && activation.has_blockers() {
                 blocked_reason = Some(format!(
@@ -511,6 +515,7 @@ pub async fn execute_spec_with_native_tool_executor(
         &integration_catalog,
         &plugin_scan_reports,
         &plugin_translation_reports,
+        &setup_readiness_context,
         &spec.operation,
     )
     .await
@@ -758,6 +763,38 @@ fn bridge_support_matrix(spec: &RunnerSpec) -> (BridgeSupportMatrix, bool) {
         }
         _ => (BridgeSupportMatrix::default(), false),
     }
+}
+
+fn plugin_setup_readiness_context_from_process_env() -> PluginSetupReadinessContext {
+    let verified_env_vars = collect_verified_env_var_names(std::env::vars_os());
+
+    PluginSetupReadinessContext {
+        verified_env_vars,
+        verified_config_keys: BTreeSet::new(),
+    }
+}
+
+fn collect_verified_env_var_names<I>(env_vars: I) -> BTreeSet<String>
+where
+    I: IntoIterator<Item = (OsString, OsString)>,
+{
+    let mut verified_env_vars = BTreeSet::new();
+
+    for (raw_name, raw_value) in env_vars {
+        let name = raw_name.to_string_lossy().trim().to_owned();
+        if name.is_empty() {
+            continue;
+        }
+
+        let value = raw_value.to_string_lossy().trim().to_owned();
+        if value.is_empty() {
+            continue;
+        }
+
+        verified_env_vars.insert(name);
+    }
+
+    verified_env_vars
 }
 
 fn bridge_runtime_policy(
@@ -1194,6 +1231,7 @@ async fn execute_spec_operation(
     integration_catalog: &IntegrationCatalog,
     plugin_scan_reports: &[PluginScanReport],
     plugin_translation_reports: &[PluginTranslationReport],
+    setup_readiness_context: &PluginSetupReadinessContext,
     operation: &OperationSpec,
 ) -> CliResult<(&'static str, Value)> {
     match operation {
@@ -1458,6 +1496,7 @@ async fn execute_spec_operation(
                 integration_catalog,
                 plugin_scan_reports,
                 plugin_translation_reports,
+                setup_readiness_context,
                 query,
                 *limit,
                 *include_deferred,
@@ -1565,6 +1604,27 @@ mod bootstrap_policy_tests {
         let policy = bootstrap_policy(&spec).expect("bootstrap policy should resolve");
         assert!(policy.allow_acp_bridge_auto_apply);
         assert!(!policy.allow_acp_runtime_auto_apply);
+    }
+}
+
+#[cfg(test)]
+mod setup_readiness_context_tests {
+    use super::*;
+
+    #[test]
+    fn collect_verified_env_var_names_ignores_blank_names_and_values() {
+        let env_vars = vec![
+            (OsString::from("TAVILY_API_KEY"), OsString::from("secret")),
+            (OsString::from("EMPTY_VALUE"), OsString::from("   ")),
+            (OsString::from("   "), OsString::from("ignored")),
+        ];
+
+        let verified_env_vars = collect_verified_env_var_names(env_vars);
+
+        assert_eq!(
+            verified_env_vars,
+            BTreeSet::from(["TAVILY_API_KEY".to_owned()])
+        );
     }
 }
 

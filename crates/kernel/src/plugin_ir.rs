@@ -62,6 +62,61 @@ pub struct PluginIR {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PluginSetupReadinessContext {
+    pub verified_env_vars: BTreeSet<String>,
+    pub verified_config_keys: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginSetupReadiness {
+    pub ready: bool,
+    pub missing_required_env_vars: Vec<String>,
+    pub missing_required_config_keys: Vec<String>,
+}
+
+impl Default for PluginSetupReadiness {
+    fn default() -> Self {
+        Self {
+            ready: true,
+            missing_required_env_vars: Vec::new(),
+            missing_required_config_keys: Vec::new(),
+        }
+    }
+}
+
+pub fn evaluate_plugin_setup_requirements(
+    required_env_vars: &[String],
+    required_config_keys: &[String],
+    context: &PluginSetupReadinessContext,
+) -> PluginSetupReadiness {
+    let mut missing_required_env_vars = Vec::new();
+    for required_env_var in required_env_vars {
+        let env_var_is_verified = context.verified_env_vars.contains(required_env_var);
+        if !env_var_is_verified {
+            missing_required_env_vars.push(required_env_var.clone());
+        }
+    }
+
+    let mut missing_required_config_keys = Vec::new();
+    for required_config_key in required_config_keys {
+        let config_key_is_verified = context.verified_config_keys.contains(required_config_key);
+        if !config_key_is_verified {
+            missing_required_config_keys.push(required_config_key.clone());
+        }
+    }
+
+    let env_ready = missing_required_env_vars.is_empty();
+    let config_ready = missing_required_config_keys.is_empty();
+    let ready = env_ready && config_ready;
+
+    PluginSetupReadiness {
+        ready,
+        missing_required_env_vars,
+        missing_required_config_keys,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct PluginTranslationReport {
     pub translated_plugins: usize,
     pub bridge_distribution: BTreeMap<String, usize>,
@@ -72,6 +127,7 @@ pub struct PluginTranslationReport {
 #[serde(rename_all = "snake_case")]
 pub enum PluginActivationStatus {
     Ready,
+    SetupIncomplete,
     BlockedUnsupportedBridge,
     BlockedUnsupportedAdapterFamily,
 }
@@ -87,6 +143,8 @@ pub struct PluginActivationCandidate {
     pub adapter_family: String,
     pub status: PluginActivationStatus,
     pub reason: String,
+    pub missing_required_env_vars: Vec<String>,
+    pub missing_required_config_keys: Vec<String>,
     pub bootstrap_hint: String,
 }
 
@@ -94,6 +152,7 @@ pub struct PluginActivationCandidate {
 pub struct PluginActivationPlan {
     pub total_plugins: usize,
     pub ready_plugins: usize,
+    pub setup_incomplete_plugins: usize,
     pub blocked_plugins: usize,
     pub candidates: Vec<PluginActivationCandidate>,
 }
@@ -191,11 +250,16 @@ impl PluginTranslator {
         &self,
         translation: &PluginTranslationReport,
         matrix: &BridgeSupportMatrix,
+        setup_readiness_context: &PluginSetupReadinessContext,
     ) -> PluginActivationPlan {
         let mut plan = PluginActivationPlan::default();
 
         for ir in &translation.entries {
             plan.total_plugins = plan.total_plugins.saturating_add(1);
+
+            let setup_readiness =
+                evaluate_plugin_setup_readiness(ir.setup.as_ref(), setup_readiness_context);
+            let setup_is_incomplete = !setup_readiness.ready;
 
             let (status, reason) = if !matrix.is_bridge_supported(ir.runtime.bridge_kind) {
                 (
@@ -213,6 +277,11 @@ impl PluginTranslator {
                         ir.runtime.adapter_family
                     ),
                 )
+            } else if setup_is_incomplete {
+                (
+                    PluginActivationStatus::SetupIncomplete,
+                    format_plugin_setup_incomplete_reason(&setup_readiness),
+                )
             } else {
                 (
                     PluginActivationStatus::Ready,
@@ -223,6 +292,9 @@ impl PluginTranslator {
             match status {
                 PluginActivationStatus::Ready => {
                     plan.ready_plugins = plan.ready_plugins.saturating_add(1)
+                }
+                PluginActivationStatus::SetupIncomplete => {
+                    plan.setup_incomplete_plugins = plan.setup_incomplete_plugins.saturating_add(1)
                 }
                 PluginActivationStatus::BlockedUnsupportedBridge
                 | PluginActivationStatus::BlockedUnsupportedAdapterFamily => {
@@ -240,12 +312,48 @@ impl PluginTranslator {
                 adapter_family: ir.runtime.adapter_family.clone(),
                 status,
                 reason,
+                missing_required_env_vars: setup_readiness.missing_required_env_vars,
+                missing_required_config_keys: setup_readiness.missing_required_config_keys,
                 bootstrap_hint: bootstrap_hint(ir),
             });
         }
 
         plan
     }
+}
+
+fn evaluate_plugin_setup_readiness(
+    setup: Option<&PluginSetup>,
+    context: &PluginSetupReadinessContext,
+) -> PluginSetupReadiness {
+    let Some(setup) = setup else {
+        return PluginSetupReadiness::default();
+    };
+
+    evaluate_plugin_setup_requirements(
+        &setup.required_env_vars,
+        &setup.required_config_keys,
+        context,
+    )
+}
+
+fn format_plugin_setup_incomplete_reason(readiness: &PluginSetupReadiness) -> String {
+    let mut reasons = Vec::new();
+
+    if !readiness.missing_required_env_vars.is_empty() {
+        let missing_env_vars = readiness.missing_required_env_vars.join(", ");
+        let env_reason = format!("missing required env vars: {missing_env_vars}");
+        reasons.push(env_reason);
+    }
+
+    if !readiness.missing_required_config_keys.is_empty() {
+        let missing_config_keys = readiness.missing_required_config_keys.join(", ");
+        let config_reason = format!("missing required config keys: {missing_config_keys}");
+        reasons.push(config_reason);
+    }
+
+    let combined_reasons = reasons.join("; ");
+    format!("plugin setup is incomplete: {combined_reasons}")
 }
 
 fn infer_runtime_profile(language: &str, manifest: &PluginManifest) -> PluginRuntimeProfile {
@@ -546,10 +654,10 @@ mod tests {
     }
 
     #[test]
-    fn activation_plan_blocks_unsupported_bridge() {
+    fn activation_plan_marks_setup_incomplete_when_required_setup_is_missing() {
         let descriptor = descriptor(
             "js",
-            BTreeMap::from([("bridge_kind".to_owned(), "mcp_server".to_owned())]),
+            BTreeMap::from([("bridge_kind".to_owned(), "http_json".to_owned())]),
         );
         let translator = PluginTranslator::new();
         let translation = translator.translate_scan_report(&PluginScanReport {
@@ -562,11 +670,13 @@ mod tests {
             supported_bridges: BTreeSet::from([PluginBridgeKind::HttpJson]),
             supported_adapter_families: BTreeSet::new(),
         };
-        let plan = translator.plan_activation(&translation, &matrix);
+        let setup_readiness_context = PluginSetupReadinessContext::default();
+        let plan = translator.plan_activation(&translation, &matrix, &setup_readiness_context);
 
         assert_eq!(plan.total_plugins, 1);
         assert_eq!(plan.ready_plugins, 0);
-        assert_eq!(plan.blocked_plugins, 1);
+        assert_eq!(plan.setup_incomplete_plugins, 1);
+        assert_eq!(plan.blocked_plugins, 0);
         assert_eq!(
             plan.candidates[0].source_kind,
             PluginSourceKind::EmbeddedSource
@@ -575,8 +685,16 @@ mod tests {
         assert_eq!(plan.candidates[0].package_manifest_path, None);
         assert!(matches!(
             plan.candidates[0].status,
-            PluginActivationStatus::BlockedUnsupportedBridge
+            PluginActivationStatus::SetupIncomplete
         ));
+        assert_eq!(
+            plan.candidates[0].missing_required_env_vars,
+            vec!["TAVILY_API_KEY".to_owned()]
+        );
+        assert_eq!(
+            plan.candidates[0].missing_required_config_keys,
+            vec!["tools.web_search.default_provider".to_owned()]
+        );
     }
 
     #[test]
@@ -599,7 +717,11 @@ mod tests {
             supported_bridges: BTreeSet::from([PluginBridgeKind::ProcessStdio]),
             supported_adapter_families: BTreeSet::from(["rust-stdio-adapter".to_owned()]),
         };
-        let plan = translator.plan_activation(&translation, &matrix);
+        let setup_readiness_context = PluginSetupReadinessContext {
+            verified_env_vars: BTreeSet::from(["TAVILY_API_KEY".to_owned()]),
+            verified_config_keys: BTreeSet::from(["tools.web_search.default_provider".to_owned()]),
+        };
+        let plan = translator.plan_activation(&translation, &matrix, &setup_readiness_context);
 
         assert_eq!(plan.total_plugins, 1);
         assert_eq!(plan.ready_plugins, 0);
@@ -607,6 +729,70 @@ mod tests {
         assert!(matches!(
             plan.candidates[0].status,
             PluginActivationStatus::BlockedUnsupportedAdapterFamily
+        ));
+    }
+
+    #[test]
+    fn activation_plan_marks_plugin_ready_when_setup_requirements_are_verified() {
+        let descriptor = descriptor("manifest", BTreeMap::new());
+        let translator = PluginTranslator::new();
+        let translation = translator.translate_scan_report(&PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            descriptors: vec![descriptor],
+        });
+
+        let matrix = BridgeSupportMatrix {
+            supported_bridges: BTreeSet::from([PluginBridgeKind::HttpJson]),
+            supported_adapter_families: BTreeSet::new(),
+        };
+        let setup_readiness_context = PluginSetupReadinessContext {
+            verified_env_vars: BTreeSet::from(["TAVILY_API_KEY".to_owned()]),
+            verified_config_keys: BTreeSet::from(["tools.web_search.default_provider".to_owned()]),
+        };
+        let plan = translator.plan_activation(&translation, &matrix, &setup_readiness_context);
+
+        assert_eq!(plan.total_plugins, 1);
+        assert_eq!(plan.ready_plugins, 1);
+        assert_eq!(plan.setup_incomplete_plugins, 0);
+        assert_eq!(plan.blocked_plugins, 0);
+        assert!(matches!(
+            plan.candidates[0].status,
+            PluginActivationStatus::Ready
+        ));
+        assert!(plan.candidates[0].missing_required_env_vars.is_empty());
+        assert!(plan.candidates[0].missing_required_config_keys.is_empty());
+    }
+
+    #[test]
+    fn activation_plan_still_blocks_unsupported_bridge_before_setup_readiness() {
+        let descriptor = descriptor(
+            "js",
+            BTreeMap::from([("bridge_kind".to_owned(), "mcp_server".to_owned())]),
+        );
+        let translator = PluginTranslator::new();
+        let translation = translator.translate_scan_report(&PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            descriptors: vec![descriptor],
+        });
+
+        let matrix = BridgeSupportMatrix {
+            supported_bridges: BTreeSet::from([PluginBridgeKind::HttpJson]),
+            supported_adapter_families: BTreeSet::new(),
+        };
+        let setup_readiness_context = PluginSetupReadinessContext {
+            verified_env_vars: BTreeSet::from(["TAVILY_API_KEY".to_owned()]),
+            verified_config_keys: BTreeSet::from(["tools.web_search.default_provider".to_owned()]),
+        };
+        let plan = translator.plan_activation(&translation, &matrix, &setup_readiness_context);
+
+        assert_eq!(plan.ready_plugins, 0);
+        assert_eq!(plan.setup_incomplete_plugins, 0);
+        assert_eq!(plan.blocked_plugins, 1);
+        assert!(matches!(
+            plan.candidates[0].status,
+            PluginActivationStatus::BlockedUnsupportedBridge
         ));
     }
 }
