@@ -2251,6 +2251,125 @@ pub async fn run_wecom_channel_with_stop(
     run_wecom_channel_with_context(context, stop, initialize_runtime_environment).await
 }
 
+pub async fn run_background_channel_with_stop(
+    channel_id: &str,
+    resolved_path: PathBuf,
+    config: LoongClawConfig,
+    account_id: Option<&str>,
+    stop: ChannelServeStopHandle,
+    initialize_runtime_environment: bool,
+) -> CliResult<()> {
+    match channel_id {
+        "telegram" => {
+            #[cfg(feature = "channel-telegram")]
+            {
+                return run_telegram_channel_with_stop(
+                    resolved_path,
+                    config,
+                    false,
+                    account_id,
+                    stop,
+                    initialize_runtime_environment,
+                )
+                .await;
+            }
+            #[cfg(not(feature = "channel-telegram"))]
+            {
+                let _ = (
+                    resolved_path,
+                    config,
+                    account_id,
+                    stop,
+                    initialize_runtime_environment,
+                );
+                return Err(
+                    "telegram channel is disabled (enable feature `channel-telegram`)".to_owned(),
+                );
+            }
+        }
+        "feishu" => {
+            #[cfg(feature = "channel-feishu")]
+            {
+                return run_feishu_channel_with_stop(
+                    resolved_path,
+                    config,
+                    account_id,
+                    None,
+                    None,
+                    stop,
+                    initialize_runtime_environment,
+                )
+                .await;
+            }
+            #[cfg(not(feature = "channel-feishu"))]
+            {
+                let _ = (
+                    resolved_path,
+                    config,
+                    account_id,
+                    stop,
+                    initialize_runtime_environment,
+                );
+                return Err(
+                    "feishu channel is disabled (enable feature `channel-feishu`)".to_owned(),
+                );
+            }
+        }
+        "matrix" => {
+            #[cfg(feature = "channel-matrix")]
+            {
+                return run_matrix_channel_with_stop(
+                    resolved_path,
+                    config,
+                    false,
+                    account_id,
+                    stop,
+                    initialize_runtime_environment,
+                )
+                .await;
+            }
+            #[cfg(not(feature = "channel-matrix"))]
+            {
+                let _ = (
+                    resolved_path,
+                    config,
+                    account_id,
+                    stop,
+                    initialize_runtime_environment,
+                );
+                return Err(
+                    "matrix channel is disabled (enable feature `channel-matrix`)".to_owned(),
+                );
+            }
+        }
+        "wecom" => {
+            #[cfg(feature = "channel-wecom")]
+            {
+                return run_wecom_channel_with_stop(
+                    resolved_path,
+                    config,
+                    account_id,
+                    stop,
+                    initialize_runtime_environment,
+                )
+                .await;
+            }
+            #[cfg(not(feature = "channel-wecom"))]
+            {
+                let _ = (
+                    resolved_path,
+                    config,
+                    account_id,
+                    stop,
+                    initialize_runtime_environment,
+                );
+                return Err("wecom channel is disabled (enable feature `channel-wecom`)".to_owned());
+            }
+        }
+        _ => Err(format!("unsupported background channel `{channel_id}`")),
+    }
+}
+
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",

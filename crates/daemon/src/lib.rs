@@ -892,9 +892,14 @@ mod multi_channel_serve_tests {
         assert_eq!(actual_ids, expected_ids);
     }
 
-    #[cfg(not(feature = "channel-matrix"))]
     #[test]
     fn parse_multi_channel_serve_channel_account_rejects_compiled_out_matrix_runtime() {
+        let supported_channel_ids = supported_multi_channel_serve_channel_ids();
+        let matrix_is_supported = supported_channel_ids.contains(&"matrix");
+        if matrix_is_supported {
+            return;
+        }
+
         let error = parse_multi_channel_serve_channel_account("matrix=bridge-sync")
             .expect_err("compiled-out matrix runtime should be rejected");
 
