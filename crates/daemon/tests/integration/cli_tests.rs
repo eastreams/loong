@@ -1509,6 +1509,21 @@ fn multi_channel_serve_cli_parses_channel_account_selection_flags() {
 }
 
 #[test]
+fn multi_channel_serve_cli_rejects_malformed_channel_account_selector() {
+    let error = Cli::try_parse_from([
+        "loongclaw",
+        "multi-channel-serve",
+        "--session",
+        "cli-supervisor",
+        "--channel-account",
+        "telegrambot123",
+    ])
+    .expect_err("missing CHANNEL=ACCOUNT separator should fail");
+
+    assert!(error.to_string().contains("CHANNEL=ACCOUNT"));
+}
+
+#[test]
 fn multi_channel_serve_cli_help_mentions_session_and_channel_account_flags() {
     let mut command = Cli::command();
     let multi_channel_serve = command

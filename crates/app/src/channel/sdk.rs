@@ -240,9 +240,11 @@ pub fn is_background_channel_surface_enabled(
 }
 
 fn find_channel_integration(id: &str) -> Option<&'static ChannelIntegrationDescriptor> {
+    let normalized_id = super::registry::normalize_channel_catalog_id(id)?;
+
     CHANNEL_INTEGRATIONS
         .iter()
-        .find(|integration| integration.descriptor.id == id)
+        .find(|integration| integration.descriptor.id == normalized_id)
 }
 
 fn cli_channel_is_enabled(config: &LoongClawConfig) -> bool {
@@ -314,7 +316,7 @@ fn feishu_background_surface_is_enabled(
     let resolved = crate::feishu::resolve_requested_feishu_account(
         &config.feishu,
         account_id,
-        "rerun with `--account <configured_account_id>` using one of those configured accounts",
+        "rerun with `--channel-account <CHANNEL=ACCOUNT>` using one of those configured accounts",
     )?;
     Ok(resolved.enabled)
 }
@@ -391,6 +393,15 @@ mod tests {
             .expect_err("cli should not be a background channel");
 
         assert_eq!(error, "unsupported background channel `cli`");
+    }
+
+    #[test]
+    fn background_channel_surface_enablement_normalizes_aliases() {
+        let config = LoongClawConfig::default();
+        let enabled = is_background_channel_surface_enabled(" LARK ", &config, None)
+            .expect("feishu alias should normalize through the channel registry");
+
+        assert!(!enabled);
     }
 
     #[cfg(feature = "feishu-integration")]

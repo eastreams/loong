@@ -841,14 +841,14 @@ fn parse_multi_channel_serve_channel_account(
     let runtime_descriptor = mvp::channel::resolve_channel_runtime_command_descriptor(channel_token)
         .ok_or_else(|| {
             format!(
-                "unsupported multi-channel service channel `{channel_token}` (expected one of: {supported_channels})"
+                "unrecognized multi-channel service channel `{channel_token}` (available runtime-backed channels: {supported_channels})"
             )
         })?;
     let runtime_channel_id = runtime_descriptor.channel_id;
     let runtime_is_supported = supported_channel_ids.contains(&runtime_channel_id);
     if !runtime_is_supported {
         return Err(format!(
-            "unsupported multi-channel service channel `{channel_token}` (expected one of: {supported_channels})"
+            "multi-channel service channel `{channel_token}` resolves to `{runtime_channel_id}` but is not supported in this build (expected one of: {supported_channels})"
         ));
     }
 
@@ -903,7 +903,19 @@ mod multi_channel_serve_tests {
         let error = parse_multi_channel_serve_channel_account("matrix=bridge-sync")
             .expect_err("compiled-out matrix runtime should be rejected");
 
-        assert!(error.contains("unsupported multi-channel service channel `matrix`"));
+        assert!(
+            error.contains(
+                "multi-channel service channel `matrix` resolves to `matrix` but is not supported in this build"
+            )
+        );
+    }
+
+    #[test]
+    fn parse_multi_channel_serve_channel_account_rejects_unknown_runtime_channel() {
+        let error = parse_multi_channel_serve_channel_account("unknown=bridge-sync")
+            .expect_err("unknown runtime channel should be rejected");
+
+        assert!(error.contains("unrecognized multi-channel service channel `unknown`"));
     }
 }
 

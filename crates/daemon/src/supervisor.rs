@@ -80,6 +80,7 @@ fn collect_multi_channel_account_overrides(
 
     Ok(collected_accounts)
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfacePhase {
     Starting,
@@ -699,10 +700,11 @@ pub async fn run_multi_channel_serve_with_hooks_for_test(
                 )
             })?;
         let stop_handle = mvp::channel::ChannelServeStopHandle::new();
+        let account_id = surface.account_id().map(str::to_owned);
         let request = BackgroundChannelRunnerRequest {
             resolved_path: resolved_path.clone(),
             config: config.clone(),
-            account_id: surface.account_id.clone(),
+            account_id,
             stop: stop_handle.clone(),
             initialize_runtime_environment: false,
         };
