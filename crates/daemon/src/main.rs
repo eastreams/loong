@@ -520,6 +520,39 @@ async fn main() {
             )
             .await
         }
+        Commands::WecomSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                WECOM_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: &target,
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::WecomServe { config, account } => {
+            run_channel_serve_cli(
+                WECOM_SERVE_CLI_SPEC,
+                ChannelServeCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    once: false,
+                    bind_override: None,
+                    path_override: None,
+                },
+            )
+            .await
+        }
         Commands::MultiChannelServe {
             config,
             session,

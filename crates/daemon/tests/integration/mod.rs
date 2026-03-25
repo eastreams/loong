@@ -368,6 +368,14 @@ fn render_channel_surfaces_text_reports_aliases_and_operation_health() {
     config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
         "app-secret".to_owned(),
     ));
+    config.wecom.enabled = true;
+    config.wecom.bot_id = Some(loongclaw_contracts::SecretRef::Inline(
+        "bot_test".to_owned(),
+    ));
+    config.wecom.secret = Some(loongclaw_contracts::SecretRef::Inline(
+        "secret_test".to_owned(),
+    ));
+    config.wecom.allowed_conversation_ids = vec!["group_demo".to_owned()];
 
     let inventory = mvp::channel::channel_inventory(&config);
     let rendered = render_channel_surfaces_text("/tmp/loongclaw.toml", &inventory);
@@ -401,6 +409,16 @@ fn render_channel_surfaces_text_reports_aliases_and_operation_health() {
     assert!(rendered.contains(&format!(
         "op serve ({}) misconfigured: allowed_chat_ids is empty; verification_token is missing; encrypt_key is missing target_kinds=message_reply requirements=enabled,app_id,app_secret,mode,allowed_chat_ids,verification_token,encrypt_key",
         channel_serve_command("feishu")
+    )));
+    assert!(rendered.contains("WeCom [wecom]"));
+    assert!(rendered.contains("account=wecom:bot_test"));
+    assert!(rendered.contains(&format!(
+        "op send ({}) ready: ready target_kinds=conversation requirements=enabled,bot_id,secret,websocket_url",
+        channel_send_command("wecom")
+    )));
+    assert!(rendered.contains(&format!(
+        "op serve ({}) ready: ready target_kinds=conversation requirements=enabled,bot_id,secret,allowed_conversation_ids,websocket_url,ping_interval_s",
+        channel_serve_command("wecom")
     )));
     assert!(rendered.contains("running=false"));
 }
@@ -502,7 +520,22 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         "LINE [line] implementation_status=stub selection_order=60 selection_label=\"consumer messaging bot\""
     ));
     assert!(rendered.contains(
+        "Google Chat [google-chat] implementation_status=stub selection_order=120 selection_label=\"workspace thread bot\""
+    ));
+    assert!(rendered.contains(
+        "catalog op send (google-chat-send) availability=stub tracks_runtime=false target_kinds=conversation requirements=enabled,service_account_json,space_id"
+    ));
+    assert!(rendered.contains(
+        "Signal [signal] implementation_status=stub selection_order=130 selection_label=\"private messenger bridge\""
+    ));
+    assert!(rendered.contains(
+        "catalog op send (signal-send) availability=stub tracks_runtime=false target_kinds=address requirements=enabled,service_url,account"
+    ));
+    assert!(rendered.contains(
         "Webhook [webhook] implementation_status=stub selection_order=110 selection_label=\"generic http integration\""
+    ));
+    assert!(rendered.contains(
+        "WebChat [webchat] implementation_status=stub selection_order=230 selection_label=\"embedded web inbox\""
     ));
     assert!(rendered.contains(
         "catalog op send (webhook-send) availability=stub tracks_runtime=false target_kinds=endpoint requirements=enabled,endpoint_url,auth_token"
@@ -829,6 +862,29 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
             .expect("channel catalog array")
             .iter()
             .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("wecom")
+                    && entry
+                        .get("implementation_status")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("runtime_backed")
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["conversation"])
+            })
+    );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
                 entry.get("id").and_then(serde_json::Value::as_str) == Some("discord")
                     && entry
                         .get("implementation_status")
@@ -892,6 +948,52 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                         == Some(110)
             })
     );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("google-chat")
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["conversation"])
+                    && entry
+                        .get("selection_order")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(120)
+            })
+    );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("signal")
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["address"])
+                    && entry
+                        .get("selection_order")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(130)
+            })
+    );
 }
 
 #[test]
@@ -947,6 +1049,45 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
                         .collect::<Vec<_>>()
                 })
                 == Some(channel_supported_target_kinds("telegram"))
+            && surface
+                .get("configured_accounts")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len)
+                == Some(1)
+    }));
+
+    assert!(surfaces.iter().any(|surface| {
+        surface
+            .get("catalog")
+            .and_then(|catalog| catalog.get("id"))
+            .and_then(serde_json::Value::as_str)
+            == Some("wecom")
+            && surface
+                .get("default_configured_account_id")
+                .and_then(serde_json::Value::as_str)
+                == Some("default")
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("capabilities"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_capability_ids("wecom"))
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("supported_target_kinds"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_supported_target_kinds("wecom"))
             && surface
                 .get("configured_accounts")
                 .and_then(serde_json::Value::as_array)
@@ -1050,6 +1191,35 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
                         .collect::<Vec<_>>()
                 })
                 == Some(channel_supported_target_kinds("webhook"))
+            && surface
+                .get("configured_accounts")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len)
+                == Some(0)
+    }));
+
+    assert!(surfaces.iter().any(|surface| {
+        surface
+            .get("catalog")
+            .and_then(|catalog| catalog.get("id"))
+            .and_then(serde_json::Value::as_str)
+            == Some("webchat")
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("selection_order"))
+                .and_then(serde_json::Value::as_u64)
+                == Some(230)
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("supported_target_kinds"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_supported_target_kinds("webchat"))
             && surface
                 .get("configured_accounts")
                 .and_then(serde_json::Value::as_array)

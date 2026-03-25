@@ -1304,6 +1304,54 @@ fn matrix_send_cli_rejects_non_conversation_target_kind() {
 }
 
 #[test]
+fn wecom_send_cli_accepts_generic_target_and_defaults_to_conversation() {
+    let cli = Cli::try_parse_from([
+        "loongclaw",
+        channel_send_command("wecom"),
+        "--target",
+        "group_demo",
+        "--text",
+        "hello wecom",
+    ])
+    .expect("wecom send CLI should parse");
+
+    match cli.command {
+        Some(Commands::WecomSend {
+            target,
+            target_kind,
+            text,
+            ..
+        }) => {
+            assert_eq!(target, "group_demo");
+            assert_eq!(target_kind, channel_default_send_target_kind("wecom"));
+            assert_eq!(text, "hello wecom");
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn wecom_send_cli_rejects_non_conversation_target_kind() {
+    let error = Cli::try_parse_from([
+        "loongclaw",
+        channel_send_command("wecom"),
+        "--target",
+        "group_demo",
+        "--target-kind",
+        "message_reply",
+        "--text",
+        "hello wecom",
+    ])
+    .expect_err("wecom send should reject non-conversation kinds");
+
+    assert!(
+        error
+            .to_string()
+            .contains("wecom --target-kind does not support `message_reply`; use `conversation`")
+    );
+}
+
+#[test]
 fn matrix_serve_cli_accepts_once_and_account_flags() {
     let cli = Cli::try_parse_from(["loongclaw", "matrix-serve", "--once", "--account", "ops"])
         .expect("matrix serve CLI should parse");
@@ -1311,6 +1359,19 @@ fn matrix_serve_cli_accepts_once_and_account_flags() {
     match cli.command {
         Some(Commands::MatrixServe { once, account, .. }) => {
             assert!(once);
+            assert_eq!(account.as_deref(), Some("ops"));
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn wecom_serve_cli_accepts_account_flag() {
+    let cli = Cli::try_parse_from(["loongclaw", "wecom-serve", "--account", "ops"])
+        .expect("wecom serve CLI should parse");
+
+    match cli.command {
+        Some(Commands::WecomServe { account, .. }) => {
             assert_eq!(account.as_deref(), Some("ops"));
         }
         other => panic!("unexpected command parse result: {other:?}"),
@@ -1479,6 +1540,13 @@ fn default_channel_send_target_kind_uses_command_family_send_metadata() {
     assert_eq!(
         default_channel_send_target_kind(ChannelSendCliSpec {
             family: mvp::channel::MATRIX_COMMAND_FAMILY_DESCRIPTOR,
+            run: fake_send_cli_runner,
+        }),
+        mvp::channel::ChannelOutboundTargetKind::Conversation
+    );
+    assert_eq!(
+        default_channel_send_target_kind(ChannelSendCliSpec {
+            family: mvp::channel::WECOM_COMMAND_FAMILY_DESCRIPTOR,
             run: fake_send_cli_runner,
         }),
         mvp::channel::ChannelOutboundTargetKind::Conversation

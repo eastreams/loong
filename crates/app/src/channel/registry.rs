@@ -6,7 +6,8 @@ use crate::config::{
     ChannelDefaultAccountSelectionSource, FEISHU_APP_ID_ENV, FEISHU_APP_SECRET_ENV,
     FEISHU_ENCRYPT_KEY_ENV, FEISHU_VERIFICATION_TOKEN_ENV, FeishuChannelServeMode, LoongClawConfig,
     MATRIX_ACCESS_TOKEN_ENV, ResolvedFeishuChannelConfig, ResolvedMatrixChannelConfig,
-    ResolvedTelegramChannelConfig, TELEGRAM_BOT_TOKEN_ENV,
+    ResolvedTelegramChannelConfig, ResolvedWecomChannelConfig, TELEGRAM_BOT_TOKEN_ENV,
+    WECOM_BOT_ID_ENV, WECOM_SECRET_ENV,
 };
 
 use super::{ChannelCatalogTargetKind, ChannelOperationRuntime, ChannelPlatform, runtime_state};
@@ -21,9 +22,6 @@ const SLACK_APP_TOKEN_ENV: &str = "SLACK_APP_TOKEN";
 const SLACK_SIGNING_SECRET_ENV: &str = "SLACK_SIGNING_SECRET";
 const LINE_CHANNEL_ACCESS_TOKEN_ENV: &str = "LINE_CHANNEL_ACCESS_TOKEN";
 const LINE_CHANNEL_SECRET_ENV: &str = "LINE_CHANNEL_SECRET";
-const WECOM_CORP_ID_ENV: &str = "WECOM_CORP_ID";
-const WECOM_AGENT_ID_ENV: &str = "WECOM_AGENT_ID";
-const WECOM_CORP_SECRET_ENV: &str = "WECOM_CORP_SECRET";
 const DINGTALK_APP_KEY_ENV: &str = "DINGTALK_APP_KEY";
 const DINGTALK_APP_SECRET_ENV: &str = "DINGTALK_APP_SECRET";
 const DINGTALK_ROBOT_CODE_ENV: &str = "DINGTALK_ROBOT_CODE";
@@ -36,6 +34,32 @@ const EMAIL_IMAP_USERNAME_ENV: &str = "EMAIL_IMAP_USERNAME";
 const EMAIL_IMAP_PASSWORD_ENV: &str = "EMAIL_IMAP_PASSWORD";
 const WEBHOOK_AUTH_TOKEN_ENV: &str = "WEBHOOK_AUTH_TOKEN";
 const WEBHOOK_SIGNING_SECRET_ENV: &str = "WEBHOOK_SIGNING_SECRET";
+const GOOGLE_CHAT_SERVICE_ACCOUNT_JSON_ENV: &str = "GOOGLE_CHAT_SERVICE_ACCOUNT_JSON";
+const GOOGLE_CHAT_VERIFICATION_TOKEN_ENV: &str = "GOOGLE_CHAT_VERIFICATION_TOKEN";
+const SIGNAL_SERVICE_URL_ENV: &str = "SIGNAL_SERVICE_URL";
+const SIGNAL_ACCOUNT_ENV: &str = "SIGNAL_ACCOUNT";
+const TEAMS_APP_ID_ENV: &str = "TEAMS_APP_ID";
+const TEAMS_APP_PASSWORD_ENV: &str = "TEAMS_APP_PASSWORD";
+const TEAMS_TENANT_ID_ENV: &str = "TEAMS_TENANT_ID";
+const MATTERMOST_SERVER_URL_ENV: &str = "MATTERMOST_SERVER_URL";
+const MATTERMOST_BOT_TOKEN_ENV: &str = "MATTERMOST_BOT_TOKEN";
+const NEXTCLOUD_TALK_SERVER_URL_ENV: &str = "NEXTCLOUD_TALK_SERVER_URL";
+const NEXTCLOUD_TALK_APP_PASSWORD_ENV: &str = "NEXTCLOUD_TALK_APP_PASSWORD";
+const NEXTCLOUD_TALK_BOT_ACTOR_ID_ENV: &str = "NEXTCLOUD_TALK_BOT_ACTOR_ID";
+const IRC_SERVER_ENV: &str = "IRC_SERVER";
+const IRC_NICKNAME_ENV: &str = "IRC_NICKNAME";
+const IMESSAGE_BRIDGE_URL_ENV: &str = "IMESSAGE_BRIDGE_URL";
+const IMESSAGE_BRIDGE_TOKEN_ENV: &str = "IMESSAGE_BRIDGE_TOKEN";
+const NOSTR_RELAY_URLS_ENV: &str = "NOSTR_RELAY_URLS";
+const NOSTR_PRIVATE_KEY_ENV: &str = "NOSTR_PRIVATE_KEY";
+const TWITCH_BOT_OAUTH_TOKEN_ENV: &str = "TWITCH_BOT_OAUTH_TOKEN";
+const TWITCH_CLIENT_ID_ENV: &str = "TWITCH_CLIENT_ID";
+const ZALO_APP_ID_ENV: &str = "ZALO_APP_ID";
+const ZALO_OA_ACCESS_TOKEN_ENV: &str = "ZALO_OA_ACCESS_TOKEN";
+const ZALO_APP_SECRET_ENV: &str = "ZALO_APP_SECRET";
+const ZALO_PERSONAL_ACCESS_TOKEN_ENV: &str = "ZALO_PERSONAL_ACCESS_TOKEN";
+const WEBCHAT_PUBLIC_BASE_URL_ENV: &str = "WEBCHAT_PUBLIC_BASE_URL";
+const WEBCHAT_SESSION_SIGNING_SECRET_ENV: &str = "WEBCHAT_SESSION_SIGNING_SECRET";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelRuntimeCommandDescriptor {
@@ -63,6 +87,13 @@ pub const MATRIX_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
         channel_id: "matrix",
         platform: ChannelPlatform::Matrix,
         serve_bootstrap_agent_id: "channel-matrix",
+    };
+
+pub const WECOM_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
+    ChannelRuntimeCommandDescriptor {
+        channel_id: "wecom",
+        platform: ChannelPlatform::Wecom,
+        serve_bootstrap_agent_id: "channel-wecom",
     };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -663,6 +694,40 @@ pub const MATRIX_COMMAND_FAMILY_DESCRIPTOR: ChannelCommandFamilyDescriptor =
         catalog: MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     };
 
+const WECOM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "proactive send",
+    command: "wecom-send",
+    availability: ChannelCatalogOperationAvailability::Implemented,
+    tracks_runtime: false,
+    requirements: WECOM_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+
+const WECOM_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "long connection reply loop",
+    command: "wecom-serve",
+    availability: ChannelCatalogOperationAvailability::Implemented,
+    tracks_runtime: true,
+    requirements: WECOM_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+
+pub const WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
+    ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "wecom",
+        default_send_target_kind: ChannelCatalogTargetKind::Conversation,
+        send: WECOM_SEND_OPERATION,
+        serve: WECOM_SERVE_OPERATION,
+    };
+
+pub const WECOM_COMMAND_FAMILY_DESCRIPTOR: ChannelCommandFamilyDescriptor =
+    ChannelCommandFamilyDescriptor {
+        runtime: WECOM_RUNTIME_COMMAND_DESCRIPTOR,
+        catalog: WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    };
+
 const MATRIX_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
     ChannelCatalogOperationRequirement {
         id: "enabled",
@@ -1048,105 +1113,105 @@ const WECOM_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
         env_pointer_paths: &[],
         default_env_var: None,
     };
-const WECOM_CORP_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
+const WECOM_BOT_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
     ChannelCatalogOperationRequirement {
-        id: "corp_id",
-        label: "corp id",
-        config_paths: &["wecom.corp_id", "wecom.accounts.<account>.corp_id"],
-        env_pointer_paths: &["wecom.corp_id_env", "wecom.accounts.<account>.corp_id_env"],
-        default_env_var: Some(WECOM_CORP_ID_ENV),
+        id: "bot_id",
+        label: "aibot bot id",
+        config_paths: &["wecom.bot_id", "wecom.accounts.<account>.bot_id"],
+        env_pointer_paths: &["wecom.bot_id_env", "wecom.accounts.<account>.bot_id_env"],
+        default_env_var: Some(WECOM_BOT_ID_ENV),
     };
-const WECOM_AGENT_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
+const WECOM_SECRET_REQUIREMENT: ChannelCatalogOperationRequirement =
     ChannelCatalogOperationRequirement {
-        id: "agent_id",
-        label: "agent id",
-        config_paths: &["wecom.agent_id", "wecom.accounts.<account>.agent_id"],
-        env_pointer_paths: &[
-            "wecom.agent_id_env",
-            "wecom.accounts.<account>.agent_id_env",
+        id: "secret",
+        label: "aibot secret",
+        config_paths: &["wecom.secret", "wecom.accounts.<account>.secret"],
+        env_pointer_paths: &["wecom.secret_env", "wecom.accounts.<account>.secret_env"],
+        default_env_var: Some(WECOM_SECRET_ENV),
+    };
+const WECOM_ALLOWED_CONVERSATION_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_conversation_ids",
+        label: "allowed conversation ids",
+        config_paths: &[
+            "wecom.allowed_conversation_ids",
+            "wecom.accounts.<account>.allowed_conversation_ids",
         ],
-        default_env_var: Some(WECOM_AGENT_ID_ENV),
-    };
-const WECOM_CORP_SECRET_REQUIREMENT: ChannelCatalogOperationRequirement =
-    ChannelCatalogOperationRequirement {
-        id: "corp_secret",
-        label: "corp secret",
-        config_paths: &["wecom.corp_secret", "wecom.accounts.<account>.corp_secret"],
-        env_pointer_paths: &[
-            "wecom.corp_secret_env",
-            "wecom.accounts.<account>.corp_secret_env",
-        ],
-        default_env_var: Some(WECOM_CORP_SECRET_ENV),
-    };
-const WECOM_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
-    ChannelCatalogOperationRequirement {
-        id: "token",
-        label: "callback token",
-        config_paths: &["wecom.token", "wecom.accounts.<account>.token"],
-        env_pointer_paths: &["wecom.token_env", "wecom.accounts.<account>.token_env"],
+        env_pointer_paths: &[],
         default_env_var: None,
     };
-const WECOM_ENCODING_AES_KEY_REQUIREMENT: ChannelCatalogOperationRequirement =
+const WECOM_WEBSOCKET_URL_REQUIREMENT: ChannelCatalogOperationRequirement =
     ChannelCatalogOperationRequirement {
-        id: "encoding_aes_key",
-        label: "encoding aes key",
+        id: "websocket_url",
+        label: "websocket url override",
         config_paths: &[
-            "wecom.encoding_aes_key",
-            "wecom.accounts.<account>.encoding_aes_key",
+            "wecom.websocket_url",
+            "wecom.accounts.<account>.websocket_url",
         ],
-        env_pointer_paths: &[
-            "wecom.encoding_aes_key_env",
-            "wecom.accounts.<account>.encoding_aes_key_env",
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const WECOM_PING_INTERVAL_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "ping_interval_s",
+        label: "ping interval seconds",
+        config_paths: &[
+            "wecom.ping_interval_s",
+            "wecom.accounts.<account>.ping_interval_s",
         ],
+        env_pointer_paths: &[],
         default_env_var: None,
     };
 const WECOM_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
     WECOM_ENABLED_REQUIREMENT,
-    WECOM_CORP_ID_REQUIREMENT,
-    WECOM_AGENT_ID_REQUIREMENT,
-    WECOM_CORP_SECRET_REQUIREMENT,
+    WECOM_BOT_ID_REQUIREMENT,
+    WECOM_SECRET_REQUIREMENT,
+    WECOM_WEBSOCKET_URL_REQUIREMENT,
 ];
 const WECOM_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
     WECOM_ENABLED_REQUIREMENT,
-    WECOM_CORP_ID_REQUIREMENT,
-    WECOM_AGENT_ID_REQUIREMENT,
-    WECOM_CORP_SECRET_REQUIREMENT,
-    WECOM_TOKEN_REQUIREMENT,
-    WECOM_ENCODING_AES_KEY_REQUIREMENT,
+    WECOM_BOT_ID_REQUIREMENT,
+    WECOM_SECRET_REQUIREMENT,
+    WECOM_ALLOWED_CONVERSATION_IDS_REQUIREMENT,
+    WECOM_WEBSOCKET_URL_REQUIREMENT,
+    WECOM_PING_INTERVAL_REQUIREMENT,
 ];
-const WECOM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
-    id: CHANNEL_OPERATION_SEND_ID,
-    label: "app message send",
-    command: "wecom-send",
-    availability: ChannelCatalogOperationAvailability::Stub,
-    tracks_runtime: false,
-    requirements: WECOM_SEND_REQUIREMENTS,
-    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
-};
-const WECOM_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
-    id: CHANNEL_OPERATION_SERVE_ID,
-    label: "callback reply service",
-    command: "wecom-serve",
-    availability: ChannelCatalogOperationAvailability::Stub,
-    tracks_runtime: true,
-    requirements: WECOM_SERVE_REQUIREMENTS,
-    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
-};
+const WECOM_SEND_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
+    name: "wecom channel",
+    trigger: ChannelDoctorCheckTrigger::OperationHealth,
+}];
+const WECOM_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[
+    ChannelDoctorCheckSpec {
+        name: "wecom aibot long connection",
+        trigger: ChannelDoctorCheckTrigger::OperationHealth,
+    },
+    ChannelDoctorCheckSpec {
+        name: "wecom serve runtime",
+        trigger: ChannelDoctorCheckTrigger::ReadyRuntime,
+    },
+];
 const WECOM_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
-        operation: WECOM_SEND_OPERATION,
-        doctor_checks: &[],
+        operation: WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR.send,
+        doctor_checks: WECOM_SEND_DOCTOR_CHECKS,
     },
     ChannelRegistryOperationDescriptor {
-        operation: WECOM_SERVE_OPERATION,
-        doctor_checks: &[],
+        operation: WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
+        doctor_checks: WECOM_SERVE_DOCTOR_CHECKS,
     },
 ];
+const WECOM_CAPABILITIES: &[ChannelCapability] = &[
+    ChannelCapability::RuntimeBacked,
+    ChannelCapability::MultiAccount,
+    ChannelCapability::Send,
+    ChannelCapability::Serve,
+    ChannelCapability::RuntimeTracking,
+];
 const WECOM_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::Planned,
-    setup_hint: "planned WeCom callback surface; catalog metadata reflects the intended corp id, agent id, corp secret, and callback secret contract, but no runtime adapter is implemented yet",
-    status_command: "loongclaw channels --json",
-    repair_command: None,
+    strategy: ChannelOnboardingStrategy::ManualConfig,
+    setup_hint: "configure wecom aibot long connection credentials, allowed conversation ids, and optional websocket overrides in loongclaw.toml under wecom or wecom.accounts.<account>; do not configure webhook callback mode for this surface",
+    status_command: "loongclaw doctor",
+    repair_command: Some("loongclaw doctor --fix"),
 };
 
 const DINGTALK_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -1592,6 +1657,1122 @@ const WEBHOOK_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboar
     repair_command: None,
 };
 
+const GOOGLE_CHAT_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &[
+            "google_chat.enabled",
+            "google_chat.accounts.<account>.enabled",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const GOOGLE_CHAT_SERVICE_ACCOUNT_JSON_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "service_account_json",
+        label: "service account json",
+        config_paths: &[
+            "google_chat.service_account_json",
+            "google_chat.accounts.<account>.service_account_json",
+        ],
+        env_pointer_paths: &[
+            "google_chat.service_account_json_env",
+            "google_chat.accounts.<account>.service_account_json_env",
+        ],
+        default_env_var: Some(GOOGLE_CHAT_SERVICE_ACCOUNT_JSON_ENV),
+    };
+const GOOGLE_CHAT_SPACE_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "space_id",
+        label: "space id",
+        config_paths: &[
+            "google_chat.space_id",
+            "google_chat.accounts.<account>.space_id",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const GOOGLE_CHAT_ALLOWED_SPACE_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_space_ids",
+        label: "allowed space ids",
+        config_paths: &[
+            "google_chat.allowed_space_ids",
+            "google_chat.accounts.<account>.allowed_space_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const GOOGLE_CHAT_VERIFICATION_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "verification_token",
+        label: "verification token",
+        config_paths: &[
+            "google_chat.verification_token",
+            "google_chat.accounts.<account>.verification_token",
+        ],
+        env_pointer_paths: &[
+            "google_chat.verification_token_env",
+            "google_chat.accounts.<account>.verification_token_env",
+        ],
+        default_env_var: Some(GOOGLE_CHAT_VERIFICATION_TOKEN_ENV),
+    };
+const GOOGLE_CHAT_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    GOOGLE_CHAT_ENABLED_REQUIREMENT,
+    GOOGLE_CHAT_SERVICE_ACCOUNT_JSON_REQUIREMENT,
+    GOOGLE_CHAT_SPACE_ID_REQUIREMENT,
+];
+const GOOGLE_CHAT_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    GOOGLE_CHAT_ENABLED_REQUIREMENT,
+    GOOGLE_CHAT_SERVICE_ACCOUNT_JSON_REQUIREMENT,
+    GOOGLE_CHAT_ALLOWED_SPACE_IDS_REQUIREMENT,
+    GOOGLE_CHAT_VERIFICATION_TOKEN_REQUIREMENT,
+];
+const GOOGLE_CHAT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "space send",
+    command: "google-chat-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: GOOGLE_CHAT_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+const GOOGLE_CHAT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "space event service",
+    command: "google-chat-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: GOOGLE_CHAT_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+const GOOGLE_CHAT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: GOOGLE_CHAT_SEND_OPERATION,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: GOOGLE_CHAT_SERVE_OPERATION,
+        doctor_checks: &[],
+    },
+];
+const GOOGLE_CHAT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
+    ChannelOnboardingDescriptor {
+        strategy: ChannelOnboardingStrategy::Planned,
+        setup_hint: "planned Google Chat surface; catalog metadata reflects the intended service-account, space routing, and event verification contract, but no runtime adapter is implemented yet",
+        status_command: "loongclaw channels --json",
+        repair_command: None,
+    };
+
+const SIGNAL_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["signal.enabled", "signal.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const SIGNAL_SERVICE_URL_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "service_url",
+        label: "service url",
+        config_paths: &[
+            "signal.service_url",
+            "signal.accounts.<account>.service_url",
+        ],
+        env_pointer_paths: &[
+            "signal.service_url_env",
+            "signal.accounts.<account>.service_url_env",
+        ],
+        default_env_var: Some(SIGNAL_SERVICE_URL_ENV),
+    };
+const SIGNAL_ACCOUNT_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "account",
+        label: "account identifier",
+        config_paths: &["signal.account", "signal.accounts.<account>.account"],
+        env_pointer_paths: &[
+            "signal.account_env",
+            "signal.accounts.<account>.account_env",
+        ],
+        default_env_var: Some(SIGNAL_ACCOUNT_ENV),
+    };
+const SIGNAL_ALLOWED_SENDER_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_sender_ids",
+        label: "allowed sender ids",
+        config_paths: &[
+            "signal.allowed_sender_ids",
+            "signal.accounts.<account>.allowed_sender_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const SIGNAL_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    SIGNAL_ENABLED_REQUIREMENT,
+    SIGNAL_SERVICE_URL_REQUIREMENT,
+    SIGNAL_ACCOUNT_REQUIREMENT,
+];
+const SIGNAL_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    SIGNAL_ENABLED_REQUIREMENT,
+    SIGNAL_SERVICE_URL_REQUIREMENT,
+    SIGNAL_ACCOUNT_REQUIREMENT,
+    SIGNAL_ALLOWED_SENDER_IDS_REQUIREMENT,
+];
+const SIGNAL_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "direct message send",
+    command: "signal-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: SIGNAL_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
+};
+const SIGNAL_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "linked-device listener",
+    command: "signal-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: SIGNAL_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
+};
+const SIGNAL_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: SIGNAL_SEND_OPERATION,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: SIGNAL_SERVE_OPERATION,
+        doctor_checks: &[],
+    },
+];
+const SIGNAL_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::Planned,
+    setup_hint: "planned Signal bridge surface; catalog metadata reflects the intended service endpoint, linked-account identity, and sender allowlist contract, but no runtime adapter is implemented yet",
+    status_command: "loongclaw channels --json",
+    repair_command: None,
+};
+
+const TEAMS_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["teams.enabled", "teams.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const TEAMS_APP_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "app_id",
+        label: "app id",
+        config_paths: &["teams.app_id", "teams.accounts.<account>.app_id"],
+        env_pointer_paths: &["teams.app_id_env", "teams.accounts.<account>.app_id_env"],
+        default_env_var: Some(TEAMS_APP_ID_ENV),
+    };
+const TEAMS_APP_PASSWORD_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "app_password",
+        label: "app password",
+        config_paths: &[
+            "teams.app_password",
+            "teams.accounts.<account>.app_password",
+        ],
+        env_pointer_paths: &[
+            "teams.app_password_env",
+            "teams.accounts.<account>.app_password_env",
+        ],
+        default_env_var: Some(TEAMS_APP_PASSWORD_ENV),
+    };
+const TEAMS_TENANT_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "tenant_id",
+        label: "tenant id",
+        config_paths: &["teams.tenant_id", "teams.accounts.<account>.tenant_id"],
+        env_pointer_paths: &[
+            "teams.tenant_id_env",
+            "teams.accounts.<account>.tenant_id_env",
+        ],
+        default_env_var: Some(TEAMS_TENANT_ID_ENV),
+    };
+const TEAMS_ALLOWED_CONVERSATION_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_conversation_ids",
+        label: "allowed conversation ids",
+        config_paths: &[
+            "teams.allowed_conversation_ids",
+            "teams.accounts.<account>.allowed_conversation_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const TEAMS_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    TEAMS_ENABLED_REQUIREMENT,
+    TEAMS_APP_ID_REQUIREMENT,
+    TEAMS_APP_PASSWORD_REQUIREMENT,
+    TEAMS_TENANT_ID_REQUIREMENT,
+];
+const TEAMS_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    TEAMS_ENABLED_REQUIREMENT,
+    TEAMS_APP_ID_REQUIREMENT,
+    TEAMS_APP_PASSWORD_REQUIREMENT,
+    TEAMS_TENANT_ID_REQUIREMENT,
+    TEAMS_ALLOWED_CONVERSATION_IDS_REQUIREMENT,
+];
+const TEAMS_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "conversation send",
+    command: "teams-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: TEAMS_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+const TEAMS_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "bot event service",
+    command: "teams-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: TEAMS_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+const TEAMS_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: TEAMS_SEND_OPERATION,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: TEAMS_SERVE_OPERATION,
+        doctor_checks: &[],
+    },
+];
+const TEAMS_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::Planned,
+    setup_hint: "planned Microsoft Teams surface; catalog metadata reflects the intended app id, app password, tenant binding, and conversation allowlist contract, but no runtime adapter is implemented yet",
+    status_command: "loongclaw channels --json",
+    repair_command: None,
+};
+
+const MATTERMOST_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &[
+            "mattermost.enabled",
+            "mattermost.accounts.<account>.enabled",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const MATTERMOST_SERVER_URL_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "server_url",
+        label: "server url",
+        config_paths: &[
+            "mattermost.server_url",
+            "mattermost.accounts.<account>.server_url",
+        ],
+        env_pointer_paths: &[
+            "mattermost.server_url_env",
+            "mattermost.accounts.<account>.server_url_env",
+        ],
+        default_env_var: Some(MATTERMOST_SERVER_URL_ENV),
+    };
+const MATTERMOST_BOT_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "bot_token",
+        label: "bot token",
+        config_paths: &[
+            "mattermost.bot_token",
+            "mattermost.accounts.<account>.bot_token",
+        ],
+        env_pointer_paths: &[
+            "mattermost.bot_token_env",
+            "mattermost.accounts.<account>.bot_token_env",
+        ],
+        default_env_var: Some(MATTERMOST_BOT_TOKEN_ENV),
+    };
+const MATTERMOST_ALLOWED_CHANNEL_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_channel_ids",
+        label: "allowed channel ids",
+        config_paths: &[
+            "mattermost.allowed_channel_ids",
+            "mattermost.accounts.<account>.allowed_channel_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const MATTERMOST_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    MATTERMOST_ENABLED_REQUIREMENT,
+    MATTERMOST_SERVER_URL_REQUIREMENT,
+    MATTERMOST_BOT_TOKEN_REQUIREMENT,
+];
+const MATTERMOST_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    MATTERMOST_ENABLED_REQUIREMENT,
+    MATTERMOST_SERVER_URL_REQUIREMENT,
+    MATTERMOST_BOT_TOKEN_REQUIREMENT,
+    MATTERMOST_ALLOWED_CHANNEL_IDS_REQUIREMENT,
+];
+const MATTERMOST_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "channel send",
+    command: "mattermost-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: MATTERMOST_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+const MATTERMOST_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "event websocket service",
+    command: "mattermost-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: MATTERMOST_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+const MATTERMOST_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: MATTERMOST_SEND_OPERATION,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: MATTERMOST_SERVE_OPERATION,
+        doctor_checks: &[],
+    },
+];
+const MATTERMOST_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::Planned,
+    setup_hint: "planned Mattermost surface; catalog metadata reflects the intended self-hosted server url, bot token, and channel allowlist contract, but no runtime adapter is implemented yet",
+    status_command: "loongclaw channels --json",
+    repair_command: None,
+};
+
+const NEXTCLOUD_TALK_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &[
+            "nextcloud_talk.enabled",
+            "nextcloud_talk.accounts.<account>.enabled",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const NEXTCLOUD_TALK_SERVER_URL_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "server_url",
+        label: "server url",
+        config_paths: &[
+            "nextcloud_talk.server_url",
+            "nextcloud_talk.accounts.<account>.server_url",
+        ],
+        env_pointer_paths: &[
+            "nextcloud_talk.server_url_env",
+            "nextcloud_talk.accounts.<account>.server_url_env",
+        ],
+        default_env_var: Some(NEXTCLOUD_TALK_SERVER_URL_ENV),
+    };
+const NEXTCLOUD_TALK_APP_PASSWORD_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "app_password",
+        label: "app password",
+        config_paths: &[
+            "nextcloud_talk.app_password",
+            "nextcloud_talk.accounts.<account>.app_password",
+        ],
+        env_pointer_paths: &[
+            "nextcloud_talk.app_password_env",
+            "nextcloud_talk.accounts.<account>.app_password_env",
+        ],
+        default_env_var: Some(NEXTCLOUD_TALK_APP_PASSWORD_ENV),
+    };
+const NEXTCLOUD_TALK_BOT_ACTOR_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "bot_actor_id",
+        label: "bot actor id",
+        config_paths: &[
+            "nextcloud_talk.bot_actor_id",
+            "nextcloud_talk.accounts.<account>.bot_actor_id",
+        ],
+        env_pointer_paths: &[
+            "nextcloud_talk.bot_actor_id_env",
+            "nextcloud_talk.accounts.<account>.bot_actor_id_env",
+        ],
+        default_env_var: Some(NEXTCLOUD_TALK_BOT_ACTOR_ID_ENV),
+    };
+const NEXTCLOUD_TALK_ALLOWED_ROOM_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_room_ids",
+        label: "allowed room ids",
+        config_paths: &[
+            "nextcloud_talk.allowed_room_ids",
+            "nextcloud_talk.accounts.<account>.allowed_room_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const NEXTCLOUD_TALK_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    NEXTCLOUD_TALK_ENABLED_REQUIREMENT,
+    NEXTCLOUD_TALK_SERVER_URL_REQUIREMENT,
+    NEXTCLOUD_TALK_APP_PASSWORD_REQUIREMENT,
+    NEXTCLOUD_TALK_BOT_ACTOR_ID_REQUIREMENT,
+];
+const NEXTCLOUD_TALK_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    NEXTCLOUD_TALK_ENABLED_REQUIREMENT,
+    NEXTCLOUD_TALK_SERVER_URL_REQUIREMENT,
+    NEXTCLOUD_TALK_APP_PASSWORD_REQUIREMENT,
+    NEXTCLOUD_TALK_BOT_ACTOR_ID_REQUIREMENT,
+    NEXTCLOUD_TALK_ALLOWED_ROOM_IDS_REQUIREMENT,
+];
+const NEXTCLOUD_TALK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "room send",
+    command: "nextcloud-talk-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: NEXTCLOUD_TALK_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+const NEXTCLOUD_TALK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "talk room service",
+    command: "nextcloud-talk-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: NEXTCLOUD_TALK_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+const NEXTCLOUD_TALK_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: NEXTCLOUD_TALK_SEND_OPERATION,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: NEXTCLOUD_TALK_SERVE_OPERATION,
+        doctor_checks: &[],
+    },
+];
+const NEXTCLOUD_TALK_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
+    ChannelOnboardingDescriptor {
+        strategy: ChannelOnboardingStrategy::Planned,
+        setup_hint: "planned Nextcloud Talk surface; catalog metadata reflects the intended server url, app password, bot actor id, and room allowlist contract, but no runtime adapter is implemented yet",
+        status_command: "loongclaw channels --json",
+        repair_command: None,
+    };
+
+const IRC_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["irc.enabled", "irc.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const IRC_SERVER_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "server",
+        label: "server",
+        config_paths: &["irc.server", "irc.accounts.<account>.server"],
+        env_pointer_paths: &["irc.server_env", "irc.accounts.<account>.server_env"],
+        default_env_var: Some(IRC_SERVER_ENV),
+    };
+const IRC_NICKNAME_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "nickname",
+        label: "nickname",
+        config_paths: &["irc.nickname", "irc.accounts.<account>.nickname"],
+        env_pointer_paths: &["irc.nickname_env", "irc.accounts.<account>.nickname_env"],
+        default_env_var: Some(IRC_NICKNAME_ENV),
+    };
+const IRC_CHANNEL_NAMES_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "channel_names",
+        label: "channel names",
+        config_paths: &["irc.channel_names", "irc.accounts.<account>.channel_names"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const IRC_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    IRC_ENABLED_REQUIREMENT,
+    IRC_SERVER_REQUIREMENT,
+    IRC_NICKNAME_REQUIREMENT,
+];
+const IRC_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    IRC_ENABLED_REQUIREMENT,
+    IRC_SERVER_REQUIREMENT,
+    IRC_NICKNAME_REQUIREMENT,
+    IRC_CHANNEL_NAMES_REQUIREMENT,
+];
+const IRC_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "message send",
+    command: "irc-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: IRC_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+const IRC_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "relay loop",
+    command: "irc-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: IRC_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+const IRC_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: IRC_SEND_OPERATION,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: IRC_SERVE_OPERATION,
+        doctor_checks: &[],
+    },
+];
+const IRC_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::Planned,
+    setup_hint: "planned IRC surface; catalog metadata reflects the intended server, nick, and channel subscription contract, but no runtime adapter is implemented yet",
+    status_command: "loongclaw channels --json",
+    repair_command: None,
+};
+
+const IMESSAGE_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["imessage.enabled", "imessage.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const IMESSAGE_BRIDGE_URL_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "bridge_url",
+        label: "bridge url",
+        config_paths: &[
+            "imessage.bridge_url",
+            "imessage.accounts.<account>.bridge_url",
+        ],
+        env_pointer_paths: &[
+            "imessage.bridge_url_env",
+            "imessage.accounts.<account>.bridge_url_env",
+        ],
+        default_env_var: Some(IMESSAGE_BRIDGE_URL_ENV),
+    };
+const IMESSAGE_BRIDGE_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "bridge_token",
+        label: "bridge token",
+        config_paths: &[
+            "imessage.bridge_token",
+            "imessage.accounts.<account>.bridge_token",
+        ],
+        env_pointer_paths: &[
+            "imessage.bridge_token_env",
+            "imessage.accounts.<account>.bridge_token_env",
+        ],
+        default_env_var: Some(IMESSAGE_BRIDGE_TOKEN_ENV),
+    };
+const IMESSAGE_ALLOWED_CHAT_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_chat_ids",
+        label: "allowed chat ids",
+        config_paths: &[
+            "imessage.allowed_chat_ids",
+            "imessage.accounts.<account>.allowed_chat_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const IMESSAGE_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    IMESSAGE_ENABLED_REQUIREMENT,
+    IMESSAGE_BRIDGE_URL_REQUIREMENT,
+    IMESSAGE_BRIDGE_TOKEN_REQUIREMENT,
+];
+const IMESSAGE_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    IMESSAGE_ENABLED_REQUIREMENT,
+    IMESSAGE_BRIDGE_URL_REQUIREMENT,
+    IMESSAGE_BRIDGE_TOKEN_REQUIREMENT,
+    IMESSAGE_ALLOWED_CHAT_IDS_REQUIREMENT,
+];
+const IMESSAGE_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "chat send",
+    command: "imessage-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: IMESSAGE_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+const IMESSAGE_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "bridge sync service",
+    command: "imessage-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: IMESSAGE_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+const IMESSAGE_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: IMESSAGE_SEND_OPERATION,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: IMESSAGE_SERVE_OPERATION,
+        doctor_checks: &[],
+    },
+];
+const IMESSAGE_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::Planned,
+    setup_hint: "planned iMessage bridge surface; catalog metadata reflects the intended bridge url, bridge token, and chat allowlist contract, but no runtime adapter is implemented yet",
+    status_command: "loongclaw channels --json",
+    repair_command: None,
+};
+
+const NOSTR_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["nostr.enabled", "nostr.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const NOSTR_RELAY_URLS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "relay_urls",
+        label: "relay urls",
+        config_paths: &["nostr.relay_urls", "nostr.accounts.<account>.relay_urls"],
+        env_pointer_paths: &[
+            "nostr.relay_urls_env",
+            "nostr.accounts.<account>.relay_urls_env",
+        ],
+        default_env_var: Some(NOSTR_RELAY_URLS_ENV),
+    };
+const NOSTR_PRIVATE_KEY_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "private_key",
+        label: "private key",
+        config_paths: &["nostr.private_key", "nostr.accounts.<account>.private_key"],
+        env_pointer_paths: &[
+            "nostr.private_key_env",
+            "nostr.accounts.<account>.private_key_env",
+        ],
+        default_env_var: Some(NOSTR_PRIVATE_KEY_ENV),
+    };
+const NOSTR_ALLOWED_PUBKEYS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_pubkeys",
+        label: "allowed pubkeys",
+        config_paths: &[
+            "nostr.allowed_pubkeys",
+            "nostr.accounts.<account>.allowed_pubkeys",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const NOSTR_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    NOSTR_ENABLED_REQUIREMENT,
+    NOSTR_RELAY_URLS_REQUIREMENT,
+    NOSTR_PRIVATE_KEY_REQUIREMENT,
+];
+const NOSTR_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    NOSTR_ENABLED_REQUIREMENT,
+    NOSTR_RELAY_URLS_REQUIREMENT,
+    NOSTR_PRIVATE_KEY_REQUIREMENT,
+    NOSTR_ALLOWED_PUBKEYS_REQUIREMENT,
+];
+const NOSTR_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "relay publish",
+    command: "nostr-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: NOSTR_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
+};
+const NOSTR_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "relay subscriber",
+    command: "nostr-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: NOSTR_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
+};
+const NOSTR_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: NOSTR_SEND_OPERATION,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: NOSTR_SERVE_OPERATION,
+        doctor_checks: &[],
+    },
+];
+const NOSTR_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::Planned,
+    setup_hint: "planned Nostr surface; catalog metadata reflects the intended relay list, signing key, and pubkey allowlist contract, but no runtime adapter is implemented yet",
+    status_command: "loongclaw channels --json",
+    repair_command: None,
+};
+
+const TWITCH_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["twitch.enabled", "twitch.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const TWITCH_BOT_OAUTH_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "bot_oauth_token",
+        label: "bot oauth token",
+        config_paths: &[
+            "twitch.bot_oauth_token",
+            "twitch.accounts.<account>.bot_oauth_token",
+        ],
+        env_pointer_paths: &[
+            "twitch.bot_oauth_token_env",
+            "twitch.accounts.<account>.bot_oauth_token_env",
+        ],
+        default_env_var: Some(TWITCH_BOT_OAUTH_TOKEN_ENV),
+    };
+const TWITCH_CLIENT_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "client_id",
+        label: "client id",
+        config_paths: &["twitch.client_id", "twitch.accounts.<account>.client_id"],
+        env_pointer_paths: &[
+            "twitch.client_id_env",
+            "twitch.accounts.<account>.client_id_env",
+        ],
+        default_env_var: Some(TWITCH_CLIENT_ID_ENV),
+    };
+const TWITCH_CHANNEL_NAMES_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "channel_names",
+        label: "channel names",
+        config_paths: &[
+            "twitch.channel_names",
+            "twitch.accounts.<account>.channel_names",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const TWITCH_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    TWITCH_ENABLED_REQUIREMENT,
+    TWITCH_BOT_OAUTH_TOKEN_REQUIREMENT,
+    TWITCH_CLIENT_ID_REQUIREMENT,
+];
+const TWITCH_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    TWITCH_ENABLED_REQUIREMENT,
+    TWITCH_BOT_OAUTH_TOKEN_REQUIREMENT,
+    TWITCH_CLIENT_ID_REQUIREMENT,
+    TWITCH_CHANNEL_NAMES_REQUIREMENT,
+];
+const TWITCH_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "chat send",
+    command: "twitch-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: TWITCH_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+const TWITCH_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "chat listener",
+    command: "twitch-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: TWITCH_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+const TWITCH_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: TWITCH_SEND_OPERATION,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: TWITCH_SERVE_OPERATION,
+        doctor_checks: &[],
+    },
+];
+const TWITCH_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::Planned,
+    setup_hint: "planned Twitch chat surface; catalog metadata reflects the intended bot oauth token, client id, and channel subscription contract, but no runtime adapter is implemented yet",
+    status_command: "loongclaw channels --json",
+    repair_command: None,
+};
+
+const ZALO_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["zalo.enabled", "zalo.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const ZALO_APP_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "app_id",
+        label: "app id",
+        config_paths: &["zalo.app_id", "zalo.accounts.<account>.app_id"],
+        env_pointer_paths: &["zalo.app_id_env", "zalo.accounts.<account>.app_id_env"],
+        default_env_var: Some(ZALO_APP_ID_ENV),
+    };
+const ZALO_OA_ACCESS_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "oa_access_token",
+        label: "official account access token",
+        config_paths: &[
+            "zalo.oa_access_token",
+            "zalo.accounts.<account>.oa_access_token",
+        ],
+        env_pointer_paths: &[
+            "zalo.oa_access_token_env",
+            "zalo.accounts.<account>.oa_access_token_env",
+        ],
+        default_env_var: Some(ZALO_OA_ACCESS_TOKEN_ENV),
+    };
+const ZALO_APP_SECRET_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "app_secret",
+        label: "app secret",
+        config_paths: &["zalo.app_secret", "zalo.accounts.<account>.app_secret"],
+        env_pointer_paths: &[
+            "zalo.app_secret_env",
+            "zalo.accounts.<account>.app_secret_env",
+        ],
+        default_env_var: Some(ZALO_APP_SECRET_ENV),
+    };
+const ZALO_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    ZALO_ENABLED_REQUIREMENT,
+    ZALO_APP_ID_REQUIREMENT,
+    ZALO_OA_ACCESS_TOKEN_REQUIREMENT,
+];
+const ZALO_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    ZALO_ENABLED_REQUIREMENT,
+    ZALO_APP_ID_REQUIREMENT,
+    ZALO_OA_ACCESS_TOKEN_REQUIREMENT,
+    ZALO_APP_SECRET_REQUIREMENT,
+];
+const ZALO_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "official account send",
+    command: "zalo-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: ZALO_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
+};
+const ZALO_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "official account webhook service",
+    command: "zalo-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: ZALO_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
+};
+const ZALO_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: ZALO_SEND_OPERATION,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: ZALO_SERVE_OPERATION,
+        doctor_checks: &[],
+    },
+];
+const ZALO_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::Planned,
+    setup_hint: "planned Zalo official account surface; catalog metadata reflects the intended app id, official account access token, and webhook secret contract, but no runtime adapter is implemented yet",
+    status_command: "loongclaw channels --json",
+    repair_command: None,
+};
+
+const ZALO_PERSONAL_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &[
+            "zalo_personal.enabled",
+            "zalo_personal.accounts.<account>.enabled",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const ZALO_PERSONAL_ACCESS_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "access_token",
+        label: "personal bridge access token",
+        config_paths: &[
+            "zalo_personal.access_token",
+            "zalo_personal.accounts.<account>.access_token",
+        ],
+        env_pointer_paths: &[
+            "zalo_personal.access_token_env",
+            "zalo_personal.accounts.<account>.access_token_env",
+        ],
+        default_env_var: Some(ZALO_PERSONAL_ACCESS_TOKEN_ENV),
+    };
+const ZALO_PERSONAL_ALLOWED_CONTACT_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_contact_ids",
+        label: "allowed contact ids",
+        config_paths: &[
+            "zalo_personal.allowed_contact_ids",
+            "zalo_personal.accounts.<account>.allowed_contact_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const ZALO_PERSONAL_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    ZALO_PERSONAL_ENABLED_REQUIREMENT,
+    ZALO_PERSONAL_ACCESS_TOKEN_REQUIREMENT,
+];
+const ZALO_PERSONAL_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    ZALO_PERSONAL_ENABLED_REQUIREMENT,
+    ZALO_PERSONAL_ACCESS_TOKEN_REQUIREMENT,
+    ZALO_PERSONAL_ALLOWED_CONTACT_IDS_REQUIREMENT,
+];
+const ZALO_PERSONAL_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "personal send",
+    command: "zalo-personal-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: ZALO_PERSONAL_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
+};
+const ZALO_PERSONAL_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "personal message bridge",
+    command: "zalo-personal-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: ZALO_PERSONAL_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
+};
+const ZALO_PERSONAL_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: ZALO_PERSONAL_SEND_OPERATION,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: ZALO_PERSONAL_SERVE_OPERATION,
+        doctor_checks: &[],
+    },
+];
+const ZALO_PERSONAL_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
+    ChannelOnboardingDescriptor {
+        strategy: ChannelOnboardingStrategy::Planned,
+        setup_hint: "planned Zalo personal bridge surface; catalog metadata reflects the intended bridge access token and contact allowlist contract, but no runtime adapter is implemented yet",
+        status_command: "loongclaw channels --json",
+        repair_command: None,
+    };
+
+const WEBCHAT_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["webchat.enabled", "webchat.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const WEBCHAT_PUBLIC_BASE_URL_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "public_base_url",
+        label: "public base url",
+        config_paths: &[
+            "webchat.public_base_url",
+            "webchat.accounts.<account>.public_base_url",
+        ],
+        env_pointer_paths: &[
+            "webchat.public_base_url_env",
+            "webchat.accounts.<account>.public_base_url_env",
+        ],
+        default_env_var: Some(WEBCHAT_PUBLIC_BASE_URL_ENV),
+    };
+const WEBCHAT_SESSION_SIGNING_SECRET_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "session_signing_secret",
+        label: "session signing secret",
+        config_paths: &[
+            "webchat.session_signing_secret",
+            "webchat.accounts.<account>.session_signing_secret",
+        ],
+        env_pointer_paths: &[
+            "webchat.session_signing_secret_env",
+            "webchat.accounts.<account>.session_signing_secret_env",
+        ],
+        default_env_var: Some(WEBCHAT_SESSION_SIGNING_SECRET_ENV),
+    };
+const WEBCHAT_ALLOWED_ORIGINS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_origins",
+        label: "allowed origins",
+        config_paths: &[
+            "webchat.allowed_origins",
+            "webchat.accounts.<account>.allowed_origins",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const WEBCHAT_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    WEBCHAT_ENABLED_REQUIREMENT,
+    WEBCHAT_PUBLIC_BASE_URL_REQUIREMENT,
+    WEBCHAT_SESSION_SIGNING_SECRET_REQUIREMENT,
+];
+const WEBCHAT_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    WEBCHAT_ENABLED_REQUIREMENT,
+    WEBCHAT_PUBLIC_BASE_URL_REQUIREMENT,
+    WEBCHAT_SESSION_SIGNING_SECRET_REQUIREMENT,
+    WEBCHAT_ALLOWED_ORIGINS_REQUIREMENT,
+];
+const WEBCHAT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "browser session send",
+    command: "webchat-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: WEBCHAT_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+const WEBCHAT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "browser session service",
+    command: "webchat-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: WEBCHAT_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+const WEBCHAT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: WEBCHAT_SEND_OPERATION,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: WEBCHAT_SERVE_OPERATION,
+        doctor_checks: &[],
+    },
+];
+const WEBCHAT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::Planned,
+    setup_hint: "planned web chat surface; catalog metadata reflects the intended public base url, browser session signing secret, and origin allowlist contract, but no runtime adapter is implemented yet",
+    status_command: "loongclaw channels --json",
+    repair_command: None,
+};
+
 const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "telegram",
@@ -1645,6 +2826,23 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
         operations: MATRIX_OPERATIONS,
     },
     ChannelRegistryDescriptor {
+        id: "wecom",
+        runtime: Some(ChannelRuntimeDescriptor {
+            family: WECOM_COMMAND_FAMILY_DESCRIPTOR,
+            snapshot_builder: build_wecom_snapshots,
+        }),
+        selection_order: 35,
+        selection_label: "enterprise aibot",
+        blurb: "Shipped WeCom AIBot long-connection surface with proactive send and account-aware runtime state.",
+        implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
+        capabilities: WECOM_CAPABILITIES,
+        label: "WeCom",
+        aliases: &["wechat-work", "qywx"],
+        transport: "wecom_aibot_long_connection",
+        onboarding: WECOM_ONBOARDING_DESCRIPTOR,
+        operations: WECOM_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
         id: "discord",
         runtime: None,
         selection_order: 40,
@@ -1685,20 +2883,6 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
         transport: "line_messaging_api",
         onboarding: LINE_ONBOARDING_DESCRIPTOR,
         operations: LINE_OPERATIONS,
-    },
-    ChannelRegistryDescriptor {
-        id: "wecom",
-        runtime: None,
-        selection_order: 70,
-        selection_label: "wechat work app",
-        blurb: "Planned WeCom enterprise callback surface aligned with corp-app credentials and encrypted callbacks.",
-        implementation_status: ChannelCatalogImplementationStatus::Stub,
-        capabilities: PLANNED_CHANNEL_CAPABILITIES,
-        label: "WeCom",
-        aliases: &["wechat-work", "qywx"],
-        transport: "wecom_callback_api",
-        onboarding: WECOM_ONBOARDING_DESCRIPTOR,
-        operations: WECOM_OPERATIONS,
     },
     ChannelRegistryDescriptor {
         id: "dingtalk",
@@ -1755,6 +2939,174 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
         transport: "generic_webhook",
         onboarding: WEBHOOK_ONBOARDING_DESCRIPTOR,
         operations: WEBHOOK_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "google-chat",
+        runtime: None,
+        selection_order: 120,
+        selection_label: "workspace thread bot",
+        blurb: "Planned Google Chat surface for space-targeted sends and verified event delivery.",
+        implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        label: "Google Chat",
+        aliases: &["gchat", "googlechat"],
+        transport: "google_chat_events_api",
+        onboarding: GOOGLE_CHAT_ONBOARDING_DESCRIPTOR,
+        operations: GOOGLE_CHAT_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "signal",
+        runtime: None,
+        selection_order: 130,
+        selection_label: "private messenger bridge",
+        blurb: "Planned Signal surface for linked-device sends and inbound contact routing.",
+        implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        label: "Signal",
+        aliases: &["signal-cli"],
+        transport: "signal_service_bridge",
+        onboarding: SIGNAL_ONBOARDING_DESCRIPTOR,
+        operations: SIGNAL_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "teams",
+        runtime: None,
+        selection_order: 140,
+        selection_label: "enterprise meeting bot",
+        blurb: "Planned Microsoft Teams surface for bot-framework conversations and tenant-scoped routing.",
+        implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        label: "Microsoft Teams",
+        aliases: &["msteams", "ms-teams"],
+        transport: "microsoft_teams_bot_framework",
+        onboarding: TEAMS_ONBOARDING_DESCRIPTOR,
+        operations: TEAMS_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "mattermost",
+        runtime: None,
+        selection_order: 150,
+        selection_label: "self-hosted workspace bot",
+        blurb: "Planned Mattermost surface for self-hosted team chat sends and websocket event handling.",
+        implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        label: "Mattermost",
+        aliases: &["mm"],
+        transport: "mattermost_websocket_api",
+        onboarding: MATTERMOST_ONBOARDING_DESCRIPTOR,
+        operations: MATTERMOST_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "nextcloud-talk",
+        runtime: None,
+        selection_order: 160,
+        selection_label: "self-hosted room bot",
+        blurb: "Planned Nextcloud Talk surface for room delivery on self-hosted collaboration stacks.",
+        implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        label: "Nextcloud Talk",
+        aliases: &["nextcloud", "nextcloudtalk"],
+        transport: "nextcloud_talk_api",
+        onboarding: NEXTCLOUD_TALK_ONBOARDING_DESCRIPTOR,
+        operations: NEXTCLOUD_TALK_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "irc",
+        runtime: None,
+        selection_order: 170,
+        selection_label: "relay and channel bot",
+        blurb: "Planned IRC surface for classic channel relays and direct nick interactions.",
+        implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        label: "IRC",
+        aliases: &[],
+        transport: "irc_socket",
+        onboarding: IRC_ONBOARDING_DESCRIPTOR,
+        operations: IRC_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "imessage",
+        runtime: None,
+        selection_order: 180,
+        selection_label: "apple message bridge",
+        blurb: "Planned iMessage surface for bridge-backed Apple message delivery and sync.",
+        implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        label: "iMessage",
+        aliases: &["bluebubbles", "blue-bubbles"],
+        transport: "imessage_bridge_api",
+        onboarding: IMESSAGE_ONBOARDING_DESCRIPTOR,
+        operations: IMESSAGE_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "nostr",
+        runtime: None,
+        selection_order: 190,
+        selection_label: "relay-signed social bot",
+        blurb: "Planned Nostr surface for relay publication, inbound subscriptions, and key-based routing.",
+        implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        label: "Nostr",
+        aliases: &[],
+        transport: "nostr_relays",
+        onboarding: NOSTR_ONBOARDING_DESCRIPTOR,
+        operations: NOSTR_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "twitch",
+        runtime: None,
+        selection_order: 200,
+        selection_label: "livestream chat bot",
+        blurb: "Planned Twitch surface for stream chat participation and channel-scoped routing.",
+        implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        label: "Twitch",
+        aliases: &["tmi"],
+        transport: "twitch_irc_or_eventsub",
+        onboarding: TWITCH_ONBOARDING_DESCRIPTOR,
+        operations: TWITCH_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "zalo",
+        runtime: None,
+        selection_order: 210,
+        selection_label: "official account bot",
+        blurb: "Planned Zalo official account surface for business messaging and webhook-backed delivery.",
+        implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        label: "Zalo",
+        aliases: &["zalo-oa"],
+        transport: "zalo_official_account_api",
+        onboarding: ZALO_ONBOARDING_DESCRIPTOR,
+        operations: ZALO_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "zalo-personal",
+        runtime: None,
+        selection_order: 220,
+        selection_label: "personal chat bridge",
+        blurb: "Planned Zalo personal bridge surface for direct personal-message automation flows.",
+        implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        label: "Zalo Personal",
+        aliases: &["zalo-pm"],
+        transport: "zalo_personal_bridge",
+        onboarding: ZALO_PERSONAL_ONBOARDING_DESCRIPTOR,
+        operations: ZALO_PERSONAL_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "webchat",
+        runtime: None,
+        selection_order: 230,
+        selection_label: "embedded web inbox",
+        blurb: "Planned web chat surface for browser-hosted sessions with signed conversation routing.",
+        implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        label: "WebChat",
+        aliases: &["browser-chat", "web-ui"],
+        transport: "webchat_websocket",
+        onboarding: WEBCHAT_ONBOARDING_DESCRIPTOR,
+        operations: WEBCHAT_OPERATIONS,
     },
 ];
 
@@ -2253,6 +3605,48 @@ fn build_matrix_snapshots(
         .collect()
 }
 
+fn build_wecom_snapshots(
+    descriptor: &ChannelRegistryDescriptor,
+    config: &LoongClawConfig,
+    runtime_dir: &Path,
+    now_ms: u64,
+) -> Vec<ChannelStatusSnapshot> {
+    let compiled = cfg!(feature = "channel-wecom");
+    let default_selection = config.wecom.default_configured_account_selection();
+    let default_configured_account_id = default_selection.id.clone();
+    let default_account_source = default_selection.source;
+    config
+        .wecom
+        .configured_account_ids()
+        .into_iter()
+        .map(|configured_account_id| {
+            let is_default_account = configured_account_id == default_configured_account_id;
+            match config
+                .wecom
+                .resolve_account(Some(configured_account_id.as_str()))
+            {
+                Ok(resolved) => build_wecom_snapshot_for_account(
+                    descriptor,
+                    compiled,
+                    resolved,
+                    is_default_account,
+                    default_account_source,
+                    runtime_dir,
+                    now_ms,
+                ),
+                Err(error) => build_invalid_wecom_snapshot(
+                    descriptor,
+                    compiled,
+                    configured_account_id.as_str(),
+                    is_default_account,
+                    default_account_source,
+                    error,
+                ),
+            }
+        })
+        .collect()
+}
+
 fn build_feishu_snapshot_for_account(
     descriptor: &ChannelRegistryDescriptor,
     compiled: bool,
@@ -2518,6 +3912,140 @@ fn build_matrix_snapshot_for_account(
     }
 }
 
+fn build_wecom_snapshot_for_account(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    resolved: ResolvedWecomChannelConfig,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+    runtime_dir: &Path,
+    now_ms: u64,
+) -> ChannelStatusSnapshot {
+    let mut send_issues = Vec::new();
+    if resolved.bot_id().is_none() {
+        send_issues.push("bot_id is missing".to_owned());
+    }
+    if resolved.secret().is_none() {
+        send_issues.push("secret is missing".to_owned());
+    }
+
+    let mut serve_issues = send_issues.clone();
+    let has_allowlist = resolved
+        .allowed_conversation_ids
+        .iter()
+        .any(|value| !value.trim().is_empty());
+    if !has_allowlist {
+        serve_issues.push("allowed_conversation_ids is empty".to_owned());
+    }
+
+    let websocket_url = resolved.resolved_websocket_url();
+    let websocket_parse = reqwest::Url::parse(websocket_url.as_str());
+    if websocket_parse.is_err() {
+        let error = websocket_parse
+            .err()
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown url parse error".to_owned());
+        let issue = format!("websocket_url is invalid: {error}");
+        send_issues.push(issue.clone());
+        serve_issues.push(issue);
+    }
+
+    let send_operation = if !compiled {
+        unsupported_operation(
+            WECOM_SEND_OPERATION,
+            "binary built without feature `channel-wecom`".to_owned(),
+        )
+    } else if !resolved.enabled {
+        disabled_operation(
+            WECOM_SEND_OPERATION,
+            "disabled by wecom account configuration".to_owned(),
+        )
+    } else if !send_issues.is_empty() {
+        misconfigured_operation(WECOM_SEND_OPERATION, send_issues)
+    } else {
+        ready_operation(WECOM_SEND_OPERATION)
+    };
+
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            WECOM_SERVE_OPERATION,
+            "binary built without feature `channel-wecom`".to_owned(),
+        )
+    } else if !resolved.enabled {
+        disabled_operation(
+            WECOM_SERVE_OPERATION,
+            "disabled by wecom account configuration".to_owned(),
+        )
+    } else if !serve_issues.is_empty() {
+        misconfigured_operation(WECOM_SERVE_OPERATION, serve_issues)
+    } else {
+        ready_operation(WECOM_SERVE_OPERATION)
+    };
+    let send_operation = attach_runtime(
+        ChannelPlatform::Wecom,
+        WECOM_SEND_OPERATION,
+        send_operation,
+        resolved.account.id.as_str(),
+        resolved.account.label.as_str(),
+        runtime_dir,
+        now_ms,
+    );
+    let serve_operation = attach_runtime(
+        ChannelPlatform::Wecom,
+        WECOM_SERVE_OPERATION,
+        serve_operation,
+        resolved.account.id.as_str(),
+        resolved.account.label.as_str(),
+        runtime_dir,
+        now_ms,
+    );
+
+    let mut notes = vec![
+        format!("configured_account_id={}", resolved.configured_account_id),
+        format!("configured_account={}", resolved.configured_account_label),
+        format!("account_id={}", resolved.account.id),
+        format!("account={}", resolved.account.label),
+        format!("websocket_url={websocket_url}"),
+        format!("ping_interval_s={}", resolved.ping_interval_s),
+        format!("reconnect_interval_s={}", resolved.reconnect_interval_s),
+    ];
+    if !resolved.acp.bootstrap_mcp_servers.is_empty() {
+        notes.push(format!(
+            "acp_bootstrap_mcp_servers={}",
+            resolved.acp.bootstrap_mcp_servers.join(",")
+        ));
+    }
+    if let Some(working_directory) = resolved.acp.resolved_working_directory() {
+        notes.push(format!(
+            "acp_working_directory={}",
+            working_directory.display()
+        ));
+    }
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: resolved.configured_account_id.clone(),
+        configured_account_label: resolved.configured_account_label.clone(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: resolved.enabled,
+        api_base_url: Some(websocket_url),
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
 fn build_invalid_telegram_snapshot(
     descriptor: &ChannelRegistryDescriptor,
     compiled: bool,
@@ -2680,6 +4208,60 @@ fn build_invalid_matrix_snapshot(
     }
 }
 
+fn build_invalid_wecom_snapshot(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    configured_account_id: &str,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+    error: String,
+) -> ChannelStatusSnapshot {
+    let send_operation = if !compiled {
+        unsupported_operation(
+            WECOM_SEND_OPERATION,
+            "binary built without feature `channel-wecom`".to_owned(),
+        )
+    } else {
+        misconfigured_operation(WECOM_SEND_OPERATION, vec![error.clone()])
+    };
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            WECOM_SERVE_OPERATION,
+            "binary built without feature `channel-wecom`".to_owned(),
+        )
+    } else {
+        misconfigured_operation(WECOM_SERVE_OPERATION, vec![error.clone()])
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={configured_account_id}"),
+        format!("selection_error={error}"),
+    ];
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: configured_account_id.to_owned(),
+        configured_account_label: configured_account_id.to_owned(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: false,
+        api_base_url: None,
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
 fn ready_operation(operation: ChannelCatalogOperation) -> ChannelOperationStatus {
     ChannelOperationStatus {
         id: operation.id,
@@ -2811,6 +4393,12 @@ mod tests {
         assert_eq!(normalize_channel_catalog_id(" TELEGRAM "), Some("telegram"));
         assert_eq!(normalize_channel_catalog_id("discord-bot"), Some("discord"));
         assert_eq!(normalize_channel_catalog_id("slack"), Some("slack"));
+        assert_eq!(normalize_channel_catalog_id("gchat"), Some("google-chat"));
+        assert_eq!(
+            normalize_channel_catalog_id("bluebubbles"),
+            Some("imessage")
+        );
+        assert_eq!(normalize_channel_catalog_id("web-ui"), Some("webchat"));
         assert_eq!(normalize_channel_catalog_id("unknown"), None);
     }
 
@@ -2823,7 +4411,7 @@ mod tests {
                 .iter()
                 .map(|descriptor| descriptor.id)
                 .collect::<Vec<_>>(),
-            vec!["telegram", "feishu", "matrix"]
+            vec!["telegram", "feishu", "matrix", "wecom"]
         );
         assert!(
             runtime_backed
@@ -2838,6 +4426,8 @@ mod tests {
             .expect("telegram runtime command descriptor");
         let lark =
             resolve_channel_runtime_command_descriptor("lark").expect("lark runtime descriptor");
+        let wecom =
+            resolve_channel_runtime_command_descriptor("wecom").expect("wecom runtime descriptor");
 
         assert_eq!(telegram.channel_id, "telegram");
         assert_eq!(telegram.platform, ChannelPlatform::Telegram);
@@ -2846,6 +4436,10 @@ mod tests {
         assert_eq!(lark.channel_id, "feishu");
         assert_eq!(lark.platform, ChannelPlatform::Feishu);
         assert_eq!(lark.serve_bootstrap_agent_id, "channel-feishu");
+
+        assert_eq!(wecom.channel_id, "wecom");
+        assert_eq!(wecom.platform, ChannelPlatform::Wecom);
+        assert_eq!(wecom.serve_bootstrap_agent_id, "channel-wecom");
     }
 
     #[test]
@@ -2865,6 +4459,10 @@ mod tests {
             .expect("lark catalog command family");
         let slack = resolve_channel_catalog_command_family_descriptor("slack-bot")
             .expect("slack alias catalog command family");
+        let google_chat = resolve_channel_catalog_command_family_descriptor("gchat")
+            .expect("google chat alias catalog command family");
+        let imessage = resolve_channel_catalog_command_family_descriptor("bluebubbles")
+            .expect("imessage alias catalog command family");
 
         assert_eq!(telegram.channel_id, "telegram");
         assert_eq!(telegram.send.id, CHANNEL_OPERATION_SEND_ID);
@@ -2891,6 +4489,22 @@ mod tests {
             slack.default_send_target_kind,
             ChannelCatalogTargetKind::Conversation
         );
+
+        assert_eq!(google_chat.channel_id, "google-chat");
+        assert_eq!(google_chat.send.command, "google-chat-send");
+        assert_eq!(google_chat.serve.command, "google-chat-serve");
+        assert_eq!(
+            google_chat.default_send_target_kind,
+            ChannelCatalogTargetKind::Conversation
+        );
+
+        assert_eq!(imessage.channel_id, "imessage");
+        assert_eq!(imessage.send.command, "imessage-send");
+        assert_eq!(imessage.serve.command, "imessage-serve");
+        assert_eq!(
+            imessage.default_send_target_kind,
+            ChannelCatalogTargetKind::Conversation
+        );
     }
 
     #[test]
@@ -2905,6 +4519,22 @@ mod tests {
         assert_eq!(matrix.serve.command, "matrix-serve");
         assert_eq!(
             matrix.default_send_target_kind,
+            ChannelCatalogTargetKind::Conversation
+        );
+    }
+
+    #[test]
+    fn resolve_channel_catalog_command_family_descriptor_includes_wecom_runtime_channel() {
+        let wecom = resolve_channel_catalog_command_family_descriptor("wecom")
+            .expect("wecom catalog command family");
+
+        assert_eq!(wecom.channel_id, "wecom");
+        assert_eq!(wecom.send.id, CHANNEL_OPERATION_SEND_ID);
+        assert_eq!(wecom.send.command, "wecom-send");
+        assert_eq!(wecom.serve.id, CHANNEL_OPERATION_SERVE_ID);
+        assert_eq!(wecom.serve.command, "wecom-serve");
+        assert_eq!(
+            wecom.default_send_target_kind,
             ChannelCatalogTargetKind::Conversation
         );
     }
@@ -3274,6 +4904,60 @@ mod tests {
     }
 
     #[test]
+    fn channel_catalog_includes_openclaw_inspired_planned_surfaces() {
+        let catalog = list_channel_catalog();
+        let google_chat = catalog
+            .iter()
+            .find(|entry| entry.id == "google-chat")
+            .expect("google chat catalog entry");
+        let signal = catalog
+            .iter()
+            .find(|entry| entry.id == "signal")
+            .expect("signal catalog entry");
+        let imessage = catalog
+            .iter()
+            .find(|entry| entry.id == "imessage")
+            .expect("imessage catalog entry");
+        let webchat = catalog
+            .iter()
+            .find(|entry| entry.id == "webchat")
+            .expect("webchat catalog entry");
+
+        assert_eq!(
+            google_chat.implementation_status,
+            ChannelCatalogImplementationStatus::Stub
+        );
+        assert_eq!(google_chat.selection_order, 120);
+        assert_eq!(google_chat.aliases, vec!["gchat", "googlechat"]);
+        assert_eq!(google_chat.transport, "google_chat_events_api");
+        assert_eq!(
+            google_chat.supported_target_kinds,
+            vec![ChannelCatalogTargetKind::Conversation]
+        );
+        assert_eq!(google_chat.operations[0].command, "google-chat-send");
+        assert_eq!(google_chat.operations[1].command, "google-chat-serve");
+
+        assert_eq!(
+            signal.supported_target_kinds,
+            vec![ChannelCatalogTargetKind::Address]
+        );
+        assert_eq!(signal.operations[0].command, "signal-send");
+        assert_eq!(signal.operations[1].command, "signal-serve");
+
+        assert_eq!(imessage.aliases, vec!["bluebubbles", "blue-bubbles"]);
+        assert_eq!(imessage.selection_order, 180);
+        assert!(imessage.blurb.contains("Apple message"));
+
+        assert_eq!(webchat.selection_order, 230);
+        assert_eq!(webchat.aliases, vec!["browser-chat", "web-ui"]);
+        assert_eq!(webchat.transport, "webchat_websocket");
+        assert_eq!(
+            webchat.supported_target_kinds,
+            vec![ChannelCatalogTargetKind::Conversation]
+        );
+    }
+
+    #[test]
     fn channel_catalog_operations_expose_requirement_metadata() {
         let catalog = list_channel_catalog();
         let telegram = catalog
@@ -3288,6 +4972,10 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "discord")
             .expect("discord catalog entry");
+        let google_chat = catalog
+            .iter()
+            .find(|entry| entry.id == "google-chat")
+            .expect("google chat catalog entry");
 
         assert_eq!(
             telegram.operations[0]
@@ -3375,6 +5063,36 @@ mod tests {
             discord.operations[1].requirements[2].default_env_var,
             Some("DISCORD_APPLICATION_ID")
         );
+
+        assert_eq!(
+            google_chat.operations[0]
+                .requirements
+                .iter()
+                .map(|requirement| requirement.id)
+                .collect::<Vec<_>>(),
+            vec!["enabled", "service_account_json", "space_id"]
+        );
+        assert_eq!(
+            google_chat.operations[1]
+                .requirements
+                .iter()
+                .map(|requirement| requirement.id)
+                .collect::<Vec<_>>(),
+            vec![
+                "enabled",
+                "service_account_json",
+                "allowed_space_ids",
+                "verification_token",
+            ]
+        );
+        assert_eq!(
+            google_chat.operations[0].requirements[1].default_env_var,
+            Some("GOOGLE_CHAT_SERVICE_ACCOUNT_JSON")
+        );
+        assert_eq!(
+            google_chat.operations[1].requirements[3].default_env_var,
+            Some("GOOGLE_CHAT_VERIFICATION_TOKEN")
+        );
     }
 
     #[test]
@@ -3392,6 +5110,10 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "discord")
             .expect("discord catalog entry");
+        let signal = catalog
+            .iter()
+            .find(|entry| entry.id == "signal")
+            .expect("signal catalog entry");
 
         assert_eq!(
             telegram.operations[0].supported_target_kinds,
@@ -3420,6 +5142,14 @@ mod tests {
             discord.operations[1].supported_target_kinds,
             &[ChannelCatalogTargetKind::Conversation]
         );
+        assert_eq!(
+            signal.operations[0].supported_target_kinds,
+            &[ChannelCatalogTargetKind::Address]
+        );
+        assert_eq!(
+            signal.operations[1].supported_target_kinds,
+            &[ChannelCatalogTargetKind::Address]
+        );
     }
 
     #[test]
@@ -3430,6 +5160,8 @@ mod tests {
             resolve_channel_catalog_operation("feishu", "send").expect("feishu send operation");
         let webhook =
             resolve_channel_catalog_operation("webhook", "send").expect("webhook send operation");
+        let signal =
+            resolve_channel_catalog_operation("signal", "send").expect("signal send operation");
 
         assert_eq!(
             telegram.default_target_kind(),
@@ -3449,6 +5181,11 @@ mod tests {
         );
         assert!(webhook.supports_target_kind(ChannelCatalogTargetKind::Endpoint));
         assert!(!webhook.supports_target_kind(ChannelCatalogTargetKind::Conversation));
+        assert_eq!(
+            signal.default_target_kind(),
+            Some(ChannelCatalogTargetKind::Address)
+        );
+        assert!(signal.supports_target_kind(ChannelCatalogTargetKind::Address));
     }
 
     #[test]
@@ -3466,6 +5203,10 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "discord")
             .expect("discord catalog entry");
+        let signal = catalog
+            .iter()
+            .find(|entry| entry.id == "signal")
+            .expect("signal catalog entry");
 
         assert_eq!(
             telegram.supported_target_kinds,
@@ -3482,6 +5223,10 @@ mod tests {
             discord.supported_target_kinds,
             vec![ChannelCatalogTargetKind::Conversation]
         );
+        assert_eq!(
+            signal.supported_target_kinds,
+            vec![ChannelCatalogTargetKind::Address]
+        );
     }
 
     #[test]
@@ -3496,7 +5241,25 @@ mod tests {
                 .map(|entry| entry.id)
                 .collect::<Vec<_>>(),
             vec![
-                "discord", "slack", "line", "wecom", "dingtalk", "whatsapp", "email", "webhook",
+                "discord",
+                "slack",
+                "line",
+                "dingtalk",
+                "whatsapp",
+                "email",
+                "webhook",
+                "google-chat",
+                "signal",
+                "teams",
+                "mattermost",
+                "nextcloud-talk",
+                "irc",
+                "imessage",
+                "nostr",
+                "twitch",
+                "zalo",
+                "zalo-personal",
+                "webchat",
             ]
         );
         assert_eq!(catalog_only[0].operations[0].command, "discord-send");
@@ -3504,7 +5267,9 @@ mod tests {
         assert_eq!(catalog_only[1].operations[0].command, "slack-send");
         assert_eq!(catalog_only[1].operations[1].command, "slack-serve");
         assert_eq!(catalog_only[2].operations[0].command, "line-send");
-        assert_eq!(catalog_only[7].operations[1].command, "webhook-serve");
+        assert_eq!(catalog_only[6].operations[1].command, "webhook-serve");
+        assert_eq!(catalog_only[7].operations[0].command, "google-chat-send");
+        assert_eq!(catalog_only[18].operations[1].command, "webchat-serve");
     }
 
     #[test]
@@ -3518,7 +5283,7 @@ mod tests {
                 .iter()
                 .map(|snapshot| snapshot.id)
                 .collect::<Vec<_>>(),
-            vec!["telegram", "feishu", "matrix"]
+            vec!["telegram", "feishu", "matrix", "wecom"]
         );
         assert_eq!(
             inventory
@@ -3527,7 +5292,25 @@ mod tests {
                 .map(|entry| entry.id)
                 .collect::<Vec<_>>(),
             vec![
-                "discord", "slack", "line", "wecom", "dingtalk", "whatsapp", "email", "webhook",
+                "discord",
+                "slack",
+                "line",
+                "dingtalk",
+                "whatsapp",
+                "email",
+                "webhook",
+                "google-chat",
+                "signal",
+                "teams",
+                "mattermost",
+                "nextcloud-talk",
+                "irc",
+                "imessage",
+                "nostr",
+                "twitch",
+                "zalo",
+                "zalo-personal",
+                "webchat",
             ]
         );
         assert_eq!(
@@ -3537,8 +5320,29 @@ mod tests {
                 .map(|entry| entry.id)
                 .collect::<Vec<_>>(),
             vec![
-                "telegram", "feishu", "matrix", "discord", "slack", "line", "wecom", "dingtalk",
-                "whatsapp", "email", "webhook",
+                "telegram",
+                "feishu",
+                "matrix",
+                "wecom",
+                "discord",
+                "slack",
+                "line",
+                "dingtalk",
+                "whatsapp",
+                "email",
+                "webhook",
+                "google-chat",
+                "signal",
+                "teams",
+                "mattermost",
+                "nextcloud-talk",
+                "irc",
+                "imessage",
+                "nostr",
+                "twitch",
+                "zalo",
+                "zalo-personal",
+                "webchat",
             ]
         );
     }
@@ -3558,8 +5362,29 @@ mod tests {
                 .map(|surface| surface.catalog.id)
                 .collect::<Vec<_>>(),
             vec![
-                "telegram", "feishu", "matrix", "discord", "slack", "line", "wecom", "dingtalk",
-                "whatsapp", "email", "webhook",
+                "telegram",
+                "feishu",
+                "matrix",
+                "wecom",
+                "discord",
+                "slack",
+                "line",
+                "dingtalk",
+                "whatsapp",
+                "email",
+                "webhook",
+                "google-chat",
+                "signal",
+                "teams",
+                "mattermost",
+                "nextcloud-talk",
+                "irc",
+                "imessage",
+                "nostr",
+                "twitch",
+                "zalo",
+                "zalo-personal",
+                "webchat",
             ]
         );
 
@@ -3586,6 +5411,34 @@ mod tests {
         );
         assert!(discord.configured_accounts.is_empty());
         assert_eq!(discord.default_configured_account_id, None);
+
+        let wecom = inventory
+            .channel_surfaces
+            .iter()
+            .find(|surface| surface.catalog.id == "wecom")
+            .expect("wecom surface");
+        assert_eq!(
+            wecom.catalog.implementation_status,
+            ChannelCatalogImplementationStatus::RuntimeBacked
+        );
+        assert_eq!(wecom.configured_accounts.len(), 1);
+        assert_eq!(
+            wecom.default_configured_account_id.as_deref(),
+            Some("default")
+        );
+        assert_eq!(wecom.configured_accounts[0].id, "wecom");
+
+        let webchat = inventory
+            .channel_surfaces
+            .iter()
+            .find(|surface| surface.catalog.id == "webchat")
+            .expect("webchat surface");
+        assert_eq!(
+            webchat.catalog.implementation_status,
+            ChannelCatalogImplementationStatus::Stub
+        );
+        assert_eq!(webchat.catalog.aliases, vec!["browser-chat", "web-ui"]);
+        assert!(webchat.configured_accounts.is_empty());
     }
 
     #[test]

@@ -16,14 +16,15 @@ pub use channels::{
     ChannelDescriptor, ChannelResolvedAccountRoute, ChannelRuntimeKind, CliChannelConfig,
     FeishuAccountConfig, FeishuChannelConfig, FeishuChannelServeMode, FeishuDomain,
     MatrixAccountConfig, MatrixChannelConfig, ResolvedFeishuChannelConfig,
-    ResolvedMatrixChannelConfig, ResolvedTelegramChannelConfig, TelegramAccountConfig,
-    TelegramChannelConfig, TelegramStreamingMode, channel_descriptor, service_channel_descriptors,
+    ResolvedMatrixChannelConfig, ResolvedTelegramChannelConfig, ResolvedWecomChannelConfig,
+    TelegramAccountConfig, TelegramChannelConfig, TelegramStreamingMode, WecomAccountConfig,
+    WecomChannelConfig, channel_descriptor, service_channel_descriptors,
 };
 #[allow(unused_imports)]
 pub(crate) use channels::{
     FEISHU_APP_ID_ENV, FEISHU_APP_SECRET_ENV, FEISHU_ENCRYPT_KEY_ENV,
     FEISHU_VERIFICATION_TOKEN_ENV, MATRIX_ACCESS_TOKEN_ENV, TELEGRAM_BOT_TOKEN_ENV,
-    normalize_channel_account_id,
+    WECOM_BOT_ID_ENV, WECOM_SECRET_ENV, normalize_channel_account_id,
 };
 #[allow(unused_imports)]
 pub use conversation::{ConversationConfig, ConversationTurnLoopConfig};
@@ -122,6 +123,12 @@ mod tests {
         assert_eq!(feishu.runtime_kind, ChannelRuntimeKind::Service);
         assert_eq!(feishu.serve_subcommand, Some("feishu-serve"));
 
+        let wecom = channel_descriptor("wecom").expect("wecom descriptor");
+        assert_eq!(wecom.id, "wecom");
+        assert_eq!(wecom.surface_label, "wecom channel");
+        assert_eq!(wecom.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(wecom.serve_subcommand, Some("wecom-serve"));
+
         assert!(channel_descriptor("unknown").is_none());
     }
 
@@ -134,21 +141,22 @@ mod tests {
         config.telegram.enabled = true;
         config.feishu.enabled = true;
         config.matrix.enabled = true;
+        config.wecom.enabled = true;
 
         assert_eq!(
             config.enabled_channel_ids(),
-            vec!["cli", "telegram", "feishu", "matrix"]
+            vec!["cli", "telegram", "feishu", "matrix", "wecom"]
         );
         assert_eq!(
             config.enabled_service_channel_ids(),
-            vec!["telegram", "feishu", "matrix"]
+            vec!["telegram", "feishu", "matrix", "wecom"]
         );
 
         let service_ids = service_channel_descriptors()
             .into_iter()
             .map(|descriptor| descriptor.id)
             .collect::<Vec<_>>();
-        assert_eq!(service_ids, vec!["telegram", "feishu", "matrix"]);
+        assert_eq!(service_ids, vec!["telegram", "feishu", "matrix", "wecom"]);
     }
 
     #[test]
@@ -166,7 +174,16 @@ mod tests {
             .into_iter()
             .map(|descriptor| descriptor.id)
             .collect::<Vec<_>>();
-        assert_eq!(service_ids, vec!["telegram", "feishu", "matrix"]);
+        assert_eq!(service_ids, vec!["telegram", "feishu", "matrix", "wecom"]);
+    }
+
+    #[test]
+    fn channel_descriptor_lookup_reports_wecom_metadata() {
+        let wecom = channel_descriptor("wecom").expect("wecom descriptor");
+        assert_eq!(wecom.id, "wecom");
+        assert_eq!(wecom.surface_label, "wecom channel");
+        assert_eq!(wecom.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(wecom.serve_subcommand, Some("wecom-serve"));
     }
 
     #[test]

@@ -11,7 +11,10 @@ use crate::CliResult;
 
 use super::{
     audit::AuditConfig,
-    channels::{CliChannelConfig, FeishuChannelConfig, MatrixChannelConfig, TelegramChannelConfig},
+    channels::{
+        CliChannelConfig, FeishuChannelConfig, MatrixChannelConfig, TelegramChannelConfig,
+        WecomChannelConfig,
+    },
     conversation::ConversationConfig,
     feishu_integration::FeishuIntegrationConfig,
     memory::MemoryConfig,
@@ -86,6 +89,8 @@ pub struct LoongClawConfig {
     pub feishu: FeishuChannelConfig,
     #[serde(default)]
     pub matrix: MatrixChannelConfig,
+    #[serde(default)]
+    pub wecom: WecomChannelConfig,
     #[serde(default)]
     pub feishu_integration: FeishuIntegrationConfig,
     #[serde(default)]

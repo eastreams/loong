@@ -62,6 +62,8 @@ use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 
 #[cfg(feature = "channel-matrix")]
 use super::config::ResolvedMatrixChannelConfig;
+#[cfg(feature = "channel-wecom")]
+use super::config::ResolvedWecomChannelConfig;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
@@ -97,6 +99,8 @@ mod registry;
 mod runtime_state;
 #[cfg(feature = "channel-telegram")]
 mod telegram;
+#[cfg(feature = "channel-wecom")]
+mod wecom;
 
 pub use registry::{
     CHANNEL_OPERATION_SEND_ID, CHANNEL_OPERATION_SERVE_ID, ChannelCapability,
@@ -111,12 +115,14 @@ pub use registry::{
     MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR, MATRIX_COMMAND_FAMILY_DESCRIPTOR,
     MATRIX_RUNTIME_COMMAND_DESCRIPTOR, TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     TELEGRAM_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR,
-    catalog_only_channel_entries, channel_inventory, channel_status_snapshots,
-    list_channel_catalog, normalize_channel_catalog_id, normalize_channel_platform,
-    resolve_channel_catalog_command_family_descriptor, resolve_channel_catalog_entry,
-    resolve_channel_catalog_operation, resolve_channel_command_family_descriptor,
-    resolve_channel_doctor_operation_spec, resolve_channel_onboarding_descriptor,
-    resolve_channel_operation_descriptor, resolve_channel_runtime_command_descriptor,
+    WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WECOM_COMMAND_FAMILY_DESCRIPTOR,
+    WECOM_RUNTIME_COMMAND_DESCRIPTOR, catalog_only_channel_entries, channel_inventory,
+    channel_status_snapshots, list_channel_catalog, normalize_channel_catalog_id,
+    normalize_channel_platform, resolve_channel_catalog_command_family_descriptor,
+    resolve_channel_catalog_entry, resolve_channel_catalog_operation,
+    resolve_channel_command_family_descriptor, resolve_channel_doctor_operation_spec,
+    resolve_channel_onboarding_descriptor, resolve_channel_operation_descriptor,
+    resolve_channel_runtime_command_descriptor,
 };
 pub use runtime_state::ChannelOperationRuntime;
 use runtime_state::ChannelOperationRuntimeTracker;
@@ -166,6 +172,7 @@ pub enum ChannelPlatform {
     Telegram,
     Feishu,
     Matrix,
+    Wecom,
 }
 
 impl ChannelPlatform {
@@ -174,6 +181,7 @@ impl ChannelPlatform {
             Self::Telegram => "telegram",
             Self::Feishu => "feishu",
             Self::Matrix => "matrix",
+            Self::Wecom => "wecom",
         }
     }
 }
@@ -638,6 +646,11 @@ enum KnownChannelSessionSendTarget {
         account_id: Option<String>,
         room_id: String,
     },
+    Wecom {
+        account_id: Option<String>,
+        conversation_id: String,
+        chat_type: Option<u8>,
+    },
 }
 
 #[cfg(any(
@@ -656,6 +669,9 @@ fn parse_known_channel_session_send_target(
         "telegram" => parse_telegram_session_send_target(config, session_id, scope.as_slice()),
         "feishu" | "lark" => parse_feishu_session_send_target(config, session_id, scope.as_slice()),
         "matrix" => parse_matrix_session_send_target(config, session_id, scope.as_slice()),
+        "wecom" | "wechat-work" | "qywx" => {
+            parse_wecom_session_send_target(config, session_id, scope.as_slice())
+        }
         _ => Err(format!("sessions_send_channel_unsupported: `{session_id}`")),
     }
 }
@@ -789,6 +805,46 @@ fn parse_matrix_session_send_target(
     Ok(KnownChannelSessionSendTarget::Matrix {
         account_id,
         room_id: room_id.to_owned(),
+    })
+}
+
+fn parse_wecom_session_send_target(
+    config: &LoongClawConfig,
+    session_id: &str,
+    scope: &[String],
+) -> CliResult<KnownChannelSessionSendTarget> {
+    let configured_account_ids = config.wecom.configured_account_ids();
+    let runtime_account_ids = configured_runtime_account_ids(
+        configured_account_ids.as_slice(),
+        |configured_account_id| {
+            config
+                .wecom
+                .resolve_account(Some(configured_account_id))
+                .map(|resolved| resolved.account.id)
+        },
+    );
+    let (account_id, scoped_path) = split_known_channel_account_and_scope(
+        scope,
+        configured_account_ids.as_slice(),
+        runtime_account_ids.as_slice(),
+    );
+    let Some(conversation_id) = scoped_path
+        .first()
+        .map(String::as_str)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(format!("sessions_send_channel_unsupported: `{session_id}`"));
+    };
+
+    let chat_type = if scoped_path.len() >= 2 {
+        Some(2)
+    } else {
+        None
+    };
+    Ok(KnownChannelSessionSendTarget::Wecom {
+        account_id,
+        conversation_id: conversation_id.to_owned(),
+        chat_type,
     })
 }
 
@@ -981,6 +1037,17 @@ impl ChannelResolvedRuntimeAccount for ResolvedMatrixChannelConfig {
     }
 }
 
+#[cfg(feature = "channel-wecom")]
+impl ChannelResolvedRuntimeAccount for ResolvedWecomChannelConfig {
+    fn runtime_account_id(&self) -> &str {
+        self.account.id.as_str()
+    }
+
+    fn runtime_account_label(&self) -> &str {
+        self.account.label.as_str()
+    }
+}
+
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
@@ -1101,6 +1168,39 @@ fn build_matrix_command_context(
     if !resolved.enabled {
         return Err(format!(
             "matrix account `{}` is disabled by configuration",
+            resolved.configured_account_id
+        ));
+    }
+    Ok(ChannelCommandContext {
+        resolved_path,
+        config,
+        resolved,
+        route,
+    })
+}
+
+#[cfg(feature = "channel-wecom")]
+fn load_wecom_command_context(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedWecomChannelConfig>> {
+    let (resolved_path, config) = super::config::load(config_path)?;
+    build_wecom_command_context(resolved_path, config, account_id)
+}
+
+#[cfg(feature = "channel-wecom")]
+fn build_wecom_command_context(
+    resolved_path: PathBuf,
+    config: LoongClawConfig,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedWecomChannelConfig>> {
+    let resolved = config.wecom.resolve_account(account_id)?;
+    let route = config
+        .wecom
+        .resolved_account_route(account_id, resolved.configured_account_id.as_str());
+    if !resolved.enabled {
+        return Err(format!(
+            "wecom account `{}` is disabled by configuration",
             resolved.configured_account_id
         ));
     }
@@ -1977,6 +2077,132 @@ pub async fn run_matrix_channel(
     }
 }
 
+#[allow(clippy::print_stdout)]
+pub async fn run_wecom_send(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+    target: &str,
+    target_kind: ChannelOutboundTargetKind,
+    text: &str,
+) -> CliResult<()> {
+    if !cfg!(feature = "channel-wecom") {
+        return Err("wecom channel is disabled (enable feature `channel-wecom`)".to_owned());
+    }
+
+    #[cfg(not(feature = "channel-wecom"))]
+    {
+        let _ = (config_path, account_id, target, target_kind, text);
+        return Err("wecom channel is disabled (enable feature `channel-wecom`)".to_owned());
+    }
+
+    #[cfg(feature = "channel-wecom")]
+    {
+        let context = load_wecom_command_context(config_path, account_id)?;
+        let target = target.to_owned();
+        let text = text.to_owned();
+        run_channel_send_command(
+            context,
+            ChannelSendCommandSpec {
+                family: WECOM_COMMAND_FAMILY_DESCRIPTOR,
+            },
+            |context| {
+                Box::pin(async move {
+                    wecom::run_wecom_send(
+                        &context.resolved,
+                        target_kind,
+                        target.as_str(),
+                        text.as_str(),
+                    )
+                    .await
+                })
+            },
+            |context| {
+                format!(
+                    "wecom message sent (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, target_kind={})",
+                    context.resolved_path.display(),
+                    context.resolved.configured_account_id,
+                    context.resolved.account.label,
+                    context.route.selected_by_default(),
+                    context.route.default_account_source.as_str(),
+                    target_kind
+                )
+            },
+        )
+        .await
+    }
+}
+
+#[allow(clippy::print_stdout)]
+pub async fn run_wecom_channel(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+) -> CliResult<()> {
+    if !cfg!(feature = "channel-wecom") {
+        return Err("wecom channel is disabled (enable feature `channel-wecom`)".to_owned());
+    }
+
+    #[cfg(not(feature = "channel-wecom"))]
+    {
+        let _ = (config_path, account_id);
+        return Err("wecom channel is disabled (enable feature `channel-wecom`)".to_owned());
+    }
+
+    #[cfg(feature = "channel-wecom")]
+    {
+        let context = load_wecom_command_context(config_path, account_id)?;
+        run_wecom_channel_with_context(context, ChannelServeStopHandle::new(), true).await
+    }
+}
+
+#[cfg(feature = "channel-wecom")]
+async fn run_wecom_channel_with_context(
+    context: ChannelCommandContext<ResolvedWecomChannelConfig>,
+    stop: ChannelServeStopHandle,
+    initialize_runtime_environment: bool,
+) -> CliResult<()> {
+    run_channel_serve_command_with_stop(
+        context,
+        ChannelServeCommandSpec {
+            family: WECOM_COMMAND_FAMILY_DESCRIPTOR,
+        },
+        validate_wecom_security_config,
+        stop,
+        initialize_runtime_environment,
+        move |context, kernel_ctx, runtime, stop| {
+            Box::pin(async move {
+                let route = context.route.clone();
+                let resolved_path = context.resolved_path.clone();
+                let resolved = context.resolved.clone();
+                let config = context.config.clone();
+                wecom::run_wecom_channel(
+                    &config,
+                    &resolved,
+                    &resolved_path,
+                    route.selected_by_default(),
+                    route.default_account_source,
+                    kernel_ctx,
+                    runtime,
+                    stop,
+                )
+                .await
+            })
+        },
+    )
+    .await
+}
+
+#[cfg(feature = "channel-wecom")]
+pub async fn run_wecom_channel_with_stop(
+    resolved_path: PathBuf,
+    config: LoongClawConfig,
+    account_id: Option<&str>,
+    stop: ChannelServeStopHandle,
+    initialize_runtime_environment: bool,
+) -> CliResult<()> {
+    let context = build_wecom_command_context(resolved_path, config, account_id)?;
+    run_wecom_channel_with_context(context, stop, initialize_runtime_environment).await
+}
+
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
@@ -2149,6 +2375,45 @@ pub(crate) async fn send_text_to_known_session(
                 })
             }
         }
+        KnownChannelSessionSendTarget::Wecom {
+            account_id,
+            conversation_id,
+            chat_type,
+        } => {
+            #[cfg(not(feature = "channel-wecom"))]
+            {
+                let _ = (config, account_id, conversation_id, chat_type, text);
+                Err("wecom channel is disabled (enable feature `channel-wecom`)".to_owned())
+            }
+
+            #[cfg(feature = "channel-wecom")]
+            {
+                let resolved = config
+                    .wecom
+                    .resolve_account_for_session_account_id(account_id.as_deref())?;
+                if !resolved.enabled {
+                    return Err(
+                        "sessions_send_channel_disabled: wecom channel is disabled by config"
+                            .to_owned(),
+                    );
+                }
+                let is_allowed = resolved
+                    .allowed_conversation_ids
+                    .iter()
+                    .any(|allowed| allowed.trim() == conversation_id);
+                if !is_allowed {
+                    return Err(format!(
+                        "sessions_send_target_not_allowed: wecom target `{conversation_id}` is not present in wecom.allowed_conversation_ids"
+                    ));
+                }
+                wecom::send_wecom_text(&resolved, conversation_id.as_str(), chat_type, text)
+                    .await?;
+                Ok(ChannelSendReceipt {
+                    channel: "wecom",
+                    target: conversation_id,
+                })
+            }
+        }
     }
 }
 
@@ -2249,6 +2514,17 @@ fn resolve_channel_acp_turn_hints(
         ChannelPlatform::Matrix => {
             let resolved = config
                 .matrix
+                .resolve_account_for_session_account_id(session.account_id.as_deref())?;
+            let acp = resolved.acp;
+            let working_directory = acp.resolved_working_directory();
+            Ok(ChannelResolvedAcpTurnHints {
+                bootstrap_mcp_servers: acp.bootstrap_mcp_servers,
+                working_directory,
+            })
+        }
+        ChannelPlatform::Wecom => {
+            let resolved = config
+                .wecom
                 .resolve_account_for_session_account_id(session.account_id.as_deref())?;
             let acp = resolved.acp;
             let working_directory = acp.resolved_working_directory();
@@ -2425,6 +2701,10 @@ fn validate_feishu_security_config(config: &ResolvedFeishuChannelConfig) -> CliR
         );
     }
 
+    if config.mode != crate::config::FeishuChannelServeMode::Webhook {
+        return Ok(());
+    }
+
     let has_verification_token = config
         .verification_token()
         .map(|value| !value.trim().is_empty())
@@ -2482,6 +2762,46 @@ fn validate_matrix_security_config(config: &ResolvedMatrixChannelConfig) -> CliR
             "matrix.user_id is missing; configure user_id when ignore_self_messages is enabled"
                 .to_owned(),
         );
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "channel-wecom")]
+fn validate_wecom_security_config(config: &ResolvedWecomChannelConfig) -> CliResult<()> {
+    let has_allowlist = config
+        .allowed_conversation_ids
+        .iter()
+        .any(|value| !value.trim().is_empty());
+    if !has_allowlist {
+        return Err(
+            "wecom.allowed_conversation_ids is empty; configure at least one trusted conversation id"
+                .to_owned(),
+        );
+    }
+
+    let websocket_url = config.resolved_websocket_url();
+    let parsed_url = reqwest::Url::parse(websocket_url.as_str())
+        .map_err(|error| format!("invalid wecom.websocket_url: {error}"))?;
+    let scheme = parsed_url.scheme();
+    if scheme != "ws" && scheme != "wss" {
+        return Err("wecom.websocket_url must use ws or wss".to_owned());
+    }
+
+    let has_bot_id = config
+        .bot_id()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    if !has_bot_id {
+        return Err("wecom.bot_id is missing; configure bot_id or bot_id_env".to_owned());
+    }
+
+    let has_secret = config
+        .secret()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    if !has_secret {
+        return Err("wecom.secret is missing; configure secret or secret_env".to_owned());
     }
 
     Ok(())
@@ -3542,6 +3862,20 @@ mod tests {
             "encrypt-key-123".to_owned(),
         ));
         config.feishu.encrypt_key_env = None;
+
+        let resolved = config
+            .feishu
+            .resolve_account(None)
+            .expect("resolve feishu account");
+        assert!(validate_feishu_security_config(&resolved).is_ok());
+    }
+
+    #[cfg(feature = "channel-feishu")]
+    #[test]
+    fn feishu_security_validation_accepts_websocket_mode_without_webhook_secrets() {
+        let mut config = LoongClawConfig::default();
+        config.feishu.allowed_chat_ids = vec!["oc_123".to_owned()];
+        config.feishu.mode = Some(crate::config::FeishuChannelServeMode::Websocket);
 
         let resolved = config
             .feishu
