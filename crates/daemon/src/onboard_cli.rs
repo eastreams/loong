@@ -34,6 +34,10 @@ use crate::onboard_preflight::{
 };
 use crate::onboarding_model_policy;
 use crate::provider_credential_policy;
+use crate::tui_surface::{
+    TuiCalloutTone, TuiChoiceSpec, TuiHeaderStyle, TuiScreenSpec, TuiSectionSpec,
+    render_onboard_screen_spec,
+};
 #[cfg(test)]
 use std::fs;
 #[cfg(test)]
@@ -699,6 +703,18 @@ fn select_options_from_screen_options(options: &[OnboardScreenOption]) -> Vec<Se
         .collect()
 }
 
+fn tui_choices_from_screen_options(options: &[OnboardScreenOption]) -> Vec<TuiChoiceSpec> {
+    options
+        .iter()
+        .map(|option| TuiChoiceSpec {
+            key: option.key.clone(),
+            label: option.label.clone(),
+            detail_lines: option.detail_lines.clone(),
+            recommended: option.recommended,
+        })
+        .collect()
+}
+
 fn select_screen_option(
     ui: &mut impl OnboardUi,
     label: &str,
@@ -943,7 +959,6 @@ pub struct OnboardEntryOption {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OnboardHeaderStyle {
-    Brand,
     Compact,
 }
 
@@ -3302,41 +3317,16 @@ fn render_onboard_entry_screen_lines_with_style(
     width: usize,
     color_enabled: bool,
 ) -> Vec<String> {
-    let recommended_plan_available = import_candidates.iter().any(|candidate| {
-        candidate.source_kind == crate::migration::ImportSourceKind::RecommendedPlan
-    });
-    let mut lines = render_onboard_header(
-        OnboardHeaderStyle::Compact,
-        width,
-        "guided setup for provider, channels, and workspace guidance",
-        color_enabled,
+    let spec = build_onboard_entry_screen_spec(
+        current_setup_state,
+        current_candidate,
+        import_candidates,
+        options,
+        workspace_root,
+        false,
     );
-    lines.push(String::new());
-    lines.push(crate::onboard_presentation::detected_settings_section_heading().to_owned());
-    lines.extend(render_onboard_wrapped_display_lines(
-        render_detected_settings_digest_lines(
-            current_setup_state,
-            current_candidate,
-            import_candidates,
-            workspace_root,
-            recommended_plan_available,
-        ),
-        width,
-    ));
-    lines.push(String::new());
-    lines.push(crate::onboard_presentation::entry_choice_section_heading().to_owned());
-    let screen_options = build_onboard_entry_screen_options(options);
-    lines.extend(render_onboard_option_lines(&screen_options, width));
-    let footer_lines = append_escape_cancel_hint(
-        render_onboard_entry_default_choice_footer_line(options)
-            .into_iter()
-            .collect::<Vec<_>>(),
-    );
-    if !footer_lines.is_empty() {
-        lines.push(String::new());
-        lines.extend(render_onboard_wrapped_display_lines(footer_lines, width));
-    }
-    lines
+
+    render_onboard_screen_spec(&spec, width, color_enabled)
 }
 
 fn render_onboard_entry_interactive_screen_lines_with_style(
@@ -3348,36 +3338,79 @@ fn render_onboard_entry_interactive_screen_lines_with_style(
     width: usize,
     color_enabled: bool,
 ) -> Vec<String> {
+    let spec = build_onboard_entry_screen_spec(
+        current_setup_state,
+        current_candidate,
+        import_candidates,
+        options,
+        workspace_root,
+        true,
+    );
+
+    render_onboard_screen_spec(&spec, width, color_enabled)
+}
+
+fn build_onboard_entry_screen_spec(
+    current_setup_state: crate::migration::CurrentSetupState,
+    current_candidate: Option<&ImportCandidate>,
+    import_candidates: &[ImportCandidate],
+    options: &[OnboardEntryOption],
+    workspace_root: Option<&Path>,
+    interactive: bool,
+) -> TuiScreenSpec {
     let recommended_plan_available = import_candidates.iter().any(|candidate| {
         candidate.source_kind == crate::migration::ImportSourceKind::RecommendedPlan
     });
-    let mut lines = render_onboard_header(
-        OnboardHeaderStyle::Compact,
-        width,
-        "guided setup for provider, channels, and workspace guidance",
-        color_enabled,
+    let detected_settings_lines = render_detected_settings_digest_lines(
+        current_setup_state,
+        current_candidate,
+        import_candidates,
+        workspace_root,
+        recommended_plan_available,
     );
-    lines.push(String::new());
-    lines.push(crate::onboard_presentation::detected_settings_section_heading().to_owned());
-    lines.extend(render_onboard_wrapped_display_lines(
-        render_detected_settings_digest_lines(
-            current_setup_state,
-            current_candidate,
-            import_candidates,
-            workspace_root,
-            recommended_plan_available,
-        ),
-        width,
-    ));
+    let detected_settings_section = TuiSectionSpec::Narrative {
+        title: Some(crate::onboard_presentation::detected_settings_section_heading().to_owned()),
+        lines: detected_settings_lines,
+    };
+
+    let mut sections = vec![detected_settings_section];
+
     if !options.is_empty() {
-        lines.push(String::new());
-        lines.push(crate::onboard_presentation::entry_choice_section_heading().to_owned());
+        let entry_choice_section = TuiSectionSpec::Narrative {
+            title: Some(crate::onboard_presentation::entry_choice_section_heading().to_owned()),
+            lines: Vec::new(),
+        };
+
+        sections.push(entry_choice_section);
     }
-    lines.extend(render_onboard_wrapped_display_lines(
-        append_escape_cancel_hint(Vec::<String>::new()),
-        width,
-    ));
-    lines
+
+    let choices = if interactive {
+        Vec::new()
+    } else {
+        let screen_options = build_onboard_entry_screen_options(options);
+        tui_choices_from_screen_options(&screen_options)
+    };
+
+    let footer_lines = if interactive {
+        append_escape_cancel_hint(Vec::<String>::new())
+    } else {
+        let default_footer_lines = render_onboard_entry_default_choice_footer_line(options)
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        append_escape_cancel_hint(default_footer_lines)
+    };
+
+    TuiScreenSpec {
+        header_style: TuiHeaderStyle::Compact,
+        subtitle: Some("guided setup for provider, channels, and workspace guidance".to_owned()),
+        title: None,
+        progress_line: None,
+        intro_lines: Vec::new(),
+        sections,
+        choices,
+        footer_lines,
+    }
 }
 
 fn render_onboard_entry_default_choice_footer_line(
@@ -4018,90 +4051,78 @@ fn render_onboard_review_lines_with_guidance_and_style(
     flow_style: ReviewFlowStyle,
     color_enabled: bool,
 ) -> Vec<String> {
-    let mut lines =
-        render_onboard_compact_header(width, flow_style.header_subtitle(), color_enabled);
-    lines.push(String::new());
-    lines.push("review setup".to_owned());
-    lines.push(flow_style.progress_line());
-    if let Some(source) = import_source {
-        append_onboard_review_section(
-            &mut lines,
-            "starting point",
-            mvp::presentation::render_wrapped_text_line(
-                "- starting point: ",
-                &onboard_starting_point_label(None, source),
-                width,
-            ),
-        );
-    }
-    append_onboard_review_section(
-        &mut lines,
-        "configuration",
-        render_onboard_review_digest_lines(config, width),
+    let spec = build_onboard_review_screen_spec(
+        config,
+        import_source,
+        workspace_guidance,
+        selected_candidate,
+        flow_style,
+        width,
     );
+
+    render_onboard_screen_spec(&spec, width, color_enabled)
+}
+
+fn build_onboard_review_screen_spec(
+    config: &mvp::config::LoongClawConfig,
+    import_source: Option<&str>,
+    workspace_guidance: &[crate::migration::WorkspaceGuidanceCandidate],
+    selected_candidate: Option<&ImportCandidate>,
+    flow_style: ReviewFlowStyle,
+    width: usize,
+) -> TuiScreenSpec {
+    let mut sections = Vec::new();
+
+    if let Some(source) = import_source {
+        let starting_point_label = onboard_starting_point_label(None, source);
+        let starting_point_lines = mvp::presentation::render_wrapped_text_line(
+            "- starting point: ",
+            &starting_point_label,
+            width,
+        );
+        let starting_point_section = TuiSectionSpec::Narrative {
+            title: Some("starting point".to_owned()),
+            lines: starting_point_lines,
+        };
+
+        sections.push(starting_point_section);
+    }
+
+    let configuration_lines = render_onboard_review_digest_lines(config, width);
+    let configuration_section = TuiSectionSpec::Narrative {
+        title: Some("configuration".to_owned()),
+        lines: configuration_lines,
+    };
+
+    sections.push(configuration_section);
+
     let review_candidate = build_onboard_review_candidate_with_selected_context(
         config,
         workspace_guidance,
         selected_candidate,
     );
-    append_onboard_review_section(
-        &mut lines,
-        "draft source",
-        crate::migration::render::render_candidate_preview_lines(&review_candidate, width),
-    );
-    lines
-}
+    let draft_source_lines =
+        crate::migration::render::render_candidate_preview_lines(&review_candidate, width);
+    let draft_source_section = TuiSectionSpec::Narrative {
+        title: Some("draft source".to_owned()),
+        lines: draft_source_lines,
+    };
 
-fn append_onboard_review_section(lines: &mut Vec<String>, title: &str, section_lines: Vec<String>) {
-    if section_lines.is_empty() {
-        return;
-    }
-    lines.push(String::new());
-    lines.push(title.to_owned());
-    lines.extend(section_lines);
-}
-fn render_onboard_brand_header(width: usize, subtitle: &str, color_enabled: bool) -> Vec<String> {
-    mvp::presentation::style_brand_lines_with_palette(
-        &mvp::presentation::render_brand_header(
-            width,
-            &mvp::presentation::BuildVersionInfo::current(),
-            Some(subtitle),
-        ),
-        color_enabled,
-        mvp::presentation::ONBOARD_BRAND_PALETTE,
-    )
-}
+    sections.push(draft_source_section);
 
-pub(crate) fn render_onboard_compact_header(
-    width: usize,
-    subtitle: &str,
-    color_enabled: bool,
-) -> Vec<String> {
-    mvp::presentation::style_brand_lines_with_palette(
-        &mvp::presentation::render_compact_brand_header(
-            width,
-            &mvp::presentation::BuildVersionInfo::current(),
-            Some(subtitle),
-        ),
-        color_enabled,
-        mvp::presentation::ONBOARD_BRAND_PALETTE,
-    )
-}
-
-fn render_onboard_header(
-    style: OnboardHeaderStyle,
-    width: usize,
-    subtitle: &str,
-    color_enabled: bool,
-) -> Vec<String> {
-    match style {
-        OnboardHeaderStyle::Brand => render_onboard_brand_header(width, subtitle, color_enabled),
-        OnboardHeaderStyle::Compact => {
-            render_onboard_compact_header(width, subtitle, color_enabled)
-        }
+    TuiScreenSpec {
+        header_style: TuiHeaderStyle::Compact,
+        subtitle: Some(flow_style.header_subtitle().to_owned()),
+        title: Some("review setup".to_owned()),
+        progress_line: Some(flow_style.progress_line()),
+        intro_lines: Vec::new(),
+        sections,
+        choices: Vec::new(),
+        footer_lines: Vec::new(),
     }
 }
 
+#[cfg(test)]
 pub(crate) fn render_onboard_wrapped_display_lines<I, S>(
     display_lines: I,
     width: usize,
@@ -4116,6 +4137,7 @@ where
         .collect()
 }
 
+#[cfg(test)]
 pub(crate) fn render_onboard_option_lines(
     options: &[OnboardScreenOption],
     width: usize,
@@ -4157,6 +4179,7 @@ fn render_prompt_with_default_text(label: &str, default: &str) -> String {
     format!("{label} (default: {default}): ")
 }
 
+#[cfg(test)]
 fn render_onboard_option_prefix(key: &str) -> String {
     format!("{key}) ")
 }
@@ -4314,26 +4337,17 @@ fn render_onboard_choice_screen(
     footer_lines: Vec<String>,
     color_enabled: bool,
 ) -> Vec<String> {
-    let footer_lines = append_escape_cancel_hint(footer_lines);
-    let mut lines = render_onboard_header(header_style, width, subtitle, color_enabled);
-    lines.push(String::new());
-    lines.extend(render_onboard_wrapped_display_lines([title], width));
-    if let Some((step, guided_prompt_path)) = step {
-        lines.extend(render_onboard_wrapped_display_lines(
-            [step.progress_line(guided_prompt_path)],
-            width,
-        ));
-    }
-    lines.extend(render_onboard_wrapped_display_lines(intro_lines, width));
-    if !options.is_empty() {
-        lines.push(String::new());
-        lines.extend(render_onboard_option_lines(&options, width));
-    }
-    if !footer_lines.is_empty() {
-        lines.push(String::new());
-        lines.extend(render_onboard_wrapped_display_lines(footer_lines, width));
-    }
-    lines
+    let spec = build_onboard_choice_screen_spec(
+        header_style,
+        subtitle,
+        title,
+        step,
+        intro_lines,
+        options,
+        footer_lines,
+    );
+
+    render_onboard_screen_spec(&spec, width, color_enabled)
 }
 
 fn render_onboard_input_screen(
@@ -4345,20 +4359,10 @@ fn render_onboard_input_screen(
     hint_lines: Vec<String>,
     color_enabled: bool,
 ) -> Vec<String> {
-    let hint_lines = append_escape_cancel_hint(hint_lines);
-    let mut lines = render_onboard_header(OnboardHeaderStyle::Compact, width, "", color_enabled);
-    lines.push(String::new());
-    lines.extend(render_onboard_wrapped_display_lines([title], width));
-    lines.extend(render_onboard_wrapped_display_lines(
-        [step.progress_line(guided_prompt_path)],
-        width,
-    ));
-    lines.extend(render_onboard_wrapped_display_lines(context_lines, width));
-    if !hint_lines.is_empty() {
-        lines.push(String::new());
-        lines.extend(render_onboard_wrapped_display_lines(hint_lines, width));
-    }
-    lines
+    let spec =
+        build_onboard_input_screen_spec(title, step, guided_prompt_path, context_lines, hint_lines);
+
+    render_onboard_screen_spec(&spec, width, color_enabled)
 }
 
 pub fn render_continue_current_setup_screen_lines(
@@ -4395,27 +4399,9 @@ fn render_onboard_shortcut_screen_lines_with_style(
     width: usize,
     color_enabled: bool,
 ) -> Vec<String> {
-    let mut context_lines = Vec::new();
-    if let Some(source) = import_source {
-        context_lines.push(format!(
-            "- starting point: {}",
-            onboard_starting_point_label(None, source)
-        ));
-    }
-    context_lines.extend(render_onboard_review_digest_lines(config, width));
-    context_lines.push(shortcut_kind.summary_line().to_owned());
-
-    render_onboard_choice_screen(
-        OnboardHeaderStyle::Compact,
-        width,
-        shortcut_kind.subtitle(),
-        shortcut_kind.title(),
-        None,
-        context_lines,
-        build_onboard_shortcut_screen_options(shortcut_kind),
-        vec![render_shortcut_default_choice_footer_line(shortcut_kind)],
-        color_enabled,
-    )
+    let spec =
+        build_onboard_shortcut_screen_spec(shortcut_kind, config, import_source, width, true);
+    render_onboard_screen_spec(&spec, width, color_enabled)
 }
 
 fn render_onboard_shortcut_header_lines_with_style(
@@ -4425,27 +4411,9 @@ fn render_onboard_shortcut_header_lines_with_style(
     width: usize,
     color_enabled: bool,
 ) -> Vec<String> {
-    let mut context_lines = Vec::new();
-    if let Some(source) = import_source {
-        context_lines.push(format!(
-            "- starting point: {}",
-            onboard_starting_point_label(None, source)
-        ));
-    }
-    context_lines.extend(render_onboard_review_digest_lines(config, width));
-    context_lines.push(shortcut_kind.summary_line().to_owned());
-
-    render_onboard_choice_screen(
-        OnboardHeaderStyle::Compact,
-        width,
-        shortcut_kind.subtitle(),
-        shortcut_kind.title(),
-        None,
-        context_lines,
-        Vec::new(),
-        Vec::new(),
-        color_enabled,
-    )
+    let spec =
+        build_onboard_shortcut_screen_spec(shortcut_kind, config, import_source, width, false);
+    render_onboard_screen_spec(&spec, width, color_enabled)
 }
 
 fn render_shortcut_default_choice_footer_line(shortcut_kind: OnboardShortcutKind) -> String {
@@ -4461,37 +4429,110 @@ fn render_onboarding_risk_screen_lines_with_style(
     color_enabled: bool,
 ) -> Vec<String> {
     let copy = crate::onboard_presentation::risk_screen_copy();
-    render_onboard_choice_screen(
-        OnboardHeaderStyle::Brand,
-        width,
-        copy.subtitle,
-        copy.title,
-        None,
-        vec![
-            "- LoongClaw can invoke tools and read local files when enabled.".to_owned(),
-            "- Keep credentials in environment variables, not in prompts.".to_owned(),
-            "- Prefer allowlist-style tool policy for shared environments.".to_owned(),
+    let footer_lines = append_escape_cancel_hint(vec![render_default_choice_footer_line(
+        "n",
+        copy.default_choice_description,
+    )]);
+    let spec = TuiScreenSpec {
+        header_style: TuiHeaderStyle::Brand,
+        subtitle: Some(copy.subtitle.to_owned()),
+        title: Some(copy.title.to_owned()),
+        progress_line: None,
+        intro_lines: vec!["review the trust boundary before writing any config".to_owned()],
+        sections: vec![
+            TuiSectionSpec::Callout {
+                tone: TuiCalloutTone::Warning,
+                title: Some("what onboarding can do".to_owned()),
+                lines: vec![
+                    "LoongClaw can invoke tools and read local files when enabled.".to_owned(),
+                    "Keep credentials in environment variables, not in prompts.".to_owned(),
+                    "Prefer allowlist-style tool policy for shared environments.".to_owned(),
+                ],
+            },
+            TuiSectionSpec::Narrative {
+                title: Some("recommended baseline".to_owned()),
+                lines: vec![
+                    "start with the narrowest tool scope that still lets you verify first success"
+                        .to_owned(),
+                    "you can widen channels, models, and local automation after doctor and review"
+                        .to_owned(),
+                ],
+            },
         ],
-        vec![
-            OnboardScreenOption {
+        choices: vec![
+            TuiChoiceSpec {
                 key: "y".to_owned(),
                 label: copy.continue_label.to_owned(),
                 detail_lines: vec![copy.continue_detail.to_owned()],
                 recommended: false,
             },
-            OnboardScreenOption {
+            TuiChoiceSpec {
                 key: "n".to_owned(),
                 label: copy.cancel_label.to_owned(),
                 detail_lines: vec![copy.cancel_detail.to_owned()],
                 recommended: false,
             },
         ],
-        vec![render_default_choice_footer_line(
-            "n",
-            copy.default_choice_description,
-        )],
-        color_enabled,
-    )
+        footer_lines,
+    };
+
+    render_onboard_screen_spec(&spec, width, color_enabled)
+}
+
+fn build_onboard_shortcut_screen_spec(
+    shortcut_kind: OnboardShortcutKind,
+    config: &mvp::config::LoongClawConfig,
+    import_source: Option<&str>,
+    width: usize,
+    include_choices: bool,
+) -> TuiScreenSpec {
+    let mut snapshot_lines = Vec::new();
+    if let Some(source) = import_source {
+        snapshot_lines.push(format!(
+            "- starting point: {}",
+            onboard_starting_point_label(None, source)
+        ));
+    }
+    snapshot_lines.extend(render_onboard_review_digest_lines(config, width));
+    let snapshot_title = if import_source.is_some() {
+        "detected starting point snapshot"
+    } else {
+        "current setup snapshot"
+    };
+
+    let choices = if include_choices {
+        tui_choices_from_screen_options(&build_onboard_shortcut_screen_options(shortcut_kind))
+    } else {
+        Vec::new()
+    };
+    let footer_lines = if include_choices {
+        append_escape_cancel_hint(vec![render_shortcut_default_choice_footer_line(
+            shortcut_kind,
+        )])
+    } else {
+        Vec::new()
+    };
+
+    TuiScreenSpec {
+        header_style: TuiHeaderStyle::Compact,
+        subtitle: Some(shortcut_kind.subtitle().to_owned()),
+        title: Some(shortcut_kind.title().to_owned()),
+        progress_line: None,
+        intro_lines: Vec::new(),
+        sections: vec![
+            TuiSectionSpec::Narrative {
+                title: Some(snapshot_title.to_owned()),
+                lines: snapshot_lines,
+            },
+            TuiSectionSpec::Callout {
+                tone: TuiCalloutTone::Success,
+                title: Some("fast lane".to_owned()),
+                lines: vec![shortcut_kind.summary_line().to_owned()],
+            },
+        ],
+        choices,
+        footer_lines,
+    }
 }
 
 fn render_preflight_summary_screen_lines_with_style(
@@ -4559,18 +4600,81 @@ fn render_write_confirmation_screen_lines_with_style(
     flow_style: ReviewFlowStyle,
     color_enabled: bool,
 ) -> Vec<String> {
-    let mut context_lines = vec![format!("- config: {config_path}")];
-    context_lines.push(
-        crate::onboard_presentation::write_confirmation_status_line(warnings_kept).to_owned(),
-    );
-    let options = vec![
-        OnboardScreenOption {
+    let spec = build_write_confirmation_screen_spec(config_path, warnings_kept, flow_style);
+
+    render_onboard_screen_spec(&spec, width, color_enabled)
+}
+
+fn build_onboard_choice_screen_spec(
+    header_style: OnboardHeaderStyle,
+    subtitle: &str,
+    title: &str,
+    step: Option<(GuidedOnboardStep, GuidedPromptPath)>,
+    intro_lines: Vec<String>,
+    options: Vec<OnboardScreenOption>,
+    footer_lines: Vec<String>,
+) -> TuiScreenSpec {
+    let resolved_subtitle = screen_subtitle(subtitle);
+    let resolved_progress_line =
+        step.map(|(step, guided_prompt_path)| step.progress_line(guided_prompt_path));
+    let resolved_footer_lines = append_escape_cancel_hint(footer_lines);
+    let resolved_choices = tui_choices_from_screen_options(&options);
+
+    TuiScreenSpec {
+        header_style: tui_header_style(header_style),
+        subtitle: resolved_subtitle,
+        title: Some(title.to_owned()),
+        progress_line: resolved_progress_line,
+        intro_lines,
+        sections: Vec::new(),
+        choices: resolved_choices,
+        footer_lines: resolved_footer_lines,
+    }
+}
+
+fn build_onboard_input_screen_spec(
+    title: &str,
+    step: GuidedOnboardStep,
+    guided_prompt_path: GuidedPromptPath,
+    context_lines: Vec<String>,
+    hint_lines: Vec<String>,
+) -> TuiScreenSpec {
+    let resolved_footer_lines = append_escape_cancel_hint(hint_lines);
+    let progress_line = step.progress_line(guided_prompt_path);
+
+    TuiScreenSpec {
+        header_style: TuiHeaderStyle::Compact,
+        subtitle: None,
+        title: Some(title.to_owned()),
+        progress_line: Some(progress_line),
+        intro_lines: context_lines,
+        sections: Vec::new(),
+        choices: Vec::new(),
+        footer_lines: resolved_footer_lines,
+    }
+}
+
+fn build_write_confirmation_screen_spec(
+    config_path: &str,
+    warnings_kept: bool,
+    flow_style: ReviewFlowStyle,
+) -> TuiScreenSpec {
+    let mut intro_lines = Vec::new();
+    let config_line = format!("- config: {config_path}");
+    let status_line =
+        crate::onboard_presentation::write_confirmation_status_line(warnings_kept).to_owned();
+
+    intro_lines.push(config_line);
+    intro_lines.push(status_line);
+
+    let choices = vec![
+        TuiChoiceSpec {
             key: "y".to_owned(),
             label: crate::onboard_presentation::write_confirmation_label().to_owned(),
             detail_lines: vec![crate::onboard_presentation::write_confirmation_detail().to_owned()],
             recommended: false,
         },
-        OnboardScreenOption {
+        TuiChoiceSpec {
             key: "n".to_owned(),
             label: crate::onboard_presentation::write_confirmation_cancel_label().to_owned(),
             detail_lines: vec![
@@ -4579,26 +4683,39 @@ fn render_write_confirmation_screen_lines_with_style(
             recommended: false,
         },
     ];
-    let mut lines = render_onboard_header(OnboardHeaderStyle::Compact, width, "", color_enabled);
-    lines.push(String::new());
-    lines.extend(render_onboard_wrapped_display_lines(
-        [crate::onboard_presentation::write_confirmation_title()],
-        width,
-    ));
-    lines.extend(render_onboard_wrapped_display_lines(
-        [flow_style.progress_line()],
-        width,
-    ));
-    lines.extend(render_onboard_wrapped_display_lines(context_lines, width));
-    lines.push(String::new());
-    lines.extend(render_onboard_option_lines(&options, width));
-    lines.push(String::new());
-    let footer_lines = append_escape_cancel_hint(vec![render_default_choice_footer_line(
+
+    let default_choice_line = render_default_choice_footer_line(
         "y",
         crate::onboard_presentation::write_confirmation_default_choice_description(),
-    )]);
-    lines.extend(render_onboard_wrapped_display_lines(footer_lines, width));
-    lines
+    );
+    let footer_lines = append_escape_cancel_hint(vec![default_choice_line]);
+
+    TuiScreenSpec {
+        header_style: TuiHeaderStyle::Compact,
+        subtitle: None,
+        title: Some(crate::onboard_presentation::write_confirmation_title().to_owned()),
+        progress_line: Some(flow_style.progress_line()),
+        intro_lines,
+        sections: Vec::new(),
+        choices,
+        footer_lines,
+    }
+}
+
+fn tui_header_style(style: OnboardHeaderStyle) -> TuiHeaderStyle {
+    match style {
+        OnboardHeaderStyle::Compact => TuiHeaderStyle::Compact,
+    }
+}
+
+fn screen_subtitle(subtitle: &str) -> Option<String> {
+    let trimmed_subtitle = subtitle.trim();
+
+    if trimmed_subtitle.is_empty() {
+        return None;
+    }
+
+    Some(trimmed_subtitle.to_owned())
 }
 
 fn push_starting_point_fit_hint(

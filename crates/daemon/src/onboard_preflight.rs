@@ -4,6 +4,11 @@ use std::path::Path;
 use loongclaw_app as mvp;
 use loongclaw_contracts::SecretRef;
 
+use crate::tui_surface::{
+    TuiChecklistItemSpec, TuiChecklistStatus, TuiChoiceSpec, TuiHeaderStyle, TuiScreenSpec,
+    TuiSectionSpec, render_onboard_screen_spec,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnboardCheckLevel {
     Pass,
@@ -352,89 +357,8 @@ pub(crate) fn render_preflight_summary_screen_lines_with_progress(
     progress_line: &str,
     color_enabled: bool,
 ) -> Vec<String> {
-    let counts = summarize_onboard_checks(checks);
-    let has_attention = counts.warn > 0 || counts.fail > 0;
-    let mut lines = crate::onboard_cli::render_onboard_compact_header(
-        width,
-        crate::onboard_presentation::preflight_header_title(),
-        color_enabled,
-    );
-    let mut summary_lines = vec![format!(
-        "- status: {} pass · {} warn · {} fail",
-        counts.pass, counts.warn, counts.fail
-    )];
-
-    if has_attention {
-        let attention_line =
-            crate::onboard_presentation::preflight_attention_summary_line().to_owned();
-        summary_lines.push(attention_line);
-
-        if let Some(hint) = preflight_attention_hint_line(checks) {
-            summary_lines.push(hint.to_owned());
-        }
-    } else {
-        let green_line = crate::onboard_presentation::preflight_green_summary_line().to_owned();
-        summary_lines.push(green_line);
-    }
-
-    lines.push(String::new());
-    lines.extend(crate::onboard_cli::render_onboard_wrapped_display_lines(
-        [crate::onboard_presentation::preflight_section_title()],
-        width,
-    ));
-    lines.extend(crate::onboard_cli::render_onboard_wrapped_display_lines(
-        [progress_line],
-        width,
-    ));
-    lines.extend(crate::onboard_cli::render_onboard_wrapped_display_lines(
-        summary_lines,
-        width,
-    ));
-
-    if !checks.is_empty() {
-        lines.push(String::new());
-        lines.extend(render_preflight_check_rows(checks, width));
-    }
-
-    if has_attention {
-        let options = vec![
-            crate::onboard_cli::OnboardScreenOption {
-                key: "y".to_owned(),
-                label: crate::onboard_presentation::preflight_continue_label().to_owned(),
-                detail_lines: vec![
-                    crate::onboard_presentation::preflight_continue_detail().to_owned(),
-                ],
-                recommended: false,
-            },
-            crate::onboard_cli::OnboardScreenOption {
-                key: "n".to_owned(),
-                label: crate::onboard_presentation::preflight_cancel_label().to_owned(),
-                detail_lines: vec![
-                    crate::onboard_presentation::preflight_cancel_detail().to_owned(),
-                ],
-                recommended: false,
-            },
-        ];
-
-        lines.push(String::new());
-        lines.extend(crate::onboard_cli::render_onboard_option_lines(
-            &options, width,
-        ));
-        lines.push(String::new());
-
-        let footer_lines = vec![crate::onboard_cli::render_default_choice_footer_line(
-            "n",
-            crate::onboard_presentation::preflight_default_choice_description(),
-        )];
-        let footer_lines = crate::onboard_cli::append_escape_cancel_hint(footer_lines);
-
-        lines.extend(crate::onboard_cli::render_onboard_wrapped_display_lines(
-            footer_lines,
-            width,
-        ));
-    }
-
-    lines
+    let spec = build_preflight_summary_screen_spec(checks, progress_line);
+    render_onboard_screen_spec(&spec, width, color_enabled)
 }
 
 pub fn render_preflight_summary_screen_lines(checks: &[OnboardCheck], width: usize) -> Vec<String> {
@@ -655,60 +579,98 @@ fn summarize_onboard_checks(checks: &[OnboardCheck]) -> OnboardCheckCounts {
     counts
 }
 
-fn render_preflight_check_rows(checks: &[OnboardCheck], width: usize) -> Vec<String> {
-    let render_stacked_rows = |checks: &[OnboardCheck], width: usize| {
-        let mut lines = Vec::new();
+fn build_preflight_summary_screen_spec(
+    checks: &[OnboardCheck],
+    progress_line: &str,
+) -> TuiScreenSpec {
+    let counts = summarize_onboard_checks(checks);
+    let has_attention = counts.warn > 0 || counts.fail > 0;
+    let mut summary_lines = vec![format!(
+        "- status: {} pass · {} warn · {} fail",
+        counts.pass, counts.warn, counts.fail
+    )];
 
-        for check in checks {
-            lines.push(format!(
-                "{} {}",
-                check_level_marker(check.level),
-                check.name
-            ));
-            lines.extend(mvp::presentation::render_wrapped_text_line(
-                "  ",
-                &check.detail,
-                width,
-            ));
+    if has_attention {
+        summary_lines
+            .push(crate::onboard_presentation::preflight_attention_summary_line().to_owned());
+
+        if let Some(hint) = preflight_attention_hint_line(checks) {
+            summary_lines.push(hint.to_owned());
         }
+    } else {
+        summary_lines.push(crate::onboard_presentation::preflight_green_summary_line().to_owned());
+    }
 
-        lines
+    let mut sections = Vec::new();
+    if !checks.is_empty() {
+        sections.push(TuiSectionSpec::Checklist {
+            title: None,
+            items: tui_checklist_items_from_preflight_checks(checks),
+        });
+    }
+
+    let choices = if has_attention {
+        vec![
+            TuiChoiceSpec {
+                key: "y".to_owned(),
+                label: crate::onboard_presentation::preflight_continue_label().to_owned(),
+                detail_lines: vec![
+                    crate::onboard_presentation::preflight_continue_detail().to_owned(),
+                ],
+                recommended: false,
+            },
+            TuiChoiceSpec {
+                key: "n".to_owned(),
+                label: crate::onboard_presentation::preflight_cancel_label().to_owned(),
+                detail_lines: vec![
+                    crate::onboard_presentation::preflight_cancel_detail().to_owned(),
+                ],
+                recommended: false,
+            },
+        ]
+    } else {
+        Vec::new()
     };
 
-    if width < 68 {
-        return render_stacked_rows(checks, width);
+    let footer_lines = if has_attention {
+        crate::onboard_cli::append_escape_cancel_hint(vec![
+            crate::onboard_cli::render_default_choice_footer_line(
+                "n",
+                crate::onboard_presentation::preflight_default_choice_description(),
+            ),
+        ])
+    } else {
+        Vec::new()
+    };
+
+    TuiScreenSpec {
+        header_style: TuiHeaderStyle::Compact,
+        subtitle: Some(crate::onboard_presentation::preflight_header_title().to_owned()),
+        title: Some(crate::onboard_presentation::preflight_section_title().to_owned()),
+        progress_line: Some(progress_line.to_owned()),
+        intro_lines: summary_lines,
+        sections,
+        choices,
+        footer_lines,
     }
-
-    let name_width = checks
-        .iter()
-        .map(|check| check.name.len())
-        .max()
-        .unwrap_or(0);
-    let rows = checks
-        .iter()
-        .map(|check| {
-            format!(
-                "{} {:width$}  {}",
-                check_level_marker(check.level),
-                check.name,
-                check.detail,
-                width = name_width
-            )
-        })
-        .collect::<Vec<_>>();
-
-    if rows.iter().any(|row| row.len() > width) {
-        return render_stacked_rows(checks, width);
-    }
-
-    rows
 }
 
-fn check_level_marker(level: OnboardCheckLevel) -> &'static str {
+fn tui_checklist_items_from_preflight_checks(checks: &[OnboardCheck]) -> Vec<TuiChecklistItemSpec> {
+    checks
+        .iter()
+        .map(|check| TuiChecklistItemSpec {
+            status: tui_checklist_status(check.level),
+            label: check.name.to_owned(),
+            detail: check.detail.clone(),
+        })
+        .collect()
+}
+
+fn tui_checklist_status(level: OnboardCheckLevel) -> TuiChecklistStatus {
     match level {
-        OnboardCheckLevel::Pass => "[OK]",
-        OnboardCheckLevel::Warn => "[WARN]",
-        OnboardCheckLevel::Fail => "[FAIL]",
+        OnboardCheckLevel::Pass => TuiChecklistStatus::Pass,
+        OnboardCheckLevel::Warn => TuiChecklistStatus::Warn,
+        OnboardCheckLevel::Fail => TuiChecklistStatus::Fail,
     }
 }
 

@@ -7,6 +7,11 @@ use time::OffsetDateTime;
 use time::format_description::FormatItem;
 use time::macros::format_description;
 
+use crate::tui_surface::{
+    TuiActionSpec, TuiHeaderStyle, TuiKeyValueSpec, TuiScreenSpec, TuiSectionSpec,
+    render_onboard_screen_spec,
+};
+
 const BACKUP_TIMESTAMP_FORMAT: &[FormatItem<'static>] =
     format_description!("[year][month][day]-[hour][minute][second]");
 const CLI_CHANNEL_ID: &str = "cli";
@@ -355,10 +360,9 @@ fn collect_onboarding_suggested_channels(config: &mvp::config::LoongClawConfig) 
         .collect()
 }
 
-fn render_onboarding_domain_outcome_lines(
+fn build_onboarding_domain_outcome_items(
     outcomes: &[OnboardingDomainOutcome],
-    width: usize,
-) -> Vec<String> {
+) -> Vec<TuiKeyValueSpec> {
     let mut grouped: Vec<(crate::migration::types::PreviewDecision, Vec<&'static str>)> =
         Vec::new();
     let mut sorted = outcomes.to_vec();
@@ -380,9 +384,9 @@ fn render_onboarding_domain_outcome_lines(
 
     grouped
         .into_iter()
-        .flat_map(|(decision, labels)| {
-            let prefix = format!("- {}: ", decision.outcome_label());
-            mvp::presentation::render_wrapped_csv_line(&prefix, &labels, width)
+        .map(|(decision, labels)| TuiKeyValueSpec::Csv {
+            key: decision.outcome_label().to_owned(),
+            values: labels.into_iter().map(str::to_owned).collect(),
         })
         .collect()
 }
@@ -392,135 +396,146 @@ fn render_onboarding_success_summary_with_style(
     width: usize,
     color_enabled: bool,
 ) -> Vec<String> {
-    let mut lines = render_compact_header(width, "setup complete", color_enabled);
+    let spec = build_onboarding_success_screen_spec(summary);
+    render_onboard_screen_spec(&spec, width, color_enabled)
+}
 
-    lines.push(String::new());
-    lines.push("onboarding complete".to_owned());
+fn build_onboarding_success_screen_spec(summary: &OnboardingSuccessSummary) -> TuiScreenSpec {
+    let mut sections = Vec::new();
 
-    if !summary.next_actions.is_empty() {
-        let mut actions = summary.next_actions.iter();
-        let primary = actions.next();
-
-        if let Some(primary) = primary {
-            if width < 56 {
-                lines.push("start here".to_owned());
-                lines.extend(mvp::presentation::render_wrapped_text_line(
-                    &format!("- {}: ", primary.label),
-                    &primary.command,
-                    width,
-                ));
-            } else {
-                lines.extend(mvp::presentation::render_wrapped_text_line(
-                    "start here: ",
-                    &primary.command,
-                    width,
-                ));
-            }
-        }
-
-        let secondary_actions = actions.collect::<Vec<_>>();
-
-        if !secondary_actions.is_empty() {
-            lines.push("also available".to_owned());
-            lines.extend(secondary_actions.into_iter().flat_map(|action| {
-                mvp::presentation::render_wrapped_text_line(
-                    &format!("- {}: ", action.label),
-                    &action.command,
-                    width,
-                )
-            }));
-        }
+    if let Some(primary) = summary.next_actions.first() {
+        sections.push(TuiSectionSpec::ActionGroup {
+            title: Some("start here".to_owned()),
+            inline_title_when_wide: true,
+            items: vec![TuiActionSpec {
+                label: primary.label.clone(),
+                command: primary.command.clone(),
+            }],
+        });
     }
 
-    lines.push("saved setup".to_owned());
-    lines.extend(mvp::presentation::render_wrapped_text_line(
-        "- config: ",
-        &summary.config_path,
-        width,
-    ));
+    if summary.next_actions.len() > 1 {
+        sections.push(TuiSectionSpec::ActionGroup {
+            title: Some("also available".to_owned()),
+            inline_title_when_wide: false,
+            items: summary
+                .next_actions
+                .iter()
+                .skip(1)
+                .map(|action| TuiActionSpec {
+                    label: action.label.clone(),
+                    command: action.command.clone(),
+                })
+                .collect(),
+        });
+    }
+
+    sections.push(TuiSectionSpec::KeyValues {
+        title: Some("saved setup".to_owned()),
+        items: build_onboarding_saved_setup_items(summary),
+    });
+
+    if !summary.domain_outcomes.is_empty() {
+        sections.push(TuiSectionSpec::KeyValues {
+            title: Some("setup outcome".to_owned()),
+            items: build_onboarding_domain_outcome_items(&summary.domain_outcomes),
+        });
+    }
+
+    TuiScreenSpec {
+        header_style: TuiHeaderStyle::Compact,
+        subtitle: Some("setup complete".to_owned()),
+        title: Some("onboarding complete".to_owned()),
+        progress_line: None,
+        intro_lines: Vec::new(),
+        sections,
+        choices: Vec::new(),
+        footer_lines: Vec::new(),
+    }
+}
+
+fn build_onboarding_saved_setup_items(summary: &OnboardingSuccessSummary) -> Vec<TuiKeyValueSpec> {
+    let mut items = vec![TuiKeyValueSpec::Plain {
+        key: "config".to_owned(),
+        value: summary.config_path.clone(),
+    }];
 
     if let Some(config_status) = summary.config_status.as_deref() {
-        lines.extend(mvp::presentation::render_wrapped_text_line(
-            "- config status: ",
-            config_status,
-            width,
-        ));
+        items.push(TuiKeyValueSpec::Plain {
+            key: "config status".to_owned(),
+            value: config_status.to_owned(),
+        });
     }
 
     if let Some(source) = summary.import_source.as_deref() {
-        let onboarding_label = crate::migration::ImportSourceKind::onboarding_label(None, source);
-
-        lines.extend(mvp::presentation::render_wrapped_text_line(
-            "- starting point: ",
-            &onboarding_label,
-            width,
-        ));
+        items.push(TuiKeyValueSpec::Plain {
+            key: "starting point".to_owned(),
+            value: crate::migration::ImportSourceKind::onboarding_label(None, source),
+        });
     }
 
-    lines.extend(
-        crate::provider_presentation::render_provider_profile_state_lines_from_parts(
-            &summary.provider,
-            &summary.saved_provider_profiles,
-            width,
-            Some("- provider: "),
-        ),
-    );
-    lines.extend(mvp::presentation::render_wrapped_text_line(
-        "- model: ",
-        &summary.model,
-        width,
-    ));
-    lines.extend(mvp::presentation::render_wrapped_text_line(
-        "- transport: ",
-        &summary.transport,
-        width,
-    ));
+    if summary.saved_provider_profiles.len() > 1 {
+        items.push(TuiKeyValueSpec::Plain {
+            key: "active provider".to_owned(),
+            value: summary.provider.clone(),
+        });
+        items.push(TuiKeyValueSpec::Csv {
+            key: "saved provider profiles".to_owned(),
+            values: summary.saved_provider_profiles.clone(),
+        });
+    } else {
+        items.push(TuiKeyValueSpec::Plain {
+            key: "provider".to_owned(),
+            value: summary.provider.clone(),
+        });
+    }
+
+    items.push(TuiKeyValueSpec::Plain {
+        key: "model".to_owned(),
+        value: summary.model.clone(),
+    });
+    items.push(TuiKeyValueSpec::Plain {
+        key: "transport".to_owned(),
+        value: summary.transport.clone(),
+    });
 
     if let Some(provider_endpoint) = summary.provider_endpoint.as_deref() {
-        lines.extend(mvp::presentation::render_wrapped_text_line(
-            "- provider endpoint: ",
-            provider_endpoint,
-            width,
-        ));
+        items.push(TuiKeyValueSpec::Plain {
+            key: "provider endpoint".to_owned(),
+            value: provider_endpoint.to_owned(),
+        });
     }
 
     if let Some(credential) = summary.credential.as_ref() {
-        let prefix = format!("- {}: ", credential.label);
-
-        lines.extend(mvp::presentation::render_wrapped_text_line(
-            &prefix,
-            &credential.value,
-            width,
-        ));
+        items.push(TuiKeyValueSpec::Plain {
+            key: credential.label.to_owned(),
+            value: credential.value.clone(),
+        });
     }
 
-    lines.extend(mvp::presentation::render_wrapped_text_line(
-        "- prompt mode: ",
-        &summary.prompt_mode,
-        width,
-    ));
+    items.push(TuiKeyValueSpec::Plain {
+        key: "prompt mode".to_owned(),
+        value: summary.prompt_mode.clone(),
+    });
 
     if let Some(personality) = summary.personality.as_deref() {
-        lines.extend(mvp::presentation::render_wrapped_text_line(
-            "- personality: ",
-            personality,
-            width,
-        ));
+        items.push(TuiKeyValueSpec::Plain {
+            key: "personality".to_owned(),
+            value: personality.to_owned(),
+        });
     }
 
     if let Some(prompt_addendum) = summary.prompt_addendum.as_deref() {
-        lines.extend(mvp::presentation::render_wrapped_text_line(
-            "- prompt addendum: ",
-            prompt_addendum,
-            width,
-        ));
+        items.push(TuiKeyValueSpec::Plain {
+            key: "prompt addendum".to_owned(),
+            value: prompt_addendum.to_owned(),
+        });
     }
 
-    lines.extend(mvp::presentation::render_wrapped_text_line(
-        "- memory profile: ",
-        &summary.memory_profile,
-        width,
-    ));
+    items.push(TuiKeyValueSpec::Plain {
+        key: "memory profile".to_owned(),
+        value: summary.memory_profile.clone(),
+    });
 
     lines.extend(mvp::presentation::render_wrapped_text_line(
         "- web search: ",
@@ -539,64 +554,33 @@ fn render_onboarding_success_summary_with_style(
     }
 
     if let Some(memory_path) = summary.memory_path.as_deref() {
-        lines.extend(mvp::presentation::render_wrapped_text_line(
-            "- sqlite memory: ",
-            memory_path,
-            width,
-        ));
+        items.push(TuiKeyValueSpec::Plain {
+            key: "sqlite memory".to_owned(),
+            value: memory_path.to_owned(),
+        });
     }
 
     let channels = summary
         .channels
         .iter()
         .filter(|channel| channel.as_str() != CLI_CHANNEL_ID)
-        .map(String::as_str)
+        .cloned()
         .collect::<Vec<_>>();
     if !channels.is_empty() {
-        lines.extend(mvp::presentation::render_wrapped_csv_line(
-            "- channels: ",
-            &channels,
-            width,
-        ));
+        items.push(TuiKeyValueSpec::Csv {
+            key: "channels".to_owned(),
+            values: channels,
+        });
     }
 
     if !summary.suggested_channels.is_empty() {
-        let suggested_channels = summary
-            .suggested_channels
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>();
-
-        lines.extend(mvp::presentation::render_wrapped_csv_line(
-            "- suggested channels: ",
-            &suggested_channels,
-            width,
-        ));
+        items.push(TuiKeyValueSpec::Csv {
+            key: "suggested channels".to_owned(),
+            values: summary.suggested_channels.clone(),
+        });
     }
 
-    if !summary.domain_outcomes.is_empty() {
-        lines.push("setup outcome".to_owned());
-        lines.extend(render_onboarding_domain_outcome_lines(
-            &summary.domain_outcomes,
-            width,
-        ));
-    }
-
-    lines
-}
-
-fn render_compact_header(width: usize, subtitle: &str, color_enabled: bool) -> Vec<String> {
-    let header_lines = mvp::presentation::render_compact_brand_header(
-        width,
-        &mvp::presentation::BuildVersionInfo::current(),
-        Some(subtitle),
-    );
-
-    mvp::presentation::style_brand_lines_with_palette(
-        &header_lines,
-        color_enabled,
-        mvp::presentation::ONBOARD_BRAND_PALETTE,
-    )
+    items
 }
 
 pub(crate) fn format_backup_timestamp_at(timestamp: OffsetDateTime) -> CliResult<String> {

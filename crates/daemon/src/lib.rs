@@ -99,6 +99,7 @@ pub mod runtime_restore_cli;
 pub mod skills_cli;
 pub mod source_presentation;
 pub mod supervisor;
+mod tui_surface;
 
 pub use loongclaw_spec::programmatic::{
     acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
