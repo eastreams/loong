@@ -22,6 +22,8 @@ pub(crate) const FEISHU_APP_SECRET_ENV: &str = "FEISHU_APP_SECRET";
 pub(crate) const FEISHU_VERIFICATION_TOKEN_ENV: &str = "FEISHU_VERIFICATION_TOKEN";
 pub(crate) const FEISHU_ENCRYPT_KEY_ENV: &str = "FEISHU_ENCRYPT_KEY";
 pub(crate) const MATRIX_ACCESS_TOKEN_ENV: &str = "MATRIX_ACCESS_TOKEN";
+pub(crate) const WECOM_BOT_ID_ENV: &str = "WECOM_BOT_ID";
+pub(crate) const WECOM_SECRET_ENV: &str = "WECOM_SECRET";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelRuntimeKind {
@@ -85,7 +87,15 @@ const MATRIX_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     serve_subcommand: Some("matrix-serve"),
 };
 
-const CHANNEL_CATALOG: [ChannelCatalogEntry; 4] = [
+const WECOM_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
+    id: "wecom",
+    label: "wecom",
+    surface_label: "wecom channel",
+    runtime_kind: ChannelRuntimeKind::Service,
+    serve_subcommand: Some("wecom-serve"),
+};
+
+const CHANNEL_CATALOG: [ChannelCatalogEntry; 5] = [
     ChannelCatalogEntry {
         descriptor: &CLI_CHANNEL_DESCRIPTOR,
         is_enabled: cli_is_enabled,
@@ -105,6 +115,11 @@ const CHANNEL_CATALOG: [ChannelCatalogEntry; 4] = [
         descriptor: &MATRIX_CHANNEL_DESCRIPTOR,
         is_enabled: matrix_is_enabled,
         collect_validation_issues: collect_matrix_validation_issues,
+    },
+    ChannelCatalogEntry {
+        descriptor: &WECOM_CHANNEL_DESCRIPTOR,
+        is_enabled: wecom_is_enabled,
+        collect_validation_issues: collect_wecom_validation_issues,
     },
 ];
 
@@ -170,6 +185,10 @@ fn matrix_is_enabled(config: &LoongClawConfig) -> bool {
     config.matrix.enabled
 }
 
+fn wecom_is_enabled(config: &LoongClawConfig) -> bool {
+    config.wecom.enabled
+}
+
 fn collect_cli_validation_issues(_config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
     Vec::new()
 }
@@ -184,6 +203,10 @@ fn collect_feishu_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValid
 
 fn collect_matrix_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
     config.matrix.validate()
+}
+
+fn collect_wecom_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+    config.wecom.validate()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -547,6 +570,68 @@ impl ResolvedMatrixChannelConfig {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WecomAccountConfig {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub bot_id: Option<SecretRef>,
+    #[serde(default)]
+    pub secret: Option<SecretRef>,
+    #[serde(default)]
+    pub bot_id_env: Option<String>,
+    #[serde(default)]
+    pub secret_env: Option<String>,
+    #[serde(default)]
+    pub websocket_url: Option<String>,
+    #[serde(default)]
+    pub ping_interval_s: Option<u64>,
+    #[serde(default)]
+    pub reconnect_interval_s: Option<u64>,
+    #[serde(default)]
+    pub allowed_conversation_ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub acp: Option<ChannelAcpConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedWecomChannelConfig {
+    pub configured_account_id: String,
+    pub configured_account_label: String,
+    pub account: ChannelAccountIdentity,
+    pub enabled: bool,
+    pub bot_id: Option<SecretRef>,
+    pub secret: Option<SecretRef>,
+    pub bot_id_env: Option<String>,
+    pub secret_env: Option<String>,
+    pub websocket_url: Option<String>,
+    pub ping_interval_s: u64,
+    pub reconnect_interval_s: u64,
+    pub allowed_conversation_ids: Vec<String>,
+    pub acp: ChannelAcpConfig,
+}
+
+impl ResolvedWecomChannelConfig {
+    pub fn bot_id(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.bot_id.as_ref(), self.bot_id_env.as_deref())
+    }
+
+    pub fn secret(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.secret.as_ref(), self.secret_env.as_deref())
+    }
+
+    pub fn resolved_websocket_url(&self) -> String {
+        self.websocket_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(default_wecom_websocket_url)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FeishuChannelConfig {
     #[serde(default)]
@@ -619,6 +704,36 @@ pub struct MatrixChannelConfig {
     pub acp: ChannelAcpConfig,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, MatrixAccountConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WecomChannelConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub default_account: Option<String>,
+    #[serde(default)]
+    pub bot_id: Option<SecretRef>,
+    #[serde(default)]
+    pub secret: Option<SecretRef>,
+    #[serde(default)]
+    pub bot_id_env: Option<String>,
+    #[serde(default)]
+    pub secret_env: Option<String>,
+    #[serde(default)]
+    pub websocket_url: Option<String>,
+    #[serde(default = "default_wecom_ping_interval_seconds")]
+    pub ping_interval_s: u64,
+    #[serde(default = "default_wecom_reconnect_interval_seconds")]
+    pub reconnect_interval_s: u64,
+    #[serde(default)]
+    pub allowed_conversation_ids: Vec<String>,
+    #[serde(default)]
+    pub acp: ChannelAcpConfig,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub accounts: BTreeMap<String, WecomAccountConfig>,
 }
 
 impl Default for CliChannelConfig {
@@ -928,6 +1043,26 @@ impl Default for MatrixChannelConfig {
             sync_timeout_s: default_matrix_sync_timeout_seconds(),
             allowed_room_ids: Vec::new(),
             ignore_self_messages: true,
+            acp: ChannelAcpConfig::default(),
+            accounts: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for WecomChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_id: None,
+            default_account: None,
+            bot_id: None,
+            secret: None,
+            bot_id_env: Some(WECOM_BOT_ID_ENV.to_owned()),
+            secret_env: Some(WECOM_SECRET_ENV.to_owned()),
+            websocket_url: None,
+            ping_interval_s: default_wecom_ping_interval_seconds(),
+            reconnect_interval_s: default_wecom_reconnect_interval_seconds(),
+            allowed_conversation_ids: Vec::new(),
             acp: ChannelAcpConfig::default(),
             accounts: BTreeMap::new(),
         }
@@ -1441,6 +1576,230 @@ impl MatrixChannelConfig {
     }
 }
 
+impl WecomChannelConfig {
+    pub(super) fn validate(&self) -> Vec<ConfigValidationIssue> {
+        let mut issues = Vec::new();
+        validate_channel_account_integrity(
+            &mut issues,
+            "wecom",
+            self.default_account.as_deref(),
+            self.accounts.keys(),
+        );
+        validate_wecom_env_pointer(
+            &mut issues,
+            "wecom.bot_id_env",
+            self.bot_id_env.as_deref(),
+            "wecom.bot_id",
+        );
+        validate_wecom_secret_ref_env_pointer(&mut issues, "wecom.bot_id", self.bot_id.as_ref());
+        validate_wecom_env_pointer(
+            &mut issues,
+            "wecom.secret_env",
+            self.secret_env.as_deref(),
+            "wecom.secret",
+        );
+        validate_wecom_secret_ref_env_pointer(&mut issues, "wecom.secret", self.secret.as_ref());
+        for (raw_account_id, account) in &self.accounts {
+            let account_id = normalize_channel_account_id(raw_account_id);
+            let bot_id_field_path = format!("wecom.accounts.{account_id}.bot_id");
+            validate_wecom_env_pointer(
+                &mut issues,
+                format!("{bot_id_field_path}_env").as_str(),
+                account.bot_id_env.as_deref(),
+                bot_id_field_path.as_str(),
+            );
+            validate_wecom_secret_ref_env_pointer(
+                &mut issues,
+                bot_id_field_path.as_str(),
+                account.bot_id.as_ref(),
+            );
+            let secret_field_path = format!("wecom.accounts.{account_id}.secret");
+            validate_wecom_env_pointer(
+                &mut issues,
+                format!("{secret_field_path}_env").as_str(),
+                account.secret_env.as_deref(),
+                secret_field_path.as_str(),
+            );
+            validate_wecom_secret_ref_env_pointer(
+                &mut issues,
+                secret_field_path.as_str(),
+                account.secret.as_ref(),
+            );
+        }
+        issues
+    }
+
+    pub fn bot_id(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.bot_id.as_ref(), self.bot_id_env.as_deref())
+    }
+
+    pub fn secret(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.secret.as_ref(), self.secret_env.as_deref())
+    }
+
+    pub fn configured_account_ids(&self) -> Vec<String> {
+        let ids = configured_account_ids(self.accounts.keys());
+        if ids.is_empty() {
+            return vec![self.default_configured_account_id()];
+        }
+        ids
+    }
+
+    pub fn default_configured_account_selection(&self) -> ChannelDefaultAccountSelection {
+        resolve_default_configured_account_selection(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+
+    pub fn default_configured_account_id(&self) -> String {
+        self.default_configured_account_selection().id
+    }
+
+    pub fn resolved_account_route(
+        &self,
+        requested_account_id: Option<&str>,
+        selected_configured_account_id: &str,
+    ) -> ChannelResolvedAccountRoute {
+        resolve_channel_account_route(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+            requested_account_id,
+            selected_configured_account_id,
+        )
+    }
+
+    pub fn resolve_account(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedWecomChannelConfig> {
+        let configured = self.resolve_configured_account_selection(requested_account_id)?;
+        let account_override = configured
+            .account_key
+            .as_deref()
+            .and_then(|key| self.accounts.get(key));
+
+        let merged = WecomChannelConfig {
+            enabled: self.enabled
+                && account_override
+                    .and_then(|account| account.enabled)
+                    .unwrap_or(true),
+            account_id: account_override
+                .and_then(|account| account.account_id.clone())
+                .or_else(|| self.account_id.clone()),
+            default_account: None,
+            bot_id: account_override
+                .and_then(|account| account.bot_id.clone())
+                .or_else(|| self.bot_id.clone()),
+            secret: account_override
+                .and_then(|account| account.secret.clone())
+                .or_else(|| self.secret.clone()),
+            bot_id_env: account_override
+                .and_then(|account| account.bot_id_env.clone())
+                .or_else(|| self.bot_id_env.clone()),
+            secret_env: account_override
+                .and_then(|account| account.secret_env.clone())
+                .or_else(|| self.secret_env.clone()),
+            websocket_url: account_override
+                .and_then(|account| account.websocket_url.clone())
+                .or_else(|| self.websocket_url.clone()),
+            ping_interval_s: account_override
+                .and_then(|account| account.ping_interval_s)
+                .unwrap_or(self.ping_interval_s),
+            reconnect_interval_s: account_override
+                .and_then(|account| account.reconnect_interval_s)
+                .unwrap_or(self.reconnect_interval_s),
+            allowed_conversation_ids: account_override
+                .and_then(|account| account.allowed_conversation_ids.clone())
+                .unwrap_or_else(|| self.allowed_conversation_ids.clone()),
+            acp: resolve_channel_acp_config(
+                &self.acp,
+                account_override.and_then(|account| account.acp.as_ref()),
+            ),
+            accounts: BTreeMap::new(),
+        };
+        let account = merged.resolved_account_identity();
+
+        Ok(ResolvedWecomChannelConfig {
+            configured_account_id: configured.id,
+            configured_account_label: configured.label,
+            account,
+            enabled: merged.enabled,
+            bot_id: merged.bot_id,
+            secret: merged.secret,
+            bot_id_env: merged.bot_id_env,
+            secret_env: merged.secret_env,
+            websocket_url: merged.websocket_url,
+            ping_interval_s: merged.ping_interval_s.clamp(1, 300),
+            reconnect_interval_s: merged.reconnect_interval_s.clamp(1, 300),
+            allowed_conversation_ids: merged.allowed_conversation_ids,
+            acp: merged.acp,
+        })
+    }
+
+    pub fn resolve_account_for_session_account_id(
+        &self,
+        session_account_id: Option<&str>,
+    ) -> CliResult<ResolvedWecomChannelConfig> {
+        resolve_account_for_session_account_id(
+            session_account_id,
+            || self.resolve_account(session_account_id),
+            || self.configured_account_ids(),
+            |configured_id| self.resolve_account(Some(configured_id)),
+            |resolved| resolved.account.id.as_str(),
+        )
+    }
+
+    pub fn resolved_account_identity(&self) -> ChannelAccountIdentity {
+        if let Some((id, label)) = resolve_configured_account_identity(self.account_id.as_deref()) {
+            return ChannelAccountIdentity {
+                id,
+                label,
+                source: ChannelAccountIdentitySource::Configured,
+            };
+        }
+
+        if let Some(bot_id) = self
+            .bot_id()
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let normalized_bot_id = normalize_channel_account_id(bot_id);
+            return ChannelAccountIdentity {
+                id: format!("wecom_{normalized_bot_id}"),
+                label: format!("wecom:{bot_id}"),
+                source: ChannelAccountIdentitySource::DerivedCredential,
+            };
+        }
+
+        default_channel_account_identity()
+    }
+
+    pub fn resolved_websocket_url(&self) -> String {
+        self.websocket_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(default_wecom_websocket_url)
+    }
+
+    fn resolve_configured_account_selection(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedConfiguredAccount> {
+        resolve_configured_account_selection(
+            self.accounts.keys(),
+            requested_account_id,
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+}
+
 fn default_telegram_base_url() -> String {
     "https://api.telegram.org".to_owned()
 }
@@ -1467,6 +1826,18 @@ fn default_feishu_webhook_path() -> String {
 
 const fn default_matrix_sync_timeout_seconds() -> u64 {
     30
+}
+
+fn default_wecom_websocket_url() -> String {
+    "wss://openws.work.weixin.qq.com".to_owned()
+}
+
+const fn default_wecom_ping_interval_seconds() -> u64 {
+    30
+}
+
+const fn default_wecom_reconnect_interval_seconds() -> u64 {
+    5
 }
 
 fn default_system_prompt() -> String {
@@ -1676,6 +2047,53 @@ fn validate_matrix_secret_ref_env_pointer(
         EnvPointerValidationHint {
             inline_field_path: field_path,
             example_env_name: MATRIX_ACCESS_TOKEN_ENV,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_wecom_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    env_key: Option<&str>,
+    inline_field_path: &str,
+) {
+    let example_env_name = if field_path.ends_with("bot_id_env") {
+        WECOM_BOT_ID_ENV
+    } else {
+        WECOM_SECRET_ENV
+    };
+    if let Err(issue) = validate_env_pointer_field(
+        field_path,
+        env_key,
+        EnvPointerValidationHint {
+            inline_field_path,
+            example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_wecom_secret_ref_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    secret_ref: Option<&SecretRef>,
+) {
+    let example_env_name = if field_path.ends_with("bot_id") {
+        WECOM_BOT_ID_ENV
+    } else {
+        WECOM_SECRET_ENV
+    };
+    if let Err(issue) = validate_secret_ref_env_pointer_field(
+        field_path,
+        secret_ref,
+        EnvPointerValidationHint {
+            inline_field_path: field_path,
+            example_env_name,
             detect_telegram_token_shape: false,
         },
     ) {
@@ -2465,6 +2883,146 @@ mod tests {
             ChannelDefaultAccountSelectionSource::ExplicitDefault
         );
         assert!(!route.uses_implicit_fallback_default());
+    }
+
+    #[test]
+    fn wecom_account_identity_prefers_explicit_account_id() {
+        let config: WecomChannelConfig = serde_json::from_value(json!({
+            "account_id": "Ops-Bot",
+            "bot_id": "bot_123"
+        }))
+        .expect("deserialize wecom config");
+
+        let identity = config.resolved_account_identity();
+        assert_eq!(identity.id, "ops-bot");
+        assert_eq!(identity.label, "Ops-Bot");
+    }
+
+    #[test]
+    fn wecom_account_identity_derives_from_bot_id() {
+        let config = WecomChannelConfig {
+            bot_id: Some(loongclaw_contracts::SecretRef::Inline("bot_123".to_owned())),
+            bot_id_env: None,
+            ..WecomChannelConfig::default()
+        };
+
+        let identity = config.resolved_account_identity();
+        assert_eq!(identity.id, "wecom_bot_123");
+        assert_eq!(identity.label, "wecom:bot_123");
+    }
+
+    #[test]
+    fn wecom_multi_account_resolution_merges_base_and_account_overrides() {
+        let config: WecomChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "bot_id_env": "BASE_WECOM_BOT_ID",
+            "secret_env": "BASE_WECOM_SECRET",
+            "ping_interval_s": 45,
+            "reconnect_interval_s": 12,
+            "allowed_conversation_ids": ["group_base"],
+            "acp": {
+                "bootstrap_mcp_servers": ["filesystem"],
+                "working_directory": " /workspace/base "
+            },
+            "default_account": "Work Bot",
+            "accounts": {
+                "Work Bot": {
+                    "account_id": "WeCom-Work",
+                    "bot_id": "bot_work",
+                    "secret": "secret-work",
+                    "allowed_conversation_ids": ["group_work"],
+                    "acp": {
+                        "bootstrap_mcp_servers": ["search"],
+                        "working_directory": "/workspace/work-bot"
+                    }
+                },
+                "Alerts": {
+                    "enabled": false,
+                    "bot_id": "bot_alerts",
+                    "secret": "secret-alerts"
+                }
+            }
+        }))
+        .expect("deserialize wecom multi-account config");
+
+        assert_eq!(config.configured_account_ids(), vec!["alerts", "work-bot"]);
+        assert_eq!(config.default_configured_account_id(), "work-bot");
+
+        let resolved = config
+            .resolve_account(None)
+            .expect("resolve default wecom account");
+        assert_eq!(resolved.configured_account_id, "work-bot");
+        assert_eq!(resolved.account.id, "wecom-work");
+        assert_eq!(resolved.account.label, "WeCom-Work");
+        assert_eq!(
+            resolved.allowed_conversation_ids,
+            vec!["group_work".to_owned()]
+        );
+        assert_eq!(resolved.ping_interval_s, 45);
+        assert_eq!(resolved.reconnect_interval_s, 12);
+        assert_eq!(
+            resolved.acp.bootstrap_mcp_servers,
+            vec!["search".to_owned()]
+        );
+        assert_eq!(
+            resolved.acp.resolved_working_directory(),
+            Some(std::path::PathBuf::from("/workspace/work-bot"))
+        );
+        assert_eq!(
+            resolved.resolved_websocket_url(),
+            "wss://openws.work.weixin.qq.com"
+        );
+
+        let disabled = config
+            .resolve_account(Some("Alerts"))
+            .expect("resolve explicit wecom account");
+        assert_eq!(disabled.configured_account_id, "alerts");
+        assert!(!disabled.enabled);
+        assert_eq!(
+            disabled.allowed_conversation_ids,
+            vec!["group_base".to_owned()]
+        );
+        assert_eq!(
+            disabled.acp.bootstrap_mcp_servers,
+            vec!["filesystem".to_owned()]
+        );
+        assert_eq!(
+            disabled.acp.resolved_working_directory(),
+            Some(std::path::PathBuf::from("/workspace/base"))
+        );
+    }
+
+    #[test]
+    fn wecom_resolve_account_for_session_account_id_matches_runtime_identity() {
+        let config: WecomChannelConfig = serde_json::from_value(json!({
+            "default_account": "Work Bot",
+            "accounts": {
+                "Work Bot": {
+                    "account_id": "wecom-shared",
+                    "bot_id": "bot_work",
+                    "secret": "secret-work",
+                    "acp": {
+                        "bootstrap_mcp_servers": ["search"],
+                        "working_directory": "/workspace/work-bot"
+                    }
+                }
+            }
+        }))
+        .expect("deserialize wecom config");
+
+        let resolved = config
+            .resolve_account_for_session_account_id(Some("wecom-shared"))
+            .expect("resolve wecom runtime account identity");
+        assert_eq!(resolved.configured_account_id, "work-bot");
+        assert_eq!(resolved.account.id, "wecom-shared");
+        assert_eq!(
+            resolved.acp.bootstrap_mcp_servers,
+            vec!["search".to_owned()]
+        );
+        assert_eq!(
+            resolved.acp.resolved_working_directory(),
+            Some(std::path::PathBuf::from("/workspace/work-bot"))
+        );
     }
 
     #[test]

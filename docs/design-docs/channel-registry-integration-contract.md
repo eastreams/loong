@@ -69,7 +69,8 @@ Current required fields are:
 
 Requirement metadata exists to describe what the operation needs before runtime
 state is even considered. That includes config keys and environment-pointer
-paths such as Telegram bot tokens or Feishu webhook secrets.
+paths such as Telegram bot tokens, Feishu webhook secrets, or WeCom AIBot
+credentials.
 
 Target-kind metadata exists to describe the operator contract for each command
 without pretending every surface routes through a conversation id. Some planned
@@ -173,6 +174,10 @@ When introducing a new real channel implementation:
 5. Add regression tests for registry lookup, JSON surfaces, text rendering, and
    doctor behavior.
 
+If the new channel uses an exclusive long-connection transport, the runtime
+contract should also make that exclusivity visible in operator status and send
+behavior instead of hiding it behind ad hoc command-specific logic.
+
 ### Adding A New Stub Channel
 
 When the runtime implementation does not exist yet:
@@ -184,9 +189,10 @@ When the runtime implementation does not exist yet:
 4. Do not add placeholder runtime builders or fake health logic.
 5. Verify the channel appears correctly in catalog and grouped surfaces.
 
-This is the preferred path for channels such as Discord, Slack, LINE, WeCom,
-DingTalk, WhatsApp, Email, or generic Webhook surfaces before full runtime
-support lands.
+This is the preferred path for channels such as Discord, Slack, LINE,
+DingTalk, WhatsApp, Email, generic Webhook, Google Chat, Signal, Microsoft
+Teams, Mattermost, Nextcloud Talk, IRC, iMessage, Nostr, Twitch, Zalo, Zalo
+Personal, or WebChat surfaces before full runtime support lands.
 
 ## Anti-Patterns
 
@@ -198,6 +204,8 @@ The following patterns violate the contract:
   knows
 - hiding stub channels from catalog surfaces until runtime code exists
 - introducing runtime builders for channels that have no runtime state
+- modeling a shipped long-connection surface as webhook-style static metadata
+  after the runtime contract has already moved to account-aware session state
 
 ## Validation Standard
 
@@ -222,5 +230,6 @@ LoongClaw does not yet need:
 - a trait-heavy multi-backend channel substrate
 
 It does need a stable metadata seam that allows those future steps to be added
-without re-breaking the current Telegram/Feishu/Lark implementation or forcing
-Discord/Slack to be bolted on through more hardcoded daemon logic.
+without re-breaking the current Telegram/Feishu/Lark/Matrix/WeCom
+implementation or forcing broader OpenClaw-style surface coverage to be bolted
+on through more hardcoded daemon logic.
