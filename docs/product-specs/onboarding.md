@@ -27,9 +27,10 @@ next.
 - [ ] The credential-source step asks for an environment variable name,
       rejects pasted secret literals or shell assignment syntax, and never
       echoes rejected secret-like input in review or success output.
-- [ ] Interactive onboarding lets the user choose a default web search provider
-      and asks for a web-search credential env source immediately when that
-      provider requires a key.
+- [ ] Interactive onboarding lets the user choose a default web search provider,
+      shows a ranked recommendation order with an explicit reason, and asks for
+      a web-search credential env source immediately when the chosen provider
+      requires a key.
 - [ ] Non-interactive onboarding supports `--web-search-provider` and
       `--web-search-api-key`, and explicit web-search choices are not silently
       replaced by heuristic fallbacks.
