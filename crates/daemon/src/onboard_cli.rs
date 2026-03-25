@@ -32,7 +32,7 @@ use crate::onboard_preflight::{
     non_interactive_preflight_failure_message, render_preflight_summary_screen_lines_with_progress,
     run_preflight_checks,
 };
-use crate::onboarding_model_policy;
+pub use crate::onboard_types::OnboardingCredentialSummary;
 #[cfg(test)]
 use crate::onboard_web_search::{
     WebSearchProviderRecommendation, WebSearchProviderRecommendationSource,
@@ -46,6 +46,7 @@ use crate::onboard_web_search::{
     resolve_web_search_provider_recommendation, summarize_web_search_provider_credential,
     web_search_provider_display_name, web_search_provider_has_inline_credential,
 };
+use crate::onboarding_model_policy;
 use crate::provider_credential_policy;
 use mvp::tui_surface::{
     TuiCalloutTone, TuiChoiceSpec, TuiHeaderStyle, TuiScreenSpec, TuiSectionSpec,
@@ -57,8 +58,8 @@ use std::fs;
 use time::OffsetDateTime;
 
 pub use crate::onboard_finalize::{
-    OnboardingAction, OnboardingActionKind, OnboardingCredentialSummary, OnboardingDomainOutcome,
-    OnboardingSuccessSummary, backup_existing_config, build_onboarding_success_summary,
+    OnboardingAction, OnboardingActionKind, OnboardingDomainOutcome, OnboardingSuccessSummary,
+    backup_existing_config, build_onboarding_success_summary,
     render_onboarding_success_summary_with_width,
 };
 const ONBOARD_CLEAR_INPUT_TOKEN: &str = ":clear";

@@ -7,6 +7,7 @@ use time::OffsetDateTime;
 use time::format_description::FormatItem;
 use time::macros::format_description;
 
+use crate::onboard_types::OnboardingCredentialSummary;
 use mvp::tui_surface::{
     TuiActionSpec, TuiHeaderStyle, TuiKeyValueSpec, TuiScreenSpec, TuiSectionSpec,
     render_onboard_screen_spec,
@@ -52,12 +53,6 @@ pub struct OnboardingSuccessSummary {
     pub suggested_channels: Vec<String>,
     pub domain_outcomes: Vec<OnboardingDomainOutcome>,
     pub next_actions: Vec<OnboardingAction>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OnboardingCredentialSummary {
-    pub label: &'static str,
-    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

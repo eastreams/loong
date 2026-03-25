@@ -5,7 +5,7 @@ use loongclaw_contracts::SecretRef;
 use loongclaw_spec::CliResult;
 
 use crate::onboard_cli::OnboardCommandOptions;
-use crate::onboard_finalize::OnboardingCredentialSummary;
+use crate::onboard_types::OnboardingCredentialSummary;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WebSearchProviderRecommendation {
@@ -38,12 +38,8 @@ pub(crate) async fn resolve_web_search_provider_recommendation(
         return Ok(explicit_recommendation);
     }
 
-    let user_configured = onboard_web_search_is_user_configured(config);
-    if user_configured
-        && let Some(configured_provider) = mvp::config::normalize_web_search_provider(
-            config.tools.web_search.default_provider.as_str(),
-        )
-    {
+    let configured_provider = configured_default_web_search_provider(config);
+    if let Some(configured_provider) = configured_provider {
         return Ok(WebSearchProviderRecommendation {
             provider: configured_provider,
             reason: "reusing the configured web search provider from the current starting point"
@@ -61,6 +57,17 @@ pub(crate) async fn resolve_web_search_provider_recommendation(
     let signals = detect_web_search_environment_signals().await;
     let recommendation = recommend_web_search_provider_from_signals(signals);
     Ok(recommendation)
+}
+
+fn configured_default_web_search_provider(
+    config: &mvp::config::LoongClawConfig,
+) -> Option<&'static str> {
+    let configured_provider = config.tools.web_search.default_provider.as_str();
+    if configured_provider == mvp::config::DEFAULT_WEB_SEARCH_PROVIDER {
+        return None;
+    }
+
+    mvp::config::normalize_web_search_provider(configured_provider)
 }
 
 pub(crate) fn resolve_effective_web_search_default_provider(
@@ -103,10 +110,6 @@ pub(crate) fn resolve_effective_web_search_default_provider(
     }
 
     mvp::config::WEB_SEARCH_PROVIDER_DUCKDUCKGO
-}
-
-fn onboard_web_search_is_user_configured(config: &mvp::config::LoongClawConfig) -> bool {
-    config.tools.web_search != mvp::config::WebSearchToolConfig::default()
 }
 
 pub(crate) fn explicit_web_search_provider_override(
@@ -297,7 +300,9 @@ fn onboarding_locale_looks_domestic_cn() -> bool {
 }
 
 async fn probe_duckduckgo_route() -> bool {
-    let client = build_onboard_probe_client();
+    let Some(client) = build_onboard_probe_client() else {
+        return false;
+    };
     let request = client.get("https://html.duckduckgo.com/html/?q=loongclaw");
     let response = request.send().await;
     match response {
@@ -307,7 +312,9 @@ async fn probe_duckduckgo_route() -> bool {
 }
 
 async fn probe_tavily_route() -> bool {
-    let client = build_onboard_probe_client();
+    let Some(client) = build_onboard_probe_client() else {
+        return false;
+    };
     let request = client
         .post("https://api.tavily.com/search")
         .header("Content-Type", "application/json")
@@ -322,9 +329,13 @@ async fn probe_tavily_route() -> bool {
     }
 }
 
-fn build_onboard_probe_client() -> reqwest::Client {
-    let client = mvp::tools::build_ssrf_safe_client(false, 2, "LoongClaw-Onboard/0.1");
-    client.unwrap_or_else(|_| reqwest::Client::new())
+fn build_onboard_probe_client() -> Option<reqwest::Client> {
+    build_onboard_probe_client_with_user_agent("LoongClaw-Onboard/0.1")
+}
+
+fn build_onboard_probe_client_with_user_agent(user_agent: &str) -> Option<reqwest::Client> {
+    let client = mvp::tools::build_ssrf_safe_client(false, 2, user_agent);
+    client.ok()
 }
 
 pub(crate) fn web_search_provider_display_name(provider: &str) -> String {
@@ -515,4 +526,86 @@ fn env_var_has_non_empty_value(env_name: &str) -> bool {
         .ok()
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::test_support::ScopedEnv;
+
+    fn default_options() -> OnboardCommandOptions {
+        OnboardCommandOptions {
+            output: None,
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: false,
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn resolve_web_search_provider_recommendation_detects_unique_ready_credential_without_explicit_default_provider()
+     {
+        let options = default_options();
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.tools.web_search.tavily_api_key = Some("${TAVILY_API_KEY}".to_owned());
+
+        let mut env = ScopedEnv::new();
+        env.set("TAVILY_API_KEY", "tavily-test-token");
+
+        let recommendation = resolve_web_search_provider_recommendation(&options, &config)
+            .await
+            .expect("resolve recommendation");
+
+        assert_eq!(
+            recommendation.provider,
+            mvp::config::WEB_SEARCH_PROVIDER_TAVILY
+        );
+        assert_eq!(
+            recommendation.source,
+            WebSearchProviderRecommendationSource::DetectedCredential
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn resolve_web_search_provider_recommendation_keeps_explicitly_configured_default_provider()
+     {
+        let options = default_options();
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.tools.web_search.default_provider =
+            mvp::config::WEB_SEARCH_PROVIDER_TAVILY.to_owned();
+
+        let recommendation = resolve_web_search_provider_recommendation(&options, &config)
+            .await
+            .expect("resolve recommendation");
+
+        assert_eq!(
+            recommendation.provider,
+            mvp::config::WEB_SEARCH_PROVIDER_TAVILY
+        );
+        assert_eq!(
+            recommendation.source,
+            WebSearchProviderRecommendationSource::Configured
+        );
+    }
+
+    #[test]
+    fn build_onboard_probe_client_returns_none_when_ssrf_safe_client_build_fails() {
+        let invalid_user_agent = "LoongClaw-Onboard\nTest";
+        let client = build_onboard_probe_client_with_user_agent(invalid_user_agent);
+
+        assert!(
+            client.is_none(),
+            "probe client should fail closed when the SSRF-safe client cannot be built"
+        );
+    }
 }
