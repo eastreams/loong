@@ -31,7 +31,7 @@ use crate::acp::{
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 use crate::runtime_self_continuity;
 
-use super::super::config::LoongClawConfig;
+use super::super::config::{LoongClawConfig, ProviderProtocolFamily};
 use super::ConversationSessionAddress;
 use super::ProviderErrorMode;
 use super::analytics::{
@@ -82,6 +82,10 @@ use super::turn_budget::{
 use super::turn_engine::{
     AppToolDispatcher, DefaultAppToolDispatcher, ProviderTurn, ToolBatchExecutionTrace, ToolIntent,
     TurnEngine, TurnFailure, TurnFailureKind, TurnResult, TurnValidation,
+};
+use super::turn_observer::{
+    ConversationTurnObserverHandle, ConversationTurnPhaseEvent,
+    build_observer_streaming_token_callback,
 };
 use super::turn_shared::{
     ProviderTurnRequestAction, ReplyPersistenceMode, ReplyResolutionMode, ToolDrivenFollowupKind,
@@ -1083,7 +1087,9 @@ impl ProviderTurnContinuePhase {
         turn_loop_state: &mut ProviderTurnLoopState,
         remaining_provider_rounds: usize,
         binding: ConversationRuntimeBinding<'_>,
+        observer: Option<&ConversationTurnObserverHandle>,
     ) -> ResolvedProviderTurn {
+        observe_provider_turn_continue_phase(observer, self, 1);
         resolve_provider_turn_reply(
             runtime,
             &self.followup_config,
@@ -1096,6 +1102,7 @@ impl ProviderTurnContinuePhase {
             remaining_provider_rounds,
             binding,
             self.ingress.as_ref(),
+            observer,
         )
         .await
     }
@@ -1775,6 +1782,31 @@ impl ConversationTurnCoordinator {
         .await
     }
 
+    pub async fn handle_turn_with_address_and_acp_options_and_observer(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        binding: ConversationRuntimeBinding<'_>,
+        observer: Option<ConversationTurnObserverHandle>,
+    ) -> CliResult<String> {
+        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+            config,
+            address,
+            user_input,
+            error_mode,
+            &runtime,
+            acp_options,
+            binding,
+            None,
+            observer,
+        )
+        .await
+    }
+
     pub async fn handle_turn_with_runtime<R: ConversationRuntime + ?Sized>(
         &self,
         config: &LoongClawConfig,
@@ -2060,92 +2092,154 @@ impl ConversationTurnCoordinator {
         binding: ConversationRuntimeBinding<'_>,
         ingress: Option<&ConversationIngressContext>,
     ) -> CliResult<String> {
-        let session_id = address.session_id.as_str();
-        match evaluate_acp_conversation_turn_entry_for_address(config, address, acp_options)? {
-            AcpConversationTurnEntryDecision::RejectExplicitWhenDisabled => {
-                let error = "ACP is disabled by policy (`acp.enabled=false`)".to_owned();
-                return match error_mode {
-                    ProviderErrorMode::Propagate => Err(error),
-                    ProviderErrorMode::InlineMessage => {
-                        let synthetic = format_provider_error_reply(&error);
-                        persist_reply_turns_raw_with_mode(
-                            runtime,
-                            session_id,
-                            user_input,
-                            &synthetic,
-                            ReplyPersistenceMode::InlineProviderError,
-                            binding,
-                        )
-                        .await?;
-                        Ok(synthetic)
-                    }
-                };
-            }
-            AcpConversationTurnEntryDecision::RouteViaAcp => {
-                return self
-                    .handle_turn_via_acp(
-                        config,
-                        address,
-                        user_input,
-                        error_mode,
-                        runtime,
-                        acp_options,
-                        binding,
-                    )
-                    .await;
-            }
-            AcpConversationTurnEntryDecision::StayOnProvider => {}
-        }
-
-        if let Some(kernel_ctx) = binding.kernel_context() {
-            runtime.bootstrap(config, session_id, kernel_ctx).await?;
-        }
-        let session_context = runtime.session_context(config, session_id, binding)?;
-        let tool_view = session_context.tool_view.clone();
-        let visible_ingress = ingress.filter(|value| value.has_contextual_hints());
-        emit_turn_ingress_event(runtime, session_id, visible_ingress, binding).await;
-        let turn_id = next_conversation_turn_id();
-        let preparation = ProviderTurnPreparation::from_assembled_context_with_turn_id(
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
             config,
-            runtime
-                .build_context(config, session_id, true, binding)
-                .await?,
+            address,
             user_input,
-            turn_id.as_str(),
-            visible_ingress,
-        );
-        let resolved_turn = resolve_provider_turn(
-            config,
-            runtime,
-            session_id,
-            user_input,
-            &preparation,
-            runtime
-                .request_turn(
-                    config,
-                    session_id,
-                    preparation.turn_id.as_str(),
-                    &preparation.session.messages,
-                    &tool_view,
-                    binding,
-                )
-                .await,
             error_mode,
+            runtime,
+            acp_options,
             binding,
             ingress,
-        )
-        .await;
-
-        apply_resolved_provider_turn(
-            config,
-            runtime,
-            session_id,
-            user_input,
-            &preparation,
-            &resolved_turn,
-            binding,
+            None,
         )
         .await
+    }
+
+    async fn handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer<
+        R: ConversationRuntime + ?Sized,
+    >(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        runtime: &R,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        binding: ConversationRuntimeBinding<'_>,
+        ingress: Option<&ConversationIngressContext>,
+        observer: Option<ConversationTurnObserverHandle>,
+    ) -> CliResult<String> {
+        let turn_result: CliResult<String> = async {
+            let session_id = address.session_id.as_str();
+            match evaluate_acp_conversation_turn_entry_for_address(config, address, acp_options)? {
+                AcpConversationTurnEntryDecision::RejectExplicitWhenDisabled => {
+                    let error = "ACP is disabled by policy (`acp.enabled=false`)".to_owned();
+                    return match error_mode {
+                        ProviderErrorMode::Propagate => Err(error),
+                        ProviderErrorMode::InlineMessage => {
+                            let synthetic = format_provider_error_reply(&error);
+                            persist_reply_turns_raw_with_mode(
+                                runtime,
+                                session_id,
+                                user_input,
+                                &synthetic,
+                                ReplyPersistenceMode::InlineProviderError,
+                                binding,
+                            )
+                            .await?;
+                            Ok(synthetic)
+                        }
+                    };
+                }
+                AcpConversationTurnEntryDecision::RouteViaAcp => {
+                    return self
+                        .handle_turn_via_acp(
+                            config,
+                            address,
+                            user_input,
+                            error_mode,
+                            runtime,
+                            acp_options,
+                            binding,
+                        )
+                        .await;
+                }
+                AcpConversationTurnEntryDecision::StayOnProvider => {}
+            }
+
+            observe_turn_phase(observer.as_ref(), ConversationTurnPhaseEvent::preparing());
+
+            if let Some(kernel_ctx) = binding.kernel_context() {
+                runtime.bootstrap(config, session_id, kernel_ctx).await?;
+            }
+
+            let session_context = runtime.session_context(config, session_id, binding)?;
+            let tool_view = session_context.tool_view.clone();
+            let visible_ingress = ingress.filter(|value| value.has_contextual_hints());
+            emit_turn_ingress_event(runtime, session_id, visible_ingress, binding).await;
+
+            let turn_id = next_conversation_turn_id();
+            let assembled_context = runtime
+                .build_context(config, session_id, true, binding)
+                .await?;
+            let preparation = ProviderTurnPreparation::from_assembled_context_with_turn_id(
+                config,
+                assembled_context,
+                user_input,
+                turn_id.as_str(),
+                visible_ingress,
+            );
+            let context_message_count = preparation.session.messages.len();
+            let context_estimated_tokens = preparation.session.estimated_tokens;
+            let initial_request_event = ConversationTurnPhaseEvent::requesting_provider(
+                1,
+                context_message_count,
+                context_estimated_tokens,
+            );
+            observe_turn_phase(
+                observer.as_ref(),
+                ConversationTurnPhaseEvent::context_ready(
+                    context_message_count,
+                    context_estimated_tokens,
+                ),
+            );
+            observe_turn_phase(observer.as_ref(), initial_request_event);
+
+            let provider_turn_result = request_provider_turn_with_observer(
+                config,
+                runtime,
+                session_id,
+                preparation.turn_id.as_str(),
+                &preparation.session.messages,
+                &tool_view,
+                binding,
+                observer.as_ref(),
+            )
+            .await;
+            let resolved_turn = resolve_provider_turn(
+                config,
+                runtime,
+                session_id,
+                user_input,
+                &preparation,
+                provider_turn_result,
+                error_mode,
+                binding,
+                ingress,
+                observer.as_ref(),
+            )
+            .await;
+
+            apply_resolved_provider_turn(
+                config,
+                runtime,
+                session_id,
+                user_input,
+                &preparation,
+                &resolved_turn,
+                binding,
+                observer.as_ref(),
+            )
+            .await
+        }
+        .await;
+
+        if turn_result.is_err() {
+            observe_turn_phase(observer.as_ref(), ConversationTurnPhaseEvent::failed());
+        }
+
+        turn_result
     }
 
     fn reload_followup_provider_config_after_tool_turn(
@@ -2532,6 +2626,70 @@ fn disabled_lane_decision(user_input: &str) -> LaneDecision {
     }
 }
 
+fn observe_turn_phase(
+    observer: Option<&ConversationTurnObserverHandle>,
+    event: ConversationTurnPhaseEvent,
+) {
+    let Some(observer) = observer else {
+        return;
+    };
+
+    observer.on_phase(event);
+}
+
+fn observe_provider_turn_continue_phase(
+    observer: Option<&ConversationTurnObserverHandle>,
+    continue_phase: &ProviderTurnContinuePhase,
+    provider_round: usize,
+) {
+    let tool_call_count = continue_phase.tool_intent_count();
+    if tool_call_count == 0 {
+        return;
+    }
+
+    let lane = continue_phase.lane_execution.lane;
+    let event = ConversationTurnPhaseEvent::running_tools(provider_round, lane, tool_call_count);
+    observe_turn_phase(observer, event);
+}
+
+fn provider_turn_observer_supports_streaming(
+    config: &LoongClawConfig,
+    observer: Option<&ConversationTurnObserverHandle>,
+) -> bool {
+    if observer.is_none() {
+        return false;
+    }
+
+    let protocol_family = config.provider.kind.protocol_family();
+    protocol_family == ProviderProtocolFamily::AnthropicMessages
+}
+
+async fn request_provider_turn_with_observer<R: ConversationRuntime + ?Sized>(
+    config: &LoongClawConfig,
+    runtime: &R,
+    session_id: &str,
+    turn_id: &str,
+    messages: &[Value],
+    tool_view: &crate::tools::ToolView,
+    binding: ConversationRuntimeBinding<'_>,
+    observer: Option<&ConversationTurnObserverHandle>,
+) -> CliResult<ProviderTurn> {
+    if let Some(observer) = observer
+        && provider_turn_observer_supports_streaming(config, Some(observer))
+    {
+        let on_token = build_observer_streaming_token_callback(observer);
+        return runtime
+            .request_turn_streaming(
+                config, session_id, turn_id, messages, tool_view, binding, on_token,
+            )
+            .await;
+    }
+
+    runtime
+        .request_turn(config, session_id, turn_id, messages, tool_view, binding)
+        .await
+}
+
 async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
     config: &LoongClawConfig,
     runtime: &R,
@@ -2542,6 +2700,7 @@ async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
     error_mode: ProviderErrorMode,
     binding: ConversationRuntimeBinding<'_>,
     ingress: Option<&ConversationIngressContext>,
+    observer: Option<&ConversationTurnObserverHandle>,
 ) -> ResolvedProviderTurn {
     let turn_loop_policy = ProviderTurnLoopPolicy::from_config(config);
     let mut turn_loop_state = ProviderTurnLoopState::default();
@@ -2586,6 +2745,7 @@ async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
                         .max_discovery_followup_rounds
                         .max(1),
                     binding,
+                    observer,
                 )
                 .await
         }
@@ -2686,6 +2846,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     remaining_provider_rounds: usize,
     binding: ConversationRuntimeBinding<'_>,
     ingress: Option<&ConversationIngressContext>,
+    observer: Option<&ConversationTurnObserverHandle>,
 ) -> ResolvedProviderTurn {
     enum ReplyLoopDecision {
         FinalizeDirect(String),
@@ -2709,6 +2870,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     let kernel_ctx = binding.kernel_context();
 
     loop {
+        let current_provider_round = provider_round_index.saturating_add(1);
         if current_continue_phase
             .lane_execution
             .requires_provider_turn_followup
@@ -2811,14 +2973,15 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                     .requires_provider_turn_followup
                     && remaining_provider_rounds > 1
                 {
+                    let next_provider_round = current_provider_round.saturating_add(1);
                     remaining_provider_rounds -= 1;
                     let initial_estimated_tokens = estimate_tokens_for_messages(
                         current_preparation.session.estimated_tokens,
                         &current_preparation.session.messages,
                     );
-                    let followup_estimated_tokens = estimate_tokens(&follow_up_messages);
+                    let followup_request_estimated_tokens = estimate_tokens(&follow_up_messages);
                     let followup_added_estimated_tokens = initial_estimated_tokens
-                        .zip(followup_estimated_tokens)
+                        .zip(followup_request_estimated_tokens)
                         .map(|(initial, followup)| followup.saturating_sub(initial));
                     let followup_preparation =
                         current_preparation.for_followup_messages(follow_up_messages);
@@ -2837,6 +3000,18 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                             return ResolvedProviderTurn::persist_reply(raw_reply, checkpoint);
                         }
                     };
+                    let followup_message_count = followup_preparation.session.messages.len();
+                    let followup_context_estimated_tokens =
+                        followup_preparation.session.estimated_tokens;
+                    let followup_request_event =
+                        ConversationTurnPhaseEvent::requesting_followup_provider(
+                            next_provider_round,
+                            current_continue_phase.lane_execution.lane,
+                            current_continue_phase.tool_intent_count(),
+                            followup_message_count,
+                            followup_context_estimated_tokens,
+                        );
+                    observe_turn_phase(observer, followup_request_event);
                     emit_discovery_first_event(
                         runtime,
                         session_id,
@@ -2847,23 +3022,24 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                                 .lane_execution
                                 .raw_tool_output_requested,
                             "initial_estimated_tokens": initial_estimated_tokens,
-                            "followup_estimated_tokens": followup_estimated_tokens,
+                            "followup_estimated_tokens": followup_request_estimated_tokens,
                             "followup_added_estimated_tokens": followup_added_estimated_tokens,
                         }),
                         kernel_ctx,
                     )
                     .await;
                     match decide_provider_turn_request_action(
-                        runtime
-                            .request_turn(
-                                &current_continue_phase.followup_config,
-                                session_id,
-                                followup_preparation.turn_id.as_str(),
-                                &followup_preparation.session.messages,
-                                &followup_tool_view,
-                                binding,
-                            )
-                            .await,
+                        request_provider_turn_with_observer(
+                            &current_continue_phase.followup_config,
+                            runtime,
+                            session_id,
+                            followup_preparation.turn_id.as_str(),
+                            &followup_preparation.session.messages,
+                            &followup_tool_view,
+                            binding,
+                            observer,
+                        )
+                        .await,
                         ProviderErrorMode::Propagate,
                     ) {
                         ProviderTurnRequestAction::Continue { turn } => {
@@ -2915,6 +3091,11 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                             .await;
                             current_preparation = followup_preparation;
                             provider_round_index = provider_round_index.saturating_add(1);
+                            observe_provider_turn_continue_phase(
+                                observer,
+                                &current_continue_phase,
+                                next_provider_round,
+                            );
                             continue;
                         }
                         ProviderTurnRequestAction::FinalizeInlineProviderError { .. }
@@ -3770,11 +3951,37 @@ async fn apply_resolved_provider_turn<R: ConversationRuntime + ?Sized>(
     preparation: &ProviderTurnPreparation,
     resolved: &ResolvedProviderTurn,
     binding: ConversationRuntimeBinding<'_>,
+    observer: Option<&ConversationTurnObserverHandle>,
 ) -> CliResult<String> {
-    resolved
-        .terminal_phase(&preparation.session)
+    let terminal_phase = resolved.terminal_phase(&preparation.session);
+    let completion_event = match &terminal_phase {
+        ProviderTurnTerminalPhase::PersistReply(phase) => {
+            let message_count = phase.tail_phase.after_turn_messages().len();
+            let estimated_tokens = phase.tail_phase.estimated_tokens();
+            let finalizing_event =
+                ConversationTurnPhaseEvent::finalizing_reply(message_count, estimated_tokens);
+            observe_turn_phase(observer, finalizing_event);
+            Some(ConversationTurnPhaseEvent::completed(
+                message_count,
+                estimated_tokens,
+            ))
+        }
+        ProviderTurnTerminalPhase::ReturnError(_) => None,
+    };
+    let apply_result = terminal_phase
         .apply(config, runtime, session_id, user_input, binding)
-        .await
+        .await;
+
+    let completion_observation = match (completion_event, apply_result.is_ok()) {
+        (Some(event), true) => Some(event),
+        (Some(_), false) | (None, true) | (None, false) => None,
+    };
+
+    if let Some(event) = completion_observation {
+        observe_turn_phase(observer, event);
+    }
+
+    apply_result
 }
 
 fn effective_tool_config_for_session(
@@ -6766,8 +6973,10 @@ async fn execute_single_tool_intent(
 mod tests {
     use super::*;
     use crate::context::bootstrap_test_kernel_context;
+    use crate::conversation::{ConversationTurnObserver, ConversationTurnPhase};
     use crate::session::repository::FinalizeSessionTerminalResult;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::sync::Mutex as StdMutex;
 
     fn unique_sqlite_path(label: &str) -> PathBuf {
@@ -6875,6 +7084,173 @@ mod tests {
             *compact_calls += 1;
             Ok(())
         }
+    }
+
+    #[derive(Default)]
+    struct ObserverStreamingRuntime {
+        streaming_calls: StdMutex<usize>,
+    }
+
+    #[async_trait]
+    impl ConversationRuntime for ObserverStreamingRuntime {
+        async fn build_messages(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _include_system_prompt: bool,
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<Vec<Value>> {
+            Ok(vec![json!({
+                "role": "system",
+                "content": "stay focused"
+            })])
+        }
+
+        async fn request_completion(
+            &self,
+            _config: &LoongClawConfig,
+            _messages: &[Value],
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<String> {
+            Ok("completion".to_owned())
+        }
+
+        async fn request_turn(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<ProviderTurn> {
+            panic!("request_turn should not be called when observer streaming is enabled")
+        }
+
+        async fn request_turn_streaming(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+            on_token: crate::provider::StreamingTokenCallback,
+        ) -> CliResult<ProviderTurn> {
+            let mut streaming_calls = self
+                .streaming_calls
+                .lock()
+                .expect("streaming call lock should not be poisoned");
+            *streaming_calls += 1;
+
+            if let Some(on_token) = on_token {
+                on_token(crate::provider::StreamingCallbackData::Text {
+                    text: "draft".to_owned(),
+                });
+            }
+
+            Ok(ProviderTurn {
+                assistant_text: "final reply".to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            })
+        }
+
+        async fn persist_turn(
+            &self,
+            _session_id: &str,
+            _role: &str,
+            _content: &str,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingTurnObserver {
+        phase_events: StdMutex<Vec<ConversationTurnPhaseEvent>>,
+        token_events: StdMutex<Vec<crate::acp::StreamingTokenEvent>>,
+    }
+
+    impl ConversationTurnObserver for RecordingTurnObserver {
+        fn on_phase(&self, event: ConversationTurnPhaseEvent) {
+            let mut phase_events = self
+                .phase_events
+                .lock()
+                .expect("phase event lock should not be poisoned");
+            phase_events.push(event);
+        }
+
+        fn on_streaming_token(&self, event: crate::acp::StreamingTokenEvent) {
+            let mut token_events = self
+                .token_events
+                .lock()
+                .expect("token event lock should not be poisoned");
+            token_events.push(event);
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_turn_with_observer_uses_streaming_request_and_emits_live_events() {
+        let mut config = LoongClawConfig::default();
+        config.provider.kind = crate::config::ProviderKind::Anthropic;
+
+        let runtime = ObserverStreamingRuntime::default();
+        let observer = Arc::new(RecordingTurnObserver::default());
+        let observer_handle: ConversationTurnObserverHandle = observer.clone();
+        let acp_options = AcpConversationTurnOptions::automatic();
+        let address = ConversationSessionAddress::from_session_id("observer-session");
+        let reply = ConversationTurnCoordinator::new()
+            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+                &config,
+                &address,
+                "say hello",
+                ProviderErrorMode::Propagate,
+                &runtime,
+                &acp_options,
+                ConversationRuntimeBinding::direct(),
+                None,
+                Some(observer_handle),
+            )
+            .await
+            .expect("observer turn should succeed");
+
+        assert_eq!(reply, "final reply");
+
+        let streaming_calls = runtime
+            .streaming_calls
+            .lock()
+            .expect("streaming call lock should not be poisoned");
+        assert_eq!(*streaming_calls, 1);
+
+        let phase_events = observer
+            .phase_events
+            .lock()
+            .expect("phase event lock should not be poisoned");
+        let phase_names = phase_events
+            .iter()
+            .map(|event| event.phase)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            phase_names,
+            vec![
+                ConversationTurnPhase::Preparing,
+                ConversationTurnPhase::ContextReady,
+                ConversationTurnPhase::RequestingProvider,
+                ConversationTurnPhase::FinalizingReply,
+                ConversationTurnPhase::Completed,
+            ]
+        );
+
+        let token_events = observer
+            .token_events
+            .lock()
+            .expect("token event lock should not be poisoned");
+        assert_eq!(token_events.len(), 1);
+        assert_eq!(token_events[0].event_type, "text_delta");
+        assert_eq!(token_events[0].delta.text.as_deref(), Some("draft"));
     }
 
     #[cfg(feature = "memory-sqlite")]
