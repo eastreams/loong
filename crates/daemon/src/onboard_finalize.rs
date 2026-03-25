@@ -406,7 +406,7 @@ fn build_onboarding_success_screen_spec(summary: &OnboardingSuccessSummary) -> T
     if let Some(primary) = summary.next_actions.first() {
         sections.push(TuiSectionSpec::ActionGroup {
             title: Some("start here".to_owned()),
-            inline_title_when_wide: true,
+            inline_title_when_wide: false,
             items: vec![TuiActionSpec {
                 label: primary.label.clone(),
                 command: primary.command.clone(),

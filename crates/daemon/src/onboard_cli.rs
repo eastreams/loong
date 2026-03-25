@@ -4521,10 +4521,13 @@ fn build_onboard_shortcut_screen_spec(
 ) -> TuiScreenSpec {
     let mut snapshot_lines = Vec::new();
     if let Some(source) = import_source {
-        snapshot_lines.push(format!(
-            "- starting point: {}",
-            onboard_starting_point_label(None, source)
-        ));
+        let starting_point_label = onboard_starting_point_label(None, source);
+        let starting_point_lines = mvp::presentation::render_wrapped_text_line(
+            "- starting point: ",
+            &starting_point_label,
+            width,
+        );
+        snapshot_lines.extend(starting_point_lines);
     }
     snapshot_lines.extend(render_onboard_review_digest_lines(config, width));
     let snapshot_title = if import_source.is_some() {
@@ -4538,13 +4541,8 @@ fn build_onboard_shortcut_screen_spec(
     } else {
         Vec::new()
     };
-    let footer_lines = if include_choices {
-        append_escape_cancel_hint(vec![render_shortcut_default_choice_footer_line(
-            shortcut_kind,
-        )])
-    } else {
-        Vec::new()
-    };
+    let default_choice_footer_line = render_shortcut_default_choice_footer_line(shortcut_kind);
+    let footer_lines = append_escape_cancel_hint(vec![default_choice_footer_line]);
 
     TuiScreenSpec {
         header_style: TuiHeaderStyle::Compact,
@@ -8982,6 +8980,48 @@ mod tests {
                 .any(|line| line.contains("Esc") && line.contains("cancel")),
             "choice screens should teach the exit gesture explicitly: {lines:#?}"
         );
+    }
+
+    #[test]
+    fn shortcut_header_footer_mentions_escape_cancel() {
+        let lines = render_onboard_shortcut_header_lines_with_style(
+            OnboardShortcutKind::CurrentSetup,
+            &mvp::config::LoongClawConfig::default(),
+            None,
+            80,
+            false,
+        );
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Esc") && line.contains("cancel")),
+            "header-only shortcut screens should keep the exit gesture visible before the chooser opens: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn detected_shortcut_snapshot_wraps_starting_point_like_review_rows() {
+        let config = mvp::config::LoongClawConfig::default();
+        let import_source =
+            "Codex config at /very/long/path/to/a/workspace/with/a/deeply/nested/config.toml";
+        let expected_label = onboard_starting_point_label(None, import_source);
+        let expected_lines =
+            mvp::presentation::render_wrapped_text_line("- starting point: ", &expected_label, 48);
+        let lines = render_onboard_shortcut_screen_lines_with_style(
+            OnboardShortcutKind::DetectedSetup,
+            &config,
+            Some(import_source),
+            48,
+            false,
+        );
+
+        for expected_line in expected_lines {
+            assert!(
+                lines.iter().any(|line| line == &expected_line),
+                "detected shortcut snapshots should wrap the starting-point row with the same helper used by the review digest: {lines:#?}"
+            );
+        }
     }
 
     #[test]

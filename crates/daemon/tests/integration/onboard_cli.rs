@@ -6659,8 +6659,8 @@ fn onboarding_success_summary_surfaces_primary_handoff_before_saved_setup_detail
         loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
     let start_here_index = lines
         .iter()
-        .position(|line| line.starts_with("start here:"))
-        .expect("start here line should exist");
+        .position(|line| line == "start here")
+        .expect("start here heading should exist");
     let saved_setup_index = lines
         .iter()
         .position(|line| line == "saved setup")
@@ -6716,9 +6716,10 @@ fn onboarding_success_summary_uses_compact_header() {
         "success summary should retain a clear completion heading: {lines:#?}"
     );
     assert!(
-        lines
-            .join(" ")
-            .contains("start here: loongclaw ask --config '/tmp/loongclaw-config.toml' --message")
+        lines.iter().any(|line| line == "start here")
+            && lines.join(" ").contains(
+                "- first answer: loongclaw ask --config '/tmp/loongclaw-config.toml' --message"
+            )
             && lines
                 .join(" ")
                 .contains("Summarize this repository and suggest the best next step."),
@@ -6758,7 +6759,7 @@ fn onboarding_success_summary_shell_quotes_config_paths_with_single_quotes() {
 
     assert!(
         rendered.contains(
-            "start here: loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message"
+            "- first answer: loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message"
         ),
         "success summary should shell-quote single quotes in the primary ask handoff: {lines:#?}"
     );
@@ -7052,9 +7053,9 @@ fn onboarding_success_summary_groups_secondary_channel_actions_after_primary_han
     let rendered = lines.join(" ");
 
     assert!(
-        rendered
-            .contains("start here: loongclaw ask --config '/tmp/loongclaw-config.toml' --message")
-            && rendered.contains("Summarize this repository and suggest the best next step."),
+        rendered.contains(
+            "- first answer: loongclaw ask --config '/tmp/loongclaw-config.toml' --message"
+        ) && rendered.contains("Summarize this repository and suggest the best next step."),
         "wide success summary should call out a single primary ask action even when wrapping is needed: {lines:#?}"
     );
     assert!(
@@ -7095,14 +7096,16 @@ fn onboarding_success_summary_uses_channel_handoff_when_cli_is_disabled() {
         "structured actions should promote the first enabled channel when cli is disabled: {summary:#?}"
     );
     assert!(
-        lines.iter().any(|line| line
-            == "start here: loongclaw telegram-serve --config '/tmp/loongclaw-config.toml'"),
+        lines.iter().any(|line| line == "start here")
+            && lines.iter().any(|line| {
+                line == "- Telegram: loongclaw telegram-serve --config '/tmp/loongclaw-config.toml'"
+            }),
         "success summary should guide users into the first enabled channel when cli is disabled: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .all(|line| line != "start here: loongclaw chat --config '/tmp/loongclaw-config.toml'"),
+            .all(|line| line != "- chat: loongclaw chat --config '/tmp/loongclaw-config.toml'"),
         "success summary should not keep chat as the primary handoff once cli is disabled: {lines:#?}"
     );
 }
@@ -7126,10 +7129,10 @@ fn onboarding_success_summary_uses_channel_catalog_handoff_when_cli_is_disabled_
     );
     assert_eq!(summary.next_actions[0].label, "channels");
     assert!(
-        lines
-            .iter()
-            .any(|line| line
-                == "start here: loongclaw channels --config '/tmp/loongclaw-config.toml'"),
+        lines.iter().any(|line| line == "start here")
+            && lines.iter().any(|line| {
+                line == "- channels: loongclaw channels --config '/tmp/loongclaw-config.toml'"
+            }),
         "success summary should fall back to the channel catalog when no direct cli or service-channel handoff exists: {lines:#?}"
     );
 }

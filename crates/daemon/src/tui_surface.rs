@@ -108,12 +108,8 @@ pub(crate) fn render_onboard_screen_spec(
     width: usize,
     color_enabled: bool,
 ) -> Vec<String> {
-    let mut lines = render_header(
-        spec.header_style,
-        width,
-        spec.subtitle.as_deref().unwrap_or(""),
-        color_enabled,
-    );
+    let subtitle = spec.subtitle.as_deref();
+    let mut lines = render_header(spec.header_style, width, subtitle, color_enabled);
 
     if let Some(title) = spec.title.as_deref() {
         lines.push(String::new());
@@ -150,19 +146,19 @@ const INLINE_ACTION_GROUP_WIDTH: usize = 56;
 fn render_header(
     style: TuiHeaderStyle,
     width: usize,
-    subtitle: &str,
+    subtitle: Option<&str>,
     color_enabled: bool,
 ) -> Vec<String> {
     let brand_lines = match style {
         TuiHeaderStyle::Brand => mvp::presentation::render_brand_header(
             width,
             &mvp::presentation::BuildVersionInfo::current(),
-            Some(subtitle),
+            subtitle,
         ),
         TuiHeaderStyle::Compact => mvp::presentation::render_compact_brand_header(
             width,
             &mvp::presentation::BuildVersionInfo::current(),
-            Some(subtitle),
+            subtitle,
         ),
     };
 
