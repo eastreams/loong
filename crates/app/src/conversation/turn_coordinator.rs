@@ -39,7 +39,7 @@ use super::analytics::{
     TurnCheckpointRecoveryAction, TurnCheckpointRepairManualReason, TurnCheckpointRepairPlan,
     TurnCheckpointSessionState, build_turn_checkpoint_repair_plan, summarize_safe_lane_history,
 };
-use super::context_engine::AssembledConversationContext;
+use super::context_engine::{AssembledConversationContext, ConversationContextEngine};
 use super::ingress::ConversationIngressContext;
 use super::lane_arbiter::{ExecutionLane, LaneArbiterPolicy, LaneDecision};
 use super::persistence::{
@@ -1783,6 +1783,32 @@ impl ConversationTurnCoordinator {
         .await
     }
 
+    pub async fn handle_turn_with_address_and_acp_options_and_ingress_and_observer(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        binding: ConversationRuntimeBinding<'_>,
+        ingress: Option<&ConversationIngressContext>,
+        observer: Option<ConversationTurnObserverHandle>,
+    ) -> CliResult<String> {
+        let runtime = Self::build_default_runtime_or_observe_failure(config, observer.as_ref())?;
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+            config,
+            address,
+            user_input,
+            error_mode,
+            &runtime,
+            acp_options,
+            binding,
+            ingress,
+            observer,
+        )
+        .await
+    }
+
     pub async fn handle_turn_with_address_and_acp_options_and_observer(
         &self,
         config: &LoongClawConfig,
@@ -1793,19 +1819,33 @@ impl ConversationTurnCoordinator {
         binding: ConversationRuntimeBinding<'_>,
         observer: Option<ConversationTurnObserverHandle>,
     ) -> CliResult<String> {
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+        self.handle_turn_with_address_and_acp_options_and_ingress_and_observer(
             config,
             address,
             user_input,
             error_mode,
-            &runtime,
             acp_options,
             binding,
             None,
             observer,
         )
         .await
+    }
+
+    fn build_default_runtime_or_observe_failure(
+        config: &LoongClawConfig,
+        observer: Option<&ConversationTurnObserverHandle>,
+    ) -> CliResult<DefaultConversationRuntime<Box<dyn ConversationContextEngine>>> {
+        let runtime_result = DefaultConversationRuntime::from_config_or_env(config);
+        let runtime = match runtime_result {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                let failed_event = ConversationTurnPhaseEvent::failed();
+                observe_turn_phase(observer, failed_event);
+                return Err(error);
+            }
+        };
+        Ok(runtime)
     }
 
     pub async fn handle_turn_with_runtime<R: ConversationRuntime + ?Sized>(
@@ -2107,7 +2147,7 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    async fn handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer<
+    pub async fn handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer<
         R: ConversationRuntime + ?Sized,
     >(
         &self,
@@ -7706,6 +7746,77 @@ mod tests {
             .lock()
             .expect("streaming call lock should not be poisoned");
         assert_eq!(*streaming_calls, 0);
+    }
+
+    #[tokio::test]
+    async fn handle_turn_with_ingress_and_observer_marks_failed_when_runtime_bootstrap_fails() {
+        let mut config = LoongClawConfig::default();
+        config.conversation.context_engine = Some("missing-observer-runtime-ingress".to_owned());
+
+        let coordinator = ConversationTurnCoordinator::new();
+        let observer = Arc::new(RecordingTurnObserver::default());
+        let observer_handle: ConversationTurnObserverHandle = observer.clone();
+        let acp_options = AcpConversationTurnOptions::automatic();
+        let address = ConversationSessionAddress::from_session_id("observer-session");
+
+        let result = coordinator
+            .handle_turn_with_address_and_acp_options_and_ingress_and_observer(
+                &config,
+                &address,
+                "say hello",
+                ProviderErrorMode::Propagate,
+                &acp_options,
+                ConversationRuntimeBinding::direct(),
+                None,
+                Some(observer_handle),
+            )
+            .await;
+        let _error = result.expect_err("missing runtime bootstrap should fail");
+
+        let phase_events = observer
+            .phase_events
+            .lock()
+            .expect("phase event lock should not be poisoned");
+        let phase_names = phase_events
+            .iter()
+            .map(|event| event.phase)
+            .collect::<Vec<_>>();
+        assert_eq!(phase_names, vec![ConversationTurnPhase::Failed]);
+    }
+
+    #[tokio::test]
+    async fn handle_turn_with_observer_marks_failed_when_runtime_bootstrap_fails() {
+        let mut config = LoongClawConfig::default();
+        config.conversation.context_engine = Some("missing-observer-runtime".to_owned());
+
+        let coordinator = ConversationTurnCoordinator::new();
+        let observer = Arc::new(RecordingTurnObserver::default());
+        let observer_handle: ConversationTurnObserverHandle = observer.clone();
+        let acp_options = AcpConversationTurnOptions::automatic();
+        let address = ConversationSessionAddress::from_session_id("observer-session");
+
+        let result = coordinator
+            .handle_turn_with_address_and_acp_options_and_observer(
+                &config,
+                &address,
+                "say hello",
+                ProviderErrorMode::Propagate,
+                &acp_options,
+                ConversationRuntimeBinding::direct(),
+                Some(observer_handle),
+            )
+            .await;
+        let _error = result.expect_err("missing runtime bootstrap should fail");
+
+        let phase_events = observer
+            .phase_events
+            .lock()
+            .expect("phase event lock should not be poisoned");
+        let phase_names = phase_events
+            .iter()
+            .map(|event| event.phase)
+            .collect::<Vec<_>>();
+        assert_eq!(phase_names, vec![ConversationTurnPhase::Failed]);
     }
 
     #[test]

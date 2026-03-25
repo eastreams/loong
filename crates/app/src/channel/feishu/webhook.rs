@@ -24,7 +24,8 @@ use crate::CliResult;
 use crate::KernelContext;
 use crate::channel::{
     ChannelAdapter, ChannelInboundMessage, ChannelOutboundMessage, ChannelOutboundTarget,
-    process_inbound_with_provider, runtime_state::ChannelOperationRuntimeTracker,
+    ChannelTurnFeedbackPolicy, process_inbound_with_provider,
+    runtime_state::ChannelOperationRuntimeTracker,
 };
 use crate::config::{LoongClawConfig, ResolvedFeishuChannelConfig};
 use crate::crypto::timing_safe_eq;
@@ -552,7 +553,8 @@ async fn handle_feishu_card_callback_event(
         &state.config,
         state.resolved_path.as_deref(),
         &inbound,
-        Some(state.kernel_ctx.as_ref()),
+        state.kernel_ctx.as_ref(),
+        ChannelTurnFeedbackPolicy::disabled(),
     )
     .await
     .map(|reply| {
@@ -602,7 +604,8 @@ async fn handle_feishu_inbound_event(
             &state.config,
             state.resolved_path.as_deref(),
             &channel_message,
-            Some(state.kernel_ctx.as_ref()),
+            state.kernel_ctx.as_ref(),
+            ChannelTurnFeedbackPolicy::final_trace_significant(),
         )
         .await
         .map_err(|error| {

@@ -91,7 +91,8 @@ use super::config::{ChannelResolvedAccountRoute, LoongClawConfig, normalize_chan
 use super::conversation::{
     ConversationIngressChannel, ConversationIngressContext, ConversationIngressDelivery,
     ConversationIngressDeliveryResource, ConversationIngressFeishuCallbackContext,
-    ConversationIngressPrivateContext, ConversationSessionAddress, encode_route_session_segment,
+    ConversationIngressPrivateContext, ConversationRuntime, ConversationRuntimeBinding,
+    ConversationSessionAddress, DefaultConversationRuntime, encode_route_session_segment,
     parse_route_session_id,
 };
 #[cfg(any(
@@ -111,6 +112,13 @@ mod runtime_state;
 pub(crate) mod sdk;
 #[cfg(feature = "channel-telegram")]
 mod telegram;
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom"
+))]
+mod turn_feedback;
 #[cfg(feature = "channel-wecom")]
 mod wecom;
 
@@ -139,6 +147,20 @@ pub use registry::{
 pub use runtime_state::ChannelOperationRuntime;
 use runtime_state::ChannelOperationRuntimeTracker;
 pub use sdk::{background_channel_runtime_descriptors, is_background_channel_surface_enabled};
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom"
+))]
+use turn_feedback::ChannelTurnFeedbackCapture;
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom"
+))]
+pub use turn_feedback::ChannelTurnFeedbackPolicy;
 
 #[derive(Debug, Clone, Default)]
 pub struct ChannelDelivery {
@@ -610,6 +632,9 @@ pub trait ChannelAdapter {
     fn streaming_mode(&self) -> ChannelStreamingMode {
         ChannelStreamingMode::Off
     }
+    fn turn_feedback_policy(&self) -> ChannelTurnFeedbackPolicy {
+        ChannelTurnFeedbackPolicy::final_trace_significant()
+    }
     async fn receive_batch(&mut self) -> CliResult<Vec<ChannelInboundMessage>>;
     async fn send_message(
         &self,
@@ -965,7 +990,7 @@ async fn process_channel_batch<A, F>(
 ) -> CliResult<bool>
 where
     A: ChannelAdapter + Send + ?Sized,
-    F: FnMut(ChannelInboundMessage) -> ChannelProcessFuture,
+    F: FnMut(ChannelInboundMessage, ChannelTurnFeedbackPolicy) -> ChannelProcessFuture,
 {
     if batch.is_empty() {
         adapter.complete_batch().await?;
@@ -978,7 +1003,8 @@ where
         }
 
         let result = async {
-            let reply = process(message.clone()).await?;
+            let turn_feedback_policy = adapter.turn_feedback_policy();
+            let reply = process(message.clone(), turn_feedback_policy).await?;
             let outbound = ChannelOutboundMessage::Text(reply);
             let streaming_mode = adapter.streaming_mode();
             adapter
@@ -1591,7 +1617,7 @@ async fn run_telegram_channel_with_context(
                     &mut adapter,
                     batch,
                     Some(runtime.as_ref()),
-                    |message| {
+                    |message, turn_feedback_policy| {
                         let config = config.clone();
                         let kernel_ctx = kernel_ctx.clone();
                         let resolved_path = resolved_path.clone();
@@ -1600,7 +1626,8 @@ async fn run_telegram_channel_with_context(
                                 &config,
                                 Some(resolved_path.as_path()),
                                 &message,
-                                Some(kernel_ctx.as_ref()),
+                                kernel_ctx.as_ref(),
+                                turn_feedback_policy,
                             )
                             .await
                         })
@@ -2082,7 +2109,7 @@ async fn run_matrix_channel_with_context(
                         &mut adapter,
                         batch,
                         Some(runtime.as_ref()),
-                        |message| {
+                        |message, turn_feedback_policy| {
                             let config = config.clone();
                             let kernel_ctx = batch_kernel_ctx.clone();
                             let resolved_path = resolved_path.clone();
@@ -2091,7 +2118,8 @@ async fn run_matrix_channel_with_context(
                                     &config,
                                     Some(resolved_path.as_path()),
                                     &message,
-                                    Some(kernel_ctx.as_ref()),
+                                    kernel_ctx.as_ref(),
+                                    turn_feedback_policy,
                                 )
                                 .await
                             })
@@ -2605,33 +2633,61 @@ pub(crate) async fn send_text_to_known_session(
     feature = "channel-matrix",
     feature = "channel-wecom"
 ))]
-pub(super) async fn process_inbound_with_provider(
+async fn process_inbound_with_runtime_and_feedback<R: ConversationRuntime + ?Sized>(
     config: &LoongClawConfig,
-    resolved_path: Option<&std::path::Path>,
+    runtime: &R,
     message: &ChannelInboundMessage,
-    kernel_ctx: Option<&KernelContext>,
+    binding: ConversationRuntimeBinding<'_>,
+    feedback_policy: ChannelTurnFeedbackPolicy,
 ) -> CliResult<String> {
-    let turn_config = reload_channel_turn_config(config, resolved_path)?;
     let address = message.session.conversation_address();
-    let acp_turn_hints = resolve_channel_acp_turn_hints(&turn_config, &message.session)?;
+    let acp_turn_hints = resolve_channel_acp_turn_hints(config, &message.session)?;
     let acp_options = AcpConversationTurnOptions::automatic()
         .with_additional_bootstrap_mcp_servers(&acp_turn_hints.bootstrap_mcp_servers)
         .with_working_directory(acp_turn_hints.working_directory.as_deref())
         .with_provenance(channel_message_acp_turn_provenance(message));
     let ingress = channel_message_ingress_context(message);
-    ConversationTurnCoordinator::new()
-        .handle_turn_with_address_and_acp_options_and_ingress(
-            &turn_config,
+    let feedback_capture = ChannelTurnFeedbackCapture::new(feedback_policy);
+    let observer = feedback_capture.observer_handle();
+    let reply = ConversationTurnCoordinator::new()
+        .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+            config,
             &address,
             &message.text,
             ProviderErrorMode::Propagate,
+            runtime,
             &acp_options,
-            crate::conversation::ConversationRuntimeBinding::from_optional_kernel_context(
-                kernel_ctx,
-            ),
+            binding,
             ingress.as_ref(),
+            observer,
         )
-        .await
+        .await?;
+    Ok(feedback_capture.render_reply(reply))
+}
+
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom"
+))]
+pub(super) async fn process_inbound_with_provider(
+    config: &LoongClawConfig,
+    resolved_path: Option<&std::path::Path>,
+    message: &ChannelInboundMessage,
+    kernel_ctx: &KernelContext,
+    feedback_policy: ChannelTurnFeedbackPolicy,
+) -> CliResult<String> {
+    let turn_config = reload_channel_turn_config(config, resolved_path)?;
+    let runtime = DefaultConversationRuntime::from_config_or_env(&turn_config)?;
+    process_inbound_with_runtime_and_feedback(
+        &turn_config,
+        &runtime,
+        message,
+        ConversationRuntimeBinding::kernel(kernel_ctx),
+        feedback_policy,
+    )
+    .await
 }
 
 #[cfg(any(
@@ -2988,6 +3044,7 @@ fn validate_wecom_security_config(config: &ResolvedWecomChannelConfig) -> CliRes
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use serde_json::Value;
     use std::{
         path::PathBuf,
         sync::{Arc, Mutex},
@@ -3010,6 +3067,132 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_millis() as u64
+    }
+
+    #[cfg(any(
+        feature = "channel-telegram",
+        feature = "channel-feishu",
+        feature = "channel-matrix"
+    ))]
+    #[derive(Default)]
+    struct ChannelTraceRuntime {
+        request_turn_calls: Arc<Mutex<usize>>,
+        request_turn_kernel_bindings: Arc<Mutex<Vec<bool>>>,
+    }
+
+    #[cfg(any(
+        feature = "channel-telegram",
+        feature = "channel-feishu",
+        feature = "channel-matrix"
+    ))]
+    #[async_trait]
+    impl crate::conversation::ConversationRuntime for ChannelTraceRuntime {
+        async fn build_messages(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            include_system_prompt: bool,
+            _tool_view: &crate::tools::ToolView,
+            _binding: crate::conversation::ConversationRuntimeBinding<'_>,
+        ) -> CliResult<Vec<Value>> {
+            let mut messages = Vec::new();
+
+            if include_system_prompt {
+                let system_message = serde_json::json!({
+                    "role": "system",
+                    "content": "system",
+                });
+                messages.push(system_message);
+            }
+
+            let user_message = serde_json::json!({
+                "role": "user",
+                "content": "hello",
+            });
+            messages.push(user_message);
+
+            Ok(messages)
+        }
+
+        async fn request_completion(
+            &self,
+            _config: &LoongClawConfig,
+            _messages: &[Value],
+            _binding: crate::conversation::ConversationRuntimeBinding<'_>,
+        ) -> CliResult<String> {
+            Err("request_completion should not be used in channel trace runtime tests".to_owned())
+        }
+
+        async fn request_turn(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            binding: crate::conversation::ConversationRuntimeBinding<'_>,
+        ) -> CliResult<crate::conversation::ProviderTurn> {
+            self.request_turn_kernel_bindings
+                .lock()
+                .expect("request turn kernel binding log")
+                .push(binding.is_kernel_bound());
+
+            let mut request_turn_calls = self
+                .request_turn_calls
+                .lock()
+                .expect("request turn call count");
+            *request_turn_calls += 1;
+            let current_call = *request_turn_calls;
+            drop(request_turn_calls);
+
+            if current_call == 1 {
+                let tool_intent = crate::conversation::ToolIntent {
+                    tool_name: "tool.search".to_owned(),
+                    args_json: serde_json::json!({
+                        "query": "qzxwvvvjjjjkkk",
+                    }),
+                    source: "provider_test".to_owned(),
+                    session_id: String::new(),
+                    turn_id: String::new(),
+                    tool_call_id: "call-1".to_owned(),
+                };
+                return Ok(crate::conversation::ProviderTurn {
+                    assistant_text: String::new(),
+                    tool_intents: vec![tool_intent],
+                    raw_meta: Value::Null,
+                });
+            }
+
+            Ok(crate::conversation::ProviderTurn {
+                assistant_text: "final reply".to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            })
+        }
+
+        async fn request_turn_streaming(
+            &self,
+            config: &LoongClawConfig,
+            session_id: &str,
+            turn_id: &str,
+            messages: &[Value],
+            tool_view: &crate::tools::ToolView,
+            binding: crate::conversation::ConversationRuntimeBinding<'_>,
+            _on_token: crate::provider::StreamingTokenCallback,
+        ) -> CliResult<crate::conversation::ProviderTurn> {
+            self.request_turn(config, session_id, turn_id, messages, tool_view, binding)
+                .await
+        }
+
+        async fn persist_turn(
+            &self,
+            _session_id: &str,
+            _role: &str,
+            _content: &str,
+            _binding: crate::conversation::ConversationRuntimeBinding<'_>,
+        ) -> CliResult<()> {
+            Ok(())
+        }
     }
 
     #[cfg(any(
@@ -3150,7 +3333,7 @@ mod tests {
             &mut adapter,
             batch,
             None,
-            |message: ChannelInboundMessage| {
+            |message: ChannelInboundMessage, _turn_feedback_policy| {
                 Box::pin(async move { Ok(format!("reply: {}", message.text)) })
             },
         )
@@ -3170,6 +3353,122 @@ mod tests {
             &[Some("101".to_owned())]
         );
         assert_eq!(*adapter.completed_batches.lock().expect("completed"), 1);
+    }
+
+    #[cfg(any(
+        feature = "channel-telegram",
+        feature = "channel-feishu",
+        feature = "channel-matrix"
+    ))]
+    #[tokio::test]
+    async fn process_inbound_with_runtime_and_feedback_appends_significant_trace() {
+        let mut config = LoongClawConfig::default();
+        config.provider.kind = crate::config::ProviderKind::Openai;
+        config.telegram = serde_json::from_value(serde_json::json!({
+            "default_account": "Work Bot",
+            "accounts": {
+                "Work Bot": {
+                    "account_id": "ops-bot",
+                    "bot_token": "test-token"
+                }
+            }
+        }))
+        .expect("deserialize telegram channel config");
+
+        let message = ChannelInboundMessage {
+            session: ChannelSession::with_account(ChannelPlatform::Telegram, "ops-bot", "chat-1"),
+            reply_target: ChannelOutboundTarget::telegram_chat(1),
+            text: "hello".to_owned(),
+            delivery: ChannelDelivery {
+                ack_cursor: None,
+                source_message_id: Some("msg-1".to_owned()),
+                sender_principal_key: None,
+                thread_root_id: None,
+                parent_message_id: None,
+                resources: Vec::new(),
+                feishu_callback: None,
+            },
+        };
+        let runtime = ChannelTraceRuntime::default();
+        let kernel_ctx = crate::context::bootstrap_test_kernel_context("channel-test", 60)
+            .expect("bootstrap test kernel context");
+
+        let reply = process_inbound_with_runtime_and_feedback(
+            &config,
+            &runtime,
+            &message,
+            crate::conversation::ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ChannelTurnFeedbackPolicy::final_trace_significant(),
+        )
+        .await
+        .expect("channel trace reply should succeed");
+
+        assert!(reply.contains("final reply"));
+        assert!(reply.contains("execution trace:"));
+        assert!(reply.contains("tool.search completed: returned 0 results"));
+
+        let request_turn_calls = runtime
+            .request_turn_calls
+            .lock()
+            .expect("request turn call count");
+        assert_eq!(*request_turn_calls, 2);
+
+        let request_turn_kernel_bindings = runtime
+            .request_turn_kernel_bindings
+            .lock()
+            .expect("request turn kernel binding log");
+        assert_eq!(request_turn_kernel_bindings.as_slice(), &[true, true]);
+    }
+
+    #[cfg(any(
+        feature = "channel-telegram",
+        feature = "channel-feishu",
+        feature = "channel-matrix"
+    ))]
+    #[tokio::test]
+    async fn process_inbound_with_runtime_and_feedback_can_disable_trace_rendering() {
+        let mut config = LoongClawConfig::default();
+        config.provider.kind = crate::config::ProviderKind::Openai;
+        config.telegram = serde_json::from_value(serde_json::json!({
+            "default_account": "Work Bot",
+            "accounts": {
+                "Work Bot": {
+                    "account_id": "ops-bot",
+                    "bot_token": "test-token"
+                }
+            }
+        }))
+        .expect("deserialize telegram channel config");
+
+        let message = ChannelInboundMessage {
+            session: ChannelSession::with_account(ChannelPlatform::Telegram, "ops-bot", "chat-1"),
+            reply_target: ChannelOutboundTarget::telegram_chat(1),
+            text: "hello".to_owned(),
+            delivery: ChannelDelivery {
+                ack_cursor: None,
+                source_message_id: Some("msg-1".to_owned()),
+                sender_principal_key: None,
+                thread_root_id: None,
+                parent_message_id: None,
+                resources: Vec::new(),
+                feishu_callback: None,
+            },
+        };
+        let runtime = ChannelTraceRuntime::default();
+        let kernel_ctx = crate::context::bootstrap_test_kernel_context("channel-test", 60)
+            .expect("bootstrap test kernel context");
+
+        let reply = process_inbound_with_runtime_and_feedback(
+            &config,
+            &runtime,
+            &message,
+            crate::conversation::ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ChannelTurnFeedbackPolicy::disabled(),
+        )
+        .await
+        .expect("channel reply should succeed when trace rendering is disabled");
+
+        assert_eq!(reply, "final reply");
     }
 
     #[cfg(any(

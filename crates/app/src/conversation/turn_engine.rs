@@ -862,12 +862,7 @@ fn build_tool_intent_completed_trace(
     outcome: &ToolCoreOutcome,
 ) -> ToolBatchExecutionIntentTrace {
     let tool_name = effective_result_tool_name(intent);
-    let normalized_status = outcome.status.trim();
-    let detail = if normalized_status.is_empty() || normalized_status == "ok" {
-        None
-    } else {
-        Some(normalized_status.to_owned())
-    };
+    let detail = summarize_completed_tool_trace_detail(tool_name.as_str(), outcome);
 
     ToolBatchExecutionIntentTrace {
         tool_call_id: intent.tool_call_id.clone(),
@@ -875,6 +870,27 @@ fn build_tool_intent_completed_trace(
         status: ToolBatchExecutionIntentStatus::Completed,
         detail,
     }
+}
+
+fn summarize_completed_tool_trace_detail(
+    tool_name: &str,
+    outcome: &ToolCoreOutcome,
+) -> Option<String> {
+    let normalized_status = outcome.status.trim();
+    if !normalized_status.is_empty() && normalized_status != "ok" {
+        return Some(normalized_status.to_owned());
+    }
+
+    match tool_name {
+        "tool.search" => summarize_tool_search_completed_trace_detail(&outcome.payload),
+        _ => None,
+    }
+}
+
+fn summarize_tool_search_completed_trace_detail(payload: &serde_json::Value) -> Option<String> {
+    let returned = payload.get("returned")?.as_u64()?;
+    let noun = if returned == 1 { "result" } else { "results" };
+    Some(format!("returned {returned} {noun}"))
 }
 
 fn build_tool_intent_failure_trace(

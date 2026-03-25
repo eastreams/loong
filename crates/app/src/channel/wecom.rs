@@ -15,8 +15,8 @@ use crate::config::{
 use super::{
     CHANNEL_OPERATION_SERVE_ID, ChannelDelivery, ChannelDeliveryResource, ChannelInboundMessage,
     ChannelOperationRuntimeTracker, ChannelOutboundTarget, ChannelOutboundTargetKind,
-    ChannelPlatform, ChannelServeStopHandle, ChannelSession, process_inbound_with_provider,
-    runtime_state,
+    ChannelPlatform, ChannelServeStopHandle, ChannelSession, ChannelTurnFeedbackPolicy,
+    process_inbound_with_provider, runtime_state,
 };
 
 const WECOM_SUBSCRIBE_CMD: &str = "aibot_subscribe";
@@ -422,7 +422,8 @@ async fn run_wecom_serve_session(
                 config,
                 Some(resolved_path),
                 &parsed.message,
-                Some(provider_ctx.as_ref()),
+                provider_ctx.as_ref(),
+                ChannelTurnFeedbackPolicy::final_trace_significant(),
             )
             .await;
 
