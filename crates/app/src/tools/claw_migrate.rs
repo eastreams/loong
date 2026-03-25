@@ -615,6 +615,7 @@ mod tests {
             sessions_enabled: true,
             messages_enabled: true,
             delegate_enabled: true,
+            runtime_self: Default::default(),
             browser: Default::default(),
             browser_companion: Default::default(),
             web_fetch: Default::default(),

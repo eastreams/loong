@@ -162,6 +162,40 @@ impl BrowserCompanionRuntimePolicy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSelfRuntimePolicy {
+    pub max_source_chars: usize,
+    pub max_total_chars: usize,
+}
+
+impl RuntimeSelfRuntimePolicy {
+    #[must_use]
+    pub fn from_limits(max_source_chars: usize, max_total_chars: usize) -> Self {
+        let clamped_max_source_chars = max_source_chars.clamp(
+            crate::config::MIN_RUNTIME_SELF_MAX_SOURCE_CHARS,
+            crate::config::MAX_RUNTIME_SELF_MAX_SOURCE_CHARS,
+        );
+        let clamped_max_total_chars = max_total_chars.clamp(
+            crate::config::MIN_RUNTIME_SELF_MAX_TOTAL_CHARS,
+            crate::config::MAX_RUNTIME_SELF_MAX_TOTAL_CHARS,
+        );
+
+        Self {
+            max_source_chars: clamped_max_source_chars,
+            max_total_chars: clamped_max_total_chars,
+        }
+    }
+}
+
+impl Default for RuntimeSelfRuntimePolicy {
+    fn default() -> Self {
+        Self::from_limits(
+            crate::config::DEFAULT_RUNTIME_SELF_MAX_SOURCE_CHARS,
+            crate::config::DEFAULT_RUNTIME_SELF_MAX_TOTAL_CHARS,
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebFetchRuntimePolicy {
     pub enabled: bool,
     pub allow_private_hosts: bool,
@@ -258,6 +292,7 @@ pub struct ToolRuntimeConfig {
     pub sessions_enabled: bool,
     pub messages_enabled: bool,
     pub delegate_enabled: bool,
+    pub runtime_self: RuntimeSelfRuntimePolicy,
     pub browser: BrowserRuntimePolicy,
     pub browser_companion: BrowserCompanionRuntimePolicy,
     pub web_fetch: WebFetchRuntimePolicy,
@@ -281,6 +316,7 @@ impl Default for ToolRuntimeConfig {
             sessions_enabled: true,
             messages_enabled: false,
             delegate_enabled: true,
+            runtime_self: RuntimeSelfRuntimePolicy::default(),
             browser: BrowserRuntimePolicy::default(),
             browser_companion: BrowserCompanionRuntimePolicy::default(),
             web_fetch: WebFetchRuntimePolicy::default(),
@@ -315,6 +351,10 @@ impl ToolRuntimeConfig {
             sessions_enabled: config.tools.sessions.enabled,
             messages_enabled: config.tools.messages.enabled,
             delegate_enabled: config.tools.delegate.enabled,
+            runtime_self: RuntimeSelfRuntimePolicy::from_limits(
+                config.tools.runtime_self.max_source_chars,
+                config.tools.runtime_self.max_total_chars,
+            ),
             browser: BrowserRuntimePolicy {
                 enabled: config.tools.browser.enabled,
                 max_sessions: config.tools.browser.max_sessions,
@@ -416,6 +456,16 @@ impl ToolRuntimeConfig {
         let sessions_enabled = parse_env_bool("LOONGCLAW_TOOL_SESSIONS_ENABLED").unwrap_or(true);
         let messages_enabled = parse_env_bool("LOONGCLAW_TOOL_MESSAGES_ENABLED").unwrap_or(false);
         let delegate_enabled = parse_env_bool("LOONGCLAW_TOOL_DELEGATE_ENABLED").unwrap_or(true);
+        let runtime_self_max_source_chars =
+            parse_env_usize("LOONGCLAW_RUNTIME_SELF_MAX_SOURCE_CHARS")
+                .unwrap_or(crate::config::DEFAULT_RUNTIME_SELF_MAX_SOURCE_CHARS);
+        let runtime_self_max_total_chars =
+            parse_env_usize("LOONGCLAW_RUNTIME_SELF_MAX_TOTAL_CHARS")
+                .unwrap_or(crate::config::DEFAULT_RUNTIME_SELF_MAX_TOTAL_CHARS);
+        let runtime_self_policy = RuntimeSelfRuntimePolicy::from_limits(
+            runtime_self_max_source_chars,
+            runtime_self_max_total_chars,
+        );
         let browser_enabled = parse_env_bool("LOONGCLAW_BROWSER_ENABLED").unwrap_or(true);
         let browser_max_sessions = parse_env_usize("LOONGCLAW_BROWSER_MAX_SESSIONS")
             .unwrap_or(crate::config::DEFAULT_BROWSER_MAX_SESSIONS);
@@ -505,6 +555,7 @@ impl ToolRuntimeConfig {
             sessions_enabled,
             messages_enabled,
             delegate_enabled,
+            runtime_self: runtime_self_policy,
             browser: BrowserRuntimePolicy {
                 enabled: browser_enabled,
                 max_sessions: browser_max_sessions,
@@ -973,6 +1024,8 @@ mod tests {
             "LOONGCLAW_TOOL_SESSIONS_ENABLED",
             "LOONGCLAW_TOOL_MESSAGES_ENABLED",
             "LOONGCLAW_TOOL_DELEGATE_ENABLED",
+            "LOONGCLAW_RUNTIME_SELF_MAX_SOURCE_CHARS",
+            "LOONGCLAW_RUNTIME_SELF_MAX_TOTAL_CHARS",
             "LOONGCLAW_BROWSER_ENABLED",
             "LOONGCLAW_BROWSER_MAX_SESSIONS",
             "LOONGCLAW_BROWSER_MAX_LINKS",
@@ -1024,6 +1077,14 @@ mod tests {
         assert!(config.sessions_enabled);
         assert!(!config.messages_enabled);
         assert!(config.delegate_enabled);
+        assert_eq!(
+            config.runtime_self.max_source_chars,
+            crate::config::DEFAULT_RUNTIME_SELF_MAX_SOURCE_CHARS
+        );
+        assert_eq!(
+            config.runtime_self.max_total_chars,
+            crate::config::DEFAULT_RUNTIME_SELF_MAX_TOTAL_CHARS
+        );
         assert!(config.browser.enabled);
         assert_eq!(config.browser.max_sessions, 8);
         assert_eq!(config.browser.max_links, 40);
@@ -1084,6 +1145,7 @@ mod tests {
             shell_allow: BTreeSet::from(["git".to_owned(), "cargo".to_owned()]),
             file_root: Some(PathBuf::from("/tmp/test-root")),
             config_path: Some(PathBuf::from("/tmp/test-root/loongclaw.toml")),
+            runtime_self: RuntimeSelfRuntimePolicy::from_limits(4_096, 32_768),
             browser: BrowserRuntimePolicy {
                 enabled: false,
                 max_sessions: 4,
@@ -1128,6 +1190,8 @@ mod tests {
         assert!(!config.sessions_enabled);
         assert!(config.messages_enabled);
         assert!(!config.delegate_enabled);
+        assert_eq!(config.runtime_self.max_source_chars, 4_096);
+        assert_eq!(config.runtime_self.max_total_chars, 32_768);
         assert!(!config.browser.enabled);
         assert_eq!(config.browser.max_sessions, 4);
         assert_eq!(config.browser.max_links, 12);
@@ -1212,6 +1276,23 @@ mod tests {
             Some("1.2.3")
         );
         assert_eq!(runtime.browser_companion.timeout_seconds, 7);
+    }
+
+    #[test]
+    fn from_loongclaw_config_projects_runtime_self_policy() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        #[cfg(feature = "feishu-integration")]
+        clear_feishu_runtime_env(&mut env);
+
+        let mut config = crate::config::LoongClawConfig::default();
+        config.tools.runtime_self.max_source_chars = 12_345;
+        config.tools.runtime_self.max_total_chars = 67_890;
+
+        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+
+        assert_eq!(runtime.runtime_self.max_source_chars, 12_345);
+        assert_eq!(runtime.runtime_self.max_total_chars, 67_890);
     }
 
     #[test]
@@ -1381,6 +1462,27 @@ mod tests {
             Some(PathBuf::from("/tmp/managed-skills"))
         );
         assert!(!config.external_skills.auto_expose_installed);
+    }
+
+    #[test]
+    fn from_env_clamps_runtime_self_policy() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        #[cfg(feature = "feishu-integration")]
+        clear_feishu_runtime_env(&mut env);
+        env.set("LOONGCLAW_RUNTIME_SELF_MAX_SOURCE_CHARS", "999999");
+        env.set("LOONGCLAW_RUNTIME_SELF_MAX_TOTAL_CHARS", "1");
+
+        let config = ToolRuntimeConfig::from_env();
+
+        assert_eq!(
+            config.runtime_self.max_source_chars,
+            crate::config::MAX_RUNTIME_SELF_MAX_SOURCE_CHARS
+        );
+        assert_eq!(
+            config.runtime_self.max_total_chars,
+            crate::config::MIN_RUNTIME_SELF_MAX_TOTAL_CHARS
+        );
     }
 
     #[test]

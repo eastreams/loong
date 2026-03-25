@@ -22,6 +22,12 @@ struct RuntimeSelfSourceSpec {
     lane: RuntimeSelfLane,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeSelfTruncationCause {
+    SourceBudget,
+    TotalBudget,
+}
+
 const RUNTIME_SELF_SOURCE_SPECS: &[RuntimeSelfSourceSpec] = &[
     RuntimeSelfSourceSpec {
         relative_path: "AGENTS.md",
@@ -86,21 +92,28 @@ pub(crate) fn load_runtime_self_model_with_config(
     let source_candidates = runtime_self_source_candidates(workspace_root);
     let mut loaded_paths = BTreeSet::new();
     let mut model = RuntimeSelfModel::default();
+    let mut remaining_total_chars = tool_runtime_config.runtime_self.max_total_chars;
 
     for (candidate_path, lane) in source_candidates {
+        if remaining_total_chars == 0 {
+            break;
+        }
+
         let Some(content) =
             read_runtime_self_source(workspace_root, &candidate_path, tool_runtime_config)
         else {
             continue;
         };
 
-        let path_key = normalized_path_key(&candidate_path);
-        let inserted = loaded_paths.insert(path_key);
-        if !inserted {
-            continue;
-        }
-
-        append_runtime_self_content(&mut model, lane, content);
+        ingest_runtime_self_source(
+            &mut model,
+            &mut loaded_paths,
+            &mut remaining_total_chars,
+            lane,
+            &candidate_path,
+            content.as_str(),
+            tool_runtime_config,
+        );
     }
 
     model
@@ -199,6 +212,36 @@ pub(crate) fn normalized_path_key(path: &Path) -> String {
     canonical_path.display().to_string()
 }
 
+pub(crate) fn ingest_runtime_self_source(
+    model: &mut RuntimeSelfModel,
+    loaded_paths: &mut BTreeSet<String>,
+    remaining_total_chars: &mut usize,
+    lane: RuntimeSelfLane,
+    path: &Path,
+    content: &str,
+    tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
+) {
+    let path_key = normalized_path_key(path);
+    let inserted = loaded_paths.insert(path_key);
+    if !inserted {
+        return;
+    }
+
+    let truncated_content = truncate_runtime_self_source_content(
+        path,
+        content,
+        *remaining_total_chars,
+        tool_runtime_config,
+    );
+    let Some(truncated_content) = truncated_content else {
+        return;
+    };
+
+    let stored_char_count = truncated_content.chars().count();
+    *remaining_total_chars = remaining_total_chars.saturating_sub(stored_char_count);
+    append_runtime_self_content(model, lane, truncated_content);
+}
+
 pub(crate) fn append_runtime_self_content(
     model: &mut RuntimeSelfModel,
     lane: RuntimeSelfLane,
@@ -221,6 +264,73 @@ pub(crate) fn append_runtime_self_content(
             model.user_context.push(content);
         }
     }
+}
+
+fn truncate_runtime_self_source_content(
+    path: &Path,
+    content: &str,
+    remaining_total_chars: usize,
+    tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
+) -> Option<String> {
+    let runtime_self_policy = &tool_runtime_config.runtime_self;
+    let max_source_chars = runtime_self_policy.max_source_chars;
+    let effective_limit = max_source_chars.min(remaining_total_chars);
+    if effective_limit == 0 {
+        return None;
+    }
+
+    let content_char_count = content.chars().count();
+    if content_char_count <= effective_limit {
+        return Some(content.to_owned());
+    }
+
+    let total_budget_is_tighter = remaining_total_chars < max_source_chars;
+    let truncation_cause = if total_budget_is_tighter {
+        RuntimeSelfTruncationCause::TotalBudget
+    } else {
+        RuntimeSelfTruncationCause::SourceBudget
+    };
+    let source_label = runtime_self_source_label(path);
+    let truncation_notice = runtime_self_truncation_notice(source_label.as_str(), truncation_cause);
+    let notice_char_count = truncation_notice.chars().count();
+
+    if effective_limit <= notice_char_count {
+        let fallback_content = take_runtime_self_prefix(content, effective_limit);
+        let trimmed_fallback = fallback_content.trim();
+        if trimmed_fallback.is_empty() {
+            return None;
+        }
+
+        return Some(trimmed_fallback.to_owned());
+    }
+
+    let prefix_limit = effective_limit - notice_char_count;
+    let content_prefix = take_runtime_self_prefix(content, prefix_limit);
+    let rendered_content = format!("{content_prefix}{truncation_notice}");
+    Some(rendered_content)
+}
+
+fn runtime_self_source_label(path: &Path) -> String {
+    let file_name = path.file_name();
+    let file_name = file_name.and_then(|value| value.to_str());
+    let file_name = file_name.unwrap_or("runtime self source");
+    file_name.to_owned()
+}
+
+fn runtime_self_truncation_notice(
+    source_label: &str,
+    truncation_cause: RuntimeSelfTruncationCause,
+) -> String {
+    let budget_label = match truncation_cause {
+        RuntimeSelfTruncationCause::SourceBudget => "per-source budget",
+        RuntimeSelfTruncationCause::TotalBudget => "remaining total budget",
+    };
+
+    format!("\n\n[runtime self source truncated: {source_label} exceeded the {budget_label}]")
+}
+
+fn take_runtime_self_prefix(content: &str, max_chars: usize) -> String {
+    content.chars().take(max_chars).collect()
 }
 
 fn push_rendered_lane(sections: &mut Vec<String>, heading: &str, entries: &[String]) {
@@ -395,6 +505,94 @@ mod tests {
         let rendered = render_runtime_self_section(&model);
 
         assert_eq!(rendered, None);
+    }
+
+    #[test]
+    fn load_runtime_self_model_truncates_oversized_source_content() {
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        let agents_path = workspace_root.join("AGENTS.md");
+        let prefix = "Keep standing instructions visible.\n";
+        let tail_marker = "TAIL_MARKER_SHOULD_NOT_SURVIVE";
+        let oversized_content = format!("{prefix}{}\n{tail_marker}", "a".repeat(24_000),);
+
+        std::fs::write(&agents_path, oversized_content).expect("write oversized AGENTS");
+
+        let model = load_runtime_self_model(workspace_root);
+        let rendered = model
+            .standing_instructions
+            .first()
+            .expect("standing instructions")
+            .as_str();
+
+        assert!(rendered.contains(prefix));
+        assert!(
+            rendered.contains("runtime self source truncated"),
+            "expected truncation notice in rendered source, got: {rendered}"
+        );
+        assert!(
+            !rendered.contains(tail_marker),
+            "oversized source tail should be truncated, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn load_runtime_self_model_enforces_total_runtime_self_budget() {
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        let nested_workspace_root = workspace_root.join("workspace");
+
+        std::fs::create_dir_all(&nested_workspace_root).expect("create nested workspace root");
+
+        let root_agents = workspace_root.join("AGENTS.md");
+        let root_claude = workspace_root.join("CLAUDE.md");
+        let root_tools = workspace_root.join("TOOLS.md");
+        let root_soul = workspace_root.join("SOUL.md");
+        let root_user = workspace_root.join("USER.md");
+        let nested_agents = nested_workspace_root.join("AGENTS.md");
+        let nested_tools = nested_workspace_root.join("TOOLS.md");
+        let nested_soul = nested_workspace_root.join("SOUL.md");
+        let nested_user = nested_workspace_root.join("USER.md");
+
+        let repeated_body = "b".repeat(18_500);
+        let nested_tail_marker = "NESTED_USER_TAIL_MARKER_SHOULD_NOT_SURVIVE";
+        let root_content = format!("root\n{repeated_body}");
+        let nested_user_content = format!("nested user\n{repeated_body}\n{nested_tail_marker}");
+
+        std::fs::write(&root_agents, &root_content).expect("write root AGENTS");
+        std::fs::write(&root_claude, &root_content).expect("write root CLAUDE");
+        std::fs::write(&root_tools, &root_content).expect("write root TOOLS");
+        std::fs::write(&root_soul, &root_content).expect("write root SOUL");
+        std::fs::write(&root_user, &root_content).expect("write root USER");
+        std::fs::write(&nested_agents, &root_content).expect("write nested AGENTS");
+        std::fs::write(&nested_tools, &root_content).expect("write nested TOOLS");
+        std::fs::write(&nested_soul, &root_content).expect("write nested SOUL");
+        std::fs::write(&nested_user, &nested_user_content).expect("write nested USER");
+
+        let model = load_runtime_self_model(workspace_root);
+        let total_chars = model
+            .standing_instructions
+            .iter()
+            .chain(model.tool_usage_policy.iter())
+            .chain(model.soul_guidance.iter())
+            .chain(model.identity_context.iter())
+            .chain(model.user_context.iter())
+            .map(|entry| entry.chars().count())
+            .sum::<usize>();
+        let rendered_user_context = model.user_context.join("\n\n");
+
+        assert!(
+            total_chars <= 150_000,
+            "runtime self total chars should stay within the default budget, got {total_chars}"
+        );
+        assert!(
+            rendered_user_context.contains("runtime self source truncated"),
+            "expected total-budget truncation notice in user context, got: {rendered_user_context}"
+        );
+        assert!(
+            !rendered_user_context.contains(nested_tail_marker),
+            "later runtime-self sources should not bypass the total budget"
+        );
     }
 
     #[cfg(unix)]

@@ -225,21 +225,28 @@ async fn load_runtime_self_model_with_binding(
     let source_candidates = runtime_self::runtime_self_source_candidates(workspace_root);
     let mut loaded_paths = BTreeSet::new();
     let mut model = runtime_self::RuntimeSelfModel::default();
+    let mut remaining_total_chars = tool_runtime_config.runtime_self.max_total_chars;
 
     for (candidate_path, lane) in source_candidates {
+        if remaining_total_chars == 0 {
+            break;
+        }
+
         let Some(content) =
             read_runtime_self_source_via_kernel(workspace_root, &candidate_path, kernel_ctx).await
         else {
             continue;
         };
 
-        let path_key = runtime_self::normalized_path_key(&candidate_path);
-        let inserted = loaded_paths.insert(path_key);
-        if !inserted {
-            continue;
-        }
-
-        runtime_self::append_runtime_self_content(&mut model, lane, content);
+        runtime_self::ingest_runtime_self_source(
+            &mut model,
+            &mut loaded_paths,
+            &mut remaining_total_chars,
+            lane,
+            &candidate_path,
+            content.as_str(),
+            tool_runtime_config,
+        );
     }
 
     model
@@ -1079,5 +1086,43 @@ mod tests {
                     .is_some_and(|content| content.contains("## Advisory Durable Recall"))
         });
         assert!(durable_recall_message.is_none());
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn message_builder_truncates_oversized_runtime_self_sources() {
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        let agents_path = workspace_root.join("AGENTS.md");
+        let prefix = "Keep runtime self bounded.\n";
+        let tail_marker = "TAIL_MARKER_SHOULD_NOT_SURVIVE";
+        let oversized_content = format!("{prefix}{}\n{tail_marker}", "c".repeat(24_000),);
+
+        std::fs::write(&agents_path, oversized_content).expect("write oversized AGENTS");
+
+        let db_path = workspace_root.join("provider-runtime-self-budget.sqlite3");
+        let mut config = LoongClawConfig::default();
+        config.tools.file_root = Some(workspace_root.display().to_string());
+        config.memory.sqlite_path = db_path.display().to_string();
+
+        let messages = build_messages_for_session(&config, "runtime-self-budget-session", true)
+            .expect("build messages");
+
+        let runtime_self_message = messages
+            .iter()
+            .find(|message| {
+                message["role"] == "system"
+                    && message["content"]
+                        .as_str()
+                        .is_some_and(|content| content.contains("## Runtime Self Context"))
+            })
+            .expect("runtime self system message");
+        let runtime_self_content = runtime_self_message["content"]
+            .as_str()
+            .expect("runtime self content");
+
+        assert!(runtime_self_content.contains(prefix));
+        assert!(runtime_self_content.contains("runtime self source truncated"));
+        assert!(!runtime_self_content.contains(tail_marker));
     }
 }
