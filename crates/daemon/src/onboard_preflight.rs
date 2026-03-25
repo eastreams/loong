@@ -86,14 +86,19 @@ pub(crate) async fn run_preflight_checks(
                 });
             }
             Err(error) => {
-                let transport_style_failure =
-                    crate::provider_route_diagnostics::is_transport_style_model_probe_failure(
+                let probe_failure =
+                    crate::provider_model_probe_policy::provider_model_probe_failure(
+                        config,
                         error.as_str(),
                     );
+                let should_collect_route_probe = matches!(
+                    &probe_failure.kind,
+                    crate::provider_model_probe_policy::ProviderModelProbeFailureKind::TransportFailure
+                );
+                let check = onboard_check_from_provider_model_probe_failure(probe_failure);
+                checks.push(check);
 
-                checks.push(provider_model_probe_failure_check(config, error));
-
-                if transport_style_failure
+                if should_collect_route_probe
                     && let Some(route_probe) =
                         crate::provider_route_diagnostics::collect_provider_route_probe(
                             &config.provider,
@@ -407,84 +412,51 @@ fn provider_check_detail_prefix(config: &mvp::config::LoongClawConfig) -> String
     crate::provider_presentation::active_provider_detail_label(config)
 }
 
-fn render_onboard_model_candidate_list(models: &[String]) -> String {
-    models
-        .iter()
-        .map(|model| format!("`{model}`"))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-pub(crate) fn provider_model_probe_failure_check(
-    config: &mvp::config::LoongClawConfig,
-    error: String,
+fn onboard_check_from_provider_model_probe_failure(
+    probe_failure: crate::provider_model_probe_policy::ProviderModelProbeFailure,
 ) -> OnboardCheck {
-    let provider_prefix = provider_check_detail_prefix(config);
-
-    if crate::provider_route_diagnostics::is_transport_style_model_probe_failure(error.as_str()) {
-        return OnboardCheck {
-            name: "provider model probe",
-            level: OnboardCheckLevel::Fail,
-            detail: format!(
-                "{provider_prefix}: {} ({error}); runtime could not verify the provider route. inspect provider route diagnostics and retry once dns / proxy / TUN routing is stable",
-                crate::provider_route_diagnostics::MODEL_CATALOG_TRANSPORT_FAILED_MARKER
-            ),
-            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-        };
-    }
-
-    let auth_style_failure = mvp::provider::is_auth_style_failure_message(error.as_str());
-    let append_region_hint = |mut detail: String| {
-        if auth_style_failure && let Some(hint) = config.provider.region_endpoint_failure_hint() {
-            detail.push(' ');
-            detail.push_str(hint.as_str());
+    let level = match probe_failure.level {
+        crate::provider_model_probe_policy::ProviderModelProbeFailureLevel::Warn => {
+            OnboardCheckLevel::Warn
         }
-
-        detail
+        crate::provider_model_probe_policy::ProviderModelProbeFailureLevel::Fail => {
+            OnboardCheckLevel::Fail
+        }
     };
-
-    let recovery = config.provider.model_catalog_probe_recovery();
-    let (level, detail, non_interactive_warning_policy) = match recovery {
-        mvp::config::ModelCatalogProbeRecovery::ExplicitModel(model) => (
-            OnboardCheckLevel::Warn,
-            append_region_hint(format!(
-                "{provider_prefix}: model catalog probe failed ({error}); chat may still work because model `{model}` is explicitly configured"
-            )),
-            OnboardNonInteractiveWarningPolicy::AcceptedByExplicitModel,
-        ),
-        mvp::config::ModelCatalogProbeRecovery::ConfiguredPreferredModels(fallback_models) => (
-            OnboardCheckLevel::Warn,
-            append_region_hint(format!(
-                "{provider_prefix}: model catalog probe failed ({error}); runtime will try configured preferred model fallback(s): {}",
-                render_onboard_model_candidate_list(&fallback_models)
-            )),
-            OnboardNonInteractiveWarningPolicy::AcceptedByPreferredModels,
-        ),
-        mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
-            recommended_onboarding_model,
-        } => {
-            let detail = provider_model_probe_requires_explicit_model_detail(
-                provider_prefix.as_str(),
-                error.as_str(),
-                recommended_onboarding_model,
-            );
-            let detail = append_region_hint(detail);
-            let policy = if recommended_onboarding_model.is_some() {
-                OnboardNonInteractiveWarningPolicy::RequiresExplicitModel
-            } else {
-                OnboardNonInteractiveWarningPolicy::RequiresExplicitModelWithoutReviewedDefault
-            };
-
-            (OnboardCheckLevel::Fail, detail, policy)
+    let non_interactive_warning_policy = match probe_failure.kind {
+        crate::provider_model_probe_policy::ProviderModelProbeFailureKind::TransportFailure => {
+            OnboardNonInteractiveWarningPolicy::Block
         }
+        crate::provider_model_probe_policy::ProviderModelProbeFailureKind::ExplicitModel {
+            ..
+        } => OnboardNonInteractiveWarningPolicy::AcceptedByExplicitModel,
+        crate::provider_model_probe_policy::ProviderModelProbeFailureKind::PreferredModels {
+            ..
+        } => OnboardNonInteractiveWarningPolicy::AcceptedByPreferredModels,
+        crate::provider_model_probe_policy::ProviderModelProbeFailureKind::RequiresExplicitModel {
+            recommended_onboarding_model: Some(_),
+        } => OnboardNonInteractiveWarningPolicy::RequiresExplicitModel,
+        crate::provider_model_probe_policy::ProviderModelProbeFailureKind::RequiresExplicitModel {
+            recommended_onboarding_model: None,
+        } => OnboardNonInteractiveWarningPolicy::RequiresExplicitModelWithoutReviewedDefault,
     };
 
     OnboardCheck {
         name: "provider model probe",
         level,
-        detail,
+        detail: probe_failure.detail,
         non_interactive_warning_policy,
     }
+}
+
+#[cfg(test)]
+pub(crate) fn provider_model_probe_failure_check(
+    config: &mvp::config::LoongClawConfig,
+    error: String,
+) -> OnboardCheck {
+    let probe_failure =
+        crate::provider_model_probe_policy::provider_model_probe_failure(config, error.as_str());
+    onboard_check_from_provider_model_probe_failure(probe_failure)
 }
 
 async fn collect_browser_companion_preflight_checks(
@@ -515,21 +487,6 @@ async fn collect_browser_companion_preflight_checks(
         detail,
         non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
     }]
-}
-
-fn provider_model_probe_requires_explicit_model_detail(
-    provider_prefix: &str,
-    error: &str,
-    recommended_onboarding_model: Option<&str>,
-) -> String {
-    match recommended_onboarding_model {
-        Some(model) => format!(
-            "{provider_prefix}: model catalog probe failed ({error}); current config still uses `model = auto`; rerun onboarding and accept reviewed model `{model}`, or set `provider.model` / `preferred_models` explicitly"
-        ),
-        None => format!(
-            "{provider_prefix}: model catalog probe failed ({error}); current config still uses `model = auto`; set `provider.model` explicitly or configure `preferred_models` before retrying"
-        ),
-    }
 }
 
 fn provider_transport_check(config: &mvp::config::LoongClawConfig) -> OnboardCheck {

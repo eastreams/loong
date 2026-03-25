@@ -11,8 +11,7 @@ use loongclaw_spec::CliResult;
 use serde_json::json;
 
 use crate::provider_credential_policy;
-
-const MODEL_CATALOG_PROBE_FAILED_MARKER: &str = "model catalog probe failed";
+use crate::provider_model_probe_policy;
 
 #[derive(Debug, Clone)]
 pub struct DoctorCommandOptions {
@@ -80,12 +79,17 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
                 detail: format!("{} model(s) available", models.len()),
             }),
             Err(error) => {
-                let transport_style_failure =
-                    crate::provider_route_diagnostics::is_transport_style_model_probe_failure(
-                        error.as_str(),
-                    );
-                checks.push(provider_model_probe_failure_check(&config, error));
-                if transport_style_failure
+                let probe_failure = provider_model_probe_policy::provider_model_probe_failure(
+                    &config,
+                    error.as_str(),
+                );
+                let should_collect_route_probe = matches!(
+                    &probe_failure.kind,
+                    provider_model_probe_policy::ProviderModelProbeFailureKind::TransportFailure
+                );
+                let check = doctor_check_from_provider_model_probe_failure(probe_failure);
+                checks.push(check);
+                if should_collect_route_probe
                     && let Some(route_probe) =
                         crate::provider_route_diagnostics::collect_provider_route_probe(
                             &config.provider,
@@ -1296,79 +1300,58 @@ fn provider_credentials_doctor_check(
     }
 }
 
-fn provider_model_probe_failure_check(
-    config: &mvp::config::LoongClawConfig,
-    error: String,
+fn doctor_check_from_provider_model_probe_failure(
+    probe_failure: provider_model_probe_policy::ProviderModelProbeFailure,
 ) -> DoctorCheck {
-    let provider_prefix = crate::provider_presentation::active_provider_detail_label(config);
-    if crate::provider_route_diagnostics::is_transport_style_model_probe_failure(error.as_str()) {
-        return DoctorCheck {
-            name: "provider model probe".to_owned(),
-            level: DoctorCheckLevel::Fail,
-            detail: format!(
-                "{provider_prefix}: {} ({error}); runtime could not verify the provider route. inspect provider route diagnostics and retry once dns / proxy / TUN routing is stable",
-                crate::provider_route_diagnostics::MODEL_CATALOG_TRANSPORT_FAILED_MARKER
-            ),
-        };
-    }
-    let auth_style_failure = mvp::provider::is_auth_style_failure_message(error.as_str());
-    let append_region_hint = |mut detail: String| {
-        if auth_style_failure && let Some(hint) = config.provider.region_endpoint_failure_hint() {
-            detail.push(' ');
-            detail.push_str(hint.as_str());
-        }
-        detail
-    };
-    let (level, detail) = match config.provider.model_catalog_probe_recovery() {
-        mvp::config::ModelCatalogProbeRecovery::ExplicitModel(model) => (
-            DoctorCheckLevel::Warn,
-            append_region_hint(format!(
-                "{provider_prefix}: {MODEL_CATALOG_PROBE_FAILED_MARKER} ({error}); chat may still work because model `{model}` is explicitly configured"
-            )),
-        ),
-        mvp::config::ModelCatalogProbeRecovery::ConfiguredPreferredModels(fallback_models) => (
-            DoctorCheckLevel::Warn,
-            append_region_hint(format!(
-                "{provider_prefix}: {MODEL_CATALOG_PROBE_FAILED_MARKER} ({error}); runtime will try configured preferred model fallback(s): {}",
-                fallback_models
-                    .iter()
-                    .map(|model| format!("`{model}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
-        ),
-        mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
-            recommended_onboarding_model,
-        } => (
-            DoctorCheckLevel::Fail,
-            append_region_hint(provider_model_probe_requires_explicit_model_detail(
-                provider_prefix.as_str(),
-                error.as_str(),
-                recommended_onboarding_model,
-            )),
-        ),
+    let level = match probe_failure.level {
+        provider_model_probe_policy::ProviderModelProbeFailureLevel::Warn => DoctorCheckLevel::Warn,
+        provider_model_probe_policy::ProviderModelProbeFailureLevel::Fail => DoctorCheckLevel::Fail,
     };
 
     DoctorCheck {
         name: "provider model probe".to_owned(),
         level,
-        detail,
+        detail: probe_failure.detail,
     }
 }
 
-fn provider_model_probe_requires_explicit_model_detail(
-    provider_prefix: &str,
-    error: &str,
-    recommended_onboarding_model: Option<&str>,
-) -> String {
-    match recommended_onboarding_model {
-        Some(model) => format!(
-            "{provider_prefix}: {MODEL_CATALOG_PROBE_FAILED_MARKER} ({error}); current config still uses `model = auto`; rerun onboarding and accept reviewed model `{model}`, or set `provider.model` / `preferred_models` explicitly"
-        ),
-        None => format!(
-            "{provider_prefix}: {MODEL_CATALOG_PROBE_FAILED_MARKER} ({error}); current config still uses `model = auto`; set `provider.model` explicitly or configure `preferred_models` before retrying"
-        ),
+#[cfg(test)]
+fn provider_model_probe_failure_check(
+    config: &mvp::config::LoongClawConfig,
+    error: String,
+) -> DoctorCheck {
+    let probe_failure =
+        provider_model_probe_policy::provider_model_probe_failure(config, error.as_str());
+    doctor_check_from_provider_model_probe_failure(probe_failure)
+}
+
+fn is_provider_model_probe_failure_check(check: &DoctorCheck) -> bool {
+    let is_provider_model_probe = check.name == "provider model probe";
+    let is_failure = check.level != DoctorCheckLevel::Pass;
+    let is_probe_failure =
+        provider_model_probe_policy::provider_model_probe_failed_detail(check.detail.as_str());
+
+    is_provider_model_probe && is_failure && is_probe_failure
+}
+
+fn is_transport_style_provider_model_probe_failure_check(check: &DoctorCheck) -> bool {
+    let is_provider_model_probe_failure = is_provider_model_probe_failure_check(check);
+    if !is_provider_model_probe_failure {
+        return false;
     }
+
+    provider_model_probe_policy::provider_model_probe_transport_failure_detail(
+        check.detail.as_str(),
+    )
+}
+
+fn is_auth_style_provider_model_probe_failure_check(check: &DoctorCheck) -> bool {
+    let is_provider_model_probe_failure = is_provider_model_probe_failure_check(check);
+    if !is_provider_model_probe_failure {
+        return false;
+    }
+
+    provider_model_probe_policy::provider_model_probe_auth_failure_detail(check.detail.as_str())
 }
 
 async fn collect_browser_companion_doctor_checks(
@@ -1527,21 +1510,11 @@ fn build_doctor_next_steps_with_path_env(
         }
     }
 
-    if checks.iter().any(|check| {
-        check.name == "provider model probe"
-            && check.level != DoctorCheckLevel::Pass
-            && (check.detail.contains(MODEL_CATALOG_PROBE_FAILED_MARKER)
-                || check.detail.contains(
-                    crate::provider_route_diagnostics::MODEL_CATALOG_TRANSPORT_FAILED_MARKER,
-                ))
-    }) {
-        let provider_model_probe_transport_failure = checks.iter().any(|check| {
-            check.name == "provider model probe"
-                && check.level != DoctorCheckLevel::Pass
-                && check.detail.contains(
-                    crate::provider_route_diagnostics::MODEL_CATALOG_TRANSPORT_FAILED_MARKER,
-                )
-        });
+    let has_provider_model_probe_failure = checks.iter().any(is_provider_model_probe_failure_check);
+    if has_provider_model_probe_failure {
+        let provider_model_probe_transport_failure = checks
+            .iter()
+            .any(is_transport_style_provider_model_probe_failure_check);
         if provider_model_probe_transport_failure {
             if checks.iter().any(|check| {
                 check.name == crate::provider_route_diagnostics::PROVIDER_ROUTE_PROBE_CHECK_NAME
@@ -1571,12 +1544,9 @@ fn build_doctor_next_steps_with_path_env(
                 );
             }
         } else {
-            let provider_model_probe_auth_failure = checks.iter().any(|check| {
-                check.name == "provider model probe"
-                    && check.level != DoctorCheckLevel::Pass
-                    && check.detail.contains(MODEL_CATALOG_PROBE_FAILED_MARKER)
-                    && mvp::provider::is_auth_style_failure_message(check.detail.as_str())
-            });
+            let provider_model_probe_auth_failure = checks
+                .iter()
+                .any(is_auth_style_provider_model_probe_failure_check);
             match config.provider.model_catalog_probe_recovery() {
                 mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
                     recommended_onboarding_model: Some(model),
