@@ -11,6 +11,8 @@ pub const DEFAULT_BROWSER_MAX_SESSIONS: usize = 8;
 pub const DEFAULT_BROWSER_MAX_LINKS: usize = 40;
 pub const DEFAULT_BROWSER_MAX_TEXT_CHARS: usize = 6000;
 pub const DEFAULT_BROWSER_COMPANION_TIMEOUT_SECONDS: u64 = 30;
+pub const DEFAULT_RUNTIME_SELF_MAX_SOURCE_CHARS: usize = 20_000;
+pub const DEFAULT_RUNTIME_SELF_MAX_TOTAL_CHARS: usize = 150_000;
 pub(crate) const MIN_WEB_FETCH_MAX_BYTES: usize = 1024;
 pub const MAX_WEB_FETCH_MAX_BYTES: usize = 5 * 1024 * 1024;
 pub(crate) const MIN_WEB_FETCH_TIMEOUT_SECONDS: usize = 1;
@@ -22,6 +24,10 @@ pub(crate) const MIN_BROWSER_MAX_LINKS: usize = 1;
 pub const MAX_BROWSER_MAX_LINKS: usize = 200;
 pub(crate) const MIN_BROWSER_MAX_TEXT_CHARS: usize = 256;
 pub const MAX_BROWSER_MAX_TEXT_CHARS: usize = 20_000;
+pub(crate) const MIN_RUNTIME_SELF_MAX_SOURCE_CHARS: usize = 256;
+pub const MAX_RUNTIME_SELF_MAX_SOURCE_CHARS: usize = 100_000;
+pub(crate) const MIN_RUNTIME_SELF_MAX_TOTAL_CHARS: usize = 1_024;
+pub const MAX_RUNTIME_SELF_MAX_TOTAL_CHARS: usize = 500_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolConfig {
@@ -45,6 +51,8 @@ pub struct ToolConfig {
     pub messages: MessageToolConfig,
     #[serde(default)]
     pub delegate: DelegateToolConfig,
+    #[serde(default)]
+    pub runtime_self: RuntimeSelfToolConfig,
     #[serde(default)]
     pub browser: BrowserToolConfig,
     #[serde(default)]
@@ -175,6 +183,14 @@ pub struct BrowserCompanionToolConfig {
     pub expected_version: Option<String>,
     #[serde(default = "default_browser_companion_timeout_seconds")]
     pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeSelfToolConfig {
+    #[serde(default = "default_runtime_self_max_source_chars")]
+    pub max_source_chars: usize,
+    #[serde(default = "default_runtime_self_max_total_chars")]
+    pub max_total_chars: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -328,6 +344,14 @@ const fn default_browser_companion_timeout_seconds() -> u64 {
     DEFAULT_BROWSER_COMPANION_TIMEOUT_SECONDS
 }
 
+const fn default_runtime_self_max_source_chars() -> usize {
+    DEFAULT_RUNTIME_SELF_MAX_SOURCE_CHARS
+}
+
+const fn default_runtime_self_max_total_chars() -> usize {
+    DEFAULT_RUNTIME_SELF_MAX_TOTAL_CHARS
+}
+
 /// Default allow list used when the config file omits `shell_allow`.
 ///
 /// Empty by design: no commands are allowed unless the user explicitly
@@ -375,6 +399,7 @@ impl Default for ToolConfig {
             sessions: SessionToolConfig::default(),
             messages: MessageToolConfig::default(),
             delegate: DelegateToolConfig::default(),
+            runtime_self: RuntimeSelfToolConfig::default(),
             browser: BrowserToolConfig::default(),
             browser_companion: BrowserCompanionToolConfig::default(),
             web: WebToolConfig::default(),
@@ -390,6 +415,15 @@ impl Default for BrowserCompanionToolConfig {
             command: None,
             expected_version: None,
             timeout_seconds: default_browser_companion_timeout_seconds(),
+        }
+    }
+}
+
+impl Default for RuntimeSelfToolConfig {
+    fn default() -> Self {
+        Self {
+            max_source_chars: default_runtime_self_max_source_chars(),
+            max_total_chars: default_runtime_self_max_total_chars(),
         }
     }
 }
@@ -493,6 +527,22 @@ impl ToolConfig {
 
     pub(super) fn validate(&self) -> Vec<ConfigValidationIssue> {
         let mut issues = Vec::new();
+        if let Err(issue) = validate_numeric_range(
+            "tools.runtime_self.max_source_chars",
+            self.runtime_self.max_source_chars,
+            MIN_RUNTIME_SELF_MAX_SOURCE_CHARS,
+            MAX_RUNTIME_SELF_MAX_SOURCE_CHARS,
+        ) {
+            issues.push(*issue);
+        }
+        if let Err(issue) = validate_numeric_range(
+            "tools.runtime_self.max_total_chars",
+            self.runtime_self.max_total_chars,
+            MIN_RUNTIME_SELF_MAX_TOTAL_CHARS,
+            MAX_RUNTIME_SELF_MAX_TOTAL_CHARS,
+        ) {
+            issues.push(*issue);
+        }
         if let Err(issue) = validate_numeric_range(
             "tools.browser.max_sessions",
             self.browser.max_sessions,
@@ -880,6 +930,14 @@ mod tests {
             ]
         );
         assert!(!config.delegate.allow_shell_in_child);
+        assert_eq!(
+            config.runtime_self.max_source_chars,
+            DEFAULT_RUNTIME_SELF_MAX_SOURCE_CHARS
+        );
+        assert_eq!(
+            config.runtime_self.max_total_chars,
+            DEFAULT_RUNTIME_SELF_MAX_TOTAL_CHARS
+        );
         assert!(config.browser.enabled);
         assert_eq!(config.browser.max_sessions, 8);
         assert_eq!(config.browser.max_links, 40);
@@ -1169,6 +1227,21 @@ max_text_chars = 1024
             parsed.tools.delegate.child_runtime.browser.max_text_chars,
             Some(1024)
         );
+    }
+
+    #[cfg(feature = "config-toml")]
+    #[test]
+    fn tool_config_parses_runtime_self_controls_from_toml() {
+        let raw = r#"
+[tools.runtime_self]
+max_source_chars = 12345
+max_total_chars = 67890
+"#;
+        let parsed =
+            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+
+        assert_eq!(parsed.tools.runtime_self.max_source_chars, 12345);
+        assert_eq!(parsed.tools.runtime_self.max_total_chars, 67890);
     }
 
     #[cfg(feature = "config-toml")]
