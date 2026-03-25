@@ -220,14 +220,14 @@ cargo install --path crates/daemon
 
 ## 配置
 
-`loongclaw onboard` 默认通过 `provider.api_key_env` 引用 provider 凭据，让密钥不直接写进配置文件：
+`loongclaw onboard` 默认通过 `provider.api_key = { env = "..." }` 引用 provider 凭据，让密钥不直接写进配置文件：
 
 ```toml
 active_provider = "openai"
 
 [providers.openai]
 kind = "openai"
-api_key_env = "PROVIDER_API_KEY"
+api_key = { env = "PROVIDER_API_KEY" }
 ```
 
 现在 onboarding 也支持选择默认的 web search backend。当前支持
@@ -263,7 +263,7 @@ active_provider = "volcengine"
 [providers.volcengine]
 kind = "volcengine"
 model = "your-coding-plan-model-id"
-api_key_env = "ARK_API_KEY"
+api_key = { env = "ARK_API_KEY" }
 base_url = "https://ark.cn-beijing.volces.com"
 chat_completions_path = "/api/v3/chat/completions"
 ```

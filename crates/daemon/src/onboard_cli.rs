@@ -2034,8 +2034,8 @@ fn apply_selected_api_key_env(
 ) {
     let selected_api_key_env = selected_api_key_env.trim();
     if selected_api_key_env.is_empty() {
-        provider.set_api_key_env(None);
-        provider.set_oauth_access_token_env(None);
+        provider.clear_api_key_env_binding();
+        provider.clear_oauth_access_token_env_binding();
         return;
     }
 
@@ -2046,12 +2046,12 @@ fn apply_selected_api_key_env(
         selected_api_key_env,
     ) {
         provider_credential_policy::ProviderCredentialEnvField::ApiKey => {
-            provider.set_oauth_access_token_env(None);
-            provider.set_api_key_env(Some(selected_api_key_env.to_owned()));
+            provider.clear_oauth_access_token_env_binding();
+            provider.set_api_key_env_binding(Some(selected_api_key_env.to_owned()));
         }
         provider_credential_policy::ProviderCredentialEnvField::OAuthAccessToken => {
-            provider.set_api_key_env(None);
-            provider.set_oauth_access_token_env(Some(selected_api_key_env.to_owned()));
+            provider.clear_api_key_env_binding();
+            provider.set_oauth_access_token_env_binding(Some(selected_api_key_env.to_owned()));
         }
     }
 }
@@ -2827,8 +2827,10 @@ fn onboard_credential_env_name_is_safe(raw: &str) -> bool {
     }
 
     let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.api_key = None;
-    config.provider.api_key_env = Some(trimmed.to_owned());
+    config.provider.api_key = Some(SecretRef::Env {
+        env: trimmed.to_owned(),
+    });
+    config.provider.api_key_env = None;
 
     config.validate().is_ok()
 }
@@ -3051,15 +3053,18 @@ fn non_interactive_preflight_warning_message(
 fn render_configured_provider_credential_source_value(
     provider: &mvp::config::ProviderConfig,
 ) -> Option<String> {
-    let configured_oauth = provider.oauth_access_token_env.as_deref();
-    let rendered_oauth =
-        provider_credential_policy::render_provider_credential_source_value(configured_oauth);
+    let configured_oauth = provider.configured_oauth_access_token_env_override();
+    let rendered_oauth = provider_credential_policy::render_provider_credential_source_value(
+        configured_oauth.as_deref(),
+    );
     if rendered_oauth.is_some() {
         return rendered_oauth;
     }
 
-    let configured_api_key = provider.api_key_env.as_deref();
-    provider_credential_policy::render_provider_credential_source_value(configured_api_key)
+    let configured_api_key = provider.configured_api_key_env_override();
+    provider_credential_policy::render_provider_credential_source_value(
+        configured_api_key.as_deref(),
+    )
 }
 
 pub fn preferred_api_key_env_default(config: &mvp::config::LoongClawConfig) -> String {
@@ -7243,13 +7248,84 @@ mod tests {
         .expect_err("non-interactive onboarding should reject secret-like env selections");
 
         assert!(
-            error.contains("provider.api_key_env"),
+            error.contains("provider.api_key.env"),
             "the validation error should identify the bad field: {error}"
         );
         assert!(
             !error.contains(secret),
             "non-interactive validation must not echo the secret-like input: {error}"
         );
+    }
+
+    #[test]
+    fn resolve_api_key_env_selection_reprompts_after_uuid_secret_literal_interactively() {
+        let secret = "9f479837-0a12-4b56-89ab-cdef01234567";
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::VolcengineCoding;
+        let mut ui = TestOnboardUi::with_inputs([secret, "ARK_API_KEY"]);
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let selected = resolve_api_key_env_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: false,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                web_search_provider: None,
+                web_search_api_key_env: None,
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            "ARK_API_KEY".to_owned(),
+            GuidedPromptPath::NativePromptPack,
+            &mut ui,
+            &context,
+        )
+        .expect("uuid-shaped credential input should be rejected and reprompted");
+
+        assert_eq!(selected, "ARK_API_KEY");
+    }
+
+    #[test]
+    fn resolve_api_key_env_selection_rejects_uuid_secret_literal_non_interactively() {
+        let secret = "9f479837-0a12-4b56-89ab-cdef01234567";
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::VolcengineCoding;
+        let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
+        let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+
+        let error = resolve_api_key_env_selection(
+            &OnboardCommandOptions {
+                output: None,
+                force: false,
+                non_interactive: true,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: Some(secret.to_owned()),
+                web_search_provider: None,
+                web_search_api_key_env: None,
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: false,
+            },
+            &config,
+            "ARK_API_KEY".to_owned(),
+            GuidedPromptPath::NativePromptPack,
+            &mut ui,
+            &context,
+        )
+        .expect_err("uuid-shaped env selections should be rejected non-interactively");
+
+        assert!(error.contains("provider.api_key.env"));
+        assert!(!error.contains(secret));
     }
 
     #[test]
@@ -7572,41 +7648,51 @@ mod tests {
     fn apply_selected_api_key_env_routes_openai_oauth_env_to_oauth_binding() {
         let mut provider = mvp::config::ProviderConfig {
             kind: mvp::config::ProviderKind::Openai,
-            api_key_env: Some("OPENAI_API_KEY".to_owned()),
+            api_key: Some(SecretRef::Env {
+                env: "OPENAI_API_KEY".to_owned(),
+            }),
             ..mvp::config::ProviderConfig::default()
         };
 
         apply_selected_api_key_env(&mut provider, "OPENAI_CODEX_OAUTH_TOKEN".to_owned());
 
         assert_eq!(
-            provider.oauth_access_token_env.as_deref(),
-            Some("OPENAI_CODEX_OAUTH_TOKEN")
+            provider.oauth_access_token,
+            Some(SecretRef::Env {
+                env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
+            })
         );
         assert_eq!(
             provider.api_key_env, None,
             "switching to the OpenAI oauth env should clear the stale api-key env binding"
         );
+        assert_eq!(provider.api_key, None);
     }
 
     #[test]
     fn apply_selected_api_key_env_routes_unknown_openai_env_to_api_key_binding() {
         let mut provider = mvp::config::ProviderConfig {
             kind: mvp::config::ProviderKind::Openai,
-            oauth_access_token_env: Some("OPENAI_CODEX_OAUTH_TOKEN".to_owned()),
+            oauth_access_token: Some(SecretRef::Env {
+                env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
+            }),
             ..mvp::config::ProviderConfig::default()
         };
 
         apply_selected_api_key_env(&mut provider, "OPENAI_ALT_BEARER".to_owned());
 
         assert_eq!(
-            provider.api_key_env.as_deref(),
-            Some("OPENAI_ALT_BEARER"),
+            provider.api_key,
+            Some(SecretRef::Env {
+                env: "OPENAI_ALT_BEARER".to_owned(),
+            }),
             "unknown env names should stay on the explicit api-key field instead of being silently rebound to oauth"
         );
         assert_eq!(
             provider.oauth_access_token_env, None,
             "switching to a custom env name should clear the stale oauth binding"
         );
+        assert_eq!(provider.oauth_access_token, None);
     }
 
     #[test]
@@ -7620,18 +7706,30 @@ mod tests {
 
         let mut api_key_env_update = current.clone();
         apply_selected_api_key_env(&mut api_key_env_update, "OPENAI_API_KEY".to_owned());
-        assert!(api_key_env_update.api_key_env_explicit);
+        assert_eq!(
+            api_key_env_update.api_key,
+            Some(SecretRef::Env {
+                env: "OPENAI_API_KEY".to_owned(),
+            })
+        );
+        assert!(!api_key_env_update.api_key_env_explicit);
         assert!(
             provider_matches_for_review(&current, &api_key_env_update),
-            "review matching should ignore explicit api_key_env metadata when the provider identity is otherwise unchanged"
+            "review matching should ignore credential binding rewrites when the provider identity is otherwise unchanged"
         );
 
         let mut oauth_env_update = current.clone();
         apply_selected_api_key_env(&mut oauth_env_update, "OPENAI_CODEX_OAUTH_TOKEN".to_owned());
-        assert!(oauth_env_update.oauth_access_token_env_explicit);
+        assert_eq!(
+            oauth_env_update.oauth_access_token,
+            Some(SecretRef::Env {
+                env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
+            })
+        );
+        assert!(!oauth_env_update.oauth_access_token_env_explicit);
         assert!(
             provider_matches_for_review(&current, &oauth_env_update),
-            "review matching should ignore explicit oauth_access_token_env metadata when the provider identity is otherwise unchanged"
+            "review matching should ignore credential binding rewrites when the provider identity is otherwise unchanged"
         );
     }
 

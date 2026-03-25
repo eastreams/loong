@@ -1180,18 +1180,22 @@ fn maybe_apply_provider_env_fix(
         return false;
     };
     match binding.field {
-        provider_credential_policy::ProviderCredentialEnvField::ApiKey => ensure_env_binding(
-            &mut config.provider.api_key_env,
-            &binding.env_name,
-            fixes,
-            "set provider.api_key_env",
-        ),
-        provider_credential_policy::ProviderCredentialEnvField::OAuthAccessToken => {
-            ensure_env_binding(
-                &mut config.provider.oauth_access_token_env,
+        provider_credential_policy::ProviderCredentialEnvField::ApiKey => {
+            ensure_provider_env_binding(
+                &mut config.provider,
+                provider_credential_policy::ProviderCredentialEnvField::ApiKey,
                 &binding.env_name,
                 fixes,
-                "set provider.oauth_access_token_env",
+                "set provider.api_key.env",
+            )
+        }
+        provider_credential_policy::ProviderCredentialEnvField::OAuthAccessToken => {
+            ensure_provider_env_binding(
+                &mut config.provider,
+                provider_credential_policy::ProviderCredentialEnvField::OAuthAccessToken,
+                &binding.env_name,
+                fixes,
+                "set provider.oauth_access_token.env",
             )
         }
     }
@@ -1211,6 +1215,7 @@ fn maybe_apply_channel_env_fix(
     changed
 }
 
+#[cfg(test)]
 fn ensure_env_binding(
     slot: &mut Option<String>,
     default_key: &str,
@@ -1226,6 +1231,38 @@ fn ensure_env_binding(
         return false;
     }
     *slot = Some(default_key.to_owned());
+    fixes.push(format!("{label}={default_key}"));
+    true
+}
+
+fn ensure_provider_env_binding(
+    provider: &mut mvp::config::ProviderConfig,
+    field: provider_credential_policy::ProviderCredentialEnvField,
+    default_key: &str,
+    fixes: &mut Vec<String>,
+    label: &'static str,
+) -> bool {
+    let configured = match field {
+        provider_credential_policy::ProviderCredentialEnvField::ApiKey => {
+            provider.configured_api_key_env_override()
+        }
+        provider_credential_policy::ProviderCredentialEnvField::OAuthAccessToken => {
+            provider.configured_oauth_access_token_env_override()
+        }
+    };
+    if configured.is_some() {
+        return false;
+    }
+
+    match field {
+        provider_credential_policy::ProviderCredentialEnvField::ApiKey => {
+            provider.set_api_key_env_binding(Some(default_key.to_owned()));
+        }
+        provider_credential_policy::ProviderCredentialEnvField::OAuthAccessToken => {
+            provider.set_oauth_access_token_env_binding(Some(default_key.to_owned()));
+        }
+    }
+
     fixes.push(format!("{label}={default_key}"));
     true
 }
@@ -2171,13 +2208,15 @@ mod tests {
 
         assert!(changed);
         assert_eq!(
-            config.provider.oauth_access_token_env.as_deref(),
-            Some("OPENAI_CODEX_OAUTH_TOKEN")
+            config.provider.oauth_access_token,
+            Some(loongclaw_contracts::SecretRef::Env {
+                env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
+            })
         );
         assert_eq!(config.provider.api_key_env, None);
         assert_eq!(
             fixes,
-            vec!["set provider.oauth_access_token_env=OPENAI_CODEX_OAUTH_TOKEN".to_owned()]
+            vec!["set provider.oauth_access_token.env=OPENAI_CODEX_OAUTH_TOKEN".to_owned()]
         );
     }
 

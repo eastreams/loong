@@ -275,9 +275,11 @@ model = "deepseek-chat"
         mvp::config::ProviderKind::Deepseek
     );
     assert_eq!(
-        codex_candidate.config.provider.api_key_env.as_deref(),
-        Some("DEEPSEEK_API_KEY"),
-        "recognized Codex providers should start from their provider baseline so imports keep the correct credential env even without an explicit provider section"
+        codex_candidate.config.provider.api_key,
+        Some(loongclaw_contracts::SecretRef::Env {
+            env: "DEEPSEEK_API_KEY".to_owned(),
+        }),
+        "recognized Codex providers should start from their provider baseline so imports keep the correct canonical credential binding even without an explicit provider section"
     );
     assert_eq!(
         codex_candidate.config.provider.oauth_access_token_env, None,
@@ -354,9 +356,12 @@ model = "openai/gpt-5.1-codex"
         mvp::config::ProviderKind::Openai
     );
     assert_eq!(
-        codex_candidate.config.provider.api_key_env.as_deref(),
-        Some("OPENAI_API_KEY")
+        codex_candidate.config.provider.api_key,
+        Some(loongclaw_contracts::SecretRef::Env {
+            env: "OPENAI_API_KEY".to_owned(),
+        })
     );
+    assert_eq!(codex_candidate.config.provider.api_key_env, None);
     assert_eq!(
         codex_candidate.config.provider.oauth_access_token_env, None,
         "Codex imports should keep the portable API-key path by default instead of auto-enabling machine-local OAuth envs"
@@ -1524,9 +1529,12 @@ fn migration_compose_recommended_candidate_upgrades_incomplete_provider_from_com
         "compatible ready provider should upgrade an incomplete current provider"
     );
     assert_eq!(
-        composed.config.provider.api_key_env.as_deref(),
-        Some("KIMI_CODING_API_KEY")
+        composed.config.provider.api_key,
+        Some(loongclaw_contracts::SecretRef::Inline(
+            "kimi-coding-secret".to_owned(),
+        ))
     );
+    assert_eq!(composed.config.provider.api_key_env, None);
 }
 
 #[test]
@@ -1639,10 +1647,13 @@ fn migration_compose_recommended_candidate_preserves_current_custom_provider_end
         "recommended plan should preserve the current compatible endpoint path when only credentials are supplemented"
     );
     assert_eq!(
-        composed.config.provider.api_key_env.as_deref(),
-        Some("OPENROUTER_API_KEY"),
-        "recommended plan should still upgrade missing credentials from the compatible source"
+        composed.config.provider.api_key,
+        Some(loongclaw_contracts::SecretRef::Inline(
+            "openrouter-secret".to_owned(),
+        )),
+        "recommended plan should still upgrade missing credentials from the compatible source into the canonical api_key field"
     );
+    assert_eq!(composed.config.provider.api_key_env, None);
 }
 
 #[test]

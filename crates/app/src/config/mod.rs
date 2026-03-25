@@ -1761,6 +1761,18 @@ bot_token = { file = "/run/secrets/telegram" }
     }
 
     #[test]
+    fn config_validation_rejects_uuid_shaped_secret_in_env_pointer() {
+        let mut config = LoongClawConfig::default();
+        config.provider.api_key_env = Some("9f479837-0a12-4b56-89ab-cdef01234567".to_owned());
+
+        let error = config
+            .validate()
+            .expect_err("uuid-shaped provider secrets should be rejected in env pointer fields");
+        assert!(error.contains("provider.api_key_env"));
+        assert!(error.contains("secret literal"));
+    }
+
+    #[test]
     fn config_validation_rejects_invalid_typed_secret_ref_env_names() {
         let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
             "provider": {

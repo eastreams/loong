@@ -611,6 +611,10 @@ fn looks_like_secret_literal(raw: &str, detect_telegram_token_shape: bool) -> bo
         return true;
     }
 
+    if looks_like_uuid_shaped_secret_literal(trimmed) {
+        return true;
+    }
+
     if looks_like_compatible_env_name(trimmed) {
         return false;
     }
@@ -620,6 +624,22 @@ fn looks_like_secret_literal(raw: &str, detect_telegram_token_shape: bool) -> bo
         && trimmed
             .chars()
             .any(|ch| matches!(ch, '-' | '.' | ':' | '/' | '+'))
+}
+
+fn looks_like_uuid_shaped_secret_literal(raw: &str) -> bool {
+    let mut groups = raw.split('-');
+    let expected_lengths = [8usize, 4, 4, 4, 12];
+
+    for expected_length in expected_lengths {
+        let Some(group) = groups.next() else {
+            return false;
+        };
+        if group.len() != expected_length || !group.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            return false;
+        }
+    }
+
+    groups.next().is_none()
 }
 
 fn looks_like_compatible_env_name(raw: &str) -> bool {
@@ -748,6 +768,14 @@ mod tests {
             parse_env_assignment("set OPENAI_API_KEY=sk-value"),
             Some(("OPENAI_API_KEY", "sk-value"))
         );
+    }
+
+    #[test]
+    fn uuid_shaped_values_are_treated_as_secret_literals() {
+        assert!(looks_like_secret_literal(
+            "9f479837-0a12-4b56-89ab-cdef01234567",
+            false
+        ));
     }
 
     #[test]

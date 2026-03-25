@@ -937,12 +937,13 @@ async fn non_interactive_onboard_allows_explicit_skip_model_probe_warning() {
 
     let raw = std::fs::read_to_string(&output).expect("read written onboarding config");
     assert!(
-        raw.contains("oauth_access_token_env = \"OPENAI_CODEX_OAUTH_TOKEN\""),
-        "onboarding should persist the openai oauth env name after provider-aligned credential routing: {raw}"
+        raw.contains("[providers.openai.oauth_access_token]")
+            && raw.contains("env = \"OPENAI_CODEX_OAUTH_TOKEN\""),
+        "onboarding should persist the routed openai oauth env binding in the canonical secret field: {raw}"
     );
     assert!(
-        !raw.contains("oauth_access_token = "),
-        "provider-aligned onboarding should not fall back to the legacy oauth_access_token field for the openai oauth route: {raw}"
+        !raw.contains("oauth_access_token_env = "),
+        "provider-aligned onboarding should not keep the legacy oauth_access_token_env field for the openai oauth route: {raw}"
     );
     assert!(
         !raw.contains("api_key = "),
@@ -953,13 +954,15 @@ async fn non_interactive_onboard_allows_explicit_skip_model_probe_warning() {
         .expect("load written onboarding config");
     assert_eq!(config.provider.model, "openai/gpt-5.1-codex");
     assert_eq!(
-        config.provider.oauth_access_token, None,
-        "reloaded config should not repopulate the legacy oauth_access_token field for the oauth-backed openai route"
+        config.provider.oauth_access_token,
+        Some(loongclaw_contracts::SecretRef::Env {
+            env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
+        }),
+        "reloaded config should keep the routed oauth env binding in the canonical oauth_access_token field"
     );
     assert_eq!(
-        config.provider.oauth_access_token_env.as_deref(),
-        Some("OPENAI_CODEX_OAUTH_TOKEN"),
-        "reloaded config should keep the routed oauth env name after provider-aligned onboarding"
+        config.provider.oauth_access_token_env, None,
+        "reloaded config should not keep the legacy oauth_access_token_env field after provider-aligned onboarding"
     );
     assert_eq!(
         config.provider.authorization_header(),
@@ -1132,8 +1135,8 @@ async fn non_interactive_api_key_env_override_clears_existing_oauth_credentials(
 
     let raw = std::fs::read_to_string(&output).expect("read written onboarding config");
     assert!(
-        raw.contains("api_key_env = \"OPENAI_API_KEY\""),
-        "api key env override should persist the selected api key source: {raw}"
+        raw.contains("[providers.openai.api_key]") && raw.contains("env = \"OPENAI_API_KEY\""),
+        "api key env override should persist the selected api key source in the canonical secret field: {raw}"
     );
     assert!(
         !raw.contains("OPENAI_CODEX_OAUTH_TOKEN"),
@@ -1145,13 +1148,15 @@ async fn non_interactive_api_key_env_override_clears_existing_oauth_credentials(
     assert_eq!(config.provider.oauth_access_token, None);
     assert_eq!(config.provider.oauth_access_token_env, None);
     assert_eq!(
-        config.provider.api_key, None,
-        "reloaded config should not keep the legacy inline api_key field once the env name field is persisted"
+        config.provider.api_key,
+        Some(loongclaw_contracts::SecretRef::Env {
+            env: "OPENAI_API_KEY".to_owned(),
+        }),
+        "reloaded config should keep only the selected api key env binding in the canonical api_key field"
     );
     assert_eq!(
-        config.provider.api_key_env.as_deref(),
-        Some("OPENAI_API_KEY"),
-        "reloaded config should keep only the selected api key credential source"
+        config.provider.api_key_env, None,
+        "reloaded config should not keep the legacy api_key_env field after persisting the selected api key source"
     );
 }
 
@@ -1188,8 +1193,8 @@ async fn non_interactive_api_key_env_override_clears_existing_inline_api_key() {
 
     let raw = std::fs::read_to_string(&output).expect("read written onboarding config");
     assert!(
-        raw.contains("api_key_env = \"OPENAI_API_KEY\""),
-        "api key env override should persist the selected api key source: {raw}"
+        raw.contains("[providers.openai.api_key]") && raw.contains("env = \"OPENAI_API_KEY\""),
+        "api key env override should persist the selected api key source in the canonical secret field: {raw}"
     );
     assert!(
         !raw.contains("inline-secret"),
@@ -1199,13 +1204,15 @@ async fn non_interactive_api_key_env_override_clears_existing_inline_api_key() {
     let (_, config) = mvp::config::load(Some(output.to_string_lossy().as_ref()))
         .expect("load written onboarding config");
     assert_eq!(
-        config.provider.api_key, None,
-        "reloaded config should not keep the legacy inline api_key field once the env name field is persisted"
+        config.provider.api_key,
+        Some(loongclaw_contracts::SecretRef::Env {
+            env: "OPENAI_API_KEY".to_owned(),
+        }),
+        "reloaded config should keep only the selected api key env binding in the canonical api_key field"
     );
     assert_eq!(
-        config.provider.api_key_env.as_deref(),
-        Some("OPENAI_API_KEY"),
-        "reloaded config should keep only the selected api key env reference"
+        config.provider.api_key_env, None,
+        "reloaded config should not keep the legacy api_key_env field after persisting the selected api key source"
     );
 }
 
@@ -2345,9 +2352,12 @@ requires_openai_auth = true
         mvp::config::ProviderKind::KimiCoding
     );
     assert_eq!(
-        codex_candidate.config.provider.api_key_env.as_deref(),
-        Some("KIMI_CODING_API_KEY")
+        codex_candidate.config.provider.api_key,
+        Some(loongclaw_contracts::SecretRef::Env {
+            env: "KIMI_CODING_API_KEY".to_owned(),
+        })
     );
+    assert_eq!(codex_candidate.config.provider.api_key_env, None);
 }
 
 #[test]
@@ -4688,8 +4698,9 @@ fn onboard_model_selection_screen_wraps_compact_header_and_progress_on_narrow_wi
 fn onboard_api_key_env_screen_explains_suggested_env_and_blank_behavior() {
     let mut config = mvp::config::LoongClawConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Openai;
-    config.provider.api_key_env = None;
-    config.provider.oauth_access_token_env = Some("OPENAI_CODEX_OAUTH_TOKEN".to_owned());
+    config.provider.oauth_access_token = Some(loongclaw_contracts::SecretRef::Env {
+        env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
+    });
 
     let lines = loongclaw_daemon::onboard_cli::render_api_key_env_selection_screen_lines(
         &config,
@@ -4749,7 +4760,9 @@ fn onboard_api_key_env_screen_explains_suggested_env_and_blank_behavior() {
 fn onboard_api_key_env_screen_shows_prefilled_env_when_enter_default_is_overridden() {
     let mut config = mvp::config::LoongClawConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Openai;
-    config.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
+    config.provider.api_key = Some(loongclaw_contracts::SecretRef::Env {
+        env: "OPENAI_API_KEY".to_owned(),
+    });
 
     let lines =
         loongclaw_daemon::onboard_cli::render_api_key_env_selection_screen_lines_with_default(
@@ -6403,7 +6416,9 @@ fn onboard_review_lines_include_core_setup_summary_for_fresh_setup() {
 #[test]
 fn onboard_review_lines_prefer_oauth_env_over_api_key_env_when_both_are_configured() {
     let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.oauth_access_token_env = Some("OPENAI_CODEX_OAUTH_TOKEN".to_owned());
+    config.provider.oauth_access_token = Some(loongclaw_contracts::SecretRef::Env {
+        env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
+    });
 
     let lines = loongclaw_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
         &config,
@@ -6772,7 +6787,9 @@ fn onboarding_success_summary_shell_quotes_config_paths_with_single_quotes() {
 fn onboarding_success_summary_prefers_oauth_env_over_api_key_env_when_both_are_configured() {
     let path = PathBuf::from("/tmp/loongclaw-config.toml");
     let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.oauth_access_token_env = Some("OPENAI_CODEX_OAUTH_TOKEN".to_owned());
+    config.provider.oauth_access_token = Some(loongclaw_contracts::SecretRef::Env {
+        env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
+    });
 
     let summary =
         loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);

@@ -95,7 +95,9 @@ fn sample_import_candidate() -> loongclaw_daemon::migration::types::ImportCandid
     let mut config = mvp::config::LoongClawConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Openrouter;
     config.provider.model = "openrouter/openai/gpt-5.1".to_owned();
-    config.provider.api_key_env = Some("OPENROUTER_API_KEY".to_owned());
+    config
+        .provider
+        .set_api_key_env_binding(Some("OPENROUTER_API_KEY".to_owned()));
     config.cli.system_prompt = "Imported CLI prompt".to_owned();
     config.telegram.enabled = true;
     config.telegram.bot_token_env = Some("TELEGRAM_BOT_TOKEN".to_owned());
@@ -175,7 +177,10 @@ fn import_candidate_with_provider(
     candidate.config.provider.base_url = profile.base_url.to_owned();
     candidate.config.provider.chat_completions_path = profile.chat_completions_path.to_owned();
     candidate.config.provider.model = model.to_owned();
-    candidate.config.provider.api_key_env = Some(credential_env.to_owned());
+    candidate
+        .config
+        .provider
+        .set_api_key_env_binding(Some(credential_env.to_owned()));
     candidate.domains.retain(|domain| {
         domain.kind != loongclaw_daemon::migration::types::SetupDomainKind::Provider
     });
@@ -1312,13 +1317,15 @@ model = "deepseek-chat"
     );
     assert_eq!(imported.provider.model, "deepseek-chat");
     assert_eq!(
-        imported.provider.api_key, None,
-        "source-path-selected provider should not keep the legacy inline api_key field once the env name field is persisted"
+        imported.provider.api_key,
+        Some(loongclaw_contracts::SecretRef::Env {
+            env: "DEEPSEEK_API_KEY".to_owned(),
+        }),
+        "source-path-selected provider should keep its credential binding in the canonical api_key field"
     );
     assert_eq!(
-        imported.provider.api_key_env.as_deref(),
-        Some("DEEPSEEK_API_KEY"),
-        "source-path-selected provider should retain its provider-specific credential binding as an env name field"
+        imported.provider.api_key_env, None,
+        "source-path-selected provider should not keep the legacy api_key_env field once the canonical api_key binding is persisted"
     );
     assert_eq!(
         imported.provider.authorization_header().as_deref(),
@@ -1426,13 +1433,15 @@ requires_openai_auth = true
         mvp::config::ProviderWireApi::Responses
     );
     assert_eq!(
-        imported.provider.api_key, None,
-        "codex import should not keep the legacy inline api_key field once the env name field is persisted"
+        imported.provider.api_key,
+        Some(loongclaw_contracts::SecretRef::Env {
+            env: "OPENAI_API_KEY".to_owned(),
+        }),
+        "codex import should keep OpenAI auth in the canonical api_key field"
     );
     assert_eq!(
-        imported.provider.api_key_env.as_deref(),
-        Some("OPENAI_API_KEY"),
-        "codex import should persist OpenAI auth as an env name field"
+        imported.provider.api_key_env, None,
+        "codex import should not keep the legacy api_key_env field once the canonical api_key binding is persisted"
     );
 
     let models = mvp::provider::fetch_available_models(&imported)
@@ -1919,7 +1928,13 @@ fn import_cli_provider_selection_accepts_manual_choice_for_unresolved_recommende
 
     assert_eq!(provider.kind, mvp::config::ProviderKind::Deepseek);
     assert_eq!(provider.model, "deepseek-chat");
-    assert_eq!(provider.api_key_env.as_deref(), Some("DEEPSEEK_API_KEY"));
+    assert_eq!(
+        provider.api_key,
+        Some(loongclaw_contracts::SecretRef::Env {
+            env: "DEEPSEEK_API_KEY".to_owned(),
+        })
+    );
+    assert_eq!(provider.api_key_env, None);
 }
 
 #[test]

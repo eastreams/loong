@@ -2020,24 +2020,30 @@ fn runtime_snapshot_migrate_provider_env_reference(
     let explicit_env_name = inline_secret
         .as_ref()
         .and_then(SecretRef::explicit_env_name);
-    let Some(explicit_env_name) = explicit_env_name else {
+    if let Some(explicit_env_name) = explicit_env_name {
+        *inline_secret = Some(SecretRef::Env {
+            env: explicit_env_name,
+        });
+        *env_name = None;
         return;
-    };
-    let configured_env_name = env_name.as_deref();
-    let configured_env_name = configured_env_name.map(str::trim);
-    let configured_env_name = configured_env_name.filter(|value| !value.is_empty());
-
-    match configured_env_name {
-        None => {
-            *env_name = Some(explicit_env_name);
-            *inline_secret = None;
-        }
-        Some(configured_env_name) if configured_env_name == explicit_env_name => {
-            *env_name = Some(explicit_env_name);
-            *inline_secret = None;
-        }
-        Some(_) => {}
     }
+
+    if inline_secret.is_some() {
+        *env_name = None;
+        return;
+    }
+
+    let configured_env_name = env_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    if let Some(configured_env_name) = configured_env_name {
+        *inline_secret = Some(SecretRef::Env {
+            env: configured_env_name,
+        });
+    }
+    *env_name = None;
 }
 
 fn runtime_snapshot_is_env_reference_literal(raw: &str) -> bool {
@@ -2224,7 +2230,7 @@ mod runtime_snapshot_restore_spec_tests {
     }
 
     #[test]
-    fn runtime_snapshot_restore_normalization_keeps_provider_env_name_fields() {
+    fn runtime_snapshot_restore_normalization_moves_provider_env_name_fields_into_secret_refs() {
         let mut warnings = Vec::new();
         let mut profile = mvp::config::ProviderProfileConfig {
             default_for_kind: true,
@@ -2243,16 +2249,20 @@ mod runtime_snapshot_restore_spec_tests {
             &mut warnings,
         );
 
-        assert_eq!(profile.provider.api_key, None);
         assert_eq!(
-            profile.provider.api_key_env.as_deref(),
-            Some("OPENAI_API_KEY")
+            profile.provider.api_key,
+            Some(SecretRef::Env {
+                env: "OPENAI_API_KEY".to_owned(),
+            })
         );
-        assert_eq!(profile.provider.oauth_access_token, None);
+        assert_eq!(profile.provider.api_key_env, None);
         assert_eq!(
-            profile.provider.oauth_access_token_env.as_deref(),
-            Some("OPENAI_CODEX_OAUTH_TOKEN")
+            profile.provider.oauth_access_token,
+            Some(SecretRef::Env {
+                env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
+            })
         );
+        assert_eq!(profile.provider.oauth_access_token_env, None);
         assert!(warnings.is_empty());
     }
 
@@ -2280,21 +2290,26 @@ mod runtime_snapshot_restore_spec_tests {
             &mut warnings,
         );
 
-        assert_eq!(profile.provider.api_key, None);
         assert_eq!(
-            profile.provider.api_key_env.as_deref(),
-            Some("INLINE_OPENAI_API_KEY")
+            profile.provider.api_key,
+            Some(SecretRef::Env {
+                env: "INLINE_OPENAI_API_KEY".to_owned(),
+            })
         );
-        assert_eq!(profile.provider.oauth_access_token, None);
+        assert_eq!(profile.provider.api_key_env, None);
         assert_eq!(
-            profile.provider.oauth_access_token_env.as_deref(),
-            Some("INLINE_OPENAI_OAUTH_TOKEN")
+            profile.provider.oauth_access_token,
+            Some(SecretRef::Env {
+                env: "INLINE_OPENAI_OAUTH_TOKEN".to_owned(),
+            })
         );
+        assert_eq!(profile.provider.oauth_access_token_env, None);
         assert!(warnings.is_empty());
     }
 
     #[test]
-    fn runtime_snapshot_restore_normalization_keeps_conflicting_explicit_env_reference() {
+    fn runtime_snapshot_restore_normalization_prefers_explicit_env_reference_over_legacy_env_field()
+    {
         let mut warnings = Vec::new();
         let mut profile = mvp::config::ProviderProfileConfig {
             default_for_kind: true,
@@ -2319,20 +2334,18 @@ mod runtime_snapshot_restore_spec_tests {
 
         assert_eq!(
             profile.provider.api_key,
-            Some(SecretRef::Inline("${INLINE_OPENAI_API_KEY}".to_owned()))
+            Some(SecretRef::Env {
+                env: "INLINE_OPENAI_API_KEY".to_owned(),
+            })
         );
-        assert_eq!(
-            profile.provider.api_key_env.as_deref(),
-            Some("CONFIGURED_OPENAI_API_KEY")
-        );
+        assert_eq!(profile.provider.api_key_env, None);
         assert_eq!(
             profile.provider.oauth_access_token,
-            Some(SecretRef::Inline("$INLINE_OPENAI_OAUTH_TOKEN".to_owned()))
+            Some(SecretRef::Env {
+                env: "INLINE_OPENAI_OAUTH_TOKEN".to_owned(),
+            })
         );
-        assert_eq!(
-            profile.provider.oauth_access_token_env.as_deref(),
-            Some("CONFIGURED_OPENAI_OAUTH_TOKEN")
-        );
+        assert_eq!(profile.provider.oauth_access_token_env, None);
         assert!(warnings.is_empty());
     }
 

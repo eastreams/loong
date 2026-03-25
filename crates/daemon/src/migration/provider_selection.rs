@@ -181,21 +181,18 @@ pub fn merge_provider_config(
     incoming: &mvp::config::ProviderConfig,
 ) -> mvp::config::ProviderConfig {
     let mut merged = existing.clone();
+    merged.canonicalize_configured_auth_env_bindings();
+    let mut incoming = incoming.clone();
+    incoming.canonicalize_configured_auth_env_bindings();
     if merged.model.trim().is_empty() || merged.model.eq_ignore_ascii_case("auto") {
         merged.model = incoming.model.clone();
     }
-    super::provider_transport::supplement_provider_transport(&mut merged, incoming);
+    super::provider_transport::supplement_provider_transport(&mut merged, &incoming);
     if merged.api_key.is_none() {
         merged.api_key = incoming.api_key.clone();
     }
-    if merged.api_key_env.is_none() {
-        merged.api_key_env = incoming.api_key_env.clone();
-    }
     if merged.oauth_access_token.is_none() {
         merged.oauth_access_token = incoming.oauth_access_token.clone();
-    }
-    if merged.oauth_access_token_env.is_none() {
-        merged.oauth_access_token_env = incoming.oauth_access_token_env.clone();
     }
     if merged.endpoint.is_none() {
         merged.endpoint = incoming.endpoint.clone();
@@ -220,6 +217,30 @@ pub fn merge_provider_config(
         merged.reasoning_effort = incoming.reasoning_effort;
     }
     merged
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_provider_config_canonicalizes_legacy_api_key_env_binding() {
+        let existing =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Openai);
+        let mut incoming =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Openai);
+        incoming.set_api_key_env(Some("OPENAI_API_KEY".to_owned()));
+
+        let merged = merge_provider_config(&existing, &incoming);
+
+        assert_eq!(
+            merged.api_key,
+            Some(loongclaw_contracts::SecretRef::Env {
+                env: "OPENAI_API_KEY".to_owned(),
+            })
+        );
+        assert_eq!(merged.api_key_env, None);
+    }
 }
 
 pub fn resolve_choice_by_selector_resolution(

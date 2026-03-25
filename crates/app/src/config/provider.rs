@@ -848,9 +848,59 @@ impl ProviderConfig {
         self.api_key_env = api_key_env;
     }
 
+    pub fn set_api_key_env_binding(&mut self, api_key_env: Option<String>) {
+        let normalized = api_key_env
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        self.api_key = normalized.map(|env| SecretRef::Env { env });
+        self.set_api_key_env(None);
+    }
+
+    pub fn clear_api_key_env_binding(&mut self) {
+        if secret_ref_env_name(self.api_key.as_ref()).is_some() {
+            self.api_key = None;
+        }
+        self.set_api_key_env(None);
+    }
+
     pub fn set_oauth_access_token_env(&mut self, oauth_access_token_env: Option<String>) {
         self.oauth_access_token_env_explicit = oauth_access_token_env.is_some();
         self.oauth_access_token_env = oauth_access_token_env;
+    }
+
+    pub fn set_oauth_access_token_env_binding(&mut self, oauth_access_token_env: Option<String>) {
+        let normalized = oauth_access_token_env
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        self.oauth_access_token = normalized.map(|env| SecretRef::Env { env });
+        self.set_oauth_access_token_env(None);
+    }
+
+    pub fn clear_oauth_access_token_env_binding(&mut self) {
+        if secret_ref_env_name(self.oauth_access_token.as_ref()).is_some() {
+            self.oauth_access_token = None;
+        }
+        self.set_oauth_access_token_env(None);
+    }
+
+    pub fn canonicalize_configured_auth_env_bindings(&mut self) {
+        let configured_api_key_env = self.configured_api_key_env_override();
+        if self.api_key.is_some() {
+            self.set_api_key_env(None);
+        } else {
+            self.set_api_key_env_binding(configured_api_key_env);
+        }
+
+        let configured_oauth_env = self.configured_oauth_access_token_env_override();
+        if self.oauth_access_token.is_some() {
+            self.set_oauth_access_token_env(None);
+        } else {
+            self.set_oauth_access_token_env_binding(configured_oauth_env);
+        }
     }
 
     pub fn fresh_for_kind(kind: ProviderKind) -> Self {
@@ -1799,6 +1849,14 @@ impl ProviderConfig {
         normalized.oauth_access_token = self.normalized_oauth_access_token_for_persistence();
         normalized.oauth_access_token_env =
             self.normalized_oauth_access_token_env_for_persistence();
+        canonicalize_secret_env_reference_for_persistence(
+            &mut normalized.api_key,
+            &mut normalized.api_key_env,
+        );
+        canonicalize_secret_env_reference_for_persistence(
+            &mut normalized.oauth_access_token,
+            &mut normalized.oauth_access_token_env,
+        );
         normalized
     }
 
@@ -3307,6 +3365,36 @@ fn normalize_secret_ref_for_persistence(
     }
 }
 
+fn canonicalize_secret_env_reference_for_persistence(
+    secret_ref: &mut Option<SecretRef>,
+    env_name: &mut Option<String>,
+) {
+    if let Some(explicit_env_name) = secret_ref_env_name(secret_ref.as_ref()) {
+        *secret_ref = Some(SecretRef::Env {
+            env: explicit_env_name,
+        });
+        *env_name = None;
+        return;
+    }
+
+    if secret_ref.is_some() {
+        *env_name = None;
+        return;
+    }
+
+    let normalized_env_name = env_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    if let Some(normalized_env_name) = normalized_env_name {
+        *secret_ref = Some(SecretRef::Env {
+            env: normalized_env_name,
+        });
+    }
+    *env_name = None;
+}
+
 fn split_secret_candidates(raw: &str) -> Vec<String> {
     let mut values = Vec::new();
     for value in raw.split([',', ';', '\n', '\r']) {
@@ -3506,6 +3594,40 @@ api_key_env = "OPENAI_API_KEY"
             config.authorization_header().as_deref(),
             Some("Bearer api-key-wins")
         );
+    }
+
+    #[test]
+    fn normalized_for_persistence_canonicalizes_legacy_api_key_env_binding() {
+        let mut config = ProviderConfig::fresh_for_kind(ProviderKind::Openai);
+        config.set_api_key_env(Some("OPENAI_API_KEY".to_owned()));
+
+        let normalized = config.normalized_for_persistence();
+
+        assert_eq!(
+            normalized.api_key,
+            Some(SecretRef::Env {
+                env: "OPENAI_API_KEY".to_owned(),
+            })
+        );
+        assert_eq!(normalized.api_key_env, None);
+    }
+
+    #[test]
+    fn normalized_for_persistence_keeps_secret_ref_env_binding_canonical() {
+        let mut config = ProviderConfig::fresh_for_kind(ProviderKind::Openai);
+        config.api_key = Some(SecretRef::Env {
+            env: "OPENAI_API_KEY".to_owned(),
+        });
+
+        let normalized = config.normalized_for_persistence();
+
+        assert_eq!(
+            normalized.api_key,
+            Some(SecretRef::Env {
+                env: "OPENAI_API_KEY".to_owned(),
+            })
+        );
+        assert_eq!(normalized.api_key_env, None);
     }
 
     #[test]

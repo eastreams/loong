@@ -15,13 +15,13 @@ pub(crate) struct ProviderCredentialEnvBinding {
 
 pub(crate) fn provider_credential_env_hints(provider: &mvp::config::ProviderConfig) -> Vec<String> {
     let mut hints = Vec::new();
-    let configured_oauth = provider.oauth_access_token_env.as_deref();
-    let configured_api_key = provider.api_key_env.as_deref();
+    let configured_oauth = provider.configured_oauth_access_token_env_override();
+    let configured_api_key = provider.configured_api_key_env_override();
     let default_oauth = provider.kind.default_oauth_access_token_env();
     let default_api_key = provider.kind.default_api_key_env();
 
-    push_provider_credential_env_hint(&mut hints, configured_oauth);
-    push_provider_credential_env_hint(&mut hints, configured_api_key);
+    push_provider_credential_env_hint(&mut hints, configured_oauth.as_deref());
+    push_provider_credential_env_hint(&mut hints, configured_api_key.as_deref());
     push_provider_credential_env_hint(&mut hints, default_oauth);
     push_provider_credential_env_hint(&mut hints, default_api_key);
 
@@ -38,13 +38,15 @@ pub(crate) fn provider_credential_env_hint(
 pub(crate) fn preferred_provider_credential_env_binding(
     provider: &mvp::config::ProviderConfig,
 ) -> Option<ProviderCredentialEnvBinding> {
+    let configured_oauth = provider.configured_oauth_access_token_env_override();
+    let configured_api_key = provider.configured_api_key_env_override();
     let configured_oauth = binding_for_env_name(
         ProviderCredentialEnvField::OAuthAccessToken,
-        provider.oauth_access_token_env.as_deref(),
+        configured_oauth.as_deref(),
     );
     let configured_api_key = binding_for_env_name(
         ProviderCredentialEnvField::ApiKey,
-        provider.api_key_env.as_deref(),
+        configured_api_key.as_deref(),
     );
     let default_oauth = binding_for_env_name(
         ProviderCredentialEnvField::OAuthAccessToken,
@@ -64,13 +66,15 @@ pub(crate) fn preferred_provider_credential_env_binding(
 pub(crate) fn configured_provider_credential_env_binding(
     provider: &mvp::config::ProviderConfig,
 ) -> Option<ProviderCredentialEnvBinding> {
+    let configured_oauth = provider.configured_oauth_access_token_env_override();
+    let configured_api_key = provider.configured_api_key_env_override();
     let configured_oauth = binding_for_env_name(
         ProviderCredentialEnvField::OAuthAccessToken,
-        provider.oauth_access_token_env.as_deref(),
+        configured_oauth.as_deref(),
     );
     let configured_api_key = binding_for_env_name(
         ProviderCredentialEnvField::ApiKey,
-        provider.api_key_env.as_deref(),
+        configured_api_key.as_deref(),
     );
 
     configured_oauth.or(configured_api_key)
@@ -86,18 +90,10 @@ pub(crate) fn provider_has_inline_credential(provider: &mvp::config::ProviderCon
 pub(crate) fn provider_has_configured_credential_env(
     provider: &mvp::config::ProviderConfig,
 ) -> bool {
-    let oauth_env_present = provider
-        .oauth_access_token_env
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty());
-    let api_key_env_present = provider
-        .api_key_env
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty());
-
-    oauth_env_present || api_key_env_present
+    provider
+        .configured_oauth_access_token_env_override()
+        .is_some()
+        || provider.configured_api_key_env_override().is_some()
 }
 
 pub(crate) fn selected_provider_credential_env_field(
@@ -145,7 +141,7 @@ fn env_name_matches_oauth_binding(provider: &mvp::config::ProviderConfig, env_na
     let default_oauth = provider.kind.default_oauth_access_token_env();
     let oauth_aliases = provider.kind.oauth_access_token_env_aliases();
     let configured_oauth = provider
-        .oauth_access_token_env
+        .configured_oauth_access_token_env_override()
         .as_deref()
         .and_then(normalize_provider_credential_env_name);
 
@@ -166,7 +162,7 @@ fn env_name_matches_api_key_binding(
     let default_api_key = provider.kind.default_api_key_env();
     let api_key_aliases = provider.kind.api_key_env_aliases();
     let configured_api_key = provider
-        .api_key_env
+        .configured_api_key_env_override()
         .as_deref()
         .and_then(normalize_provider_credential_env_name);
 
@@ -201,8 +197,10 @@ fn provider_credential_env_name_is_safe(raw: &str) -> bool {
     }
 
     let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.api_key = None;
-    config.provider.api_key_env = Some(trimmed.to_owned());
+    config.provider.api_key = Some(SecretRef::Env {
+        env: trimmed.to_owned(),
+    });
+    config.provider.api_key_env = None;
 
     config.validate().is_ok()
 }
