@@ -1,6 +1,7 @@
 use super::*;
 
 use std::{
+    collections::BTreeMap,
     future::Future,
     path::PathBuf,
     pin::Pin,
@@ -12,13 +13,15 @@ use std::{
 };
 
 use loongclaw_daemon::supervisor::{
-    BackgroundChannelRunnerRequest, LoadedSupervisorConfig, RuntimeOwnerPhase,
-    SupervisorRuntimeHooks, SupervisorShutdownReason, SurfacePhase,
+    BackgroundChannelRunnerRequest, BackgroundChannelSurface, LoadedSupervisorConfig,
+    RuntimeOwnerPhase, SupervisorRuntimeHooks, SupervisorShutdownReason, SurfacePhase,
     run_multi_channel_serve_with_hooks_for_test,
 };
 use tokio::{sync::Notify, time::sleep};
 
 type BoxedCliFuture = Pin<Box<dyn Future<Output = CliResult<()>> + Send + 'static>>;
+type TestBackgroundChannelRunner =
+    Arc<dyn Fn(BackgroundChannelRunnerRequest) -> BoxedCliFuture + Send + Sync + 'static>;
 const MULTI_CHANNEL_TEST_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Default)]
@@ -66,6 +69,18 @@ fn loaded_config_fixture_with_path(path: &str) -> LoadedSupervisorConfig {
     fixture
 }
 
+fn all_service_channels_loaded_config_fixture() -> LoadedSupervisorConfig {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = true;
+    config.feishu.enabled = true;
+    config.matrix.enabled = true;
+    config.wecom.enabled = true;
+    LoadedSupervisorConfig {
+        resolved_path: PathBuf::from("/tmp/loongclaw.toml"),
+        config,
+    }
+}
+
 fn telegram_only_loaded_config_fixture() -> LoadedSupervisorConfig {
     let mut config = mvp::config::LoongClawConfig::default();
     config.telegram.enabled = true;
@@ -93,12 +108,31 @@ fn hooks(
     run_feishu: impl Fn(BackgroundChannelRunnerRequest) -> BoxedCliFuture + Send + Sync + 'static,
     wait_for_shutdown: impl Fn() -> BoxedCliFuture + Send + Sync + 'static,
 ) -> SupervisorRuntimeHooks {
+    let telegram_runner = Arc::new(run_telegram);
+    let feishu_runner = Arc::new(run_feishu);
+    let matrix_runner = idle_background_channel_runner();
+    let wecom_runner = idle_background_channel_runner();
+    let background_channel_runners = background_channel_runner_registry(vec![
+        (
+            mvp::channel::TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR,
+            telegram_runner,
+        ),
+        (
+            mvp::channel::FEISHU_RUNTIME_COMMAND_DESCRIPTOR,
+            feishu_runner,
+        ),
+        (
+            mvp::channel::MATRIX_RUNTIME_COMMAND_DESCRIPTOR,
+            matrix_runner,
+        ),
+        (mvp::channel::WECOM_RUNTIME_COMMAND_DESCRIPTOR, wecom_runner),
+    ]);
+
     SupervisorRuntimeHooks {
         load_config: Arc::new(load_config),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(run_cli_host),
-        run_telegram: Arc::new(run_telegram),
-        run_feishu: Arc::new(run_feishu),
+        background_channel_runners,
         wait_for_shutdown: Arc::new(wait_for_shutdown),
     }
 }
@@ -126,68 +160,180 @@ fn unique_runtime_dir(label: &str) -> PathBuf {
     runtime_dir
 }
 
+fn idle_background_channel_runner() -> TestBackgroundChannelRunner {
+    Arc::new(|request| {
+        boxed_cli_result(async move {
+            while !request.stop.is_requested() {
+                tokio::task::yield_now().await;
+            }
+            Ok(())
+        })
+    })
+}
+
+fn background_channel_runner_registry(
+    entries: Vec<(
+        mvp::channel::ChannelRuntimeCommandDescriptor,
+        TestBackgroundChannelRunner,
+    )>,
+) -> BTreeMap<&'static str, TestBackgroundChannelRunner> {
+    let mut runners = BTreeMap::new();
+    for (runtime, runner) in entries {
+        runners.insert(runtime.channel_id, runner);
+    }
+    runners
+}
+
+fn channel_accounts(
+    values: &[(&str, &str)],
+) -> Vec<loongclaw_daemon::MultiChannelServeChannelAccount> {
+    values
+        .iter()
+        .map(
+            |(channel_id, account_id)| loongclaw_daemon::MultiChannelServeChannelAccount {
+                channel_id: (*channel_id).to_owned(),
+                account_id: (*account_id).to_owned(),
+            },
+        )
+        .collect()
+}
+
+fn telegram_surface(account_id: Option<&str>) -> BackgroundChannelSurface {
+    BackgroundChannelSurface::new(
+        mvp::channel::TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR,
+        account_id,
+    )
+}
+
+fn feishu_surface(account_id: Option<&str>) -> BackgroundChannelSurface {
+    BackgroundChannelSurface::new(mvp::channel::FEISHU_RUNTIME_COMMAND_DESCRIPTOR, account_id)
+}
+
+fn matrix_surface(account_id: Option<&str>) -> BackgroundChannelSurface {
+    BackgroundChannelSurface::new(mvp::channel::MATRIX_RUNTIME_COMMAND_DESCRIPTOR, account_id)
+}
+
+fn wecom_surface(account_id: Option<&str>) -> BackgroundChannelSurface {
+    BackgroundChannelSurface::new(mvp::channel::WECOM_RUNTIME_COMMAND_DESCRIPTOR, account_id)
+}
+
 #[tokio::test(flavor = "current_thread")]
-async fn multi_channel_serve_starts_telegram_and_feishu_background_tasks() {
+async fn multi_channel_serve_starts_all_enabled_runtime_backed_service_channels() {
     let log = EventLog::default();
+    let telegram_runner = {
+        let log = log.clone();
+        Arc::new(move |request: BackgroundChannelRunnerRequest| {
+            let log = log.clone();
+            boxed_cli_result(async move {
+                log.push(format!(
+                    "telegram-start account={}",
+                    request.account_id.as_deref().unwrap_or("-")
+                ));
+                while !request.stop.is_requested() {
+                    tokio::task::yield_now().await;
+                }
+                log.push("telegram-stop");
+                Ok(())
+            })
+        })
+    };
+    let feishu_runner = {
+        let log = log.clone();
+        Arc::new(move |request: BackgroundChannelRunnerRequest| {
+            let log = log.clone();
+            boxed_cli_result(async move {
+                log.push(format!(
+                    "feishu-start account={}",
+                    request.account_id.as_deref().unwrap_or("-")
+                ));
+                while !request.stop.is_requested() {
+                    tokio::task::yield_now().await;
+                }
+                log.push("feishu-stop");
+                Ok(())
+            })
+        })
+    };
+    let matrix_runner = {
+        let log = log.clone();
+        Arc::new(move |request: BackgroundChannelRunnerRequest| {
+            let log = log.clone();
+            boxed_cli_result(async move {
+                log.push(format!(
+                    "matrix-start account={}",
+                    request.account_id.as_deref().unwrap_or("-")
+                ));
+                while !request.stop.is_requested() {
+                    tokio::task::yield_now().await;
+                }
+                log.push("matrix-stop");
+                Ok(())
+            })
+        })
+    };
+    let wecom_runner = {
+        let log = log.clone();
+        Arc::new(move |request: BackgroundChannelRunnerRequest| {
+            let log = log.clone();
+            boxed_cli_result(async move {
+                log.push(format!(
+                    "wecom-start account={}",
+                    request.account_id.as_deref().unwrap_or("-")
+                ));
+                while !request.stop.is_requested() {
+                    tokio::task::yield_now().await;
+                }
+                log.push("wecom-stop");
+                Ok(())
+            })
+        })
+    };
+    let background_channel_runners = background_channel_runner_registry(vec![
+        (
+            mvp::channel::TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR,
+            telegram_runner,
+        ),
+        (
+            mvp::channel::FEISHU_RUNTIME_COMMAND_DESCRIPTOR,
+            feishu_runner,
+        ),
+        (
+            mvp::channel::MATRIX_RUNTIME_COMMAND_DESCRIPTOR,
+            matrix_runner,
+        ),
+        (mvp::channel::WECOM_RUNTIME_COMMAND_DESCRIPTOR, wecom_runner),
+    ]);
     let state = run_multi_channel_serve_with_hooks_for_test(
         None,
         "cli-supervisor",
-        Some("bot_123456"),
-        Some("alerts"),
-        hooks(
-            {
+        channel_accounts(&[
+            ("telegram", "bot_123456"),
+            ("feishu", "alerts"),
+            ("matrix", "bridge-sync"),
+            ("wecom", "robot-prod"),
+        ]),
+        SupervisorRuntimeHooks {
+            load_config: {
                 let log = log.clone();
-                move |_| {
+                Arc::new(move |_| {
                     log.push("load-config");
-                    Ok(loaded_config_fixture())
-                }
+                    Ok(all_service_channels_loaded_config_fixture())
+                })
             },
-            {
+            initialize_runtime_environment: Arc::new(|_| {}),
+            run_cli_host: {
                 let log = log.clone();
-                move |options| {
+                Arc::new(move |options| {
                     let log = log.clone();
                     boxed_cli_result(async move {
                         log.push(format!("cli-start session={}", options.session_id));
                         Ok(())
                     })
-                }
+                })
             },
-            {
-                let log = log.clone();
-                move |request| {
-                    let log = log.clone();
-                    boxed_cli_result(async move {
-                        log.push(format!(
-                            "telegram-start account={}",
-                            request.account_id.as_deref().unwrap_or("-")
-                        ));
-                        while !request.stop.is_requested() {
-                            tokio::task::yield_now().await;
-                        }
-                        log.push("telegram-stop");
-                        Ok(())
-                    })
-                }
-            },
-            {
-                let log = log.clone();
-                move |request| {
-                    let log = log.clone();
-                    boxed_cli_result(async move {
-                        log.push(format!(
-                            "feishu-start account={}",
-                            request.account_id.as_deref().unwrap_or("-")
-                        ));
-                        while !request.stop.is_requested() {
-                            tokio::task::yield_now().await;
-                        }
-                        log.push("feishu-stop");
-                        Ok(())
-                    })
-                }
-            },
-            pending_shutdown_future,
-        ),
+            background_channel_runners,
+            wait_for_shutdown: Arc::new(pending_shutdown_future),
+        },
     )
     .await
     .expect("run helper");
@@ -196,23 +342,29 @@ async fn multi_channel_serve_starts_telegram_and_feishu_background_tasks() {
     assert!(state.final_exit_result().is_ok());
     assert_eq!(
         state
-            .surface_state(
-                &loongclaw_daemon::supervisor::BackgroundChannelSurface::Telegram {
-                    account_id: Some("bot_123456".to_owned()),
-                }
-            )
+            .surface_state(&telegram_surface(Some("bot_123456")))
             .expect("telegram tracked")
             .phase,
         SurfacePhase::Stopped
     );
     assert_eq!(
         state
-            .surface_state(
-                &loongclaw_daemon::supervisor::BackgroundChannelSurface::Feishu {
-                    account_id: Some("alerts".to_owned()),
-                }
-            )
+            .surface_state(&feishu_surface(Some("alerts")))
             .expect("feishu tracked")
+            .phase,
+        SurfacePhase::Stopped
+    );
+    assert_eq!(
+        state
+            .surface_state(&matrix_surface(Some("bridge-sync")))
+            .expect("matrix tracked")
+            .phase,
+        SurfacePhase::Stopped
+    );
+    assert_eq!(
+        state
+            .surface_state(&wecom_surface(Some("robot-prod")))
+            .expect("wecom tracked")
             .phase,
         SurfacePhase::Stopped
     );
@@ -231,6 +383,18 @@ async fn multi_channel_serve_starts_telegram_and_feishu_background_tasks() {
             .any(|event| event == "feishu-start account=alerts"),
         "events: {events:?}"
     );
+    assert!(
+        events
+            .iter()
+            .any(|event| event == "matrix-start account=bridge-sync"),
+        "events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event == "wecom-start account=robot-prod"),
+        "events: {events:?}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -239,8 +403,7 @@ async fn multi_channel_serve_skips_feishu_when_only_telegram_is_enabled() {
     let state = run_multi_channel_serve_with_hooks_for_test(
         None,
         "cli-supervisor",
-        Some("bot_123456"),
-        Some("stale-feishu"),
+        channel_accounts(&[("telegram", "bot_123456"), ("feishu", "stale-feishu")]),
         hooks(
             |_| Ok(telegram_only_loaded_config_fixture()),
             {
@@ -290,9 +453,7 @@ async fn multi_channel_serve_skips_feishu_when_only_telegram_is_enabled() {
     assert_eq!(state.spec().surfaces.len(), 1);
     assert_eq!(
         state.spec().surfaces[0],
-        loongclaw_daemon::supervisor::BackgroundChannelSurface::Telegram {
-            account_id: Some("bot_123456".to_owned()),
-        }
+        telegram_surface(Some("bot_123456"))
     );
 
     let events = log.snapshot();
@@ -314,8 +475,7 @@ async fn multi_channel_serve_skips_telegram_when_only_feishu_is_enabled() {
     let state = run_multi_channel_serve_with_hooks_for_test(
         None,
         "cli-supervisor",
-        Some("stale-telegram"),
-        Some("alerts"),
+        channel_accounts(&[("telegram", "stale-telegram"), ("feishu", "alerts")]),
         hooks(
             |_| Ok(feishu_only_loaded_config_fixture()),
             {
@@ -363,12 +523,7 @@ async fn multi_channel_serve_skips_telegram_when_only_feishu_is_enabled() {
 
     assert!(state.final_exit_result().is_ok());
     assert_eq!(state.spec().surfaces.len(), 1);
-    assert_eq!(
-        state.spec().surfaces[0],
-        loongclaw_daemon::supervisor::BackgroundChannelSurface::Feishu {
-            account_id: Some("alerts".to_owned()),
-        }
-    );
+    assert_eq!(state.spec().surfaces[0], feishu_surface(Some("alerts")));
 
     let events = log.snapshot();
     assert!(
@@ -395,8 +550,7 @@ async fn multi_channel_serve_background_failure_exits_foreground_cli_host_with_s
             run_multi_channel_serve_with_hooks_for_test(
                 None,
                 "cli-supervisor",
-                Some("bot_123456"),
-                Some("alerts"),
+                channel_accounts(&[("telegram", "bot_123456"), ("feishu", "alerts")]),
                 hooks(
                     |_| Ok(loaded_config_fixture()),
                     {
@@ -463,9 +617,7 @@ async fn multi_channel_serve_background_failure_exits_foreground_cli_host_with_s
     assert_eq!(
         state.shutdown_reason(),
         Some(&SupervisorShutdownReason::SurfaceFailed {
-            surface: loongclaw_daemon::supervisor::BackgroundChannelSurface::Telegram {
-                account_id: Some("bot_123456".to_owned()),
-            },
+            surface: telegram_surface(Some("bot_123456")),
             error: "telegram task exited unexpectedly".to_owned(),
         })
     );
@@ -483,8 +635,7 @@ async fn multi_channel_serve_background_failure_before_cli_wait_still_stops_fore
         run_multi_channel_serve_with_hooks_for_test(
             None,
             "cli-supervisor",
-            Some("bot_123456"),
-            Some("alerts"),
+            channel_accounts(&[("telegram", "bot_123456"), ("feishu", "alerts")]),
             hooks(
                 |_| Ok(loaded_config_fixture()),
                 {
@@ -566,8 +717,7 @@ async fn multi_channel_serve_background_join_error_still_shuts_down_cli_and_othe
             run_multi_channel_serve_with_hooks_for_test(
                 None,
                 "cli-supervisor",
-                Some("bot_123456"),
-                Some("alerts"),
+                channel_accounts(&[("telegram", "bot_123456"), ("feishu", "alerts")]),
                 hooks(
                     |_| Ok(loaded_config_fixture()),
                     {
@@ -645,8 +795,7 @@ async fn multi_channel_serve_keeps_cli_session_distinct_from_channel_sessions() 
     let state = run_multi_channel_serve_with_hooks_for_test(
         None,
         "cli-supervisor",
-        Some("bot_123456"),
-        Some("alerts"),
+        channel_accounts(&[("telegram", "bot_123456"), ("feishu", "alerts")]),
         hooks(
             |_| Ok(loaded_config_fixture()),
             {
@@ -726,8 +875,7 @@ async fn multi_channel_serve_loads_config_once_before_spawning_children() {
     let state = run_multi_channel_serve_with_hooks_for_test(
         Some("/tmp/loongclaw.toml"),
         "cli-supervisor",
-        Some("bot_123456"),
-        Some("alerts"),
+        channel_accounts(&[("telegram", "bot_123456"), ("feishu", "alerts")]),
         hooks(
             {
                 let load_count = load_count.clone();
@@ -803,12 +951,79 @@ async fn multi_channel_serve_initializes_runtime_environment_before_spawning_chi
     let expected_path_string = expected_path.to_owned();
     let initialized_config_path = Arc::new(Mutex::new(None::<String>));
     let started = Arc::new(AtomicUsize::new(0));
+    let background_channel_runners = background_channel_runner_registry(vec![
+        (
+            mvp::channel::TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR,
+            Arc::new({
+                let initialized_config_path = initialized_config_path.clone();
+                let started = started.clone();
+                let expected_path_string = expected_path_string.clone();
+                move |request: BackgroundChannelRunnerRequest| {
+                    let initialized_config_path = initialized_config_path.clone();
+                    let started = started.clone();
+                    let expected_path_string = expected_path_string.clone();
+                    boxed_cli_result(async move {
+                        let observed_path = initialized_config_path
+                            .lock()
+                            .expect("initialized config path lock")
+                            .clone();
+                        assert_eq!(
+                            observed_path.as_deref(),
+                            Some(expected_path_string.as_str())
+                        );
+                        assert!(!request.initialize_runtime_environment);
+                        started.fetch_add(1, Ordering::SeqCst);
+                        while !request.stop.is_requested() {
+                            tokio::task::yield_now().await;
+                        }
+                        Ok(())
+                    })
+                }
+            }),
+        ),
+        (
+            mvp::channel::FEISHU_RUNTIME_COMMAND_DESCRIPTOR,
+            Arc::new({
+                let initialized_config_path = initialized_config_path.clone();
+                let started = started.clone();
+                let expected_path_string = expected_path_string.clone();
+                move |request: BackgroundChannelRunnerRequest| {
+                    let initialized_config_path = initialized_config_path.clone();
+                    let started = started.clone();
+                    let expected_path_string = expected_path_string.clone();
+                    boxed_cli_result(async move {
+                        let observed_path = initialized_config_path
+                            .lock()
+                            .expect("initialized config path lock")
+                            .clone();
+                        assert_eq!(
+                            observed_path.as_deref(),
+                            Some(expected_path_string.as_str())
+                        );
+                        assert!(!request.initialize_runtime_environment);
+                        started.fetch_add(1, Ordering::SeqCst);
+                        while !request.stop.is_requested() {
+                            tokio::task::yield_now().await;
+                        }
+                        Ok(())
+                    })
+                }
+            }),
+        ),
+        (
+            mvp::channel::MATRIX_RUNTIME_COMMAND_DESCRIPTOR,
+            idle_background_channel_runner(),
+        ),
+        (
+            mvp::channel::WECOM_RUNTIME_COMMAND_DESCRIPTOR,
+            idle_background_channel_runner(),
+        ),
+    ]);
 
     let state = run_multi_channel_serve_with_hooks_for_test(
         None,
         "cli-supervisor",
-        Some("bot_123456"),
-        Some("alerts"),
+        channel_accounts(&[("telegram", "bot_123456"), ("feishu", "alerts")]),
         SupervisorRuntimeHooks {
             load_config: Arc::new(move |_| Ok(loaded_config_fixture_with_path(expected_path))),
             initialize_runtime_environment: Arc::new({
@@ -848,58 +1063,7 @@ async fn multi_channel_serve_initializes_runtime_environment_before_spawning_chi
                     })
                 }
             }),
-            run_telegram: Arc::new({
-                let initialized_config_path = initialized_config_path.clone();
-                let started = started.clone();
-                let expected_path_string = expected_path_string.clone();
-                move |request| {
-                    let initialized_config_path = initialized_config_path.clone();
-                    let started = started.clone();
-                    let expected_path_string = expected_path_string.clone();
-                    boxed_cli_result(async move {
-                        let observed_path = initialized_config_path
-                            .lock()
-                            .expect("initialized config path lock")
-                            .clone();
-                        assert_eq!(
-                            observed_path.as_deref(),
-                            Some(expected_path_string.as_str())
-                        );
-                        assert!(!request.initialize_runtime_environment);
-                        started.fetch_add(1, Ordering::SeqCst);
-                        while !request.stop.is_requested() {
-                            tokio::task::yield_now().await;
-                        }
-                        Ok(())
-                    })
-                }
-            }),
-            run_feishu: Arc::new({
-                let initialized_config_path = initialized_config_path.clone();
-                let started = started.clone();
-                let expected_path_string = expected_path_string.clone();
-                move |request| {
-                    let initialized_config_path = initialized_config_path.clone();
-                    let started = started.clone();
-                    let expected_path_string = expected_path_string.clone();
-                    boxed_cli_result(async move {
-                        let observed_path = initialized_config_path
-                            .lock()
-                            .expect("initialized config path lock")
-                            .clone();
-                        assert_eq!(
-                            observed_path.as_deref(),
-                            Some(expected_path_string.as_str())
-                        );
-                        assert!(!request.initialize_runtime_environment);
-                        started.fetch_add(1, Ordering::SeqCst);
-                        while !request.stop.is_requested() {
-                            tokio::task::yield_now().await;
-                        }
-                        Ok(())
-                    })
-                }
-            }),
+            background_channel_runners,
             wait_for_shutdown: Arc::new(pending_shutdown_future),
         },
     )
@@ -923,8 +1087,7 @@ async fn multi_channel_serve_ctrl_c_waits_for_background_joins_and_reports_shutd
                 run_multi_channel_serve_with_hooks_for_test(
                     None,
                     "cli-supervisor",
-                    Some("bot_123456"),
-                    Some("alerts"),
+                    channel_accounts(&[("telegram", "bot_123456"), ("feishu", "alerts")]),
                     hooks(
                         |_| Ok(loaded_config_fixture()),
                         {
@@ -1036,8 +1199,7 @@ async fn multi_channel_serve_cooperative_stop_clears_channel_runtime_running_sta
             run_multi_channel_serve_with_hooks_for_test(
                 None,
                 "cli-supervisor",
-                Some("bot_123456"),
-                Some("alerts"),
+                channel_accounts(&[("telegram", "bot_123456"), ("feishu", "alerts")]),
                 hooks(
                     |_| Ok(loaded_config_fixture()),
                     move |options| {

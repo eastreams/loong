@@ -178,7 +178,7 @@ pub(crate) struct ChannelSendReceipt {
     pub target: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ChannelPlatform {
     Telegram,
     Feishu,
@@ -1471,38 +1471,6 @@ where
     feature = "channel-matrix",
     feature = "channel-wecom"
 ))]
-async fn run_channel_serve_command<R, V, F>(
-    context: ChannelCommandContext<R>,
-    spec: ChannelServeCommandSpec,
-    validate: V,
-    run: F,
-) -> CliResult<()>
-where
-    R: ChannelResolvedRuntimeAccount,
-    V: FnOnce(&R) -> CliResult<()>,
-    F: for<'a> FnOnce(
-        &'a ChannelCommandContext<R>,
-        KernelContext,
-        Arc<ChannelOperationRuntimeTracker>,
-    ) -> ChannelCommandFuture<'a>,
-{
-    run_channel_serve_command_with_stop(
-        context,
-        spec,
-        validate,
-        ChannelServeStopHandle::new(),
-        true,
-        move |context, kernel_ctx, runtime, _stop| run(context, kernel_ctx, runtime),
-    )
-    .await
-}
-
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
 async fn run_channel_serve_command_with_stop<R, V, F>(
     context: ChannelCommandContext<R>,
     spec: ChannelServeCommandSpec,
@@ -2057,73 +2025,102 @@ pub async fn run_matrix_channel(
     #[cfg(feature = "channel-matrix")]
     {
         let context = load_matrix_command_context(config_path, account_id)?;
-        run_channel_serve_command(
-            context,
-            ChannelServeCommandSpec {
-                family: MATRIX_COMMAND_FAMILY_DESCRIPTOR,
-            },
-            validate_matrix_security_config,
-            move |context, kernel_ctx, runtime| {
-                Box::pin(async move {
-                    let route = context.route.clone();
-                    let resolved_path = context.resolved_path.clone();
-                    let resolved = context.resolved.clone();
-                    let config = context.config.clone();
-                    let batch_kernel_ctx = Arc::new(crate::KernelContext {
-                        kernel: kernel_ctx.kernel.clone(),
-                        token: kernel_ctx.token.clone(),
-                    });
-                    let token = resolved.access_token().ok_or_else(|| {
-                        "matrix access token missing (set matrix.access_token or env)".to_owned()
-                    })?;
-                    let mut adapter = matrix::MatrixAdapter::new(&resolved, token);
-
-                    println!(
-                        "{} channel started (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, timeout={}s)",
-                        adapter.name(),
-                        resolved_path.display(),
-                        resolved.configured_account_id,
-                        resolved.account.label,
-                        route.selected_by_default(),
-                        route.default_account_source.as_str(),
-                        resolved.sync_timeout_s
-                    );
-
-                    loop {
-                        let batch = adapter.receive_batch().await?;
-                        let had_messages = process_channel_batch(
-                            &mut adapter,
-                            batch,
-                            Some(runtime.as_ref()),
-                            |message| {
-                                let config = config.clone();
-                                let kernel_ctx = batch_kernel_ctx.clone();
-                                let resolved_path = resolved_path.clone();
-                                Box::pin(async move {
-                                    process_inbound_with_provider(
-                                        &config,
-                                        Some(resolved_path.as_path()),
-                                        &message,
-                                        Some(kernel_ctx.as_ref()),
-                                    )
-                                    .await
-                                })
-                            },
-                        )
-                        .await?;
-                        if !had_messages && once {
-                            break;
-                        }
-                        if once {
-                            break;
-                        }
-                    }
-                    Ok(())
-                })
-            },
-        )
-        .await
+        run_matrix_channel_with_context(context, once, ChannelServeStopHandle::new(), true).await
     }
+}
+
+#[cfg(feature = "channel-matrix")]
+#[allow(clippy::print_stdout)]
+async fn run_matrix_channel_with_context(
+    context: ChannelCommandContext<ResolvedMatrixChannelConfig>,
+    once: bool,
+    stop: ChannelServeStopHandle,
+    initialize_runtime_environment: bool,
+) -> CliResult<()> {
+    run_channel_serve_command_with_stop(
+        context,
+        ChannelServeCommandSpec {
+            family: MATRIX_COMMAND_FAMILY_DESCRIPTOR,
+        },
+        validate_matrix_security_config,
+        stop,
+        initialize_runtime_environment,
+        move |context, kernel_ctx, runtime, stop| {
+            Box::pin(async move {
+                let route = context.route.clone();
+                let resolved_path = context.resolved_path.clone();
+                let resolved = context.resolved.clone();
+                let config = context.config.clone();
+                let batch_kernel_ctx = Arc::new(crate::KernelContext {
+                    kernel: kernel_ctx.kernel.clone(),
+                    token: kernel_ctx.token.clone(),
+                });
+                let token = resolved.access_token().ok_or_else(|| {
+                    "matrix access token missing (set matrix.access_token or env)".to_owned()
+                })?;
+                let mut adapter = matrix::MatrixAdapter::new(&resolved, token);
+
+                println!(
+                    "{} channel started (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, timeout={}s)",
+                    adapter.name(),
+                    resolved_path.display(),
+                    resolved.configured_account_id,
+                    resolved.account.label,
+                    route.selected_by_default(),
+                    route.default_account_source.as_str(),
+                    resolved.sync_timeout_s
+                );
+
+                loop {
+                    let batch = tokio::select! {
+                        _ = stop.wait() => break,
+                        batch = adapter.receive_batch() => batch?,
+                    };
+                    let had_messages = process_channel_batch(
+                        &mut adapter,
+                        batch,
+                        Some(runtime.as_ref()),
+                        |message| {
+                            let config = config.clone();
+                            let kernel_ctx = batch_kernel_ctx.clone();
+                            let resolved_path = resolved_path.clone();
+                            Box::pin(async move {
+                                process_inbound_with_provider(
+                                    &config,
+                                    Some(resolved_path.as_path()),
+                                    &message,
+                                    Some(kernel_ctx.as_ref()),
+                                )
+                                .await
+                            })
+                        },
+                    )
+                    .await?;
+                    if !had_messages && once {
+                        break;
+                    }
+                    if once {
+                        break;
+                    }
+                }
+                Ok(())
+            })
+        },
+    )
+    .await
+}
+
+#[cfg(feature = "channel-matrix")]
+pub async fn run_matrix_channel_with_stop(
+    resolved_path: PathBuf,
+    config: LoongClawConfig,
+    once: bool,
+    account_id: Option<&str>,
+    stop: ChannelServeStopHandle,
+    initialize_runtime_environment: bool,
+) -> CliResult<()> {
+    let context = build_matrix_command_context(resolved_path, config, account_id)?;
+    run_matrix_channel_with_context(context, once, stop, initialize_runtime_environment).await
 }
 
 #[allow(clippy::print_stdout)]

@@ -1470,36 +1470,46 @@ fn multi_channel_serve_cli_requires_explicit_cli_session() {
 }
 
 #[test]
-fn multi_channel_serve_cli_parses_account_selection_flags() {
+fn multi_channel_serve_cli_parses_channel_account_selection_flags() {
     let cli = Cli::try_parse_from([
         "loongclaw",
         "multi-channel-serve",
         "--session",
         "cli-supervisor",
-        "--telegram-account",
-        "bot_123456",
-        "--feishu-account",
-        "alerts",
+        "--channel-account",
+        "telegram=bot_123456",
+        "--channel-account",
+        "lark=alerts",
+        "--channel-account",
+        "matrix=bridge-sync",
+        "--channel-account",
+        "wecom=robot-prod",
     ])
     .expect("multi-channel-serve should parse");
 
     match cli.command {
         Some(Commands::MultiChannelServe {
             session,
-            telegram_account,
-            feishu_account,
+            channel_account,
             ..
         }) => {
             assert_eq!(session, "cli-supervisor");
-            assert_eq!(telegram_account.as_deref(), Some("bot_123456"));
-            assert_eq!(feishu_account.as_deref(), Some("alerts"));
+            assert_eq!(channel_account.len(), 4);
+            assert_eq!(channel_account[0].channel_id, "telegram");
+            assert_eq!(channel_account[0].account_id, "bot_123456");
+            assert_eq!(channel_account[1].channel_id, "feishu");
+            assert_eq!(channel_account[1].account_id, "alerts");
+            assert_eq!(channel_account[2].channel_id, "matrix");
+            assert_eq!(channel_account[2].account_id, "bridge-sync");
+            assert_eq!(channel_account[3].channel_id, "wecom");
+            assert_eq!(channel_account[3].account_id, "robot-prod");
         }
         other => panic!("unexpected parse result: {other:?}"),
     }
 }
 
 #[test]
-fn multi_channel_serve_cli_help_mentions_session_and_account_flags() {
+fn multi_channel_serve_cli_help_mentions_session_and_channel_account_flags() {
     let mut command = Cli::command();
     let multi_channel_serve = command
         .find_subcommand_mut("multi-channel-serve")
@@ -1512,11 +1522,11 @@ fn multi_channel_serve_cli_help_mentions_session_and_account_flags() {
 
     assert!(help.contains("--session <SESSION>"), "help: {help}");
     assert!(
-        help.contains("--telegram-account <TELEGRAM_ACCOUNT>"),
+        help.contains("--channel-account <CHANNEL=ACCOUNT>"),
         "help: {help}"
     );
     assert!(
-        help.contains("--feishu-account <FEISHU_ACCOUNT>"),
+        help.contains("runtime-backed service-channel"),
         "help: {help}"
     );
 }

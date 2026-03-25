@@ -125,7 +125,25 @@ That means the registry should cleanly separate:
 This lets LoongClaw expose future channels early without pretending they already
 have runtime support.
 
-### 6. High-Quality Stubs Are Valid Platform Entries
+### 6. Runtime Owners Must Bind Through Runtime Registries
+
+Foreground runtime owners such as `multi-channel-serve` must derive their
+background channel surface set from registry-backed runtime metadata instead of
+hardcoding channel-specific supervisor branches.
+
+That means:
+
+- runtime selection should start from the canonical channel id
+- account selectors should use a generic `channel=account` contract
+- runner lookup should happen through a channel runner registry keyed by
+  canonical ids
+- adding a new runtime-backed channel should not require adding new ad hoc CLI
+  flags or new supervisor enum variants
+
+This keeps runtime ownership aligned with the same source of truth that powers
+catalog, doctor, and inventory views.
+
+### 7. High-Quality Stubs Are Valid Platform Entries
 
 A stub channel is still expected to be a first-class catalog entry.
 
@@ -143,7 +161,7 @@ High-quality stubs should include:
 This keeps future channels visible to operators and avoids later invasive
 migration when the runtime implementation arrives.
 
-### 7. Changes Must Stay Additive
+### 8. Changes Must Stay Additive
 
 Channel-platform evolution must preserve existing public surfaces whenever
 possible.
@@ -191,8 +209,9 @@ When the runtime implementation does not exist yet:
 
 This is the preferred path for channels such as Discord, Slack, LINE,
 DingTalk, WhatsApp, Email, generic Webhook, Google Chat, Signal, Microsoft
-Teams, Mattermost, Nextcloud Talk, IRC, iMessage, Nostr, Twitch, Zalo, Zalo
-Personal, or WebChat surfaces before full runtime support lands.
+Teams, Mattermost, Nextcloud Talk, Synology Chat, IRC, iMessage /
+BlueBubbles, Nostr, Twitch, Tlon, Zalo, Zalo Personal, or WebChat surfaces
+before full runtime support lands.
 
 ## Anti-Patterns
 
@@ -202,6 +221,8 @@ The following patterns violate the contract:
 - keeping a second source of truth for doctor requirements
 - adding per-channel JSON formatting branches for metadata the registry already
   knows
+- adding per-channel supervisor hook fields when runtime-backed runner lookup
+  can be keyed by canonical channel id instead
 - hiding stub channels from catalog surfaces until runtime code exists
 - introducing runtime builders for channels that have no runtime state
 - modeling a shipped long-connection surface as webhook-style static metadata

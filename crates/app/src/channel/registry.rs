@@ -46,6 +46,8 @@ const MATTERMOST_BOT_TOKEN_ENV: &str = "MATTERMOST_BOT_TOKEN";
 const NEXTCLOUD_TALK_SERVER_URL_ENV: &str = "NEXTCLOUD_TALK_SERVER_URL";
 const NEXTCLOUD_TALK_APP_PASSWORD_ENV: &str = "NEXTCLOUD_TALK_APP_PASSWORD";
 const NEXTCLOUD_TALK_BOT_ACTOR_ID_ENV: &str = "NEXTCLOUD_TALK_BOT_ACTOR_ID";
+const SYNOLOGY_CHAT_TOKEN_ENV: &str = "SYNOLOGY_CHAT_TOKEN";
+const SYNOLOGY_CHAT_INCOMING_URL_ENV: &str = "SYNOLOGY_CHAT_INCOMING_URL";
 const IRC_SERVER_ENV: &str = "IRC_SERVER";
 const IRC_NICKNAME_ENV: &str = "IRC_NICKNAME";
 const IMESSAGE_BRIDGE_URL_ENV: &str = "IMESSAGE_BRIDGE_URL";
@@ -54,6 +56,9 @@ const NOSTR_RELAY_URLS_ENV: &str = "NOSTR_RELAY_URLS";
 const NOSTR_PRIVATE_KEY_ENV: &str = "NOSTR_PRIVATE_KEY";
 const TWITCH_BOT_OAUTH_TOKEN_ENV: &str = "TWITCH_BOT_OAUTH_TOKEN";
 const TWITCH_CLIENT_ID_ENV: &str = "TWITCH_CLIENT_ID";
+const TLON_SHIP_ENV: &str = "TLON_SHIP";
+const TLON_URL_ENV: &str = "TLON_URL";
+const TLON_CODE_ENV: &str = "TLON_CODE";
 const ZALO_APP_ID_ENV: &str = "ZALO_APP_ID";
 const ZALO_OA_ACCESS_TOKEN_ENV: &str = "ZALO_OA_ACCESS_TOKEN";
 const ZALO_APP_SECRET_ENV: &str = "ZALO_APP_SECRET";
@@ -2164,6 +2169,103 @@ const NEXTCLOUD_TALK_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
         repair_command: None,
     };
 
+const SYNOLOGY_CHAT_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &[
+            "synology_chat.enabled",
+            "synology_chat.accounts.<account>.enabled",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const SYNOLOGY_CHAT_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "token",
+        label: "outgoing webhook token",
+        config_paths: &[
+            "synology_chat.token",
+            "synology_chat.accounts.<account>.token",
+        ],
+        env_pointer_paths: &[
+            "synology_chat.token_env",
+            "synology_chat.accounts.<account>.token_env",
+        ],
+        default_env_var: Some(SYNOLOGY_CHAT_TOKEN_ENV),
+    };
+const SYNOLOGY_CHAT_INCOMING_URL_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "incoming_url",
+        label: "incoming webhook url",
+        config_paths: &[
+            "synology_chat.incoming_url",
+            "synology_chat.accounts.<account>.incoming_url",
+        ],
+        env_pointer_paths: &[
+            "synology_chat.incoming_url_env",
+            "synology_chat.accounts.<account>.incoming_url_env",
+        ],
+        default_env_var: Some(SYNOLOGY_CHAT_INCOMING_URL_ENV),
+    };
+const SYNOLOGY_CHAT_ALLOWED_USER_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_user_ids",
+        label: "allowed user ids",
+        config_paths: &[
+            "synology_chat.allowed_user_ids",
+            "synology_chat.accounts.<account>.allowed_user_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const SYNOLOGY_CHAT_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    SYNOLOGY_CHAT_ENABLED_REQUIREMENT,
+    SYNOLOGY_CHAT_TOKEN_REQUIREMENT,
+    SYNOLOGY_CHAT_INCOMING_URL_REQUIREMENT,
+];
+const SYNOLOGY_CHAT_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    SYNOLOGY_CHAT_ENABLED_REQUIREMENT,
+    SYNOLOGY_CHAT_TOKEN_REQUIREMENT,
+    SYNOLOGY_CHAT_INCOMING_URL_REQUIREMENT,
+    SYNOLOGY_CHAT_ALLOWED_USER_IDS_REQUIREMENT,
+];
+const SYNOLOGY_CHAT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "chat send",
+    command: "synology-chat-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: SYNOLOGY_CHAT_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
+};
+const SYNOLOGY_CHAT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "webhook service",
+    command: "synology-chat-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: SYNOLOGY_CHAT_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Address],
+};
+const SYNOLOGY_CHAT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: SYNOLOGY_CHAT_SEND_OPERATION,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: SYNOLOGY_CHAT_SERVE_OPERATION,
+        doctor_checks: &[],
+    },
+];
+const SYNOLOGY_CHAT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
+    ChannelOnboardingDescriptor {
+        strategy: ChannelOnboardingStrategy::Planned,
+        setup_hint: "planned Synology Chat surface; catalog metadata reflects the intended outgoing webhook token, incoming webhook url, and user allowlist contract, but no runtime adapter is implemented yet",
+        status_command: "loongclaw channels --json",
+        repair_command: None,
+    };
+
 const IRC_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
     ChannelCatalogOperationRequirement {
         id: "enabled",
@@ -2330,7 +2432,7 @@ const IMESSAGE_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 ];
 const IMESSAGE_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::Planned,
-    setup_hint: "planned iMessage bridge surface; catalog metadata reflects the intended bridge url, bridge token, and chat allowlist contract, but no runtime adapter is implemented yet",
+    setup_hint: "planned BlueBubbles-backed iMessage bridge surface; catalog metadata reflects the intended bridge url, bridge token, and chat allowlist contract, but no runtime adapter is implemented yet",
     status_command: "loongclaw channels --json",
     repair_command: None,
 };
@@ -2508,6 +2610,85 @@ const TWITCH_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 const TWITCH_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::Planned,
     setup_hint: "planned Twitch chat surface; catalog metadata reflects the intended bot oauth token, client id, and channel subscription contract, but no runtime adapter is implemented yet",
+    status_command: "loongclaw channels --json",
+    repair_command: None,
+};
+
+const TLON_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["tlon.enabled", "tlon.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const TLON_SHIP_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "ship",
+        label: "ship",
+        config_paths: &["tlon.ship", "tlon.accounts.<account>.ship"],
+        env_pointer_paths: &["tlon.ship_env", "tlon.accounts.<account>.ship_env"],
+        default_env_var: Some(TLON_SHIP_ENV),
+    };
+const TLON_URL_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "url",
+        label: "ship url",
+        config_paths: &["tlon.url", "tlon.accounts.<account>.url"],
+        env_pointer_paths: &["tlon.url_env", "tlon.accounts.<account>.url_env"],
+        default_env_var: Some(TLON_URL_ENV),
+    };
+const TLON_CODE_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "code",
+        label: "login code",
+        config_paths: &["tlon.code", "tlon.accounts.<account>.code"],
+        env_pointer_paths: &["tlon.code_env", "tlon.accounts.<account>.code_env"],
+        default_env_var: Some(TLON_CODE_ENV),
+    };
+const TLON_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    TLON_ENABLED_REQUIREMENT,
+    TLON_SHIP_REQUIREMENT,
+    TLON_URL_REQUIREMENT,
+    TLON_CODE_REQUIREMENT,
+];
+const TLON_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    TLON_ENABLED_REQUIREMENT,
+    TLON_SHIP_REQUIREMENT,
+    TLON_URL_REQUIREMENT,
+    TLON_CODE_REQUIREMENT,
+];
+const TLON_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "ship message send",
+    command: "tlon-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: TLON_SEND_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+const TLON_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "ship event service",
+    command: "tlon-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: TLON_SERVE_REQUIREMENTS,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+const TLON_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: TLON_SEND_OPERATION,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: TLON_SERVE_OPERATION,
+        doctor_checks: &[],
+    },
+];
+const TLON_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::Planned,
+    setup_hint: "planned Tlon surface; catalog metadata reflects the intended ship identity, ship url, and login-code contract, but no runtime adapter is implemented yet",
     status_command: "loongclaw channels --json",
     repair_command: None,
 };
@@ -3011,6 +3192,20 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
         operations: NEXTCLOUD_TALK_OPERATIONS,
     },
     ChannelRegistryDescriptor {
+        id: "synology-chat",
+        runtime: None,
+        selection_order: 165,
+        selection_label: "nas webhook bot",
+        blurb: "Planned Synology Chat surface for self-hosted NAS chat delivery through outgoing and incoming webhooks.",
+        implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        label: "Synology Chat",
+        aliases: &["synologychat", "synochat"],
+        transport: "synology_chat_outgoing_incoming_webhooks",
+        onboarding: SYNOLOGY_CHAT_ONBOARDING_DESCRIPTOR,
+        operations: SYNOLOGY_CHAT_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
         id: "irc",
         runtime: None,
         selection_order: 170,
@@ -3029,7 +3224,7 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
         runtime: None,
         selection_order: 180,
         selection_label: "apple message bridge",
-        blurb: "Planned iMessage surface for bridge-backed Apple message delivery and sync.",
+        blurb: "Planned BlueBubbles-backed iMessage surface for Apple message delivery and sync.",
         implementation_status: ChannelCatalogImplementationStatus::Stub,
         capabilities: PLANNED_CHANNEL_CAPABILITIES,
         label: "iMessage",
@@ -3065,6 +3260,20 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
         transport: "twitch_irc_or_eventsub",
         onboarding: TWITCH_ONBOARDING_DESCRIPTOR,
         operations: TWITCH_OPERATIONS,
+    },
+    ChannelRegistryDescriptor {
+        id: "tlon",
+        runtime: None,
+        selection_order: 205,
+        selection_label: "urbit ship bot",
+        blurb: "Planned Tlon surface for Urbit DMs and group mentions with ship-backed routing.",
+        implementation_status: ChannelCatalogImplementationStatus::Stub,
+        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        label: "Tlon",
+        aliases: &["urbit"],
+        transport: "tlon_urbit_ship_api",
+        onboarding: TLON_ONBOARDING_DESCRIPTOR,
+        operations: TLON_OPERATIONS,
     },
     ChannelRegistryDescriptor {
         id: "zalo",
@@ -4395,9 +4604,14 @@ mod tests {
         assert_eq!(normalize_channel_catalog_id("slack"), Some("slack"));
         assert_eq!(normalize_channel_catalog_id("gchat"), Some("google-chat"));
         assert_eq!(
+            normalize_channel_catalog_id("synochat"),
+            Some("synology-chat")
+        );
+        assert_eq!(
             normalize_channel_catalog_id("bluebubbles"),
             Some("imessage")
         );
+        assert_eq!(normalize_channel_catalog_id("urbit"), Some("tlon"));
         assert_eq!(normalize_channel_catalog_id("web-ui"), Some("webchat"));
         assert_eq!(normalize_channel_catalog_id("unknown"), None);
     }
@@ -4461,8 +4675,12 @@ mod tests {
             .expect("slack alias catalog command family");
         let google_chat = resolve_channel_catalog_command_family_descriptor("gchat")
             .expect("google chat alias catalog command family");
+        let synology_chat = resolve_channel_catalog_command_family_descriptor("synochat")
+            .expect("synology chat alias catalog command family");
         let imessage = resolve_channel_catalog_command_family_descriptor("bluebubbles")
             .expect("imessage alias catalog command family");
+        let tlon = resolve_channel_catalog_command_family_descriptor("urbit")
+            .expect("tlon alias catalog command family");
 
         assert_eq!(telegram.channel_id, "telegram");
         assert_eq!(telegram.send.id, CHANNEL_OPERATION_SEND_ID);
@@ -4498,11 +4716,27 @@ mod tests {
             ChannelCatalogTargetKind::Conversation
         );
 
+        assert_eq!(synology_chat.channel_id, "synology-chat");
+        assert_eq!(synology_chat.send.command, "synology-chat-send");
+        assert_eq!(synology_chat.serve.command, "synology-chat-serve");
+        assert_eq!(
+            synology_chat.default_send_target_kind,
+            ChannelCatalogTargetKind::Address
+        );
+
         assert_eq!(imessage.channel_id, "imessage");
         assert_eq!(imessage.send.command, "imessage-send");
         assert_eq!(imessage.serve.command, "imessage-serve");
         assert_eq!(
             imessage.default_send_target_kind,
+            ChannelCatalogTargetKind::Conversation
+        );
+
+        assert_eq!(tlon.channel_id, "tlon");
+        assert_eq!(tlon.send.command, "tlon-send");
+        assert_eq!(tlon.serve.command, "tlon-serve");
+        assert_eq!(
+            tlon.default_send_target_kind,
             ChannelCatalogTargetKind::Conversation
         );
     }
@@ -4914,10 +5148,18 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "signal")
             .expect("signal catalog entry");
+        let synology_chat = catalog
+            .iter()
+            .find(|entry| entry.id == "synology-chat")
+            .expect("synology chat catalog entry");
         let imessage = catalog
             .iter()
             .find(|entry| entry.id == "imessage")
             .expect("imessage catalog entry");
+        let tlon = catalog
+            .iter()
+            .find(|entry| entry.id == "tlon")
+            .expect("tlon catalog entry");
         let webchat = catalog
             .iter()
             .find(|entry| entry.id == "webchat")
@@ -4944,9 +5186,32 @@ mod tests {
         assert_eq!(signal.operations[0].command, "signal-send");
         assert_eq!(signal.operations[1].command, "signal-serve");
 
+        assert_eq!(synology_chat.selection_order, 165);
+        assert_eq!(synology_chat.aliases, vec!["synologychat", "synochat"]);
+        assert_eq!(
+            synology_chat.transport,
+            "synology_chat_outgoing_incoming_webhooks"
+        );
+        assert_eq!(
+            synology_chat.supported_target_kinds,
+            vec![ChannelCatalogTargetKind::Address]
+        );
+        assert_eq!(synology_chat.operations[0].command, "synology-chat-send");
+        assert_eq!(synology_chat.operations[1].command, "synology-chat-serve");
+
         assert_eq!(imessage.aliases, vec!["bluebubbles", "blue-bubbles"]);
         assert_eq!(imessage.selection_order, 180);
-        assert!(imessage.blurb.contains("Apple message"));
+        assert!(imessage.blurb.contains("BlueBubbles"));
+
+        assert_eq!(tlon.selection_order, 205);
+        assert_eq!(tlon.aliases, vec!["urbit"]);
+        assert_eq!(tlon.transport, "tlon_urbit_ship_api");
+        assert_eq!(
+            tlon.supported_target_kinds,
+            vec![ChannelCatalogTargetKind::Conversation]
+        );
+        assert_eq!(tlon.operations[0].command, "tlon-send");
+        assert_eq!(tlon.operations[1].command, "tlon-serve");
 
         assert_eq!(webchat.selection_order, 230);
         assert_eq!(webchat.aliases, vec!["browser-chat", "web-ui"]);
@@ -5234,6 +5499,38 @@ mod tests {
         let config = LoongClawConfig::default();
         let snapshots = channel_status_snapshots(&config);
         let catalog_only = catalog_only_channel_entries(&snapshots);
+        let discord = catalog_only
+            .iter()
+            .find(|entry| entry.id == "discord")
+            .expect("discord catalog entry");
+        let slack = catalog_only
+            .iter()
+            .find(|entry| entry.id == "slack")
+            .expect("slack catalog entry");
+        let line = catalog_only
+            .iter()
+            .find(|entry| entry.id == "line")
+            .expect("line catalog entry");
+        let webhook = catalog_only
+            .iter()
+            .find(|entry| entry.id == "webhook")
+            .expect("webhook catalog entry");
+        let google_chat = catalog_only
+            .iter()
+            .find(|entry| entry.id == "google-chat")
+            .expect("google chat catalog entry");
+        let synology_chat = catalog_only
+            .iter()
+            .find(|entry| entry.id == "synology-chat")
+            .expect("synology chat catalog entry");
+        let tlon = catalog_only
+            .iter()
+            .find(|entry| entry.id == "tlon")
+            .expect("tlon catalog entry");
+        let webchat = catalog_only
+            .iter()
+            .find(|entry| entry.id == "webchat")
+            .expect("webchat catalog entry");
 
         assert_eq!(
             catalog_only
@@ -5253,23 +5550,27 @@ mod tests {
                 "teams",
                 "mattermost",
                 "nextcloud-talk",
+                "synology-chat",
                 "irc",
                 "imessage",
                 "nostr",
                 "twitch",
+                "tlon",
                 "zalo",
                 "zalo-personal",
                 "webchat",
             ]
         );
-        assert_eq!(catalog_only[0].operations[0].command, "discord-send");
-        assert_eq!(catalog_only[0].operations[1].command, "discord-serve");
-        assert_eq!(catalog_only[1].operations[0].command, "slack-send");
-        assert_eq!(catalog_only[1].operations[1].command, "slack-serve");
-        assert_eq!(catalog_only[2].operations[0].command, "line-send");
-        assert_eq!(catalog_only[6].operations[1].command, "webhook-serve");
-        assert_eq!(catalog_only[7].operations[0].command, "google-chat-send");
-        assert_eq!(catalog_only[18].operations[1].command, "webchat-serve");
+        assert_eq!(discord.operations[0].command, "discord-send");
+        assert_eq!(discord.operations[1].command, "discord-serve");
+        assert_eq!(slack.operations[0].command, "slack-send");
+        assert_eq!(slack.operations[1].command, "slack-serve");
+        assert_eq!(line.operations[0].command, "line-send");
+        assert_eq!(webhook.operations[1].command, "webhook-serve");
+        assert_eq!(google_chat.operations[0].command, "google-chat-send");
+        assert_eq!(synology_chat.operations[1].command, "synology-chat-serve");
+        assert_eq!(tlon.operations[0].command, "tlon-send");
+        assert_eq!(webchat.operations[1].command, "webchat-serve");
     }
 
     #[test]
@@ -5304,10 +5605,12 @@ mod tests {
                 "teams",
                 "mattermost",
                 "nextcloud-talk",
+                "synology-chat",
                 "irc",
                 "imessage",
                 "nostr",
                 "twitch",
+                "tlon",
                 "zalo",
                 "zalo-personal",
                 "webchat",
@@ -5336,10 +5639,12 @@ mod tests {
                 "teams",
                 "mattermost",
                 "nextcloud-talk",
+                "synology-chat",
                 "irc",
                 "imessage",
                 "nostr",
                 "twitch",
+                "tlon",
                 "zalo",
                 "zalo-personal",
                 "webchat",
@@ -5378,10 +5683,12 @@ mod tests {
                 "teams",
                 "mattermost",
                 "nextcloud-talk",
+                "synology-chat",
                 "irc",
                 "imessage",
                 "nostr",
                 "twitch",
+                "tlon",
                 "zalo",
                 "zalo-personal",
                 "webchat",

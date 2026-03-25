@@ -11,47 +11,111 @@ use std::{
 use loongclaw_spec::CliResult;
 use tokio::task::{Id, JoinSet};
 
-use crate::{mvp, wait_for_shutdown_signal};
+use crate::{MultiChannelServeChannelAccount, mvp, wait_for_shutdown_signal};
 
 type BoxedSupervisorFuture = Pin<Box<dyn Future<Output = CliResult<()>> + Send + 'static>>;
+type BackgroundChannelRunner =
+    Arc<dyn Fn(BackgroundChannelRunnerRequest) -> BoxedSupervisorFuture + Send + Sync + 'static>;
+type BackgroundChannelRunnerRegistry = BTreeMap<&'static str, BackgroundChannelRunner>;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum BackgroundChannelSurface {
-    Telegram { account_id: Option<String> },
-    Feishu { account_id: Option<String> },
+pub struct BackgroundChannelSurface {
+    channel_id: &'static str,
+    platform: mvp::channel::ChannelPlatform,
+    account_id: Option<String>,
 }
 
 impl BackgroundChannelSurface {
-    pub fn all_from_accounts(
-        telegram_account: Option<&str>,
-        feishu_account: Option<&str>,
-    ) -> Vec<Self> {
-        vec![
-            Self::Telegram {
-                account_id: telegram_account.map(str::to_owned),
-            },
-            Self::Feishu {
-                account_id: feishu_account.map(str::to_owned),
-            },
-        ]
+    pub fn new(
+        runtime: mvp::channel::ChannelRuntimeCommandDescriptor,
+        account_id: Option<&str>,
+    ) -> Self {
+        let normalized_account_id = account_id.map(str::to_owned);
+        Self {
+            channel_id: runtime.channel_id,
+            platform: runtime.platform,
+            account_id: normalized_account_id,
+        }
+    }
+
+    pub fn channel_id(&self) -> &'static str {
+        self.channel_id
+    }
+
+    pub fn platform(&self) -> mvp::channel::ChannelPlatform {
+        self.platform
+    }
+
+    pub fn account_id(&self) -> Option<&str> {
+        self.account_id.as_deref()
     }
 }
 
 impl fmt::Display for BackgroundChannelSurface {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Telegram {
-                account_id: Some(account_id),
-            } => write!(f, "telegram(account={account_id})"),
-            Self::Telegram { account_id: None } => write!(f, "telegram"),
-            Self::Feishu {
-                account_id: Some(account_id),
-            } => write!(f, "feishu(account={account_id})"),
-            Self::Feishu { account_id: None } => write!(f, "feishu"),
+        match &self.account_id {
+            Some(account_id) => write!(f, "{}(account={account_id})", self.channel_id),
+            None => write!(f, "{}", self.channel_id),
         }
     }
 }
 
+struct BackgroundChannelRegistration {
+    runtime: mvp::channel::ChannelRuntimeCommandDescriptor,
+    is_enabled: fn(&mvp::config::LoongClawConfig, Option<&str>) -> CliResult<bool>,
+}
+
+const BACKGROUND_CHANNEL_REGISTRATIONS: [BackgroundChannelRegistration; 4] = [
+    BackgroundChannelRegistration {
+        runtime: mvp::channel::TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR,
+        is_enabled: telegram_surface_is_enabled,
+    },
+    BackgroundChannelRegistration {
+        runtime: mvp::channel::FEISHU_RUNTIME_COMMAND_DESCRIPTOR,
+        is_enabled: feishu_surface_is_enabled,
+    },
+    BackgroundChannelRegistration {
+        runtime: mvp::channel::MATRIX_RUNTIME_COMMAND_DESCRIPTOR,
+        is_enabled: matrix_surface_is_enabled,
+    },
+    BackgroundChannelRegistration {
+        runtime: mvp::channel::WECOM_RUNTIME_COMMAND_DESCRIPTOR,
+        is_enabled: wecom_surface_is_enabled,
+    },
+];
+
+fn background_channel_registrations() -> &'static [BackgroundChannelRegistration] {
+    &BACKGROUND_CHANNEL_REGISTRATIONS
+}
+
+fn find_background_channel_registration(
+    channel_id: &str,
+) -> Option<&'static BackgroundChannelRegistration> {
+    background_channel_registrations()
+        .iter()
+        .find(|registration| registration.runtime.channel_id == channel_id)
+}
+
+fn collect_multi_channel_account_overrides(
+    channel_accounts: &[MultiChannelServeChannelAccount],
+) -> Result<BTreeMap<String, String>, String> {
+    let mut collected_accounts = BTreeMap::new();
+
+    for channel_account in channel_accounts {
+        let previous_account = collected_accounts.insert(
+            channel_account.channel_id.clone(),
+            channel_account.account_id.clone(),
+        );
+        if previous_account.is_some() {
+            return Err(format!(
+                "duplicate multi-channel account selection configured for `{}`",
+                channel_account.channel_id
+            ));
+        }
+    }
+
+    Ok(collected_accounts)
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfacePhase {
     Starting,
@@ -172,37 +236,25 @@ impl SupervisorSpec {
         Ok(Self { mode, surfaces })
     }
 
-    pub fn from_multi_channel_serve(
-        session: &str,
-        telegram_account: Option<&str>,
-        feishu_account: Option<&str>,
-    ) -> Result<Self, String> {
-        Self::new(
-            RuntimeOwnerMode::MultiChannelServe {
-                cli_session: session.to_owned(),
-            },
-            BackgroundChannelSurface::all_from_accounts(telegram_account, feishu_account),
-        )
-    }
-
     pub fn from_loaded_multi_channel_serve(
         session: &str,
         config: &mvp::config::LoongClawConfig,
-        telegram_account: Option<&str>,
-        feishu_account: Option<&str>,
+        channel_accounts: &[MultiChannelServeChannelAccount],
     ) -> Result<Self, String> {
+        let account_overrides = collect_multi_channel_account_overrides(channel_accounts)?;
         let mut surfaces = Vec::new();
 
-        if telegram_surface_is_enabled(config, telegram_account)? {
-            surfaces.push(BackgroundChannelSurface::Telegram {
-                account_id: telegram_account.map(str::to_owned),
-            });
-        }
+        for registration in background_channel_registrations() {
+            let selected_account_id = account_overrides
+                .get(registration.runtime.channel_id)
+                .map(String::as_str);
+            let surface_is_enabled = (registration.is_enabled)(config, selected_account_id)?;
+            if !surface_is_enabled {
+                continue;
+            }
 
-        if feishu_surface_is_enabled(config, feishu_account)? {
-            surfaces.push(BackgroundChannelSurface::Feishu {
-                account_id: feishu_account.map(str::to_owned),
-            });
+            let surface = BackgroundChannelSurface::new(registration.runtime, selected_account_id);
+            surfaces.push(surface);
         }
 
         Self::new(
@@ -543,16 +595,93 @@ pub struct SupervisorRuntimeHooks {
             + Sync
             + 'static,
     >,
-    pub run_telegram: Arc<
-        dyn Fn(BackgroundChannelRunnerRequest) -> BoxedSupervisorFuture + Send + Sync + 'static,
-    >,
-    pub run_feishu: Arc<
-        dyn Fn(BackgroundChannelRunnerRequest) -> BoxedSupervisorFuture + Send + Sync + 'static,
-    >,
+    pub background_channel_runners: BackgroundChannelRunnerRegistry,
     pub wait_for_shutdown: Arc<dyn Fn() -> BoxedSupervisorFuture + Send + Sync + 'static>,
 }
 
 impl SupervisorRuntimeHooks {
+    fn production_background_channel_runners() -> BackgroundChannelRunnerRegistry {
+        let telegram_runner: BackgroundChannelRunner = Arc::new(
+            |request: BackgroundChannelRunnerRequest| -> BoxedSupervisorFuture {
+                Box::pin(async move {
+                    mvp::channel::run_telegram_channel_with_stop(
+                        request.resolved_path,
+                        request.config,
+                        false,
+                        request.account_id.as_deref(),
+                        request.stop,
+                        request.initialize_runtime_environment,
+                    )
+                    .await
+                })
+            },
+        );
+        let feishu_runner: BackgroundChannelRunner = Arc::new(
+            |request: BackgroundChannelRunnerRequest| -> BoxedSupervisorFuture {
+                Box::pin(async move {
+                    mvp::channel::run_feishu_channel_with_stop(
+                        request.resolved_path,
+                        request.config,
+                        request.account_id.as_deref(),
+                        None,
+                        None,
+                        request.stop,
+                        request.initialize_runtime_environment,
+                    )
+                    .await
+                })
+            },
+        );
+        let matrix_runner: BackgroundChannelRunner = Arc::new(
+            |request: BackgroundChannelRunnerRequest| -> BoxedSupervisorFuture {
+                Box::pin(async move {
+                    mvp::channel::run_matrix_channel_with_stop(
+                        request.resolved_path,
+                        request.config,
+                        false,
+                        request.account_id.as_deref(),
+                        request.stop,
+                        request.initialize_runtime_environment,
+                    )
+                    .await
+                })
+            },
+        );
+        let wecom_runner: BackgroundChannelRunner = Arc::new(
+            |request: BackgroundChannelRunnerRequest| -> BoxedSupervisorFuture {
+                Box::pin(async move {
+                    mvp::channel::run_wecom_channel_with_stop(
+                        request.resolved_path,
+                        request.config,
+                        request.account_id.as_deref(),
+                        request.stop,
+                        request.initialize_runtime_environment,
+                    )
+                    .await
+                })
+            },
+        );
+
+        let mut runners = BackgroundChannelRunnerRegistry::new();
+        runners.insert(
+            mvp::channel::TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR.channel_id,
+            telegram_runner,
+        );
+        runners.insert(
+            mvp::channel::FEISHU_RUNTIME_COMMAND_DESCRIPTOR.channel_id,
+            feishu_runner,
+        );
+        runners.insert(
+            mvp::channel::MATRIX_RUNTIME_COMMAND_DESCRIPTOR.channel_id,
+            matrix_runner,
+        );
+        runners.insert(
+            mvp::channel::WECOM_RUNTIME_COMMAND_DESCRIPTOR.channel_id,
+            wecom_runner,
+        );
+        runners
+    }
+
     fn production() -> Self {
         Self {
             load_config: Arc::new(|config_path| {
@@ -577,33 +706,7 @@ impl SupervisorRuntimeHooks {
                     .map_err(|error| format!("concurrent CLI host task failed to join: {error}"))?
                 })
             }),
-            run_telegram: Arc::new(|request| {
-                Box::pin(async move {
-                    mvp::channel::run_telegram_channel_with_stop(
-                        request.resolved_path,
-                        request.config,
-                        false,
-                        request.account_id.as_deref(),
-                        request.stop,
-                        request.initialize_runtime_environment,
-                    )
-                    .await
-                })
-            }),
-            run_feishu: Arc::new(|request| {
-                Box::pin(async move {
-                    mvp::channel::run_feishu_channel_with_stop(
-                        request.resolved_path,
-                        request.config,
-                        request.account_id.as_deref(),
-                        None,
-                        None,
-                        request.stop,
-                        request.initialize_runtime_environment,
-                    )
-                    .await
-                })
-            }),
+            background_channel_runners: Self::production_background_channel_runners(),
             wait_for_shutdown: Arc::new(|| Box::pin(async { wait_for_shutdown_signal().await })),
         }
     }
@@ -642,6 +745,26 @@ fn feishu_surface_is_enabled(
     .enabled)
 }
 
+fn matrix_surface_is_enabled(
+    config: &mvp::config::LoongClawConfig,
+    account_id: Option<&str>,
+) -> CliResult<bool> {
+    if !config.matrix.enabled {
+        return Ok(false);
+    }
+    Ok(config.matrix.resolve_account(account_id)?.enabled)
+}
+
+fn wecom_surface_is_enabled(
+    config: &mvp::config::LoongClawConfig,
+    account_id: Option<&str>,
+) -> CliResult<bool> {
+    if !config.wecom.enabled {
+        return Ok(false);
+    }
+    Ok(config.wecom.resolve_account(account_id)?.enabled)
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -673,8 +796,7 @@ fn forward_root_shutdown(
 pub async fn run_multi_channel_serve_with_hooks_for_test(
     config_path: Option<&str>,
     session: &str,
-    telegram_account: Option<&str>,
-    feishu_account: Option<&str>,
+    channel_accounts: Vec<MultiChannelServeChannelAccount>,
     hooks: SupervisorRuntimeHooks,
 ) -> CliResult<SupervisorState> {
     let loaded_config = (hooks.load_config)(config_path)?;
@@ -683,68 +805,57 @@ pub async fn run_multi_channel_serve_with_hooks_for_test(
         resolved_path,
         config,
     } = loaded_config;
-    let spec = SupervisorSpec::from_loaded_multi_channel_serve(
-        session,
-        &config,
-        telegram_account,
-        feishu_account,
-    )?;
+    let spec =
+        SupervisorSpec::from_loaded_multi_channel_serve(session, &config, &channel_accounts)?;
     let mut supervisor = SupervisorState::new(spec.clone());
 
     let cli_shutdown = mvp::chat::ConcurrentCliShutdown::new();
-    let telegram_stop = mvp::channel::ChannelServeStopHandle::new();
-    let feishu_stop = mvp::channel::ChannelServeStopHandle::new();
-    let stop_handles = vec![telegram_stop.clone(), feishu_stop.clone()];
+    let mut stop_handles = Vec::new();
 
     let mut background_tasks = JoinSet::new();
     let mut background_task_surfaces = BTreeMap::<Id, BackgroundChannelSurface>::new();
 
     for surface in &spec.surfaces {
         supervisor.mark_surface_running(surface, now_ms())?;
-        match surface {
-            BackgroundChannelSurface::Telegram { account_id } => {
-                let request = BackgroundChannelRunnerRequest {
-                    resolved_path: resolved_path.clone(),
-                    config: config.clone(),
-                    account_id: account_id.clone(),
-                    stop: telegram_stop.clone(),
-                    initialize_runtime_environment: false,
-                };
-                let run_telegram = hooks.run_telegram.clone();
-                let tracked_surface = surface.clone();
-                let task_surface = tracked_surface.clone();
-                let task_id = background_tasks
-                    .spawn(async move {
-                        BackgroundTaskExit::Surface {
-                            surface: task_surface,
-                            result: run_telegram(request).await,
-                        }
-                    })
-                    .id();
-                background_task_surfaces.insert(task_id, tracked_surface);
-            }
-            BackgroundChannelSurface::Feishu { account_id } => {
-                let request = BackgroundChannelRunnerRequest {
-                    resolved_path: resolved_path.clone(),
-                    config: config.clone(),
-                    account_id: account_id.clone(),
-                    stop: feishu_stop.clone(),
-                    initialize_runtime_environment: false,
-                };
-                let run_feishu = hooks.run_feishu.clone();
-                let tracked_surface = surface.clone();
-                let task_surface = tracked_surface.clone();
-                let task_id = background_tasks
-                    .spawn(async move {
-                        BackgroundTaskExit::Surface {
-                            surface: task_surface,
-                            result: run_feishu(request).await,
-                        }
-                    })
-                    .id();
-                background_task_surfaces.insert(task_id, tracked_surface);
-            }
-        }
+        let channel_registration = find_background_channel_registration(surface.channel_id())
+            .ok_or_else(|| {
+                format!(
+                    "missing background channel registration for `{}`",
+                    surface.channel_id()
+                )
+            })?;
+        let run_background_channel = hooks
+            .background_channel_runners
+            .get(channel_registration.runtime.channel_id)
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "missing background channel runner for `{}`",
+                    channel_registration.runtime.channel_id
+                )
+            })?;
+        let stop_handle = mvp::channel::ChannelServeStopHandle::new();
+        let request = BackgroundChannelRunnerRequest {
+            resolved_path: resolved_path.clone(),
+            config: config.clone(),
+            account_id: surface.account_id.clone(),
+            stop: stop_handle.clone(),
+            initialize_runtime_environment: false,
+        };
+        stop_handles.push(stop_handle);
+
+        let tracked_surface = surface.clone();
+        let task_surface = tracked_surface.clone();
+        let task_id = background_tasks
+            .spawn(async move {
+                let result = run_background_channel(request).await;
+                BackgroundTaskExit::Surface {
+                    surface: task_surface,
+                    result,
+                }
+            })
+            .id();
+        background_task_surfaces.insert(task_id, tracked_surface);
     }
 
     let mut cli_host = Box::pin((hooks.run_cli_host)(mvp::chat::ConcurrentCliHostOptions {
@@ -835,14 +946,12 @@ pub async fn run_multi_channel_serve_with_hooks_for_test(
 pub async fn run_multi_channel_serve(
     config_path: Option<&str>,
     session: &str,
-    telegram_account: Option<&str>,
-    feishu_account: Option<&str>,
+    channel_accounts: Vec<MultiChannelServeChannelAccount>,
 ) -> CliResult<()> {
     let supervisor = run_multi_channel_serve_with_hooks_for_test(
         config_path,
         session,
-        telegram_account,
-        feishu_account,
+        channel_accounts,
         SupervisorRuntimeHooks::production(),
     )
     .await?;
@@ -855,17 +964,25 @@ mod tests {
         BackgroundChannelSurface, RuntimeOwnerMode, RuntimeOwnerPhase, SupervisorShutdownReason,
         SupervisorSpec, SupervisorState, SurfacePhase,
     };
+    use crate::mvp;
 
     fn telegram_surface(account_id: Option<&str>) -> BackgroundChannelSurface {
-        BackgroundChannelSurface::Telegram {
-            account_id: account_id.map(str::to_owned),
-        }
+        BackgroundChannelSurface::new(
+            mvp::channel::TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR,
+            account_id,
+        )
     }
 
     fn feishu_surface(account_id: Option<&str>) -> BackgroundChannelSurface {
-        BackgroundChannelSurface::Feishu {
-            account_id: account_id.map(str::to_owned),
-        }
+        BackgroundChannelSurface::new(mvp::channel::FEISHU_RUNTIME_COMMAND_DESCRIPTOR, account_id)
+    }
+
+    fn matrix_surface(account_id: Option<&str>) -> BackgroundChannelSurface {
+        BackgroundChannelSurface::new(mvp::channel::MATRIX_RUNTIME_COMMAND_DESCRIPTOR, account_id)
+    }
+
+    fn wecom_surface(account_id: Option<&str>) -> BackgroundChannelSurface {
+        BackgroundChannelSurface::new(mvp::channel::WECOM_RUNTIME_COMMAND_DESCRIPTOR, account_id)
     }
 
     fn sample_spec(surfaces: Vec<BackgroundChannelSurface>) -> Result<SupervisorSpec, String> {
@@ -893,6 +1010,76 @@ mod tests {
         assert_eq!(state.phase, SurfacePhase::Running);
         assert_eq!(state.started_at_ms, Some(1_710_000_000_000));
         assert_eq!(supervisor.phase(), RuntimeOwnerPhase::Running);
+    }
+
+    #[tokio::test]
+    async fn loaded_multi_channel_spec_includes_all_enabled_runtime_backed_service_channels() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.telegram.enabled = true;
+        config.feishu.enabled = true;
+        config.matrix.enabled = true;
+        config.wecom.enabled = true;
+
+        let spec = SupervisorSpec::from_loaded_multi_channel_serve(
+            "cli-supervisor",
+            &config,
+            &[
+                crate::MultiChannelServeChannelAccount {
+                    channel_id: "telegram".to_owned(),
+                    account_id: "bot_123456".to_owned(),
+                },
+                crate::MultiChannelServeChannelAccount {
+                    channel_id: "feishu".to_owned(),
+                    account_id: "alerts".to_owned(),
+                },
+                crate::MultiChannelServeChannelAccount {
+                    channel_id: "matrix".to_owned(),
+                    account_id: "bridge-sync".to_owned(),
+                },
+                crate::MultiChannelServeChannelAccount {
+                    channel_id: "wecom".to_owned(),
+                    account_id: "robot-prod".to_owned(),
+                },
+            ],
+        )
+        .expect("build loaded spec");
+
+        assert_eq!(
+            spec.surfaces,
+            vec![
+                telegram_surface(Some("bot_123456")),
+                feishu_surface(Some("alerts")),
+                matrix_surface(Some("bridge-sync")),
+                wecom_surface(Some("robot-prod")),
+            ]
+        );
+    }
+
+    #[test]
+    fn loaded_multi_channel_spec_rejects_duplicate_channel_account_overrides() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.telegram.enabled = true;
+
+        let error = SupervisorSpec::from_loaded_multi_channel_serve(
+            "cli-supervisor",
+            &config,
+            &[
+                crate::MultiChannelServeChannelAccount {
+                    channel_id: "telegram".to_owned(),
+                    account_id: "bot_123456".to_owned(),
+                },
+                crate::MultiChannelServeChannelAccount {
+                    channel_id: "telegram".to_owned(),
+                    account_id: "bot_backup".to_owned(),
+                },
+            ],
+        )
+        .expect_err("duplicate channel selection should fail");
+
+        assert_eq!(
+            error,
+            "duplicate multi-channel account selection configured for `telegram`"
+        );
     }
 
     #[tokio::test]

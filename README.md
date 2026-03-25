@@ -447,17 +447,21 @@ By default, LoongClaw reads `MATRIX_ACCESS_TOKEN`. Matrix room and user IDs ofte
 
 ### Multi-Channel Serve
 
-Use `multi-channel-serve` when you want one process to keep an interactive CLI session in the foreground while supervising Telegram and Feishu surfaces in the same runtime.
+Use `multi-channel-serve` when you want one process to keep an interactive CLI session in the foreground while supervising every enabled runtime-backed service channel in the same runtime.
 
 ```bash
 loongclaw multi-channel-serve \
   --session cli-supervisor \
-  --telegram-account bot_123456 \
-  --feishu-account alerts \
+  --channel-account telegram=bot_123456 \
+  --channel-account lark=alerts \
+  --channel-account matrix=bridge-sync \
+  --channel-account wecom=robot-prod \
   --config ~/.loongclaw/config.toml
 ```
 
-`--session` is required. `--telegram-account` and `--feishu-account` are optional selectors for the channel accounts this runtime should supervise.
+`--session` is required. Repeat `--channel-account <CHANNEL=ACCOUNT>` to pin specific channel accounts. LoongClaw normalizes runtime-backed aliases such as `lark` to canonical channel ids and only supervises runtime-backed channels that are enabled in the loaded config.
+
+`loongclaw channels --json` exposes the broader channel catalog separately from shipped runtime-backed surfaces. Planned surfaces already modeled in the catalog include Discord, Slack, LINE, DingTalk, WhatsApp, Google Chat, Signal, Synology Chat, Tlon, iMessage / BlueBubbles, Nostr, Twitch, Zalo, and WebChat, but they do not claim runtime support until an adapter is actually shipped.
 
 Tool policy stays explicit:
 

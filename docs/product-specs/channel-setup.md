@@ -13,8 +13,9 @@ needs.
 - [ ] Product docs clearly distinguish runtime-backed shipped surfaces from
       catalog-only planned surfaces such as Discord, Slack, LINE,
       DingTalk, WhatsApp, Email, generic Webhook, Google Chat, Signal,
-      Microsoft Teams, Mattermost, Nextcloud Talk, IRC, iMessage, Nostr,
-      Twitch, Zalo, Zalo Personal, and WebChat.
+      Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat, IRC,
+      iMessage / BlueBubbles, Nostr, Twitch, Tlon, Zalo, Zalo Personal,
+      and WebChat.
 - [ ] Channel setup guidance describes required credentials, config toggles, and
       the command used to run each shipped channel.
 - [ ] WeCom setup guidance documents the official AIBot long-connection flow and
@@ -30,7 +31,9 @@ needs.
 ## Out of Scope
 
 - Shipping additional channels beyond CLI, Telegram, Feishu / Lark, Matrix, and WeCom
-- Promoting the remaining catalog-only planned surfaces to runtime-backed support in this slice
+- Promoting the remaining catalog-only planned surfaces such as Discord, Slack,
+  DingTalk, WhatsApp, Signal, Synology Chat, Tlon, or iMessage / BlueBubbles
+  to runtime-backed support in this slice
 - Broad cross-channel inbox or routing UX
 - Full remote pairing flows for unshipped surfaces
 
@@ -43,6 +46,22 @@ needs.
 | Feishu / Lark | Runtime-backed | webhook or websocket | `feishu.enabled`, `feishu.app_id`, `feishu.app_secret`, `feishu.allowed_chat_ids`; webhook mode also needs `verification_token` and `encrypt_key` | `loongclaw feishu-send`, `loongclaw feishu-serve` |
 | Matrix | Runtime-backed | Client-Server sync | `matrix.enabled`, `matrix.access_token`, `matrix.base_url`, `matrix.allowed_room_ids` | `loongclaw matrix-send`, `loongclaw matrix-serve` |
 | WeCom | Runtime-backed | official AIBot long connection | `wecom.enabled`, `wecom.bot_id`, `wecom.secret`, `wecom.allowed_conversation_ids` | `loongclaw wecom-send`, `loongclaw wecom-serve` |
+
+## Expansion Model
+
+LoongClaw keeps channel expansion in three explicit layers so planned surfaces
+do not overclaim runtime support:
+
+- the channel catalog is the superset and can model planned surfaces before a
+  runtime adapter exists
+- runtime-backed service channels are a strict shipped subset of the catalog
+- `multi-channel-serve` only supervises enabled runtime-backed channels and uses
+  repeatable `--channel-account <channel=account>` selectors instead of
+  channel-specific flags
+
+This lets the product align channel naming and onboarding with broader channel
+ecosystems such as OpenClaw without pretending a stub catalog entry is already a
+shipped runtime surface.
 
 ## Setup Rules
 
@@ -100,3 +119,17 @@ long-connection transport:
 
 LoongClaw does not support a WeCom webhook callback mode on this surface. The
 runtime contract is explicitly the official AIBot websocket subscription flow.
+
+### Multi-Channel Serve
+
+`multi-channel-serve` is the runtime owner for the shipped service-channel
+subset:
+
+- it keeps the concurrent CLI host in the foreground
+- it supervises every enabled runtime-backed surface from the loaded config
+- it accepts repeatable `--channel-account <channel=account>` selectors to pin
+  specific accounts such as `telegram=bot_123456`, `lark=alerts`, `matrix=bridge-sync`,
+  or `wecom=robot-prod`
+- it never promotes catalog-only planned surfaces such as WhatsApp, Signal,
+  DingTalk, Synology Chat, or Tlon into runtime supervision until those
+  adapters are implemented

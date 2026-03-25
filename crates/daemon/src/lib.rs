@@ -161,6 +161,20 @@ pub struct ChannelServeCliSpec {
     pub run: for<'a> fn(ChannelServeCliArgs<'a>) -> ChannelCliCommandFuture<'a>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MultiChannelServeChannelAccount {
+    pub channel_id: String,
+    pub account_id: String,
+}
+
+impl std::str::FromStr for MultiChannelServeChannelAccount {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        parse_multi_channel_serve_channel_account(raw)
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = CLI_COMMAND_NAME,
@@ -775,16 +789,14 @@ pub enum Commands {
         #[arg(long)]
         account: Option<String>,
     },
-    /// Run the multi-channel supervisor for coordinated Telegram and Feishu serving
+    /// Run the multi-channel supervisor for coordinated runtime-backed service-channel serving
     MultiChannelServe {
         #[arg(long)]
         config: Option<String>,
         #[arg(long)]
         session: String,
-        #[arg(long)]
-        telegram_account: Option<String>,
-        #[arg(long)]
-        feishu_account: Option<String>,
+        #[arg(long = "channel-account", value_name = "CHANNEL=ACCOUNT")]
+        channel_account: Vec<MultiChannelServeChannelAccount>,
     },
     /// Run the Feishu integration namespace
     Feishu {
@@ -803,6 +815,54 @@ pub enum ValidateConfigOutput {
     Text,
     Json,
     ProblemJson,
+}
+
+fn parse_multi_channel_serve_channel_account(
+    raw: &str,
+) -> Result<MultiChannelServeChannelAccount, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("multi-channel channel-account entries cannot be empty".to_owned());
+    }
+
+    let (raw_channel_id, raw_account_id) = trimmed.split_once('=').ok_or_else(|| {
+        format!("multi-channel channel-account `{trimmed}` must use CHANNEL=ACCOUNT syntax")
+    })?;
+
+    let channel_token = raw_channel_id.trim();
+    if channel_token.is_empty() {
+        return Err(format!(
+            "multi-channel channel-account `{trimmed}` is missing a channel id"
+        ));
+    }
+
+    let supported_channels = supported_multi_channel_serve_channel_ids().join(", ");
+    let runtime_descriptor = mvp::channel::resolve_channel_runtime_command_descriptor(channel_token)
+        .ok_or_else(|| {
+            format!(
+                "unsupported multi-channel service channel `{channel_token}` (expected one of: {supported_channels})"
+            )
+        })?;
+
+    let account_token = raw_account_id.trim();
+    if account_token.is_empty() {
+        return Err(format!(
+            "multi-channel channel-account `{trimmed}` is missing an account id"
+        ));
+    }
+
+    Ok(MultiChannelServeChannelAccount {
+        channel_id: runtime_descriptor.channel_id.to_owned(),
+        account_id: account_token.to_owned(),
+    })
+}
+
+fn supported_multi_channel_serve_channel_ids() -> Vec<&'static str> {
+    let supported_channels = mvp::config::service_channel_descriptors()
+        .into_iter()
+        .map(|descriptor| descriptor.id)
+        .collect::<BTreeSet<_>>();
+    supported_channels.into_iter().collect()
 }
 
 fn resolved_default_entry_config_path() -> PathBuf {
@@ -3937,11 +3997,9 @@ pub fn run_wecom_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliComm
 pub async fn run_multi_channel_serve_cli(
     config_path: Option<&str>,
     session: &str,
-    telegram_account: Option<&str>,
-    feishu_account: Option<&str>,
+    channel_accounts: Vec<MultiChannelServeChannelAccount>,
 ) -> CliResult<()> {
-    supervisor::run_multi_channel_serve(config_path, session, telegram_account, feishu_account)
-        .await
+    supervisor::run_multi_channel_serve(config_path, session, channel_accounts).await
 }
 
 pub fn parse_json_payload(raw: &str, context: &str) -> CliResult<Value> {
