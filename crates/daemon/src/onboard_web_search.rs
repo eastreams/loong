@@ -70,13 +70,36 @@ fn configured_default_web_search_provider(
     mvp::config::normalize_web_search_provider(configured_provider)
 }
 
+pub(crate) fn current_web_search_provider(config: &mvp::config::LoongClawConfig) -> &'static str {
+    let configured_provider = config.tools.web_search.default_provider.as_str();
+    let normalized_provider = mvp::config::normalize_web_search_provider(configured_provider);
+    normalized_provider.unwrap_or(mvp::config::DEFAULT_WEB_SEARCH_PROVIDER)
+}
+
 pub(crate) fn resolve_effective_web_search_default_provider(
     options: &OnboardCommandOptions,
     config: &mvp::config::LoongClawConfig,
     recommendation: &WebSearchProviderRecommendation,
 ) -> &'static str {
     if !options.non_interactive {
-        return recommendation.provider;
+        let current_provider = current_web_search_provider(config);
+        match recommendation.source {
+            WebSearchProviderRecommendationSource::ExplicitCli => {
+                return recommendation.provider;
+            }
+            WebSearchProviderRecommendationSource::ExplicitEnv => {
+                return recommendation.provider;
+            }
+            WebSearchProviderRecommendationSource::Configured => {
+                return current_provider;
+            }
+            WebSearchProviderRecommendationSource::DetectedCredential => {
+                return current_provider;
+            }
+            WebSearchProviderRecommendationSource::DetectedSignals => {
+                return current_provider;
+            }
+        }
     }
 
     match recommendation.source {
@@ -595,6 +618,48 @@ mod tests {
         assert_eq!(
             recommendation.source,
             WebSearchProviderRecommendationSource::Configured
+        );
+    }
+
+    #[test]
+    fn resolve_effective_web_search_default_provider_keeps_current_interactive_provider_for_detected_recommendations()
+     {
+        let options = default_options();
+        let config = mvp::config::LoongClawConfig::default();
+        let recommendation = WebSearchProviderRecommendation {
+            provider: mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
+            reason: "domestic locale or timezone was detected".to_owned(),
+            source: WebSearchProviderRecommendationSource::DetectedSignals,
+        };
+
+        let selected =
+            resolve_effective_web_search_default_provider(&options, &config, &recommendation);
+
+        assert_eq!(
+            selected,
+            mvp::config::WEB_SEARCH_PROVIDER_DUCKDUCKGO,
+            "interactive onboarding should keep the current draft provider on enter even when a different provider is recommended"
+        );
+    }
+
+    #[test]
+    fn resolve_effective_web_search_default_provider_keeps_explicit_interactive_override() {
+        let mut options = default_options();
+        options.web_search_provider = Some("tavily".to_owned());
+        let config = mvp::config::LoongClawConfig::default();
+        let recommendation = WebSearchProviderRecommendation {
+            provider: mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
+            reason: "set by --web-search-provider".to_owned(),
+            source: WebSearchProviderRecommendationSource::ExplicitCli,
+        };
+
+        let selected =
+            resolve_effective_web_search_default_provider(&options, &config, &recommendation);
+
+        assert_eq!(
+            selected,
+            mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
+            "explicit interactive overrides should still become the default selection"
         );
     }
 

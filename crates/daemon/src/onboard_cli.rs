@@ -42,9 +42,10 @@ use crate::onboard_web_search::{
 use crate::onboard_web_search::{
     configured_web_search_provider_credential_source_value,
     configured_web_search_provider_env_name, configured_web_search_provider_secret,
-    preferred_web_search_credential_env_default, resolve_effective_web_search_default_provider,
-    resolve_web_search_provider_recommendation, summarize_web_search_provider_credential,
-    web_search_provider_display_name, web_search_provider_has_inline_credential,
+    current_web_search_provider, preferred_web_search_credential_env_default,
+    resolve_effective_web_search_default_provider, resolve_web_search_provider_recommendation,
+    summarize_web_search_provider_credential, web_search_provider_display_name,
+    web_search_provider_has_inline_credential,
 };
 use crate::onboarding_model_policy;
 use crate::provider_credential_policy;
@@ -2415,6 +2416,7 @@ async fn resolve_web_search_provider_selection(
     context: &OnboardRuntimeContext,
 ) -> CliResult<String> {
     let recommendation = resolve_web_search_provider_recommendation(options, config).await?;
+    let recommended_provider = recommendation.provider;
     let default_provider =
         resolve_effective_web_search_default_provider(options, config, &recommendation);
 
@@ -2422,14 +2424,17 @@ async fn resolve_web_search_provider_selection(
         return Ok(default_provider.to_owned());
     }
 
-    let screen_options = build_web_search_provider_screen_options(config, default_provider);
+    let screen_options = build_web_search_provider_screen_options(config, recommended_provider);
     let select_options = select_options_from_screen_options(&screen_options);
-    let default_idx = screen_options.iter().position(|option| option.recommended);
+    let default_idx = screen_options
+        .iter()
+        .position(|option| option.key == default_provider);
 
     print_lines(
         ui,
         render_web_search_provider_selection_screen_lines_with_style(
             config,
+            recommended_provider,
             default_provider,
             recommendation.reason.as_str(),
             guided_prompt_path,
@@ -2564,18 +2569,22 @@ fn build_web_search_provider_screen_options(
 fn render_web_search_provider_selection_screen_lines_with_style(
     config: &mvp::config::LoongClawConfig,
     recommended_provider: &str,
+    default_provider: &str,
     recommendation_reason: &str,
     guided_prompt_path: GuidedPromptPath,
     width: usize,
     color_enabled: bool,
 ) -> Vec<String> {
-    let current_provider = mvp::config::normalize_web_search_provider(
-        config.tools.web_search.default_provider.as_str(),
-    )
-    .unwrap_or(mvp::config::DEFAULT_WEB_SEARCH_PROVIDER);
+    let current_provider = current_web_search_provider(config);
     let current_provider_label = web_search_provider_display_name(current_provider);
     let recommended_provider_label = web_search_provider_display_name(recommended_provider);
+    let default_provider_label = web_search_provider_display_name(default_provider);
     let options = build_web_search_provider_screen_options(config, recommended_provider);
+    let default_footer_description = if default_provider == current_provider {
+        format!("keep {current_provider_label}")
+    } else {
+        format!("use {default_provider_label}")
+    };
 
     render_onboard_choice_screen(
         OnboardHeaderStyle::Compact,
@@ -2591,7 +2600,7 @@ fn render_web_search_provider_selection_screen_lines_with_style(
         options,
         vec![render_default_choice_footer_line(
             "Enter",
-            format!("use {recommended_provider_label}").as_str(),
+            default_footer_description.as_str(),
         )],
         true,
         color_enabled,
@@ -7327,6 +7336,73 @@ mod tests {
         assert_eq!(
             recommendation.source,
             WebSearchProviderRecommendationSource::ExplicitCli
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn resolve_web_search_provider_selection_keeps_current_provider_on_blank_interactive_input_when_recommendation_differs()
+     {
+        let options = interactive_onboard_options();
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.tools.web_search.tavily_api_key = Some("${TAVILY_API_KEY}".to_owned());
+
+        let mut env = ScopedEnv::new();
+        env.set("TAVILY_API_KEY", "tavily-test-token");
+
+        let mut ui = TestOnboardUi::with_inputs([""]);
+        let context = onboard_test_context();
+        let selected = resolve_web_search_provider_selection(
+            &options,
+            &config,
+            GuidedPromptPath::NativePromptPack,
+            &mut ui,
+            &context,
+        )
+        .await
+        .expect("blank interactive input should keep the current web search provider");
+
+        assert_eq!(
+            selected,
+            mvp::config::WEB_SEARCH_PROVIDER_DUCKDUCKGO,
+            "interactive enter should preserve the current provider even when another provider is recommended"
+        );
+    }
+
+    #[test]
+    fn render_web_search_provider_selection_screen_uses_actual_default_provider_in_footer() {
+        let config = mvp::config::LoongClawConfig::default();
+        let current_provider = mvp::config::WEB_SEARCH_PROVIDER_DUCKDUCKGO;
+        let recommended_provider = mvp::config::WEB_SEARCH_PROVIDER_TAVILY;
+        let current_provider_label = web_search_provider_display_name(current_provider);
+        let recommended_provider_label = web_search_provider_display_name(recommended_provider);
+        let footer_description = format!("keep {current_provider_label}");
+        let expected_footer =
+            render_default_choice_footer_line("Enter", footer_description.as_str());
+        let lines = render_web_search_provider_selection_screen_lines_with_style(
+            &config,
+            recommended_provider,
+            current_provider,
+            "found a ready credential",
+            GuidedPromptPath::NativePromptPack,
+            80,
+            false,
+        );
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == &format!("- current provider: {current_provider_label}")),
+            "web search provider screen should show the current provider separately: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(
+                |line| line == &format!("- recommended provider: {recommended_provider_label}")
+            ),
+            "web search provider screen should show the recommendation separately: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line == &expected_footer),
+            "web search provider footer should describe the real Enter default instead of the recommendation: {lines:#?}"
         );
     }
 
