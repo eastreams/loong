@@ -77,6 +77,30 @@ impl PluginSetup {
             remediation,
         }
     }
+
+    #[must_use]
+    pub fn is_effectively_empty(&self) -> bool {
+        let has_surface = self.surface.is_some();
+        let has_required_env_vars = !self.required_env_vars.is_empty();
+        let has_recommended_env_vars = !self.recommended_env_vars.is_empty();
+        let has_required_config_keys = !self.required_config_keys.is_empty();
+        let has_default_env_var = self.default_env_var.is_some();
+        let has_docs_urls = !self.docs_urls.is_empty();
+        let has_remediation = self.remediation.is_some();
+        let has_non_default_payload = has_surface
+            || has_required_env_vars
+            || has_recommended_env_vars
+            || has_required_config_keys
+            || has_default_env_var
+            || has_docs_urls
+            || has_remediation;
+
+        if has_non_default_payload {
+            return false;
+        }
+
+        matches!(self.mode, PluginSetupMode::MetadataOnly)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -863,7 +887,8 @@ fn clean_manifest_line(line: &str) -> String {
 
 fn normalize_plugin_manifest(mut manifest: PluginManifest) -> PluginManifest {
     let normalized_setup = manifest.setup.take().map(PluginSetup::normalized);
-    manifest.setup = normalized_setup;
+    let canonical_setup = normalized_setup.filter(|setup| !setup.is_effectively_empty());
+    manifest.setup = canonical_setup;
     manifest
 }
 
@@ -1466,6 +1491,60 @@ mod tests {
                 remediation: None,
             })
         );
+    }
+
+    #[test]
+    fn scanner_treats_empty_metadata_only_setup_as_absent() {
+        let root = unique_tmp_dir("loongclaw-plugin-empty-setup");
+        let package_root = root.join("pkg");
+        fs::create_dir_all(&package_root).expect("create temp root");
+
+        let manifest_file = package_root.join(PACKAGE_MANIFEST_FILE_NAME);
+        fs::write(
+            &manifest_file,
+            r#"
+{
+  "plugin_id": "package-plugin",
+  "provider_id": "package-provider",
+  "connector_name": "package-connector",
+  "channel_id": "package-channel",
+  "endpoint": "https://package.example/invoke",
+  "capabilities": ["InvokeConnector"],
+  "metadata": {
+    "bridge_kind": "http_json"
+  }
+}
+"#,
+        )
+        .expect("write package manifest");
+
+        let source_file = package_root.join("plugin.py");
+        fs::write(
+            &source_file,
+            r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "package-plugin",
+#   "provider_id": "package-provider",
+#   "connector_name": "package-connector",
+#   "channel_id": "package-channel",
+#   "endpoint": "https://package.example/invoke",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json"},
+#   "setup": {}
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+        )
+        .expect("write source plugin");
+
+        let scanner = PluginScanner::new();
+        let report = scanner.scan_path(&root).expect("scan should succeed");
+
+        assert_eq!(report.scanned_files, 2);
+        assert_eq!(report.matched_plugins, 1);
+        assert_eq!(report.descriptors.len(), 1);
+        assert_eq!(report.descriptors[0].manifest.setup, None);
     }
 
     #[test]

@@ -1041,14 +1041,13 @@ fn insert_plugin_setup_metadata(
         return;
     };
 
-    metadata
-        .entry("plugin_setup_mode".to_owned())
-        .or_insert_with(|| setup.mode.as_str().to_owned());
+    let mode_key = "plugin_setup_mode".to_owned();
+    let mode_value = setup.mode.as_str().to_owned();
+    metadata.insert(mode_key, mode_value);
 
     if let Some(surface) = setup.surface.clone() {
-        metadata
-            .entry("plugin_setup_surface".to_owned())
-            .or_insert(surface);
+        let surface_key = "plugin_setup_surface".to_owned();
+        metadata.insert(surface_key, surface);
     }
 
     insert_plugin_setup_string_list_metadata(
@@ -1068,9 +1067,8 @@ fn insert_plugin_setup_metadata(
     );
 
     if let Some(default_env_var) = setup.default_env_var.clone() {
-        metadata
-            .entry("plugin_setup_default_env_var".to_owned())
-            .or_insert(default_env_var);
+        let default_env_var_key = "plugin_setup_default_env_var".to_owned();
+        metadata.insert(default_env_var_key, default_env_var);
     }
 
     insert_plugin_setup_string_list_metadata(
@@ -1080,9 +1078,8 @@ fn insert_plugin_setup_metadata(
     );
 
     if let Some(remediation) = setup.remediation.clone() {
-        metadata
-            .entry("plugin_setup_remediation".to_owned())
-            .or_insert(remediation);
+        let remediation_key = "plugin_setup_remediation".to_owned();
+        metadata.insert(remediation_key, remediation);
     }
 }
 
@@ -1102,7 +1099,8 @@ fn insert_plugin_setup_string_list_metadata(
         return;
     };
 
-    metadata.entry(key.to_owned()).or_insert(serialized);
+    let metadata_key = key.to_owned();
+    metadata.insert(metadata_key, serialized);
 }
 fn fnv1a64_hex(bytes: &[u8]) -> String {
     const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
@@ -1831,6 +1829,48 @@ mod plugin_metadata_tests {
         assert!(
             !metadata.contains_key("plugin_package_manifest_path"),
             "source fallback should remove forged package manifest paths"
+        );
+    }
+
+    #[test]
+    fn enrich_scan_report_overrides_conflicting_ad_hoc_setup_metadata() {
+        let mut descriptor = test_descriptor(PluginSourceKind::PackageManifest);
+        descriptor
+            .manifest
+            .metadata
+            .insert("plugin_setup_mode".to_owned(), "governed_entry".to_owned());
+        descriptor.manifest.metadata.insert(
+            "plugin_setup_surface".to_owned(),
+            "legacy_surface".to_owned(),
+        );
+        descriptor.manifest.metadata.insert(
+            "plugin_setup_required_env_vars_json".to_owned(),
+            "[\"LEGACY_KEY\"]".to_owned(),
+        );
+
+        let report = PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            descriptors: vec![descriptor.clone()],
+        };
+        let translation = test_translation(&descriptor);
+
+        let enriched = enrich_scan_report_with_translation(&report, &translation);
+        let metadata = &enriched.descriptors[0].manifest.metadata;
+
+        assert_eq!(
+            metadata.get("plugin_setup_mode").map(String::as_str),
+            Some("metadata_only")
+        );
+        assert_eq!(
+            metadata.get("plugin_setup_surface").map(String::as_str),
+            Some("web_search")
+        );
+        assert_eq!(
+            metadata
+                .get("plugin_setup_required_env_vars_json")
+                .map(String::as_str),
+            Some("[\"TAVILY_API_KEY\"]")
         );
     }
 }
