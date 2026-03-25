@@ -255,27 +255,41 @@ pub fn execute_session_tool_with_policies(
         if !tool_config.sessions.enabled {
             return Err("app_tool_disabled: session tools are disabled by config".to_owned());
         }
-        match request.tool_name.as_str() {
+        let ToolCoreRequest { tool_name, payload } = request;
+        let tool_catalog = super::tool_catalog();
+        let tool_descriptor = tool_catalog.resolve(tool_name.as_str());
+        let visibility_gate = tool_descriptor.map(|descriptor| descriptor.visibility_gate);
+        let mutation_gate = super::catalog::ToolVisibilityGate::SessionMutation;
+        let uses_mutation_gate = visibility_gate == Some(mutation_gate);
+        let mutation_disabled = !tool_config.sessions.allow_mutation;
+
+        if uses_mutation_gate && mutation_disabled {
+            return Err(format!(
+                "app_tool_disabled: session mutation tool `{tool_name}` is disabled by config"
+            ));
+        }
+
+        match tool_name.as_str() {
             "sessions_list" => {
-                execute_sessions_list(request.payload, current_session_id, config, tool_config)
+                execute_sessions_list(payload, current_session_id, config, tool_config)
             }
             "session_events" => {
-                execute_session_events(request.payload, current_session_id, config, tool_config)
+                execute_session_events(payload, current_session_id, config, tool_config)
             }
             "sessions_history" => {
-                execute_sessions_history(request.payload, current_session_id, config, tool_config)
+                execute_sessions_history(payload, current_session_id, config, tool_config)
             }
             "session_status" => {
-                execute_session_status(request.payload, current_session_id, config, tool_config)
+                execute_session_status(payload, current_session_id, config, tool_config)
             }
             "session_cancel" => {
-                execute_session_cancel(request.payload, current_session_id, config, tool_config)
+                execute_session_cancel(payload, current_session_id, config, tool_config)
             }
             "session_archive" => {
-                execute_session_archive(request.payload, current_session_id, config, tool_config)
+                execute_session_archive(payload, current_session_id, config, tool_config)
             }
             "session_recover" => {
-                execute_session_recover(request.payload, current_session_id, config, tool_config)
+                execute_session_recover(payload, current_session_id, config, tool_config)
             }
             other => Err(format!(
                 "app_tool_not_found: unknown session tool `{other}`"
@@ -2610,7 +2624,7 @@ fn session_terminal_outcome_json(
 mod tests {
     use std::fs;
 
-    use loongclaw_contracts::ToolCoreRequest;
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
     use rusqlite::params;
     use serde_json::{Value, json};
 
@@ -2636,6 +2650,16 @@ mod tests {
             sqlite_path: Some(db_path),
             ..MemoryRuntimeConfig::default()
         }
+    }
+
+    fn execute_session_mutation_tool_with_config(
+        request: ToolCoreRequest,
+        current_session_id: &str,
+        config: &MemoryRuntimeConfig,
+    ) -> Result<ToolCoreOutcome, String> {
+        let mut tool_config = ToolConfig::default();
+        tool_config.sessions.allow_mutation = true;
+        execute_session_tool_with_policies(request, current_session_id, config, &tool_config)
     }
 
     fn overwrite_session_event_ts(
@@ -2667,6 +2691,32 @@ mod tests {
             .iter()
             .find(|item| item.get("session_id").and_then(Value::as_str) == Some(session_id))
             .unwrap_or_else(|| panic!("missing batch result for session `{session_id}`"))
+    }
+
+    #[test]
+    fn session_mutation_tools_are_disabled_by_default() {
+        let config = isolated_memory_config("session-mutation-disabled");
+        let expected_error =
+            "app_tool_disabled: session mutation tool `session_archive` is disabled by config";
+
+        let error = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_archive".to_owned(),
+                payload: json!({
+                    "session_id": "child-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect_err("session mutation tools should require explicit opt-in");
+
+        let matches_expected_error = error.contains(expected_error);
+
+        assert!(
+            matches_expected_error,
+            "expected mutation gating error, got: {error}"
+        );
     }
 
     #[test]
@@ -2881,7 +2931,7 @@ mod tests {
             .expect("finalize child");
         }
 
-        execute_session_tool_with_config(
+        execute_session_mutation_tool_with_config(
             ToolCoreRequest {
                 tool_name: "session_archive".to_owned(),
                 payload: json!({
@@ -2949,7 +2999,7 @@ mod tests {
             },
         )
         .expect("finalize child");
-        execute_session_tool_with_config(
+        execute_session_mutation_tool_with_config(
             ToolCoreRequest {
                 tool_name: "session_archive".to_owned(),
                 payload: json!({
@@ -3446,7 +3496,7 @@ mod tests {
             super::current_unix_ts() - 90,
         );
 
-        let outcome = execute_session_tool_with_config(
+        let outcome = execute_session_mutation_tool_with_config(
             ToolCoreRequest {
                 tool_name: "session_recover".to_owned(),
                 payload: json!({
@@ -3509,7 +3559,7 @@ mod tests {
         })
         .expect("append queued event");
 
-        let error = execute_session_tool_with_config(
+        let error = execute_session_mutation_tool_with_config(
             ToolCoreRequest {
                 tool_name: "session_recover".to_owned(),
                 payload: json!({
@@ -3580,7 +3630,7 @@ mod tests {
             super::current_unix_ts() - 90,
         );
 
-        let outcome = execute_session_tool_with_config(
+        let outcome = execute_session_mutation_tool_with_config(
             ToolCoreRequest {
                 tool_name: "session_recover".to_owned(),
                 payload: json!({
@@ -3658,7 +3708,7 @@ mod tests {
         })
         .expect("append started event");
 
-        let error = execute_session_tool_with_config(
+        let error = execute_session_mutation_tool_with_config(
             ToolCoreRequest {
                 tool_name: "session_recover".to_owned(),
                 payload: json!({
@@ -3739,7 +3789,7 @@ mod tests {
             super::current_unix_ts() - 90,
         );
 
-        let outcome = execute_session_tool_with_config(
+        let outcome = execute_session_mutation_tool_with_config(
             ToolCoreRequest {
                 tool_name: "session_recover".to_owned(),
                 payload: json!({
@@ -3900,7 +3950,7 @@ mod tests {
             super::current_unix_ts() - 90,
         );
 
-        let outcome = execute_session_tool_with_config(
+        let outcome = execute_session_mutation_tool_with_config(
             ToolCoreRequest {
                 tool_name: "session_recover".to_owned(),
                 payload: json!({
@@ -4024,7 +4074,7 @@ mod tests {
         })
         .expect("append queued event");
 
-        let outcome = execute_session_tool_with_config(
+        let outcome = execute_session_mutation_tool_with_config(
             ToolCoreRequest {
                 tool_name: "session_cancel".to_owned(),
                 payload: json!({
@@ -4095,7 +4145,7 @@ mod tests {
         })
         .expect("append started event");
 
-        let outcome = execute_session_tool_with_config(
+        let outcome = execute_session_mutation_tool_with_config(
             ToolCoreRequest {
                 tool_name: "session_cancel".to_owned(),
                 payload: json!({
@@ -4203,7 +4253,7 @@ mod tests {
         })
         .expect("append running started event");
 
-        let outcome = execute_session_tool_with_config(
+        let outcome = execute_session_mutation_tool_with_config(
             ToolCoreRequest {
                 tool_name: "session_cancel".to_owned(),
                 payload: json!({
@@ -4333,7 +4383,7 @@ mod tests {
         })
         .expect("append running started event");
 
-        let outcome = execute_session_tool_with_config(
+        let outcome = execute_session_mutation_tool_with_config(
             ToolCoreRequest {
                 tool_name: "session_cancel".to_owned(),
                 payload: json!({
@@ -5058,7 +5108,7 @@ mod tests {
         )
         .expect("finalize child");
 
-        let outcome = execute_session_tool_with_config(
+        let outcome = execute_session_mutation_tool_with_config(
             ToolCoreRequest {
                 tool_name: "session_archive".to_owned(),
                 payload: json!({
@@ -5148,7 +5198,7 @@ mod tests {
             )
             .expect("finalize child");
         }
-        execute_session_tool_with_config(
+        execute_session_mutation_tool_with_config(
             ToolCoreRequest {
                 tool_name: "session_archive".to_owned(),
                 payload: json!({
@@ -5160,7 +5210,7 @@ mod tests {
         )
         .expect("archive already-archived child");
 
-        let outcome = execute_session_tool_with_config(
+        let outcome = execute_session_mutation_tool_with_config(
             ToolCoreRequest {
                 tool_name: "session_archive".to_owned(),
                 payload: json!({
@@ -5261,7 +5311,7 @@ mod tests {
             )
             .expect("finalize child");
         }
-        execute_session_tool_with_config(
+        execute_session_mutation_tool_with_config(
             ToolCoreRequest {
                 tool_name: "session_archive".to_owned(),
                 payload: json!({
@@ -5273,7 +5323,7 @@ mod tests {
         )
         .expect("archive already-archived child");
 
-        let outcome = execute_session_tool_with_config(
+        let outcome = execute_session_mutation_tool_with_config(
             ToolCoreRequest {
                 tool_name: "session_archive".to_owned(),
                 payload: json!({

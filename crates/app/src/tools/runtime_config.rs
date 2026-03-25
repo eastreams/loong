@@ -290,6 +290,7 @@ pub struct ToolRuntimeConfig {
     pub shell_default_mode: ShellPolicyDefault,
     pub config_path: Option<PathBuf>,
     pub sessions_enabled: bool,
+    pub sessions_allow_mutation: bool,
     pub messages_enabled: bool,
     pub delegate_enabled: bool,
     pub runtime_self: RuntimeSelfRuntimePolicy,
@@ -314,6 +315,7 @@ impl Default for ToolRuntimeConfig {
             shell_default_mode: ShellPolicyDefault::Deny,
             config_path: None,
             sessions_enabled: true,
+            sessions_allow_mutation: false,
             messages_enabled: false,
             delegate_enabled: true,
             runtime_self: RuntimeSelfRuntimePolicy::default(),
@@ -349,6 +351,7 @@ impl ToolRuntimeConfig {
             shell_default_mode: ShellPolicyDefault::parse(&config.tools.shell_default_mode),
             config_path: config_path.map(Path::to_path_buf),
             sessions_enabled: config.tools.sessions.enabled,
+            sessions_allow_mutation: config.tools.sessions.allow_mutation,
             messages_enabled: config.tools.messages.enabled,
             delegate_enabled: config.tools.delegate.enabled,
             runtime_self: RuntimeSelfRuntimePolicy::from_limits(
@@ -454,6 +457,8 @@ impl ToolRuntimeConfig {
             .ok()
             .map(PathBuf::from);
         let sessions_enabled = parse_env_bool("LOONGCLAW_TOOL_SESSIONS_ENABLED").unwrap_or(true);
+        let sessions_allow_mutation =
+            parse_env_bool("LOONGCLAW_TOOL_SESSIONS_ALLOW_MUTATION").unwrap_or(false);
         let messages_enabled = parse_env_bool("LOONGCLAW_TOOL_MESSAGES_ENABLED").unwrap_or(false);
         let delegate_enabled = parse_env_bool("LOONGCLAW_TOOL_DELEGATE_ENABLED").unwrap_or(true);
         let runtime_self_max_source_chars =
@@ -553,6 +558,7 @@ impl ToolRuntimeConfig {
             file_root,
             config_path,
             sessions_enabled,
+            sessions_allow_mutation,
             messages_enabled,
             delegate_enabled,
             runtime_self: runtime_self_policy,
@@ -1022,6 +1028,7 @@ mod tests {
             "LOONGCLAW_CONFIG_PATH",
             "LOONGCLAW_FILE_ROOT",
             "LOONGCLAW_TOOL_SESSIONS_ENABLED",
+            "LOONGCLAW_TOOL_SESSIONS_ALLOW_MUTATION",
             "LOONGCLAW_TOOL_MESSAGES_ENABLED",
             "LOONGCLAW_TOOL_DELEGATE_ENABLED",
             "LOONGCLAW_RUNTIME_SELF_MAX_SOURCE_CHARS",
@@ -1075,6 +1082,7 @@ mod tests {
         assert!(config.file_root.is_none());
         assert!(config.config_path.is_none());
         assert!(config.sessions_enabled);
+        assert!(!config.sessions_allow_mutation);
         assert!(!config.messages_enabled);
         assert!(config.delegate_enabled);
         assert_eq!(
@@ -1140,6 +1148,7 @@ mod tests {
     fn explicit_config_injection_overrides_defaults() {
         let config = ToolRuntimeConfig {
             sessions_enabled: false,
+            sessions_allow_mutation: true,
             messages_enabled: true,
             delegate_enabled: false,
             shell_allow: BTreeSet::from(["git".to_owned(), "cargo".to_owned()]),
@@ -1188,6 +1197,7 @@ mod tests {
             Some(PathBuf::from("/tmp/test-root/loongclaw.toml"))
         );
         assert!(!config.sessions_enabled);
+        assert!(config.sessions_allow_mutation);
         assert!(config.messages_enabled);
         assert!(!config.delegate_enabled);
         assert_eq!(config.runtime_self.max_source_chars, 4_096);
@@ -1296,6 +1306,22 @@ mod tests {
     }
 
     #[test]
+    fn from_loongclaw_config_projects_session_mutation_toggle() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        #[cfg(feature = "feishu-integration")]
+        clear_feishu_runtime_env(&mut env);
+
+        let mut config = crate::config::LoongClawConfig::default();
+        config.tools.sessions.allow_mutation = true;
+
+        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+
+        assert!(runtime.sessions_enabled);
+        assert!(runtime.sessions_allow_mutation);
+    }
+
+    #[test]
     fn from_loongclaw_config_canonicalizes_web_search_provider_alias() {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
@@ -1347,6 +1373,7 @@ mod tests {
         #[cfg(feature = "feishu-integration")]
         clear_feishu_runtime_env(&mut env);
         env.set("LOONGCLAW_TOOL_SESSIONS_ENABLED", "false");
+        env.set("LOONGCLAW_TOOL_SESSIONS_ALLOW_MUTATION", "true");
         env.set("LOONGCLAW_TOOL_MESSAGES_ENABLED", "true");
         env.set("LOONGCLAW_TOOL_DELEGATE_ENABLED", "false");
         env.set("LOONGCLAW_BROWSER_ENABLED", "false");
@@ -1392,6 +1419,7 @@ mod tests {
 
         let config = ToolRuntimeConfig::from_env();
         assert!(!config.sessions_enabled);
+        assert!(config.sessions_allow_mutation);
         assert!(config.messages_enabled);
         assert!(!config.delegate_enabled);
         assert!(!config.browser.enabled);

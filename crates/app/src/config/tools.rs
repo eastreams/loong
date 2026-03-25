@@ -101,6 +101,8 @@ pub struct SessionToolConfig {
     pub list_limit: usize,
     #[serde(default = "default_session_history_limit")]
     pub history_limit: usize,
+    #[serde(default)]
+    pub allow_mutation: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -445,6 +447,7 @@ impl Default for SessionToolConfig {
             visibility: SessionVisibility::default(),
             list_limit: default_session_list_limit(),
             history_limit: default_session_history_limit(),
+            allow_mutation: false,
         }
     }
 }
@@ -916,6 +919,7 @@ mod tests {
         assert_eq!(config.sessions.visibility, SessionVisibility::Children);
         assert_eq!(config.sessions.list_limit, 100);
         assert_eq!(config.sessions.history_limit, 200);
+        assert!(!config.sessions.allow_mutation);
         assert!(!config.messages.enabled);
         assert!(config.delegate.enabled);
         assert_eq!(config.delegate.max_depth, 1);
@@ -1128,6 +1132,7 @@ denied_calls = ["tool:session_cancel"]
 visibility = "self"
 list_limit = 12
 history_limit = 34
+allow_mutation = true
 
 [tools.messages]
 enabled = true
@@ -1171,6 +1176,7 @@ max_text_chars = 1024
         );
         assert_eq!(parsed.tools.sessions.list_limit, 12);
         assert_eq!(parsed.tools.sessions.history_limit, 34);
+        assert!(parsed.tools.sessions.allow_mutation);
         assert!(parsed.tools.messages.enabled);
         assert!(!parsed.tools.delegate.enabled);
         assert_eq!(parsed.tools.delegate.max_depth, 2);

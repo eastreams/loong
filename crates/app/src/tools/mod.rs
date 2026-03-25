@@ -1803,7 +1803,7 @@ mod tests {
     fn tool_registry_returns_runtime_discoverable_tools_for_default_config() {
         let config = runtime_config::ToolRuntimeConfig::default();
         let entries = tool_registry_with_config(Some(&config));
-        assert_eq!(entries.len(), 24);
+        assert_eq!(entries.len(), 21);
         let names: Vec<&str> = entries.iter().map(|e| e.name).collect();
         assert!(names.contains(&"approval_request_resolve"));
         assert!(names.contains(&"approval_request_status"));
@@ -1818,10 +1818,7 @@ mod tests {
         assert!(names.contains(&"file.write"));
         assert!(names.contains(&"file.edit"));
         assert!(names.contains(&"provider.switch"));
-        assert!(names.contains(&"session_archive"));
-        assert!(names.contains(&"session_cancel"));
         assert!(names.contains(&"session_events"));
-        assert!(names.contains(&"session_recover"));
         assert!(names.contains(&"session_status"));
         assert!(names.contains(&"session_wait"));
         assert!(names.contains(&"sessions_history"));
@@ -1835,6 +1832,9 @@ mod tests {
         assert!(names.contains(&"external_skills.policy"));
         assert!(!names.contains(&"external_skills.remove"));
         assert!(!names.contains(&"shell.exec"));
+        assert!(!names.contains(&"session_archive"));
+        assert!(!names.contains(&"session_cancel"));
+        assert!(!names.contains(&"session_recover"));
         assert!(!names.contains(&"sessions_send"));
     }
 
@@ -1848,7 +1848,7 @@ mod tests {
     fn tool_registry_returns_runtime_discoverable_tools_for_default_config_no_websearch() {
         let config = runtime_config::ToolRuntimeConfig::default();
         let entries = tool_registry_with_config(Some(&config));
-        assert_eq!(entries.len(), 23);
+        assert_eq!(entries.len(), 20);
         let names: Vec<&str> = entries.iter().map(|e| e.name).collect();
         assert!(names.contains(&"approval_request_resolve"));
         assert!(names.contains(&"approval_request_status"));
@@ -1863,10 +1863,7 @@ mod tests {
         assert!(names.contains(&"file.write"));
         assert!(names.contains(&"file.edit"));
         assert!(names.contains(&"provider.switch"));
-        assert!(names.contains(&"session_archive"));
-        assert!(names.contains(&"session_cancel"));
         assert!(names.contains(&"session_events"));
-        assert!(names.contains(&"session_recover"));
         assert!(names.contains(&"session_status"));
         assert!(names.contains(&"session_wait"));
         assert!(names.contains(&"sessions_history"));
@@ -1880,7 +1877,26 @@ mod tests {
         assert!(names.contains(&"external_skills.policy"));
         assert!(!names.contains(&"external_skills.remove"));
         assert!(!names.contains(&"shell.exec"));
+        assert!(!names.contains(&"session_archive"));
+        assert!(!names.contains(&"session_cancel"));
+        assert!(!names.contains(&"session_recover"));
         assert!(!names.contains(&"sessions_send"));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn tool_registry_re_exposes_session_mutation_tools_when_runtime_policy_allows_them() {
+        let config = runtime_config::ToolRuntimeConfig {
+            sessions_allow_mutation: true,
+            ..runtime_config::ToolRuntimeConfig::default()
+        };
+
+        let entries = tool_registry_with_config(Some(&config));
+        let names: Vec<&str> = entries.iter().map(|entry| entry.name).collect();
+
+        assert!(names.contains(&"session_archive"));
+        assert!(names.contains(&"session_cancel"));
+        assert!(names.contains(&"session_recover"));
     }
 
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
@@ -1913,7 +1929,7 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[test]
-    fn runtime_tool_view_includes_runtime_session_tools_but_hides_planned_ones() {
+    fn runtime_tool_view_hides_session_mutation_tools_by_default() {
         let view = runtime_tool_view_for_config(&crate::config::ToolConfig::default());
 
         for tool_name in [
@@ -1922,10 +1938,7 @@ mod tests {
             "approval_requests_list",
             "delegate",
             "delegate_async",
-            "session_archive",
-            "session_cancel",
             "session_events",
-            "session_recover",
             "session_status",
             "session_wait",
             "sessions_history",
@@ -1940,12 +1953,32 @@ mod tests {
             );
         }
 
+        for tool_name in ["session_archive", "session_cancel", "session_recover"] {
+            assert!(
+                !view.contains(tool_name),
+                "expected runtime view to hide `{tool_name}` by default"
+            );
+        }
+
         let tool_name = "sessions_send";
         assert!(
             !view.contains(tool_name),
             "expected runtime view to keep `{tool_name}` hidden"
         );
         assert!(view.contains("web.fetch"));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn runtime_tool_view_re_exposes_session_mutation_tools_when_enabled() {
+        let mut config = crate::config::ToolConfig::default();
+        config.sessions.allow_mutation = true;
+
+        let view = runtime_tool_view_for_config(&config);
+
+        assert!(view.contains("session_archive"));
+        assert!(view.contains("session_cancel"));
+        assert!(view.contains("session_recover"));
     }
 
     #[test]
@@ -2013,6 +2046,7 @@ mod tests {
     fn capability_snapshot_with_config_uses_runtime_enabled_tool_view() {
         let config = runtime_config::ToolRuntimeConfig {
             sessions_enabled: false,
+            sessions_allow_mutation: false,
             messages_enabled: false,
             delegate_enabled: false,
             browser: runtime_config::BrowserRuntimePolicy {

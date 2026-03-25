@@ -167,6 +167,7 @@ pub enum ToolExposureClass {
 pub enum ToolVisibilityGate {
     Always,
     Sessions,
+    SessionMutation,
     Messages,
     Delegate,
     Browser,
@@ -566,7 +567,7 @@ pub fn tool_catalog() -> ToolCatalog {
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
-            visibility_gate: ToolVisibilityGate::Sessions,
+            visibility_gate: ToolVisibilityGate::SessionMutation,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: session_archive_definition,
         },
@@ -578,7 +579,7 @@ pub fn tool_catalog() -> ToolCatalog {
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
-            visibility_gate: ToolVisibilityGate::Sessions,
+            visibility_gate: ToolVisibilityGate::SessionMutation,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: session_cancel_definition,
         },
@@ -602,7 +603,7 @@ pub fn tool_catalog() -> ToolCatalog {
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
-            visibility_gate: ToolVisibilityGate::Sessions,
+            visibility_gate: ToolVisibilityGate::SessionMutation,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: session_recover_definition,
         },
@@ -1084,6 +1085,11 @@ fn tool_visibility_gate_enabled_for_runtime_view(
     match gate {
         ToolVisibilityGate::Always => true,
         ToolVisibilityGate::Sessions => config.sessions.enabled,
+        ToolVisibilityGate::SessionMutation => {
+            let sessions_enabled = config.sessions.enabled;
+            let allow_mutation = config.sessions.allow_mutation;
+            sessions_enabled && allow_mutation
+        }
         ToolVisibilityGate::Messages => config.messages.enabled,
         ToolVisibilityGate::Delegate => config.delegate.enabled,
         ToolVisibilityGate::Browser => config.browser.enabled,
@@ -1105,6 +1111,11 @@ fn tool_visibility_gate_enabled_for_runtime_policy(
     match gate {
         ToolVisibilityGate::Always => true,
         ToolVisibilityGate::Sessions => config.sessions_enabled,
+        ToolVisibilityGate::SessionMutation => {
+            let sessions_enabled = config.sessions_enabled;
+            let allow_mutation = config.sessions_allow_mutation;
+            sessions_enabled && allow_mutation
+        }
         ToolVisibilityGate::Messages => config.messages_enabled,
         ToolVisibilityGate::Delegate => config.delegate_enabled,
         ToolVisibilityGate::Browser => config.browser.enabled,
