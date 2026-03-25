@@ -1738,6 +1738,7 @@ fn provider_runtime_contract_defaults_are_stable() {
         openai_contract.transport_mode,
         ProviderTransportMode::OpenAiChatCompletions
     );
+    assert!(!openai_contract.supports_turn_streaming_events());
     assert_eq!(
         openai_contract.profile_health_mode,
         ProviderProfileHealthMode::EnforceUnusableWindows
@@ -1797,10 +1798,22 @@ fn provider_runtime_contract_defaults_are_stable() {
         anthropic_contract.transport_mode,
         ProviderTransportMode::AnthropicMessages
     );
+    assert!(anthropic_contract.supports_turn_streaming_events());
     assert_eq!(
         anthropic_contract.default_reasoning_field,
         ReasoningField::Omit
     );
+
+    let responses_contract = provider_runtime_contract(&ProviderConfig {
+        kind: ProviderKind::Openai,
+        wire_api: crate::config::ProviderWireApi::Responses,
+        ..ProviderConfig::default()
+    });
+    assert_eq!(
+        responses_contract.transport_mode,
+        ProviderTransportMode::Responses
+    );
+    assert!(!responses_contract.supports_turn_streaming_events());
 
     let bedrock_contract = provider_runtime_contract(&ProviderConfig {
         kind: ProviderKind::Bedrock,
@@ -1814,6 +1827,7 @@ fn provider_runtime_contract_defaults_are_stable() {
         bedrock_contract.transport_mode,
         ProviderTransportMode::BedrockConverse
     );
+    assert!(!bedrock_contract.supports_turn_streaming_events());
     assert_eq!(
         bedrock_contract.default_reasoning_field,
         ReasoningField::Omit
@@ -1846,6 +1860,7 @@ fn provider_runtime_contract_defaults_are_stable() {
         kimi_coding_contract.transport_mode,
         ProviderTransportMode::KimiApi
     );
+    assert!(!kimi_coding_contract.supports_turn_streaming_events());
     assert!(!kimi_coding_contract.validation.forbid_kimi_coding_endpoint);
     assert!(
         kimi_coding_contract
@@ -1918,6 +1933,35 @@ fn provider_runtime_contract_defaults_are_stable() {
     assert_eq!(
         openai_observe_only_contract.profile_health_mode,
         ProviderProfileHealthMode::ObserveOnly
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn request_turn_streaming_rejects_unsupported_transport_modes() {
+    let config = test_config(ProviderConfig {
+        kind: ProviderKind::Openai,
+        ..ProviderConfig::default()
+    });
+
+    assert!(!supports_turn_streaming_events(&config));
+
+    let error = request_turn_streaming(
+        &config,
+        "session-provider-test",
+        "turn-provider-test",
+        &[json!({
+            "role": "user",
+            "content": "turn ping"
+        })],
+        ProviderRuntimeBinding::direct(),
+        None,
+    )
+    .await
+    .expect_err("unsupported transports should be rejected before any request is prepared");
+
+    assert!(
+        error.contains("does not support live turn streaming events"),
+        "the provider error should explain the unsupported transport: {error}"
     );
 }
 

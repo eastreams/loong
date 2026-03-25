@@ -31,7 +31,7 @@ use crate::acp::{
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 use crate::runtime_self_continuity;
 
-use super::super::config::{LoongClawConfig, ProviderProtocolFamily};
+use super::super::config::LoongClawConfig;
 use super::ConversationSessionAddress;
 use super::ProviderErrorMode;
 use super::analytics::{
@@ -2831,8 +2831,7 @@ fn provider_turn_observer_supports_streaming(
         return false;
     }
 
-    let protocol_family = config.provider.kind.protocol_family();
-    protocol_family == ProviderProtocolFamily::AnthropicMessages
+    crate::provider::supports_turn_streaming_events(config)
 }
 
 async fn request_provider_turn_with_observer<R: ConversationRuntime + ?Sized>(
@@ -7362,6 +7361,88 @@ mod tests {
     }
 
     #[derive(Default)]
+    struct ObserverFallbackRuntime {
+        request_turn_calls: StdMutex<usize>,
+        request_turn_streaming_calls: StdMutex<usize>,
+    }
+
+    #[async_trait]
+    impl ConversationRuntime for ObserverFallbackRuntime {
+        async fn build_messages(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _include_system_prompt: bool,
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<Vec<Value>> {
+            Ok(vec![json!({
+                "role": "system",
+                "content": "stay focused"
+            })])
+        }
+
+        async fn request_completion(
+            &self,
+            _config: &LoongClawConfig,
+            _messages: &[Value],
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<String> {
+            Ok("completion".to_owned())
+        }
+
+        async fn request_turn(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<ProviderTurn> {
+            let mut request_turn_calls = self
+                .request_turn_calls
+                .lock()
+                .expect("request-turn call lock should not be poisoned");
+            *request_turn_calls += 1;
+
+            Ok(ProviderTurn {
+                assistant_text: "final reply".to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            })
+        }
+
+        async fn request_turn_streaming(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+            _on_token: crate::provider::StreamingTokenCallback,
+        ) -> CliResult<ProviderTurn> {
+            let mut request_turn_streaming_calls = self
+                .request_turn_streaming_calls
+                .lock()
+                .expect("request-turn-streaming call lock should not be poisoned");
+            *request_turn_streaming_calls += 1;
+            panic!("request_turn_streaming should not be called for unsupported transports")
+        }
+
+        async fn persist_turn(
+            &self,
+            _session_id: &str,
+            _role: &str,
+            _content: &str,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
     struct RecordingTurnObserver {
         phase_events: StdMutex<Vec<ConversationTurnPhaseEvent>>,
         tool_events: StdMutex<Vec<ConversationTurnToolEvent>>,
@@ -7453,6 +7534,74 @@ mod tests {
         assert_eq!(token_events.len(), 1);
         assert_eq!(token_events[0].event_type, "text_delta");
         assert_eq!(token_events[0].delta.text.as_deref(), Some("draft"));
+    }
+
+    #[tokio::test]
+    async fn handle_turn_with_observer_falls_back_when_streaming_events_are_unsupported() {
+        let mut config = LoongClawConfig::default();
+        config.provider.kind = crate::config::ProviderKind::Openai;
+
+        let runtime = ObserverFallbackRuntime::default();
+        let observer = Arc::new(RecordingTurnObserver::default());
+        let observer_handle: ConversationTurnObserverHandle = observer.clone();
+        let acp_options = AcpConversationTurnOptions::automatic();
+        let address = ConversationSessionAddress::from_session_id("observer-session");
+        let reply = ConversationTurnCoordinator::new()
+            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+                &config,
+                &address,
+                "say hello",
+                ProviderErrorMode::Propagate,
+                &runtime,
+                &acp_options,
+                ConversationRuntimeBinding::direct(),
+                None,
+                Some(observer_handle),
+            )
+            .await
+            .expect("observer turn should succeed");
+
+        assert_eq!(reply, "final reply");
+
+        let request_turn_calls = runtime
+            .request_turn_calls
+            .lock()
+            .expect("request-turn call lock should not be poisoned");
+        assert_eq!(*request_turn_calls, 1);
+
+        let request_turn_streaming_calls = runtime
+            .request_turn_streaming_calls
+            .lock()
+            .expect("request-turn-streaming call lock should not be poisoned");
+        assert_eq!(*request_turn_streaming_calls, 0);
+
+        let phase_events = observer
+            .phase_events
+            .lock()
+            .expect("phase event lock should not be poisoned");
+        let phase_names = phase_events
+            .iter()
+            .map(|event| event.phase)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            phase_names,
+            vec![
+                ConversationTurnPhase::Preparing,
+                ConversationTurnPhase::ContextReady,
+                ConversationTurnPhase::RequestingProvider,
+                ConversationTurnPhase::FinalizingReply,
+                ConversationTurnPhase::Completed,
+            ]
+        );
+
+        let token_events = observer
+            .token_events
+            .lock()
+            .expect("token event lock should not be poisoned");
+        assert!(
+            token_events.is_empty(),
+            "unsupported transports should not emit streaming token events: {token_events:#?}"
+        );
     }
 
     #[tokio::test]

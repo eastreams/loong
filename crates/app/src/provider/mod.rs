@@ -69,6 +69,9 @@ use catalog_runtime::{ModelCatalogCacheLookup, fetch_model_catalog_singleflight}
 #[cfg(test)]
 use contracts::ProviderApiError;
 #[cfg(test)]
+use contracts::ProviderFeatureFamily;
+use contracts::provider_runtime_contract;
+#[cfg(test)]
 use contracts::should_disable_tool_schema_for_error;
 #[cfg(test)]
 use contracts::{CompletionPayloadMode, ReasoningField, TemperatureField, TokenLimitField};
@@ -77,8 +80,6 @@ use contracts::{
     PayloadAdaptationAxis, ProviderReasoningExtraBodyMode, ProviderToolSchemaMode,
     ProviderTransportMode,
 };
-#[cfg(test)]
-use contracts::{ProviderFeatureFamily, provider_runtime_contract};
 #[cfg(test)]
 use contracts::{adapt_payload_mode_for_error, parse_provider_api_error};
 #[cfg(test)]
@@ -284,6 +285,11 @@ pub async fn request_turn_streaming(
     .await
 }
 
+pub fn supports_turn_streaming_events(config: &LoongClawConfig) -> bool {
+    let runtime_contract = provider_runtime_contract(&config.provider);
+    runtime_contract.supports_turn_streaming_events()
+}
+
 pub async fn request_turn_streaming_in_view(
     config: &LoongClawConfig,
     session_id: &str,
@@ -293,6 +299,10 @@ pub async fn request_turn_streaming_in_view(
     binding: ProviderRuntimeBinding<'_>,
     on_token: crate::provider::request_executor::StreamingTokenCallback,
 ) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
+    if !supports_turn_streaming_events(config) {
+        return Err("provider transport does not support live turn streaming events".to_owned());
+    }
+
     let session = prepare_provider_request_session(config).await?;
     let tool_runtime_config =
         crate::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None);

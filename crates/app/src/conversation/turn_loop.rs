@@ -6,7 +6,6 @@ use serde_json::{Value, json};
 
 use crate::CliResult;
 use crate::acp::{AcpTurnEventSink, JsonlAcpTurnEventSink};
-use crate::config::ProviderProtocolFamily;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 
 use super::super::config::LoongClawConfig;
@@ -131,8 +130,7 @@ impl ConversationTurnLoop {
         );
 
         for round_index in 0..policy.max_rounds {
-            let use_streaming =
-                config.provider.kind.protocol_family() == ProviderProtocolFamily::AnthropicMessages;
+            let use_streaming = crate::provider::supports_turn_streaming_events(config);
             let on_token: crate::provider::StreamingTokenCallback = if use_streaming {
                 let sink = JsonlAcpTurnEventSink::stderr_with_prefix("");
                 Some(Arc::new(
