@@ -127,4 +127,10 @@ mod tests {
         let payload = json!({"limit": -3});
         assert_eq!(optional_payload_limit(&payload, "limit", 10, 20), 10);
     }
+
+    #[test]
+    fn optional_string_returns_none_for_non_string() {
+        let payload = json!({"tag": 42});
+        assert!(optional_payload_string(&payload, "tag").is_none());
+    }
 }
