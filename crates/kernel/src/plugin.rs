@@ -1160,11 +1160,10 @@ mod tests {
         assert!(report.descriptors[0].manifest.tags.is_empty());
         assert!(report.descriptors[0].manifest.input_examples.is_empty());
         assert!(
-            report.descriptors[0]
+            !report.descriptors[0]
                 .manifest
                 .metadata
-                .get("legacy_source")
-                .is_none()
+                .contains_key("legacy_source")
         );
         assert_eq!(
             report.descriptors[0].manifest.provider_id,
