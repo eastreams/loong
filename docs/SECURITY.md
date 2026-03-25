@@ -49,7 +49,7 @@ Tool-specific request approval currently lives in the `PolicyExtensionChain`; th
 
 ### Capability Tokens
 
-- 9 capability types with generation-based revocation
+- 8 capability types with generation-based revocation
 - `AtomicU64` threshold: revoke all tokens with generation <= N
 - TTL enforcement on every authorization check
 - `membrane` field exists but not enforced (TD-003)
