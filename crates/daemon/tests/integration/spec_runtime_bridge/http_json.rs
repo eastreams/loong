@@ -96,6 +96,7 @@ async fn execute_spec_http_json_bridge_executes_against_local_server() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "http-runtime".to_owned(),
             operation: "invoke".to_owned(),
@@ -207,6 +208,7 @@ async fn execute_spec_http_json_bridge_blocks_when_protocol_authorization_fails(
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "http-authz-block".to_owned(),
             operation: "invoke".to_owned(),
@@ -345,6 +347,7 @@ async fn execute_spec_http_json_bridge_strict_contract_fails_on_method_mismatch(
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "http-strict-method".to_owned(),
             operation: "invoke".to_owned(),
@@ -469,6 +472,7 @@ async fn execute_spec_http_json_bridge_strict_contract_fails_on_id_mismatch() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "http-strict-id".to_owned(),
             operation: "invoke".to_owned(),
@@ -597,6 +601,7 @@ async fn execute_spec_http_json_bridge_strict_contract_executes_on_matching_fram
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "http-strict-pass".to_owned(),
             operation: "invoke".to_owned(),

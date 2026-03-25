@@ -6,6 +6,12 @@ fn template_spec_is_json_roundtrip_stable() {
     let encoded = serde_json::to_string_pretty(&spec).expect("encode spec");
     let decoded: RunnerSpec = serde_json::from_str(&encoded).expect("decode spec");
     assert_eq!(decoded.pack.pack_id, "sales-intel-local");
+    let readiness = decoded
+        .plugin_setup_readiness
+        .expect("template should expose plugin setup readiness");
+    assert!(readiness.inherit_process_env);
+    assert!(readiness.verified_env_vars.is_empty());
+    assert!(readiness.verified_config_keys.is_empty());
     assert!(matches!(
         decoded.operation,
         OperationSpec::RuntimeExtension { .. }
@@ -19,6 +25,7 @@ fn runtime_extension_fixture_uses_backward_compatible_spec_defaults() {
     let parsed: RunnerSpec = serde_json::from_str(&raw)
         .expect("runtime-extension fixture should parse when hotfixes is omitted");
     assert!(parsed.hotfixes.is_empty());
+    assert!(parsed.plugin_setup_readiness.is_none());
 }
 
 #[tokio::test]
@@ -46,6 +53,7 @@ async fn execute_spec_returns_blocked_instead_of_panicking_on_operation_error() 
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "non-existent".to_owned(),
             operation: "notify".to_owned(),
@@ -236,6 +244,7 @@ fn security_scan_profile_path_overrides_bundled_defaults() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-security-profile-path".to_owned(),
             objective: "verify profile loading".to_owned(),
@@ -344,6 +353,7 @@ fn security_scan_profile_sha256_pin_accepts_matching_profile() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-security-profile-pin".to_owned(),
             objective: "verify profile sha pin".to_owned(),
@@ -444,6 +454,7 @@ async fn execute_spec_blocks_when_security_scan_profile_sha256_mismatches() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-security-profile-mismatch".to_owned(),
             objective: "mismatch pin should block".to_owned(),
@@ -552,6 +563,7 @@ fn security_scan_profile_signature_accepts_matching_signature() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-security-signature-pin".to_owned(),
             objective: "verify profile signature pin".to_owned(),
@@ -665,6 +677,7 @@ async fn execute_spec_blocks_when_security_scan_profile_signature_mismatches() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-security-signature-mismatch".to_owned(),
             objective: "signature mismatch should block".to_owned(),
@@ -713,6 +726,7 @@ async fn execute_spec_runs_runtime_extension_and_captures_audit() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::RuntimeExtension {
             action: "start".to_owned(),
             required_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
@@ -770,6 +784,7 @@ async fn execute_spec_auto_provisions_provider_and_channel_when_missing() {
             required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
         }),
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "openrouter".to_owned(),
             operation: "chat".to_owned(),
@@ -825,6 +840,7 @@ async fn execute_spec_applies_hotfix_endpoint_before_invocation() {
             channel_id: "alerts".to_owned(),
             new_endpoint: "https://hooks.slack.com/services/new".to_owned(),
         }],
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "slack".to_owned(),
             operation: "notify".to_owned(),
@@ -897,6 +913,7 @@ async fn execute_spec_scans_plugin_files_and_absorbs_them_for_hotplug() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "openrouter".to_owned(),
             operation: "chat".to_owned(),
@@ -994,6 +1011,7 @@ async fn execute_spec_blocks_when_bridge_matrix_does_not_support_plugin() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "openrouter".to_owned(),
             operation: "chat".to_owned(),
@@ -1105,6 +1123,7 @@ async fn execute_spec_skips_blocked_plugins_when_bridge_enforcement_is_disabled(
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "webhookx".to_owned(),
             operation: "notify".to_owned(),
@@ -1206,6 +1225,7 @@ async fn execute_spec_surfaces_setup_incomplete_plugins_without_marking_them_rea
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ToolSearch {
             query: "tavily".to_owned(),
             limit: 5,
@@ -1346,6 +1366,7 @@ async fn execute_spec_bootstrap_applies_only_bridges_allowed_by_bootstrap_policy
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "http-provider".to_owned(),
             operation: "notify".to_owned(),
@@ -1462,6 +1483,7 @@ async fn execute_spec_bootstrap_enforcement_blocks_when_ready_plugins_are_deferr
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-bootstrap-enforce".to_owned(),
             objective: "must be blocked by bootstrap enforcement".to_owned(),
@@ -1533,6 +1555,7 @@ async fn execute_spec_blocks_on_bridge_support_checksum_mismatch() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-bridge-checksum".to_owned(),
             objective: "should be blocked before execution".to_owned(),
@@ -1595,6 +1618,7 @@ async fn execute_spec_blocks_on_bridge_support_sha256_mismatch() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-bridge-sha256".to_owned(),
             objective: "should be blocked before execution".to_owned(),
@@ -1656,6 +1680,7 @@ async fn execute_spec_allows_execution_when_bridge_support_sha256_matches() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-bridge-sha256-match".to_owned(),
             objective: "should pass".to_owned(),
@@ -1754,6 +1779,7 @@ async fn execute_spec_enriches_plugin_bridge_metadata_and_emits_bridge_execution
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "ffi-provider".to_owned(),
             operation: "invoke".to_owned(),
@@ -1897,6 +1923,7 @@ async fn execute_spec_wasm_component_bridge_executes_when_runtime_enabled() {
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "wasm-runtime-provider".to_owned(),
             operation: "invoke".to_owned(),
@@ -2127,6 +2154,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_component_sha256_mismatc
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "wasm-runtime-hash-provider".to_owned(),
             operation: "invoke".to_owned(),
@@ -2265,6 +2293,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_metadata_pin_conflicts_w
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "wasm-runtime-pin-conflict-provider".to_owned(),
             operation: "invoke".to_owned(),
@@ -2399,6 +2428,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_hash_pin_required_but_mi
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "wasm-runtime-pin-required-provider".to_owned(),
             operation: "invoke".to_owned(),
@@ -2538,6 +2568,7 @@ async fn execute_spec_wasm_component_bridge_blocks_artifact_outside_runtime_pref
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "wasm-runtime-path-provider".to_owned(),
             operation: "invoke".to_owned(),
@@ -2681,6 +2712,7 @@ async fn execute_spec_wasm_component_bridge_blocks_symlink_escape_under_allowed_
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "wasm-runtime-symlink-provider".to_owned(),
             operation: "invoke".to_owned(),
@@ -2815,6 +2847,7 @@ async fn execute_spec_wasm_component_bridge_blocks_non_regular_artifact_path() {
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "wasm-runtime-regular-file-provider".to_owned(),
             operation: "invoke".to_owned(),
@@ -2950,6 +2983,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_module_size_exceeds_runt
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "wasm-runtime-size-provider".to_owned(),
             operation: "invoke".to_owned(),
@@ -3042,6 +3076,7 @@ async fn execute_spec_blocks_when_wasm_runtime_enabled_without_allowed_prefixes(
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-wasm-runtime-invalid-policy".to_owned(),
             objective: "runtime policy should fail closed".to_owned(),
@@ -3170,6 +3205,7 @@ async fn execute_spec_security_scan_blocks_wasm_plugin_with_wasi_import() {
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-security-wasm-block".to_owned(),
             objective: "security scan should block risky wasm".to_owned(),
@@ -3319,6 +3355,7 @@ async fn execute_spec_security_scan_allows_clean_wasm_with_hash_pin() {
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-security-wasm-pass".to_owned(),
             objective: "security scan should allow clean wasm".to_owned(),
@@ -3450,6 +3487,7 @@ async fn execute_spec_security_scan_allows_clean_wasm_with_metadata_hash_pin() {
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-security-wasm-pass-metadata".to_owned(),
             objective: "security scan should accept metadata hash pin".to_owned(),
@@ -3586,6 +3624,7 @@ async fn execute_spec_security_scan_blocks_when_metadata_hash_pin_is_invalid() {
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-security-wasm-invalid-pin".to_owned(),
             objective: "security scan should block invalid metadata hash pin".to_owned(),
@@ -3719,6 +3758,7 @@ async fn execute_spec_security_scan_blocks_when_metadata_pin_conflicts_with_poli
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-security-wasm-pin-conflict".to_owned(),
             objective: "security scan should block conflicting wasm hash pins".to_owned(),
@@ -3843,6 +3883,7 @@ async fn execute_spec_security_scan_emits_audit_summary_when_not_blocking() {
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-security-audit-pass".to_owned(),
             objective: "security scan should emit audit summary".to_owned(),
@@ -4000,6 +4041,7 @@ async fn execute_spec_security_scan_exports_siem_record_with_truncation() {
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-security-siem-pass".to_owned(),
             objective: "security scan should export siem record".to_owned(),
@@ -4143,6 +4185,7 @@ async fn execute_spec_security_scan_siem_fail_closed_blocks_execution() {
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-security-siem-block".to_owned(),
             objective: "siem fail closed should block".to_owned(),
@@ -4293,6 +4336,7 @@ async fn execute_spec_security_scan_covers_deferred_plugins_not_only_applied_sub
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-security-deferred-ready".to_owned(),
             objective: "security scan must inspect deferred ready plugins".to_owned(),
@@ -4352,6 +4396,7 @@ async fn execute_spec_default_medium_policy_blocks_high_risk_tool_call_without_a
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ToolCore {
             tool_name: "delete-file".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
@@ -4403,6 +4448,7 @@ async fn execute_spec_per_call_approval_allows_high_risk_tool_call() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ToolCore {
             tool_name: "delete-file".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
@@ -4448,6 +4494,7 @@ async fn execute_spec_one_time_full_access_allows_high_risk_tool_call() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ToolCore {
             tool_name: "delete-file".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
@@ -4492,6 +4539,7 @@ async fn execute_spec_strict_mode_requires_approval_for_low_risk_tool_call() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ToolCore {
             tool_name: "read-schema".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
@@ -4531,6 +4579,7 @@ async fn execute_spec_default_medium_policy_allows_low_risk_tool_call_without_ap
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ToolCore {
             tool_name: "list-schema".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
@@ -4607,6 +4656,7 @@ async fn execute_spec_tool_core_can_run_claw_migrate_plan_via_native_tool_runtim
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ToolCore {
             tool_name: "claw.migrate".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
@@ -4693,6 +4743,7 @@ async fn execute_spec_tool_extension_can_hot_handle_claw_migrate_via_core_wrappe
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ToolExtension {
             extension_action: "plan".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
@@ -4796,6 +4847,7 @@ async fn execute_spec_tool_extension_can_discover_multiple_sources() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ToolExtension {
             extension_action: "discover".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
@@ -4894,6 +4946,7 @@ async fn execute_spec_tool_extension_can_merge_profiles_without_merging_prompt_l
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ToolExtension {
             extension_action: "merge_profiles".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
@@ -4998,6 +5051,7 @@ async fn execute_spec_tool_extension_apply_selected_safe_merge_keeps_native_prom
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ToolExtension {
             extension_action: "apply_selected".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
@@ -5074,6 +5128,7 @@ async fn execute_spec_denylist_overrides_other_approvals() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ToolCore {
             tool_name: "delete-file".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
@@ -5127,6 +5182,7 @@ async fn execute_spec_one_time_full_access_expired_is_rejected() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ToolCore {
             tool_name: "delete-file".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
@@ -5172,6 +5228,7 @@ async fn execute_spec_one_time_full_access_with_zero_remaining_uses_is_rejected(
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ToolCore {
             tool_name: "delete-file".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
@@ -5288,6 +5345,7 @@ async fn execute_spec_bootstrap_max_tasks_limits_applied_plugins() {
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-bootstrap-limit".to_owned(),
             objective: "run regardless of selective bootstrap".to_owned(),
@@ -5410,6 +5468,7 @@ async fn execute_spec_scans_multiple_roots_and_absorbs_per_root() {
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-multi-root".to_owned(),
             objective: "validate multi-root scan".to_owned(),
@@ -5525,6 +5584,7 @@ async fn execute_spec_plugin_scan_is_transactional_when_blocked() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-plugin-rollback".to_owned(),
             objective: "must block and rollback staged plugin absorb".to_owned(),
@@ -5622,6 +5682,7 @@ async fn execute_spec_blocks_when_package_manifest_conflicts_with_source_manifes
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-plugin-manifest-conflict".to_owned(),
             objective: "plugin scan should fail on package/source drift".to_owned(),
@@ -5759,6 +5820,7 @@ async fn execute_spec_bootstrap_budget_is_global_across_multiple_roots() {
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::Task {
             task_id: "t-bootstrap-global".to_owned(),
             objective: "max_tasks must be global across roots".to_owned(),
@@ -5903,6 +5965,7 @@ async fn execute_spec_tool_search_honors_deferred_filter_and_examples() {
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ToolSearch {
             query: "web search".to_owned(),
             limit: 5,
@@ -5941,6 +6004,140 @@ async fn execute_spec_tool_search_honors_deferred_filter_and_examples() {
     assert_eq!(
         report_visible_deferred.outcome["results"][0]["input_examples"][0]["query"],
         "search best rust crates"
+    );
+}
+
+#[tokio::test]
+async fn execute_spec_tool_search_uses_explicit_plugin_setup_readiness_context() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-tool-search-readiness-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    let plugin_manifest_path = plugin_root.join("loongclaw.plugin.json");
+    fs::write(
+        &plugin_manifest_path,
+        r#"
+{
+  "plugin_id": "tavily-search",
+  "provider_id": "tavily",
+  "connector_name": "tavily-http",
+  "endpoint": "https://api.tavily.com/search",
+  "capabilities": ["InvokeConnector"],
+  "metadata": {
+    "bridge_kind": "http_json",
+    "adapter_family": "web-search"
+  },
+  "summary": "Manifest-discovered Tavily package",
+  "tags": ["search", "provider"],
+  "setup": {
+    "mode": "metadata_only",
+    "surface": "web_search",
+    "required_env_vars": ["TAVILY_API_KEY"],
+    "required_config_keys": ["tools.web_search.default_provider"],
+    "default_env_var": "TAVILY_API_KEY",
+    "docs_urls": ["https://docs.example.com/tavily"],
+    "remediation": "set a Tavily credential before enabling search"
+  }
+}
+"#,
+    )
+    .expect("write plugin manifest");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-tool-search-readiness".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-tool-search-readiness".to_owned(),
+        ttl_s: 120,
+        approval: Some(HumanApprovalSpec {
+            mode: HumanApprovalMode::Disabled,
+            ..HumanApprovalSpec::default()
+        }),
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: Some(BridgeSupportSpec {
+            enabled: true,
+            supported_bridges: vec![PluginBridgeKind::HttpJson],
+            supported_adapter_families: Vec::new(),
+            enforce_supported: true,
+            policy_version: None,
+            expected_checksum: None,
+            expected_sha256: None,
+            execute_process_stdio: false,
+            execute_http_json: false,
+            allowed_process_commands: Vec::new(),
+            enforce_execution_success: false,
+            security_scan: None,
+        }),
+        bootstrap: Some(BootstrapSpec {
+            enabled: true,
+            allow_http_json_auto_apply: Some(false),
+            allow_process_stdio_auto_apply: Some(false),
+            allow_native_ffi_auto_apply: Some(false),
+            allow_wasm_component_auto_apply: Some(false),
+            allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
+            enforce_ready_execution: Some(false),
+            max_tasks: Some(8),
+        }),
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: Some(PluginSetupReadinessSpec {
+            inherit_process_env: false,
+            verified_env_vars: vec!["TAVILY_API_KEY".to_owned()],
+            verified_config_keys: vec!["tools.web_search.default_provider".to_owned()],
+        }),
+        operation: OperationSpec::ToolSearch {
+            query: "tavily".to_owned(),
+            limit: 5,
+            include_deferred: true,
+            include_examples: false,
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+
+    assert_eq!(report.operation_kind, "tool_search");
+    assert_eq!(report.plugin_activation_plans.len(), 1);
+    assert_eq!(report.plugin_activation_plans[0].ready_plugins, 1);
+    assert_eq!(
+        report.plugin_activation_plans[0].setup_incomplete_plugins,
+        0
+    );
+    assert!(matches!(
+        report.plugin_activation_plans[0].candidates[0].status,
+        loongclaw_daemon::kernel::PluginActivationStatus::Ready
+    ));
+    assert_eq!(report.outcome["returned"], 1);
+    assert_eq!(report.outcome["results"][0]["provider_id"], "tavily");
+    assert_eq!(report.outcome["results"][0]["setup_ready"], true);
+    assert_eq!(
+        report.outcome["results"][0]["missing_required_env_vars"],
+        json!([])
+    );
+    assert_eq!(
+        report.outcome["results"][0]["missing_required_config_keys"],
+        json!([])
     );
 }
 
@@ -6028,6 +6225,7 @@ async fn execute_spec_tool_search_uses_translation_bridge_kind_for_unabsorbed_pl
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ToolSearch {
             query: "rusty".to_owned(),
             limit: 5,

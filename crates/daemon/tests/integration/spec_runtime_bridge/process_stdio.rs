@@ -99,6 +99,7 @@ async fn execute_spec_process_stdio_bridge_executes_when_enabled_and_allowed() {
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "stdio-provider".to_owned(),
             operation: "invoke".to_owned(),
@@ -225,6 +226,7 @@ async fn execute_spec_process_stdio_bridge_blocks_when_command_not_allowlisted()
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "stdio-provider".to_owned(),
             operation: "invoke".to_owned(),
@@ -335,6 +337,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_invalid_json_line_response()
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "stdio-invalid-frame-provider".to_owned(),
             operation: "invoke".to_owned(),
@@ -454,6 +457,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_id_mismatch() {
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "stdio-mismatch-id-provider".to_owned(),
             operation: "invoke".to_owned(),
@@ -567,6 +571,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_method_mismatch() {
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "stdio-mismatch-method-provider".to_owned(),
             operation: "invoke".to_owned(),
@@ -678,6 +683,7 @@ async fn execute_spec_process_stdio_bridge_blocks_when_protocol_authorization_fa
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "stdio-authz-block-provider".to_owned(),
             operation: "invoke".to_owned(),
@@ -805,6 +811,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_recv_timeout() {
         }),
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: OperationSpec::ConnectorLegacy {
             connector_name: "stdio-timeout-provider".to_owned(),
             operation: "invoke".to_owned(),
