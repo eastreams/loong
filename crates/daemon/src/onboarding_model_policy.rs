@@ -181,7 +181,7 @@ mod tests {
         let prompt_default = resolve_onboarding_model_prompt_default(&config.provider, None)
             .expect("resolve prompt default");
 
-        assert_eq!(prompt_default, "MiniMax-M2.5");
+        assert_eq!(prompt_default, "MiniMax-M2.7");
     }
 
     #[test]
@@ -201,13 +201,13 @@ mod tests {
         let mut config = mvp::config::LoongClawConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
         config.provider.model = "auto".to_owned();
-        config.provider.preferred_models = vec!["MiniMax-M1".to_owned()];
+        config.provider.preferred_models = vec!["MiniMax-M2.5".to_owned()];
 
         let context = onboarding_model_selection_context(&config.provider);
 
         assert_eq!(context.current_model, "auto");
-        assert_eq!(context.recommended_model, Some("MiniMax-M2.5".to_owned()));
-        assert_eq!(context.preferred_fallback_models, vec!["MiniMax-M1"]);
+        assert_eq!(context.recommended_model, Some("MiniMax-M2.7".to_owned()));
+        assert_eq!(context.preferred_fallback_models, vec!["MiniMax-M2.5"]);
         assert!(context.allows_auto_fallback_hint);
     }
 

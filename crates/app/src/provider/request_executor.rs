@@ -1246,7 +1246,7 @@ mod tests {
             &provider,
             ProviderFailoverReason::AuthRejected,
             401,
-            "MiniMax-M2.5",
+            "MiniMax-M2.7",
             1,
             3,
             &json!({
