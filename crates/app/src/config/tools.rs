@@ -728,6 +728,43 @@ impl ToolConfig {
                 extra_message_variables,
             });
         }
+        if let Some(v) = self.tool_execution.default_timeout_seconds
+            && v == 0
+        {
+            let mut vars = std::collections::BTreeMap::new();
+            vars.insert("actual_value".to_owned(), v.to_string());
+            issues.push(super::shared::ConfigValidationIssue {
+                severity: super::shared::ConfigValidationSeverity::Error,
+                code: super::shared::ConfigValidationCode::NumericRange,
+                field_path: "tools.tool_execution.default_timeout_seconds".to_owned(),
+                inline_field_path: "tools.tool_execution.default_timeout_seconds".to_owned(),
+                example_env_name: "LOONGCLAW_TOOL_DEFAULT_TIMEOUT_SECONDS".to_owned(),
+                suggested_env_name: Some("LOONGCLAW_TOOL_DEFAULT_TIMEOUT_SECONDS".to_owned()),
+                extra_message_variables: vars,
+            });
+        }
+        for (key, &value) in &self.tool_execution.per_tool_timeout {
+            if value == 0 {
+                let mut vars = std::collections::BTreeMap::new();
+                vars.insert("tool_name".to_owned(), key.clone());
+                vars.insert("actual_value".to_owned(), value.to_string());
+                issues.push(super::shared::ConfigValidationIssue {
+                    severity: super::shared::ConfigValidationSeverity::Error,
+                    code: super::shared::ConfigValidationCode::NumericRange,
+                    field_path: format!("tools.tool_execution.per_tool_timeout[\"{key}\"]"),
+                    inline_field_path: format!("tools.tool_execution.per_tool_timeout[\"{key}\"]"),
+                    example_env_name: format!(
+                        "LOONGCLAW_TOOL_{}_TIMEOUT_SECONDS",
+                        key.to_uppercase()
+                    ),
+                    suggested_env_name: Some(format!(
+                        "LOONGCLAW_TOOL_{}_TIMEOUT_SECONDS",
+                        key.to_uppercase()
+                    )),
+                    extra_message_variables: vars,
+                });
+            }
+        }
         issues
     }
 }

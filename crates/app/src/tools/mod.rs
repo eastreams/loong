@@ -75,7 +75,22 @@ pub const BROWSER_COMPANION_PREVIEW_SKILL_ID: &str =
     bundled_skills::BROWSER_COMPANION_PREVIEW_SKILL_ID;
 pub const BROWSER_COMPANION_COMMAND: &str = bundled_skills::BROWSER_COMPANION_COMMAND;
 
-pub(crate) const SHELL_EXEC_TOOL_NAME: &str = "shell.exec";
+const TOOLS_WITH_OWN_TIMEOUT: &[&str] = &[
+    "shell.exec",
+    "web.fetch",
+    "web.search",
+    "browser.companion.session.start",
+    "browser.companion.navigate",
+    "browser.companion.snapshot",
+    "browser.companion.wait",
+    "browser.companion.session.stop",
+    "browser.companion.click",
+    "browser.companion.type",
+];
+
+fn tool_has_own_timeout(tool_name: &str) -> bool {
+    TOOLS_WITH_OWN_TIMEOUT.contains(&tool_name)
+}
 
 pub(crate) const LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY: &str = "_loongclaw";
 const LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY: &str = "tool_search";
@@ -708,7 +723,7 @@ fn execute_discoverable_tool_core_with_config(
     };
 
     match timeout_seconds {
-        Some(seconds) if seconds > 0 && tool_name != SHELL_EXEC_TOOL_NAME => {
+        Some(seconds) if seconds > 0 && !tool_has_own_timeout(&tool_name) => {
             run_blocking_with_timeout(inner, seconds, &tool_name)
         }
         _ => inner(),
