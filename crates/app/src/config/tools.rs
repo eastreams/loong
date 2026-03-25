@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -70,7 +73,7 @@ pub struct ToolExecutionToolConfig {
     #[serde(default)]
     pub default_timeout_seconds: Option<u64>,
     #[serde(default)]
-    pub per_tool_timeout: std::collections::HashMap<String, u64>,
+    pub per_tool_timeout: BTreeMap<String, u64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -602,6 +605,25 @@ impl ToolConfig {
         ) {
             issues.push(*issue);
         }
+        if self.tool_execution.default_timeout_seconds == Some(0)
+            && let Err(issue) = validate_numeric_range(
+                "tools.tool_execution.default_timeout_seconds",
+                0,
+                1,
+                usize::MAX,
+            )
+        {
+            issues.push(*issue);
+        }
+        for (tool_name, timeout_seconds) in &self.tool_execution.per_tool_timeout {
+            if *timeout_seconds != 0 {
+                continue;
+            }
+            let field_path = format!("tools.tool_execution.per_tool_timeout.{tool_name}");
+            if let Err(issue) = validate_numeric_range(&field_path, 0, 1, usize::MAX) {
+                issues.push(*issue);
+            }
+        }
         if let Some(max_sessions) = self.delegate.child_runtime.browser.max_sessions
             && let Err(issue) = validate_numeric_range(
                 "tools.delegate.child_runtime.browser.max_sessions",
@@ -724,49 +746,6 @@ impl ToolConfig {
                 suggested_env_name: Some("LOONGCLAW_WEB_SEARCH_PROVIDER".to_owned()),
                 extra_message_variables,
             });
-        }
-        if let Some(v) = self.tool_execution.default_timeout_seconds
-            && v == 0
-        {
-            let mut vars = std::collections::BTreeMap::new();
-            vars.insert("actual_value".to_owned(), v.to_string());
-            issues.push(super::shared::ConfigValidationIssue {
-                severity: super::shared::ConfigValidationSeverity::Error,
-                code: super::shared::ConfigValidationCode::NumericRange,
-                field_path: "tools.tool_execution.default_timeout_seconds".to_owned(),
-                inline_field_path: "tools.tool_execution.default_timeout_seconds".to_owned(),
-                example_env_name: "LOONGCLAW_TOOL_DEFAULT_TIMEOUT_SECONDS".to_owned(),
-                suggested_env_name: Some("LOONGCLAW_TOOL_DEFAULT_TIMEOUT_SECONDS".to_owned()),
-                extra_message_variables: vars,
-            });
-        }
-        for (key, &value) in &self.tool_execution.per_tool_timeout {
-            if value == 0 {
-                let mut vars = std::collections::BTreeMap::new();
-                vars.insert("tool_name".to_owned(), key.clone());
-                vars.insert("actual_value".to_owned(), value.to_string());
-                let env_tool_name: String = key
-                    .chars()
-                    .map(|ch| {
-                        if ch.is_ascii_alphanumeric() {
-                            ch.to_ascii_uppercase()
-                        } else {
-                            '_'
-                        }
-                    })
-                    .collect();
-                issues.push(super::shared::ConfigValidationIssue {
-                    severity: super::shared::ConfigValidationSeverity::Error,
-                    code: super::shared::ConfigValidationCode::NumericRange,
-                    field_path: format!("tools.tool_execution.per_tool_timeout[\"{key}\"]"),
-                    inline_field_path: format!("tools.tool_execution.per_tool_timeout[\"{key}\"]"),
-                    example_env_name: format!("LOONGCLAW_TOOL_{env_tool_name}_TIMEOUT_SECONDS"),
-                    suggested_env_name: Some(format!(
-                        "LOONGCLAW_TOOL_{env_tool_name}_TIMEOUT_SECONDS"
-                    )),
-                    extra_message_variables: vars,
-                });
-            }
         }
         issues
     }
@@ -1166,6 +1145,72 @@ mod tests {
                 )
             }),
             "unexpected web_search validation issues: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_zero_tool_execution_default_timeout() {
+        let mut config = ToolConfig::default();
+        config.tool_execution.default_timeout_seconds = Some(0);
+
+        let issues = config.validate();
+
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.field_path == "tools.tool_execution.default_timeout_seconds"),
+            "expected default timeout validation issue, got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_zero_tool_execution_per_tool_timeout() {
+        let mut config = ToolConfig::default();
+        config
+            .tool_execution
+            .per_tool_timeout
+            .insert("file.read".to_owned(), 0);
+
+        let issues = config.validate();
+
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.field_path == "tools.tool_execution.per_tool_timeout.file.read"),
+            "expected per-tool timeout validation issue, got {issues:?}"
+        );
+    }
+
+    #[cfg(feature = "config-toml")]
+    #[test]
+    fn tool_config_parses_tool_execution_settings_from_toml() {
+        let raw = r#"
+[tools.tool_execution]
+default_timeout_seconds = 12
+per_tool_timeout = { "file.read" = 3, "web.search" = 9 }
+"#;
+        let parsed =
+            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+
+        assert_eq!(
+            parsed.tools.tool_execution.default_timeout_seconds,
+            Some(12)
+        );
+        assert_eq!(
+            parsed
+                .tools
+                .tool_execution
+                .per_tool_timeout
+                .get("file.read"),
+            Some(&3)
+        );
+        assert_eq!(
+            parsed
+                .tools
+                .tool_execution
+                .per_tool_timeout
+                .get("web.search"),
+            Some(&9)
         );
     }
 

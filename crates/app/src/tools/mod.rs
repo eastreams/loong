@@ -5,8 +5,8 @@ use std::{
     ffi::OsString,
     future::Future,
     path::{Path, PathBuf},
-    sync::OnceLock,
-    time::{SystemTime, UNIX_EPOCH},
+    sync::{OnceLock, mpsc},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -75,22 +75,12 @@ pub const BROWSER_COMPANION_PREVIEW_SKILL_ID: &str =
     bundled_skills::BROWSER_COMPANION_PREVIEW_SKILL_ID;
 pub const BROWSER_COMPANION_COMMAND: &str = bundled_skills::BROWSER_COMPANION_COMMAND;
 
-const TOOLS_WITH_OWN_TIMEOUT: &[&str] = &[
-    "shell.exec",
-    "web.fetch",
-    "web.search",
-    "browser.companion.session.start",
-    "browser.companion.navigate",
-    "browser.companion.snapshot",
-    "browser.companion.wait",
-    "browser.companion.session.stop",
-    "browser.companion.click",
-    "browser.companion.type",
-];
-
-fn tool_has_own_timeout(tool_name: &str) -> bool {
-    TOOLS_WITH_OWN_TIMEOUT.contains(&tool_name)
-}
+const BROWSER_COMPANION_TOOL_PREFIX: &str = "browser.companion.";
+const DELEGATE_ASYNC_TOOL_NAME: &str = "delegate_async";
+const DELEGATE_TOOL_NAME: &str = "delegate";
+pub(crate) const SHELL_EXEC_TOOL_NAME: &str = "shell.exec";
+const WEB_FETCH_TOOL_NAME: &str = "web.fetch";
+const WEB_SEARCH_TOOL_NAME: &str = "web.search";
 
 pub(crate) const LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY: &str = "_loongclaw";
 const LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY: &str = "tool_search";
@@ -714,7 +704,6 @@ fn execute_discoverable_tool_core_with_config(
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let tool_name = request.tool_name.clone();
-
     let timeout_seconds = config.tool_execution.timeout_for_tool(&tool_name);
 
     let inner = {
@@ -723,11 +712,30 @@ fn execute_discoverable_tool_core_with_config(
     };
 
     match timeout_seconds {
-        Some(seconds) if seconds > 0 && !tool_has_own_timeout(&tool_name) => {
+        Some(seconds) if seconds > 0 && !tool_uses_dedicated_timeout(&tool_name) => {
             run_blocking_with_timeout(inner, seconds, &tool_name)
         }
         _ => inner(),
     }
+}
+
+fn tool_uses_dedicated_timeout(tool_name: &str) -> bool {
+    if tool_name == SHELL_EXEC_TOOL_NAME {
+        return true;
+    }
+    if tool_name == WEB_FETCH_TOOL_NAME {
+        return true;
+    }
+    if tool_name == WEB_SEARCH_TOOL_NAME {
+        return true;
+    }
+    if tool_name == DELEGATE_TOOL_NAME {
+        return true;
+    }
+    if tool_name == DELEGATE_ASYNC_TOOL_NAME {
+        return true;
+    }
+    tool_name.starts_with(BROWSER_COMPANION_TOOL_PREFIX)
 }
 
 fn dispatch_tool_request(
@@ -799,28 +807,44 @@ where
     F: FnOnce() -> Result<T, String> + Send + 'static,
     T: Send + 'static,
 {
-    let timeout = tokio::time::Duration::from_secs(timeout_seconds);
+    let timeout = Duration::from_secs(timeout_seconds);
     let tool_name = tool_name.to_owned();
+    let worker_name = format!("tool-timeout:{tool_name}");
+    let (sender, receiver) = mpsc::sync_channel(1);
 
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| format!("failed to create tokio runtime for timeout: {error}"))?;
+    let worker = std::thread::Builder::new()
+        .name(worker_name)
+        .spawn(move || {
+            let result = f();
+            let _ = sender.send(result);
+        })
+        .map_err(|error| format!("failed to spawn tool timeout worker for {tool_name}: {error}"))?;
 
-    rt.block_on(async move {
-        let join_handle = tokio::task::spawn_blocking(f);
-
-        match tokio::time::timeout(timeout, join_handle).await {
-            Ok(Ok(Ok(result))) => Ok(result),
-            Ok(Ok(Err(e))) => Err(e),
-            Ok(Err(join_error)) => Err(format!(
-                "tool_execution_join_error: {tool_name} panicked: {join_error}"
-            )),
-            Err(_) => Err(format!(
-                "tool_execution_timeout: {tool_name} exceeded {timeout_seconds}s"
-            )),
+    match receiver.recv_timeout(timeout) {
+        Ok(result) => {
+            let join_result = worker.join();
+            if join_result.is_err() {
+                return Err(format!(
+                    "tool_execution_join_error: {tool_name} worker thread panicked"
+                ));
+            }
+            result
         }
-    })
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(format!(
+            "tool_execution_timeout: {tool_name} exceeded {timeout_seconds}s"
+        )),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            let join_result = worker.join();
+            if join_result.is_err() {
+                return Err(format!(
+                    "tool_execution_join_error: {tool_name} worker thread panicked"
+                ));
+            }
+            Err(format!(
+                "tool_execution_join_error: {tool_name} worker thread exited without returning a result"
+            ))
+        }
+    }
 }
 
 /// Tool registry entry for capability snapshot disclosure.
@@ -2977,6 +3001,20 @@ mod tests {
     }
 
     #[test]
+    fn framework_timeout_excludes_tools_with_dedicated_timeout_controls() {
+        assert!(tool_uses_dedicated_timeout(
+            "browser.companion.session.start"
+        ));
+        assert!(tool_uses_dedicated_timeout("browser.companion.wait"));
+        assert!(tool_uses_dedicated_timeout("delegate"));
+        assert!(tool_uses_dedicated_timeout("delegate_async"));
+        assert!(tool_uses_dedicated_timeout("shell.exec"));
+        assert!(tool_uses_dedicated_timeout("web.fetch"));
+        assert!(tool_uses_dedicated_timeout("web.search"));
+        assert!(!tool_uses_dedicated_timeout("file.read"));
+    }
+
+    #[test]
     fn tool_without_timeout_config_completes_normally() {
         use std::fs;
 
@@ -2999,6 +3037,58 @@ mod tests {
         assert!(
             result.is_ok(),
             "tool should complete normally without timeout, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn framework_timeout_returns_without_waiting_for_worker_completion() {
+        let start = std::time::Instant::now();
+
+        let error = run_blocking_with_timeout(
+            || {
+                let (_sender, receiver) = mpsc::channel::<()>();
+                let _ = receiver.recv_timeout(Duration::from_secs(3));
+                Ok::<(), String>(())
+            },
+            1,
+            "file.read",
+        )
+        .expect_err("timeout should be reported");
+
+        let elapsed = start.elapsed();
+
+        assert_eq!(error, "tool_execution_timeout: file.read exceeded 1s");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "timeout helper should return promptly, got {elapsed:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn framework_timeout_supports_async_core_tool_calls() {
+        use std::fs;
+
+        let root = unique_temp_dir("tool-timeout-async-core");
+        fs::create_dir_all(&root).expect("create temp dir");
+        let readme_path = root.join("README.md");
+        fs::write(&readme_path, "readme content").expect("write test file");
+
+        let mut config = test_tool_runtime_config(root);
+        config.tool_execution.default_timeout_seconds = Some(1);
+
+        let adapter = MvpToolAdapter::with_config(config);
+        let request = ToolCoreRequest {
+            tool_name: "file.read".to_owned(),
+            payload: json!({
+                "path": "README.md"
+            }),
+        };
+
+        let result = loongclaw_kernel::CoreToolAdapter::execute_core_tool(&adapter, request).await;
+
+        assert!(
+            result.is_ok(),
+            "async core tool execution should stay usable with framework timeouts, got: {result:?}"
         );
     }
 
