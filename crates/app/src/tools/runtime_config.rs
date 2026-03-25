@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -278,6 +278,21 @@ impl FeishuToolRuntimeConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ToolExecutionConfig {
+    pub default_timeout_seconds: Option<u64>,
+    pub per_tool_timeout: BTreeMap<String, u64>,
+}
+
+impl ToolExecutionConfig {
+    pub fn timeout_for_tool(&self, tool_name: &str) -> Option<u64> {
+        self.per_tool_timeout
+            .get(tool_name)
+            .copied()
+            .or(self.default_timeout_seconds)
+    }
+}
+
 /// Typed runtime configuration for tool executors.
 ///
 /// Replaces per-call `std::env::var` lookups with a single read from a
@@ -299,6 +314,7 @@ pub struct ToolRuntimeConfig {
     pub web_fetch: WebFetchRuntimePolicy,
     pub web_search: WebSearchRuntimePolicy,
     pub external_skills: ExternalSkillsRuntimePolicy,
+    pub tool_execution: ToolExecutionConfig,
     #[cfg(feature = "feishu-integration")]
     pub feishu: Option<FeishuToolRuntimeConfig>,
 }
@@ -324,6 +340,7 @@ impl Default for ToolRuntimeConfig {
             web_fetch: WebFetchRuntimePolicy::default(),
             web_search: WebSearchRuntimePolicy::default(),
             external_skills: ExternalSkillsRuntimePolicy::default(),
+            tool_execution: ToolExecutionConfig::default(),
             #[cfg(feature = "feishu-integration")]
             feishu: None,
         }
@@ -442,6 +459,7 @@ impl ToolRuntimeConfig {
                 install_root: config.external_skills.resolved_install_root(),
                 auto_expose_installed: config.external_skills.auto_expose_installed,
             },
+            tool_execution: ToolExecutionConfig::default(),
             #[cfg(feature = "feishu-integration")]
             feishu: FeishuToolRuntimeConfig::from_loongclaw_config(config),
         }
@@ -554,6 +572,24 @@ impl ToolRuntimeConfig {
         let auto_expose_installed =
             parse_env_bool("LOONGCLAW_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED").unwrap_or(false);
 
+        let tool_execution_default_timeout =
+            parse_env_u64("LOONGCLAW_TOOL_DEFAULT_TIMEOUT_SECONDS");
+        let mut tool_execution_per_tool_timeout = BTreeMap::new();
+        for (key, value) in std::env::vars() {
+            if let Some(tool_name) = key.strip_prefix("LOONGCLAW_TOOL_")
+                && let Some(stripped) = tool_name.strip_suffix("_TIMEOUT_SECONDS")
+                && !stripped.is_empty()
+                && stripped != "DEFAULT"
+                && let Ok(timeout) = value.parse::<u64>()
+            {
+                tool_execution_per_tool_timeout.insert(stripped.to_lowercase(), timeout);
+            }
+        }
+        let tool_execution = ToolExecutionConfig {
+            default_timeout_seconds: tool_execution_default_timeout,
+            per_tool_timeout: tool_execution_per_tool_timeout,
+        };
+
         Self {
             file_root,
             config_path,
@@ -596,6 +632,7 @@ impl ToolRuntimeConfig {
                 timeout_seconds: web_search_timeout_seconds,
                 max_results: web_search_max_results,
             },
+            tool_execution,
             ..Self::default()
         }
         .with_external_skills_policy(ExternalSkillsRuntimePolicy {

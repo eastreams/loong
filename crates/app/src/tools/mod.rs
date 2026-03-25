@@ -696,6 +696,27 @@ fn execute_discoverable_tool_core_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
+    let tool_name = request.tool_name.clone();
+
+    let timeout_seconds = config.tool_execution.timeout_for_tool(&tool_name);
+
+    let inner = {
+        let config = config.clone();
+        move || dispatch_tool_request(request, &config)
+    };
+
+    match timeout_seconds {
+        Some(seconds) if seconds > 0 && tool_name != "shell.exec" => {
+            run_blocking_with_timeout(inner, seconds, &tool_name)
+        }
+        _ => inner(),
+    }
+}
+
+fn dispatch_tool_request(
+    request: ToolCoreRequest,
+    config: &runtime_config::ToolRuntimeConfig,
+) -> Result<ToolCoreOutcome, String> {
     match request.tool_name.as_str() {
         "claw.migrate" => claw_migrate::execute_claw_migrate_tool_with_config(request, config),
         "external_skills.inspect" => {
@@ -754,6 +775,31 @@ fn execute_discoverable_tool_core_with_config(
             request.tool_name
         )),
     }
+}
+
+fn run_blocking_with_timeout<F, T>(f: F, timeout_seconds: u64, tool_name: &str) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    let timeout = tokio::time::Duration::from_secs(timeout_seconds);
+    let tool_name = tool_name.to_owned();
+
+    let handle = tokio::runtime::Handle::current();
+    let join_handle = handle.spawn_blocking(f);
+
+    handle.block_on(async move {
+        match tokio::time::timeout(timeout, join_handle).await {
+            Ok(Ok(Ok(result))) => Ok(result),
+            Ok(Ok(Err(e))) => Err(e),
+            Ok(Err(join_error)) => Err(format!(
+                "tool_execution_join_error: {tool_name} panicked: {join_error}"
+            )),
+            Err(_) => Err(format!(
+                "tool_execution_timeout: {tool_name} exceeded {timeout_seconds}s"
+            )),
+        }
+    })
 }
 
 /// Tool registry entry for capability snapshot disclosure.
@@ -2900,6 +2946,66 @@ mod tests {
                 "expected path separator rejection for `{cmd}`, got: {error}"
             );
         }
+    }
+
+    #[test]
+    fn tool_execution_config_timeout_for_tool_prefers_per_tool() {
+        use std::collections::BTreeMap;
+
+        let mut per_tool = BTreeMap::new();
+        per_tool.insert("file.read".to_owned(), 30u64);
+
+        let config = runtime_config::ToolExecutionConfig {
+            default_timeout_seconds: Some(60u64),
+            per_tool_timeout: per_tool,
+        };
+
+        assert_eq!(config.timeout_for_tool("file.read"), Some(30));
+        assert_eq!(config.timeout_for_tool("file.write"), Some(60));
+        assert_eq!(config.timeout_for_tool("unknown"), Some(60));
+    }
+
+    #[test]
+    fn tool_execution_config_timeout_for_tool_none_when_no_default() {
+        let config = runtime_config::ToolExecutionConfig {
+            default_timeout_seconds: None,
+            per_tool_timeout: BTreeMap::new(),
+        };
+
+        assert_eq!(config.timeout_for_tool("file.read"), None);
+    }
+
+    #[test]
+    fn tool_execution_config_default_is_no_timeout() {
+        let config = runtime_config::ToolExecutionConfig::default();
+        assert_eq!(config.default_timeout_seconds, None);
+        assert!(config.per_tool_timeout.is_empty());
+    }
+
+    #[test]
+    fn tool_without_timeout_config_completes_normally() {
+        use std::fs;
+
+        let root = unique_temp_dir("no-timeout-test");
+        fs::create_dir_all(&root).expect("create temp dir");
+        let readme_path = root.join("README.md");
+        fs::write(&readme_path, "readme content").expect("write test file");
+
+        let config = test_tool_runtime_config(root);
+
+        let request = ToolCoreRequest {
+            tool_name: "file.read".to_owned(),
+            payload: json!({
+                "path": "README.md"
+            }),
+        };
+
+        let result = execute_tool_core_with_test_context(request, &config);
+
+        assert!(
+            result.is_ok(),
+            "tool should complete normally without timeout, got: {result:?}"
+        );
     }
 
     #[cfg(feature = "tool-shell")]
