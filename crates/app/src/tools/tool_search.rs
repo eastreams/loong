@@ -1440,12 +1440,16 @@ fn build_name_fragments(
     provider_name: &str,
     aliases: &[&str],
 ) -> Vec<String> {
-    let mut fragments = Vec::new();
-
-    fragments.push(canonical_name.to_owned());
-    fragments.push(identifier_phrase_variant(canonical_name));
-    fragments.push(provider_name.to_owned());
-    fragments.push(identifier_phrase_variant(provider_name));
+    let canonical_name_fragment = canonical_name.to_owned();
+    let canonical_name_variant = identifier_phrase_variant(canonical_name);
+    let provider_name_fragment = provider_name.to_owned();
+    let provider_name_variant = identifier_phrase_variant(provider_name);
+    let mut fragments = Vec::from([
+        canonical_name_fragment,
+        canonical_name_variant,
+        provider_name_fragment,
+        provider_name_variant,
+    ]);
 
     for alias in aliases {
         fragments.push((*alias).to_owned());
@@ -1741,13 +1745,12 @@ fn token_looks_like_file_reference(token: &str) -> bool {
     }
 
     let extension_length = extension.chars().count();
-    let extension_valid = extension_length >= 1
-        && extension_length <= 8
-        && extension
-            .chars()
-            .all(|character| character.is_alphanumeric());
+    let extension_length_valid = (1..=8).contains(&extension_length);
+    let extension_characters_valid = extension
+        .chars()
+        .all(|character| character.is_alphanumeric());
 
-    extension_valid
+    extension_length_valid && extension_characters_valid
 }
 
 fn trim_structural_token(token: &str) -> &str {
