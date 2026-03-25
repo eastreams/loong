@@ -1328,10 +1328,10 @@ fn provider_model_probe_failure_check(
 fn is_provider_model_probe_failure_check(check: &DoctorCheck) -> bool {
     let is_provider_model_probe = check.name == "provider model probe";
     let is_failure = check.level != DoctorCheckLevel::Pass;
-    let is_probe_failure =
+    let has_probe_failure_detail =
         provider_model_probe_policy::provider_model_probe_failed_detail(check.detail.as_str());
 
-    is_provider_model_probe && is_failure && is_probe_failure
+    is_provider_model_probe && is_failure && has_probe_failure_detail
 }
 
 fn is_transport_style_provider_model_probe_failure_check(check: &DoctorCheck) -> bool {

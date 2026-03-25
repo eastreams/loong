@@ -136,8 +136,8 @@ pub(crate) fn non_interactive_preflight_failure_message(checks: &[OnboardCheck])
             let mut detail = check.detail.clone();
 
             if check.name == "provider model probe"
-                && check.detail.contains(
-                    crate::provider_route_diagnostics::MODEL_CATALOG_TRANSPORT_FAILED_MARKER,
+                && crate::provider_model_probe_policy::provider_model_probe_transport_failure_detail(
+                    check.detail.as_str(),
                 )
                 && let Some(route_probe) = checks.iter().find(|candidate| {
                     candidate.name
