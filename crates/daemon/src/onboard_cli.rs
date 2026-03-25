@@ -1696,22 +1696,22 @@ fn resolve_provider_selection(
         })
         .unwrap_or(config.provider.kind);
     let provider_kinds = mvp::config::ProviderKind::all_sorted()
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|kind| {
-            **kind != mvp::config::ProviderKind::Zai
-                && **kind != mvp::config::ProviderKind::Kimi
-                && **kind != mvp::config::ProviderKind::KimiCoding
-                && **kind != mvp::config::ProviderKind::Stepfun
-                && **kind != mvp::config::ProviderKind::StepPlan
+            *kind != mvp::config::ProviderKind::Kimi
+                && *kind != mvp::config::ProviderKind::KimiCoding
+                && *kind != mvp::config::ProviderKind::Stepfun
+                && *kind != mvp::config::ProviderKind::StepPlan
         })
         .collect::<Vec<_>>();
     let mut select_options: Vec<SelectOption> = provider_kinds
         .iter()
         .map(|kind| SelectOption {
-            label: provider_kind_display_name(**kind).to_owned(),
-            slug: provider_kind_id(**kind).to_owned(),
+            label: provider_kind_display_name(*kind).to_owned(),
+            slug: provider_kind_id(*kind).to_owned(),
             description: String::new(),
-            recommended: **kind == default_provider_kind,
+            recommended: *kind == default_provider_kind,
         })
         .collect();
     select_options.push(SelectOption {
@@ -1729,12 +1729,25 @@ fn resolve_provider_selection(
             || default_provider_kind == mvp::config::ProviderKind::StepPlan,
     });
     select_options.sort_by(|a, b| a.label.cmp(&b.label));
+    let default_provider_slug = if matches!(
+        default_provider_kind,
+        mvp::config::ProviderKind::Kimi | mvp::config::ProviderKind::KimiCoding
+    ) {
+        "kimi"
+    } else if matches!(
+        default_provider_kind,
+        mvp::config::ProviderKind::Stepfun | mvp::config::ProviderKind::StepPlan
+    ) {
+        "stepfun"
+    } else {
+        provider_kind_id(default_provider_kind)
+    };
     let default_idx = if provider_selection.requires_explicit_choice {
         None
     } else {
-        provider_kinds
+        select_options
             .iter()
-            .position(|kind| **kind == default_provider_kind)
+            .position(|option| option.slug == default_provider_slug)
     };
     print_lines(
         ui,
@@ -1772,10 +1785,13 @@ fn resolve_provider_selection(
             },
         ];
         print_lines(ui, vec!["Select the Kimi variant:".to_owned()])?;
+        let kimi_default_idx = Some(usize::from(
+            default_provider_kind == mvp::config::ProviderKind::KimiCoding,
+        ));
         let sub_idx = ui.select_one(
             "Kimi variant",
             &kimi_options,
-            Some(0),
+            kimi_default_idx,
             SelectInteractionMode::List,
         )?;
         let sub_slug = kimi_options
@@ -1804,10 +1820,13 @@ fn resolve_provider_selection(
             },
         ];
         print_lines(ui, vec!["Select the Stepfun variant:".to_owned()])?;
+        let stepfun_default_idx = Some(usize::from(
+            default_provider_kind == mvp::config::ProviderKind::StepPlan,
+        ));
         let sub_idx = ui.select_one(
             "Stepfun variant",
             &stepfun_options,
-            Some(0),
+            stepfun_default_idx,
             SelectInteractionMode::List,
         )?;
         let sub_slug = stepfun_options
@@ -1821,38 +1840,51 @@ fn resolve_provider_selection(
             mvp::config::ProviderKind::Stepfun
         }
     } else {
-        **provider_kinds
+        provider_kinds
             .iter()
-            .find(|k| provider_kind_id(***k) == selected_slug)
+            .find(|kind| provider_kind_id(**kind) == selected_slug)
+            .copied()
             .ok_or_else(|| format!("provider kind not found for slug {}", selected_slug))?
     };
 
-    let mut provider_config = resolve_provider_config_from_selection(
-        &config.provider,
-        provider_selection,
-        kind,
-    );
+    let mut provider_config =
+        resolve_provider_config_from_selection(&config.provider, provider_selection, kind);
 
     if let Some(region_info) = kind.region_endpoint_info() {
-        let region_options = vec![
-            SelectOption {
-                label: format!("{} (default)", region_info.default_variant.label),
-                slug: region_info.default_variant.base_url.to_owned(),
-                description: format!("endpoint: {}", region_info.default_variant.base_url),
-                recommended: true,
-            },
-            SelectOption {
-                label: region_info.alternate_variant.label.to_owned(),
-                slug: region_info.alternate_variant.base_url.to_owned(),
-                description: format!("endpoint: {}", region_info.alternate_variant.base_url),
-                recommended: false,
-            },
-        ];
-        print_lines(ui, vec![format!("Select the {} region endpoint:", region_info.family_label)])?;
+        let configured_base_url = provider_config.base_url.as_str();
+        let default_region_idx = region_info
+            .variants
+            .iter()
+            .position(|variant| variant.base_url == configured_base_url)
+            .unwrap_or(0);
+        let region_options = region_info
+            .variants
+            .iter()
+            .enumerate()
+            .map(|(index, variant)| {
+                let is_default_variant = index == 0;
+                let label = if is_default_variant {
+                    format!("{} (default)", variant.label)
+                } else {
+                    variant.label.to_owned()
+                };
+                let slug = variant.base_url.to_owned();
+                let description = format!("endpoint: {}", variant.base_url);
+                let recommended = index == default_region_idx;
+                SelectOption {
+                    label,
+                    slug,
+                    description,
+                    recommended,
+                }
+            })
+            .collect::<Vec<_>>();
+        let region_prompt = format!("Select the {} region endpoint:", region_info.family_label);
+        print_lines(ui, vec![region_prompt])?;
         let region_idx = ui.select_one(
             "Region",
             &region_options,
-            Some(0),
+            Some(default_region_idx),
             SelectInteractionMode::List,
         )?;
         let selected_base_url = region_options
@@ -5972,6 +6004,28 @@ mod tests {
         }
     }
 
+    fn interactive_onboard_options() -> OnboardCommandOptions {
+        OnboardCommandOptions {
+            output: None,
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: false,
+        }
+    }
+
+    fn onboard_test_context() -> OnboardRuntimeContext {
+        OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>())
+    }
+
     fn browser_companion_temp_dir(label: &str) -> PathBuf {
         static NEXT_TEMP_DIR_SEED: AtomicU64 = AtomicU64::new(1);
         let seed = NEXT_TEMP_DIR_SEED.fetch_add(1, Ordering::Relaxed);
@@ -7657,6 +7711,100 @@ mod tests {
             is_explicitly_accepted_non_interactive_warning(&check, &options),
             "non-interactive warning acceptance should follow structured policy rather than fragile display strings"
         );
+    }
+
+    #[test]
+    fn resolve_provider_selection_keeps_zai_available_in_interactive_list() {
+        let config = mvp::config::LoongClawConfig::default();
+        let options = interactive_onboard_options();
+        let provider_selection = crate::migration::ProviderSelectionPlan::default();
+        let context = onboard_test_context();
+        let mut ui = TestOnboardUi::with_inputs(["zai"]);
+
+        let selected = resolve_provider_selection(
+            &options,
+            &config,
+            &provider_selection,
+            GuidedPromptPath::NativePromptPack,
+            &mut ui,
+            &context,
+        )
+        .expect("z.ai should stay selectable in the interactive provider list");
+
+        assert_eq!(selected.kind, mvp::config::ProviderKind::Zai);
+        assert_eq!(selected.base_url, "https://api.z.ai");
+    }
+
+    #[test]
+    fn resolve_provider_selection_preserves_kimi_coding_default_variant() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        let options = interactive_onboard_options();
+        let provider_selection = crate::migration::ProviderSelectionPlan::default();
+        let context = onboard_test_context();
+        let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
+        config.provider =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::KimiCoding);
+
+        let selected = resolve_provider_selection(
+            &options,
+            &config,
+            &provider_selection,
+            GuidedPromptPath::NativePromptPack,
+            &mut ui,
+            &context,
+        )
+        .expect("default kimi coding selection should stay stable");
+
+        assert_eq!(selected.kind, mvp::config::ProviderKind::KimiCoding);
+    }
+
+    #[test]
+    fn resolve_provider_selection_preserves_step_plan_default_variant() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        let options = interactive_onboard_options();
+        let provider_selection = crate::migration::ProviderSelectionPlan::default();
+        let context = onboard_test_context();
+        let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
+        config.provider =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::StepPlan);
+
+        let selected = resolve_provider_selection(
+            &options,
+            &config,
+            &provider_selection,
+            GuidedPromptPath::NativePromptPack,
+            &mut ui,
+            &context,
+        )
+        .expect("default step plan selection should stay stable");
+
+        assert_eq!(selected.kind, mvp::config::ProviderKind::StepPlan);
+    }
+
+    #[test]
+    fn resolve_provider_selection_preserves_existing_region_endpoint_default() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        let options = interactive_onboard_options();
+        let provider_selection = crate::migration::ProviderSelectionPlan::default();
+        let context = onboard_test_context();
+        let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
+        let global_minimax_base_url = "https://api.minimax.io".to_owned();
+        config.provider =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Minimax);
+        config.provider.base_url = global_minimax_base_url.clone();
+
+        let selected = resolve_provider_selection(
+            &options,
+            &config,
+            &provider_selection,
+            GuidedPromptPath::NativePromptPack,
+            &mut ui,
+            &context,
+        )
+        .expect("region selection should preserve the current endpoint when accepting defaults");
+
+        assert_eq!(selected.kind, mvp::config::ProviderKind::Minimax);
+        assert_eq!(selected.base_url, global_minimax_base_url);
     }
 
     #[test]

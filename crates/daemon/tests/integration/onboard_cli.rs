@@ -47,9 +47,42 @@ fn unique_temp_path(label: &str) -> PathBuf {
 }
 
 fn provider_choice_input(kind: mvp::config::ProviderKind) -> String {
-    let index = mvp::config::ProviderKind::all_sorted()
+    let mut options = mvp::config::ProviderKind::all_sorted()
         .iter()
-        .position(|candidate| *candidate == kind)
+        .copied()
+        .filter(|candidate| {
+            *candidate != mvp::config::ProviderKind::Kimi
+                && *candidate != mvp::config::ProviderKind::KimiCoding
+                && *candidate != mvp::config::ProviderKind::Stepfun
+                && *candidate != mvp::config::ProviderKind::StepPlan
+        })
+        .map(|candidate| {
+            let label =
+                loongclaw_daemon::onboard_cli::provider_kind_display_name(candidate).to_owned();
+            let slug = loongclaw_daemon::onboard_cli::provider_kind_id(candidate).to_owned();
+            (label, slug)
+        })
+        .collect::<Vec<_>>();
+    options.push(("Kimi".to_owned(), "kimi".to_owned()));
+    options.push(("Stepfun".to_owned(), "stepfun".to_owned()));
+    options.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let target_slug = if matches!(
+        kind,
+        mvp::config::ProviderKind::Kimi | mvp::config::ProviderKind::KimiCoding
+    ) {
+        "kimi"
+    } else if matches!(
+        kind,
+        mvp::config::ProviderKind::Stepfun | mvp::config::ProviderKind::StepPlan
+    ) {
+        "stepfun"
+    } else {
+        loongclaw_daemon::onboard_cli::provider_kind_id(kind)
+    };
+    let index = options
+        .iter()
+        .position(|(_, slug)| slug == target_slug)
         .expect("provider kind should exist in the interactive onboarding order");
     (index + 1).to_string()
 }

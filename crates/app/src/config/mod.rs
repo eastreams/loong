@@ -236,6 +236,7 @@ mod tests {
                 "sglang",
                 "siliconflow",
                 "stepfun",
+                "step_plan",
                 "together",
                 "venice",
                 "vercel_ai_gateway",
@@ -341,6 +342,12 @@ mod tests {
             config.default_api_key_env().as_deref(),
             Some("OPENROUTER_API_KEY")
         );
+    }
+
+    #[test]
+    fn provider_display_names_remain_stable_for_tool_contracts() {
+        assert_eq!(ProviderKind::Stepfun.display_name(), "StepFun");
+        assert_eq!(ProviderKind::Zhipu.display_name(), "Zhipu");
     }
 
     #[test]
@@ -1082,6 +1089,20 @@ kind = "volcengine_coding"
         assert!(hint.contains("provider.base_url"));
         assert!(hint.contains("https://open.bigmodel.cn"));
         assert!(hint.contains("https://api.z.ai"));
+    }
+
+    #[test]
+    fn zhipu_region_endpoint_info_uses_normalized_family_label_and_ordered_variants() {
+        let region_info = ProviderKind::Zhipu
+            .region_endpoint_info()
+            .expect("zhipu should expose onboarding region info");
+
+        assert_eq!(region_info.family_label, "Z.ai");
+        assert_eq!(region_info.variants.len(), 2);
+        assert_eq!(region_info.variants[0].label, "CN");
+        assert_eq!(region_info.variants[0].base_url, "https://open.bigmodel.cn");
+        assert_eq!(region_info.variants[1].label, "Global");
+        assert_eq!(region_info.variants[1].base_url, "https://api.z.ai");
     }
 
     #[test]

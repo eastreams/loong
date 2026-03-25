@@ -128,14 +128,12 @@ pub enum ModelCatalogProbeRecovery {
 
 /// Information about a provider's region endpoint variants.
 /// Used to allow users to select between different regional endpoints (e.g., CN vs Global).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderRegionEndpointInfo {
     /// Display name for the provider family (e.g., "MiniMax", "Moonshot Kimi").
     pub family_label: &'static str,
-    /// The default region variant (label and base URL).
-    pub default_variant: RegionVariant,
-    /// The alternate region variant (label and base URL).
-    pub alternate_variant: RegionVariant,
+    /// Region variants ordered with the default endpoint first.
+    pub variants: Vec<RegionVariant>,
 }
 
 /// A region endpoint variant with label and base URL.
@@ -2035,7 +2033,7 @@ impl ProviderKind {
             ProviderKind::Sambanova => "SambaNova",
             ProviderKind::Sglang => "SGLang",
             ProviderKind::Siliconflow => "SiliconFlow",
-            ProviderKind::Stepfun => "Stepfun API",
+            ProviderKind::Stepfun => "StepFun",
             ProviderKind::StepPlan => "Step Plan",
             ProviderKind::Together => "Together",
             ProviderKind::Venice => "Venice",
@@ -2045,7 +2043,7 @@ impl ProviderKind {
             ProviderKind::VolcengineCoding => "Volcengine Coding",
             ProviderKind::Xai => "xAI",
             ProviderKind::Zai => "Z.ai",
-            ProviderKind::Zhipu => "Z.ai(Zhipu)",
+            ProviderKind::Zhipu => "Zhipu",
         }
     }
 
@@ -2364,16 +2362,24 @@ impl ProviderKind {
 
     pub fn region_endpoint_info(self) -> Option<ProviderRegionEndpointInfo> {
         let guide = self.region_endpoint_guide()?;
-        Some(ProviderRegionEndpointInfo {
-            family_label: guide.family_label,
-            default_variant: RegionVariant {
+        let family_label = if matches!(self, ProviderKind::Zai | ProviderKind::Zhipu) {
+            "Z.ai"
+        } else {
+            guide.family_label
+        };
+        let variants = vec![
+            RegionVariant {
                 label: guide.default_variant.label,
                 base_url: guide.default_variant.base_url,
             },
-            alternate_variant: RegionVariant {
+            RegionVariant {
                 label: guide.alternate_variant.label,
                 base_url: guide.alternate_variant.base_url,
             },
+        ];
+        Some(ProviderRegionEndpointInfo {
+            family_label,
+            variants,
         })
     }
 }
