@@ -3865,6 +3865,10 @@ pub fn run_matrix_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCom
 
 pub fn run_wecom_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
+        // WeCom AIBot uses a long connection only. `args.once`,
+        // `args.bind_override`, and `args.path_override` are intentionally
+        // discarded because single-run mode and HTTP bind/path overrides do not
+        // apply to this transport.
         let _ = (args.once, args.bind_override, args.path_override);
         with_graceful_shutdown(mvp::channel::run_wecom_channel(
             args.config_path,

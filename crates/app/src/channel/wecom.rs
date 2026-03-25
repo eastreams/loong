@@ -27,6 +27,7 @@ const WECOM_RESPOND_MSG_CMD: &str = "aibot_respond_msg";
 const WECOM_SEND_MSG_CMD: &str = "aibot_send_msg";
 const WECOM_EVENT_DISCONNECTED: &str = "disconnected_event";
 const WECOM_GROUP_CHAT_TYPE: u8 = 2;
+const WECOM_CONNECTION_OWNER_OPERATION_ID: &str = "owner";
 
 type WecomWebsocketStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -44,29 +45,31 @@ struct WecomParsedInboundMessage {
     message: ChannelInboundMessage,
 }
 
+#[derive(Debug, Clone)]
+struct WecomConnectionConfig {
+    websocket_url: String,
+    bot_id: String,
+    secret: String,
+}
+
 struct WecomWebsocketClient {
     stream: WecomWebsocketStream,
     request_counter: u64,
 }
 
 impl WecomWebsocketClient {
-    async fn connect(resolved: &ResolvedWecomChannelConfig) -> CliResult<Self> {
-        let websocket_url = resolved.resolved_websocket_url();
-        let websocket_url = websocket_url.trim().to_owned();
-        if websocket_url.is_empty() {
-            return Err("wecom websocket_url is empty".to_owned());
-        }
-
+    async fn connect(connection: &WecomConnectionConfig) -> CliResult<Self> {
         ensure_wecom_websocket_rustls_provider();
-        let connection = connect_async(websocket_url.as_str()).await;
+        let websocket_url = connection.websocket_url.as_str();
+        let connect_result = connect_async(websocket_url).await;
         let (stream, _) =
-            connection.map_err(|error| format!("connect WeCom websocket failed: {error}"))?;
+            connect_result.map_err(|error| format!("connect WeCom websocket failed: {error}"))?;
 
         let mut client = Self {
             stream,
             request_counter: 0,
         };
-        client.subscribe(resolved).await?;
+        client.subscribe(connection).await?;
         Ok(client)
     }
 
@@ -77,13 +80,9 @@ impl WecomWebsocketClient {
         format!("loongclaw-{scope}-{timestamp_ms}-{counter}")
     }
 
-    async fn subscribe(&mut self, resolved: &ResolvedWecomChannelConfig) -> CliResult<()> {
-        let bot_id = resolved
-            .bot_id()
-            .ok_or_else(|| "wecom bot_id is missing; configure wecom.bot_id or env".to_owned())?;
-        let secret = resolved
-            .secret()
-            .ok_or_else(|| "wecom secret is missing; configure wecom.secret or env".to_owned())?;
+    async fn subscribe(&mut self, connection: &WecomConnectionConfig) -> CliResult<()> {
+        let bot_id = connection.bot_id.as_str();
+        let secret = connection.secret.as_str();
         let req_id = self.next_request_id("subscribe");
         let headers = json!({ "req_id": req_id });
         let body = json!({
@@ -279,8 +278,10 @@ pub(super) async fn send_wecom_text(
     chat_type: Option<u8>,
     text: &str,
 ) -> CliResult<()> {
+    let connection = resolve_wecom_connection_config(resolved)?;
     ensure_wecom_send_runtime_is_exclusive(resolved)?;
-    let mut client = WecomWebsocketClient::connect(resolved).await?;
+    let _owner_guard = acquire_wecom_connection_owner(resolved).await?;
+    let mut client = WecomWebsocketClient::connect(&connection).await?;
     client.send_markdown(conversation_id, chat_type, text).await
 }
 
@@ -295,6 +296,9 @@ pub(super) async fn run_wecom_channel(
     runtime: Arc<ChannelOperationRuntimeTracker>,
     stop: ChannelServeStopHandle,
 ) -> CliResult<()> {
+    let connection = resolve_wecom_connection_config(resolved)?;
+    let _owner_guard = acquire_wecom_connection_owner(resolved).await?;
+
     println!(
         "wecom channel started (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, websocket_url={}, ping_interval={}s)",
         resolved_path.display(),
@@ -308,15 +312,29 @@ pub(super) async fn run_wecom_channel(
 
     let reconnect_interval = Duration::from_secs(resolved.reconnect_interval_s.max(1));
     loop {
-        let outcome = run_wecom_serve_session(
+        let session_result = run_wecom_serve_session(
             config,
             resolved_path,
             resolved,
+            &connection,
             kernel_ctx.clone(),
             runtime.clone(),
             stop.clone(),
         )
-        .await?;
+        .await;
+        let outcome = match session_result {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let reconnect_seconds = reconnect_interval.as_secs();
+                emit_wecom_warning(format!(
+                    "wecom serve session ended with transport error: {error}; reconnecting in {reconnect_seconds}s"
+                ));
+                if wait_for_wecom_reconnect_or_stop(&stop, reconnect_interval).await {
+                    return Ok(());
+                }
+                continue;
+            }
+        };
 
         match outcome {
             WecomServeSessionOutcome::Stopped => return Ok(()),
@@ -327,9 +345,8 @@ pub(super) async fn run_wecom_channel(
                 );
             }
             WecomServeSessionOutcome::Reconnect => {
-                tokio::select! {
-                    _ = stop.wait() => return Ok(()),
-                    _ = tokio::time::sleep(reconnect_interval) => {}
+                if wait_for_wecom_reconnect_or_stop(&stop, reconnect_interval).await {
+                    return Ok(());
                 }
             }
         }
@@ -340,13 +357,14 @@ async fn run_wecom_serve_session(
     config: &LoongClawConfig,
     resolved_path: &std::path::Path,
     resolved: &ResolvedWecomChannelConfig,
+    connection: &WecomConnectionConfig,
     kernel_ctx: KernelContext,
     runtime: Arc<ChannelOperationRuntimeTracker>,
     stop: ChannelServeStopHandle,
 ) -> CliResult<WecomServeSessionOutcome> {
     let mut client = tokio::select! {
         _ = stop.wait() => return Ok(WecomServeSessionOutcome::Stopped),
-        client = WecomWebsocketClient::connect(resolved) => client?,
+        client = WecomWebsocketClient::connect(connection) => client?,
     };
     let ping_interval = Duration::from_secs(resolved.ping_interval_s.max(1));
     let mut ping_timer = tokio::time::interval(ping_interval);
@@ -373,20 +391,58 @@ async fn run_wecom_serve_session(
         }
 
         if command == WECOM_MESSAGE_CALLBACK_CMD {
-            let parsed = parse_wecom_inbound_message(&next_frame, resolved)?;
+            let parsed = match parse_wecom_inbound_message(&next_frame, resolved) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    emit_wecom_warning(format!("ignore malformed wecom inbound callback: {error}"));
+                    continue;
+                }
+            };
             let Some(parsed) = parsed else {
                 continue;
             };
-            runtime.mark_run_start().await?;
-            let reply = process_inbound_with_provider(
+
+            let conversation_id = parsed.message.session.conversation_id.as_str();
+            if !is_wecom_allowed_conversation(resolved, conversation_id) {
+                emit_wecom_warning(format!(
+                    "ignore wecom inbound callback from non-allowlisted conversation `{conversation_id}`"
+                ));
+                continue;
+            }
+
+            let mark_run_start_result = runtime.mark_run_start().await;
+            if let Err(error) = mark_run_start_result {
+                emit_wecom_warning(format!(
+                    "skip wecom inbound callback because runtime start tracking failed: {error}"
+                ));
+                continue;
+            }
+
+            let reply_result = process_inbound_with_provider(
                 config,
                 Some(resolved_path),
                 &parsed.message,
                 Some(provider_ctx.as_ref()),
             )
             .await;
-            runtime.mark_run_end().await?;
-            let reply = reply?;
+
+            let mark_run_end_result = runtime.mark_run_end().await;
+            if let Err(error) = mark_run_end_result {
+                emit_wecom_warning(format!(
+                    "wecom runtime end tracking failed after inbound processing: {error}"
+                ));
+            }
+
+            let reply = match reply_result {
+                Ok(reply) => reply,
+                Err(error) => {
+                    emit_wecom_warning(format!(
+                        "wecom inbound callback processing failed and will be skipped: {error}"
+                    ));
+                    continue;
+                }
+            };
+
             client
                 .send_reply_text(parsed.req_id.as_str(), reply.as_str())
                 .await?;
@@ -641,6 +697,41 @@ fn maybe_push_wecom_resource(
     });
 }
 
+fn resolve_wecom_connection_config(
+    resolved: &ResolvedWecomChannelConfig,
+) -> CliResult<WecomConnectionConfig> {
+    let websocket_url = resolved.resolved_websocket_url();
+    let websocket_url = websocket_url.trim().to_owned();
+    if websocket_url.is_empty() {
+        return Err("wecom websocket_url is empty".to_owned());
+    }
+
+    let bot_id = resolved
+        .bot_id()
+        .ok_or_else(|| "wecom bot_id is missing; configure wecom.bot_id or env".to_owned())?;
+    let secret = resolved
+        .secret()
+        .ok_or_else(|| "wecom secret is missing; configure wecom.secret or env".to_owned())?;
+
+    Ok(WecomConnectionConfig {
+        websocket_url,
+        bot_id,
+        secret,
+    })
+}
+
+async fn acquire_wecom_connection_owner(
+    resolved: &ResolvedWecomChannelConfig,
+) -> CliResult<runtime_state::ChannelOperationExclusiveGuard> {
+    runtime_state::ChannelOperationExclusiveGuard::acquire(
+        ChannelPlatform::Wecom,
+        WECOM_CONNECTION_OWNER_OPERATION_ID,
+        resolved.account.id.as_str(),
+        resolved.account.label.as_str(),
+    )
+    .await
+}
+
 fn ensure_wecom_send_runtime_is_exclusive(resolved: &ResolvedWecomChannelConfig) -> CliResult<()> {
     let runtime_dir = runtime_state::default_channel_runtime_state_dir();
     let now_ms = current_time_ms();
@@ -673,6 +764,33 @@ fn ensure_wecom_send_runtime_is_exclusive(resolved: &ResolvedWecomChannelConfig)
         "wecom account `{}` already has an active serve runtime (pid={process_id}, running_instances={}); stop the existing `wecom-serve` session before using `wecom-send`",
         resolved.account.id, runtime.running_instances
     ))
+}
+
+fn is_wecom_allowed_conversation(
+    resolved: &ResolvedWecomChannelConfig,
+    conversation_id: &str,
+) -> bool {
+    resolved
+        .allowed_conversation_ids
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .any(|allowed| allowed == conversation_id.trim())
+}
+
+async fn wait_for_wecom_reconnect_or_stop(
+    stop: &ChannelServeStopHandle,
+    reconnect_interval: Duration,
+) -> bool {
+    tokio::select! {
+        _ = stop.wait() => true,
+        _ = tokio::time::sleep(reconnect_interval) => false,
+    }
+}
+
+#[allow(clippy::print_stderr)]
+fn emit_wecom_warning(message: String) {
+    eprintln!("warning: {message}");
 }
 
 fn is_disconnected_event(value: &Value) -> bool {
@@ -973,6 +1091,158 @@ mod tests {
         (format!("ws://{address}/events"), handle)
     }
 
+    async fn spawn_mock_wecom_non_allowlisted_inbound_server(
+        release_server: Arc<Notify>,
+        observation_done: Arc<Notify>,
+    ) -> (String, tokio::task::JoinHandle<CliResult<Vec<Value>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock wecom filtered inbound server");
+        let address = listener
+            .local_addr()
+            .expect("mock wecom filtered inbound server addr");
+        let handle = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.map_err(|error| error.to_string())?;
+            let mut stream = accept_async(socket)
+                .await
+                .map_err(|error| format!("accept websocket failed: {error}"))?;
+            let mut frames = Vec::new();
+
+            let subscribe = read_text_frame(&mut stream).await?;
+            let subscribe_req_id = json_string_at(&subscribe, &["headers", "req_id"])
+                .ok_or_else(|| "missing subscribe req_id".to_owned())?;
+            frames.push(subscribe);
+            let subscribe_ack = json!({
+                "cmd": WECOM_SUBSCRIBE_CMD,
+                "headers": { "req_id": subscribe_req_id },
+                "errcode": 0,
+                "errmsg": "ok",
+            });
+            send_text_frame(&mut stream, &subscribe_ack).await?;
+
+            let inbound = json!({
+                "cmd": WECOM_MESSAGE_CALLBACK_CMD,
+                "headers": { "req_id": "req-inbound-denied" },
+                "body": {
+                    "msgid": "msg-denied",
+                    "aibotid": "bot_test",
+                    "chatid": "group_denied",
+                    "chattype": "group",
+                    "from": {
+                        "userid": "user_denied"
+                    },
+                    "msgtype": "text",
+                    "text": {
+                        "content": "ignore me"
+                    }
+                }
+            });
+            send_text_frame(&mut stream, &inbound).await?;
+
+            let unexpected_frame_result =
+                tokio::time::timeout(Duration::from_millis(300), read_text_frame(&mut stream))
+                    .await;
+            if let Ok(Ok(unexpected_frame)) = unexpected_frame_result {
+                frames.push(unexpected_frame);
+            }
+
+            observation_done.notify_waiters();
+            release_server.notified().await;
+            stream
+                .close(None)
+                .await
+                .map_err(|error| format!("close websocket failed: {error}"))?;
+            Ok(frames)
+        });
+        (format!("ws://{address}/events"), handle)
+    }
+
+    async fn spawn_mock_wecom_reconnect_server(
+        reply_seen: Arc<Notify>,
+        release_server: Arc<Notify>,
+    ) -> (String, tokio::task::JoinHandle<CliResult<Vec<Value>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock wecom reconnect server");
+        let address = listener
+            .local_addr()
+            .expect("mock wecom reconnect server addr");
+        let handle = tokio::spawn(async move {
+            let mut frames = Vec::new();
+
+            let (first_socket, _) = listener.accept().await.map_err(|error| error.to_string())?;
+            let mut first_stream = accept_async(first_socket)
+                .await
+                .map_err(|error| format!("accept first websocket failed: {error}"))?;
+            let first_subscribe = read_text_frame(&mut first_stream).await?;
+            let first_req_id = json_string_at(&first_subscribe, &["headers", "req_id"])
+                .ok_or_else(|| "missing first subscribe req_id".to_owned())?;
+            frames.push(first_subscribe);
+            let first_ack = json!({
+                "cmd": WECOM_SUBSCRIBE_CMD,
+                "headers": { "req_id": first_req_id },
+                "errcode": 0,
+                "errmsg": "ok",
+            });
+            send_text_frame(&mut first_stream, &first_ack).await?;
+            first_stream
+                .close(None)
+                .await
+                .map_err(|error| format!("close first websocket failed: {error}"))?;
+
+            let (second_socket, _) = listener.accept().await.map_err(|error| error.to_string())?;
+            let mut second_stream = accept_async(second_socket)
+                .await
+                .map_err(|error| format!("accept second websocket failed: {error}"))?;
+            let second_subscribe = read_text_frame(&mut second_stream).await?;
+            let second_req_id = json_string_at(&second_subscribe, &["headers", "req_id"])
+                .ok_or_else(|| "missing second subscribe req_id".to_owned())?;
+            frames.push(second_subscribe);
+            let second_ack = json!({
+                "cmd": WECOM_SUBSCRIBE_CMD,
+                "headers": { "req_id": second_req_id },
+                "errcode": 0,
+                "errmsg": "ok",
+            });
+            send_text_frame(&mut second_stream, &second_ack).await?;
+
+            let inbound = json!({
+                "cmd": WECOM_MESSAGE_CALLBACK_CMD,
+                "headers": { "req_id": "req-reconnect-1" },
+                "body": {
+                    "msgid": "msg-reconnect-1",
+                    "aibotid": "bot_test",
+                    "chatid": "group_demo",
+                    "chattype": "group",
+                    "from": {
+                        "userid": "user_demo"
+                    },
+                    "msgtype": "text",
+                    "text": {
+                        "content": "hello after reconnect"
+                    }
+                }
+            });
+            send_text_frame(&mut second_stream, &inbound).await?;
+
+            loop {
+                let frame = read_text_frame(&mut second_stream).await?;
+                let command = json_string_at(&frame, &["cmd"]).unwrap_or_default();
+                if command == WECOM_RESPOND_MSG_CMD {
+                    frames.push(frame);
+                    reply_seen.notify_waiters();
+                    release_server.notified().await;
+                    second_stream
+                        .close(None)
+                        .await
+                        .map_err(|error| format!("close second websocket failed: {error}"))?;
+                    return Ok(frames);
+                }
+            }
+        });
+        (format!("ws://{address}/events"), handle)
+    }
+
     async fn read_text_frame<S>(
         stream: &mut tokio_tungstenite::WebSocketStream<S>,
     ) -> CliResult<Value>
@@ -1082,7 +1352,8 @@ mod tests {
     #[tokio::test]
     async fn run_wecom_send_subscribes_and_sends_markdown_message() {
         let (websocket_url, websocket_server) = spawn_mock_wecom_send_server().await;
-        let config = build_wecom_test_config("http://127.0.0.1:9", websocket_url.as_str());
+        let mut config = build_wecom_test_config("http://127.0.0.1:9", websocket_url.as_str());
+        config.wecom.account_id = Some("wecom_send_runtime_test".to_owned());
         let resolved = config
             .wecom
             .resolve_account(None)
@@ -1115,7 +1386,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_wecom_text_rejects_active_serve_runtime() {
+    async fn send_wecom_text_rejects_active_serve_runtime_before_owner_conflict() {
         let runtime_dir = runtime_state::default_channel_runtime_state_dir();
         let now_ms = current_time_ms();
         let mut config = build_wecom_test_config("http://127.0.0.1:9", "ws://127.0.0.1:9");
@@ -1140,6 +1411,15 @@ mod tests {
         )
         .expect("seed wecom serve runtime");
 
+        let _owner_guard = runtime_state::ChannelOperationExclusiveGuard::acquire(
+            ChannelPlatform::Wecom,
+            WECOM_CONNECTION_OWNER_OPERATION_ID,
+            resolved.account.id.as_str(),
+            resolved.account.label.as_str(),
+        )
+        .await
+        .expect("seed wecom owner guard");
+
         let error = send_wecom_text(&resolved, "group_demo", None, "hello active runtime")
             .await
             .expect_err("active serve runtime should block proactive send");
@@ -1159,6 +1439,13 @@ mod tests {
             spawn_mock_wecom_inbound_server(reply_seen.clone(), release_server.clone()).await;
 
         let config = build_wecom_test_config(provider_base_url.as_str(), websocket_url.as_str());
+        let connection = resolve_wecom_connection_config(
+            &config
+                .wecom
+                .resolve_account(None)
+                .expect("resolve wecom connection config"),
+        )
+        .expect("resolve wecom connection details");
         let resolved_path = write_wecom_test_config_file(&config, "config");
         let resolved = config
             .wecom
@@ -1186,6 +1473,7 @@ mod tests {
                 &config_for_task,
                 resolved_path.as_path(),
                 &resolved_for_task,
+                &connection,
                 kernel_ctx,
                 runtime_for_task,
                 stop_for_task,
@@ -1219,6 +1507,166 @@ mod tests {
             websocket_frames[1]["body"]["text"]["content"],
             json!("wecom inbound ack")
         );
+
+        let provider_requests = provider_requests.lock().await;
+        assert_eq!(provider_requests.len(), 1);
+        assert_eq!(provider_requests[0].path, "/v1/chat/completions");
+
+        provider_server.abort();
+    }
+
+    #[tokio::test]
+    async fn run_wecom_serve_session_skips_non_allowlisted_conversations() {
+        let provider_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+        let (provider_base_url, provider_server) =
+            spawn_mock_provider_server(provider_requests.clone(), "should not be used").await;
+        let release_server = Arc::new(Notify::new());
+        let observation_done = Arc::new(Notify::new());
+        let (websocket_url, websocket_server) = spawn_mock_wecom_non_allowlisted_inbound_server(
+            release_server.clone(),
+            observation_done.clone(),
+        )
+        .await;
+
+        let config = build_wecom_test_config(provider_base_url.as_str(), websocket_url.as_str());
+        let connection = resolve_wecom_connection_config(
+            &config
+                .wecom
+                .resolve_account(None)
+                .expect("resolve wecom connection config"),
+        )
+        .expect("resolve wecom connection details");
+        let resolved_path = write_wecom_test_config_file(&config, "config-denied");
+        let resolved = config
+            .wecom
+            .resolve_account(None)
+            .expect("resolve wecom account");
+        let runtime = Arc::new(
+            ChannelOperationRuntimeTracker::start(
+                ChannelPlatform::Wecom,
+                CHANNEL_OPERATION_SERVE_ID,
+                resolved.account.id.as_str(),
+                resolved.account.label.as_str(),
+            )
+            .await
+            .expect("start runtime tracker"),
+        );
+        let kernel_ctx =
+            bootstrap_test_kernel_context("wecom-channel-test-denied", DEFAULT_TOKEN_TTL_S)
+                .expect("bootstrap kernel context");
+        let stop = ChannelServeStopHandle::new();
+        let stop_for_task = stop.clone();
+        let config_for_task = config.clone();
+        let resolved_for_task = resolved.clone();
+        let runtime_for_task = runtime.clone();
+        let session_task = tokio::spawn(async move {
+            run_wecom_serve_session(
+                &config_for_task,
+                resolved_path.as_path(),
+                &resolved_for_task,
+                &connection,
+                kernel_ctx,
+                runtime_for_task,
+                stop_for_task,
+            )
+            .await
+        });
+
+        observation_done.notified().await;
+        stop.request_stop();
+        release_server.notify_waiters();
+
+        let outcome = session_task
+            .await
+            .expect("join denied serve session")
+            .expect("denied serve session result");
+        assert_eq!(outcome, WecomServeSessionOutcome::Stopped);
+        runtime.shutdown().await.expect("shutdown runtime tracker");
+
+        let websocket_frames = websocket_server
+            .await
+            .expect("join denied websocket server")
+            .expect("denied websocket server result");
+        assert_eq!(websocket_frames.len(), 1);
+        assert_eq!(websocket_frames[0]["cmd"], json!(WECOM_SUBSCRIBE_CMD));
+
+        let provider_requests = provider_requests.lock().await;
+        assert!(provider_requests.is_empty());
+
+        provider_server.abort();
+    }
+
+    #[tokio::test]
+    async fn run_wecom_channel_reconnects_after_transport_drop() {
+        let provider_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+        let (provider_base_url, provider_server) =
+            spawn_mock_provider_server(provider_requests.clone(), "reconnect ack").await;
+        let reply_seen = Arc::new(Notify::new());
+        let release_server = Arc::new(Notify::new());
+        let (websocket_url, websocket_server) =
+            spawn_mock_wecom_reconnect_server(reply_seen.clone(), release_server.clone()).await;
+
+        let mut config =
+            build_wecom_test_config(provider_base_url.as_str(), websocket_url.as_str());
+        config.wecom.reconnect_interval_s = 1;
+        let resolved_path = write_wecom_test_config_file(&config, "config-reconnect");
+        let resolved = config
+            .wecom
+            .resolve_account(None)
+            .expect("resolve reconnect wecom account");
+        let runtime = Arc::new(
+            ChannelOperationRuntimeTracker::start(
+                ChannelPlatform::Wecom,
+                CHANNEL_OPERATION_SERVE_ID,
+                resolved.account.id.as_str(),
+                resolved.account.label.as_str(),
+            )
+            .await
+            .expect("start reconnect runtime tracker"),
+        );
+        let kernel_ctx =
+            bootstrap_test_kernel_context("wecom-channel-test-reconnect", DEFAULT_TOKEN_TTL_S)
+                .expect("bootstrap reconnect kernel context");
+        let stop = ChannelServeStopHandle::new();
+        let stop_for_task = stop.clone();
+        let config_for_task = config.clone();
+        let resolved_for_task = resolved.clone();
+        let runtime_for_task = runtime.clone();
+        let channel_task = tokio::spawn(async move {
+            run_wecom_channel(
+                &config_for_task,
+                &resolved_for_task,
+                resolved_path.as_path(),
+                true,
+                ChannelDefaultAccountSelectionSource::ExplicitDefault,
+                kernel_ctx,
+                runtime_for_task,
+                stop_for_task,
+            )
+            .await
+        });
+
+        reply_seen.notified().await;
+        stop.request_stop();
+        release_server.notify_waiters();
+
+        channel_task
+            .await
+            .expect("join reconnect channel task")
+            .expect("reconnect channel result");
+        runtime
+            .shutdown()
+            .await
+            .expect("shutdown reconnect runtime");
+
+        let websocket_frames = websocket_server
+            .await
+            .expect("join reconnect websocket server")
+            .expect("reconnect websocket server result");
+        assert_eq!(websocket_frames.len(), 3);
+        assert_eq!(websocket_frames[0]["cmd"], json!(WECOM_SUBSCRIBE_CMD));
+        assert_eq!(websocket_frames[1]["cmd"], json!(WECOM_SUBSCRIBE_CMD));
+        assert_eq!(websocket_frames[2]["cmd"], json!(WECOM_RESPOND_MSG_CMD));
 
         let provider_requests = provider_requests.lock().await;
         assert_eq!(provider_requests.len(), 1);

@@ -3,7 +3,8 @@ use std::time::Duration;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 use std::{
     collections::BTreeSet,
@@ -21,20 +22,23 @@ use std::{fmt, str::FromStr};
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 use async_trait::async_trait;
 use serde::Serialize;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 use serde_json::Value;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 use tokio::sync::Notify;
 #[cfg(feature = "channel-telegram")]
@@ -44,39 +48,45 @@ use crate::CliResult;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 use crate::KernelContext;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 use crate::acp::{AcpConversationTurnOptions, AcpTurnProvenance};
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 
+#[cfg(feature = "channel-feishu")]
+use super::config::ResolvedFeishuChannelConfig;
 #[cfg(feature = "channel-matrix")]
 use super::config::ResolvedMatrixChannelConfig;
+#[cfg(feature = "channel-telegram")]
+use super::config::ResolvedTelegramChannelConfig;
 #[cfg(feature = "channel-wecom")]
 use super::config::ResolvedWecomChannelConfig;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
-use super::config::{
-    ChannelResolvedAccountRoute, LoongClawConfig, ResolvedFeishuChannelConfig,
-    ResolvedTelegramChannelConfig, normalize_channel_account_id,
-};
+use super::config::{ChannelResolvedAccountRoute, LoongClawConfig, normalize_channel_account_id};
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 use super::conversation::{
     ConversationIngressChannel, ConversationIngressContext, ConversationIngressDelivery,
@@ -87,7 +97,8 @@ use super::conversation::{
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 use super::conversation::{ConversationTurnCoordinator, ProviderErrorMode};
 
@@ -189,7 +200,8 @@ impl ChannelPlatform {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelSession {
@@ -204,7 +216,8 @@ pub struct ChannelSession {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 impl ChannelSession {
     pub fn new(platform: ChannelPlatform, conversation_id: impl Into<String>) -> Self {
@@ -337,7 +350,8 @@ impl ChannelSession {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -352,7 +366,8 @@ pub enum ChannelOutboundTargetKind {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 impl ChannelOutboundTargetKind {
     pub fn as_str(self) -> &'static str {
@@ -395,7 +410,8 @@ pub use self::ChannelOutboundTargetKind as ChannelCatalogTargetKind;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChannelOutboundDeliveryOptions {
@@ -407,7 +423,8 @@ pub struct ChannelOutboundDeliveryOptions {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelOutboundTarget {
@@ -420,7 +437,8 @@ pub struct ChannelOutboundTarget {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 impl ChannelOutboundTarget {
     pub fn new(
@@ -511,7 +529,8 @@ impl ChannelOutboundTarget {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 #[derive(Debug, Clone)]
 pub struct ChannelInboundMessage {
@@ -524,7 +543,8 @@ pub struct ChannelInboundMessage {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ChannelResolvedAcpTurnHints {
@@ -535,7 +555,8 @@ struct ChannelResolvedAcpTurnHints {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChannelOutboundMessage {
@@ -550,7 +571,8 @@ pub enum ChannelOutboundMessage {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 pub enum ChannelStreamingMode {
     #[default]
@@ -576,7 +598,8 @@ pub struct FeishuChannelSendRequest {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 #[allow(dead_code)]
 #[async_trait]
@@ -614,21 +637,24 @@ pub trait ChannelAdapter {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 type ChannelProcessFuture = Pin<Box<dyn Future<Output = CliResult<String>> + Send>>;
 
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 type ChannelCommandFuture<'a> = Pin<Box<dyn Future<Output = CliResult<()>> + Send + 'a>>;
 
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum KnownChannelSessionSendTarget {
@@ -656,7 +682,8 @@ enum KnownChannelSessionSendTarget {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 fn parse_known_channel_session_send_target(
     config: &LoongClawConfig,
@@ -679,7 +706,8 @@ fn parse_known_channel_session_send_target(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 fn parse_telegram_session_send_target(
     config: &LoongClawConfig,
@@ -723,7 +751,8 @@ fn parse_telegram_session_send_target(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 fn parse_feishu_session_send_target(
     config: &LoongClawConfig,
@@ -772,7 +801,8 @@ fn parse_feishu_session_send_target(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 fn parse_matrix_session_send_target(
     config: &LoongClawConfig,
@@ -851,7 +881,8 @@ fn parse_wecom_session_send_target(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 fn configured_runtime_account_ids(
     configured_account_ids: &[String],
@@ -876,7 +907,8 @@ fn configured_runtime_account_ids(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 fn split_known_channel_account_and_scope<'a>(
     scope: &'a [String],
@@ -915,7 +947,8 @@ fn split_known_channel_account_and_scope<'a>(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 fn looks_like_feishu_message_id(value: &str) -> bool {
     let trimmed = value.trim();
@@ -968,7 +1001,8 @@ where
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 #[derive(Debug, Clone)]
 struct ChannelCommandContext<R> {
@@ -981,7 +1015,8 @@ struct ChannelCommandContext<R> {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 impl<R> ChannelCommandContext<R> {
     fn emit_route_notice(&self, platform: ChannelPlatform) {
@@ -997,7 +1032,8 @@ impl<R> ChannelCommandContext<R> {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 trait ChannelResolvedRuntimeAccount {
     fn runtime_account_id(&self) -> &str;
@@ -1051,7 +1087,8 @@ impl ChannelResolvedRuntimeAccount for ResolvedWecomChannelConfig {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 async fn run_channel_send_command<R, F, G>(
     context: ChannelCommandContext<R>,
@@ -1215,7 +1252,8 @@ fn build_wecom_command_context(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 #[derive(Debug, Clone, Copy)]
 struct ChannelSendCommandSpec {
@@ -1225,7 +1263,8 @@ struct ChannelSendCommandSpec {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 #[derive(Debug, Clone, Copy)]
 struct ChannelServeRuntimeSpec<'a> {
@@ -1238,7 +1277,8 @@ struct ChannelServeRuntimeSpec<'a> {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 #[derive(Debug, Clone, Copy)]
 struct ChannelServeCommandSpec {
@@ -1248,7 +1288,8 @@ struct ChannelServeCommandSpec {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 #[derive(Debug, Clone)]
 pub struct ChannelServeStopHandle {
@@ -1259,7 +1300,8 @@ pub struct ChannelServeStopHandle {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 impl ChannelServeStopHandle {
     pub fn new() -> Self {
@@ -1294,7 +1336,8 @@ impl ChannelServeStopHandle {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 fn channel_runtime_now_ms() -> u64 {
     SystemTime::now()
@@ -1306,7 +1349,8 @@ fn channel_runtime_now_ms() -> u64 {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 fn ensure_channel_operation_runtime_slot_available_in_dir(
     runtime_dir: &std::path::Path,
@@ -1350,7 +1394,8 @@ fn ensure_channel_operation_runtime_slot_available_in_dir(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 async fn with_channel_serve_runtime<T, F, Fut>(
     spec: ChannelServeRuntimeSpec<'_>,
@@ -1387,7 +1432,8 @@ where
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 async fn with_channel_serve_runtime_with_stop<F, Fut>(
     spec: ChannelServeRuntimeSpec<'_>,
@@ -1422,7 +1468,8 @@ where
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 async fn run_channel_serve_command<R, V, F>(
     context: ChannelCommandContext<R>,
@@ -1453,7 +1500,8 @@ where
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 async fn run_channel_serve_command_with_stop<R, V, F>(
     context: ChannelCommandContext<R>,
@@ -1887,7 +1935,8 @@ pub async fn run_feishu_channel_with_stop(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 pub async fn run_channel_serve_runtime_probe_for_test(
     platform: ChannelPlatform,
@@ -2206,7 +2255,8 @@ pub async fn run_wecom_channel_with_stop(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 pub(crate) async fn send_text_to_known_session(
     config: &LoongClawConfig,
@@ -2420,7 +2470,8 @@ pub(crate) async fn send_text_to_known_session(
 #[cfg(not(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 )))]
 pub(crate) async fn send_text_to_known_session(
     _config: &LoongClawConfig,
@@ -2433,7 +2484,8 @@ pub(crate) async fn send_text_to_known_session(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 pub(super) async fn process_inbound_with_provider(
     config: &LoongClawConfig,
@@ -2467,7 +2519,8 @@ pub(super) async fn process_inbound_with_provider(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 fn reload_channel_turn_config(
     config: &LoongClawConfig,
@@ -2482,7 +2535,8 @@ fn reload_channel_turn_config(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 fn resolve_channel_acp_turn_hints(
     config: &LoongClawConfig,
@@ -2539,7 +2593,8 @@ fn resolve_channel_acp_turn_hints(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 fn channel_message_acp_turn_provenance(message: &ChannelInboundMessage) -> AcpTurnProvenance<'_> {
     AcpTurnProvenance {
@@ -2552,7 +2607,8 @@ fn channel_message_acp_turn_provenance(message: &ChannelInboundMessage) -> AcpTu
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 fn channel_message_ingress_context(
     message: &ChannelInboundMessage,
@@ -2607,7 +2663,8 @@ fn channel_message_ingress_context(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
     value
@@ -2619,7 +2676,8 @@ fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 fn normalized_channel_delivery_resource(
     resource: &ChannelDeliveryResource,
@@ -2640,7 +2698,8 @@ fn normalized_channel_delivery_resource(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-matrix"
+    feature = "channel-matrix",
+    feature = "channel-wecom"
 ))]
 fn normalized_feishu_callback_context(
     callback: Option<&ChannelDeliveryFeishuCallback>,

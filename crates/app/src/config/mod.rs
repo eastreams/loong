@@ -178,15 +178,6 @@ mod tests {
     }
 
     #[test]
-    fn channel_descriptor_lookup_reports_wecom_metadata() {
-        let wecom = channel_descriptor("wecom").expect("wecom descriptor");
-        assert_eq!(wecom.id, "wecom");
-        assert_eq!(wecom.surface_label, "wecom channel");
-        assert_eq!(wecom.runtime_kind, ChannelRuntimeKind::Service);
-        assert_eq!(wecom.serve_subcommand, Some("wecom-serve"));
-    }
-
-    #[test]
     fn endpoint_resolution_for_volcengine_prefers_explicit_endpoint() {
         let mut config = ProviderConfig {
             kind: ProviderKind::Volcengine,

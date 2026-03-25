@@ -992,6 +992,7 @@ fn canonicalize_channel_configs_for_encoding(config: &mut LoongClawConfig) {
     canonicalize_telegram_channel_for_encoding(&mut config.telegram);
     canonicalize_feishu_channel_for_encoding(&mut config.feishu);
     canonicalize_matrix_channel_for_encoding(&mut config.matrix);
+    canonicalize_wecom_channel_for_encoding(&mut config.wecom);
 }
 
 fn canonicalize_telegram_channel_for_encoding(config: &mut TelegramChannelConfig) {
@@ -1025,6 +1026,16 @@ fn canonicalize_matrix_channel_for_encoding(config: &mut MatrixChannelConfig) {
     canonicalize_env_secret_reference(&mut config.access_token, &mut config.access_token_env);
     for account in config.accounts.values_mut() {
         canonicalize_env_secret_reference(&mut account.access_token, &mut account.access_token_env);
+    }
+}
+
+fn canonicalize_wecom_channel_for_encoding(config: &mut WecomChannelConfig) {
+    canonicalize_env_secret_reference(&mut config.bot_id, &mut config.bot_id_env);
+    canonicalize_env_secret_reference(&mut config.secret, &mut config.secret_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(&mut account.bot_id, &mut account.bot_id_env);
+        canonicalize_env_secret_reference(&mut account.secret, &mut account.secret_env);
     }
 }
 
@@ -2613,6 +2624,30 @@ model = "gpt-5"
         assert!(raw.contains("api_key_env = \"TEAM_OPENAI_KEY\""));
         assert!(!raw.contains("api_key_env = \" TEAM_OPENAI_KEY \""));
         assert!(!raw.contains("api_key = \"${TEAM_OPENAI_KEY}\""));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_canonicalizes_matching_wecom_env_name_fields() {
+        let path = unique_config_path("loongclaw-config-runtime-trimmed-wecom-env");
+        let path_string = path.display().to_string();
+        let mut config = LoongClawConfig::default();
+        config.wecom.bot_id = Some(SecretRef::Inline("${WECOM_BOT_ID}".to_owned()));
+        config.wecom.bot_id_env = Some(" WECOM_BOT_ID ".to_owned());
+        config.wecom.secret = Some(SecretRef::Inline("${WECOM_SECRET}".to_owned()));
+        config.wecom.secret_env = Some(" WECOM_SECRET ".to_owned());
+
+        write(Some(&path_string), &config, true).expect("config write should pass");
+
+        let raw = fs::read_to_string(&path).expect("read written config");
+        assert!(raw.contains("bot_id_env = \"WECOM_BOT_ID\""));
+        assert!(raw.contains("secret_env = \"WECOM_SECRET\""));
+        assert!(!raw.contains("bot_id_env = \" WECOM_BOT_ID \""));
+        assert!(!raw.contains("secret_env = \" WECOM_SECRET \""));
+        assert!(!raw.contains("bot_id = \"${WECOM_BOT_ID}\""));
+        assert!(!raw.contains("secret = \"${WECOM_SECRET}\""));
 
         let _ = fs::remove_file(path);
     }
