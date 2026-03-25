@@ -268,6 +268,18 @@ pub trait AppToolDispatcher: Send + Sync {
         Ok(None)
     }
 
+    async fn maybe_require_approval_with_binding(
+        &self,
+        session_context: &SessionContext,
+        intent: &ToolIntent,
+        descriptor: &crate::tools::ToolDescriptor,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> Result<Option<ApprovalRequirement>, String> {
+        let kernel_ctx = binding.kernel_context();
+        self.maybe_require_approval(session_context, intent, descriptor, kernel_ctx)
+            .await
+    }
+
     async fn execute_app_tool(
         &self,
         session_context: &SessionContext,
@@ -459,16 +471,29 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
         session_context: &SessionContext,
         intent: &ToolIntent,
         descriptor: &crate::tools::ToolDescriptor,
-        _kernel_ctx: Option<&KernelContext>,
+        kernel_ctx: Option<&KernelContext>,
+    ) -> Result<Option<ApprovalRequirement>, String> {
+        let binding = ConversationRuntimeBinding::from_optional_kernel_context(kernel_ctx);
+        self.maybe_require_approval_with_binding(session_context, intent, descriptor, binding)
+            .await
+    }
+
+    async fn maybe_require_approval_with_binding(
+        &self,
+        session_context: &SessionContext,
+        intent: &ToolIntent,
+        descriptor: &crate::tools::ToolDescriptor,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> Result<Option<ApprovalRequirement>, String> {
         #[cfg(not(feature = "memory-sqlite"))]
         {
-            let _ = (session_context, intent, descriptor);
+            let _ = (session_context, intent, descriptor, binding);
             Ok(None)
         }
 
         #[cfg(feature = "memory-sqlite")]
         {
+            let _ = binding;
             let governance = governance_profile_for_descriptor(descriptor);
             if descriptor.execution_kind != ToolExecutionKind::App
                 || governance.approval_mode != ToolApprovalMode::PolicyDriven
@@ -1630,13 +1655,12 @@ impl TurnEngine {
                 }
             }
             ToolExecutionKind::App => {
-                let kernel_ctx = binding.kernel_context();
                 match app_dispatcher
-                    .maybe_require_approval(
+                    .maybe_require_approval_with_binding(
                         session_context,
                         &effective_intent,
                         descriptor,
-                        kernel_ctx,
+                        binding,
                     )
                     .await
                 {
