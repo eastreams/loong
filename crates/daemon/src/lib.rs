@@ -90,6 +90,7 @@ mod onboard_finalize;
 mod onboard_preflight;
 pub mod onboard_presentation;
 mod provider_credential_policy;
+mod provider_model_probe_policy;
 pub mod provider_presentation;
 mod provider_route_diagnostics;
 pub mod runtime_capability_cli;
