@@ -844,9 +844,8 @@ fn parse_multi_channel_serve_channel_account(
                 "unsupported multi-channel service channel `{channel_token}` (expected one of: {supported_channels})"
             )
         })?;
-    let runtime_is_supported = supported_channel_ids
-        .iter()
-        .any(|supported_channel_id| *supported_channel_id == runtime_descriptor.channel_id);
+    let runtime_channel_id = runtime_descriptor.channel_id;
+    let runtime_is_supported = supported_channel_ids.contains(&runtime_channel_id);
     if !runtime_is_supported {
         return Err(format!(
             "unsupported multi-channel service channel `{channel_token}` (expected one of: {supported_channels})"
