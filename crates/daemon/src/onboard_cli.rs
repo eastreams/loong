@@ -55,6 +55,14 @@ const ONBOARD_SINGLE_LINE_INPUT_HINT: &str = "- single-line input only";
 const ONBOARD_PASTE_DRAIN_WINDOW_ENV: &str = "LOONGCLAW_ONBOARD_PASTE_DRAIN_WINDOW_MS";
 const DEFAULT_ONBOARD_PASTE_DRAIN_WINDOW: Duration = Duration::from_millis(75);
 const ONBOARD_LINE_READER_BUFFER_SIZE: usize = 64;
+const ONBOARD_WEB_SEARCH_PROVIDER_PRIORITY: &[&str] = &[
+    mvp::config::WEB_SEARCH_PROVIDER_DUCKDUCKGO,
+    mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
+    mvp::config::WEB_SEARCH_PROVIDER_BRAVE,
+    mvp::config::WEB_SEARCH_PROVIDER_PERPLEXITY,
+    mvp::config::WEB_SEARCH_PROVIDER_EXA,
+    mvp::config::WEB_SEARCH_PROVIDER_JINA,
+];
 
 #[derive(Debug, Clone)]
 pub struct OnboardCommandOptions {
@@ -1116,6 +1124,7 @@ struct StartingConfigSelection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WebSearchProviderRecommendation {
     provider: &'static str,
+    ordered_providers: Vec<&'static str>,
     reason: String,
     source: WebSearchProviderRecommendationSource,
 }
@@ -2269,7 +2278,9 @@ async fn resolve_web_search_provider_selection(
         return Ok(default_provider.to_owned());
     }
 
-    let screen_options = build_web_search_provider_screen_options(config, default_provider);
+    let ordered_providers = recommendation.ordered_providers.as_slice();
+    let screen_options =
+        build_web_search_provider_screen_options(config, ordered_providers, default_provider);
     let select_options = select_options_from_screen_options(&screen_options);
     let default_idx = screen_options.iter().position(|option| option.recommended);
 
@@ -2277,8 +2288,7 @@ async fn resolve_web_search_provider_selection(
         ui,
         render_web_search_provider_selection_screen_lines_with_style(
             config,
-            default_provider,
-            recommendation.reason.as_str(),
+            &recommendation,
             guided_prompt_path,
             context.render_width,
             true,
@@ -2421,6 +2431,20 @@ fn resolve_effective_web_search_default_provider(
     mvp::config::WEB_SEARCH_PROVIDER_DUCKDUCKGO
 }
 
+fn build_web_search_provider_recommendation(
+    provider: &'static str,
+    reason: String,
+    source: WebSearchProviderRecommendationSource,
+) -> WebSearchProviderRecommendation {
+    let ordered_providers = build_ranked_web_search_provider_list(provider);
+    WebSearchProviderRecommendation {
+        provider,
+        ordered_providers,
+        reason,
+        source,
+    }
+}
+
 async fn resolve_web_search_provider_recommendation(
     options: &OnboardCommandOptions,
     config: &mvp::config::LoongClawConfig,
@@ -2434,12 +2458,12 @@ async fn resolve_web_search_provider_recommendation(
             config.tools.web_search.default_provider.as_str(),
         )
     {
-        return Ok(WebSearchProviderRecommendation {
-            provider: configured_provider,
-            reason: "reusing the configured web search provider from the current starting point"
-                .to_owned(),
-            source: WebSearchProviderRecommendationSource::Configured,
-        });
+        let reason =
+            "reusing the configured web search provider from the current starting point".to_owned();
+        let source = WebSearchProviderRecommendationSource::Configured;
+        let recommendation =
+            build_web_search_provider_recommendation(configured_provider, reason, source);
+        return Ok(recommendation);
     }
 
     if let Some(credential_recommendation) =
@@ -2469,11 +2493,8 @@ fn explicit_web_search_provider_override(
             normalize_selected_web_search_provider("web-search-provider", trimmed_provider)?;
         let reason = "set by --web-search-provider".to_owned();
         let source = WebSearchProviderRecommendationSource::ExplicitCli;
-        let recommendation = WebSearchProviderRecommendation {
-            provider: normalized_provider,
-            reason,
-            source,
-        };
+        let recommendation =
+            build_web_search_provider_recommendation(normalized_provider, reason, source);
         return Ok(Some(recommendation));
     }
 
@@ -2490,11 +2511,8 @@ fn explicit_web_search_provider_override(
         normalize_selected_web_search_provider("LOONGCLAW_WEB_SEARCH_PROVIDER", trimmed_provider)?;
     let reason = "set by LOONGCLAW_WEB_SEARCH_PROVIDER".to_owned();
     let source = WebSearchProviderRecommendationSource::ExplicitEnv;
-    let recommendation = WebSearchProviderRecommendation {
-        provider: normalized_provider,
-        reason,
-        source,
-    };
+    let recommendation =
+        build_web_search_provider_recommendation(normalized_provider, reason, source);
     Ok(Some(recommendation))
 }
 
@@ -2537,61 +2555,70 @@ fn recommend_web_search_provider_from_available_credentials(
             descriptor.display_name
         )
     };
-    Some(WebSearchProviderRecommendation {
-        provider: descriptor.id,
-        reason,
-        source: WebSearchProviderRecommendationSource::DetectedCredential,
-    })
+    let source = WebSearchProviderRecommendationSource::DetectedCredential;
+    let recommendation = build_web_search_provider_recommendation(descriptor.id, reason, source);
+    Some(recommendation)
 }
 
 fn recommend_web_search_provider_from_signals(
     signals: WebSearchEnvironmentSignals,
 ) -> WebSearchProviderRecommendation {
-    if signals.domestic_locale_hint && (signals.tavily_reachable || !signals.duckduckgo_reachable) {
-        return WebSearchProviderRecommendation {
-            provider: mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
-            reason: if signals.tavily_reachable {
-                "domestic locale or timezone was detected and Tavily looked reachable from this host"
-                    .to_owned()
-            } else {
-                "domestic locale or timezone was detected and DuckDuckGo did not look reachable from this host"
-                    .to_owned()
-            },
-            source: WebSearchProviderRecommendationSource::DetectedSignals,
+    let source = WebSearchProviderRecommendationSource::DetectedSignals;
+
+    if signals.domestic_locale_hint {
+        let reason = if signals.tavily_reachable {
+            "domestic locale or timezone was detected and Tavily looked reachable from this host"
+                .to_owned()
+        } else {
+            "domestic locale or timezone was detected, so Tavily moves ahead of DuckDuckGo in the default recommendation order"
+                .to_owned()
         };
+        return build_web_search_provider_recommendation(
+            mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
+            reason,
+            source,
+        );
+    }
+
+    if !signals.duckduckgo_reachable && signals.tavily_reachable {
+        let reason =
+            "DuckDuckGo did not look reachable, but Tavily's API route responded from this host"
+                .to_owned();
+        return build_web_search_provider_recommendation(
+            mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
+            reason,
+            source,
+        );
     }
 
     if signals.duckduckgo_reachable {
-        return WebSearchProviderRecommendation {
-            provider: mvp::config::WEB_SEARCH_PROVIDER_DUCKDUCKGO,
-            reason: "DuckDuckGo looked reachable from this host, so the key-free fallback stays the default".to_owned(),
-            source: WebSearchProviderRecommendationSource::DetectedSignals,
-        };
+        let reason =
+            "DuckDuckGo looked reachable from this host, so the key-free fallback stays at the top of the recommendation order"
+                .to_owned();
+        return build_web_search_provider_recommendation(
+            mvp::config::WEB_SEARCH_PROVIDER_DUCKDUCKGO,
+            reason,
+            source,
+        );
     }
 
     if signals.tavily_reachable {
-        return WebSearchProviderRecommendation {
-            provider: mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
-            reason:
-                "DuckDuckGo did not look reachable, but Tavily's API route responded from this host"
-                    .to_owned(),
-            source: WebSearchProviderRecommendationSource::DetectedSignals,
-        };
+        let reason =
+            "DuckDuckGo did not look reachable, but Tavily's API route responded from this host"
+                .to_owned();
+        return build_web_search_provider_recommendation(
+            mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
+            reason,
+            source,
+        );
     }
 
-    if signals.domestic_locale_hint {
-        return WebSearchProviderRecommendation {
-            provider: mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
-            reason: "domestic locale or timezone was detected, so Tavily is the safer API-first recommendation".to_owned(),
-            source: WebSearchProviderRecommendationSource::DetectedSignals,
-        };
-    }
-
-    WebSearchProviderRecommendation {
-        provider: mvp::config::WEB_SEARCH_PROVIDER_DUCKDUCKGO,
-        reason: "falling back to DuckDuckGo as the key-free default".to_owned(),
-        source: WebSearchProviderRecommendationSource::DetectedSignals,
-    }
+    let reason = "falling back to DuckDuckGo as the key-free default recommendation".to_owned();
+    build_web_search_provider_recommendation(
+        mvp::config::WEB_SEARCH_PROVIDER_DUCKDUCKGO,
+        reason,
+        source,
+    )
 }
 
 async fn detect_web_search_environment_signals() -> WebSearchEnvironmentSignals {
@@ -2665,44 +2692,123 @@ fn build_onboard_probe_client() -> reqwest::Client {
         .unwrap_or_else(|_| reqwest::Client::new())
 }
 
+fn push_ranked_web_search_provider(
+    ranked_providers: &mut Vec<&'static str>,
+    provider: &'static str,
+) {
+    let is_known_provider = mvp::config::web_search_provider_descriptor(provider).is_some();
+    if !is_known_provider {
+        return;
+    }
+
+    let already_present = ranked_providers.contains(&provider);
+    if already_present {
+        return;
+    }
+
+    ranked_providers.push(provider);
+}
+
+fn build_ranked_web_search_provider_list(preferred_provider: &'static str) -> Vec<&'static str> {
+    let mut ranked_providers = Vec::new();
+
+    push_ranked_web_search_provider(&mut ranked_providers, preferred_provider);
+
+    for provider in ONBOARD_WEB_SEARCH_PROVIDER_PRIORITY {
+        push_ranked_web_search_provider(&mut ranked_providers, provider);
+    }
+
+    for descriptor in mvp::config::web_search_provider_descriptors() {
+        push_ranked_web_search_provider(&mut ranked_providers, descriptor.id);
+    }
+
+    ranked_providers
+}
+
+fn render_web_search_provider_recommendation_order(ordered_providers: &[&'static str]) -> String {
+    let provider_labels: Vec<String> = ordered_providers
+        .iter()
+        .filter_map(|provider| mvp::config::web_search_provider_descriptor(provider))
+        .map(|descriptor| descriptor.display_name.to_owned())
+        .collect();
+    provider_labels.join(" -> ")
+}
+
+fn build_web_search_provider_screen_option(
+    config: &mvp::config::LoongClawConfig,
+    descriptor: &mvp::config::WebSearchProviderDescriptor,
+    recommended_provider: &str,
+) -> OnboardScreenOption {
+    let mut detail_lines = vec![descriptor.description.to_owned()];
+    let credential_summary = summarize_web_search_provider_credential(config, descriptor.id);
+    if let Some(credential) = credential_summary {
+        let label = credential.label;
+        let value = credential.value;
+        detail_lines.push(format!("{label}: {value}"));
+    }
+
+    OnboardScreenOption {
+        key: descriptor.id.to_owned(),
+        label: descriptor.display_name.to_owned(),
+        detail_lines,
+        recommended: descriptor.id == recommended_provider,
+    }
+}
+
 fn build_web_search_provider_screen_options(
     config: &mvp::config::LoongClawConfig,
+    ordered_providers: &[&'static str],
     recommended_provider: &str,
 ) -> Vec<OnboardScreenOption> {
-    mvp::config::web_search_provider_descriptors()
-        .iter()
-        .map(|descriptor| {
-            let mut detail_lines = vec![descriptor.description.to_owned()];
-            if let Some(credential) =
-                summarize_web_search_provider_credential(config, descriptor.id)
-            {
-                detail_lines.push(format!("{}: {}", credential.label, credential.value));
-            }
-            OnboardScreenOption {
-                key: descriptor.id.to_owned(),
-                label: descriptor.display_name.to_owned(),
-                detail_lines,
-                recommended: descriptor.id == recommended_provider,
-            }
-        })
-        .collect()
+    let mut options = Vec::new();
+
+    for provider in ordered_providers {
+        let descriptor = mvp::config::web_search_provider_descriptor(provider);
+        let Some(descriptor) = descriptor else {
+            continue;
+        };
+        let option =
+            build_web_search_provider_screen_option(config, descriptor, recommended_provider);
+        options.push(option);
+    }
+
+    for descriptor in mvp::config::web_search_provider_descriptors() {
+        let already_listed = options.iter().any(|option| option.key == descriptor.id);
+        if already_listed {
+            continue;
+        }
+
+        let option =
+            build_web_search_provider_screen_option(config, descriptor, recommended_provider);
+        options.push(option);
+    }
+
+    options
 }
 
 fn render_web_search_provider_selection_screen_lines_with_style(
     config: &mvp::config::LoongClawConfig,
-    recommended_provider: &str,
-    recommendation_reason: &str,
+    recommendation: &WebSearchProviderRecommendation,
     guided_prompt_path: GuidedPromptPath,
     width: usize,
     color_enabled: bool,
 ) -> Vec<String> {
+    let recommended_provider = recommendation.provider;
+    let recommendation_reason = recommendation.reason.as_str();
+    let recommendation_order = render_web_search_provider_recommendation_order(
+        recommendation.ordered_providers.as_slice(),
+    );
     let current_provider = mvp::config::normalize_web_search_provider(
         config.tools.web_search.default_provider.as_str(),
     )
     .unwrap_or(mvp::config::DEFAULT_WEB_SEARCH_PROVIDER);
     let current_provider_label = web_search_provider_display_name(current_provider);
     let recommended_provider_label = web_search_provider_display_name(recommended_provider);
-    let options = build_web_search_provider_screen_options(config, recommended_provider);
+    let options = build_web_search_provider_screen_options(
+        config,
+        recommendation.ordered_providers.as_slice(),
+        recommended_provider,
+    );
 
     render_onboard_choice_screen(
         OnboardHeaderStyle::Compact,
@@ -2714,6 +2820,8 @@ fn render_web_search_provider_selection_screen_lines_with_style(
             format!("- current provider: {current_provider_label}"),
             format!("- recommended provider: {recommended_provider_label}"),
             format!("- why this is recommended: {recommendation_reason}"),
+            format!("- recommendation order: {recommendation_order}"),
+            "- this is a recommendation only; you can still choose any provider below".to_owned(),
         ],
         options,
         vec![render_default_choice_footer_line(
@@ -7480,6 +7588,10 @@ mod tests {
             recommendation.source,
             WebSearchProviderRecommendationSource::DetectedCredential
         );
+        assert_eq!(
+            recommendation.ordered_providers.first().copied(),
+            Some(mvp::config::WEB_SEARCH_PROVIDER_PERPLEXITY)
+        );
         assert!(
             recommendation.reason.contains("Perplexity Search"),
             "recommendation reason should identify the provider that already has a ready credential: {recommendation:?}"
@@ -7536,6 +7648,10 @@ mod tests {
             recommendation.source,
             WebSearchProviderRecommendationSource::ExplicitCli
         );
+        assert_eq!(
+            recommendation.ordered_providers.first().copied(),
+            Some(mvp::config::WEB_SEARCH_PROVIDER_EXA)
+        );
     }
 
     #[test]
@@ -7556,11 +7672,11 @@ mod tests {
             skip_model_probe: false,
         };
         let config = mvp::config::LoongClawConfig::default();
-        let recommendation = WebSearchProviderRecommendation {
-            provider: mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
-            reason: "set by --web-search-provider".to_owned(),
-            source: WebSearchProviderRecommendationSource::ExplicitCli,
-        };
+        let recommendation = build_web_search_provider_recommendation(
+            mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
+            "set by --web-search-provider".to_owned(),
+            WebSearchProviderRecommendationSource::ExplicitCli,
+        );
 
         let selected =
             resolve_effective_web_search_default_provider(&options, &config, &recommendation);
@@ -7591,11 +7707,11 @@ mod tests {
             skip_model_probe: false,
         };
         let config = mvp::config::LoongClawConfig::default();
-        let recommendation = WebSearchProviderRecommendation {
-            provider: mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
-            reason: "domestic locale or timezone was detected".to_owned(),
-            source: WebSearchProviderRecommendationSource::DetectedSignals,
-        };
+        let recommendation = build_web_search_provider_recommendation(
+            mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
+            "domestic locale or timezone was detected".to_owned(),
+            WebSearchProviderRecommendationSource::DetectedSignals,
+        );
 
         let selected =
             resolve_effective_web_search_default_provider(&options, &config, &recommendation);
@@ -7604,6 +7720,154 @@ mod tests {
             selected,
             mvp::config::WEB_SEARCH_PROVIDER_DUCKDUCKGO,
             "detected Tavily recommendations should still fall back to the key-free provider in non-interactive mode when no Tavily credential is ready"
+        );
+    }
+
+    #[test]
+    fn build_ranked_web_search_provider_list_moves_preferred_provider_to_front() {
+        let ranked_providers =
+            build_ranked_web_search_provider_list(mvp::config::WEB_SEARCH_PROVIDER_TAVILY);
+
+        assert_eq!(
+            ranked_providers,
+            vec![
+                mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
+                mvp::config::WEB_SEARCH_PROVIDER_DUCKDUCKGO,
+                mvp::config::WEB_SEARCH_PROVIDER_BRAVE,
+                mvp::config::WEB_SEARCH_PROVIDER_PERPLEXITY,
+                mvp::config::WEB_SEARCH_PROVIDER_EXA,
+                mvp::config::WEB_SEARCH_PROVIDER_JINA,
+            ]
+        );
+    }
+
+    #[test]
+    fn recommend_web_search_provider_from_signals_prefers_tavily_for_domestic_hosts() {
+        let signals = WebSearchEnvironmentSignals {
+            domestic_locale_hint: true,
+            duckduckgo_reachable: true,
+            tavily_reachable: false,
+        };
+
+        let recommendation = recommend_web_search_provider_from_signals(signals);
+
+        assert_eq!(
+            recommendation.provider,
+            mvp::config::WEB_SEARCH_PROVIDER_TAVILY
+        );
+        assert_eq!(
+            recommendation.ordered_providers.first().copied(),
+            Some(mvp::config::WEB_SEARCH_PROVIDER_TAVILY)
+        );
+        assert!(
+            recommendation
+                .reason
+                .contains("domestic locale or timezone"),
+            "domestic recommendation should explain why Tavily was moved to the top: {recommendation:?}"
+        );
+    }
+
+    #[test]
+    fn recommend_web_search_provider_from_signals_prefers_tavily_when_duckduckgo_unreachable() {
+        let signals = WebSearchEnvironmentSignals {
+            domestic_locale_hint: false,
+            duckduckgo_reachable: false,
+            tavily_reachable: true,
+        };
+
+        let recommendation = recommend_web_search_provider_from_signals(signals);
+
+        assert_eq!(
+            recommendation.provider,
+            mvp::config::WEB_SEARCH_PROVIDER_TAVILY
+        );
+        assert_eq!(
+            recommendation.ordered_providers.first().copied(),
+            Some(mvp::config::WEB_SEARCH_PROVIDER_TAVILY)
+        );
+        assert!(
+            recommendation
+                .reason
+                .contains("DuckDuckGo did not look reachable"),
+            "unreachable DuckDuckGo should move Tavily to the top of the recommendation list: {recommendation:?}"
+        );
+    }
+
+    #[test]
+    fn recommend_web_search_provider_from_signals_keeps_duckduckgo_first_without_positive_tavily_signal()
+     {
+        let signals = WebSearchEnvironmentSignals {
+            domestic_locale_hint: false,
+            duckduckgo_reachable: false,
+            tavily_reachable: false,
+        };
+
+        let recommendation = recommend_web_search_provider_from_signals(signals);
+
+        assert_eq!(
+            recommendation.provider,
+            mvp::config::WEB_SEARCH_PROVIDER_DUCKDUCKGO
+        );
+        assert_eq!(
+            recommendation.ordered_providers.first().copied(),
+            Some(mvp::config::WEB_SEARCH_PROVIDER_DUCKDUCKGO)
+        );
+        assert!(
+            recommendation.reason.contains("falling back to DuckDuckGo"),
+            "ambiguous offline environments should stay on the key-free recommendation instead of inventing a Tavily preference: {recommendation:?}"
+        );
+    }
+
+    #[test]
+    fn build_web_search_provider_screen_options_follow_ranked_recommendation_order() {
+        let config = mvp::config::LoongClawConfig::default();
+        let ordered_providers =
+            build_ranked_web_search_provider_list(mvp::config::WEB_SEARCH_PROVIDER_TAVILY);
+        let options = build_web_search_provider_screen_options(
+            &config,
+            ordered_providers.as_slice(),
+            mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
+        );
+
+        assert_eq!(
+            options.first().map(|option| option.key.as_str()),
+            Some("tavily")
+        );
+        assert_eq!(
+            options.get(1).map(|option| option.key.as_str()),
+            Some("duckduckgo")
+        );
+        assert!(options.first().is_some_and(|option| option.recommended));
+    }
+
+    #[test]
+    fn render_web_search_provider_selection_screen_mentions_recommendation_order() {
+        let config = mvp::config::LoongClawConfig::default();
+        let recommendation = build_web_search_provider_recommendation(
+            mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
+            "domestic locale or timezone was detected".to_owned(),
+            WebSearchProviderRecommendationSource::DetectedSignals,
+        );
+
+        let lines = render_web_search_provider_selection_screen_lines_with_style(
+            &config,
+            &recommendation,
+            GuidedPromptPath::NativePromptPack,
+            80,
+            false,
+        );
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("recommendation order: Tavily -> DuckDuckGo")),
+            "the onboarding screen should surface the ranking order instead of only a single recommended provider: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| {
+                line.contains("recommendation only") && line.contains("choose any provider")
+            }),
+            "the onboarding screen should make it explicit that the recommendation does not remove user choice: {lines:#?}"
         );
     }
 
