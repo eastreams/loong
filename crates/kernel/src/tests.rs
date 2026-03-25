@@ -228,8 +228,8 @@ proptest! {
 
     #[test]
     fn prop_pack_capability_boundary_for_task_dispatch(
-        pack_mask in 1_u16..(1_u16 << 9),
-        required_mask in 0_u16..(1_u16 << 9)
+        pack_mask in 1_u16..(1_u16 << TEST_CAPABILITY_VARIANT_COUNT),
+        required_mask in 0_u16..(1_u16 << TEST_CAPABILITY_VARIANT_COUNT)
     ) {
         let pack_capabilities = capability_set_from_mask(pack_mask);
         let required_capabilities = capability_set_from_mask(required_mask);
@@ -321,7 +321,7 @@ fn fault_from_kernel_error_maps_policy() {
 fn fault_from_kernel_error_maps_pack_boundary() {
     let kernel_err = KernelError::PackCapabilityBoundary {
         pack_id: "my-pack".to_owned(),
-        capability: Capability::NetworkEgress,
+        capability: Capability::FilesystemWrite,
     };
     let fault = Fault::from_kernel_error(kernel_err);
     assert!(matches!(fault, Fault::CapabilityViolation { .. }));

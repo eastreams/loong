@@ -43,7 +43,8 @@ pub struct MockCoreTool;
 pub struct MockToolExtension;
 pub struct MockCoreMemory;
 pub struct MockMemoryExtension;
-pub struct NoNetworkEgressPolicyExtension;
+pub struct NoFilesystemWritePolicyExtension;
+pub const TEST_CAPABILITY_VARIANT_COUNT: u8 = 7;
 #[derive(Debug, Clone, Copy)]
 pub enum ToolGateMode {
     Deny,
@@ -297,18 +298,18 @@ impl MemoryExtensionAdapter for MockMemoryExtension {
         })
     }
 }
-impl PolicyExtension for NoNetworkEgressPolicyExtension {
+impl PolicyExtension for NoFilesystemWritePolicyExtension {
     fn name(&self) -> &str {
-        "no-network-egress"
+        "no-filesystem-write"
     }
     fn authorize_extension(&self, context: &PolicyExtensionContext<'_>) -> Result<(), PolicyError> {
         if context
             .required_capabilities
-            .contains(&Capability::NetworkEgress)
+            .contains(&Capability::FilesystemWrite)
         {
             return Err(PolicyError::ExtensionDenied {
                 extension: self.name().to_owned(),
-                reason: "network egress is blocked for this environment".to_owned(),
+                reason: "filesystem write is blocked for this environment".to_owned(),
             });
         }
         Ok(())
@@ -377,14 +378,12 @@ pub fn capability_from_bit(bit: u8) -> Capability {
         3 => Capability::MemoryWrite,
         4 => Capability::FilesystemRead,
         5 => Capability::FilesystemWrite,
-        6 => Capability::NetworkEgress,
-        7 => Capability::ScheduleTask,
         _ => Capability::ObserveTelemetry,
     }
 }
 pub fn capability_set_from_mask(mask: u16) -> BTreeSet<Capability> {
     let mut capabilities = BTreeSet::new();
-    for bit in 0_u8..9 {
+    for bit in 0_u8..TEST_CAPABILITY_VARIANT_COUNT {
         if (mask & (1_u16 << bit)) != 0 {
             capabilities.insert(capability_from_bit(bit));
         }

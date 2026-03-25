@@ -12,8 +12,6 @@ pub enum Capability {
     MemoryWrite,
     FilesystemRead,
     FilesystemWrite,
-    NetworkEgress,
-    ScheduleTask,
     ObserveTelemetry,
 }
 
@@ -26,8 +24,6 @@ impl Capability {
             Self::MemoryWrite => "memory_write",
             Self::FilesystemRead => "filesystem_read",
             Self::FilesystemWrite => "filesystem_write",
-            Self::NetworkEgress => "network_egress",
-            Self::ScheduleTask => "schedule_task",
             Self::ObserveTelemetry => "observe_telemetry",
         }
     }
@@ -40,8 +36,6 @@ impl Capability {
             "memory_write" => Some(Self::MemoryWrite),
             "filesystem_read" => Some(Self::FilesystemRead),
             "filesystem_write" => Some(Self::FilesystemWrite),
-            "network_egress" => Some(Self::NetworkEgress),
-            "schedule_task" => Some(Self::ScheduleTask),
             "observe_telemetry" => Some(Self::ObserveTelemetry),
             _ => None,
         }
@@ -123,8 +117,6 @@ mod tests {
             (Capability::MemoryWrite, "memory_write"),
             (Capability::FilesystemRead, "filesystem_read"),
             (Capability::FilesystemWrite, "filesystem_write"),
-            (Capability::NetworkEgress, "network_egress"),
-            (Capability::ScheduleTask, "schedule_task"),
             (Capability::ObserveTelemetry, "observe_telemetry"),
         ];
 
@@ -147,5 +139,7 @@ mod tests {
         assert_eq!(Capability::parse("totally_unknown"), None);
         assert_eq!(Capability::parse(""), None);
         assert_eq!(Capability::parse("   "), None);
+        assert_eq!(Capability::parse("network_egress"), None);
+        assert_eq!(Capability::parse("schedule_task"), None);
     }
 }

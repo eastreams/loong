@@ -854,7 +854,7 @@ async fn policy_extension_chain_can_block_high_risk_capabilities() {
             allowed_connectors: BTreeSet::new(),
             granted_capabilities: BTreeSet::from([
                 Capability::InvokeTool,
-                Capability::NetworkEgress,
+                Capability::FilesystemWrite,
             ]),
             metadata: BTreeMap::new(),
         })
@@ -862,17 +862,17 @@ async fn policy_extension_chain_can_block_high_risk_capabilities() {
     kernel.register_harness_adapter(MockEmbeddedPiHarness {
         seen_tasks: Mutex::new(Vec::new()),
     });
-    kernel.register_policy_extension(NoNetworkEgressPolicyExtension);
+    kernel.register_policy_extension(NoFilesystemWritePolicyExtension);
 
     let token = kernel
         .issue_token("strict-env", "agent-secure", 120)
         .expect("token should issue");
 
     let risky_task = TaskIntent {
-        task_id: "task-net-01".to_owned(),
-        objective: "fetch external url".to_owned(),
-        required_capabilities: BTreeSet::from([Capability::NetworkEgress]),
-        payload: json!({"url": "https://example.com"}),
+        task_id: "task-fs-01".to_owned(),
+        objective: "write local file".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::FilesystemWrite]),
+        payload: json!({"path": "/tmp/output.txt"}),
     };
 
     let error = kernel
@@ -882,7 +882,7 @@ async fn policy_extension_chain_can_block_high_risk_capabilities() {
 
     assert!(matches!(
         error,
-        KernelError::Policy(PolicyError::ExtensionDenied { extension, .. }) if extension == "no-network-egress"
+        KernelError::Policy(PolicyError::ExtensionDenied { extension, .. }) if extension == "no-filesystem-write"
     ));
 }
 
