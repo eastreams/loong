@@ -5410,6 +5410,114 @@ async fn execute_spec_plugin_scan_is_transactional_when_blocked() {
 }
 
 #[tokio::test]
+async fn execute_spec_blocks_when_package_manifest_conflicts_with_source_manifest() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+
+    let plugin_root = std::env::temp_dir().join(format!("loongclaw-plugin-conflict-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    fs::write(
+        plugin_root.join("loongclaw.plugin.json"),
+        r#"
+{
+  "plugin_id": "conflict-plugin",
+  "provider_id": "package-provider",
+  "connector_name": "conflict-connector",
+  "channel_id": "primary",
+  "endpoint": "https://package.example.com/invoke",
+  "capabilities": ["InvokeConnector"],
+  "metadata": {
+    "bridge_kind": "http_json",
+    "version": "1.0.0"
+  }
+}
+"#,
+    )
+    .expect("write package manifest");
+
+    fs::write(
+        plugin_root.join("plugin.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "conflict-plugin",
+#   "provider_id": "source-provider",
+#   "connector_name": "conflict-connector",
+#   "channel_id": "primary",
+#   "endpoint": "https://package.example.com/invoke",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"}
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write conflicting source manifest");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-plugin-manifest-conflict".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::new(),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-plugin-manifest-conflict".to_owned(),
+        ttl_s: 120,
+        approval: None,
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: None,
+        bootstrap: None,
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        operation: OperationSpec::Task {
+            task_id: "t-plugin-manifest-conflict".to_owned(),
+            objective: "plugin scan should fail on package/source drift".to_owned(),
+            required_capabilities: BTreeSet::new(),
+            payload: json!({}),
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+
+    assert_eq!(report.operation_kind, "blocked");
+    assert!(
+        report
+            .blocked_reason
+            .expect("blocked reason should exist")
+            .contains("plugin manifest conflict")
+    );
+    assert!(report.plugin_scan_reports.is_empty());
+    assert!(report.plugin_absorb_reports.is_empty());
+    assert!(
+        report
+            .integration_catalog
+            .provider("package-provider")
+            .is_none()
+    );
+    assert!(
+        report
+            .integration_catalog
+            .provider("source-provider")
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn execute_spec_bootstrap_budget_is_global_across_multiple_roots() {
     use std::time::{SystemTime, UNIX_EPOCH};
 

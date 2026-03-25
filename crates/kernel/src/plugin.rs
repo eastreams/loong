@@ -84,7 +84,14 @@ impl PluginScanner {
         report.scanned_files = files.len();
 
         let package_manifest_descriptors = collect_package_manifest_descriptors(&files)?;
-        let package_roots = collect_package_roots(&package_manifest_descriptors);
+        let source_manifest_descriptors = collect_source_manifest_descriptors(&files)?;
+        let package_manifests_by_root =
+            collect_package_manifest_descriptors_by_root(&package_manifest_descriptors);
+
+        validate_package_manifest_conflicts(
+            &package_manifests_by_root,
+            &source_manifest_descriptors,
+        )?;
 
         for path in &files {
             if let Some(descriptor) = package_manifest_descriptors.get(path) {
@@ -92,12 +99,15 @@ impl PluginScanner {
                 continue;
             }
 
-            if path_is_covered_by_package_manifest(path, &package_roots) {
+            let covering_package_manifest =
+                find_covering_package_manifest_descriptor(path, &package_manifests_by_root);
+
+            if covering_package_manifest.is_some() {
                 continue;
             }
 
-            if let Some(descriptor) = parse_source_manifest_descriptor(path)? {
-                push_descriptor(&mut report, descriptor);
+            if let Some(descriptor) = source_manifest_descriptors.get(path) {
+                push_descriptor(&mut report, descriptor.clone());
             }
         }
 
@@ -291,19 +301,40 @@ fn collect_package_manifest_descriptors(
     Ok(descriptors)
 }
 
-fn collect_package_roots(descriptors: &BTreeMap<PathBuf, PluginDescriptor>) -> BTreeSet<PathBuf> {
-    let mut package_roots = BTreeSet::new();
+fn collect_source_manifest_descriptors(
+    files: &[PathBuf],
+) -> Result<BTreeMap<PathBuf, PluginDescriptor>, IntegrationError> {
+    let mut descriptors = BTreeMap::new();
 
-    for path in descriptors.keys() {
+    for path in files {
+        let descriptor = parse_source_manifest_descriptor(path)?;
+        let Some(descriptor) = descriptor else {
+            continue;
+        };
+
+        descriptors.insert(path.clone(), descriptor);
+    }
+
+    Ok(descriptors)
+}
+
+fn collect_package_manifest_descriptors_by_root(
+    descriptors: &BTreeMap<PathBuf, PluginDescriptor>,
+) -> BTreeMap<PathBuf, PluginDescriptor> {
+    let mut manifests_by_root = BTreeMap::new();
+
+    for (path, descriptor) in descriptors {
         let Some(parent) = path.parent() else {
             continue;
         };
 
         let package_root = parent.to_path_buf();
-        package_roots.insert(package_root);
+        let descriptor = descriptor.clone();
+
+        manifests_by_root.insert(package_root, descriptor);
     }
 
-    package_roots
+    manifests_by_root
 }
 
 fn push_descriptor(report: &mut PluginScanReport, descriptor: PluginDescriptor) {
@@ -391,10 +422,270 @@ fn is_package_manifest_file(path: &Path) -> bool {
     matches!(file_name, Some(PACKAGE_MANIFEST_FILE_NAME))
 }
 
-fn path_is_covered_by_package_manifest(path: &Path, package_roots: &BTreeSet<PathBuf>) -> bool {
-    package_roots
-        .iter()
-        .any(|package_root| path.starts_with(package_root))
+fn find_covering_package_manifest_descriptor<'a>(
+    path: &Path,
+    package_manifests_by_root: &'a BTreeMap<PathBuf, PluginDescriptor>,
+) -> Option<&'a PluginDescriptor> {
+    let mut best_match: Option<(&PathBuf, &PluginDescriptor)> = None;
+
+    for (package_root, descriptor) in package_manifests_by_root {
+        if !path.starts_with(package_root) {
+            continue;
+        }
+
+        let candidate_depth = package_root.components().count();
+        let Some((best_root, _)) = best_match else {
+            best_match = Some((package_root, descriptor));
+            continue;
+        };
+
+        let best_depth = best_root.components().count();
+
+        if candidate_depth > best_depth {
+            best_match = Some((package_root, descriptor));
+        }
+    }
+
+    best_match.map(|(_, descriptor)| descriptor)
+}
+
+fn validate_package_manifest_conflicts(
+    package_manifests_by_root: &BTreeMap<PathBuf, PluginDescriptor>,
+    source_manifest_descriptors: &BTreeMap<PathBuf, PluginDescriptor>,
+) -> Result<(), IntegrationError> {
+    for (source_path, source_descriptor) in source_manifest_descriptors {
+        let package_descriptor =
+            find_covering_package_manifest_descriptor(source_path, package_manifests_by_root);
+
+        let Some(package_descriptor) = package_descriptor else {
+            continue;
+        };
+
+        validate_package_manifest_pair(package_descriptor, source_descriptor)?;
+    }
+
+    Ok(())
+}
+
+fn validate_package_manifest_pair(
+    package_descriptor: &PluginDescriptor,
+    source_descriptor: &PluginDescriptor,
+) -> Result<(), IntegrationError> {
+    let conflict =
+        first_manifest_conflict(&package_descriptor.manifest, &source_descriptor.manifest);
+
+    let Some(conflict) = conflict else {
+        return Ok(());
+    };
+
+    Err(IntegrationError::PluginManifestConflict {
+        package_manifest_path: package_descriptor.path.clone(),
+        source_path: source_descriptor.path.clone(),
+        field: conflict.field,
+        package_value: conflict.package_value,
+        source_value: conflict.source_value,
+    })
+}
+
+fn first_manifest_conflict(
+    package_manifest: &PluginManifest,
+    source_manifest: &PluginManifest,
+) -> Option<ManifestFieldConflict> {
+    let plugin_id_conflict = compare_manifest_value(
+        "plugin_id",
+        &package_manifest.plugin_id,
+        &source_manifest.plugin_id,
+    );
+    if plugin_id_conflict.is_some() {
+        return plugin_id_conflict;
+    }
+
+    let provider_id_conflict = compare_manifest_value(
+        "provider_id",
+        &package_manifest.provider_id,
+        &source_manifest.provider_id,
+    );
+    if provider_id_conflict.is_some() {
+        return provider_id_conflict;
+    }
+
+    let connector_name_conflict = compare_manifest_value(
+        "connector_name",
+        &package_manifest.connector_name,
+        &source_manifest.connector_name,
+    );
+    if connector_name_conflict.is_some() {
+        return connector_name_conflict;
+    }
+
+    let channel_id_conflict = compare_manifest_value(
+        "channel_id",
+        &package_manifest.channel_id,
+        &source_manifest.channel_id,
+    );
+    if channel_id_conflict.is_some() {
+        return channel_id_conflict;
+    }
+
+    let endpoint_conflict = compare_manifest_value(
+        "endpoint",
+        &package_manifest.endpoint,
+        &source_manifest.endpoint,
+    );
+    if endpoint_conflict.is_some() {
+        return endpoint_conflict;
+    }
+
+    let capabilities_conflict = compare_manifest_value(
+        "capabilities",
+        &package_manifest.capabilities,
+        &source_manifest.capabilities,
+    );
+    if capabilities_conflict.is_some() {
+        return capabilities_conflict;
+    }
+
+    let metadata_conflict = compare_manifest_value(
+        "metadata",
+        &package_manifest.metadata,
+        &source_manifest.metadata,
+    );
+    if metadata_conflict.is_some() {
+        return metadata_conflict;
+    }
+
+    let summary_conflict = compare_manifest_value(
+        "summary",
+        &package_manifest.summary,
+        &source_manifest.summary,
+    );
+    if summary_conflict.is_some() {
+        return summary_conflict;
+    }
+
+    let tags_conflict =
+        compare_manifest_value("tags", &package_manifest.tags, &source_manifest.tags);
+    if tags_conflict.is_some() {
+        return tags_conflict;
+    }
+
+    let input_examples_conflict = compare_manifest_value(
+        "input_examples",
+        &package_manifest.input_examples,
+        &source_manifest.input_examples,
+    );
+    if input_examples_conflict.is_some() {
+        return input_examples_conflict;
+    }
+
+    let output_examples_conflict = compare_manifest_value(
+        "output_examples",
+        &package_manifest.output_examples,
+        &source_manifest.output_examples,
+    );
+    if output_examples_conflict.is_some() {
+        return output_examples_conflict;
+    }
+
+    compare_manifest_value(
+        "defer_loading",
+        &package_manifest.defer_loading,
+        &source_manifest.defer_loading,
+    )
+}
+
+fn compare_manifest_value<T>(
+    field: &str,
+    package_value: &T,
+    source_value: &T,
+) -> Option<ManifestFieldConflict>
+where
+    T: ?Sized + PartialEq + Serialize,
+{
+    if package_value == source_value {
+        return None;
+    }
+
+    let package_value = serialize_manifest_value(package_value);
+    let source_value = serialize_manifest_value(source_value);
+
+    Some(ManifestFieldConflict {
+        field: field.to_owned(),
+        package_value,
+        source_value,
+    })
+}
+
+fn compare_optional_fill_value<T>(
+    field: &str,
+    package_value: &Option<T>,
+    source_value: &Option<T>,
+) -> Option<ManifestFieldConflict>
+where
+    T: PartialEq + Serialize,
+{
+    let package_value = package_value.as_ref()?;
+    let source_value = source_value.as_ref()?;
+
+    compare_manifest_value(field, package_value, source_value)
+}
+
+fn compare_optional_fill_sequence<T>(
+    field: &str,
+    package_value: &[T],
+    source_value: &[T],
+) -> Option<ManifestFieldConflict>
+where
+    T: PartialEq + Serialize,
+{
+    if package_value.is_empty() {
+        return None;
+    }
+
+    if source_value.is_empty() {
+        return None;
+    }
+
+    compare_manifest_value(field, package_value, source_value)
+}
+
+fn first_shared_metadata_conflict(
+    package_metadata: &BTreeMap<String, String>,
+    source_metadata: &BTreeMap<String, String>,
+) -> Option<ManifestFieldConflict> {
+    for (key, package_value) in package_metadata {
+        let Some(source_value) = source_metadata.get(key) else {
+            continue;
+        };
+
+        if package_value == source_value {
+            continue;
+        }
+
+        let field = format!("metadata.{key}");
+        let package_value = serialize_manifest_value(package_value);
+        let source_value = serialize_manifest_value(source_value);
+
+        return Some(ManifestFieldConflict {
+            field,
+            package_value,
+            source_value,
+        });
+    }
+
+    None
+}
+
+fn serialize_manifest_value<T>(value: &T) -> String
+where
+    T: ?Sized + Serialize,
+{
+    let serialized = serde_json::to_string(value);
+
+    match serialized {
+        Ok(serialized) => serialized,
+        Err(error) => format!("\"<serialization_error:{error}>\""),
+    }
 }
 
 fn should_skip_dir(path: &Path) -> bool {
@@ -458,6 +749,13 @@ fn detect_language(path: &Path) -> String {
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.to_lowercase())
         .unwrap_or_else(|| "unknown".to_owned())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ManifestFieldConflict {
+    field: String,
+    package_value: String,
+    source_value: String,
 }
 
 #[cfg(test)]
@@ -630,13 +928,13 @@ mod tests {
             r#"
 # LOONGCLAW_PLUGIN_START
 # {
-#   "plugin_id": "source-plugin",
-#   "provider_id": "source-provider",
-#   "connector_name": "source-connector",
-#   "channel_id": "source-channel",
-#   "endpoint": "https://source.example/invoke",
+#   "plugin_id": "package-plugin",
+#   "provider_id": "package-provider",
+#   "connector_name": "package-connector",
+#   "channel_id": "package-channel",
+#   "endpoint": "https://package.example/invoke",
 #   "capabilities": ["InvokeConnector"],
-#   "metadata": {"bridge_kind":"process_stdio"}
+#   "metadata": {"bridge_kind":"http_json"}
 # }
 # LOONGCLAW_PLUGIN_END
 "#,
@@ -657,6 +955,150 @@ mod tests {
         assert_eq!(
             report.descriptors[0].manifest.provider_id,
             "package-provider"
+        );
+    }
+
+    #[test]
+    fn scanner_fails_when_package_manifest_conflicts_with_source_manifest() {
+        let root = unique_tmp_dir("loongclaw-plugin-conflict");
+        let package_root = root.join("pkg");
+        fs::create_dir_all(&package_root).expect("create temp root");
+
+        let manifest_file = package_root.join(PACKAGE_MANIFEST_FILE_NAME);
+        fs::write(
+            &manifest_file,
+            r#"
+{
+  "plugin_id": "package-plugin",
+  "provider_id": "package-provider",
+  "connector_name": "package-connector",
+  "channel_id": "package-channel",
+  "endpoint": "https://package.example/invoke",
+  "capabilities": ["InvokeConnector"],
+  "metadata": {
+    "bridge_kind": "http_json"
+  }
+}
+"#,
+        )
+        .expect("write package manifest");
+
+        let source_file = package_root.join("plugin.py");
+        fs::write(
+            &source_file,
+            r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "package-plugin",
+#   "provider_id": "source-provider",
+#   "connector_name": "package-connector",
+#   "channel_id": "package-channel",
+#   "endpoint": "https://package.example/invoke",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json"}
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+        )
+        .expect("write source plugin");
+
+        let scanner = PluginScanner::new();
+        let error = scanner
+            .scan_path(&root)
+            .expect_err("conflicting manifests should fail");
+
+        assert_eq!(
+            error,
+            IntegrationError::PluginManifestConflict {
+                package_manifest_path: manifest_file.display().to_string(),
+                source_path: source_file.display().to_string(),
+                field: "provider_id".to_owned(),
+                package_value: "\"package-provider\"".to_owned(),
+                source_value: "\"source-provider\"".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn scanner_uses_nearest_package_manifest_for_nested_package_roots() {
+        let root = unique_tmp_dir("loongclaw-plugin-nested-package-root");
+        let outer_root = root.join("outer");
+        let inner_root = outer_root.join("inner");
+        fs::create_dir_all(&inner_root).expect("create nested root");
+
+        let outer_manifest_file = outer_root.join(PACKAGE_MANIFEST_FILE_NAME);
+        fs::write(
+            &outer_manifest_file,
+            r#"
+{
+  "plugin_id": "outer-plugin",
+  "provider_id": "outer-provider",
+  "connector_name": "outer-connector",
+  "channel_id": "outer-channel",
+  "endpoint": "https://outer.example/invoke",
+  "capabilities": ["InvokeConnector"],
+  "metadata": {
+    "bridge_kind": "http_json"
+  }
+}
+"#,
+        )
+        .expect("write outer package manifest");
+
+        let inner_manifest_file = inner_root.join(PACKAGE_MANIFEST_FILE_NAME);
+        fs::write(
+            &inner_manifest_file,
+            r#"
+{
+  "plugin_id": "inner-plugin",
+  "provider_id": "inner-provider",
+  "connector_name": "inner-connector",
+  "channel_id": "inner-channel",
+  "endpoint": "https://inner.example/invoke",
+  "capabilities": ["InvokeConnector"],
+  "metadata": {
+    "bridge_kind": "http_json"
+  }
+}
+"#,
+        )
+        .expect("write inner package manifest");
+
+        let source_file = inner_root.join("plugin.py");
+        fs::write(
+            &source_file,
+            r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "inner-plugin",
+#   "provider_id": "inner-provider",
+#   "connector_name": "inner-connector",
+#   "channel_id": "inner-channel",
+#   "endpoint": "https://inner.example/invoke",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json"}
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+        )
+        .expect("write nested source plugin");
+
+        let scanner = PluginScanner::new();
+        let report = scanner.scan_path(&root).expect("scan should succeed");
+
+        assert_eq!(report.matched_plugins, 2);
+        assert_eq!(report.descriptors.len(), 2);
+        assert!(
+            report
+                .descriptors
+                .iter()
+                .any(|descriptor| descriptor.path == outer_manifest_file.display().to_string())
+        );
+        assert!(
+            report
+                .descriptors
+                .iter()
+                .any(|descriptor| descriptor.path == inner_manifest_file.display().to_string())
         );
     }
 
