@@ -230,9 +230,14 @@ Focus: open ecosystem without sacrificing trust boundaries.
 Planned deliverables:
 
 - multi-language plugin intake pipeline:
-  - manifest extraction
+  - manifest-first package discovery with file contract precedence over
+    embedded source markers
   - bridge inference
   - safety classification
+- setup-only plugin metadata and governed setup-entry contract for onboarding,
+  install, and doctor
+- slot-aware ownership model for exclusive vs shared plugin-provided runtime
+  surfaces
 - plugin packaging and signing metadata
 - trust policy tiers (`official`, `verified-community`, `unverified`)
 - reproducible plugin artifact verification in CI
@@ -241,6 +246,9 @@ Acceptance criteria:
 
 - unsigned/untrusted high-risk plugins never auto-activate
 - plugin provenance visible in catalog and audit events
+- plugin setup guidance can render from manifest metadata without executing the
+  plugin runtime
+- exclusive/shared ownership conflicts are deterministic and auditable
 - plugin translation + activation plans deterministic across runs
 
 ## Stage 5: Vertical Pack Productization (Next)
