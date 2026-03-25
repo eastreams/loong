@@ -2607,10 +2607,6 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
     }
 }
 
-const EMPTY_REQUIRED_FIELD_GROUPS: &[&[&str]] = &[];
-const EXTERNAL_SKILLS_INSTALL_REQUIRED_FIELD_GROUPS: &[&[&str]] =
-    &[&["path"], &["bundled_skill_id"]];
-
 fn tool_required_fields(name: &str) -> &'static [&'static str] {
     match name {
         "tool.search" => &["query"],
@@ -2640,13 +2636,6 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "sessions_send" => &["session_id", "text"],
         "web.search" => &["query"],
         _ => &[],
-    }
-}
-
-pub(crate) fn tool_required_field_groups(name: &str) -> &'static [&'static [&'static str]] {
-    match name {
-        "external_skills.install" => EXTERNAL_SKILLS_INSTALL_REQUIRED_FIELD_GROUPS,
-        _ => EMPTY_REQUIRED_FIELD_GROUPS,
     }
 }
 

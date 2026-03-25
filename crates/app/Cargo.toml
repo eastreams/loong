@@ -61,6 +61,8 @@ cbc = { version = "0.1", optional = true }
 wait-timeout = "0.2"
 tempfile = "3"
 which.workspace = true
+unicode-normalization = "0.1"
+unicode-segmentation = "1.12"
 # Kept unconditional because conversation/turn_shared.rs uses Regex to strip
 # leaked <think> tags even when tool-websearch is compiled out.
 regex.workspace = true

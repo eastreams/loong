@@ -14,6 +14,10 @@ use loongclaw_contracts::{Capability, ToolCoreOutcome, ToolCoreRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use tool_search::{
+    RankedSearchableToolEntry, SearchableToolEntry, rank_searchable_entries,
+    searchable_entry_from_descriptor, searchable_entry_from_provider_definition,
+};
 
 use crate::KernelContext;
 use crate::config::ToolConfig;
@@ -43,6 +47,7 @@ pub mod runtime_config;
 mod session;
 mod shell;
 pub mod shell_policy_ext;
+mod tool_search;
 // Browser reuses the shared SSRF and HTML helpers from web_fetch even when the
 // public web.fetch tool is compiled out.
 #[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
@@ -864,16 +869,6 @@ pub struct ToolRegistryEntry {
     pub description: &'static str,
 }
 
-#[derive(Debug, Clone)]
-struct SearchableToolEntry {
-    canonical_name: String,
-    summary: String,
-    argument_hint: String,
-    required_fields: Vec<String>,
-    required_field_groups: Vec<Vec<String>>,
-    tags: Vec<String>,
-}
-
 /// Returns a sorted list of all registered tools, gated by feature flags.
 pub fn tool_registry() -> Vec<ToolRegistryEntry> {
     tool_registry_with_config(Some(runtime_config::get_tool_runtime_config()))
@@ -894,7 +889,7 @@ pub(crate) fn tool_registry_with_config(
     let mut entries: Vec<ToolRegistryEntry> = catalog::discoverable_tool_catalog()
         .into_iter()
         .filter(|entry| runtime_visible_tool_view.contains(entry.canonical_name))
-        .filter(|entry| tool_search_entry_is_runtime_usable(*entry, config))
+        .filter(|entry| tool_search_entry_is_runtime_usable(entry.canonical_name, config))
         .map(|entry| ToolRegistryEntry {
             name: entry.canonical_name,
             description: entry.summary,
@@ -972,107 +967,6 @@ fn provider_tool_definitions_for_view(_view: &ToolView) -> Vec<Value> {
     tools
 }
 
-fn search_argument_hint_from_provider_definition(parameters: &Value) -> String {
-    let Some(properties) = parameters.get("properties").and_then(Value::as_object) else {
-        return String::new();
-    };
-    let required = schema_required_fields(parameters)
-        .into_iter()
-        .collect::<BTreeSet<_>>();
-    let mut fields = properties
-        .iter()
-        .map(|(name, schema)| {
-            let schema_type = schema
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or("value");
-            let suffix = if required.contains(name.as_str()) {
-                ""
-            } else {
-                "?"
-            };
-            format!("{name}{suffix}:{schema_type}")
-        })
-        .collect::<Vec<_>>();
-    fields.sort();
-    fields.join(",")
-}
-
-fn schema_required_fields(parameters: &Value) -> Vec<String> {
-    parameters
-        .get("required")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-fn schema_required_field_groups(parameters: &Value) -> Vec<Vec<String>> {
-    ["anyOf", "oneOf"]
-        .into_iter()
-        .filter_map(|key| parameters.get(key).and_then(Value::as_array))
-        .flatten()
-        .filter_map(|schema| {
-            let required = schema
-                .get("required")
-                .and_then(Value::as_array)?
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
-            if required.is_empty() {
-                None
-            } else {
-                Some(required)
-            }
-        })
-        .collect()
-}
-
-fn default_required_field_groups(
-    required_fields: &[String],
-    mut required_field_groups: Vec<Vec<String>>,
-) -> Vec<Vec<String>> {
-    if required_field_groups.is_empty() && !required_fields.is_empty() {
-        required_field_groups.push(required_fields.to_vec());
-    }
-    required_field_groups
-}
-
-fn searchable_entry_from_catalog(entry: catalog::ToolCatalogEntry) -> SearchableToolEntry {
-    let required_fields = entry
-        .required_fields
-        .iter()
-        .map(|field| (*field).to_owned())
-        .collect::<Vec<_>>();
-    let required_field_groups = catalog::tool_required_field_groups(entry.canonical_name)
-        .iter()
-        .map(|group| {
-            group
-                .iter()
-                .map(|field| (*field).to_owned())
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-    let required_field_groups =
-        default_required_field_groups(&required_fields, required_field_groups);
-
-    SearchableToolEntry {
-        canonical_name: entry.canonical_name.to_owned(),
-        summary: entry.summary.to_owned(),
-        argument_hint: entry.argument_hint.to_owned(),
-        required_fields,
-        required_field_groups,
-        tags: entry.tags.iter().map(|tag| (*tag).to_owned()).collect(),
-    }
-}
-
 #[cfg(feature = "feishu-integration")]
 fn feishu_searchable_entries() -> Vec<SearchableToolEntry> {
     feishu::feishu_provider_tool_definitions()
@@ -1084,23 +978,23 @@ fn feishu_searchable_entries() -> Vec<SearchableToolEntry> {
                 .get("parameters")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let required_fields = schema_required_fields(&parameters);
-            let required_field_groups = default_required_field_groups(
-                &required_fields,
-                schema_required_field_groups(&parameters),
-            );
-            Some(SearchableToolEntry {
-                canonical_name: canonical_tool_name(provider_name).to_owned(),
-                summary: function
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
-                argument_hint: search_argument_hint_from_provider_definition(&parameters),
-                required_field_groups,
-                required_fields,
-                tags: vec!["feishu".to_owned()],
-            })
+            let summary = function
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let tags = vec!["feishu".to_owned()];
+            let canonical_name = canonical_tool_name(provider_name).to_owned();
+            let preferred_parameter_order: &[(&str, &str)] = &[];
+            Some(searchable_entry_from_provider_definition(
+                canonical_name.as_str(),
+                provider_name,
+                &[],
+                summary,
+                &parameters,
+                preferred_parameter_order,
+                tags,
+            ))
         })
         .collect()
 }
@@ -1147,11 +1041,13 @@ fn runtime_discoverable_tool_entries(
         }
         None => &runtime_view,
     };
-    let mut entries = catalog::discoverable_tool_catalog()
-        .into_iter()
-        .filter(|entry| visible_tool_view.contains(entry.canonical_name))
-        .filter(|entry| tool_search_entry_is_runtime_usable(*entry, config))
-        .map(searchable_entry_from_catalog)
+    let mut entries = catalog::tool_catalog()
+        .descriptors()
+        .iter()
+        .filter(|descriptor| descriptor.is_discoverable())
+        .filter(|descriptor| visible_tool_view.contains(descriptor.name))
+        .filter(|descriptor| tool_search_entry_is_runtime_usable(descriptor.name, config))
+        .map(searchable_entry_from_descriptor)
         .collect::<Vec<_>>();
     #[cfg(feature = "feishu-integration")]
     if config.feishu.is_some() {
@@ -1215,36 +1111,22 @@ fn execute_tool_search_tool_with_config(
         .and_then(|value| serde_json::from_value::<BTreeSet<Capability>>(value).ok());
     let visible_tool_view = search_tool_view_from_payload(payload, config);
 
-    let query_normalized = query.to_ascii_lowercase();
-    let tokens = tokenize_search_query(query_normalized.as_str());
-    let mut ranked: Vec<(u32, Vec<String>, SearchableToolEntry)> =
-        runtime_discoverable_tool_entries(config, Some(&visible_tool_view))
-            .into_iter()
-            .filter(|entry| {
-                tool_search_entry_is_capability_usable(
-                    entry.canonical_name.as_str(),
-                    granted_capabilities.as_ref(),
-                )
-            })
-            .filter_map(|entry| {
-                let (score, why) = search_score(&entry, query_normalized.as_str(), &tokens);
-                if score == 0 {
-                    None
-                } else {
-                    Some((score, why, entry))
-                }
-            })
-            .collect();
-    ranked.sort_by(|(left_score, _, left), (right_score, _, right)| {
-        right_score
-            .cmp(left_score)
-            .then_with(|| left.canonical_name.cmp(&right.canonical_name))
-    });
-
-    let results: Vec<Value> = ranked
+    let searchable_entries = runtime_discoverable_tool_entries(config, Some(&visible_tool_view))
         .into_iter()
-        .take(limit)
-        .map(|(_score, why, entry)| {
+        .filter(|entry| {
+            tool_search_entry_is_capability_usable(
+                entry.canonical_name.as_str(),
+                granted_capabilities.as_ref(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let ranking = rank_searchable_entries(searchable_entries, query, limit);
+
+    let results: Vec<Value> = ranking
+        .results
+        .into_iter()
+        .map(|ranked_entry| {
+            let RankedSearchableToolEntry { entry, why } = ranked_entry;
             json!({
                 "tool_id": entry.canonical_name,
                 "summary": entry.summary,
@@ -1271,10 +1153,10 @@ fn execute_tool_search_tool_with_config(
 }
 
 fn tool_search_entry_is_runtime_usable(
-    entry: catalog::ToolCatalogEntry,
+    tool_name: &str,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> bool {
-    match entry.canonical_name {
+    match tool_name {
         "shell.exec" => {
             !config.shell_allow.is_empty()
                 || matches!(
@@ -1377,59 +1259,6 @@ fn execute_tool_invoke_tool_with_config(
             entry.canonical_name
         )),
     }
-}
-
-fn tokenize_search_query(query: &str) -> Vec<String> {
-    query
-        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-        .map(str::to_owned)
-        .collect()
-}
-
-fn search_score(entry: &SearchableToolEntry, query: &str, tokens: &[String]) -> (u32, Vec<String>) {
-    let name = entry.canonical_name.to_ascii_lowercase();
-    let summary = entry.summary.to_ascii_lowercase();
-    let argument_hint = entry.argument_hint.to_ascii_lowercase();
-    let tags = entry.tags.join(" ").to_ascii_lowercase();
-
-    let mut score = 0u32;
-    let mut why = Vec::new();
-
-    if name.contains(query) {
-        score += 50;
-        why.push("name_match".to_owned());
-    }
-    if summary.contains(query) {
-        score += 30;
-        why.push("summary_match".to_owned());
-    }
-    if argument_hint.contains(query) {
-        score += 20;
-        why.push("argument_match".to_owned());
-    }
-
-    for token in tokens {
-        if name.contains(token) {
-            score += 16;
-            why.push(format!("name:{token}"));
-        }
-        if summary.contains(token) {
-            score += 10;
-            why.push(format!("summary:{token}"));
-        }
-        if argument_hint.contains(token) {
-            score += 8;
-            why.push(format!("argument:{token}"));
-        }
-        if tags.contains(token) {
-            score += 12;
-            why.push(format!("tag:{token}"));
-        }
-    }
-
-    (score, why)
 }
 
 fn issue_tool_lease(tool_id: &str, payload: &serde_json::Map<String, Value>) -> String {
@@ -3423,6 +3252,127 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    #[cfg(all(feature = "tool-file", feature = "tool-webfetch"))]
+    #[test]
+    fn tool_search_uses_schema_derived_terms_for_web_fetch_modes() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-schema-derived");
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "query": "raw_text",
+                    "limit": 6
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        assert!(
+            results.iter().any(|entry| entry["tool_id"] == "web.fetch"),
+            "schema-derived enum terms should make web.fetch discoverable: {results:?}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "tool-websearch"))]
+    #[test]
+    fn tool_search_matches_multilingual_queries_across_languages() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-multilingual");
+        let memory_dir = root.join("memory");
+
+        std::fs::create_dir_all(&memory_dir).expect("create memory dir");
+        std::fs::write(root.join("MEMORY.md"), "deploy freeze window\n")
+            .expect("write root memory");
+
+        let config = test_tool_runtime_config(root.clone());
+        let cases = vec![
+            ("编辑文件", "file.edit"),
+            ("ファイルを読む", "file.read"),
+            ("메모 검색", "memory_search"),
+            ("искать веб", "web.search"),
+            ("تثبيت مهارة", "external_skills.install"),
+            ("cambiar proveedor", "provider.switch"),
+            ("प्रदाता बदलें", "provider.switch"),
+        ];
+
+        for (query, expected_tool) in cases {
+            let payload = json!({
+                "query": query,
+                "limit": 8
+            });
+            let request = ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload,
+            };
+            let outcome = execute_tool_core_with_config(request, &config)
+                .expect("tool search should succeed");
+            let results = outcome.payload["results"].as_array().expect("results");
+            let expected_entry = results
+                .iter()
+                .find(|entry| entry["tool_id"] == expected_tool);
+
+            assert!(
+                expected_entry.is_some(),
+                "expected `{expected_tool}` for multilingual query `{query}`, got {results:?}"
+            );
+
+            let expected_entry = expected_entry.expect("expected tool entry");
+            let why = expected_entry["why"].as_array().expect("why");
+            let used_coarse_fallback = why
+                .iter()
+                .any(|reason| reason.as_str() == Some("coarse_fallback"));
+
+            assert!(
+                !used_coarse_fallback,
+                "expected semantic match for `{query}`, got coarse fallback: {expected_entry:?}"
+            );
+        }
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn tool_search_returns_coarse_fallback_for_zero_match_queries() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-coarse-fallback");
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "query": "สวัสดีโลก",
+                    "limit": 4
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        assert!(
+            !results.is_empty(),
+            "coarse fallback should surface visible tools instead of an empty set"
+        );
+        assert!(
+            results
+                .iter()
+                .all(|entry| entry["why"].as_array().is_some_and(|why| why
+                    .iter()
+                    .any(|reason| reason.as_str() == Some("coarse_fallback")))),
+            "coarse fallback results should explain their fallback mode: {results:?}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     #[cfg(feature = "tool-browser")]
     #[test]
     fn browser_companion_tool_search_returns_runtime_ready_companion_entries() {
@@ -3702,13 +3652,14 @@ mod tests {
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
     fn tool_search_reports_alternative_required_fields_for_bundled_skill_install() {
-        let entry = catalog::find_tool_catalog_entry("external_skills.install")
+        let descriptor = catalog::tool_catalog()
+            .descriptor("external_skills.install")
             .expect("external_skills.install should exist in the catalog");
-        let searchable = searchable_entry_from_catalog(entry);
+        let searchable = searchable_entry_from_descriptor(descriptor);
 
         assert!(
-            entry.required_fields.is_empty(),
-            "catalog required_fields should only list unconditional requirements"
+            descriptor.required_fields().is_empty(),
+            "schema-derived search should keep grouped requirements separate"
         );
         assert!(
             searchable.required_fields.is_empty(),
