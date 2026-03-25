@@ -8,6 +8,7 @@ Catalog of design documents and architectural decisions.
 |----------|-------|--------|
 | [Core Beliefs](core-beliefs.md) | Engineering principles and taste enforcement | Living |
 | [Discovery-First Tool Runtime Contract](discovery-first-tool-runtime-contract.md) | Provider-core tools, leases, parser rewrites, and follow-up turn contract | Active |
+| [Governance Simplification Classification](governance-simplification-classification.md) | Classifies governance surfaces as structural, transitional, cleanup-safe, or replacement-first | Active |
 | [Layered Kernel Design](layered-kernel-design.md) | L0-L9 kernel layer specification and boundary rules | Living |
 | [Plugin Package Manifest Contract](plugin-package-manifest-contract.md) | Manifest-first plugin metadata, setup surface, and slot ownership contract | Active |
 | [Provider Runtime Roadmap](provider-runtime-roadmap.md) | Provider/runtime evolution strategy | Active |
