@@ -4309,6 +4309,12 @@ pub fn memory_system_metadata_json(
     metadata: &mvp::memory::MemorySystemMetadata,
     source: Option<&str>,
 ) -> Value {
+    let supported_pre_assembly_stage_families = metadata
+        .supported_pre_assembly_stage_families
+        .iter()
+        .copied()
+        .map(mvp::memory::MemoryStageFamily::as_str)
+        .collect::<Vec<_>>();
     let mut payload = serde_json::Map::new();
     payload.insert("id".to_owned(), json!(metadata.id));
     payload.insert("api_version".to_owned(), json!(metadata.api_version));
@@ -4316,11 +4322,24 @@ pub fn memory_system_metadata_json(
         "capabilities".to_owned(),
         json!(metadata.capability_names()),
     );
+    payload.insert(
+        "supported_pre_assembly_stage_families".to_owned(),
+        json!(supported_pre_assembly_stage_families),
+    );
     payload.insert("summary".to_owned(), json!(metadata.summary));
     if let Some(source) = source {
         payload.insert("source".to_owned(), json!(source));
     }
     Value::Object(payload)
+}
+
+fn format_memory_stage_family_names(families: &[mvp::memory::MemoryStageFamily]) -> String {
+    let names = families
+        .iter()
+        .copied()
+        .map(mvp::memory::MemoryStageFamily::as_str)
+        .collect::<Vec<_>>();
+    render_string_list(names)
 }
 
 pub fn memory_system_policy_json(policy: &mvp::memory::MemorySystemPolicySnapshot) -> Value {
@@ -4359,14 +4378,21 @@ pub fn render_memory_system_snapshot_text(
     config_path: &str,
     snapshot: &mvp::memory::MemorySystemRuntimeSnapshot,
 ) -> String {
+    let selected_capabilities = snapshot.selected_metadata.capability_names();
+    let selected_pre_assembly_stages = format_memory_stage_family_names(
+        &snapshot
+            .selected_metadata
+            .supported_pre_assembly_stage_families,
+    );
     let mut lines = vec![
         format!("config={config_path}"),
         format!(
-            "selected={} source={} api_version={} capabilities={} summary={}",
+            "selected={} source={} api_version={} capabilities={} pre_assembly_stages={} summary={}",
             snapshot.selected_metadata.id,
             snapshot.selected.source.as_str(),
             snapshot.selected_metadata.api_version,
-            format_capability_names(&snapshot.selected_metadata.capability_names()),
+            format_capability_names(&selected_capabilities),
+            selected_pre_assembly_stages,
             snapshot.selected_metadata.summary
         ),
         format!(
@@ -4384,11 +4410,15 @@ pub fn render_memory_system_snapshot_text(
     ];
 
     for metadata in &snapshot.available {
+        let capabilities = metadata.capability_names();
+        let pre_assembly_stages =
+            format_memory_stage_family_names(&metadata.supported_pre_assembly_stage_families);
         lines.push(format!(
-            "- {} api_version={} capabilities={} summary={}",
+            "- {} api_version={} capabilities={} pre_assembly_stages={} summary={}",
             metadata.id,
             metadata.api_version,
-            format_capability_names(&metadata.capability_names()),
+            format_capability_names(&capabilities),
+            pre_assembly_stages,
             metadata.summary
         ));
     }
