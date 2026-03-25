@@ -545,16 +545,13 @@ fn first_manifest_conflict(
         return capabilities_conflict;
     }
 
-    let metadata_conflict = compare_manifest_value(
-        "metadata",
-        &package_manifest.metadata,
-        &source_manifest.metadata,
-    );
+    let metadata_conflict =
+        first_shared_metadata_conflict(&package_manifest.metadata, &source_manifest.metadata);
     if metadata_conflict.is_some() {
         return metadata_conflict;
     }
 
-    let summary_conflict = compare_manifest_value(
+    let summary_conflict = compare_optional_fill_value(
         "summary",
         &package_manifest.summary,
         &source_manifest.summary,
@@ -564,12 +561,12 @@ fn first_manifest_conflict(
     }
 
     let tags_conflict =
-        compare_manifest_value("tags", &package_manifest.tags, &source_manifest.tags);
+        compare_optional_fill_sequence("tags", &package_manifest.tags, &source_manifest.tags);
     if tags_conflict.is_some() {
         return tags_conflict;
     }
 
-    let input_examples_conflict = compare_manifest_value(
+    let input_examples_conflict = compare_optional_fill_sequence(
         "input_examples",
         &package_manifest.input_examples,
         &source_manifest.input_examples,
@@ -578,7 +575,7 @@ fn first_manifest_conflict(
         return input_examples_conflict;
     }
 
-    let output_examples_conflict = compare_manifest_value(
+    let output_examples_conflict = compare_optional_fill_sequence(
         "output_examples",
         &package_manifest.output_examples,
         &source_manifest.output_examples,
@@ -1100,6 +1097,80 @@ mod tests {
                 .iter()
                 .any(|descriptor| descriptor.path == inner_manifest_file.display().to_string())
         );
+    }
+
+    #[test]
+    fn scanner_allows_source_only_optional_fields_under_package_manifest() {
+        let root = unique_tmp_dir("loongclaw-plugin-optional-source-fields");
+        let package_root = root.join("pkg");
+        fs::create_dir_all(&package_root).expect("create temp root");
+
+        let manifest_file = package_root.join(PACKAGE_MANIFEST_FILE_NAME);
+        fs::write(
+            &manifest_file,
+            r#"
+{
+  "plugin_id": "package-plugin",
+  "provider_id": "package-provider",
+  "connector_name": "package-connector",
+  "channel_id": "package-channel",
+  "endpoint": "https://package.example/invoke",
+  "capabilities": ["InvokeConnector"],
+  "metadata": {
+    "bridge_kind": "http_json"
+  }
+}
+"#,
+        )
+        .expect("write package manifest");
+
+        let source_file = package_root.join("plugin.py");
+        fs::write(
+            &source_file,
+            r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "package-plugin",
+#   "provider_id": "package-provider",
+#   "connector_name": "package-connector",
+#   "channel_id": "package-channel",
+#   "endpoint": "https://package.example/invoke",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","legacy_source":"true"},
+#   "summary": "legacy source summary",
+#   "tags": ["legacy", "source"],
+#   "input_examples": [{"query":"hello"}]
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+        )
+        .expect("write source plugin");
+
+        let scanner = PluginScanner::new();
+        let report = scanner.scan_path(&root).expect("scan should succeed");
+
+        assert_eq!(report.scanned_files, 2);
+        assert_eq!(report.matched_plugins, 1);
+        assert_eq!(report.descriptors.len(), 1);
+        assert_eq!(
+            report.descriptors[0].path,
+            manifest_file.display().to_string()
+        );
+        assert_eq!(report.descriptors[0].manifest.summary, None);
+        assert!(report.descriptors[0].manifest.tags.is_empty());
+        assert!(report.descriptors[0].manifest.input_examples.is_empty());
+        assert!(
+            report.descriptors[0]
+                .manifest
+                .metadata
+                .get("legacy_source")
+                .is_none()
+        );
+        assert_eq!(
+            report.descriptors[0].manifest.provider_id,
+            "package-provider"
+        );
+        assert_eq!(report.descriptors[0].language, "manifest");
     }
 
     #[test]
