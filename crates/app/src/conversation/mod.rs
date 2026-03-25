@@ -20,6 +20,7 @@ pub mod turn_engine;
 mod turn_loop;
 mod turn_middleware;
 mod turn_middleware_registry;
+mod turn_observer;
 mod turn_shared;
 
 pub use analytics::{
@@ -100,6 +101,10 @@ pub use turn_middleware_registry::{
     TURN_MIDDLEWARE_ENV, default_turn_middleware_ids, describe_turn_middlewares,
     list_turn_middleware_ids, list_turn_middleware_metadata, register_turn_middleware,
     resolve_turn_middleware, resolve_turn_middlewares, turn_middleware_ids_from_env,
+};
+pub use turn_observer::{
+    ConversationTurnObserver, ConversationTurnObserverHandle, ConversationTurnPhase,
+    ConversationTurnPhaseEvent,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

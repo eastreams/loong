@@ -5,7 +5,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use crate::CliResult;
-use crate::acp::{AcpTurnEventSink, JsonlAcpTurnEventSink, StreamingTokenEvent, TokenDelta};
+use crate::acp::{AcpTurnEventSink, JsonlAcpTurnEventSink};
 use crate::config::ProviderProtocolFamily;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 
@@ -18,6 +18,7 @@ use super::turn_budget::{TurnRoundBudget, TurnRoundBudgetDecision};
 use super::turn_engine::{
     DefaultAppToolDispatcher, ProviderTurn, ToolIntent, TurnEngine, TurnResult, TurnValidation,
 };
+use super::turn_observer::map_streaming_callback_data_to_token_event;
 use super::turn_shared::{
     ProviderTurnRequestAction, ReplyPersistenceMode, ToolDrivenFollowupPayload,
     ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase, build_tool_driven_followup_tail,
@@ -136,52 +137,7 @@ impl ConversationTurnLoop {
                 let sink = JsonlAcpTurnEventSink::stderr_with_prefix("");
                 Some(Arc::new(
                     move |data: crate::provider::StreamingCallbackData| {
-                        let (event_type, delta, index) = match data {
-                            crate::provider::StreamingCallbackData::Text { text } => (
-                                "text_delta".to_owned(),
-                                TokenDelta {
-                                    text: Some(text),
-                                    tool_call: None,
-                                },
-                                None,
-                            ),
-                            crate::provider::StreamingCallbackData::ToolCallStart {
-                                index,
-                                name,
-                                id,
-                            } => (
-                                "tool_call_start".to_owned(),
-                                TokenDelta {
-                                    text: None,
-                                    tool_call: Some(crate::acp::ToolCallDelta {
-                                        name: Some(name),
-                                        args: None,
-                                        id: Some(id),
-                                    }),
-                                },
-                                Some(index),
-                            ),
-                            crate::provider::StreamingCallbackData::ToolCallInput {
-                                index,
-                                partial_json,
-                            } => (
-                                "tool_call_input_delta".to_owned(),
-                                TokenDelta {
-                                    text: None,
-                                    tool_call: Some(crate::acp::ToolCallDelta {
-                                        name: None,
-                                        args: Some(partial_json),
-                                        id: None,
-                                    }),
-                                },
-                                Some(index),
-                            ),
-                        };
-                        let event = StreamingTokenEvent {
-                            event_type,
-                            delta,
-                            index,
-                        };
+                        let event = map_streaming_callback_data_to_token_event(data);
                         let _ = sink.on_event(&serde_json::to_value(&event).unwrap_or_default());
                     },
                 ))
