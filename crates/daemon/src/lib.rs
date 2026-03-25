@@ -89,6 +89,7 @@ pub mod onboard_cli;
 mod onboard_finalize;
 mod onboard_preflight;
 pub mod onboard_presentation;
+mod onboarding_model_policy;
 mod provider_credential_policy;
 pub mod provider_presentation;
 mod provider_route_diagnostics;

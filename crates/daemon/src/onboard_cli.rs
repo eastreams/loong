@@ -32,6 +32,7 @@ use crate::onboard_preflight::{
     non_interactive_preflight_failure_message, render_preflight_summary_screen_lines_with_progress,
     run_preflight_checks,
 };
+use crate::onboarding_model_policy;
 use crate::provider_credential_policy;
 #[cfg(test)]
 use std::fs;
@@ -1769,25 +1770,20 @@ fn resolve_model_selection(
     ui: &mut impl OnboardUi,
     context: &OnboardRuntimeContext,
 ) -> CliResult<String> {
-    if let Some(model) = options.model.as_deref()
-        && model.trim().is_empty()
-    {
-        return Err("model cannot be empty".to_owned());
-    }
+    let prompt_default = onboarding_model_policy::resolve_onboarding_model_prompt_default(
+        &config.provider,
+        options.model.as_deref(),
+    )?;
 
     if options.non_interactive {
-        if let Some(model) = options.model.as_deref() {
-            return Ok(model.trim().to_owned());
-        }
-        return Ok(resolve_onboarding_model_prompt_default(options, config));
+        return Ok(prompt_default);
     }
 
-    let default_model = resolve_onboarding_model_prompt_default(options, config);
     print_lines(
         ui,
         render_model_selection_screen_lines_with_style(
             config,
-            default_model.as_str(),
+            prompt_default.as_str(),
             guided_prompt_path,
             context.render_width,
             true,
@@ -1795,8 +1791,11 @@ fn resolve_model_selection(
         ),
     )?;
     if !available_models.is_empty() {
-        let (select_options, default_idx) =
-            build_model_selection_options(default_model.as_str(), available_models);
+        let catalog_choices = onboarding_model_policy::onboarding_model_catalog_choices(
+            prompt_default.as_str(),
+            available_models,
+        );
+        let (select_options, default_idx) = build_model_selection_options(&catalog_choices);
         let idx = ui.select_one(
             "Model",
             &select_options,
@@ -1809,14 +1808,14 @@ fn resolve_model_selection(
         if selected.slug != ONBOARD_CUSTOM_MODEL_OPTION_SLUG {
             return Ok(selected.slug.clone());
         }
-        let custom_model = ui.prompt_with_default("Custom model id", default_model.as_str())?;
+        let custom_model = ui.prompt_with_default("Custom model id", prompt_default.as_str())?;
         let trimmed = custom_model.trim();
         if trimmed.is_empty() {
             return Err("model cannot be empty".to_owned());
         }
         return Ok(trimmed.to_owned());
     }
-    let value = ui.prompt_with_default("Model", default_model.as_str())?;
+    let value = ui.prompt_with_default("Model", prompt_default.as_str())?;
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err("model cannot be empty".to_owned());
@@ -1840,38 +1839,28 @@ async fn load_onboarding_model_catalog(
 }
 
 fn build_model_selection_options(
-    default_model: &str,
-    available_models: &[String],
+    catalog_choices: &onboarding_model_policy::OnboardingModelCatalogChoices,
 ) -> (Vec<SelectOption>, Option<usize>) {
-    let default_model = default_model.trim();
-    let mut models = Vec::new();
-    if !default_model.is_empty() {
-        models.push(default_model.to_owned());
-    }
-    for model in available_models {
-        let trimmed = model.trim();
-        if trimmed.is_empty() || models.iter().any(|existing| existing == trimmed) {
-            continue;
-        }
-        models.push(trimmed.to_owned());
-    }
+    let default_idx = catalog_choices.default_index;
+    let mut options = Vec::new();
 
-    let mut options = models
-        .iter()
-        .map(|model| SelectOption {
+    for (index, model) in catalog_choices.ordered_models.iter().enumerate() {
+        let is_default_model = default_idx == Some(index);
+        let description = if is_default_model {
+            "current or suggested default".to_owned()
+        } else {
+            String::new()
+        };
+
+        let option = SelectOption {
             label: model.clone(),
             slug: model.clone(),
-            description: if model == default_model {
-                "current or suggested default".to_owned()
-            } else {
-                String::new()
-            },
-            recommended: model == default_model,
-        })
-        .collect::<Vec<_>>();
-    let default_idx = options
-        .iter()
-        .position(|option| option.slug == default_model);
+            description,
+            recommended: is_default_model,
+        };
+        options.push(option);
+    }
+
     options.push(SelectOption {
         label: "enter custom model id".to_owned(),
         slug: ONBOARD_CUSTOM_MODEL_OPTION_SLUG.to_owned(),
@@ -1880,28 +1869,6 @@ fn build_model_selection_options(
     });
 
     (options, default_idx)
-}
-
-fn resolve_onboarding_model_prompt_default(
-    options: &OnboardCommandOptions,
-    config: &mvp::config::LoongClawConfig,
-) -> String {
-    if let Some(model) = options.model.as_deref() {
-        return model.trim().to_owned();
-    }
-
-    if let Some(model) = config.provider.explicit_model() {
-        return model;
-    }
-
-    let configured_model = config.provider.configured_model_value();
-    if configured_model.eq_ignore_ascii_case("auto")
-        && let Some(model) = config.provider.kind.recommended_onboarding_model()
-    {
-        return model.to_owned();
-    }
-
-    configured_model
 }
 
 fn resolve_api_key_env_selection(
@@ -4279,26 +4246,26 @@ fn render_model_selection_screen_lines_with_style(
     color_enabled: bool,
     catalog_models_available: bool,
 ) -> Vec<String> {
-    let preferred_fallback_models = config.provider.configured_auto_model_candidates();
+    let selection_context =
+        onboarding_model_policy::onboarding_model_selection_context(&config.provider);
+    let current_model = selection_context.current_model;
+    let recommended_model = selection_context.recommended_model;
+    let preferred_fallback_models = selection_context.preferred_fallback_models;
+    let allows_auto_fallback_hint = selection_context.allows_auto_fallback_hint;
     let mut context_lines = vec![
         format!(
             "- provider: {}",
             crate::provider_presentation::guided_provider_label(config.provider.kind)
         ),
-        format!("- current model: {}", config.provider.model),
+        format!("- current model: {current_model}"),
     ];
-    if let Some(default_model) = config
-        .provider
-        .kind
-        .recommended_onboarding_model()
-        .filter(|default_model| *default_model != config.provider.model)
-    {
-        context_lines.push(format!("- recommended model: {default_model}"));
+    if let Some(recommended_model) = recommended_model {
+        context_lines.push(format!("- recommended model: {recommended_model}"));
     }
     if !preferred_fallback_models.is_empty() {
+        let preferred_fallback_summary = preferred_fallback_models.join(", ");
         context_lines.push(format!(
-            "- configured preferred fallback: {}",
-            preferred_fallback_models.join(", ")
+            "- configured preferred fallback: {preferred_fallback_summary}",
         ));
     }
 
@@ -4316,10 +4283,10 @@ fn render_model_selection_screen_lines_with_style(
     } else {
         hint_lines.push("- type any provider model id to override it".to_owned());
     }
-    if !preferred_fallback_models.is_empty() && config.provider.explicit_model().is_none() {
+    if allows_auto_fallback_hint {
+        let preferred_fallback_summary = preferred_fallback_models.join(", ");
         hint_lines.push(format!(
-            "- type `auto` to let runtime try configured preferred fallbacks first: {}",
-            preferred_fallback_models.join(", ")
+            "- type `auto` to let runtime try configured preferred fallbacks first: {preferred_fallback_summary}",
         ));
     }
 
