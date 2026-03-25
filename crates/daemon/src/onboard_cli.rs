@@ -1689,22 +1689,46 @@ fn resolve_provider_selection(
                 .and_then(parse_provider_kind)
         })
         .unwrap_or(config.provider.kind);
-    let provider_kinds = mvp::config::ProviderKind::all_sorted();
-    let select_options: Vec<SelectOption> = provider_kinds
+    let provider_kinds = mvp::config::ProviderKind::all_sorted()
+        .into_iter()
+        .filter(|kind| {
+            **kind != mvp::config::ProviderKind::Zai
+                && **kind != mvp::config::ProviderKind::Kimi
+                && **kind != mvp::config::ProviderKind::KimiCoding
+                && **kind != mvp::config::ProviderKind::Stepfun
+                && **kind != mvp::config::ProviderKind::StepPlan
+        })
+        .collect::<Vec<_>>();
+    let mut select_options: Vec<SelectOption> = provider_kinds
         .iter()
         .map(|kind| SelectOption {
-            label: provider_kind_display_name(*kind).to_owned(),
-            slug: provider_kind_id(*kind).to_owned(),
+            label: provider_kind_display_name(**kind).to_owned(),
+            slug: provider_kind_id(**kind).to_owned(),
             description: String::new(),
-            recommended: *kind == default_provider_kind,
+            recommended: **kind == default_provider_kind,
         })
         .collect();
+    select_options.push(SelectOption {
+        label: "Kimi".to_owned(),
+        slug: "kimi".to_owned(),
+        description: "Kimi API or Kimi Coding".to_owned(),
+        recommended: default_provider_kind == mvp::config::ProviderKind::Kimi
+            || default_provider_kind == mvp::config::ProviderKind::KimiCoding,
+    });
+    select_options.push(SelectOption {
+        label: "Stepfun".to_owned(),
+        slug: "stepfun".to_owned(),
+        description: "Stepfun API or Step Plan".to_owned(),
+        recommended: default_provider_kind == mvp::config::ProviderKind::Stepfun
+            || default_provider_kind == mvp::config::ProviderKind::StepPlan,
+    });
+    select_options.sort_by(|a, b| a.label.cmp(&b.label));
     let default_idx = if provider_selection.requires_explicit_choice {
         None
     } else {
         provider_kinds
             .iter()
-            .position(|kind| *kind == default_provider_kind)
+            .position(|kind| **kind == default_provider_kind)
     };
     print_lines(
         ui,
@@ -1720,14 +1744,120 @@ fn resolve_provider_selection(
         default_idx,
         SelectInteractionMode::List,
     )?;
-    let kind = *provider_kinds
+    let selected_slug = select_options
         .get(idx)
-        .ok_or_else(|| format!("provider selection index {idx} out of range"))?;
-    Ok(resolve_provider_config_from_selection(
+        .ok_or_else(|| format!("provider selection index {idx} out of range"))?
+        .slug
+        .clone();
+
+    let kind: mvp::config::ProviderKind = if selected_slug == "kimi" {
+        let kimi_options = vec![
+            SelectOption {
+                label: "Kimi API".to_owned(),
+                slug: "kimi_api".to_owned(),
+                description: "Standard Kimi chat completion API".to_owned(),
+                recommended: true,
+            },
+            SelectOption {
+                label: "Kimi Coding".to_owned(),
+                slug: "kimi_coding".to_owned(),
+                description: "Kimi for coding tasks".to_owned(),
+                recommended: false,
+            },
+        ];
+        print_lines(ui, vec!["Select the Kimi variant:".to_owned()])?;
+        let sub_idx = ui.select_one(
+            "Kimi variant",
+            &kimi_options,
+            Some(0),
+            SelectInteractionMode::List,
+        )?;
+        let sub_slug = kimi_options
+            .get(sub_idx)
+            .ok_or_else(|| format!("kimi variant index {sub_idx} out of range"))?
+            .slug
+            .clone();
+        if sub_slug == "kimi_coding" {
+            mvp::config::ProviderKind::KimiCoding
+        } else {
+            mvp::config::ProviderKind::Kimi
+        }
+    } else if selected_slug == "stepfun" {
+        let stepfun_options = vec![
+            SelectOption {
+                label: "Stepfun API".to_owned(),
+                slug: "stepfun_api".to_owned(),
+                description: "Standard Stepfun chat completion API".to_owned(),
+                recommended: true,
+            },
+            SelectOption {
+                label: "Step Plan".to_owned(),
+                slug: "step_plan".to_owned(),
+                description: "Step Plan for specialized tasks".to_owned(),
+                recommended: false,
+            },
+        ];
+        print_lines(ui, vec!["Select the Stepfun variant:".to_owned()])?;
+        let sub_idx = ui.select_one(
+            "Stepfun variant",
+            &stepfun_options,
+            Some(0),
+            SelectInteractionMode::List,
+        )?;
+        let sub_slug = stepfun_options
+            .get(sub_idx)
+            .ok_or_else(|| format!("stepfun variant index {sub_idx} out of range"))?
+            .slug
+            .clone();
+        if sub_slug == "step_plan" {
+            mvp::config::ProviderKind::StepPlan
+        } else {
+            mvp::config::ProviderKind::Stepfun
+        }
+    } else {
+        **provider_kinds
+            .iter()
+            .find(|k| provider_kind_id(***k) == selected_slug)
+            .ok_or_else(|| format!("provider kind not found for slug {}", selected_slug))?
+    };
+
+    let mut provider_config = resolve_provider_config_from_selection(
         &config.provider,
         provider_selection,
         kind,
-    ))
+    );
+
+    if let Some(region_info) = kind.region_endpoint_info() {
+        let region_options = vec![
+            SelectOption {
+                label: format!("{} (default)", region_info.default_variant.label),
+                slug: region_info.default_variant.base_url.to_owned(),
+                description: format!("endpoint: {}", region_info.default_variant.base_url),
+                recommended: true,
+            },
+            SelectOption {
+                label: region_info.alternate_variant.label.to_owned(),
+                slug: region_info.alternate_variant.base_url.to_owned(),
+                description: format!("endpoint: {}", region_info.alternate_variant.base_url),
+                recommended: false,
+            },
+        ];
+        print_lines(ui, vec![format!("Select the {} region endpoint:", region_info.family_label)])?;
+        let region_idx = ui.select_one(
+            "Region",
+            &region_options,
+            Some(0),
+            SelectInteractionMode::List,
+        )?;
+        let selected_base_url = region_options
+            .get(region_idx)
+            .ok_or_else(|| format!("region selection index {region_idx} out of range"))?
+            .slug
+            .clone();
+        provider_config.set_base_url(selected_base_url);
+    }
+
+    Ok(provider_config)
 }
 
 pub fn resolve_provider_config_from_selector(

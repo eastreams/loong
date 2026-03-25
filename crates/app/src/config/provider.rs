@@ -126,6 +126,27 @@ pub enum ModelCatalogProbeRecovery {
     },
 }
 
+/// Information about a provider's region endpoint variants.
+/// Used to allow users to select between different regional endpoints (e.g., CN vs Global).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderRegionEndpointInfo {
+    /// Display name for the provider family (e.g., "MiniMax", "Moonshot Kimi").
+    pub family_label: &'static str,
+    /// The default region variant (label and base URL).
+    pub default_variant: RegionVariant,
+    /// The alternate region variant (label and base URL).
+    pub alternate_variant: RegionVariant,
+}
+
+/// A region endpoint variant with label and base URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RegionVariant {
+    /// Label for the region (e.g., "CN", "Global").
+    pub label: &'static str,
+    /// Base URL for the region endpoint.
+    pub base_url: &'static str,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ProviderRegionEndpointVariant {
     label: &'static str,
@@ -428,6 +449,8 @@ pub enum ProviderKind {
     Siliconflow,
     #[serde(alias = "stepfun_compatible")]
     Stepfun,
+    #[serde(alias = "stepfun_step_plan", alias = "step_plan")]
+    StepPlan,
     #[serde(alias = "together_compatible", alias = "together_ai")]
     Together,
     #[serde(alias = "venice_compatible")]
@@ -2012,7 +2035,8 @@ impl ProviderKind {
             ProviderKind::Sambanova => "SambaNova",
             ProviderKind::Sglang => "SGLang",
             ProviderKind::Siliconflow => "SiliconFlow",
-            ProviderKind::Stepfun => "StepFun",
+            ProviderKind::Stepfun => "Stepfun API",
+            ProviderKind::StepPlan => "Step Plan",
             ProviderKind::Together => "Together",
             ProviderKind::Venice => "Venice",
             ProviderKind::VercelAiGateway => "Vercel AI Gateway",
@@ -2021,7 +2045,7 @@ impl ProviderKind {
             ProviderKind::VolcengineCoding => "Volcengine Coding",
             ProviderKind::Xai => "xAI",
             ProviderKind::Zai => "Z.ai",
-            ProviderKind::Zhipu => "Zhipu",
+            ProviderKind::Zhipu => "Z.ai(Zhipu)",
         }
     }
 
@@ -2062,6 +2086,7 @@ impl ProviderKind {
             sglang,
             siliconflow,
             stepfun,
+            step_plan,
             together,
             venice,
             vercel_ai_gateway,
@@ -2105,6 +2130,7 @@ impl ProviderKind {
             ProviderKind::Sglang => sglang,
             ProviderKind::Siliconflow => siliconflow,
             ProviderKind::Stepfun => stepfun,
+            ProviderKind::StepPlan => step_plan,
             ProviderKind::Together => together,
             ProviderKind::Venice => venice,
             ProviderKind::VercelAiGateway => vercel_ai_gateway,
@@ -2268,6 +2294,17 @@ impl ProviderKind {
                     base_url: "https://api.z.ai",
                 },
             }),
+            ProviderKind::Stepfun => Some(ProviderRegionEndpointGuide {
+                family_label: "Stepfun",
+                default_variant: ProviderRegionEndpointVariant {
+                    label: "CN",
+                    base_url: "https://api.stepfun.com",
+                },
+                alternate_variant: ProviderRegionEndpointVariant {
+                    label: "Global",
+                    base_url: "https://api.stepfun.ai",
+                },
+            }),
             ProviderKind::Anthropic
             | ProviderKind::Bedrock
             | ProviderKind::Byteplus
@@ -2296,7 +2333,7 @@ impl ProviderKind {
             | ProviderKind::Sambanova
             | ProviderKind::Sglang
             | ProviderKind::Siliconflow
-            | ProviderKind::Stepfun
+            | ProviderKind::StepPlan
             | ProviderKind::Together
             | ProviderKind::Venice
             | ProviderKind::VercelAiGateway
@@ -2324,6 +2361,21 @@ impl ProviderKind {
             None
         }
     }
+
+    pub fn region_endpoint_info(self) -> Option<ProviderRegionEndpointInfo> {
+        let guide = self.region_endpoint_guide()?;
+        Some(ProviderRegionEndpointInfo {
+            family_label: guide.family_label,
+            default_variant: RegionVariant {
+                label: guide.default_variant.label,
+                base_url: guide.default_variant.base_url,
+            },
+            alternate_variant: RegionVariant {
+                label: guide.alternate_variant.label,
+                base_url: guide.alternate_variant.base_url,
+            },
+        })
+    }
 }
 
 pub fn parse_provider_kind_id(raw: &str) -> Option<ProviderKind> {
@@ -2344,7 +2396,7 @@ pub fn parse_provider_kind_id(raw: &str) -> Option<ProviderKind> {
     None
 }
 
-const PROVIDER_KIND_ORDER: [ProviderKind; 40] = [
+const PROVIDER_KIND_ORDER: [ProviderKind; 41] = [
     ProviderKind::Anthropic,
     ProviderKind::BailianCoding,
     ProviderKind::Bedrock,
@@ -2376,6 +2428,7 @@ const PROVIDER_KIND_ORDER: [ProviderKind; 40] = [
     ProviderKind::Sglang,
     ProviderKind::Siliconflow,
     ProviderKind::Stepfun,
+    ProviderKind::StepPlan,
     ProviderKind::Together,
     ProviderKind::Venice,
     ProviderKind::VercelAiGateway,
@@ -2387,7 +2440,7 @@ const PROVIDER_KIND_ORDER: [ProviderKind; 40] = [
     ProviderKind::Zhipu,
 ];
 
-const PROVIDER_PROFILES: [ProviderProfile; 40] = [
+const PROVIDER_PROFILES: [ProviderProfile; 41] = [
     ProviderProfile {
         kind: ProviderKind::Anthropic,
         id: "anthropic",
@@ -2920,6 +2973,23 @@ const PROVIDER_PROFILES: [ProviderProfile; 40] = [
         base_url: "https://api.stepfun.com",
         chat_completions_path: "/v1/chat/completions",
         models_path: Some("/v1/models"),
+        protocol_family: ProviderProtocolFamily::OpenAiChatCompletions,
+        auth_scheme: ProviderAuthScheme::Bearer,
+        default_headers: &[],
+        default_api_key_env: Some("STEP_API_KEY"),
+        api_key_env_aliases: &[],
+        default_user_agent: None,
+        default_oauth_access_token_env: None,
+        oauth_access_token_env_aliases: &[],
+        feature_family: ProviderFeatureFamily::OpenAiCompatible,
+    },
+    ProviderProfile {
+        kind: ProviderKind::StepPlan,
+        id: "step_plan",
+        aliases: &["stepfun_step_plan", "step_plan"],
+        base_url: "https://api.stepfun.ai",
+        chat_completions_path: "/step_plan/v1/chat/completions",
+        models_path: Some("/step_plan/v1/models"),
         protocol_family: ProviderProtocolFamily::OpenAiChatCompletions,
         auth_scheme: ProviderAuthScheme::Bearer,
         default_headers: &[],
