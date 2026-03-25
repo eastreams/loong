@@ -248,6 +248,7 @@ default_provider = "duckduckgo"
 # perplexity_api_key = "${PERPLEXITY_API_KEY}"
 # exa_api_key = "${EXA_API_KEY}"
 # jina_api_key = "${JINA_API_KEY}"
+# 或 "${JINA_AUTH_TOKEN}"
 ```
 
 Volcengine Coding Plan / ARK 示例：
@@ -341,10 +342,24 @@ max_sessions = 8
 enabled = true
 allowed_domains = ["docs.example.com"]
 blocked_domains = ["*.internal.example"]
+
+[tools.web_search]
+enabled = true
+default_provider = "duckduckgo" # 也可以用 "ddg"、"brave"、"tavily"、"perplexity"、"exa"、"jina"
+timeout_seconds = 30
+max_results = 5
+# brave_api_key = "${BRAVE_API_KEY}"
+# tavily_api_key = "${TAVILY_API_KEY}"
+# perplexity_api_key = "${PERPLEXITY_API_KEY}"
+# exa_api_key = "${EXA_API_KEY}"
+# jina_api_key = "${JINA_API_KEY}"
+# 或 "${JINA_AUTH_TOKEN}"
 ```
 
 进一步参考：
 
+- `default_provider` 支持 `duckduckgo`（或 `ddg`）、`brave`、`tavily`、`perplexity`（或 `perplexity_search`）、`exa`、`jina`（或 `jinaai` / `jina-ai`）
+- `BRAVE_API_KEY`、`TAVILY_API_KEY`、`PERPLEXITY_API_KEY`、`EXA_API_KEY`、`JINA_API_KEY`、`JINA_AUTH_TOKEN` 都可以作为环境变量回退
 - [工具策略配置](docs/configuration/tool-policy.md)
 - [产品规格](docs/product-specs/index.md)
 - `loongclaw validate-config --config ~/.loongclaw/config.toml --json`

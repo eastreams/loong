@@ -95,6 +95,11 @@ impl DetectedEnvironmentGuard {
         if let Some(key) = default_config.feishu.app_secret_env.as_deref() {
             keys.insert(key.to_owned());
         }
+        for descriptor in mvp::config::web_search_provider_descriptors() {
+            for env_name in descriptor.api_key_env_names {
+                keys.insert((*env_name).to_owned());
+            }
+        }
 
         let saved = keys
             .into_iter()
@@ -138,7 +143,13 @@ impl EnvVarGuard {
         Self::set_inner(Some(lock), key, value)
     }
 
-    fn set_unlocked(key: &str, value: &str) -> Self {
+    /// # Safety
+    ///
+    /// The caller must already hold the daemon test environment lock, or an
+    /// equivalent external guard, for the full lifetime of the returned
+    /// `EnvVarGuard`. This wraps process-global environment mutation without
+    /// taking the lock itself.
+    unsafe fn set_unlocked(key: &str, value: &str) -> Self {
         Self::set_inner(None, key, value)
     }
 
@@ -817,9 +828,7 @@ async fn non_interactive_onboard_rejects_unresolved_preflight_warnings() {
 async fn non_interactive_explicit_web_search_provider_does_not_silently_fall_back() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let output = unique_temp_path("non-interactive-explicit-web-search.toml");
-    unsafe {
-        std::env::set_var("OPENAI_API_KEY", "openai-test-token");
-    }
+    let _openai_env = unsafe { EnvVarGuard::set_unlocked("OPENAI_API_KEY", "openai-test-token") };
 
     let error = run_scripted_onboard_flow(
         crate::onboard_cli::OnboardCommandOptions {
@@ -1430,8 +1439,8 @@ async fn interactive_onboard_clear_token_restores_builtin_system_prompt() {
 #[tokio::test(flavor = "current_thread")]
 async fn interactive_onboard_web_search_custom_env_persists_explicit_env_reference() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
-    let _openai_env = EnvVarGuard::set_unlocked("OPENAI_API_KEY", "openai-test-token");
-    let _tavily_env = EnvVarGuard::set_unlocked("TEAM_TAVILY_KEY", "tavily-test-token");
+    let _openai_env = unsafe { EnvVarGuard::set_unlocked("OPENAI_API_KEY", "openai-test-token") };
+    let _tavily_env = unsafe { EnvVarGuard::set_unlocked("TEAM_TAVILY_KEY", "tavily-test-token") };
     let output_path = unique_temp_path("interactive-web-search-env.toml");
     let mut existing = mvp::config::LoongClawConfig::default();
     existing.provider.model = "gpt-4.1".to_owned();
@@ -1497,7 +1506,7 @@ async fn interactive_onboard_web_search_custom_env_persists_explicit_env_referen
 #[tokio::test(flavor = "current_thread")]
 async fn interactive_onboard_web_search_blank_input_keeps_inline_credential() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
-    let _openai_env = EnvVarGuard::set_unlocked("OPENAI_API_KEY", "openai-test-token");
+    let _openai_env = unsafe { EnvVarGuard::set_unlocked("OPENAI_API_KEY", "openai-test-token") };
     let output_path = unique_temp_path("interactive-web-search-inline.toml");
     let mut existing = mvp::config::LoongClawConfig::default();
     existing.provider.model = "gpt-4.1".to_owned();
@@ -3664,6 +3673,7 @@ fn onboard_current_setup_shortcut_screen_summarizes_existing_setup_and_choices()
 
 #[test]
 fn onboard_current_setup_shortcut_is_limited_to_healthy_interactive_keep_flow() {
+    let _guard = EnvVarGuard::set("LOONGCLAW_WEB_SEARCH_PROVIDER", "");
     let base_options = loongclaw_daemon::onboard_cli::OnboardCommandOptions {
         output: None,
         force: false,
@@ -3839,6 +3849,7 @@ fn onboard_detected_setup_shortcut_screen_summarizes_starting_point_and_choices(
 #[test]
 fn onboard_detected_setup_shortcut_is_limited_to_interactive_import_flow_with_default_provider_choice()
  {
+    let _guard = EnvVarGuard::set("LOONGCLAW_WEB_SEARCH_PROVIDER", "");
     let base_options = loongclaw_daemon::onboard_cli::OnboardCommandOptions {
         output: None,
         force: false,

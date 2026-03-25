@@ -211,11 +211,13 @@ pub(crate) const WEB_SEARCH_PROVIDER_SCHEMA_VALUES: &[&str] = &[
     WEB_SEARCH_PROVIDER_BRAVE,
     WEB_SEARCH_PROVIDER_TAVILY,
     WEB_SEARCH_PROVIDER_PERPLEXITY,
+    "perplexity_search",
     WEB_SEARCH_PROVIDER_EXA,
     WEB_SEARCH_PROVIDER_JINA,
+    "jinaai",
+    "jina-ai",
 ];
-pub const WEB_SEARCH_PROVIDER_VALID_VALUES: &str =
-    "duckduckgo (or ddg), brave, tavily, perplexity, exa, jina";
+pub const WEB_SEARCH_PROVIDER_VALID_VALUES: &str = "duckduckgo (or ddg), brave, tavily, perplexity (or perplexity_search), exa, jina (or jinaai / jina-ai)";
 pub const WEB_SEARCH_BRAVE_API_KEY_ENV: &str = "BRAVE_API_KEY";
 pub const WEB_SEARCH_TAVILY_API_KEY_ENV: &str = "TAVILY_API_KEY";
 pub const WEB_SEARCH_PERPLEXITY_API_KEY_ENV: &str = "PERPLEXITY_API_KEY";
@@ -702,7 +704,7 @@ pub fn web_search_provider_api_key_env_names(raw: &str) -> &'static [&'static st
 #[cfg(feature = "tool-websearch")]
 pub(crate) fn web_search_provider_parameter_description() -> String {
     format!(
-        "Search provider. Defaults to '{DEFAULT_WEB_SEARCH_PROVIDER}'. Supported providers: {WEB_SEARCH_PROVIDER_VALID_VALUES}. DuckDuckGo works without a key. Brave, Tavily, Perplexity, Exa, and Jina use tools.web_search.brave_api_key / tools.web_search.tavily_api_key / tools.web_search.perplexity_api_key / tools.web_search.exa_api_key / tools.web_search.jina_api_key or the {WEB_SEARCH_BRAVE_API_KEY_ENV} / {WEB_SEARCH_TAVILY_API_KEY_ENV} / {WEB_SEARCH_PERPLEXITY_API_KEY_ENV} / {WEB_SEARCH_EXA_API_KEY_ENV} / {WEB_SEARCH_JINA_API_KEY_ENV} environment variable fallbacks."
+        "Search provider. Defaults to '{DEFAULT_WEB_SEARCH_PROVIDER}'. Supported providers: {WEB_SEARCH_PROVIDER_VALID_VALUES}. DuckDuckGo works without a key. Brave, Tavily, Perplexity, Exa, and Jina use tools.web_search.brave_api_key / tools.web_search.tavily_api_key / tools.web_search.perplexity_api_key / tools.web_search.exa_api_key / tools.web_search.jina_api_key or the {WEB_SEARCH_BRAVE_API_KEY_ENV} / {WEB_SEARCH_TAVILY_API_KEY_ENV} / {WEB_SEARCH_PERPLEXITY_API_KEY_ENV} / {WEB_SEARCH_EXA_API_KEY_ENV} / {WEB_SEARCH_JINA_API_KEY_ENV} / {WEB_SEARCH_JINA_AUTH_TOKEN_ENV} environment variable fallbacks."
     )
 }
 
@@ -937,6 +939,11 @@ mod tests {
         assert_eq!(normalize_web_search_provider("jina-ai"), Some("jina"));
         assert_eq!(normalize_web_search_provider("unknown"), None);
         assert_eq!(DEFAULT_WEB_SEARCH_PROVIDER, WEB_SEARCH_PROVIDER_DUCKDUCKGO);
+        assert!(WEB_SEARCH_PROVIDER_SCHEMA_VALUES.contains(&"perplexity_search"));
+        assert!(WEB_SEARCH_PROVIDER_SCHEMA_VALUES.contains(&"jinaai"));
+        assert!(WEB_SEARCH_PROVIDER_SCHEMA_VALUES.contains(&"jina-ai"));
+        assert!(WEB_SEARCH_PROVIDER_VALID_VALUES.contains("perplexity_search"));
+        assert!(WEB_SEARCH_PROVIDER_VALID_VALUES.contains("jinaai / jina-ai"));
     }
 
     #[test]
@@ -971,6 +978,7 @@ mod tests {
         assert!(description.contains(WEB_SEARCH_PERPLEXITY_API_KEY_ENV));
         assert!(description.contains(WEB_SEARCH_EXA_API_KEY_ENV));
         assert!(description.contains(WEB_SEARCH_JINA_API_KEY_ENV));
+        assert!(description.contains(WEB_SEARCH_JINA_AUTH_TOKEN_ENV));
         assert!(description.contains(DEFAULT_WEB_SEARCH_PROVIDER));
         assert!(description.contains(WEB_SEARCH_PROVIDER_VALID_VALUES));
     }

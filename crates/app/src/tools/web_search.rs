@@ -621,6 +621,9 @@ fn parse_exa_response(json: &Value, query: &str, max_results: usize) -> Result<V
 }
 
 #[cfg(feature = "tool-websearch")]
+/// Jina returns a single grounded digest, not a list of ranked result items.
+/// The runtime therefore synthesizes one result entry and ignores
+/// `_max_results`, which is kept only to align the provider function shape.
 async fn search_jina(
     query: &str,
     _max_results: usize,

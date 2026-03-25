@@ -343,7 +343,8 @@ sha256_file() {
 }
 
 lowercase_value() {
-  printf '%s' "${1:?value is required}" | tr '[:upper:]' '[:lower:]'
+  local value="${1-}"
+  printf '%s' "${value}" | tr '[:upper:]' '[:lower:]'
 }
 
 install_web_search_provider_display_name() {
@@ -470,6 +471,25 @@ recommend_onboard_web_search_provider_from_credentials() {
   printf '%s\n' "$ready_provider"
 }
 
+format_install_web_search_provider_source() {
+  local source="${1:?source is required}"
+
+  case "$source" in
+    preconfigured)
+      printf 'preconfigured\n'
+      ;;
+    detected-credential)
+      printf 'detected credential\n'
+      ;;
+    detected-signal)
+      printf 'detected\n'
+      ;;
+    *)
+      printf '%s\n' "$source"
+      ;;
+  esac
+}
+
 recommend_onboard_web_search_provider() {
   local domestic_locale_hint=0
   local duckduckgo_reachable=0
@@ -481,7 +501,7 @@ recommend_onboard_web_search_provider() {
   fi
   credential_provider="$(recommend_onboard_web_search_provider_from_credentials || true)"
   if [[ -n "$credential_provider" ]]; then
-    printf '%s\n' "$credential_provider"
+    printf '%s|%s\n' "$credential_provider" "detected-credential"
     return 0
   fi
   if probe_install_duckduckgo_route; then
@@ -492,48 +512,46 @@ recommend_onboard_web_search_provider() {
   fi
 
   if [[ "${domestic_locale_hint}" -eq 1 ]] && [[ "${tavily_reachable}" -eq 1 || "${duckduckgo_reachable}" -eq 0 ]]; then
-    printf 'tavily\n'
+    printf '%s|%s\n' "tavily" "detected-signal"
     return 0
   fi
 
   if [[ "${duckduckgo_reachable}" -eq 1 ]]; then
-    printf 'duckduckgo\n'
+    printf '%s|%s\n' "duckduckgo" "detected-signal"
     return 0
   fi
 
   if [[ "${tavily_reachable}" -eq 1 ]]; then
-    printf 'tavily\n'
+    printf '%s|%s\n' "tavily" "detected-signal"
     return 0
   fi
 
   if [[ "${domestic_locale_hint}" -eq 1 ]]; then
-    printf 'tavily\n'
+    printf '%s|%s\n' "tavily" "detected-signal"
     return 0
   fi
 
-  printf 'duckduckgo\n'
+  printf '%s|%s\n' "duckduckgo" "detected-signal"
 }
 
 run_guided_onboarding() {
   local selected_provider
   local provider_source
+  local recommendation
 
   if [[ -n "${LOONGCLAW_WEB_SEARCH_PROVIDER:-}" ]]; then
     selected_provider="${LOONGCLAW_WEB_SEARCH_PROVIDER}"
     provider_source="preconfigured"
   else
-    selected_provider="$(recommend_onboard_web_search_provider)"
-    if install_web_search_provider_has_ready_credential "$selected_provider"; then
-      provider_source="detected credential"
-    else
-      provider_source="detected"
-    fi
+    recommendation="$(recommend_onboard_web_search_provider)"
+    selected_provider="${recommendation%%|*}"
+    provider_source="${recommendation#*|}"
   fi
 
   if [[ -n "${selected_provider}" ]]; then
     printf '==> Onboarding web search default: %s (%s)\n' \
       "$(install_web_search_provider_display_name "${selected_provider}")" \
-      "${provider_source}"
+      "$(format_install_web_search_provider_source "${provider_source}")"
     "${prefix}/${bin_name}" onboard --web-search-provider "${selected_provider}"
     return 0
   fi
