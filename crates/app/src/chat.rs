@@ -1123,6 +1123,9 @@ impl CliChatLiveSurfaceObserver {
     fn record_phase_event(&self, event: ConversationTurnPhaseEvent) {
         let lines_to_render = {
             let mut state = self.lock_state();
+            if cli_chat_live_phase_starts_provider_request(event.phase) {
+                reset_cli_chat_live_request_state(&mut state);
+            }
             state.latest_phase_event = Some(event.clone());
             reconcile_cli_chat_live_tool_states_for_phase(&mut state.tool_states, event.phase);
             if !should_render_cli_chat_live_phase(event.phase) {
@@ -1201,9 +1204,9 @@ impl CliChatLiveSurfaceObserver {
                     self.render_width,
                 );
 
-                if event.event_type == "tool_call_start"
-                    && should_render_cli_chat_live_phase(current_phase)
-                {
+                let render_tool_activity_now = event.event_type == "tool_call_start"
+                    && current_phase == ConversationTurnPhase::RunningTools;
+                if render_tool_activity_now {
                     should_render = true;
                 }
             }
@@ -1248,6 +1251,23 @@ impl ConversationTurnObserver for CliChatLiveSurfaceObserver {
     fn on_streaming_token(&self, event: crate::acp::StreamingTokenEvent) {
         self.record_streaming_token_event(event);
     }
+}
+
+fn cli_chat_live_phase_starts_provider_request(phase: ConversationTurnPhase) -> bool {
+    matches!(
+        phase,
+        ConversationTurnPhase::RequestingProvider
+            | ConversationTurnPhase::RequestingFollowupProvider
+    )
+}
+
+fn reset_cli_chat_live_request_state(state: &mut CliChatLiveSurfaceState) {
+    state.draft_preview.clear();
+    state.tool_states.clear();
+    state.tool_call_index_map.clear();
+    state.next_tool_display_order = 0;
+    state.total_text_chars_seen = 0;
+    state.last_preview_emit_chars_seen = 0;
 }
 
 fn should_render_cli_chat_live_phase(phase: ConversationTurnPhase) -> bool {
@@ -5910,6 +5930,142 @@ println!(\"{value}\");
         assert_eq!(parse_markdown_heading("#NoSpace"), None);
         assert_eq!(parse_markdown_heading("#!/bin/bash"), None);
         assert_eq!(parse_markdown_heading("####### too many"), None);
+    }
+
+    #[test]
+    fn cli_chat_live_surface_observer_resets_request_scoped_buffers_between_rounds() {
+        let captured_batches = Arc::new(StdMutex::new(Vec::<Vec<String>>::new()));
+        let render_sink: CliChatLiveSurfaceSink = {
+            let captured_batches = Arc::clone(&captured_batches);
+            Arc::new(move |lines| {
+                let mut batches = captured_batches
+                    .lock()
+                    .expect("captured batches lock should not be poisoned");
+                batches.push(lines);
+            })
+        };
+        let observer = CliChatLiveSurfaceObserver::new(72, render_sink);
+
+        observer.on_phase(ConversationTurnPhaseEvent::requesting_provider(
+            1,
+            3,
+            Some(96),
+        ));
+        observer.on_streaming_token(crate::acp::StreamingTokenEvent {
+            event_type: "text_delta".to_owned(),
+            delta: crate::acp::TokenDelta {
+                text: Some("Draft response".to_owned()),
+                tool_call: None,
+            },
+            index: None,
+        });
+        observer.on_streaming_token(crate::acp::StreamingTokenEvent {
+            event_type: "tool_call_input_delta".to_owned(),
+            delta: crate::acp::TokenDelta {
+                text: None,
+                tool_call: Some(crate::acp::ToolCallDelta {
+                    name: None,
+                    args: Some("{\"query\":\"rust\"}".to_owned()),
+                    id: None,
+                }),
+            },
+            index: Some(0),
+        });
+        observer.on_phase(ConversationTurnPhaseEvent::requesting_followup_provider(
+            2,
+            ExecutionLane::Fast,
+            1,
+            5,
+            Some(128),
+        ));
+
+        let batches = captured_batches
+            .lock()
+            .expect("captured batches lock should not be poisoned");
+        let last_batch = batches.last().expect("follow-up request batch");
+
+        assert!(
+            !last_batch.iter().any(|line| line == "draft preview"),
+            "follow-up provider requests should reset the previous draft preview: {last_batch:#?}"
+        );
+        assert!(
+            !last_batch.iter().any(|line| line == "tool activity"),
+            "follow-up provider requests should not reuse prior tool activity lines: {last_batch:#?}"
+        );
+        assert!(
+            !last_batch.iter().any(|line| line == "Draft response"),
+            "follow-up provider requests should not carry the previous request preview text: {last_batch:#?}"
+        );
+    }
+
+    #[test]
+    fn cli_chat_live_surface_observer_waits_for_tools_phase_before_rendering_tool_activity() {
+        let captured_batches = Arc::new(StdMutex::new(Vec::<Vec<String>>::new()));
+        let render_sink: CliChatLiveSurfaceSink = {
+            let captured_batches = Arc::clone(&captured_batches);
+            Arc::new(move |lines| {
+                let mut batches = captured_batches
+                    .lock()
+                    .expect("captured batches lock should not be poisoned");
+                batches.push(lines);
+            })
+        };
+        let observer = CliChatLiveSurfaceObserver::new(72, render_sink);
+
+        observer.on_phase(ConversationTurnPhaseEvent::requesting_provider(
+            1,
+            3,
+            Some(96),
+        ));
+
+        let batch_count_before_tool_delta = captured_batches
+            .lock()
+            .expect("captured batches lock should not be poisoned")
+            .len();
+
+        observer.on_streaming_token(crate::acp::StreamingTokenEvent {
+            event_type: "tool_call_start".to_owned(),
+            delta: crate::acp::TokenDelta {
+                text: None,
+                tool_call: Some(crate::acp::ToolCallDelta {
+                    name: Some("search".to_owned()),
+                    args: None,
+                    id: Some("call_123".to_owned()),
+                }),
+            },
+            index: Some(0),
+        });
+
+        let batch_count_after_tool_delta = captured_batches
+            .lock()
+            .expect("captured batches lock should not be poisoned")
+            .len();
+        assert_eq!(
+            batch_count_after_tool_delta, batch_count_before_tool_delta,
+            "tool-call deltas should wait for the tools phase before re-rendering"
+        );
+
+        observer.on_phase(ConversationTurnPhaseEvent::running_tools(
+            1,
+            ExecutionLane::Fast,
+            1,
+        ));
+
+        let batches = captured_batches
+            .lock()
+            .expect("captured batches lock should not be poisoned");
+        let last_batch = batches.last().expect("running-tools batch");
+
+        assert!(
+            last_batch.iter().any(|line| line == "tool activity"),
+            "the tools phase should render the accumulated tool activity: {last_batch:#?}"
+        );
+        assert!(
+            last_batch
+                .iter()
+                .any(|line| line == "[running] search (id=call_123)"),
+            "the tools phase should surface the streamed tool metadata: {last_batch:#?}"
+        );
     }
 
     #[test]

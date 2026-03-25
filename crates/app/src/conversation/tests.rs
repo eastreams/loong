@@ -338,6 +338,25 @@ struct RecordingLifecycleContextEngine {
 }
 
 #[derive(Default)]
+struct RecordingTurnObserver {
+    phase_events: Mutex<Vec<ConversationTurnPhaseEvent>>,
+}
+
+impl ConversationTurnObserver for RecordingTurnObserver {
+    fn on_phase(&self, event: ConversationTurnPhaseEvent) {
+        let mut phase_events = self
+            .phase_events
+            .lock()
+            .expect("phase event lock should not be poisoned");
+        phase_events.push(event);
+    }
+
+    fn on_streaming_token(&self, event: crate::acp::StreamingTokenEvent) {
+        let _ = event;
+    }
+}
+
+#[derive(Default)]
 struct RoutedAcpState {
     ensure_calls: usize,
     turn_calls: usize,
@@ -3648,6 +3667,65 @@ async fn handle_turn_with_runtime_routes_explicit_acp_turns_through_acp() {
             .get("loongclaw.acp.routing_origin")
             .map(String::as_str),
         Some("explicit_request")
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_observer_routes_explicit_acp_turns_through_acp() {
+    let (backend_id, shared) = register_routed_acp_backend("success-explicit-observer", false);
+    let coordinator = ConversationTurnCoordinator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.default_agent = Some("claude".to_owned());
+    config.acp.allowed_agents = vec!["claude".to_owned()];
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.bindings_enabled = true;
+    config.acp.dispatch.bootstrap_mcp_servers =
+        vec![" Filesystem ".to_owned(), "filesystem".to_owned()];
+    config.memory.sqlite_path = unique_acp_sqlite_path("success-explicit-observer");
+
+    let observer = Arc::new(RecordingTurnObserver::default());
+    let observer_handle: ConversationTurnObserverHandle = observer.clone();
+    let address = ConversationSessionAddress::from_session_id("telegram:42");
+    let acp_options = AcpConversationTurnOptions {
+        routing_intent: AcpRoutingIntent::Explicit,
+        ..AcpConversationTurnOptions::default()
+    };
+    let reply = coordinator
+        .handle_turn_with_address_and_acp_options_and_observer(
+            &config,
+            &address,
+            "hello from channel",
+            ProviderErrorMode::Propagate,
+            &acp_options,
+            ConversationRuntimeBinding::direct(),
+            Some(observer_handle),
+        )
+        .await
+        .expect("explicit ACP turn with observer should route through ACP");
+
+    assert_eq!(reply, "acp: hello from channel");
+
+    let state = shared.lock().expect("ACP shared state");
+    assert_eq!(state.ensure_calls, 1);
+    assert_eq!(state.turn_calls, 1);
+    drop(state);
+
+    let phase_events = observer
+        .phase_events
+        .lock()
+        .expect("phase event lock should not be poisoned");
+    let phase_names = phase_events
+        .iter()
+        .map(|event| event.phase)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        phase_names,
+        vec![
+            ConversationTurnPhase::Preparing,
+            ConversationTurnPhase::FinalizingReply,
+            ConversationTurnPhase::Completed,
+        ]
     );
 }
 
