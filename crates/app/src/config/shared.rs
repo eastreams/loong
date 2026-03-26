@@ -69,6 +69,7 @@ pub(super) enum ConfigValidationCode {
     PercentWrapped,
     SecretLiteral,
     InvalidName,
+    InvalidValue,
     NumericRange,
     DuplicateChannelAccountId,
     UnknownChannelDefaultAccount,
@@ -85,6 +86,7 @@ impl ConfigValidationCode {
             ConfigValidationCode::PercentWrapped => "config.env_pointer.percent_wrapped",
             ConfigValidationCode::SecretLiteral => "config.env_pointer.secret_literal",
             ConfigValidationCode::InvalidName => "config.env_pointer.invalid_name",
+            ConfigValidationCode::InvalidValue => "config.value.invalid",
             ConfigValidationCode::NumericRange => "config.numeric_range",
             ConfigValidationCode::DuplicateChannelAccountId => {
                 "config.channel_account.duplicate_id"
@@ -119,6 +121,7 @@ impl ConfigValidationCode {
             ConfigValidationCode::InvalidName => {
                 "urn:loongclaw:problem:config.env_pointer.invalid_name"
             }
+            ConfigValidationCode::InvalidValue => "urn:loongclaw:problem:config.value.invalid",
             ConfigValidationCode::NumericRange => "urn:loongclaw:problem:config.numeric_range",
             ConfigValidationCode::DuplicateChannelAccountId => {
                 "urn:loongclaw:problem:config.channel_account.duplicate_id"
@@ -145,6 +148,7 @@ impl ConfigValidationCode {
             ConfigValidationCode::PercentWrapped => "config.env_pointer.percent_wrapped.title",
             ConfigValidationCode::SecretLiteral => "config.env_pointer.secret_literal.title",
             ConfigValidationCode::InvalidName => "config.env_pointer.invalid_name.title",
+            ConfigValidationCode::InvalidValue => "config.value.invalid.title",
             ConfigValidationCode::NumericRange => "config.numeric_range.title",
             ConfigValidationCode::DuplicateChannelAccountId => {
                 "config.channel_account.duplicate_id.title"
@@ -181,6 +185,7 @@ impl ConfigValidationCode {
             ConfigValidationCode::PercentWrapped => "Percent-Wrapped Env Pointer Notation",
             ConfigValidationCode::SecretLiteral => "Secret Literal Used In Env Pointer",
             ConfigValidationCode::InvalidName => "Invalid Env Pointer Name",
+            ConfigValidationCode::InvalidValue => "Invalid Config Value",
             ConfigValidationCode::NumericRange => "Config Value Out Of Range",
             ConfigValidationCode::DuplicateChannelAccountId => {
                 "Duplicate Normalized Channel Account ID"
@@ -208,6 +213,9 @@ impl ConfigValidationCode {
             }
             ConfigValidationCode::InvalidName => {
                 "[{code}] {field_path} is not a valid environment variable name reference. use `{field_path}` with a name like `{example_env_name}`"
+            }
+            ConfigValidationCode::InvalidValue => {
+                "[{code}] {field_path} is invalid: {invalid_reason}. {suggested_fix}"
             }
             ConfigValidationCode::NumericRange => {
                 "[{code}] {field_path} must be between {min} and {max}; got {actual_value}"
@@ -330,6 +338,7 @@ const EN_VALIDATION_MESSAGE_CATALOG: &[ConfigValidationCatalogEntry] = &[
         "config.env_pointer.invalid_name.title",
         "Invalid Env Pointer Name",
     ),
+    ConfigValidationCatalogEntry::new("config.value.invalid.title", "Invalid Config Value"),
     ConfigValidationCatalogEntry::new("config.numeric_range.title", "Config Value Out Of Range"),
     ConfigValidationCatalogEntry::new(
         "config.channel_account.duplicate_id.title",
@@ -366,6 +375,10 @@ const EN_VALIDATION_MESSAGE_CATALOG: &[ConfigValidationCatalogEntry] = &[
     ConfigValidationCatalogEntry::new(
         "config.env_pointer.invalid_name",
         "[{code}] {field_path} is not a valid environment variable name reference. use `{field_path}` with a name like `{example_env_name}`",
+    ),
+    ConfigValidationCatalogEntry::new(
+        "config.value.invalid",
+        "[{code}] {field_path} is invalid: {invalid_reason}. {suggested_fix}",
     ),
     ConfigValidationCatalogEntry::new(
         "config.numeric_range",

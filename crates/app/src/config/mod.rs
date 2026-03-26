@@ -15,13 +15,14 @@ pub use channels::{
     ChannelAcpConfig, ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource,
     ChannelDescriptor, ChannelResolvedAccountRoute, ChannelRuntimeKind, CliChannelConfig,
     DingtalkAccountConfig, DingtalkChannelConfig, DiscordAccountConfig, DiscordChannelConfig,
-    FeishuAccountConfig, FeishuChannelConfig, FeishuChannelServeMode, FeishuDomain,
-    GoogleChatAccountConfig, GoogleChatChannelConfig, ImessageAccountConfig, ImessageChannelConfig,
-    LineAccountConfig, LineChannelConfig, MatrixAccountConfig, MatrixChannelConfig,
-    MattermostAccountConfig, MattermostChannelConfig, NextcloudTalkAccountConfig,
-    NextcloudTalkChannelConfig, ResolvedDingtalkChannelConfig, ResolvedDiscordChannelConfig,
-    ResolvedFeishuChannelConfig, ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig,
-    ResolvedLineChannelConfig, ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
+    EmailAccountConfig, EmailChannelConfig, FeishuAccountConfig, FeishuChannelConfig,
+    FeishuChannelServeMode, FeishuDomain, GoogleChatAccountConfig, GoogleChatChannelConfig,
+    ImessageAccountConfig, ImessageChannelConfig, LineAccountConfig, LineChannelConfig,
+    MatrixAccountConfig, MatrixChannelConfig, MattermostAccountConfig, MattermostChannelConfig,
+    NextcloudTalkAccountConfig, NextcloudTalkChannelConfig, ResolvedDingtalkChannelConfig,
+    ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig, ResolvedFeishuChannelConfig,
+    ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig, ResolvedLineChannelConfig,
+    ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
     ResolvedNextcloudTalkChannelConfig, ResolvedSignalChannelConfig, ResolvedSlackChannelConfig,
     ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig, ResolvedTelegramChannelConfig,
     ResolvedWebhookChannelConfig, ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig,
@@ -33,17 +34,19 @@ pub use channels::{
 };
 #[allow(unused_imports)]
 pub(crate) use channels::{
-    DINGTALK_SECRET_ENV, DINGTALK_WEBHOOK_URL_ENV, DISCORD_BOT_TOKEN_ENV, FEISHU_APP_ID_ENV,
-    FEISHU_APP_SECRET_ENV, FEISHU_ENCRYPT_KEY_ENV, FEISHU_VERIFICATION_TOKEN_ENV,
-    GOOGLE_CHAT_WEBHOOK_URL_ENV, IMESSAGE_BRIDGE_TOKEN_ENV, IMESSAGE_BRIDGE_URL_ENV,
-    LINE_CHANNEL_ACCESS_TOKEN_ENV, LINE_CHANNEL_SECRET_ENV, MATRIX_ACCESS_TOKEN_ENV,
-    MATTERMOST_BOT_TOKEN_ENV, MATTERMOST_SERVER_URL_ENV, NEXTCLOUD_TALK_SERVER_URL_ENV,
-    NEXTCLOUD_TALK_SHARED_SECRET_ENV, SIGNAL_ACCOUNT_ENV, SIGNAL_SERVICE_URL_ENV,
-    SLACK_BOT_TOKEN_ENV, SYNOLOGY_CHAT_INCOMING_URL_ENV, SYNOLOGY_CHAT_TOKEN_ENV, TEAMS_APP_ID_ENV,
-    TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV, TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV,
-    WEBHOOK_AUTH_TOKEN_ENV, WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV, WECOM_BOT_ID_ENV,
-    WECOM_SECRET_ENV, WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV,
-    WHATSAPP_PHONE_NUMBER_ID_ENV, WHATSAPP_VERIFY_TOKEN_ENV, normalize_channel_account_id,
+    DINGTALK_SECRET_ENV, DINGTALK_WEBHOOK_URL_ENV, DISCORD_BOT_TOKEN_ENV, EMAIL_IMAP_PASSWORD_ENV,
+    EMAIL_IMAP_USERNAME_ENV, EMAIL_SMTP_PASSWORD_ENV, EMAIL_SMTP_USERNAME_ENV, EmailSmtpEndpoint,
+    FEISHU_APP_ID_ENV, FEISHU_APP_SECRET_ENV, FEISHU_ENCRYPT_KEY_ENV,
+    FEISHU_VERIFICATION_TOKEN_ENV, GOOGLE_CHAT_WEBHOOK_URL_ENV, IMESSAGE_BRIDGE_TOKEN_ENV,
+    IMESSAGE_BRIDGE_URL_ENV, LINE_CHANNEL_ACCESS_TOKEN_ENV, LINE_CHANNEL_SECRET_ENV,
+    MATRIX_ACCESS_TOKEN_ENV, MATTERMOST_BOT_TOKEN_ENV, MATTERMOST_SERVER_URL_ENV,
+    NEXTCLOUD_TALK_SERVER_URL_ENV, NEXTCLOUD_TALK_SHARED_SECRET_ENV, SIGNAL_ACCOUNT_ENV,
+    SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV, SYNOLOGY_CHAT_INCOMING_URL_ENV,
+    SYNOLOGY_CHAT_TOKEN_ENV, TEAMS_APP_ID_ENV, TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV,
+    TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV, WEBHOOK_AUTH_TOKEN_ENV,
+    WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV, WECOM_BOT_ID_ENV, WECOM_SECRET_ENV,
+    WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV, WHATSAPP_PHONE_NUMBER_ID_ENV,
+    WHATSAPP_VERIFY_TOKEN_ENV, normalize_channel_account_id, parse_email_smtp_endpoint,
 };
 #[allow(unused_imports)]
 pub use conversation::{ConversationConfig, ConversationTurnLoopConfig};
@@ -124,6 +127,7 @@ mod tests {
             "line",
             "dingtalk",
             "whatsapp",
+            "email",
             "webhook",
             "google-chat",
             "signal",
@@ -204,6 +208,12 @@ mod tests {
         assert_eq!(whatsapp.runtime_kind, ChannelRuntimeKind::Service);
         assert_eq!(whatsapp.serve_subcommand, None);
 
+        let email = channel_descriptor("email").expect("email descriptor");
+        assert_eq!(email.id, "email");
+        assert_eq!(email.surface_label, "email channel");
+        assert_eq!(email.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(email.serve_subcommand, None);
+
         let webhook = channel_descriptor("webhook").expect("webhook descriptor");
         assert_eq!(webhook.id, "webhook");
         assert_eq!(webhook.surface_label, "webhook channel");
@@ -271,6 +281,7 @@ mod tests {
         config.line.enabled = true;
         config.dingtalk.enabled = true;
         config.whatsapp.enabled = true;
+        config.email.enabled = true;
         config.webhook.enabled = true;
         config.google_chat.enabled = true;
         config.signal.enabled = true;
@@ -293,6 +304,7 @@ mod tests {
                 "line",
                 "dingtalk",
                 "whatsapp",
+                "email",
                 "webhook",
                 "google-chat",
                 "signal",

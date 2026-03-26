@@ -13,8 +13,8 @@ use crate::prompt::{
 
 use super::runtime::LoongClawConfig;
 use super::shared::{
-    ConfigValidationCode, ConfigValidationIssue, EnvPointerValidationHint,
-    validate_env_pointer_field, validate_secret_ref_env_pointer_field,
+    ConfigValidationCode, ConfigValidationIssue, ConfigValidationSeverity,
+    EnvPointerValidationHint, validate_env_pointer_field, validate_secret_ref_env_pointer_field,
 };
 use crate::secrets::resolve_secret_with_legacy_env;
 
@@ -22,6 +22,10 @@ pub(crate) const TELEGRAM_BOT_TOKEN_ENV: &str = "TELEGRAM_BOT_TOKEN";
 pub(crate) const DISCORD_BOT_TOKEN_ENV: &str = "DISCORD_BOT_TOKEN";
 pub(crate) const DINGTALK_WEBHOOK_URL_ENV: &str = "DINGTALK_WEBHOOK_URL";
 pub(crate) const DINGTALK_SECRET_ENV: &str = "DINGTALK_SECRET";
+pub(crate) const EMAIL_SMTP_USERNAME_ENV: &str = "EMAIL_SMTP_USERNAME";
+pub(crate) const EMAIL_SMTP_PASSWORD_ENV: &str = "EMAIL_SMTP_PASSWORD";
+pub(crate) const EMAIL_IMAP_USERNAME_ENV: &str = "EMAIL_IMAP_USERNAME";
+pub(crate) const EMAIL_IMAP_PASSWORD_ENV: &str = "EMAIL_IMAP_PASSWORD";
 pub(crate) const FEISHU_APP_ID_ENV: &str = "FEISHU_APP_ID";
 pub(crate) const FEISHU_APP_SECRET_ENV: &str = "FEISHU_APP_SECRET";
 pub(crate) const FEISHU_VERIFICATION_TOKEN_ENV: &str = "FEISHU_VERIFICATION_TOKEN";
@@ -78,6 +82,12 @@ impl WebhookPayloadFormat {
             Self::PlainText => "plain_text",
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum EmailSmtpEndpoint {
+    RelayHost(String),
+    ConnectionUrl(String),
 }
 
 pub fn channel_descriptor(id: &str) -> Option<&'static ChannelDescriptor> {
@@ -797,6 +807,109 @@ impl ResolvedWebhookChannelConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EmailAccountConfig {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub smtp_host: Option<String>,
+    #[serde(default)]
+    pub smtp_username: Option<SecretRef>,
+    #[serde(default)]
+    pub smtp_username_env: Option<String>,
+    #[serde(default)]
+    pub smtp_password: Option<SecretRef>,
+    #[serde(default)]
+    pub smtp_password_env: Option<String>,
+    #[serde(default)]
+    pub from_address: Option<String>,
+    #[serde(default)]
+    pub imap_host: Option<String>,
+    #[serde(default)]
+    pub imap_username: Option<SecretRef>,
+    #[serde(default)]
+    pub imap_username_env: Option<String>,
+    #[serde(default)]
+    pub imap_password: Option<SecretRef>,
+    #[serde(default)]
+    pub imap_password_env: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedEmailChannelConfig {
+    pub configured_account_id: String,
+    pub configured_account_label: String,
+    pub account: ChannelAccountIdentity,
+    pub enabled: bool,
+    pub smtp_host: Option<String>,
+    pub smtp_username: Option<SecretRef>,
+    pub smtp_username_env: Option<String>,
+    pub smtp_password: Option<SecretRef>,
+    pub smtp_password_env: Option<String>,
+    pub from_address: Option<String>,
+    pub imap_host: Option<String>,
+    pub imap_username: Option<SecretRef>,
+    pub imap_username_env: Option<String>,
+    pub imap_password: Option<SecretRef>,
+    pub imap_password_env: Option<String>,
+}
+
+impl ResolvedEmailChannelConfig {
+    pub fn smtp_host(&self) -> Option<String> {
+        self.smtp_host
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    }
+
+    pub fn smtp_username(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(
+            self.smtp_username.as_ref(),
+            self.smtp_username_env.as_deref(),
+        )
+    }
+
+    pub fn smtp_password(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(
+            self.smtp_password.as_ref(),
+            self.smtp_password_env.as_deref(),
+        )
+    }
+
+    pub fn from_address(&self) -> Option<String> {
+        self.from_address
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    }
+
+    pub fn imap_host(&self) -> Option<String> {
+        self.imap_host
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    }
+
+    pub fn imap_username(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(
+            self.imap_username.as_ref(),
+            self.imap_username_env.as_deref(),
+        )
+    }
+
+    pub fn imap_password(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(
+            self.imap_password.as_ref(),
+            self.imap_password_env.as_deref(),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiscordAccountConfig {
     #[serde(default)]
     pub enabled: Option<bool>,
@@ -1341,6 +1454,41 @@ pub struct WebhookChannelConfig {
     pub signing_secret_env: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, WebhookAccountConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct EmailChannelConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub default_account: Option<String>,
+    #[serde(default)]
+    pub smtp_host: Option<String>,
+    #[serde(default)]
+    pub smtp_username: Option<SecretRef>,
+    #[serde(default = "default_email_smtp_username_env")]
+    pub smtp_username_env: Option<String>,
+    #[serde(default)]
+    pub smtp_password: Option<SecretRef>,
+    #[serde(default = "default_email_smtp_password_env")]
+    pub smtp_password_env: Option<String>,
+    #[serde(default)]
+    pub from_address: Option<String>,
+    #[serde(default)]
+    pub imap_host: Option<String>,
+    #[serde(default)]
+    pub imap_username: Option<SecretRef>,
+    #[serde(default = "default_email_imap_username_env")]
+    pub imap_username_env: Option<String>,
+    #[serde(default)]
+    pub imap_password: Option<SecretRef>,
+    #[serde(default = "default_email_imap_password_env")]
+    pub imap_password_env: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub accounts: BTreeMap<String, EmailAccountConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1945,6 +2093,28 @@ impl Default for WebhookChannelConfig {
             public_base_url: None,
             signing_secret: None,
             signing_secret_env: Some(WEBHOOK_SIGNING_SECRET_ENV.to_owned()),
+            accounts: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for EmailChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_id: None,
+            default_account: None,
+            smtp_host: None,
+            smtp_username: None,
+            smtp_username_env: Some(EMAIL_SMTP_USERNAME_ENV.to_owned()),
+            smtp_password: None,
+            smtp_password_env: Some(EMAIL_SMTP_PASSWORD_ENV.to_owned()),
+            from_address: None,
+            imap_host: None,
+            imap_username: None,
+            imap_username_env: Some(EMAIL_IMAP_USERNAME_ENV.to_owned()),
+            imap_password: None,
+            imap_password_env: Some(EMAIL_IMAP_PASSWORD_ENV.to_owned()),
             accounts: BTreeMap::new(),
         }
     }
@@ -3434,6 +3604,384 @@ impl WebhookChannelConfig {
         &self,
         session_account_id: Option<&str>,
     ) -> CliResult<ResolvedWebhookChannelConfig> {
+        resolve_account_for_session_account_id(
+            session_account_id,
+            || self.resolve_account(session_account_id),
+            || self.configured_account_ids(),
+            |configured_id| self.resolve_account(Some(configured_id)),
+            |resolved| resolved.account.id.as_str(),
+        )
+    }
+
+    pub fn resolved_account_identity(&self) -> ChannelAccountIdentity {
+        if let Some((id, label)) = resolve_configured_account_identity(self.account_id.as_deref()) {
+            return ChannelAccountIdentity {
+                id,
+                label,
+                source: ChannelAccountIdentitySource::Configured,
+            };
+        }
+
+        default_channel_account_identity()
+    }
+
+    fn resolve_configured_account_selection(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedConfiguredAccount> {
+        resolve_configured_account_selection(
+            self.accounts.keys(),
+            requested_account_id,
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+}
+
+impl EmailChannelConfig {
+    pub(crate) fn validate(&self) -> Vec<ConfigValidationIssue> {
+        let mut issues = Vec::new();
+        validate_channel_account_integrity(
+            &mut issues,
+            "email",
+            self.default_account.as_deref(),
+            self.accounts.keys(),
+        );
+        validate_email_env_pointer(
+            &mut issues,
+            "email.smtp_username_env",
+            self.smtp_username_env.as_deref(),
+            "email.smtp_username",
+        );
+        validate_email_secret_ref_env_pointer(
+            &mut issues,
+            "email.smtp_username",
+            self.smtp_username.as_ref(),
+        );
+        validate_email_env_pointer(
+            &mut issues,
+            "email.smtp_password_env",
+            self.smtp_password_env.as_deref(),
+            "email.smtp_password",
+        );
+        validate_email_secret_ref_env_pointer(
+            &mut issues,
+            "email.smtp_password",
+            self.smtp_password.as_ref(),
+        );
+        validate_email_env_pointer(
+            &mut issues,
+            "email.imap_username_env",
+            self.imap_username_env.as_deref(),
+            "email.imap_username",
+        );
+        validate_email_secret_ref_env_pointer(
+            &mut issues,
+            "email.imap_username",
+            self.imap_username.as_ref(),
+        );
+        validate_email_env_pointer(
+            &mut issues,
+            "email.imap_password_env",
+            self.imap_password_env.as_deref(),
+            "email.imap_password",
+        );
+        validate_email_secret_ref_env_pointer(
+            &mut issues,
+            "email.imap_password",
+            self.imap_password.as_ref(),
+        );
+
+        if let Some(smtp_host) = self.smtp_host() {
+            let parse_result = parse_email_smtp_endpoint(smtp_host.as_str());
+            if let Err(error) = parse_result {
+                let issue = build_email_invalid_value_issue(
+                    "email.smtp_host",
+                    error.as_str(),
+                    "Configure a bare relay host like `smtp.example.com` or a full `smtp://` or `smtps://` URL.",
+                );
+                issues.push(issue);
+            }
+        }
+
+        if let Some(from_address) = self.from_address() {
+            let parse_result = from_address.parse::<lettre::message::Mailbox>();
+            if parse_result.is_err() {
+                let issue = build_email_invalid_value_issue(
+                    "email.from_address",
+                    "mailbox parse failed",
+                    "Use a valid RFC 5322 mailbox like `ops@example.com` or `LoongClaw <ops@example.com>`.",
+                );
+                issues.push(issue);
+            }
+        }
+
+        for (raw_account_id, account) in &self.accounts {
+            let account_id = normalize_channel_account_id(raw_account_id);
+
+            let smtp_username_field_path = format!("email.accounts.{account_id}.smtp_username");
+            let smtp_username_env_field_path = format!("{smtp_username_field_path}_env");
+            validate_email_env_pointer(
+                &mut issues,
+                smtp_username_env_field_path.as_str(),
+                account.smtp_username_env.as_deref(),
+                smtp_username_field_path.as_str(),
+            );
+            validate_email_secret_ref_env_pointer(
+                &mut issues,
+                smtp_username_field_path.as_str(),
+                account.smtp_username.as_ref(),
+            );
+
+            let smtp_password_field_path = format!("email.accounts.{account_id}.smtp_password");
+            let smtp_password_env_field_path = format!("{smtp_password_field_path}_env");
+            validate_email_env_pointer(
+                &mut issues,
+                smtp_password_env_field_path.as_str(),
+                account.smtp_password_env.as_deref(),
+                smtp_password_field_path.as_str(),
+            );
+            validate_email_secret_ref_env_pointer(
+                &mut issues,
+                smtp_password_field_path.as_str(),
+                account.smtp_password.as_ref(),
+            );
+
+            let imap_username_field_path = format!("email.accounts.{account_id}.imap_username");
+            let imap_username_env_field_path = format!("{imap_username_field_path}_env");
+            validate_email_env_pointer(
+                &mut issues,
+                imap_username_env_field_path.as_str(),
+                account.imap_username_env.as_deref(),
+                imap_username_field_path.as_str(),
+            );
+            validate_email_secret_ref_env_pointer(
+                &mut issues,
+                imap_username_field_path.as_str(),
+                account.imap_username.as_ref(),
+            );
+
+            let imap_password_field_path = format!("email.accounts.{account_id}.imap_password");
+            let imap_password_env_field_path = format!("{imap_password_field_path}_env");
+            validate_email_env_pointer(
+                &mut issues,
+                imap_password_env_field_path.as_str(),
+                account.imap_password_env.as_deref(),
+                imap_password_field_path.as_str(),
+            );
+            validate_email_secret_ref_env_pointer(
+                &mut issues,
+                imap_password_field_path.as_str(),
+                account.imap_password.as_ref(),
+            );
+
+            let smtp_host = account
+                .smtp_host
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned);
+            if let Some(smtp_host) = smtp_host {
+                let parse_result = parse_email_smtp_endpoint(smtp_host.as_str());
+                if let Err(error) = parse_result {
+                    let field_path = format!("email.accounts.{account_id}.smtp_host");
+                    let issue = build_email_invalid_value_issue(
+                        field_path.as_str(),
+                        error.as_str(),
+                        "Configure a bare relay host like `smtp.example.com` or a full `smtp://` or `smtps://` URL.",
+                    );
+                    issues.push(issue);
+                }
+            }
+
+            let from_address = account
+                .from_address
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned);
+            if let Some(from_address) = from_address {
+                let parse_result = from_address.parse::<lettre::message::Mailbox>();
+                if parse_result.is_err() {
+                    let field_path = format!("email.accounts.{account_id}.from_address");
+                    let issue = build_email_invalid_value_issue(
+                        field_path.as_str(),
+                        "mailbox parse failed",
+                        "Use a valid RFC 5322 mailbox like `ops@example.com` or `LoongClaw <ops@example.com>`.",
+                    );
+                    issues.push(issue);
+                }
+            }
+        }
+
+        issues
+    }
+
+    pub fn smtp_host(&self) -> Option<String> {
+        self.smtp_host
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    }
+
+    pub fn smtp_username(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(
+            self.smtp_username.as_ref(),
+            self.smtp_username_env.as_deref(),
+        )
+    }
+
+    pub fn smtp_password(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(
+            self.smtp_password.as_ref(),
+            self.smtp_password_env.as_deref(),
+        )
+    }
+
+    pub fn from_address(&self) -> Option<String> {
+        self.from_address
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    }
+
+    pub fn imap_host(&self) -> Option<String> {
+        self.imap_host
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    }
+
+    pub fn imap_username(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(
+            self.imap_username.as_ref(),
+            self.imap_username_env.as_deref(),
+        )
+    }
+
+    pub fn imap_password(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(
+            self.imap_password.as_ref(),
+            self.imap_password_env.as_deref(),
+        )
+    }
+
+    pub fn configured_account_ids(&self) -> Vec<String> {
+        let ids = configured_account_ids(self.accounts.keys());
+        if ids.is_empty() {
+            return vec![self.default_configured_account_id()];
+        }
+        ids
+    }
+
+    pub fn default_configured_account_selection(&self) -> ChannelDefaultAccountSelection {
+        resolve_default_configured_account_selection(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+
+    pub fn default_configured_account_id(&self) -> String {
+        self.default_configured_account_selection().id
+    }
+
+    pub fn resolved_account_route(
+        &self,
+        requested_account_id: Option<&str>,
+        selected_configured_account_id: &str,
+    ) -> ChannelResolvedAccountRoute {
+        resolve_channel_account_route(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+            requested_account_id,
+            selected_configured_account_id,
+        )
+    }
+
+    pub fn resolve_account(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedEmailChannelConfig> {
+        let configured = self.resolve_configured_account_selection(requested_account_id)?;
+        let account_override = configured
+            .account_key
+            .as_deref()
+            .and_then(|key| self.accounts.get(key));
+
+        let merged = EmailChannelConfig {
+            enabled: self.enabled
+                && account_override
+                    .and_then(|account| account.enabled)
+                    .unwrap_or(true),
+            account_id: account_override
+                .and_then(|account| account.account_id.clone())
+                .or_else(|| self.account_id.clone()),
+            default_account: None,
+            smtp_host: account_override
+                .and_then(|account| account.smtp_host.clone())
+                .or_else(|| self.smtp_host.clone()),
+            smtp_username: account_override
+                .and_then(|account| account.smtp_username.clone())
+                .or_else(|| self.smtp_username.clone()),
+            smtp_username_env: account_override
+                .and_then(|account| account.smtp_username_env.clone())
+                .or_else(|| self.smtp_username_env.clone()),
+            smtp_password: account_override
+                .and_then(|account| account.smtp_password.clone())
+                .or_else(|| self.smtp_password.clone()),
+            smtp_password_env: account_override
+                .and_then(|account| account.smtp_password_env.clone())
+                .or_else(|| self.smtp_password_env.clone()),
+            from_address: account_override
+                .and_then(|account| account.from_address.clone())
+                .or_else(|| self.from_address.clone()),
+            imap_host: account_override
+                .and_then(|account| account.imap_host.clone())
+                .or_else(|| self.imap_host.clone()),
+            imap_username: account_override
+                .and_then(|account| account.imap_username.clone())
+                .or_else(|| self.imap_username.clone()),
+            imap_username_env: account_override
+                .and_then(|account| account.imap_username_env.clone())
+                .or_else(|| self.imap_username_env.clone()),
+            imap_password: account_override
+                .and_then(|account| account.imap_password.clone())
+                .or_else(|| self.imap_password.clone()),
+            imap_password_env: account_override
+                .and_then(|account| account.imap_password_env.clone())
+                .or_else(|| self.imap_password_env.clone()),
+            accounts: BTreeMap::new(),
+        };
+        let account = merged.resolved_account_identity();
+
+        Ok(ResolvedEmailChannelConfig {
+            configured_account_id: configured.id,
+            configured_account_label: configured.label,
+            account,
+            enabled: merged.enabled,
+            smtp_host: merged.smtp_host,
+            smtp_username: merged.smtp_username,
+            smtp_username_env: merged.smtp_username_env,
+            smtp_password: merged.smtp_password,
+            smtp_password_env: merged.smtp_password_env,
+            from_address: merged.from_address,
+            imap_host: merged.imap_host,
+            imap_username: merged.imap_username,
+            imap_username_env: merged.imap_username_env,
+            imap_password: merged.imap_password,
+            imap_password_env: merged.imap_password_env,
+        })
+    }
+
+    pub fn resolve_account_for_session_account_id(
+        &self,
+        session_account_id: Option<&str>,
+    ) -> CliResult<ResolvedEmailChannelConfig> {
         resolve_account_for_session_account_id(
             session_account_id,
             || self.resolve_account(session_account_id),
@@ -5464,6 +6012,22 @@ fn default_line_api_base_url() -> String {
     "https://api.line.me/v2/bot".to_owned()
 }
 
+fn default_email_smtp_username_env() -> Option<String> {
+    Some(EMAIL_SMTP_USERNAME_ENV.to_owned())
+}
+
+fn default_email_smtp_password_env() -> Option<String> {
+    Some(EMAIL_SMTP_PASSWORD_ENV.to_owned())
+}
+
+fn default_email_imap_username_env() -> Option<String> {
+    Some(EMAIL_IMAP_USERNAME_ENV.to_owned())
+}
+
+fn default_email_imap_password_env() -> Option<String> {
+    Some(EMAIL_IMAP_PASSWORD_ENV.to_owned())
+}
+
 fn default_webhook_endpoint_url_env() -> Option<String> {
     Some(WEBHOOK_ENDPOINT_URL_ENV.to_owned())
 }
@@ -5617,6 +6181,51 @@ fn resolve_string_with_legacy_env(raw: Option<&str>, env_key: Option<&str>) -> O
     Some(trimmed_value.to_owned())
 }
 
+pub(crate) fn parse_email_smtp_endpoint(raw: &str) -> CliResult<EmailSmtpEndpoint> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("email smtp_host is empty".to_owned());
+    }
+
+    if trimmed.contains("://") {
+        let parsed_url = reqwest::Url::parse(trimmed)
+            .map_err(|error| format!("email smtp_host url is invalid: {error}"))?;
+        let scheme = parsed_url.scheme();
+        if scheme != "smtp" && scheme != "smtps" {
+            return Err(format!(
+                "email smtp_host url must use smtp:// or smtps://, got {scheme}://"
+            ));
+        }
+
+        let host = parsed_url
+            .host_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if host.is_none() {
+            return Err("email smtp_host url is missing a host".to_owned());
+        }
+
+        return Ok(EmailSmtpEndpoint::ConnectionUrl(trimmed.to_owned()));
+    }
+
+    if trimmed.chars().any(char::is_whitespace) {
+        return Err("email smtp_host must not contain whitespace".to_owned());
+    }
+    if trimmed.contains('/') || trimmed.contains('?') || trimmed.contains('#') {
+        return Err(
+            "email smtp_host must be a bare host or a full smtp:// or smtps:// URL".to_owned(),
+        );
+    }
+    if trimmed.contains(':') {
+        return Err(
+            "email smtp_host with an explicit port must use a full smtp:// or smtps:// URL"
+                .to_owned(),
+        );
+    }
+
+    Ok(EmailSmtpEndpoint::RelayHost(trimmed.to_owned()))
+}
+
 pub(crate) fn normalize_channel_account_id(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -5652,6 +6261,81 @@ pub(crate) fn normalize_channel_account_id(raw: &str) -> String {
         "default".to_owned()
     } else {
         normalized
+    }
+}
+
+fn validate_email_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    env_key: Option<&str>,
+    inline_field_path: &str,
+) {
+    let example_env_name = if field_path.ends_with("imap_username_env") {
+        EMAIL_IMAP_USERNAME_ENV
+    } else if field_path.ends_with("imap_password_env") {
+        EMAIL_IMAP_PASSWORD_ENV
+    } else if field_path.ends_with("smtp_password_env") {
+        EMAIL_SMTP_PASSWORD_ENV
+    } else {
+        EMAIL_SMTP_USERNAME_ENV
+    };
+    if let Err(issue) = validate_env_pointer_field(
+        field_path,
+        env_key,
+        EnvPointerValidationHint {
+            inline_field_path,
+            example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_email_secret_ref_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    secret_ref: Option<&SecretRef>,
+) {
+    let example_env_name = if field_path.ends_with("imap_username") {
+        EMAIL_IMAP_USERNAME_ENV
+    } else if field_path.ends_with("imap_password") {
+        EMAIL_IMAP_PASSWORD_ENV
+    } else if field_path.ends_with("smtp_password") {
+        EMAIL_SMTP_PASSWORD_ENV
+    } else {
+        EMAIL_SMTP_USERNAME_ENV
+    };
+    if let Err(issue) = validate_secret_ref_env_pointer_field(
+        field_path,
+        secret_ref,
+        EnvPointerValidationHint {
+            inline_field_path: field_path,
+            example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn build_email_invalid_value_issue(
+    field_path: &str,
+    invalid_reason: &str,
+    suggested_fix: &str,
+) -> ConfigValidationIssue {
+    let mut extra_message_variables = BTreeMap::new();
+    extra_message_variables.insert("invalid_reason".to_owned(), invalid_reason.to_owned());
+    extra_message_variables.insert("suggested_fix".to_owned(), suggested_fix.to_owned());
+
+    ConfigValidationIssue {
+        severity: ConfigValidationSeverity::Error,
+        code: ConfigValidationCode::InvalidValue,
+        field_path: field_path.to_owned(),
+        inline_field_path: field_path.to_owned(),
+        example_env_name: String::new(),
+        suggested_env_name: None,
+        extra_message_variables,
     }
 }
 
@@ -8368,6 +9052,64 @@ mod tests {
         assert_eq!(
             config.bridge_token_env.as_deref(),
             Some(IMESSAGE_BRIDGE_TOKEN_ENV)
+        );
+    }
+
+    #[test]
+    fn email_partial_deserialization_keeps_default_env_pointers() {
+        let config: EmailChannelConfig = serde_json::from_value(json!({
+            "enabled": true
+        }))
+        .expect("deserialize email config");
+
+        assert_eq!(
+            config.smtp_username_env.as_deref(),
+            Some(EMAIL_SMTP_USERNAME_ENV)
+        );
+        assert_eq!(
+            config.smtp_password_env.as_deref(),
+            Some(EMAIL_SMTP_PASSWORD_ENV)
+        );
+        assert_eq!(
+            config.imap_username_env.as_deref(),
+            Some(EMAIL_IMAP_USERNAME_ENV)
+        );
+        assert_eq!(
+            config.imap_password_env.as_deref(),
+            Some(EMAIL_IMAP_PASSWORD_ENV)
+        );
+    }
+
+    #[test]
+    fn parse_email_smtp_endpoint_accepts_relay_host() {
+        let endpoint =
+            parse_email_smtp_endpoint("smtp.example.test").expect("relay host should parse");
+
+        assert_eq!(
+            endpoint,
+            EmailSmtpEndpoint::RelayHost("smtp.example.test".to_owned())
+        );
+    }
+
+    #[test]
+    fn parse_email_smtp_endpoint_accepts_connection_url() {
+        let endpoint = parse_email_smtp_endpoint("smtps://smtp.example.test:465")
+            .expect("smtp url should parse");
+
+        assert_eq!(
+            endpoint,
+            EmailSmtpEndpoint::ConnectionUrl("smtps://smtp.example.test:465".to_owned())
+        );
+    }
+
+    #[test]
+    fn parse_email_smtp_endpoint_rejects_host_port_without_scheme() {
+        let error = parse_email_smtp_endpoint("smtp.example.test:587")
+            .expect_err("bare host:port should be rejected");
+
+        assert_eq!(
+            error,
+            "email smtp_host with an explicit port must use a full smtp:// or smtps:// URL"
         );
     }
 
