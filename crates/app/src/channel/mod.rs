@@ -247,6 +247,8 @@ mod synology_chat;
 mod teams;
 #[cfg(feature = "channel-telegram")]
 mod telegram;
+/// Channel API traits for platform-agnostic abstraction
+pub mod traits;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
