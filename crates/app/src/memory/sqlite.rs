@@ -3639,7 +3639,7 @@ mod tests {
 
         let thread_b_barrier = start_barrier.clone();
         let thread_b_path = db_path.clone();
-        let thread_b_config = config.clone();
+        let thread_b_config = config;
         let thread_b = std::thread::spawn(move || {
             thread_b_barrier.wait();
             ensure_memory_db_ready(Some(thread_b_path), &thread_b_config)
