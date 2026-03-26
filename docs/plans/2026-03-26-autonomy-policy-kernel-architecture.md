@@ -92,8 +92,8 @@ Evidence:
 - `crates/app/src/channel/registry.rs`
 - `crates/app/src/config/channels.rs`
 
-This matters because future autonomy policy cannot live only in one product
-profile enum. It must respect whether the current channel surface can support:
+This matters because future autonomy policy cannot live only in one `product
+mode` enum. It must respect whether the current channel surface can support:
 
 - background runtime control
 - approval round-trips
@@ -172,7 +172,7 @@ Combined, those imply that LoongClaw should separate:
 
 ## Design Goals
 
-1. Keep `product mode` as the external product/profile surface.
+1. Keep `product mode` as the external product-facing profile surface.
 2. Introduce an internal autonomy-policy kernel as the real runtime control
    plane.
 3. Preserve deterministic hard constraints for approval, binding, source
@@ -196,9 +196,14 @@ Combined, those imply that LoongClaw should separate:
 LoongClaw should use three different layers instead of one overloaded
 `product mode` abstraction.
 
-### 1. Product profile
+### 1. Product mode
 
 This is the operator-facing layer.
+
+`product mode` is the canonical external term in this document. If follow-up
+runtime code needs an explicit resolved type, it can represent that mode with a
+type such as `AutonomyProfile`, but the operator-facing contract should keep
+the `product mode` label.
 
 Examples:
 
@@ -231,7 +236,7 @@ Suggested core types:
 
 Responsibilities:
 
-- compile the selected product profile into deterministic policy fields
+- compile the selected product mode into deterministic policy fields
 - enforce hard constraints before mutation paths execute
 - produce explicit allow, approval-required, or deny outcomes
 
@@ -275,7 +280,7 @@ Input:
 
 Output:
 
-- selected product profile
+- selected product mode
 
 This is the human-facing abstraction, not the final execution contract.
 
@@ -283,7 +288,7 @@ This is the human-facing abstraction, not the final execution contract.
 
 Input:
 
-- selected product profile
+- selected product mode
 - runtime config
 - channel support
 - binding requirements
@@ -424,7 +429,7 @@ The live runtime should expose one deterministic decision contract.
 
 Suggested input shape:
 
-- resolved product profile
+- resolved product mode
 - autonomy-policy snapshot
 - capability action class
 - governance profile
@@ -442,14 +447,16 @@ Reason codes should stay explicit and operator-visible.
 
 Example families:
 
-- `product_mode_disallows_capability_acquisition`
+- `autonomy_policy_capability_acquisition_disallowed`
 - `autonomy_policy_binding_missing`
 - `autonomy_policy_channel_support_missing`
 - `autonomy_policy_source_policy_denied`
 - `autonomy_policy_budget_exceeded`
 
-`product mode` may still own the operator-facing vocabulary, but the internal
-reason model should not be limited to mode names alone.
+`product mode` may still own the operator-facing vocabulary and user-visible
+explanations, but once a mode is compiled into a policy snapshot, the internal
+reason model should stay rooted in autonomy-policy decisions rather than mixed
+layer names.
 
 ## Why Product Mode Still Matters
 
@@ -482,7 +489,7 @@ The refinement is internal:
 - add channel SDK support metadata
 - emit policy and outcome telemetry suitable for learning-time analysis
 
-### Long term
+### Long-term
 
 - add ranking models or learned strategy selection on top of the policy kernel
 - add a governed evolution plane with replay, shadow, and promotion workflows

@@ -53,7 +53,7 @@ git diff --check
 
 Expected: success
 
-### Task 2: Introduce product profile and autonomy-policy types
+### Task 2: Introduce product-mode and autonomy-policy types
 
 **Files:**
 - Modify: `crates/app/src/config/*.rs`
@@ -66,7 +66,7 @@ Expected: success
 
 Add tests with an `autonomy_profile_runtime_config_` prefix that prove:
 
-- product-facing profiles have a stable enum surface
+- `product mode` has a stable enum surface
 - runtime config resolves a default profile deterministically
 - a profile compiles into a policy snapshot
 - invalid profile or policy values fail closed
@@ -206,7 +206,7 @@ Expected: FAIL because the runtime and SDK are not yet autonomy-policy-aware.
 
 Extend SDK metadata with the smallest set of fields needed to express:
 
-- supported product profiles
+- supported product modes
 - kernel-backed mutation support
 - approval round-trip support
 - session override support
@@ -284,7 +284,7 @@ Only after earlier tasks land, add bounded experiment and promotion support.
 ## Recommended Slice Order
 
 1. docs refinement
-2. product profile and policy snapshot types
+2. product-mode and policy snapshot types
 3. capability-action classification
 4. decision engine
 5. binding and channel SDK support
