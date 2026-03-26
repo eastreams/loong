@@ -31,6 +31,7 @@ loongclaw-contracts = { path = "../contracts" }
 loongclaw-kernel = { path = "../kernel" }
 async-trait.workspace = true
 console.workspace = true
+dunce = "1"
 rand.workspace = true
 chrono.workspace = true
 serde.workspace = true

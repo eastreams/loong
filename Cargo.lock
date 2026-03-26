@@ -2002,6 +2002,7 @@ dependencies = [
  "cbc",
  "chrono",
  "console",
+ "dunce",
  "flate2",
  "futures-util",
  "hex",
