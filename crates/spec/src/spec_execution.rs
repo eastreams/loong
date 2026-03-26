@@ -1672,6 +1672,7 @@ mod setup_readiness_context_tests {
         );
     }
 
+    #[test]
     fn collect_verified_env_var_names_preserves_non_blank_name_spelling() {
         let env_vars = vec![
             (OsString::from(" TAVILY_API_KEY"), OsString::from("secret")),
