@@ -31,12 +31,6 @@ use std::{
     },
     time::{SystemTime, UNIX_EPOCH},
 };
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
 use std::{fmt, str::FromStr};
 
 #[cfg(any(
@@ -543,24 +537,12 @@ impl ChannelOutboundTargetKind {
     }
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
 impl fmt::Display for ChannelOutboundTargetKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
     }
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
 impl FromStr for ChannelOutboundTargetKind {
     type Err = String;
 
@@ -2447,12 +2429,6 @@ where
     }
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
 #[allow(clippy::print_stdout)] // CLI output
 pub async fn run_discord_send(
     config_path: Option<&str>,
@@ -2508,12 +2484,6 @@ pub async fn run_discord_send(
     }
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
 #[allow(clippy::print_stdout)] // CLI output
 pub async fn run_signal_send(
     config_path: Option<&str>,
@@ -2569,12 +2539,6 @@ pub async fn run_signal_send(
     }
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
 #[allow(clippy::print_stdout)] // CLI output
 pub async fn run_slack_send(
     config_path: Option<&str>,
@@ -2630,12 +2594,6 @@ pub async fn run_slack_send(
     }
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
 #[allow(clippy::print_stdout)] // CLI output
 pub async fn run_line_send(
     config_path: Option<&str>,
@@ -3327,12 +3285,6 @@ pub async fn run_telegram_channel(
     }
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
 #[allow(clippy::print_stdout)] // CLI output
 pub async fn run_telegram_send(
     config_path: Option<&str>,
@@ -3588,12 +3540,6 @@ pub fn load_channel_operation_runtime_for_account_from_dir_for_test(
     )
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
 #[allow(clippy::print_stdout)] // CLI output
 pub async fn run_matrix_send(
     config_path: Option<&str>,
@@ -3771,12 +3717,6 @@ pub async fn run_matrix_channel_with_stop(
     run_matrix_channel_with_context(context, once, stop, initialize_runtime_environment).await
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
 #[allow(clippy::print_stdout)]
 pub async fn run_wecom_send(
     config_path: Option<&str>,
