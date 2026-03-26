@@ -38,7 +38,7 @@ memory_mod|crates/app/src/memory/mod.rs|650|16|foundation
 acp_manager|crates/app/src/acp/manager.rs|3600|12|operational_density
 acpx_runtime|crates/app/src/acp/acpx.rs|2800|65|operational_density
 channel_registry|crates/app/src/channel/registry.rs|10000|90|structural_size
-channel_config|crates/app/src/config/channels.rs|8400|90|structural_size
+channel_config|crates/app/src/config/channels.rs|9000|90|structural_size
 chat_runtime|crates/app/src/chat.rs|7300|160|structural_size,operational_density
 channel_mod|crates/app/src/channel/mod.rs|6400|110|structural_size,operational_density
 turn_coordinator|crates/app/src/conversation/turn_coordinator.rs|11200|120|structural_size,operational_density
