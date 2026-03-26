@@ -40,6 +40,26 @@ use crate::session::repository::{
     NewSessionEvent, NewSessionRecord, SessionKind, SessionRepository, SessionState,
 };
 
+#[cfg(feature = "memory-sqlite")]
+const DEEP_DELEGATE_REENTRY_TEST_STACK_SIZE_BYTES: usize = 32 * 1024 * 1024;
+
+#[cfg(feature = "memory-sqlite")]
+fn run_conversation_test_on_large_stack<F>(thread_name: &str, operation: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    let thread_builder = std::thread::Builder::new();
+    let thread_builder = thread_builder.name(thread_name.to_owned());
+    let thread_builder = thread_builder.stack_size(DEEP_DELEGATE_REENTRY_TEST_STACK_SIZE_BYTES);
+    let join_handle = thread_builder
+        .spawn(operation)
+        .expect("spawn conversation test stack thread");
+    match join_handle.join() {
+        Ok(()) => {}
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
 struct FakeRuntime {
     seed_messages: Vec<Value>,
     assembled_context_with_system_prompt: Option<AssembledConversationContext>,
@@ -17136,8 +17156,20 @@ async fn handle_turn_with_runtime_delegate_child_cannot_reenter_delegate_async_b
 }
 
 #[cfg(feature = "memory-sqlite")]
-#[tokio::test]
-async fn handle_turn_with_runtime_delegate_child_can_reenter_when_max_depth_allows() {
+#[test]
+fn handle_turn_with_runtime_delegate_child_can_reenter_when_max_depth_allows() {
+    run_conversation_test_on_large_stack("conversation-delegate-reentry", || {
+        let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
+        runtime_builder.enable_all();
+        let runtime = runtime_builder.build().expect("build tokio runtime");
+        runtime.block_on(
+            handle_turn_with_runtime_delegate_child_can_reenter_when_max_depth_allows_impl(),
+        );
+    });
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn handle_turn_with_runtime_delegate_child_can_reenter_when_max_depth_allows_impl() {
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate", "nested-allowed")
