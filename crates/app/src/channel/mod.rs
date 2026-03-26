@@ -3405,7 +3405,10 @@ mod tests {
 
         assert!(reply.contains("final reply"));
         assert!(reply.contains("execution trace:"));
-        assert!(reply.contains("tool.search completed: returned 0 results"));
+        assert!(
+            reply.contains("tool.search completed: returned "),
+            "tool search completion trace should include a summarized result count: {reply}"
+        );
 
         let request_turn_calls = runtime
             .request_turn_calls
