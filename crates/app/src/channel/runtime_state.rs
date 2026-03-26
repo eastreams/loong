@@ -561,6 +561,11 @@ fn prune_inactive_channel_operation_runtime_files_for_optional_account_from_dir(
         match fs::remove_file(path.as_path()) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            // On Windows, another process/task may hold the file open, causing
+            // ERROR_ACCESS_DENIED (PermissionDenied). Unlike Unix, Windows does not
+            // allow unlinking an open file. Silently skip; the next prune cycle will retry.
+            #[cfg(windows)]
+            Err(ref error) if error.kind() == std::io::ErrorKind::PermissionDenied => {}
             Err(error) => {
                 return Err(format!(
                     "remove inactive channel runtime state failed for {}: {error}",
