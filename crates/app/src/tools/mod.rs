@@ -62,13 +62,15 @@ mod web_http;
 mod web_search;
 
 pub use catalog::{
-    ToolApprovalMode, ToolAvailability, ToolCatalog, ToolDescriptor, ToolExecutionKind,
-    ToolGovernanceProfile, ToolGovernanceScope, ToolRiskClass, ToolSchedulingClass, ToolView,
-    delegate_child_tool_view_for_config, delegate_child_tool_view_for_config_with_delegate,
-    governance_profile_for_descriptor, governance_profile_for_tool_name,
-    planned_delegate_child_tool_view, planned_root_tool_view, runtime_tool_view,
-    runtime_tool_view_for_config, runtime_tool_view_for_config_with_external_skills,
-    runtime_tool_view_for_runtime_config, tool_catalog,
+    CapabilityActionClass, ToolApprovalMode, ToolAvailability, ToolCatalog, ToolDescriptor,
+    ToolExecutionKind, ToolGovernanceProfile, ToolGovernanceScope, ToolRiskClass,
+    ToolSchedulingClass, ToolView, capability_action_class_for_descriptor,
+    capability_action_class_for_tool_name, delegate_child_tool_view_for_config,
+    delegate_child_tool_view_for_config_with_delegate, governance_profile_for_descriptor,
+    governance_profile_for_tool_name, planned_delegate_child_tool_view, planned_root_tool_view,
+    runtime_tool_view, runtime_tool_view_for_config,
+    runtime_tool_view_for_config_with_external_skills, runtime_tool_view_for_runtime_config,
+    tool_catalog,
 };
 #[cfg(feature = "feishu-integration")]
 pub(crate) use feishu::{DeferredFeishuCardUpdate, drain_deferred_feishu_card_updates};
