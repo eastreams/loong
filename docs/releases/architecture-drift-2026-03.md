@@ -1,20 +1,35 @@
 # Architecture Drift Report 2026-03
 
 ## Summary
-- Generated at: 2026-03-26T04:19:52Z
+- Generated at: 2026-03-26T10:39:50Z
 - Report month: `2026-03`
 - Baseline report: none
-- Hotspots tracked: 4
+- Hotspots tracked: 14
 - Boundary checks tracked: 4
 - SLO status: PASS
 
 ## Hotspot Metrics
-| Key | File | Lines | Max Lines | Line Headroom | Functions | Max Functions | Fn Headroom | Prev Lines | Line Growth | Growth SLO | Prev Functions |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|
-| spec_runtime | `crates/spec/src/spec_runtime.rs` | 3289 | 3600 | 311 | 48 | 65 | 17 | n/a | n/a | N/A | n/a |
-| spec_execution | `crates/spec/src/spec_execution.rs` | 2057 | 3700 | 1643 | 29 | 80 | 51 | n/a | n/a | N/A | n/a |
-| provider_mod | `crates/app/src/provider/mod.rs` | 375 | 1000 | 625 | 10 | 20 | 10 | n/a | n/a | N/A | n/a |
-| memory_mod | `crates/app/src/memory/mod.rs` | 356 | 650 | 294 | 14 | 16 | 2 | n/a | n/a | N/A | n/a |
+| Key | Classes | File | Lines | Max Lines | Line Headroom | Functions | Max Functions | Fn Headroom | Peak Usage | Pressure | Prev Lines | Line Growth | Growth SLO | Prev Functions |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---:|
+| spec_runtime | `foundation` | `crates/spec/src/spec_runtime.rs` | 3289 | 3600 | 311 | 48 | 65 | 17 | 91.4% | WATCH | n/a | n/a | N/A | n/a |
+| spec_execution | `foundation` | `crates/spec/src/spec_execution.rs` | 2057 | 3700 | 1643 | 29 | 80 | 51 | 55.6% | HEALTHY | n/a | n/a | N/A | n/a |
+| provider_mod | `foundation` | `crates/app/src/provider/mod.rs` | 375 | 1000 | 625 | 10 | 20 | 10 | 50.0% | HEALTHY | n/a | n/a | N/A | n/a |
+| memory_mod | `foundation` | `crates/app/src/memory/mod.rs` | 356 | 650 | 294 | 14 | 16 | 2 | 87.5% | WATCH | n/a | n/a | N/A | n/a |
+| acp_manager | `operational_density` | `crates/app/src/acp/manager.rs` | 3327 | 3600 | 273 | 8 | 12 | 4 | 92.4% | WATCH | n/a | n/a | N/A | n/a |
+| acpx_runtime | `operational_density` | `crates/app/src/acp/acpx.rs` | 2575 | 2800 | 225 | 55 | 65 | 10 | 92.0% | WATCH | n/a | n/a | N/A | n/a |
+| channel_registry | `structural_size` | `crates/app/src/channel/registry.rs` | 9504 | 10000 | 496 | 78 | 90 | 12 | 95.0% | TIGHT | n/a | n/a | N/A | n/a |
+| channel_config | `structural_size` | `crates/app/src/config/channels.rs` | 7967 | 8400 | 433 | 75 | 90 | 15 | 94.8% | WATCH | n/a | n/a | N/A | n/a |
+| chat_runtime | `structural_size,operational_density` | `crates/app/src/chat.rs` | 6808 | 7300 | 492 | 145 | 160 | 15 | 93.3% | WATCH | n/a | n/a | N/A | n/a |
+| channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 5968 | 6400 | 432 | 94 | 110 | 16 | 93.2% | WATCH | n/a | n/a | N/A | n/a |
+| turn_coordinator | `structural_size,operational_density` | `crates/app/src/conversation/turn_coordinator.rs` | 10690 | 11200 | 510 | 104 | 120 | 16 | 95.4% | TIGHT | n/a | n/a | N/A | n/a |
+| tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 14111 | 15000 | 889 | 54 | 70 | 16 | 94.1% | WATCH | n/a | n/a | N/A | n/a |
+| daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 5561 | 6000 | 439 | 170 | 190 | 20 | 92.7% | WATCH | n/a | n/a | N/A | n/a |
+| onboard_cli | `structural_size` | `crates/daemon/src/onboard_cli.rs` | 9232 | 9800 | 568 | 227 | 250 | 23 | 94.2% | WATCH | n/a | n/a | N/A | n/a |
+
+## Prioritization Signals
+- TIGHT hotspots (>=95% of any tracked budget): channel_registry (95.0%), turn_coordinator (95.4%)
+- WATCH hotspots (>=85% and <95% of any tracked budget): spec_runtime (91.4%), memory_mod (87.5%), acp_manager (92.4%), acpx_runtime (92.0%), channel_config (94.8%), chat_runtime (93.3%), channel_mod (93.2%), tools_mod (94.1%), daemon_lib (92.7%), onboard_cli (94.2%)
+- Mixed-class hotspots (size plus operational density): chat_runtime, channel_mod, turn_coordinator
 
 ## Boundary Checks
 | Check | Status | Previous Status | Detail |
@@ -43,6 +58,16 @@
 <!-- arch-hotspot key=spec_execution lines=2057 functions=29 -->
 <!-- arch-hotspot key=provider_mod lines=375 functions=10 -->
 <!-- arch-hotspot key=memory_mod lines=356 functions=14 -->
+<!-- arch-hotspot key=acp_manager lines=3327 functions=8 -->
+<!-- arch-hotspot key=acpx_runtime lines=2575 functions=55 -->
+<!-- arch-hotspot key=channel_registry lines=9504 functions=78 -->
+<!-- arch-hotspot key=channel_config lines=7967 functions=75 -->
+<!-- arch-hotspot key=chat_runtime lines=6808 functions=145 -->
+<!-- arch-hotspot key=channel_mod lines=5968 functions=94 -->
+<!-- arch-hotspot key=turn_coordinator lines=10690 functions=104 -->
+<!-- arch-hotspot key=tools_mod lines=14111 functions=54 -->
+<!-- arch-hotspot key=daemon_lib lines=5561 functions=170 -->
+<!-- arch-hotspot key=onboard_cli lines=9232 functions=227 -->
 <!-- arch-boundary key=memory_literals status=PASS -->
 <!-- arch-boundary key=provider_mod_helper_definitions status=PASS -->
 <!-- arch-boundary key=conversation_provider_optional_binding_roundtrip status=PASS -->

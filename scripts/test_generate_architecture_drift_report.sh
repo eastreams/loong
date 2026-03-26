@@ -31,8 +31,24 @@ run_no_baseline_test() {
   assert_contains "$output_file" "# Architecture Drift Report 2099-01"
   assert_contains "$output_file" "SLO status: PASS"
   assert_contains "$output_file" "Baseline report: none"
+  assert_contains "$output_file" "Hotspots tracked: 14"
+  assert_contains "$output_file" "| Key | Classes | File |"
   assert_contains "$output_file" "| spec_runtime |"
+  assert_contains "$output_file" "| channel_registry |"
+  assert_contains "$output_file" "| turn_coordinator |"
+  assert_contains "$output_file" "| onboard_cli |"
+  assert_contains "$output_file" "| tools_mod |"
+  assert_contains "$output_file" '`foundation`'
+  assert_contains "$output_file" '`structural_size,operational_density`'
+  assert_contains "$output_file" "## Prioritization Signals"
+  assert_contains "$output_file" "TIGHT hotspots (>=95% of any tracked budget)"
+  assert_contains "$output_file" "WATCH hotspots (>=85% and <95% of any tracked budget)"
+  assert_contains "$output_file" "Mixed-class hotspots (size plus operational density)"
+  assert_contains "$output_file" "turn_coordinator"
+  assert_contains "$output_file" "channel_registry"
   assert_contains "$output_file" "<!-- arch-hotspot key=spec_runtime"
+  assert_contains "$output_file" "<!-- arch-hotspot key=channel_registry"
+  assert_contains "$output_file" "<!-- arch-hotspot key=tools_mod"
   assert_contains "$output_file" "<!-- arch-boundary key=memory_literals status=PASS -->"
   assert_contains "$output_file" "<!-- arch-boundary key=provider_mod_helper_definitions status=PASS -->"
   assert_contains "$output_file" "<!-- arch-boundary key=spec_app_dependency status=PASS -->"
@@ -64,6 +80,8 @@ BASELINE
   assert_contains "$output_file" "Baseline report: $baseline_file"
   assert_contains "$output_file" "SLO status: FAIL"
   assert_contains "$output_file" "| spec_runtime |"
+  assert_contains "$output_file" "| chat_runtime |"
+  assert_contains "$output_file" "## Prioritization Signals"
   assert_contains "$output_file" "BREACH"
 }
 

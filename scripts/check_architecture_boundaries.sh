@@ -12,17 +12,32 @@ if [[ "$STRICT" != "true" && "$STRICT" != "false" ]]; then
 fi
 
 violations=0
+tight_hotspots=0
+watch_hotspots=0
+healthy_hotspots=0
 hotspot_rows="$(architecture_hotspot_rows)" || exit 1
 
-while IFS='|' read -r key file lines max_lines line_status functions max_functions fn_status; do
+while IFS='|' read -r key file classes lines max_lines line_status functions max_functions fn_status peak_usage pressure; do
   if [[ "$line_status" == "over" ]]; then
     violations=$((violations + 1))
   fi
   if [[ "$fn_status" == "over" ]]; then
     violations=$((violations + 1))
   fi
-  printf '[arch] %-16s lines=%4s/%-4s (%s) fns=%3s/%-3s (%s) file=%s\n' \
-    "$key" "$lines" "$max_lines" "$line_status" "$functions" "$max_functions" "$fn_status" "$file"
+  case "$pressure" in
+    TIGHT)
+      tight_hotspots=$((tight_hotspots + 1))
+      ;;
+    WATCH)
+      watch_hotspots=$((watch_hotspots + 1))
+      ;;
+    HEALTHY)
+      healthy_hotspots=$((healthy_hotspots + 1))
+      ;;
+  esac
+  printf '[arch] %-16s class=%-36s pressure=%-7s peak=%6s lines=%4s/%-5s (%s) fns=%3s/%-3s (%s) file=%s\n' \
+    "$key" "$classes" "$pressure" "$peak_usage" "$lines" "$max_lines" "$line_status" "$functions" "$max_functions" \
+    "$fn_status" "$file"
 done <<EOF_ROWS
 ${hotspot_rows}
 EOF_ROWS
@@ -40,6 +55,8 @@ while IFS= read -r boundary_key; do
 done <<EOF_BOUNDARIES
 $(architecture_boundary_check_keys)
 EOF_BOUNDARIES
+
+echo "[arch] pressure summary: tight=${tight_hotspots} watch=${watch_hotspots} healthy=${healthy_hotspots}"
 
 if (( violations > 0 )); then
   if [[ "$STRICT" == "true" ]]; then

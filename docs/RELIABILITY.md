@@ -23,7 +23,7 @@ optional `scripts/pre-commit` hook mirrors these cargo gates locally.
 
 ## Architecture Stability Guardrails
 
-1. **Complexity budgets are locally machine-checkable** — run `./scripts/check_architecture_boundaries.sh` or `task check:architecture` to inspect module line/function budgets for architecture hotspots (`spec_runtime`, `spec_execution`, `provider/mod`, `memory/mod`).
+1. **Complexity budgets are locally machine-checkable** — run `./scripts/check_architecture_boundaries.sh` or `task check:architecture` to inspect module line/function budgets for architecture hotspots (`spec_runtime`, `spec_execution`, `provider/mod`, `memory/mod`, `acp/manager`, `acp/acpx`, `channel/registry`, `config/channels`, `chat`, `channel/mod`, `conversation/turn_coordinator`, `tools/mod`, `daemon/lib`, `daemon/onboard_cli`). The generated drift report also classifies each hotspot by `foundation`, `structural_size`, and `operational_density` pressure so release reviews can distinguish large-surface drift from runtime-density risk.
 2. **Memory operation literals are boundary-guarded** — memory core operation strings (`append_turn`, `window`, `clear_session`) must remain centralized in `crates/app/src/memory/*` and never spread into callsites.
 3. **`spec` stays detached from `app`** — the architecture guardrails treat any direct `loongclaw-app` dependency in `crates/spec/Cargo.toml` as a boundary regression, and `./scripts/check_dep_graph.sh` must stay green.
 4. **Strict enforcement is an extended local gate** — use `task check:architecture:strict` (or set `LOONGCLAW_ARCH_STRICT=true`) to make architecture budget violations fail non-zero. This check is part of `task verify:full`, not the canonical CI-parity gate.

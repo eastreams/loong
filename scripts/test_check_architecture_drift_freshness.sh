@@ -4,6 +4,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_UNDER_TEST="$REPO_ROOT/scripts/check_architecture_drift_freshness.sh"
 
+. "$REPO_ROOT/scripts/architecture_budget_lib.sh"
+
 assert_contains() {
   local file="$1"
   local needle="$2"
@@ -20,10 +22,10 @@ make_fixture_repo() {
 
   mkdir -p \
     "$fixture/scripts" \
+    "$fixture/crates/app/src" \
     "$fixture/crates/spec/src" \
     "$fixture/crates/spec" \
-    "$fixture/crates/app/src/provider" \
-    "$fixture/crates/app/src/memory" \
+    "$fixture/crates/daemon/src" \
     "$fixture/docs/releases"
 
   cp "$REPO_ROOT/scripts/architecture_budget_lib.sh" "$fixture/scripts/architecture_budget_lib.sh"
@@ -34,29 +36,51 @@ make_fixture_repo() {
     "$fixture/scripts/generate_architecture_drift_report.sh" \
     "$fixture/scripts/check_architecture_drift_freshness.sh"
 
-  cp "$REPO_ROOT/crates/spec/src/spec_runtime.rs" "$fixture/crates/spec/src/spec_runtime.rs"
-  cp "$REPO_ROOT/crates/spec/src/spec_execution.rs" "$fixture/crates/spec/src/spec_execution.rs"
-  cp "$REPO_ROOT/crates/spec/Cargo.toml" "$fixture/crates/spec/Cargo.toml"
-  cp "$REPO_ROOT/crates/app/src/provider/mod.rs" "$fixture/crates/app/src/provider/mod.rs"
-  cp "$REPO_ROOT/crates/app/src/memory/mod.rs" "$fixture/crates/app/src/memory/mod.rs"
+  copy_hotspot_fixture_files "$fixture"
+  copy_boundary_fixture_files "$fixture"
 
   (
     cd "$fixture"
     git init -q
     git config user.name "Codex Test"
     git config user.email "codex@example.com"
-    git add scripts/architecture_budget_lib.sh \
-      scripts/generate_architecture_drift_report.sh \
-      scripts/check_architecture_drift_freshness.sh \
-      crates/spec/src/spec_runtime.rs \
-      crates/spec/src/spec_execution.rs \
-      crates/spec/Cargo.toml \
-      crates/app/src/provider/mod.rs \
-      crates/app/src/memory/mod.rs
+    git add .
     git commit -qm "seed source inputs"
   )
 
   printf '%s\n' "$fixture"
+}
+
+copy_hotspot_fixture_files() {
+  local fixture="$1"
+  local key spec file
+
+  while IFS= read -r key; do
+    [[ -z "$key" ]] && continue
+    spec="$(architecture_hotspot_spec "$key")" || exit 1
+    IFS='|' read -r file _max_lines _max_functions <<EOF_SPEC
+$spec
+EOF_SPEC
+    mkdir -p "$fixture/$(dirname "$file")"
+    cp "$REPO_ROOT/$file" "$fixture/$file"
+  done <<EOF_KEYS
+$(architecture_hotspot_keys)
+EOF_KEYS
+}
+
+copy_boundary_fixture_files() {
+  local fixture="$1"
+
+  mkdir -p \
+    "$fixture/crates/spec" \
+    "$fixture/crates/app/src/provider" \
+    "$fixture/crates/app/src/memory" \
+    "$fixture/crates/app/src/conversation"
+
+  cp "$REPO_ROOT/crates/spec/Cargo.toml" "$fixture/crates/spec/Cargo.toml"
+  cp "$REPO_ROOT/crates/app/src/provider/mod.rs" "$fixture/crates/app/src/provider/mod.rs"
+  cp "$REPO_ROOT/crates/app/src/memory/mod.rs" "$fixture/crates/app/src/memory/mod.rs"
+  cp "$REPO_ROOT/crates/app/src/conversation/runtime.rs" "$fixture/crates/app/src/conversation/runtime.rs"
 }
 
 run_fresh_report_passes_test() {
