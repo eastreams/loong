@@ -75,7 +75,17 @@ mod tests {
 
         assert_eq!(config.mode, AuditMode::Fanout);
         assert!(config.retain_in_memory);
-        assert!(config.path.ends_with(".loongclaw/audit/events.jsonl"));
+        let expected_suffix = std::path::Path::new(".loongclaw")
+            .join("audit")
+            .join("events.jsonl");
+        assert!(
+            config
+                .path
+                .ends_with(&expected_suffix.display().to_string()),
+            "audit path {} should end with {}",
+            config.path,
+            expected_suffix.display(),
+        );
     }
 
     #[test]

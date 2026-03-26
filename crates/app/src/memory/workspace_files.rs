@@ -200,7 +200,7 @@ fn collect_document_if_present(
 pub(crate) fn workspace_memory_label(workspace_root: &Path, path: &Path) -> String {
     let relative_path = path.strip_prefix(workspace_root).ok();
     let display_path = relative_path.unwrap_or(path);
-    display_path.display().to_string()
+    display_path.display().to_string().replace('\\', "/")
 }
 
 fn parse_daily_log_date(path: &Path) -> Option<NaiveDate> {
