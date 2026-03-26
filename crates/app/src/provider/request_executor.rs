@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use axum::body::Bytes;
+use bytes::Bytes;
 use futures_util::Stream;
 use serde_json::Value;
 use tokio::time::sleep;

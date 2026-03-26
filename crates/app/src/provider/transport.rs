@@ -13,7 +13,7 @@ use aws_sigv4::{
     http_request::{self, SignableBody, SignableRequest, SigningSettings},
     sign::v4,
 };
-use axum::body::Bytes;
+use bytes::Bytes;
 use futures_util::Stream;
 use futures_util::StreamExt;
 use reqwest::header::{
@@ -456,7 +456,7 @@ pub(super) fn decode_streaming_response(
 ) -> impl Stream<Item = Result<Bytes, RequestExecutionError>> + Unpin {
     response
         .bytes_stream()
-        .map(|result: Result<axum::body::Bytes, reqwest::Error>| {
+        .map(|result: Result<Bytes, reqwest::Error>| {
             result.map_err(RequestExecutionError::Transport)
         })
 }
