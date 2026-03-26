@@ -61,12 +61,14 @@ pub struct PluginIR {
     pub runtime: PluginRuntimeProfile,
 }
 
+/// Declares which setup requirements are already verified for a plugin.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct PluginSetupReadinessContext {
     pub verified_env_vars: BTreeSet<String>,
     pub verified_config_keys: BTreeSet<String>,
 }
 
+/// Summarizes whether manifest-declared setup requirements are satisfied.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginSetupReadiness {
     pub ready: bool,
@@ -84,6 +86,18 @@ impl Default for PluginSetupReadiness {
     }
 }
 
+fn env_var_names_match(verified_name: &str, required_name: &str) -> bool {
+    #[cfg(windows)]
+    {
+        verified_name.eq_ignore_ascii_case(required_name)
+    }
+    #[cfg(not(windows))]
+    {
+        verified_name == required_name
+    }
+}
+
+/// Evaluates manifest-declared setup requirements against verified runtime context.
 pub fn evaluate_plugin_setup_requirements(
     required_env_vars: &[String],
     required_config_keys: &[String],
@@ -91,7 +105,10 @@ pub fn evaluate_plugin_setup_requirements(
 ) -> PluginSetupReadiness {
     let mut missing_required_env_vars = Vec::new();
     for required_env_var in required_env_vars {
-        let env_var_is_verified = context.verified_env_vars.contains(required_env_var);
+        let env_var_is_verified = context
+            .verified_env_vars
+            .iter()
+            .any(|verified_env_var| env_var_names_match(verified_env_var, required_env_var));
         if !env_var_is_verified {
             missing_required_env_vars.push(required_env_var.clone());
         }
@@ -123,15 +140,22 @@ pub struct PluginTranslationReport {
     pub entries: Vec<PluginIR>,
 }
 
+/// Contract-facing activation status for manifest-backed plugin planning.
+///
+/// Compatibility note: this enum is additive over time. Consumers that decode
+/// serialized activation payloads should handle newly introduced variants
+/// conservatively.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginActivationStatus {
     Ready,
+    /// The runtime can host the plugin, but required setup is still missing.
     SetupIncomplete,
     BlockedUnsupportedBridge,
     BlockedUnsupportedAdapterFamily,
 }
 
+/// Captures activation planning details for a single plugin candidate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginActivationCandidate {
     pub plugin_id: String,
@@ -143,15 +167,19 @@ pub struct PluginActivationCandidate {
     pub adapter_family: String,
     pub status: PluginActivationStatus,
     pub reason: String,
+    #[serde(default)]
     pub missing_required_env_vars: Vec<String>,
+    #[serde(default)]
     pub missing_required_config_keys: Vec<String>,
     pub bootstrap_hint: String,
 }
 
+/// Summarizes activation readiness across all translated plugin candidates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct PluginActivationPlan {
     pub total_plugins: usize,
     pub ready_plugins: usize,
+    #[serde(default)]
     pub setup_incomplete_plugins: usize,
     pub blocked_plugins: usize,
     pub candidates: Vec<PluginActivationCandidate>,
@@ -695,6 +723,62 @@ mod tests {
             plan.candidates[0].missing_required_config_keys,
             vec!["tools.web_search.default_provider".to_owned()]
         );
+    }
+
+    #[test]
+    fn evaluate_plugin_setup_requirements_uses_platform_env_name_rules() {
+        let required_env_vars = vec!["PATH".to_owned()];
+        let required_config_keys = Vec::new();
+        let context = PluginSetupReadinessContext {
+            verified_env_vars: BTreeSet::from(["Path".to_owned()]),
+            verified_config_keys: BTreeSet::new(),
+        };
+
+        let readiness =
+            evaluate_plugin_setup_requirements(&required_env_vars, &required_config_keys, &context);
+
+        #[cfg(windows)]
+        {
+            assert!(readiness.ready);
+            assert!(readiness.missing_required_env_vars.is_empty());
+        }
+
+        #[cfg(not(windows))]
+        {
+            assert!(!readiness.ready);
+            assert_eq!(readiness.missing_required_env_vars, required_env_vars);
+        }
+    }
+
+    #[test]
+    fn activation_plan_deserializes_legacy_payloads_without_setup_fields() {
+        let legacy_payload = r#"{
+            "total_plugins": 1,
+            "ready_plugins": 1,
+            "blocked_plugins": 0,
+            "candidates": [
+                {
+                    "plugin_id": "sample-plugin",
+                    "source_path": "/tmp/plugin.py",
+                    "source_kind": "embedded_source",
+                    "package_root": "/tmp",
+                    "package_manifest_path": null,
+                    "bridge_kind": "http_json",
+                    "adapter_family": "http-adapter",
+                    "status": "ready",
+                    "reason": "plugin runtime profile is supported by current runtime matrix",
+                    "bootstrap_hint": "register http connector adapter"
+                }
+            ]
+        }"#;
+
+        let plan: PluginActivationPlan =
+            serde_json::from_str(legacy_payload).expect("legacy payload should deserialize");
+
+        assert_eq!(plan.setup_incomplete_plugins, 0);
+        assert_eq!(plan.candidates.len(), 1);
+        assert!(plan.candidates[0].missing_required_env_vars.is_empty());
+        assert!(plan.candidates[0].missing_required_config_keys.is_empty());
     }
 
     #[test]

@@ -1138,10 +1138,9 @@ async fn execute_spec_surfaces_setup_incomplete_plugins_without_marking_them_rea
         std::env::temp_dir().join(format!("loongclaw-plugin-setup-incomplete-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
+    let required_env_var = format!("LOONGCLAW_TEST_MISSING_ENV_{unique}");
     let plugin_file = plugin_root.join("tavily_search.py");
-    fs::write(
-        &plugin_file,
-        r#"
+    let plugin_manifest = r#"
 # LOONGCLAW_PLUGIN_START
 # {
 #   "plugin_id": "tavily-search",
@@ -1155,15 +1154,15 @@ async fn execute_spec_surfaces_setup_incomplete_plugins_without_marking_them_rea
 #   "setup": {
 #     "mode": "metadata_only",
 #     "surface": "web_search",
-#     "required_env_vars": ["TAVILY_API_KEY"],
+#     "required_env_vars": ["__REQUIRED_ENV_VAR__"],
 #     "required_config_keys": ["tools.web_search.default_provider"],
 #     "remediation": "configure tavily before enabling search"
 #   }
 # }
 # LOONGCLAW_PLUGIN_END
-"#,
-    )
-    .expect("write plugin file");
+"#;
+    let plugin_manifest = plugin_manifest.replace("__REQUIRED_ENV_VAR__", &required_env_var);
+    fs::write(&plugin_file, &plugin_manifest).expect("write plugin file");
 
     let spec = RunnerSpec {
         pack: VerticalPackManifest {
@@ -1231,7 +1230,7 @@ async fn execute_spec_surfaces_setup_incomplete_plugins_without_marking_them_rea
     assert_eq!(report.outcome["results"][0]["setup_ready"], false);
     assert_eq!(
         report.outcome["results"][0]["missing_required_env_vars"][0],
-        "TAVILY_API_KEY"
+        required_env_var
     );
     assert_eq!(
         report.outcome["results"][0]["missing_required_config_keys"][0],
