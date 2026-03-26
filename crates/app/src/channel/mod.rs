@@ -244,6 +244,7 @@ mod telegram;
 mod turn_feedback;
 #[cfg(feature = "channel-webhook")]
 mod webhook;
+mod webhook_auth;
 #[cfg(feature = "channel-wecom")]
 mod wecom;
 #[cfg(feature = "channel-whatsapp")]

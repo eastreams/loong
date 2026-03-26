@@ -23,7 +23,10 @@ use crate::config::{
     WHATSAPP_VERIFY_TOKEN_ENV, WebhookPayloadFormat,
 };
 
-use super::{ChannelCatalogTargetKind, ChannelOperationRuntime, ChannelPlatform, runtime_state};
+use super::{
+    ChannelCatalogTargetKind, ChannelOperationRuntime, ChannelPlatform, runtime_state,
+    webhook_auth::build_webhook_auth_header_from_parts,
+};
 
 pub const CHANNEL_OPERATION_SEND_ID: &str = "send";
 pub const CHANNEL_OPERATION_SERVE_ID: &str = "serve";
@@ -4871,7 +4874,7 @@ fn build_webhook_snapshot_for_account(
     }
 
     let auth_token = resolved.auth_token();
-    let auth_validation = super::webhook::build_webhook_auth_header_from_parts(
+    let auth_validation = build_webhook_auth_header_from_parts(
         auth_token.as_deref(),
         resolved.auth_header_name.as_str(),
         resolved.auth_token_prefix.as_str(),
