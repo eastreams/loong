@@ -237,15 +237,17 @@ background runtime:
 1. Add static operation descriptors with capability, availability, doctor, and
    requirement metadata.
 2. Add an SDK integration descriptor that wires shared config metadata,
-   validation, enablement, and the registry descriptor.
-3. Implement a snapshot builder that emits per-account config readiness without
+   validation, and enablement for the shipped surface.
+3. Add a registry descriptor in the registry integration path so catalog,
+   doctor, and operator inventory surfaces can consume the new channel.
+4. Implement a snapshot builder that emits per-account config readiness without
    attaching fake runtime state.
-4. Mark shipped operations as `implemented` and unshipped runtime operations as
+5. Mark shipped operations as `implemented` and unshipped runtime operations as
    `stub` or `unsupported`, depending on whether the capability is planned or
    impossible in the current architecture.
-5. Verify that `channel_catalog`, `channel_surfaces`, text rendering, and
+6. Verify that `channel_catalog`, `channel_surfaces`, text rendering, and
    `doctor` all pick up the new metadata through shared inventory assembly.
-6. Add regression tests for registry lookup, JSON surfaces, text rendering,
+7. Add regression tests for registry lookup, JSON surfaces, text rendering,
    and config/service descriptor order.
 
 ### Adding A New Stub Channel

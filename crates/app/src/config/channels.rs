@@ -687,11 +687,11 @@ pub struct SignalAccountConfig {
     pub account_id: Option<String>,
     #[serde(default, rename = "account")]
     pub signal_account: Option<String>,
-    #[serde(default, rename = "account_env")]
+    #[serde(default = "default_signal_account_env", rename = "account_env")]
     pub signal_account_env: Option<String>,
     #[serde(default)]
     pub service_url: Option<String>,
-    #[serde(default)]
+    #[serde(default = "default_signal_service_url_env")]
     pub service_url_env: Option<String>,
 }
 
@@ -716,7 +716,12 @@ impl ResolvedSignalChannelConfig {
     }
 
     pub fn service_url(&self) -> Option<String> {
-        resolve_string_with_legacy_env(self.service_url.as_deref(), self.service_url_env.as_deref())
+        let resolved_service_url = resolve_string_with_legacy_env(
+            self.service_url.as_deref(),
+            self.service_url_env.as_deref(),
+        );
+        let service_url = resolved_service_url.unwrap_or_else(default_signal_service_url);
+        Some(service_url)
     }
 }
 
@@ -728,19 +733,19 @@ pub struct WhatsappAccountConfig {
     pub account_id: Option<String>,
     #[serde(default)]
     pub access_token: Option<SecretRef>,
-    #[serde(default)]
+    #[serde(default = "default_whatsapp_access_token_env")]
     pub access_token_env: Option<String>,
     #[serde(default)]
     pub phone_number_id: Option<String>,
-    #[serde(default)]
+    #[serde(default = "default_whatsapp_phone_number_id_env")]
     pub phone_number_id_env: Option<String>,
     #[serde(default)]
     pub verify_token: Option<SecretRef>,
-    #[serde(default)]
+    #[serde(default = "default_whatsapp_verify_token_env")]
     pub verify_token_env: Option<String>,
     #[serde(default)]
     pub app_secret: Option<SecretRef>,
-    #[serde(default)]
+    #[serde(default = "default_whatsapp_app_secret_env")]
     pub app_secret_env: Option<String>,
     #[serde(default)]
     pub api_base_url: Option<String>,
@@ -794,6 +799,7 @@ impl ResolvedWhatsappChannelConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct DiscordChannelConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -803,7 +809,7 @@ pub struct DiscordChannelConfig {
     pub default_account: Option<String>,
     #[serde(default)]
     pub bot_token: Option<SecretRef>,
-    #[serde(default)]
+    #[serde(default = "default_discord_bot_token_env")]
     pub bot_token_env: Option<String>,
     #[serde(default)]
     pub api_base_url: Option<String>,
@@ -812,6 +818,7 @@ pub struct DiscordChannelConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct SlackChannelConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -821,7 +828,7 @@ pub struct SlackChannelConfig {
     pub default_account: Option<String>,
     #[serde(default)]
     pub bot_token: Option<SecretRef>,
-    #[serde(default)]
+    #[serde(default = "default_slack_bot_token_env")]
     pub bot_token_env: Option<String>,
     #[serde(default)]
     pub api_base_url: Option<String>,
@@ -830,6 +837,7 @@ pub struct SlackChannelConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct SignalChannelConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -839,17 +847,18 @@ pub struct SignalChannelConfig {
     pub default_account: Option<String>,
     #[serde(default, rename = "account")]
     pub signal_account: Option<String>,
-    #[serde(default, rename = "account_env")]
+    #[serde(default = "default_signal_account_env", rename = "account_env")]
     pub signal_account_env: Option<String>,
     #[serde(default)]
     pub service_url: Option<String>,
-    #[serde(default)]
+    #[serde(default = "default_signal_service_url_env")]
     pub service_url_env: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, SignalAccountConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct WhatsappChannelConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -859,19 +868,19 @@ pub struct WhatsappChannelConfig {
     pub default_account: Option<String>,
     #[serde(default)]
     pub access_token: Option<SecretRef>,
-    #[serde(default)]
+    #[serde(default = "default_whatsapp_access_token_env")]
     pub access_token_env: Option<String>,
     #[serde(default)]
     pub phone_number_id: Option<String>,
-    #[serde(default)]
+    #[serde(default = "default_whatsapp_phone_number_id_env")]
     pub phone_number_id_env: Option<String>,
     #[serde(default)]
     pub verify_token: Option<SecretRef>,
-    #[serde(default)]
+    #[serde(default = "default_whatsapp_verify_token_env")]
     pub verify_token_env: Option<String>,
     #[serde(default)]
     pub app_secret: Option<SecretRef>,
-    #[serde(default)]
+    #[serde(default = "default_whatsapp_app_secret_env")]
     pub app_secret_env: Option<String>,
     #[serde(default)]
     pub api_base_url: Option<String>,
@@ -1248,7 +1257,7 @@ impl Default for SignalChannelConfig {
             default_account: None,
             signal_account: None,
             signal_account_env: Some(SIGNAL_ACCOUNT_ENV.to_owned()),
-            service_url: Some(default_signal_service_url()),
+            service_url: None,
             service_url_env: Some(SIGNAL_SERVICE_URL_ENV.to_owned()),
             accounts: BTreeMap::new(),
         }
@@ -2373,7 +2382,12 @@ impl SignalChannelConfig {
     }
 
     pub fn service_url(&self) -> Option<String> {
-        resolve_string_with_legacy_env(self.service_url.as_deref(), self.service_url_env.as_deref())
+        let resolved_service_url = resolve_string_with_legacy_env(
+            self.service_url.as_deref(),
+            self.service_url_env.as_deref(),
+        );
+        let service_url = resolved_service_url.unwrap_or_else(default_signal_service_url);
+        Some(service_url)
     }
 
     pub fn configured_account_ids(&self) -> Vec<String> {
@@ -2831,16 +2845,48 @@ fn default_discord_api_base_url() -> String {
     "https://discord.com/api/v10".to_owned()
 }
 
+fn default_discord_bot_token_env() -> Option<String> {
+    Some(DISCORD_BOT_TOKEN_ENV.to_owned())
+}
+
 fn default_signal_service_url() -> String {
     "http://127.0.0.1:8080".to_owned()
+}
+
+fn default_signal_account_env() -> Option<String> {
+    Some(SIGNAL_ACCOUNT_ENV.to_owned())
+}
+
+fn default_signal_service_url_env() -> Option<String> {
+    Some(SIGNAL_SERVICE_URL_ENV.to_owned())
 }
 
 fn default_slack_api_base_url() -> String {
     "https://slack.com/api".to_owned()
 }
 
+fn default_slack_bot_token_env() -> Option<String> {
+    Some(SLACK_BOT_TOKEN_ENV.to_owned())
+}
+
 fn default_whatsapp_api_base_url() -> String {
     "https://graph.facebook.com/v25.0".to_owned()
+}
+
+fn default_whatsapp_access_token_env() -> Option<String> {
+    Some(WHATSAPP_ACCESS_TOKEN_ENV.to_owned())
+}
+
+fn default_whatsapp_phone_number_id_env() -> Option<String> {
+    Some(WHATSAPP_PHONE_NUMBER_ID_ENV.to_owned())
+}
+
+fn default_whatsapp_verify_token_env() -> Option<String> {
+    Some(WHATSAPP_VERIFY_TOKEN_ENV.to_owned())
+}
+
+fn default_whatsapp_app_secret_env() -> Option<String> {
+    Some(WHATSAPP_APP_SECRET_ENV.to_owned())
 }
 
 fn default_system_prompt() -> String {
@@ -4224,6 +4270,82 @@ mod tests {
         assert_eq!(
             service_url.as_deref(),
             Some("http://signal.example.test:8080")
+        );
+    }
+
+    #[test]
+    fn discord_partial_deserialization_keeps_default_env_pointer() {
+        let config: DiscordChannelConfig = serde_json::from_value(json!({
+            "enabled": true
+        }))
+        .expect("deserialize discord config");
+
+        assert_eq!(config.bot_token_env.as_deref(), Some(DISCORD_BOT_TOKEN_ENV));
+    }
+
+    #[test]
+    fn slack_partial_deserialization_keeps_default_env_pointer() {
+        let config: SlackChannelConfig = serde_json::from_value(json!({
+            "enabled": true
+        }))
+        .expect("deserialize slack config");
+
+        assert_eq!(config.bot_token_env.as_deref(), Some(SLACK_BOT_TOKEN_ENV));
+    }
+
+    #[test]
+    fn signal_partial_deserialization_keeps_default_env_pointers() {
+        let config: SignalChannelConfig = serde_json::from_value(json!({
+            "enabled": true
+        }))
+        .expect("deserialize signal config");
+
+        assert_eq!(
+            config.signal_account_env.as_deref(),
+            Some(SIGNAL_ACCOUNT_ENV)
+        );
+        assert_eq!(
+            config.service_url_env.as_deref(),
+            Some(SIGNAL_SERVICE_URL_ENV)
+        );
+    }
+
+    #[test]
+    fn whatsapp_partial_deserialization_keeps_default_env_pointers() {
+        let config: WhatsappChannelConfig = serde_json::from_value(json!({
+            "enabled": true
+        }))
+        .expect("deserialize whatsapp config");
+
+        assert_eq!(
+            config.access_token_env.as_deref(),
+            Some(WHATSAPP_ACCESS_TOKEN_ENV)
+        );
+        assert_eq!(
+            config.phone_number_id_env.as_deref(),
+            Some(WHATSAPP_PHONE_NUMBER_ID_ENV)
+        );
+        assert_eq!(
+            config.verify_token_env.as_deref(),
+            Some(WHATSAPP_VERIFY_TOKEN_ENV)
+        );
+        assert_eq!(
+            config.app_secret_env.as_deref(),
+            Some(WHATSAPP_APP_SECRET_ENV)
+        );
+    }
+
+    #[test]
+    fn signal_default_service_url_env_override_wins_over_fallback() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("SIGNAL_SERVICE_URL", "http://signal.override.test:8080");
+
+        let config = SignalChannelConfig::default();
+        let service_url = config.service_url();
+
+        assert_eq!(
+            service_url.as_deref(),
+            Some("http://signal.override.test:8080")
         );
     }
 

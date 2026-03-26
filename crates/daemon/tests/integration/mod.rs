@@ -517,6 +517,17 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         channel_serve_command("slack")
     )));
     assert!(rendered.contains(
+        "WhatsApp [whatsapp] implementation_status=config_backed selection_order=90 selection_label=\"business messaging app\" capabilities=multi_account,send aliases=wa,whatsapp-cloud transport=whatsapp_cloud_api target_kinds=address configured_accounts=1 default_configured_account=default"
+    ));
+    assert!(rendered.contains(&format!(
+        "op send ({}) disabled: disabled by whatsapp account configuration target_kinds=address requirements=enabled,access_token,phone_number_id",
+        channel_send_command("whatsapp")
+    )));
+    assert!(rendered.contains(&format!(
+        "op serve ({}) unsupported: whatsapp serve runtime is not implemented yet target_kinds=address requirements=enabled,access_token,phone_number_id,verify_token,app_secret",
+        channel_serve_command("whatsapp")
+    )));
+    assert!(rendered.contains(
         "LINE [line] implementation_status=stub selection_order=60 selection_label=\"consumer messaging bot\""
     ));
     assert!(rendered.contains(
@@ -530,6 +541,9 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
     ));
     assert!(rendered.contains(
         "op send (signal-send) disabled: disabled by signal account configuration target_kinds=address requirements=enabled,service_url,account"
+    ));
+    assert!(rendered.contains(
+        "op serve (signal-serve) unsupported: signal serve runtime is not implemented yet target_kinds=address requirements=enabled,service_url,account"
     ));
     assert!(rendered.contains(
         "Webhook [webhook] implementation_status=stub selection_order=110 selection_label=\"generic http integration\""
@@ -947,6 +961,60 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
             .expect("channel catalog array")
             .iter()
             .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("slack")
+                    && entry
+                        .get("implementation_status")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("config_backed")
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["conversation"])
+                    && entry
+                        .get("selection_order")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(50)
+            })
+    );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("whatsapp")
+                    && entry
+                        .get("implementation_status")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("config_backed")
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["address"])
+                    && entry
+                        .get("selection_order")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(90)
+            })
+    );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
                 entry.get("id").and_then(serde_json::Value::as_str) == Some("webhook")
                     && entry
                         .get("supported_target_kinds")
@@ -1065,6 +1133,126 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
                         .collect::<Vec<_>>()
                 })
                 == Some(channel_supported_target_kinds("telegram"))
+            && surface
+                .get("configured_accounts")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len)
+                == Some(1)
+    }));
+
+    assert!(surfaces.iter().any(|surface| {
+        surface
+            .get("catalog")
+            .and_then(|catalog| catalog.get("id"))
+            .and_then(serde_json::Value::as_str)
+            == Some("slack")
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("capabilities"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_capability_ids("slack"))
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("supported_target_kinds"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_supported_target_kinds("slack"))
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("selection_order"))
+                .and_then(serde_json::Value::as_u64)
+                == Some(50)
+            && surface
+                .get("configured_accounts")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len)
+                == Some(1)
+    }));
+
+    assert!(surfaces.iter().any(|surface| {
+        surface
+            .get("catalog")
+            .and_then(|catalog| catalog.get("id"))
+            .and_then(serde_json::Value::as_str)
+            == Some("whatsapp")
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("capabilities"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_capability_ids("whatsapp"))
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("supported_target_kinds"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_supported_target_kinds("whatsapp"))
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("selection_order"))
+                .and_then(serde_json::Value::as_u64)
+                == Some(90)
+            && surface
+                .get("configured_accounts")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len)
+                == Some(1)
+    }));
+
+    assert!(surfaces.iter().any(|surface| {
+        surface
+            .get("catalog")
+            .and_then(|catalog| catalog.get("id"))
+            .and_then(serde_json::Value::as_str)
+            == Some("signal")
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("capabilities"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_capability_ids("signal"))
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("supported_target_kinds"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_supported_target_kinds("signal"))
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("selection_order"))
+                .and_then(serde_json::Value::as_u64)
+                == Some(130)
             && surface
                 .get("configured_accounts")
                 .and_then(serde_json::Value::as_array)

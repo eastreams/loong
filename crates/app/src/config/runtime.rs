@@ -1002,6 +1002,9 @@ fn canonicalize_channel_configs_for_encoding(config: &mut LoongClawConfig) {
     canonicalize_feishu_channel_for_encoding(&mut config.feishu);
     canonicalize_matrix_channel_for_encoding(&mut config.matrix);
     canonicalize_wecom_channel_for_encoding(&mut config.wecom);
+    canonicalize_discord_channel_for_encoding(&mut config.discord);
+    canonicalize_slack_channel_for_encoding(&mut config.slack);
+    canonicalize_whatsapp_channel_for_encoding(&mut config.whatsapp);
 }
 
 fn canonicalize_telegram_channel_for_encoding(config: &mut TelegramChannelConfig) {
@@ -1045,6 +1048,34 @@ fn canonicalize_wecom_channel_for_encoding(config: &mut WecomChannelConfig) {
     for account in config.accounts.values_mut() {
         canonicalize_env_secret_reference(&mut account.bot_id, &mut account.bot_id_env);
         canonicalize_env_secret_reference(&mut account.secret, &mut account.secret_env);
+    }
+}
+
+fn canonicalize_discord_channel_for_encoding(config: &mut DiscordChannelConfig) {
+    canonicalize_env_secret_reference(&mut config.bot_token, &mut config.bot_token_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(&mut account.bot_token, &mut account.bot_token_env);
+    }
+}
+
+fn canonicalize_slack_channel_for_encoding(config: &mut SlackChannelConfig) {
+    canonicalize_env_secret_reference(&mut config.bot_token, &mut config.bot_token_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(&mut account.bot_token, &mut account.bot_token_env);
+    }
+}
+
+fn canonicalize_whatsapp_channel_for_encoding(config: &mut WhatsappChannelConfig) {
+    canonicalize_env_secret_reference(&mut config.access_token, &mut config.access_token_env);
+    canonicalize_env_secret_reference(&mut config.verify_token, &mut config.verify_token_env);
+    canonicalize_env_secret_reference(&mut config.app_secret, &mut config.app_secret_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(&mut account.access_token, &mut account.access_token_env);
+        canonicalize_env_secret_reference(&mut account.verify_token, &mut account.verify_token_env);
+        canonicalize_env_secret_reference(&mut account.app_secret, &mut account.app_secret_env);
     }
 }
 
@@ -2685,6 +2716,47 @@ model = "gpt-5"
         assert!(!raw.contains("secret_env = \" WECOM_SECRET \""));
         assert!(!raw.contains("bot_id = \"${WECOM_BOT_ID}\""));
         assert!(!raw.contains("secret = \"${WECOM_SECRET}\""));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_canonicalizes_matching_config_backed_channel_env_name_fields() {
+        let path = unique_config_path("loongclaw-config-runtime-trimmed-config-backed-env");
+        let path_string = path.display().to_string();
+        let mut config = LoongClawConfig::default();
+
+        config.discord.bot_token = Some(SecretRef::Inline("${DISCORD_BOT_TOKEN}".to_owned()));
+        config.discord.bot_token_env = Some(" DISCORD_BOT_TOKEN ".to_owned());
+
+        config.slack.bot_token = Some(SecretRef::Inline("${SLACK_BOT_TOKEN}".to_owned()));
+        config.slack.bot_token_env = Some(" SLACK_BOT_TOKEN ".to_owned());
+
+        config.whatsapp.access_token =
+            Some(SecretRef::Inline("${WHATSAPP_ACCESS_TOKEN}".to_owned()));
+        config.whatsapp.access_token_env = Some(" WHATSAPP_ACCESS_TOKEN ".to_owned());
+        config.whatsapp.verify_token =
+            Some(SecretRef::Inline("${WHATSAPP_VERIFY_TOKEN}".to_owned()));
+        config.whatsapp.verify_token_env = Some(" WHATSAPP_VERIFY_TOKEN ".to_owned());
+        config.whatsapp.app_secret = Some(SecretRef::Inline("${WHATSAPP_APP_SECRET}".to_owned()));
+        config.whatsapp.app_secret_env = Some(" WHATSAPP_APP_SECRET ".to_owned());
+
+        write(Some(&path_string), &config, true).expect("config write should pass");
+
+        let raw = fs::read_to_string(&path).expect("read written config");
+
+        assert!(raw.contains("bot_token_env = \"DISCORD_BOT_TOKEN\""));
+        assert!(raw.contains("bot_token_env = \"SLACK_BOT_TOKEN\""));
+        assert!(raw.contains("access_token_env = \"WHATSAPP_ACCESS_TOKEN\""));
+        assert!(raw.contains("verify_token_env = \"WHATSAPP_VERIFY_TOKEN\""));
+        assert!(raw.contains("app_secret_env = \"WHATSAPP_APP_SECRET\""));
+
+        assert!(!raw.contains("bot_token = \"${DISCORD_BOT_TOKEN}\""));
+        assert!(!raw.contains("bot_token = \"${SLACK_BOT_TOKEN}\""));
+        assert!(!raw.contains("access_token = \"${WHATSAPP_ACCESS_TOKEN}\""));
+        assert!(!raw.contains("verify_token = \"${WHATSAPP_VERIFY_TOKEN}\""));
+        assert!(!raw.contains("app_secret = \"${WHATSAPP_APP_SECRET}\""));
 
         let _ = fs::remove_file(path);
     }

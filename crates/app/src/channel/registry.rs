@@ -3640,6 +3640,28 @@ fn channel_status_snapshots_with_now(
     snapshots
 }
 
+fn validate_http_url(field: &str, value: &str, issues: &mut Vec<String>) {
+    let parsed_url = reqwest::Url::parse(value);
+    let url = match parsed_url {
+        Ok(url) => url,
+        Err(error) => {
+            let issue = format!("{field} is invalid: {error}");
+            issues.push(issue);
+            return;
+        }
+    };
+
+    let scheme = url.scheme();
+    let is_http = scheme == "http";
+    let is_https = scheme == "https";
+    if is_http || is_https {
+        return;
+    }
+
+    let issue = format!("{field} must use http or https, got {scheme}");
+    issues.push(issue);
+}
+
 #[cfg(test)]
 fn runtime_backed_channel_registry_descriptors() -> Vec<&'static ChannelRegistryDescriptor> {
     sorted_channel_registry_descriptors()
@@ -4102,10 +4124,7 @@ fn build_discord_snapshot_for_account(
     }
 
     let api_base_url = resolved.resolved_api_base_url();
-    let api_base_url_parse = reqwest::Url::parse(api_base_url.as_str());
-    if let Err(error) = api_base_url_parse {
-        send_issues.push(format!("api_base_url is invalid: {error}"));
-    }
+    validate_http_url("api_base_url", api_base_url.as_str(), &mut send_issues);
 
     let send_operation = if !compiled {
         unsupported_operation(
@@ -4179,10 +4198,7 @@ fn build_slack_snapshot_for_account(
     }
 
     let api_base_url = resolved.resolved_api_base_url();
-    let api_base_url_parse = reqwest::Url::parse(api_base_url.as_str());
-    if let Err(error) = api_base_url_parse {
-        send_issues.push(format!("api_base_url is invalid: {error}"));
-    }
+    validate_http_url("api_base_url", api_base_url.as_str(), &mut send_issues);
 
     let send_operation = if !compiled {
         unsupported_operation(
@@ -4259,10 +4275,7 @@ fn build_whatsapp_snapshot_for_account(
     }
 
     let api_base_url = resolved.resolved_api_base_url();
-    let api_base_url_parse = reqwest::Url::parse(api_base_url.as_str());
-    if let Err(error) = api_base_url_parse {
-        send_issues.push(format!("api_base_url is invalid: {error}"));
-    }
+    validate_http_url("api_base_url", api_base_url.as_str(), &mut send_issues);
 
     let send_operation = if !compiled {
         unsupported_operation(
@@ -4342,9 +4355,8 @@ fn build_signal_snapshot_for_account(
     if service_url.is_none() {
         send_issues.push("service_url is missing".to_owned());
     }
-    let parsed_service_url = service_url.as_deref().map(reqwest::Url::parse).transpose();
-    if let Err(error) = parsed_service_url {
-        send_issues.push(format!("service_url is invalid: {error}"));
+    if let Some(service_url) = service_url.as_deref() {
+        validate_http_url("service_url", service_url, &mut send_issues);
     }
 
     let send_operation = if !compiled {
@@ -6633,6 +6645,23 @@ mod tests {
     }
 
     #[test]
+    fn shipped_channel_registry_descriptors_define_snapshot_builders() {
+        for descriptor in sorted_channel_registry_descriptors() {
+            let is_stub =
+                descriptor.implementation_status == ChannelCatalogImplementationStatus::Stub;
+            if is_stub {
+                continue;
+            }
+
+            assert!(
+                descriptor.snapshot_builder.is_some(),
+                "non-stub channel `{}` must define a snapshot builder",
+                descriptor.id
+            );
+        }
+    }
+
+    #[test]
     fn telegram_status_reports_ready_when_token_and_allowlist_are_configured() {
         let mut config = LoongClawConfig::default();
         config.telegram.enabled = true;
@@ -6806,6 +6835,31 @@ mod tests {
     }
 
     #[test]
+    fn discord_status_rejects_non_http_api_base_url() {
+        let mut config = LoongClawConfig::default();
+        config.discord.enabled = true;
+        config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+            "discord-token".to_owned(),
+        ));
+        config.discord.api_base_url = Some("file:///tmp/discord-api".to_owned());
+
+        let snapshots = channel_status_snapshots(&config);
+        let discord = snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == "discord")
+            .expect("discord snapshot");
+        let send = discord.operation("send").expect("discord send operation");
+
+        assert_eq!(send.health, ChannelOperationHealth::Misconfigured);
+        assert!(
+            send.issues
+                .iter()
+                .any(|issue| issue.contains("api_base_url must use http or https")),
+            "send issues should reject non-http discord api base urls"
+        );
+    }
+
+    #[test]
     fn slack_status_reports_ready_send_and_stub_serve() {
         let mut config = LoongClawConfig::default();
         config.slack.enabled = true;
@@ -6860,6 +6914,29 @@ mod tests {
             Some("http://127.0.0.1:8080")
         );
         assert!(serve.runtime.is_none());
+    }
+
+    #[test]
+    fn signal_status_rejects_non_http_service_url() {
+        let mut config = LoongClawConfig::default();
+        config.signal.enabled = true;
+        config.signal.signal_account = Some("+15550001111".to_owned());
+        config.signal.service_url = Some("file:///tmp/signal-api".to_owned());
+
+        let snapshots = channel_status_snapshots(&config);
+        let signal = snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == "signal")
+            .expect("signal snapshot");
+        let send = signal.operation("send").expect("signal send operation");
+
+        assert_eq!(send.health, ChannelOperationHealth::Misconfigured);
+        assert!(
+            send.issues
+                .iter()
+                .any(|issue| issue.contains("service_url must use http or https")),
+            "send issues should reject non-http signal service urls"
+        );
     }
 
     #[test]
