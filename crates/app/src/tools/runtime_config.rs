@@ -215,21 +215,11 @@ impl AutonomyOperationMode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct AutonomyBudgetPolicy {
     pub max_capability_acquisitions_per_turn: usize,
     pub max_provider_switches_per_turn: usize,
     pub max_topology_mutations_per_turn: usize,
-}
-
-impl Default for AutonomyBudgetPolicy {
-    fn default() -> Self {
-        Self {
-            max_capability_acquisitions_per_turn: 0,
-            max_provider_switches_per_turn: 0,
-            max_topology_mutations_per_turn: 0,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1336,8 +1326,10 @@ mod tests {
 
     #[test]
     fn autonomy_profile_runtime_config_compiles_bounded_autonomous_snapshot() {
-        let mut config = ToolRuntimeConfig::default();
-        config.autonomy_profile = AutonomyProfile::BoundedAutonomous;
+        let config = ToolRuntimeConfig {
+            autonomy_profile: AutonomyProfile::BoundedAutonomous,
+            ..ToolRuntimeConfig::default()
+        };
 
         let snapshot = config.autonomy_policy_snapshot();
 
