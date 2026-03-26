@@ -126,7 +126,6 @@ fn verified_env_var_names_contain(
 ) -> bool {
     #[cfg(windows)]
     {
-        let required_env_var = required_env_var;
         verified_env_vars
             .iter()
             .any(|verified_env_var| verified_env_var.eq_ignore_ascii_case(required_env_var))
