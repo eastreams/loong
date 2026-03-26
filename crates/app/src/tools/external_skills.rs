@@ -2501,13 +2501,11 @@ fn project_discovery_probe_roots(
     let Some(project_root) = project_discovery_root(config) else {
         return Vec::new();
     };
-    let project_root = project_root
-        .canonicalize()
-        .unwrap_or_else(|_| project_root.clone());
+    let project_root = dunce::canonicalize(&project_root).unwrap_or(project_root);
 
     let mut roots = Vec::new();
     if let Ok(current_dir) = std::env::current_dir() {
-        let current_dir = current_dir.canonicalize().unwrap_or(current_dir);
+        let current_dir = dunce::canonicalize(&current_dir).unwrap_or(current_dir);
         if current_dir.starts_with(&project_root) {
             let mut next = Some(current_dir.as_path());
             while let Some(path) = next {
@@ -2635,7 +2633,7 @@ fn visit_discoverable_skill_roots(
     roots: &mut Vec<PathBuf>,
     visited: &mut BTreeSet<String>,
 ) {
-    let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let canonical = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let key = canonical.display().to_string();
     if !visited.insert(key) {
         return;

@@ -20,6 +20,17 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{prefix}-{nanos}"))
 }
 
+fn normalized_path_text(value: &str) -> String {
+    value.replace('\\', "/")
+}
+
+fn artifact_path_suffix(path: &Path) -> String {
+    let normalized_path = normalized_path_text(&path.display().to_string());
+    let suffix_parts = normalized_path.rsplit('/').take(2).collect::<Vec<_>>();
+    let ordered_suffix_parts = suffix_parts.into_iter().rev().collect::<Vec<_>>();
+    ordered_suffix_parts.join("/")
+}
+
 fn write_runtime_capability_config(root: &Path) -> PathBuf {
     fs::create_dir_all(root).expect("create fixture root");
 
@@ -1583,7 +1594,7 @@ fn runtime_capability_index_rejects_malformed_supported_artifact_during_scan() {
         "error should surface the invalid review state: {error}"
     );
     assert!(
-        error.contains(&invalid_candidate_path.display().to_string()),
+        normalized_path_text(&error).contains(&artifact_path_suffix(&invalid_candidate_path)),
         "error should identify the malformed artifact path: {error}"
     );
 
@@ -1643,7 +1654,7 @@ fn runtime_capability_index_rejects_wrong_schema_purpose_during_scan() {
         "error should surface the invalid purpose value: {error}"
     );
     assert!(
-        error.contains(&invalid_candidate_path.display().to_string()),
+        normalized_path_text(&error).contains(&artifact_path_suffix(&invalid_candidate_path)),
         "error should identify the malformed artifact path: {error}"
     );
 
@@ -1936,7 +1947,7 @@ fn runtime_capability_plan_rejects_malformed_supported_artifact_during_scan() {
         "error should surface the invalid review state: {error}"
     );
     assert!(
-        error.contains(&invalid_candidate_path.display().to_string()),
+        normalized_path_text(&error).contains(&artifact_path_suffix(&invalid_candidate_path)),
         "error should identify the malformed artifact path: {error}"
     );
 

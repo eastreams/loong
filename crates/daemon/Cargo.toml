@@ -68,6 +68,7 @@ base64.workspace = true
 rand.workspace = true
 sha2.workspace = true
 ed25519-dalek.workspace = true
+dunce = "1"
 
 [[bin]]
 name = "loongclaw"

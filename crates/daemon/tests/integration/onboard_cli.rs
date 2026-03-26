@@ -5919,19 +5919,33 @@ requires_openai_auth = true
     .expect("run scripted detected-setup onboarding with explicit starting-point selection");
 
     let joined = transcript.join("\n");
+    let (_, written_config) = mvp::config::load(Some(output_path.to_string_lossy().as_ref()))
+        .expect("load written config");
     assert!(
         joined.contains("choose detected starting point")
             && joined.contains("SELECT Starting point"),
         "the interactive flow should still show the starting-point selection stage before applying the chosen path: {transcript:#?}"
     );
     assert!(
-        joined.contains("starting point: Codex config at")
-            && joined.contains("selection-order-codex.toml"),
+        joined.contains("starting point: Codex config at"),
         "after choosing [2], the rest of onboarding should carry the displayed Codex option forward, not some internal candidate order: {transcript:#?}"
     );
     assert!(
         !joined.contains("starting point: your current environment"),
         "selection should stay aligned with the on-screen numbering when candidates are reordered for UX: {transcript:#?}"
+    );
+    assert_eq!(
+        written_config.provider.kind,
+        mvp::config::ProviderKind::Openai,
+        "choosing the second starting-point entry should apply the displayed Codex provider candidate"
+    );
+    assert_eq!(
+        written_config.provider.model, "openai/gpt-5.1-codex",
+        "choosing the second starting-point entry should keep the Codex model from the displayed candidate"
+    );
+    assert_eq!(
+        written_config.provider.base_url, "https://codex.example.com/v1",
+        "choosing the second starting-point entry should keep the Codex-compatible base url from the displayed candidate"
     );
 }
 

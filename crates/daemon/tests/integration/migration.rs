@@ -23,6 +23,10 @@ fn unique_temp_dir(label: &str) -> PathBuf {
     ))
 }
 
+fn normalized_path_text(value: &str) -> String {
+    value.replace('\\', "/")
+}
+
 #[test]
 fn source_presentation_canonical_labels_are_stable() {
     assert_eq!(
@@ -419,18 +423,21 @@ model = "deepseek-chat"
         })
         .map(|candidate| candidate.source.as_str())
         .collect::<Vec<_>>();
+    let normalized_codex_sources = codex_sources
+        .iter()
+        .map(|source| normalized_path_text(source))
+        .collect::<Vec<_>>();
 
     assert!(
-        codex_sources.contains(&"Codex config at /home/.codex/config.toml")
-            || codex_sources
-                .iter()
-                .any(|source: &&str| source.ends_with("/.codex/config.toml")),
+        normalized_codex_sources
+            .iter()
+            .any(|source| source.ends_with("/.codex/config.toml")),
         "detected candidates should include the base Codex config path: {codex_sources:#?}"
     );
     assert!(
-        codex_sources
+        normalized_codex_sources
             .iter()
-            .any(|source: &&str| source.ends_with(&format!(
+            .any(|source| source.ends_with(&format!(
                 "/.codex/agents/{}/config.toml",
                 mvp::config::CLI_COMMAND_NAME
             ))),

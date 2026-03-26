@@ -22,6 +22,10 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{prefix}-{nanos}"))
 }
 
+fn normalized_path_text(value: &str) -> String {
+    value.replace('\\', "/")
+}
+
 fn write_file(root: &Path, relative: &str, content: &str) {
     let path = root.join(relative);
     if let Some(parent) = path.parent() {
@@ -1096,10 +1100,12 @@ fn execute_skills_command_list_prefers_nearest_project_ancestor_for_duplicate_sk
     assert_eq!(list.outcome.payload["skills"][0]["skill_id"], "demo-skill");
     assert_eq!(list.outcome.payload["skills"][0]["scope"], "project");
     assert!(
-        list.outcome.payload["skills"][0]["source_path"]
-            .as_str()
-            .expect("source path should be text")
-            .contains("workspace/.agents/skills/demo-skill"),
+        normalized_path_text(
+            list.outcome.payload["skills"][0]["source_path"]
+                .as_str()
+                .expect("source path should be text"),
+        )
+        .contains("workspace/.agents/skills/demo-skill"),
         "nearest project ancestor should win within the project scope: {}",
         list.outcome.payload["skills"][0]
     );
@@ -1110,12 +1116,12 @@ fn execute_skills_command_list_prefers_nearest_project_ancestor_for_duplicate_sk
             .iter()
             .any(|skill| {
                 skill["skill_id"] == "demo-skill"
-                    && skill["source_path"]
-                        .as_str()
-                        .is_some_and(|path| path.ends_with(".agents/skills/demo-skill"))
-                    && !skill["source_path"]
-                        .as_str()
-                        .is_some_and(|path| path.contains("workspace/.agents/skills/demo-skill"))
+                    && skill["source_path"].as_str().is_some_and(|path| {
+                        normalized_path_text(path).ends_with(".agents/skills/demo-skill")
+                    })
+                    && !skill["source_path"].as_str().is_some_and(|path| {
+                        normalized_path_text(path).contains("workspace/.agents/skills/demo-skill")
+                    })
             }),
         "project ancestor duplicates should remain inspectable as shadowed skills"
     );

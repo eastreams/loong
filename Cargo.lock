@@ -2070,6 +2070,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "dialoguer",
+ "dunce",
  "ed25519-dalek",
  "libc",
  "loongclaw-app",

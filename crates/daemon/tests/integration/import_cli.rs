@@ -17,6 +17,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static IMPORT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+fn normalized_path_text(value: &str) -> String {
+    value.replace('\\', "/")
+}
+
 fn assert_compact_loongclaw_header(lines: &[String], context: &str) {
     assert!(
         lines
@@ -1251,11 +1255,11 @@ model = "deepseek-chat"
         "runtime import should explain that the Codex source filter still matched multiple configs: {error}"
     );
     assert!(
-        error.contains(".codex/config.toml"),
+        normalized_path_text(&error).contains(".codex/config.toml"),
         "runtime import should surface the base Codex config path: {error}"
     );
     assert!(
-        error.contains(".codex/agents/loongclaw/config.toml"),
+        normalized_path_text(&error).contains(".codex/agents/loongclaw/config.toml"),
         "runtime import should surface the agent-scoped Codex config path: {error}"
     );
 }
