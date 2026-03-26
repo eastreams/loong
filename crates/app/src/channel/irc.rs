@@ -1,7 +1,9 @@
-use native_tls::TlsConnector;
+use std::sync::Arc;
+
+use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
-use tokio_native_tls::TlsConnector as TokioTlsConnector;
+use tokio_rustls::TlsConnector as TokioTlsConnector;
 
 use crate::{
     CliResult,
@@ -147,9 +149,18 @@ async fn connect_irc_stream(endpoint: &IrcServerEndpoint) -> CliResult<Box<dyn I
         return Ok(Box::new(tcp_stream));
     }
 
-    let tls_connector = build_irc_tls_connector()?;
-    let tokio_tls_connector = TokioTlsConnector::from(tls_connector);
-    let server_name = endpoint.host.as_str();
+    ensure_irc_tls_provider();
+    let tls_config = build_irc_tls_config()?;
+    let tls_config = Arc::new(tls_config);
+    let tokio_tls_connector = TokioTlsConnector::from(tls_config);
+    let server_name_value = endpoint.host.as_str();
+    let server_name = ServerName::try_from(server_name_value).map_err(|error| {
+        format!(
+            "irc tls server name is invalid: {} ({error})",
+            endpoint.host
+        )
+    })?;
+    let server_name = server_name.to_owned();
     let tls_stream = tokio_tls_connector
         .connect(server_name, tcp_stream)
         .await
@@ -157,10 +168,42 @@ async fn connect_irc_stream(endpoint: &IrcServerEndpoint) -> CliResult<Box<dyn I
     Ok(Box::new(tls_stream))
 }
 
-fn build_irc_tls_connector() -> CliResult<TlsConnector> {
-    TlsConnector::builder()
-        .build()
-        .map_err(|error| format!("build irc tls connector failed: {error}"))
+fn ensure_irc_tls_provider() {
+    #[allow(clippy::disallowed_methods)]
+    {
+        let crypto_provider = rustls::crypto::CryptoProvider::get_default();
+        if crypto_provider.is_none() {
+            let default_provider = rustls::crypto::ring::default_provider();
+            let _ = default_provider.install_default();
+        }
+    }
+}
+
+fn build_irc_tls_config() -> CliResult<ClientConfig> {
+    let root_store = load_irc_root_store()?;
+    let config_builder = ClientConfig::builder();
+    let config_builder = config_builder.with_root_certificates(root_store);
+    let config = config_builder.with_no_client_auth();
+    Ok(config)
+}
+
+fn load_irc_root_store() -> CliResult<RootCertStore> {
+    let certificate_result = rustls_native_certs::load_native_certs();
+    let certs = certificate_result.certs;
+    let errors = certificate_result.errors;
+    let total_certificate_count = certs.len();
+    let mut root_store = RootCertStore::empty();
+    let (added_certificate_count, ignored_certificate_count) =
+        root_store.add_parsable_certificates(certs);
+
+    if added_certificate_count > 0 {
+        return Ok(root_store);
+    }
+
+    let error = format!(
+        "load irc tls root certificates failed: no usable root certificates were found (loaded {total_certificate_count}, ignored {ignored_certificate_count}, errors: {errors:?})"
+    );
+    Err(error)
 }
 
 async fn run_irc_send_session(

@@ -25,7 +25,7 @@ channel-email = []
 channel-mattermost = []
 channel-nextcloud-talk = []
 channel-synology-chat = []
-channel-irc = ["dep:native-tls", "dep:tokio-native-tls"]
+channel-irc = ["dep:rustls", "dep:rustls-native-certs", "dep:tokio-rustls"]
 channel-imessage = []
 provider-openai = []
 provider-anthropic = []
@@ -85,9 +85,9 @@ unicode-segmentation = "1.12"
 regex.workspace = true
 prost = { version = "0.14", optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
+rustls-native-certs = { version = "0.8.3", optional = true }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"], optional = true }
-native-tls = { version = "0.2", optional = true }
-tokio-native-tls = { version = "0.3", optional = true }
+tokio-rustls = { version = "0.26.4", optional = true }
 
 [dev-dependencies]
 axum.workspace = true
