@@ -6,7 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [features]
-default = ["channel-cli", "channel-telegram", "channel-feishu", "channel-matrix", "channel-wecom", "channel-discord", "channel-dingtalk", "channel-slack", "channel-webhook", "channel-google-chat", "channel-line", "channel-signal", "channel-twitch", "channel-teams", "channel-whatsapp", "channel-email", "channel-mattermost", "channel-nextcloud-talk", "channel-synology-chat", "channel-irc", "channel-imessage", "config-toml", "memory-sqlite", "feishu-integration", "tool-shell", "tool-file", "tool-browser", "tool-webfetch", "tool-websearch", "provider-openai", "provider-anthropic", "provider-bedrock", "provider-volcengine"]
+default = ["channel-cli", "channel-telegram", "channel-feishu", "channel-matrix", "channel-wecom", "channel-discord", "channel-dingtalk", "channel-slack", "channel-webhook", "channel-google-chat", "channel-line", "channel-signal", "channel-twitch", "channel-teams", "channel-whatsapp", "channel-email", "channel-mattermost", "channel-nextcloud-talk", "channel-synology-chat", "channel-irc", "channel-imessage", "channel-nostr", "config-toml", "memory-sqlite", "feishu-integration", "tool-shell", "tool-file", "tool-browser", "tool-webfetch", "tool-websearch", "provider-openai", "provider-anthropic", "provider-bedrock", "provider-volcengine"]
 channel-cli = []
 channel-telegram = []
 channel-feishu = ["dep:axum", "dep:aes", "dep:cbc", "dep:prost", "dep:rustls", "dep:tokio-tungstenite", "feishu-integration"]
@@ -28,6 +28,7 @@ channel-nextcloud-talk = []
 channel-synology-chat = []
 channel-irc = ["dep:rustls", "dep:rustls-native-certs", "dep:tokio-rustls"]
 channel-imessage = []
+channel-nostr = ["dep:bech32", "dep:rustls", "dep:secp256k1", "dep:tokio-tungstenite"]
 provider-openai = []
 provider-anthropic = []
 provider-bedrock = ["dep:aws-config", "dep:aws-credential-types", "dep:aws-sigv4", "dep:http"]
@@ -89,6 +90,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring"], opti
 rustls-native-certs = { version = "0.8.3", optional = true }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"], optional = true }
 tokio-rustls = { version = "0.26.4", optional = true }
+bech32 = { version = "0.9.1", optional = true }
+secp256k1 = { version = "0.31.1", optional = true }
 
 [dev-dependencies]
 axum.workspace = true

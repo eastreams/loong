@@ -9,26 +9,31 @@ use crate::config::{
     IMESSAGE_BRIDGE_TOKEN_ENV, IMESSAGE_BRIDGE_URL_ENV, IRC_NICKNAME_ENV, IRC_SERVER_ENV,
     LINE_CHANNEL_ACCESS_TOKEN_ENV, LINE_CHANNEL_SECRET_ENV, LoongClawConfig,
     MATRIX_ACCESS_TOKEN_ENV, MATTERMOST_BOT_TOKEN_ENV, MATTERMOST_SERVER_URL_ENV,
-    NEXTCLOUD_TALK_SERVER_URL_ENV, NEXTCLOUD_TALK_SHARED_SECRET_ENV, ResolvedDingtalkChannelConfig,
-    ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig, ResolvedFeishuChannelConfig,
-    ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig, ResolvedIrcChannelConfig,
-    ResolvedLineChannelConfig, ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
-    ResolvedNextcloudTalkChannelConfig, ResolvedSignalChannelConfig, ResolvedSlackChannelConfig,
-    ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig, ResolvedTelegramChannelConfig,
-    ResolvedTwitchChannelConfig, ResolvedWebhookChannelConfig, ResolvedWecomChannelConfig,
-    ResolvedWhatsappChannelConfig, SIGNAL_ACCOUNT_ENV, SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV,
-    SYNOLOGY_CHAT_INCOMING_URL_ENV, SYNOLOGY_CHAT_TOKEN_ENV, TEAMS_APP_ID_ENV,
-    TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV, TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV,
-    TWITCH_ACCESS_TOKEN_ENV, WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV,
-    WECOM_BOT_ID_ENV, WECOM_SECRET_ENV, WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV,
-    WHATSAPP_PHONE_NUMBER_ID_ENV, WHATSAPP_VERIFY_TOKEN_ENV, WebhookPayloadFormat,
-    parse_email_smtp_endpoint, parse_irc_server_endpoint,
+    NEXTCLOUD_TALK_SERVER_URL_ENV, NEXTCLOUD_TALK_SHARED_SECRET_ENV, NOSTR_PRIVATE_KEY_ENV,
+    NOSTR_RELAY_URLS_ENV, ResolvedDingtalkChannelConfig, ResolvedDiscordChannelConfig,
+    ResolvedEmailChannelConfig, ResolvedFeishuChannelConfig, ResolvedGoogleChatChannelConfig,
+    ResolvedImessageChannelConfig, ResolvedIrcChannelConfig, ResolvedLineChannelConfig,
+    ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
+    ResolvedNextcloudTalkChannelConfig, ResolvedNostrChannelConfig, ResolvedSignalChannelConfig,
+    ResolvedSlackChannelConfig, ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig,
+    ResolvedTelegramChannelConfig, ResolvedTwitchChannelConfig, ResolvedWebhookChannelConfig,
+    ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig, SIGNAL_ACCOUNT_ENV,
+    SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV, SYNOLOGY_CHAT_INCOMING_URL_ENV,
+    SYNOLOGY_CHAT_TOKEN_ENV, TEAMS_APP_ID_ENV, TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV,
+    TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV, TWITCH_ACCESS_TOKEN_ENV,
+    WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV, WECOM_BOT_ID_ENV, WECOM_SECRET_ENV,
+    WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV, WHATSAPP_PHONE_NUMBER_ID_ENV,
+    WHATSAPP_VERIFY_TOKEN_ENV, WebhookPayloadFormat, parse_email_smtp_endpoint,
+    parse_irc_server_endpoint,
 };
 
 use super::{
     ChannelCatalogTargetKind, ChannelOperationRuntime, ChannelPlatform, runtime_state,
     webhook_auth::build_webhook_auth_header_from_parts,
 };
+
+#[cfg(feature = "channel-nostr")]
+use super::nostr::validate_nostr_private_key_input;
 
 pub const CHANNEL_OPERATION_SEND_ID: &str = "send";
 pub const CHANNEL_OPERATION_SERVE_ID: &str = "serve";
@@ -40,8 +45,6 @@ const EMAIL_SMTP_USERNAME_ENV: &str = "EMAIL_SMTP_USERNAME";
 const EMAIL_SMTP_PASSWORD_ENV: &str = "EMAIL_SMTP_PASSWORD";
 const EMAIL_IMAP_USERNAME_ENV: &str = "EMAIL_IMAP_USERNAME";
 const EMAIL_IMAP_PASSWORD_ENV: &str = "EMAIL_IMAP_PASSWORD";
-const NOSTR_RELAY_URLS_ENV: &str = "NOSTR_RELAY_URLS";
-const NOSTR_PRIVATE_KEY_ENV: &str = "NOSTR_PRIVATE_KEY";
 const TLON_SHIP_ENV: &str = "TLON_SHIP";
 const TLON_URL_ENV: &str = "TLON_URL";
 const TLON_CODE_ENV: &str = "TLON_CODE";
@@ -2507,7 +2510,7 @@ const NOSTR_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "relay publish",
     command: "nostr-send",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: NOSTR_SEND_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
@@ -2521,21 +2524,28 @@ const NOSTR_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     requirements: NOSTR_SERVE_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
+pub const NOSTR_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
+    ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "nostr",
+        default_send_target_kind: ChannelCatalogTargetKind::Address,
+        send: NOSTR_SEND_OPERATION,
+        serve: NOSTR_SERVE_OPERATION,
+    };
 const NOSTR_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
-        operation: NOSTR_SEND_OPERATION,
+        operation: NOSTR_CATALOG_COMMAND_FAMILY_DESCRIPTOR.send,
         doctor_checks: &[],
     },
     ChannelRegistryOperationDescriptor {
-        operation: NOSTR_SERVE_OPERATION,
+        operation: NOSTR_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
         doctor_checks: &[],
     },
 ];
 const NOSTR_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::Planned,
-    setup_hint: "planned Nostr surface; catalog metadata reflects the intended relay list, signing key, and pubkey allowlist contract, but no runtime adapter is implemented yet",
-    status_command: "loongclaw channels --json",
-    repair_command: None,
+    strategy: ChannelOnboardingStrategy::ManualConfig,
+    setup_hint: "configure relay URLs and a signing key in loongclaw.toml under nostr or nostr.accounts.<account>; outbound relay publish is shipped, while inbound relay subscription support remains planned",
+    status_command: "loongclaw doctor",
+    repair_command: Some("loongclaw doctor --fix"),
 };
 
 const TWITCH_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -3289,12 +3299,12 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "nostr",
         runtime: None,
-        snapshot_builder: None,
+        snapshot_builder: Some(build_nostr_snapshots),
         selection_order: 190,
         selection_label: "relay-signed social bot",
-        blurb: "Planned Nostr surface for relay publication, inbound subscriptions, and key-based routing.",
-        implementation_status: ChannelCatalogImplementationStatus::Stub,
-        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        blurb: "Shipped Nostr outbound surface with config-backed relay publication and key signing; inbound relay subscription support remains planned.",
+        implementation_status: ChannelCatalogImplementationStatus::ConfigBacked,
+        capabilities: CONFIG_BACKED_SEND_CHANNEL_CAPABILITIES,
         label: "Nostr",
         aliases: &[],
         transport: "nostr_relays",
@@ -4532,6 +4542,176 @@ fn build_imessage_snapshots(
             }
         })
         .collect()
+}
+
+fn build_nostr_snapshots(
+    descriptor: &ChannelRegistryDescriptor,
+    config: &LoongClawConfig,
+    _runtime_dir: &Path,
+    _now_ms: u64,
+) -> Vec<ChannelStatusSnapshot> {
+    let compiled = cfg!(feature = "channel-nostr");
+    let default_selection = config.nostr.default_configured_account_selection();
+    let default_configured_account_id = default_selection.id.clone();
+    let default_account_source = default_selection.source;
+    config
+        .nostr
+        .configured_account_ids()
+        .into_iter()
+        .map(|configured_account_id| {
+            let is_default_account = configured_account_id == default_configured_account_id;
+            match config
+                .nostr
+                .resolve_account(Some(configured_account_id.as_str()))
+            {
+                Ok(resolved) => build_nostr_snapshot_for_account(
+                    descriptor,
+                    compiled,
+                    resolved,
+                    is_default_account,
+                    default_account_source,
+                ),
+                Err(error) => build_invalid_nostr_snapshot(
+                    descriptor,
+                    compiled,
+                    configured_account_id.as_str(),
+                    is_default_account,
+                    default_account_source,
+                    error,
+                ),
+            }
+        })
+        .collect()
+}
+
+fn build_nostr_snapshot_for_account(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    resolved: ResolvedNostrChannelConfig,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+) -> ChannelStatusSnapshot {
+    let mut send_issues = Vec::new();
+
+    let relay_urls = resolved.relay_urls();
+    if relay_urls.is_empty() {
+        send_issues.push("relay_urls is missing".to_owned());
+    }
+    for relay_url in &relay_urls {
+        validate_nostr_relay_url(relay_url.as_str(), &mut send_issues);
+    }
+
+    let private_key = resolved.private_key();
+    if private_key.is_none() {
+        send_issues.push("private_key is missing".to_owned());
+    }
+    #[cfg(feature = "channel-nostr")]
+    if let Some(private_key) = private_key.as_deref() {
+        let validation_result = validate_nostr_private_key_input(private_key);
+        match validation_result {
+            Ok(()) => {}
+            Err(error) => {
+                let issue = format!("private_key is invalid: {error}");
+                send_issues.push(issue);
+            }
+        }
+    }
+
+    let send_operation = if !compiled {
+        unsupported_operation(
+            NOSTR_SEND_OPERATION,
+            "binary built without feature `channel-nostr`".to_owned(),
+        )
+    } else if !resolved.enabled {
+        disabled_operation(
+            NOSTR_SEND_OPERATION,
+            "disabled by nostr account configuration".to_owned(),
+        )
+    } else if !send_issues.is_empty() {
+        misconfigured_operation(NOSTR_SEND_OPERATION, send_issues)
+    } else {
+        ready_operation(NOSTR_SEND_OPERATION)
+    };
+
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            NOSTR_SERVE_OPERATION,
+            "binary built without feature `channel-nostr`".to_owned(),
+        )
+    } else {
+        unsupported_operation(
+            NOSTR_SERVE_OPERATION,
+            "nostr relay subscriber runtime is not implemented yet".to_owned(),
+        )
+    };
+
+    let allowed_pubkeys = resolved.allowed_pubkeys();
+    let relay_count = relay_urls.len();
+    let mut notes = vec![
+        format!("configured_account_id={}", resolved.configured_account_id),
+        format!("configured_account={}", resolved.configured_account_label),
+        format!("account_id={}", resolved.account.id),
+        format!("account={}", resolved.account.label),
+        format!("relay_count={relay_count}"),
+    ];
+    if !allowed_pubkeys.is_empty() {
+        let allowed_pubkey_count = allowed_pubkeys.len();
+        notes.push(format!(
+            "future_serve_allowed_pubkey_count={allowed_pubkey_count}"
+        ));
+    }
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    let api_base_url = relay_urls
+        .first()
+        .cloned()
+        .and_then(|relay_url| redact_endpoint_status_url(Some(relay_url)));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: resolved.configured_account_id.clone(),
+        configured_account_label: resolved.configured_account_label.clone(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: resolved.enabled,
+        api_base_url,
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
+fn validate_nostr_relay_url(relay_url: &str, issues: &mut Vec<String>) {
+    let parsed_relay_url = reqwest::Url::parse(relay_url);
+    let parsed_relay_url = match parsed_relay_url {
+        Ok(parsed_relay_url) => parsed_relay_url,
+        Err(error) => {
+            let issue = format!("relay_url `{relay_url}` is invalid: {error}");
+            issues.push(issue);
+            return;
+        }
+    };
+
+    let scheme = parsed_relay_url.scheme();
+    if scheme != "ws" && scheme != "wss" {
+        let issue = format!("relay_url `{relay_url}` must use ws:// or wss://");
+        issues.push(issue);
+    }
+
+    let host = parsed_relay_url.host_str();
+    if host.is_none() {
+        let issue = format!("relay_url `{relay_url}` is missing a host");
+        issues.push(issue);
+    }
 }
 
 fn redact_endpoint_status_url(raw: Option<String>) -> Option<String> {
@@ -7077,6 +7257,63 @@ fn build_invalid_google_chat_snapshot(
     }
 }
 
+fn build_invalid_nostr_snapshot(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    configured_account_id: &str,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+    error: String,
+) -> ChannelStatusSnapshot {
+    let send_operation = if !compiled {
+        unsupported_operation(
+            NOSTR_SEND_OPERATION,
+            "binary built without feature `channel-nostr`".to_owned(),
+        )
+    } else {
+        misconfigured_operation(NOSTR_SEND_OPERATION, vec![error.clone()])
+    };
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            NOSTR_SERVE_OPERATION,
+            "binary built without feature `channel-nostr`".to_owned(),
+        )
+    } else {
+        unsupported_operation(
+            NOSTR_SERVE_OPERATION,
+            "nostr relay subscriber runtime is not implemented yet".to_owned(),
+        )
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={configured_account_id}"),
+        format!("selection_error={error}"),
+    ];
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: configured_account_id.to_owned(),
+        configured_account_label: configured_account_id.to_owned(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: false,
+        api_base_url: None,
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
 fn build_invalid_signal_snapshot(
     descriptor: &ChannelRegistryDescriptor,
     compiled: bool,
@@ -8235,6 +8472,10 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "imessage")
             .expect("imessage catalog entry");
+        let nostr = catalog
+            .iter()
+            .find(|entry| entry.id == "nostr")
+            .expect("nostr catalog entry");
         let tlon = catalog
             .iter()
             .find(|entry| entry.id == "tlon")
@@ -8351,6 +8592,29 @@ mod tests {
             ChannelCatalogOperationAvailability::Stub
         );
 
+        assert_eq!(
+            nostr.implementation_status,
+            ChannelCatalogImplementationStatus::ConfigBacked
+        );
+        assert_eq!(nostr.selection_order, 190);
+        assert_eq!(nostr.aliases, Vec::<&str>::new());
+        assert_eq!(nostr.transport, "nostr_relays");
+        assert!(nostr.blurb.contains("relay publication"));
+        assert_eq!(
+            nostr.supported_target_kinds,
+            vec![ChannelCatalogTargetKind::Address]
+        );
+        assert_eq!(nostr.operations[0].command, "nostr-send");
+        assert_eq!(nostr.operations[1].command, "nostr-serve");
+        assert_eq!(
+            nostr.operations[0].availability,
+            ChannelCatalogOperationAvailability::Implemented
+        );
+        assert_eq!(
+            nostr.operations[1].availability,
+            ChannelCatalogOperationAvailability::Stub
+        );
+
         assert_eq!(tlon.selection_order, 205);
         assert_eq!(tlon.aliases, vec!["urbit"]);
         assert_eq!(tlon.transport, "tlon_urbit_ship_api");
@@ -8413,6 +8677,10 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "imessage")
             .expect("imessage catalog entry");
+        let nostr = catalog
+            .iter()
+            .find(|entry| entry.id == "nostr")
+            .expect("nostr catalog entry");
 
         assert_eq!(
             telegram.operations[0]
@@ -8715,6 +8983,31 @@ mod tests {
             imessage.operations[0].requirements[2].default_env_var,
             Some("IMESSAGE_BRIDGE_TOKEN")
         );
+
+        assert_eq!(
+            nostr.operations[0]
+                .requirements
+                .iter()
+                .map(|requirement| requirement.id)
+                .collect::<Vec<_>>(),
+            vec!["enabled", "relay_urls", "private_key"]
+        );
+        assert_eq!(
+            nostr.operations[1]
+                .requirements
+                .iter()
+                .map(|requirement| requirement.id)
+                .collect::<Vec<_>>(),
+            vec!["enabled", "relay_urls", "private_key", "allowed_pubkeys"]
+        );
+        assert_eq!(
+            nostr.operations[0].requirements[1].default_env_var,
+            Some("NOSTR_RELAY_URLS")
+        );
+        assert_eq!(
+            nostr.operations[0].requirements[2].default_env_var,
+            Some("NOSTR_PRIVATE_KEY")
+        );
     }
 
     #[test]
@@ -8760,6 +9053,10 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "imessage")
             .expect("imessage catalog entry");
+        let nostr = catalog
+            .iter()
+            .find(|entry| entry.id == "nostr")
+            .expect("nostr catalog entry");
 
         assert_eq!(
             telegram.operations[0].supported_target_kinds,
@@ -8844,6 +9141,14 @@ mod tests {
             imessage.operations[1].supported_target_kinds,
             &[ChannelCatalogTargetKind::Conversation]
         );
+        assert_eq!(
+            nostr.operations[0].supported_target_kinds,
+            &[ChannelCatalogTargetKind::Address]
+        );
+        assert_eq!(
+            nostr.operations[1].supported_target_kinds,
+            &[ChannelCatalogTargetKind::Address]
+        );
     }
 
     #[test]
@@ -8866,6 +9171,8 @@ mod tests {
             .expect("synology chat send operation");
         let imessage =
             resolve_channel_catalog_operation("imessage", "send").expect("imessage send operation");
+        let nostr =
+            resolve_channel_catalog_operation("nostr", "send").expect("nostr send operation");
 
         assert_eq!(
             telegram.default_target_kind(),
@@ -8915,6 +9222,11 @@ mod tests {
             Some(ChannelCatalogTargetKind::Conversation)
         );
         assert!(imessage.supports_target_kind(ChannelCatalogTargetKind::Conversation));
+        assert_eq!(
+            nostr.default_target_kind(),
+            Some(ChannelCatalogTargetKind::Address)
+        );
+        assert!(nostr.supports_target_kind(ChannelCatalogTargetKind::Address));
     }
 
     #[test]
@@ -9055,8 +9367,9 @@ mod tests {
                 .iter()
                 .map(|entry| entry.id)
                 .collect::<Vec<_>>(),
-            vec!["nostr", "tlon", "zalo", "zalo-personal", "webchat",]
+            vec!["tlon", "zalo", "zalo-personal", "webchat",]
         );
+        assert!(!catalog_only.iter().any(|entry| entry.id == "nostr"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "discord"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "slack"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "line"));
@@ -9111,6 +9424,7 @@ mod tests {
                 "synology-chat",
                 "irc",
                 "imessage",
+                "nostr",
                 "twitch",
             ]
         );
@@ -9120,7 +9434,7 @@ mod tests {
                 .iter()
                 .map(|entry| entry.id)
                 .collect::<Vec<_>>(),
-            vec!["nostr", "tlon", "zalo", "zalo-personal", "webchat",]
+            vec!["tlon", "zalo", "zalo-personal", "webchat",]
         );
         assert_eq!(
             inventory
@@ -9620,6 +9934,22 @@ mod tests {
             Some("default")
         );
         assert_eq!(imessage.configured_accounts[0].id, "imessage");
+
+        let nostr = inventory
+            .channel_surfaces
+            .iter()
+            .find(|surface| surface.catalog.id == "nostr")
+            .expect("nostr surface");
+        assert_eq!(
+            nostr.catalog.implementation_status,
+            ChannelCatalogImplementationStatus::ConfigBacked
+        );
+        assert_eq!(nostr.configured_accounts.len(), 1);
+        assert_eq!(
+            nostr.default_configured_account_id.as_deref(),
+            Some("default")
+        );
+        assert_eq!(nostr.configured_accounts[0].id, "nostr");
 
         let twitch = inventory
             .channel_surfaces

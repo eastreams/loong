@@ -20,7 +20,8 @@ use std::time::Duration;
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
-    feature = "channel-imessage"
+    feature = "channel-imessage",
+    feature = "channel-nostr"
 ))]
 use std::{
     collections::BTreeSet,
@@ -89,7 +90,8 @@ use crate::CliResult;
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
-    feature = "channel-imessage"
+    feature = "channel-imessage",
+    feature = "channel-nostr"
 ))]
 use crate::KernelContext;
 #[cfg(any(
@@ -111,7 +113,8 @@ use crate::KernelContext;
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
-    feature = "channel-imessage"
+    feature = "channel-imessage",
+    feature = "channel-nostr"
 ))]
 use crate::acp::{AcpConversationTurnOptions, AcpTurnProvenance};
 #[cfg(any(
@@ -133,7 +136,8 @@ use crate::acp::{AcpConversationTurnOptions, AcpTurnProvenance};
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
-    feature = "channel-imessage"
+    feature = "channel-imessage",
+    feature = "channel-nostr"
 ))]
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 
@@ -159,6 +163,8 @@ use super::config::ResolvedMatrixChannelConfig;
 use super::config::ResolvedMattermostChannelConfig;
 #[cfg(feature = "channel-nextcloud-talk")]
 use super::config::ResolvedNextcloudTalkChannelConfig;
+#[cfg(feature = "channel-nostr")]
+use super::config::ResolvedNostrChannelConfig;
 #[cfg(feature = "channel-signal")]
 use super::config::ResolvedSignalChannelConfig;
 #[cfg(feature = "channel-slack")]
@@ -197,7 +203,8 @@ use super::config::ResolvedWhatsappChannelConfig;
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
-    feature = "channel-imessage"
+    feature = "channel-imessage",
+    feature = "channel-nostr"
 ))]
 use super::config::{ChannelResolvedAccountRoute, LoongClawConfig, normalize_channel_account_id};
 #[cfg(any(
@@ -244,6 +251,8 @@ mod matrix;
 mod mattermost;
 #[cfg(feature = "channel-nextcloud-talk")]
 mod nextcloud_talk;
+#[cfg(feature = "channel-nostr")]
+mod nostr;
 mod registry;
 mod runtime_state;
 pub(crate) mod sdk;
@@ -290,19 +299,19 @@ pub use registry::{
     LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR, MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     MATRIX_COMMAND_FAMILY_DESCRIPTOR, MATRIX_RUNTIME_COMMAND_DESCRIPTOR,
     MATTERMOST_CATALOG_COMMAND_FAMILY_DESCRIPTOR, NEXTCLOUD_TALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR, SLACK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    SYNOLOGY_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
-    TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR, TWITCH_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    WECOM_COMMAND_FAMILY_DESCRIPTOR, WECOM_RUNTIME_COMMAND_DESCRIPTOR,
-    WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR, catalog_only_channel_entries, channel_inventory,
-    channel_status_snapshots, list_channel_catalog, normalize_channel_catalog_id,
-    normalize_channel_platform, resolve_channel_catalog_command_family_descriptor,
-    resolve_channel_catalog_entry, resolve_channel_catalog_operation,
-    resolve_channel_command_family_descriptor, resolve_channel_doctor_operation_spec,
-    resolve_channel_onboarding_descriptor, resolve_channel_operation_descriptor,
-    resolve_channel_runtime_command_descriptor,
+    NOSTR_CATALOG_COMMAND_FAMILY_DESCRIPTOR, SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    SLACK_CATALOG_COMMAND_FAMILY_DESCRIPTOR, SYNOLOGY_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    TELEGRAM_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR,
+    TWITCH_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WECOM_COMMAND_FAMILY_DESCRIPTOR,
+    WECOM_RUNTIME_COMMAND_DESCRIPTOR, WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    catalog_only_channel_entries, channel_inventory, channel_status_snapshots,
+    list_channel_catalog, normalize_channel_catalog_id, normalize_channel_platform,
+    resolve_channel_catalog_command_family_descriptor, resolve_channel_catalog_entry,
+    resolve_channel_catalog_operation, resolve_channel_command_family_descriptor,
+    resolve_channel_doctor_operation_spec, resolve_channel_onboarding_descriptor,
+    resolve_channel_operation_descriptor, resolve_channel_runtime_command_descriptor,
 };
 pub use runtime_state::ChannelOperationRuntime;
 use runtime_state::ChannelOperationRuntimeTracker;
@@ -856,7 +865,8 @@ type ChannelProcessFuture = Pin<Box<dyn Future<Output = CliResult<String>> + Sen
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
-    feature = "channel-imessage"
+    feature = "channel-imessage",
+    feature = "channel-nostr"
 ))]
 type ChannelCommandFuture<'a> = Pin<Box<dyn Future<Output = CliResult<()>> + Send + 'a>>;
 
@@ -1227,7 +1237,8 @@ where
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
-    feature = "channel-imessage"
+    feature = "channel-imessage",
+    feature = "channel-nostr"
 ))]
 #[derive(Debug, Clone)]
 struct ChannelCommandContext<R> {
@@ -1255,7 +1266,8 @@ struct ChannelCommandContext<R> {
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
-    feature = "channel-imessage"
+    feature = "channel-imessage",
+    feature = "channel-nostr"
 ))]
 impl<R> ChannelCommandContext<R> {
     fn emit_route_notice(&self, channel_id: &str) {
@@ -1340,7 +1352,8 @@ impl ChannelResolvedRuntimeAccount for ResolvedWecomChannelConfig {
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
-    feature = "channel-imessage"
+    feature = "channel-imessage",
+    feature = "channel-nostr"
 ))]
 async fn run_channel_send_command<R, F, G>(
     context: ChannelCommandContext<R>,
@@ -2094,6 +2107,39 @@ fn build_imessage_command_context(
     })
 }
 
+#[cfg(feature = "channel-nostr")]
+fn load_nostr_command_context(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedNostrChannelConfig>> {
+    let (resolved_path, config) = super::config::load(config_path)?;
+    build_nostr_command_context(resolved_path, config, account_id)
+}
+
+#[cfg(feature = "channel-nostr")]
+fn build_nostr_command_context(
+    resolved_path: PathBuf,
+    config: LoongClawConfig,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedNostrChannelConfig>> {
+    let resolved = config.nostr.resolve_account(account_id)?;
+    let route = config
+        .nostr
+        .resolved_account_route(account_id, resolved.configured_account_id.as_str());
+    if !resolved.enabled {
+        return Err(format!(
+            "nostr account `{}` is disabled by configuration",
+            resolved.configured_account_id
+        ));
+    }
+    Ok(ChannelCommandContext {
+        resolved_path,
+        config,
+        resolved,
+        route,
+    })
+}
+
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-discord",
@@ -2110,7 +2156,8 @@ fn build_imessage_command_context(
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-teams",
-    feature = "channel-imessage"
+    feature = "channel-imessage",
+    feature = "channel-nostr"
 ))]
 #[derive(Debug, Clone, Copy)]
 struct ChannelSendCommandSpec {
@@ -3462,6 +3509,66 @@ pub async fn run_imessage_send(
                     context.route.selected_by_default(),
                     context.route.default_account_source.as_str(),
                     target_kind
+                )
+            },
+        )
+        .await
+    }
+}
+
+#[allow(clippy::print_stdout)] // CLI output
+pub async fn run_nostr_send(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+    target: Option<&str>,
+    target_kind: ChannelOutboundTargetKind,
+    text: &str,
+) -> CliResult<()> {
+    if !cfg!(feature = "channel-nostr") {
+        return Err("nostr channel is disabled (enable feature `channel-nostr`)".to_owned());
+    }
+
+    #[cfg(not(feature = "channel-nostr"))]
+    {
+        let _ = (config_path, account_id, target, target_kind, text);
+        return Err("nostr channel is disabled (enable feature `channel-nostr`)".to_owned());
+    }
+
+    #[cfg(feature = "channel-nostr")]
+    {
+        let context = load_nostr_command_context(config_path, account_id)?;
+        let target = target
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        let target_selected = target.is_some();
+        let text = text.to_owned();
+        run_channel_send_command(
+            context,
+            ChannelSendCommandSpec {
+                channel_id: "nostr",
+            },
+            |context| {
+                Box::pin(async move {
+                    nostr::run_nostr_send(
+                        &context.resolved,
+                        target_kind,
+                        target.as_deref(),
+                        text.as_str(),
+                    )
+                    .await
+                })
+            },
+            |context| {
+                format!(
+                    "nostr event published (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, target_kind={}, target_selected={})",
+                    context.resolved_path.display(),
+                    context.resolved.configured_account_id,
+                    context.resolved.account.label,
+                    context.route.selected_by_default(),
+                    context.route.default_account_source.as_str(),
+                    target_kind,
+                    target_selected
                 )
             },
         )

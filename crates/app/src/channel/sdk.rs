@@ -217,6 +217,14 @@ const IMESSAGE_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     serve_subcommand: None,
 };
 
+const NOSTR_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
+    id: "nostr",
+    label: "nostr",
+    surface_label: "nostr channel",
+    runtime_kind: ChannelRuntimeKind::Service,
+    serve_subcommand: None,
+};
+
 const CLI_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     descriptor: &CLI_CHANNEL_DESCRIPTOR,
     background_runtime: None,
@@ -416,6 +424,14 @@ const IMESSAGE_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegr
     background_surface_is_enabled: None,
 };
 
+const NOSTR_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
+    descriptor: &NOSTR_CHANNEL_DESCRIPTOR,
+    background_runtime: None,
+    is_enabled: nostr_channel_is_enabled,
+    collect_validation_issues: collect_nostr_channel_validation_issues,
+    background_surface_is_enabled: None,
+};
+
 const CHANNEL_INTEGRATIONS: &[ChannelIntegrationDescriptor] = &[
     CLI_CHANNEL_INTEGRATION,
     TELEGRAM_CHANNEL_INTEGRATION,
@@ -438,6 +454,7 @@ const CHANNEL_INTEGRATIONS: &[ChannelIntegrationDescriptor] = &[
     SYNOLOGY_CHAT_CHANNEL_INTEGRATION,
     IRC_CHANNEL_INTEGRATION,
     IMESSAGE_CHANNEL_INTEGRATION,
+    NOSTR_CHANNEL_INTEGRATION,
 ];
 
 pub(crate) fn channel_descriptor(id: &str) -> Option<&'static ChannelDescriptor> {
@@ -598,6 +615,10 @@ fn imessage_channel_is_enabled(config: &LoongClawConfig) -> bool {
     config.imessage.enabled
 }
 
+fn nostr_channel_is_enabled(config: &LoongClawConfig) -> bool {
+    config.nostr.enabled
+}
+
 fn collect_cli_channel_validation_issues(_config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
     Vec::new()
 }
@@ -710,6 +731,10 @@ fn collect_imessage_channel_validation_issues(
     config.imessage.validate()
 }
 
+fn collect_nostr_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+    config.nostr.validate()
+}
+
 fn telegram_background_surface_is_enabled(
     config: &LoongClawConfig,
     account_id: Option<&str>,
@@ -812,6 +837,7 @@ mod tests {
                 "synology-chat",
                 "irc",
                 "imessage",
+                "nostr",
             ]
         );
     }

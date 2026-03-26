@@ -50,6 +50,8 @@ pub(crate) const TEAMS_TENANT_ID_ENV: &str = "TEAMS_TENANT_ID";
 pub(crate) const TEAMS_WEBHOOK_URL_ENV: &str = "TEAMS_WEBHOOK_URL";
 pub(crate) const IMESSAGE_BRIDGE_URL_ENV: &str = "IMESSAGE_BRIDGE_URL";
 pub(crate) const IMESSAGE_BRIDGE_TOKEN_ENV: &str = "IMESSAGE_BRIDGE_TOKEN";
+pub(crate) const NOSTR_RELAY_URLS_ENV: &str = "NOSTR_RELAY_URLS";
+pub(crate) const NOSTR_PRIVATE_KEY_ENV: &str = "NOSTR_PRIVATE_KEY";
 pub(crate) const IRC_SERVER_ENV: &str = "IRC_SERVER";
 pub(crate) const IRC_NICKNAME_ENV: &str = "IRC_NICKNAME";
 pub(crate) const IRC_PASSWORD_ENV: &str = "IRC_PASSWORD";
@@ -1315,6 +1317,54 @@ impl ResolvedImessageChannelConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NostrAccountConfig {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub relay_urls: Option<Vec<String>>,
+    #[serde(default)]
+    pub relay_urls_env: Option<String>,
+    #[serde(default)]
+    pub private_key: Option<SecretRef>,
+    #[serde(default)]
+    pub private_key_env: Option<String>,
+    #[serde(default)]
+    pub allowed_pubkeys: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedNostrChannelConfig {
+    pub configured_account_id: String,
+    pub configured_account_label: String,
+    pub account: ChannelAccountIdentity,
+    pub enabled: bool,
+    pub relay_urls: Vec<String>,
+    pub relay_urls_env: Option<String>,
+    pub private_key: Option<SecretRef>,
+    pub private_key_env: Option<String>,
+    pub allowed_pubkeys: Vec<String>,
+}
+
+impl ResolvedNostrChannelConfig {
+    pub fn relay_urls(&self) -> Vec<String> {
+        resolve_string_list_with_legacy_env(
+            Some(self.relay_urls.as_slice()),
+            self.relay_urls_env.as_deref(),
+        )
+    }
+
+    pub fn private_key(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.private_key.as_ref(), self.private_key_env.as_deref())
+    }
+
+    pub fn allowed_pubkeys(&self) -> Vec<String> {
+        normalize_string_list(self.allowed_pubkeys.as_slice())
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SignalAccountConfig {
     #[serde(default)]
     pub enabled: Option<bool>,
@@ -1826,6 +1876,29 @@ pub struct SignalChannelConfig {
     pub service_url_env: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, SignalAccountConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct NostrChannelConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub default_account: Option<String>,
+    #[serde(default)]
+    pub relay_urls: Vec<String>,
+    #[serde(default = "default_nostr_relay_urls_env")]
+    pub relay_urls_env: Option<String>,
+    #[serde(default)]
+    pub private_key: Option<SecretRef>,
+    #[serde(default = "default_nostr_private_key_env")]
+    pub private_key_env: Option<String>,
+    #[serde(default)]
+    pub allowed_pubkeys: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub accounts: BTreeMap<String, NostrAccountConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -2443,6 +2516,22 @@ impl Default for SignalChannelConfig {
             signal_account_env: Some(SIGNAL_ACCOUNT_ENV.to_owned()),
             service_url: None,
             service_url_env: Some(SIGNAL_SERVICE_URL_ENV.to_owned()),
+            accounts: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for NostrChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_id: None,
+            default_account: None,
+            relay_urls: Vec::new(),
+            relay_urls_env: Some(NOSTR_RELAY_URLS_ENV.to_owned()),
+            private_key: None,
+            private_key_env: Some(NOSTR_PRIVATE_KEY_ENV.to_owned()),
+            allowed_pubkeys: Vec::new(),
             accounts: BTreeMap::new(),
         }
     }
@@ -5951,6 +6040,202 @@ impl ImessageChannelConfig {
     }
 }
 
+impl NostrChannelConfig {
+    pub(crate) fn validate(&self) -> Vec<ConfigValidationIssue> {
+        let mut issues = Vec::new();
+        validate_channel_account_integrity(
+            &mut issues,
+            "nostr",
+            self.default_account.as_deref(),
+            self.accounts.keys(),
+        );
+        validate_nostr_env_pointer(
+            &mut issues,
+            "nostr.relay_urls_env",
+            self.relay_urls_env.as_deref(),
+            "nostr.relay_urls",
+        );
+        validate_nostr_env_pointer(
+            &mut issues,
+            "nostr.private_key_env",
+            self.private_key_env.as_deref(),
+            "nostr.private_key",
+        );
+        validate_nostr_secret_ref_env_pointer(
+            &mut issues,
+            "nostr.private_key",
+            self.private_key.as_ref(),
+        );
+        for (raw_account_id, account) in &self.accounts {
+            let account_id = normalize_channel_account_id(raw_account_id);
+
+            let relay_urls_field_path = format!("nostr.accounts.{account_id}.relay_urls");
+            let relay_urls_env_field_path = format!("{relay_urls_field_path}_env");
+            validate_nostr_env_pointer(
+                &mut issues,
+                relay_urls_env_field_path.as_str(),
+                account.relay_urls_env.as_deref(),
+                relay_urls_field_path.as_str(),
+            );
+
+            let private_key_field_path = format!("nostr.accounts.{account_id}.private_key");
+            let private_key_env_field_path = format!("{private_key_field_path}_env");
+            validate_nostr_env_pointer(
+                &mut issues,
+                private_key_env_field_path.as_str(),
+                account.private_key_env.as_deref(),
+                private_key_field_path.as_str(),
+            );
+            validate_nostr_secret_ref_env_pointer(
+                &mut issues,
+                private_key_field_path.as_str(),
+                account.private_key.as_ref(),
+            );
+        }
+        issues
+    }
+
+    pub fn relay_urls(&self) -> Vec<String> {
+        resolve_string_list_with_legacy_env(
+            Some(self.relay_urls.as_slice()),
+            self.relay_urls_env.as_deref(),
+        )
+    }
+
+    pub fn private_key(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.private_key.as_ref(), self.private_key_env.as_deref())
+    }
+
+    pub fn allowed_pubkeys(&self) -> Vec<String> {
+        normalize_string_list(self.allowed_pubkeys.as_slice())
+    }
+
+    pub fn configured_account_ids(&self) -> Vec<String> {
+        let ids = configured_account_ids(self.accounts.keys());
+        if ids.is_empty() {
+            return vec![self.default_configured_account_id()];
+        }
+        ids
+    }
+
+    pub fn default_configured_account_selection(&self) -> ChannelDefaultAccountSelection {
+        resolve_default_configured_account_selection(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+
+    pub fn default_configured_account_id(&self) -> String {
+        let selection = self.default_configured_account_selection();
+        selection.id
+    }
+
+    pub fn resolved_account_route(
+        &self,
+        requested_account_id: Option<&str>,
+        selected_configured_account_id: &str,
+    ) -> ChannelResolvedAccountRoute {
+        resolve_channel_account_route(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+            requested_account_id,
+            selected_configured_account_id,
+        )
+    }
+
+    pub fn resolve_account(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedNostrChannelConfig> {
+        let configured = self.resolve_configured_account_selection(requested_account_id)?;
+        let account_override = configured
+            .account_key
+            .as_deref()
+            .and_then(|key| self.accounts.get(key));
+
+        let merged = NostrChannelConfig {
+            enabled: self.enabled
+                && account_override
+                    .and_then(|account| account.enabled)
+                    .unwrap_or(true),
+            account_id: account_override
+                .and_then(|account| account.account_id.clone())
+                .or_else(|| self.account_id.clone()),
+            default_account: None,
+            relay_urls: account_override
+                .and_then(|account| account.relay_urls.clone())
+                .unwrap_or_else(|| self.relay_urls.clone()),
+            relay_urls_env: account_override
+                .and_then(|account| account.relay_urls_env.clone())
+                .or_else(|| self.relay_urls_env.clone()),
+            private_key: account_override
+                .and_then(|account| account.private_key.clone())
+                .or_else(|| self.private_key.clone()),
+            private_key_env: account_override
+                .and_then(|account| account.private_key_env.clone())
+                .or_else(|| self.private_key_env.clone()),
+            allowed_pubkeys: account_override
+                .and_then(|account| account.allowed_pubkeys.clone())
+                .unwrap_or_else(|| self.allowed_pubkeys.clone()),
+            accounts: BTreeMap::new(),
+        };
+        let account = merged.resolved_account_identity();
+
+        Ok(ResolvedNostrChannelConfig {
+            configured_account_id: configured.id,
+            configured_account_label: configured.label,
+            account,
+            enabled: merged.enabled,
+            relay_urls: merged.relay_urls,
+            relay_urls_env: merged.relay_urls_env,
+            private_key: merged.private_key,
+            private_key_env: merged.private_key_env,
+            allowed_pubkeys: merged.allowed_pubkeys,
+        })
+    }
+
+    pub fn resolve_account_for_session_account_id(
+        &self,
+        session_account_id: Option<&str>,
+    ) -> CliResult<ResolvedNostrChannelConfig> {
+        let resolved = resolve_account_for_session_account_id(
+            session_account_id,
+            || self.resolve_account(session_account_id),
+            || self.configured_account_ids(),
+            |configured_id| self.resolve_account(Some(configured_id)),
+            |resolved| resolved.account.id.as_str(),
+        )?;
+        Ok(resolved)
+    }
+
+    pub fn resolved_account_identity(&self) -> ChannelAccountIdentity {
+        if let Some((id, label)) = resolve_configured_account_identity(self.account_id.as_deref()) {
+            return ChannelAccountIdentity {
+                id,
+                label,
+                source: ChannelAccountIdentitySource::Configured,
+            };
+        }
+
+        default_channel_account_identity()
+    }
+
+    fn resolve_configured_account_selection(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedConfiguredAccount> {
+        let configured = resolve_configured_account_selection(
+            self.accounts.keys(),
+            requested_account_id,
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )?;
+        Ok(configured)
+    }
+}
+
 impl SignalChannelConfig {
     pub(crate) fn validate(&self) -> Vec<ConfigValidationIssue> {
         let mut issues = Vec::new();
@@ -6733,6 +7018,14 @@ fn default_imessage_bridge_token_env() -> Option<String> {
     Some(IMESSAGE_BRIDGE_TOKEN_ENV.to_owned())
 }
 
+fn default_nostr_relay_urls_env() -> Option<String> {
+    Some(NOSTR_RELAY_URLS_ENV.to_owned())
+}
+
+fn default_nostr_private_key_env() -> Option<String> {
+    Some(NOSTR_PRIVATE_KEY_ENV.to_owned())
+}
+
 fn default_signal_service_url() -> String {
     "http://127.0.0.1:8080".to_owned()
 }
@@ -6848,6 +7141,59 @@ fn resolve_string_with_legacy_env(raw: Option<&str>, env_key: Option<&str>) -> O
         return None;
     }
     Some(trimmed_value.to_owned())
+}
+
+fn resolve_string_list_with_legacy_env(
+    raw: Option<&[String]>,
+    env_key: Option<&str>,
+) -> Vec<String> {
+    let inline_values = raw.map(normalize_string_list).unwrap_or_default();
+    if !inline_values.is_empty() {
+        return inline_values;
+    }
+
+    let env_name = env_key.map(str::trim).filter(|value| !value.is_empty());
+    let Some(env_name) = env_name else {
+        return Vec::new();
+    };
+    let env_value = std::env::var(env_name);
+    let Ok(env_value) = env_value else {
+        return Vec::new();
+    };
+
+    parse_string_list_env_value(env_value.as_str())
+}
+
+fn normalize_string_list(raw: &[String]) -> Vec<String> {
+    let mut values = Vec::new();
+    for item in raw {
+        let trimmed = item.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let value = trimmed.to_owned();
+        values.push(value);
+    }
+    values
+}
+
+fn parse_string_list_env_value(raw: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    for line in raw.lines() {
+        let trimmed_line = line.trim();
+        if trimmed_line.is_empty() {
+            continue;
+        }
+        for segment in trimmed_line.split(',') {
+            let trimmed_segment = segment.trim();
+            if trimmed_segment.is_empty() {
+                continue;
+            }
+            let value = trimmed_segment.to_owned();
+            values.push(value);
+        }
+    }
+    values
 }
 
 pub(crate) fn parse_email_smtp_endpoint(raw: &str) -> CliResult<EmailSmtpEndpoint> {
@@ -7698,6 +8044,48 @@ fn validate_imessage_secret_ref_env_pointer(
         EnvPointerValidationHint {
             inline_field_path: field_path,
             example_env_name: IMESSAGE_BRIDGE_TOKEN_ENV,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_nostr_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    env_key: Option<&str>,
+    inline_field_path: &str,
+) {
+    let example_env_name = if field_path.ends_with("relay_urls_env") {
+        NOSTR_RELAY_URLS_ENV
+    } else {
+        NOSTR_PRIVATE_KEY_ENV
+    };
+    if let Err(issue) = validate_env_pointer_field(
+        field_path,
+        env_key,
+        EnvPointerValidationHint {
+            inline_field_path,
+            example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_nostr_secret_ref_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    secret_ref: Option<&SecretRef>,
+) {
+    if let Err(issue) = validate_secret_ref_env_pointer_field(
+        field_path,
+        secret_ref,
+        EnvPointerValidationHint {
+            inline_field_path: field_path,
+            example_env_name: NOSTR_PRIVATE_KEY_ENV,
             detect_telegram_token_shape: false,
         },
     ) {
@@ -9996,6 +10384,118 @@ mod tests {
             config.service_url_env.as_deref(),
             Some(SIGNAL_SERVICE_URL_ENV)
         );
+    }
+
+    #[test]
+    fn nostr_partial_deserialization_keeps_default_env_pointers() {
+        let config: NostrChannelConfig = serde_json::from_value(json!({
+            "enabled": true
+        }))
+        .expect("deserialize nostr config");
+
+        assert_eq!(config.relay_urls_env.as_deref(), Some(NOSTR_RELAY_URLS_ENV));
+        assert_eq!(
+            config.private_key_env.as_deref(),
+            Some(NOSTR_PRIVATE_KEY_ENV)
+        );
+    }
+
+    #[test]
+    fn nostr_resolves_relay_urls_and_private_key_from_env_pointers() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set(
+            "TEST_NOSTR_RELAY_URLS",
+            "wss://relay.one,\n\n wss://relay.two \n wss://relay.three ",
+        );
+        env.set("TEST_NOSTR_PRIVATE_KEY", "nsec1exampleprivatekey");
+
+        let config_value = json!({
+            "enabled": true,
+            "account_id": "Nostr-Ops",
+            "relay_urls_env": "TEST_NOSTR_RELAY_URLS",
+            "private_key_env": "TEST_NOSTR_PRIVATE_KEY",
+            "allowed_pubkeys": ["pubkey-one"]
+        });
+        let config: NostrChannelConfig =
+            serde_json::from_value(config_value).expect("deserialize nostr config");
+
+        let resolved = config
+            .resolve_account(None)
+            .expect("resolve default nostr account");
+        let relay_urls = resolved.relay_urls();
+        let private_key = resolved.private_key();
+
+        assert_eq!(resolved.configured_account_id, "nostr-ops");
+        assert_eq!(resolved.account.id, "nostr-ops");
+        assert_eq!(resolved.account.label, "Nostr-Ops");
+        assert_eq!(
+            relay_urls,
+            vec![
+                "wss://relay.one".to_owned(),
+                "wss://relay.two".to_owned(),
+                "wss://relay.three".to_owned(),
+            ]
+        );
+        assert_eq!(private_key.as_deref(), Some("nsec1exampleprivatekey"));
+        assert_eq!(resolved.allowed_pubkeys(), vec!["pubkey-one".to_owned()]);
+    }
+
+    #[test]
+    fn nostr_multi_account_resolution_merges_base_and_account_overrides() {
+        let config_value = json!({
+            "enabled": true,
+            "account_id": "Nostr-Shared",
+            "relay_urls": ["wss://relay.base"],
+            "private_key": "base-private-key",
+            "allowed_pubkeys": ["base-pubkey"],
+            "default_account": "Ops",
+            "accounts": {
+                "Ops": {
+                    "account_id": "Nostr-Ops",
+                    "relay_urls": ["wss://relay.ops"],
+                    "allowed_pubkeys": ["ops-pubkey-a", "ops-pubkey-b"]
+                },
+                "Backup": {
+                    "enabled": false,
+                    "private_key": "backup-private-key"
+                }
+            }
+        });
+        let config: NostrChannelConfig =
+            serde_json::from_value(config_value).expect("deserialize nostr multi-account config");
+
+        assert_eq!(config.configured_account_ids(), vec!["backup", "ops"]);
+        assert_eq!(config.default_configured_account_id(), "ops");
+
+        let ops = config
+            .resolve_account(None)
+            .expect("resolve default nostr account");
+        let ops_relay_urls = ops.relay_urls();
+        let ops_private_key = ops.private_key();
+
+        assert_eq!(ops.configured_account_id, "ops");
+        assert_eq!(ops.account.id, "nostr-ops");
+        assert_eq!(ops.account.label, "Nostr-Ops");
+        assert_eq!(ops_relay_urls, vec!["wss://relay.ops".to_owned()]);
+        assert_eq!(ops_private_key.as_deref(), Some("base-private-key"));
+        assert_eq!(
+            ops.allowed_pubkeys(),
+            vec!["ops-pubkey-a".to_owned(), "ops-pubkey-b".to_owned()]
+        );
+
+        let backup = config
+            .resolve_account(Some("Backup"))
+            .expect("resolve explicit nostr account");
+        let backup_relay_urls = backup.relay_urls();
+        let backup_private_key = backup.private_key();
+
+        assert_eq!(backup.configured_account_id, "backup");
+        assert!(!backup.enabled);
+        assert_eq!(backup.account.id, "nostr-shared");
+        assert_eq!(backup.account.label, "Nostr-Shared");
+        assert_eq!(backup_relay_urls, vec!["wss://relay.base".to_owned()]);
+        assert_eq!(backup_private_key.as_deref(), Some("backup-private-key"));
+        assert_eq!(backup.allowed_pubkeys(), vec!["base-pubkey".to_owned()]);
     }
 
     #[test]
