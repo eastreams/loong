@@ -1,5 +1,11 @@
 # Product Mode Capability Acquisition Implementation Plan
 
+> Follow-up refinement: issue `#596` keeps the product-facing `product mode`
+> surface, but updates the internal implementation target to an autonomy-policy
+> kernel. The slice order below still applies, but new runtime types should
+> compile product-mode presets into policy snapshots rather than hard-coding all
+> behavior directly on the mode enum.
+
 > Execution note: implement this plan in follow-up slices after the contract in
 > issue `#581` is accepted.
 

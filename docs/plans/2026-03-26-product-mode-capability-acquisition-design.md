@@ -1,5 +1,12 @@
 # Product Mode Capability Acquisition Design
 
+> Follow-up refinement: issue `#596` keeps `product mode` as the external
+> product/profile surface, but generalizes the internal runtime control plane
+> into an autonomy-policy kernel. This document remains the product-facing
+> capability-acquisition contract. See
+> `docs/plans/2026-03-26-autonomy-policy-kernel-architecture.md` for the
+> internal architecture refinement.
+
 **Problem**
 
 LoongClaw now has a materially better `discovery-first` substrate, but it still
