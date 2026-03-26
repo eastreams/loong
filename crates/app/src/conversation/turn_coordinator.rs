@@ -4832,19 +4832,20 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
 ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
     let repo = SessionRepository::new(&MemoryRuntimeConfig::from_memory_config(&config.memory))?;
     let start = Instant::now();
-    let child_result = timeout(Duration::from_secs(timeout_seconds), async {
-        AssertUnwindSafe(ConversationTurnCoordinator::new().handle_turn_with_runtime(
-            config,
-            child_session_id,
-            user_input,
-            ProviderErrorMode::Propagate,
-            runtime,
-            binding,
-        ))
-        .catch_unwind()
-        .await
-    })
-    .await;
+    let child_coordinator = ConversationTurnCoordinator::new();
+    let child_turn_future = child_coordinator.handle_turn_with_runtime(
+        config,
+        child_session_id,
+        user_input,
+        ProviderErrorMode::Propagate,
+        runtime,
+        binding,
+    );
+    // Heap-allocate nested delegate turn futures so each child turn does not inline the next
+    // delegate layer into the parent future on small-stack platforms like Windows.
+    let child_turn_future = Box::pin(AssertUnwindSafe(child_turn_future).catch_unwind());
+    let child_timeout = Duration::from_secs(timeout_seconds);
+    let child_result = timeout(child_timeout, child_turn_future).await;
     let duration_ms = start.elapsed().as_millis() as u64;
 
     match child_result {
