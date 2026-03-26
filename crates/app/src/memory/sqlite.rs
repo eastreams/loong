@@ -811,6 +811,39 @@ fn lexical_normalize_runtime_db_path(path: &Path) -> PathBuf {
     }
 }
 
+/// Walk up the directory tree to find the deepest existing ancestor, canonicalize it
+/// via [`dunce::canonicalize`], and reattach the remaining path components.  This
+/// resolves Windows 8.3 short names (e.g. `RUNNER~1` -> `runneradmin`) even when
+/// the target file and its immediate parent directory do not yet exist.
+fn canonicalize_existing_ancestor(path: &Path) -> PathBuf {
+    let mut remaining = Vec::new();
+    let mut current = path.to_path_buf();
+
+    while !current.exists() {
+        let Some(name) = current.file_name().map(|n| n.to_os_string()) else {
+            return path.to_path_buf();
+        };
+        remaining.push(name);
+        let Some(parent) = current.parent().map(|p| p.to_path_buf()) else {
+            return path.to_path_buf();
+        };
+        if parent == current {
+            return path.to_path_buf();
+        }
+        current = parent;
+    }
+
+    match dunce::canonicalize(&current) {
+        Ok(mut canonical) => {
+            for component in remaining.into_iter().rev() {
+                canonical.push(component);
+            }
+            canonical
+        }
+        Err(_) => path.to_path_buf(),
+    }
+}
+
 fn normalize_runtime_db_path(path: &Path) -> Result<PathBuf, String> {
     let absolute = lexical_normalize_runtime_db_path(&absolutize_runtime_db_path(path)?);
     if let Some(normalized_path) = sqlite_runtime_path_alias_registry()
@@ -840,7 +873,7 @@ fn normalize_runtime_db_path(path: &Path) -> Result<PathBuf, String> {
 
         match dunce::canonicalize(parent) {
             Ok(canonical_parent) => canonical_parent.join(file_name),
-            Err(_) => absolute.clone(),
+            Err(_) => canonicalize_existing_ancestor(&absolute),
         }
     };
 
