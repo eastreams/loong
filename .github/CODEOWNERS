@@ -1,0 +1,114 @@
+# Documentation and contributor-facing Markdown
+/*.md @loongclaw-ai/doc-ops
+/**/*.md @loongclaw-ai/doc-ops
+/docs/** @loongclaw-ai/doc-ops
+/.github/ISSUE_TEMPLATE/** @loongclaw-ai/doc-ops
+/.github/PULL_REQUEST_TEMPLATE.md @loongclaw-ai/doc-ops
+/docs/product-specs/** @loongclaw-ai/doc-ops @loongclaw-ai/ux
+
+# Harness engineering: automation, CI/CD, audit, and verification
+/.convention-engineering.json @loongclaw-ai/harness
+/.github/dependabot.yml @loongclaw-ai/harness
+/.github/labeler.yml @loongclaw-ai/harness
+/.github/label_taxonomy.json @loongclaw-ai/harness
+/.github/workflows/** @loongclaw-ai/harness
+/Taskfile.yml @loongclaw-ai/harness
+/crates/contracts/src/audit_types.rs @loongclaw-ai/harness @loongclaw-ai/sec-ops
+/crates/daemon/src/audit_cli.rs @loongclaw-ai/harness @loongclaw-ai/sec-ops
+/crates/kernel/src/audit.rs @loongclaw-ai/harness @loongclaw-ai/sec-ops
+/crates/kernel/src/harness.rs @loongclaw-ai/harness
+/scripts/architecture_budget_lib.sh @loongclaw-ai/harness
+/scripts/check*.sh @loongclaw-ai/harness
+/scripts/generate_architecture_drift_report.sh @loongclaw-ai/harness
+/scripts/pre-commit @loongclaw-ai/harness
+/scripts/stress_daemon_tests.sh @loongclaw-ai/harness
+/scripts/sync_github_labels.py @loongclaw-ai/harness
+/scripts/test_*.sh @loongclaw-ai/harness
+/skills/update-harness.skill @loongclaw-ai/harness
+/docs/design-docs/harness-engineering.md @loongclaw-ai/doc-ops @loongclaw-ai/harness
+/docs/plans/*audit* @loongclaw-ai/doc-ops @loongclaw-ai/harness @loongclaw-ai/sec-ops
+/docs/plans/*harness* @loongclaw-ai/doc-ops @loongclaw-ai/harness
+
+# Efficiency engineering: memory, budget, and benchmark surfaces
+/.github/workflows/perf-benchmark.yml @loongclaw-ai/harness @loongclaw-ai/efficiency-engineering
+/.github/workflows/perf-lint.yml @loongclaw-ai/harness @loongclaw-ai/efficiency-engineering
+/crates/bench/** @loongclaw-ai/efficiency-engineering
+/crates/app/src/config/memory.rs @loongclaw-ai/efficiency-engineering
+/crates/app/src/conversation/compaction.rs @loongclaw-ai/efficiency-engineering
+/crates/app/src/conversation/turn_budget.rs @loongclaw-ai/efficiency-engineering
+/crates/app/src/memory/** @loongclaw-ai/efficiency-engineering
+/crates/app/src/runtime_self_continuity.rs @loongclaw-ai/efficiency-engineering
+/crates/app/src/tools/memory_tools.rs @loongclaw-ai/efficiency-engineering
+/crates/contracts/src/memory_types.rs @loongclaw-ai/efficiency-engineering
+/crates/kernel/src/memory.rs @loongclaw-ai/efficiency-engineering
+/crates/daemon/src/memory_context_benchmark.rs @loongclaw-ai/efficiency-engineering
+/crates/daemon/tests/integration/memory_context_benchmark_cli.rs @loongclaw-ai/efficiency-engineering
+/examples/benchmarks/** @loongclaw-ai/efficiency-engineering
+/scripts/benchmark_*.sh @loongclaw-ai/efficiency-engineering
+/scripts/lint_programmatic_pressure_baseline.sh @loongclaw-ai/efficiency-engineering
+/scripts/update_programmatic_pressure_schema_baseline.sh @loongclaw-ai/efficiency-engineering
+/docs/product-specs/memory-profiles.md @loongclaw-ai/doc-ops @loongclaw-ai/ux @loongclaw-ai/efficiency-engineering
+/docs/product-specs/runtime-self-continuity.md @loongclaw-ai/doc-ops @loongclaw-ai/ux @loongclaw-ai/efficiency-engineering
+/docs/plans/*benchmark* @loongclaw-ai/doc-ops @loongclaw-ai/efficiency-engineering
+/docs/plans/*compaction* @loongclaw-ai/doc-ops @loongclaw-ai/efficiency-engineering
+/docs/plans/*memory* @loongclaw-ai/doc-ops @loongclaw-ai/efficiency-engineering
+
+# Release management: release pipeline, artifacts, and install surfaces
+/.github/workflows/enforce-main-to-release.yml @loongclaw-ai/harness @loongclaw-ai/release-managers
+/.github/workflows/release.yml @loongclaw-ai/harness @loongclaw-ai/release-managers
+/CHANGELOG.md @loongclaw-ai/doc-ops @loongclaw-ai/release-managers
+/scripts/bootstrap_release_local_artifacts.sh @loongclaw-ai/harness @loongclaw-ai/release-managers
+/scripts/install.ps1 @loongclaw-ai/release-managers @loongclaw-ai/ux
+/scripts/install.sh @loongclaw-ai/release-managers @loongclaw-ai/ux
+/scripts/release_artifact_lib.sh @loongclaw-ai/harness @loongclaw-ai/release-managers
+/scripts/test_bootstrap_release_local_artifacts.sh @loongclaw-ai/harness @loongclaw-ai/release-managers
+/scripts/test_install_sh.sh @loongclaw-ai/release-managers @loongclaw-ai/ux
+/scripts/test_release_artifact_lib.sh @loongclaw-ai/harness @loongclaw-ai/release-managers
+/scripts/test_release_workflow_hardening.sh @loongclaw-ai/harness @loongclaw-ai/release-managers
+/docs/releases/** @loongclaw-ai/doc-ops @loongclaw-ai/release-managers
+/docs/product-specs/installation.md @loongclaw-ai/doc-ops @loongclaw-ai/ux @loongclaw-ai/release-managers
+/docs/plans/*release* @loongclaw-ai/doc-ops @loongclaw-ai/release-managers
+/docs/plans/*install* @loongclaw-ai/doc-ops @loongclaw-ai/ux @loongclaw-ai/release-managers
+
+# Security operations: policy, credentials, and security scans
+/.github/workflows/codeql.yml @loongclaw-ai/harness @loongclaw-ai/sec-ops
+/.github/workflows/security.yml @loongclaw-ai/harness @loongclaw-ai/sec-ops
+/SECURITY.md @loongclaw-ai/doc-ops @loongclaw-ai/sec-ops
+/crates/contracts/src/execution_security_types.rs @loongclaw-ai/sec-ops
+/crates/contracts/src/policy_types.rs @loongclaw-ai/sec-ops
+/crates/contracts/src/secret_*.rs @loongclaw-ai/sec-ops
+/crates/daemon/src/provider_credential_policy.rs @loongclaw-ai/sec-ops
+/crates/kernel/src/policy.rs @loongclaw-ai/sec-ops
+/crates/kernel/src/policy_ext.rs @loongclaw-ai/sec-ops
+/crates/spec/config/security-scan-medium-balanced.json @loongclaw-ai/sec-ops
+/crates/spec/src/spec_execution/security_scan_*.rs @loongclaw-ai/sec-ops
+/examples/policy/** @loongclaw-ai/sec-ops
+/examples/spec/plugin-wasm-security-scan.json @loongclaw-ai/sec-ops
+/docs/SECURITY.md @loongclaw-ai/doc-ops @loongclaw-ai/sec-ops
+/docs/plans/*security* @loongclaw-ai/doc-ops @loongclaw-ai/sec-ops
+
+# UI and UX: presentation, first-run, and user-facing product surfaces
+/assets/** @loongclaw-ai/ui
+/crates/app/src/tui_surface.rs @loongclaw-ai/ui @loongclaw-ai/ux
+/crates/daemon/src/browser_companion_diagnostics.rs @loongclaw-ai/ux
+/crates/daemon/src/browser_preview.rs @loongclaw-ai/ui @loongclaw-ai/ux
+/crates/daemon/src/cli_handoff.rs @loongclaw-ai/ux
+/crates/daemon/src/completions_cli.rs @loongclaw-ai/ux
+/crates/daemon/src/doctor_cli.rs @loongclaw-ai/ux
+/crates/daemon/src/next_actions.rs @loongclaw-ai/ux
+/crates/daemon/src/onboard*.rs @loongclaw-ai/ux
+/crates/daemon/src/onboarding_*.rs @loongclaw-ai/ux
+/crates/daemon/src/provider_presentation.rs @loongclaw-ai/ux
+/crates/daemon/src/source_presentation.rs @loongclaw-ai/ux
+/crates/daemon/tests/integration/doctor_feishu.rs @loongclaw-ai/ux
+/crates/daemon/tests/integration/onboard_cli.rs @loongclaw-ai/ux
+/docs/product-specs/web-ui.md @loongclaw-ai/doc-ops @loongclaw-ai/ui @loongclaw-ai/ux
+/docs/plans/*doctor* @loongclaw-ai/doc-ops @loongclaw-ai/ux
+/docs/plans/*first-run* @loongclaw-ai/doc-ops @loongclaw-ai/ux
+/docs/plans/*onboard* @loongclaw-ai/doc-ops @loongclaw-ai/ux
+/docs/plans/*personality* @loongclaw-ai/doc-ops @loongclaw-ai/ux
+/docs/plans/*browser-companion* @loongclaw-ai/doc-ops @loongclaw-ai/ui @loongclaw-ai/ux
+/docs/plans/*browser-preview* @loongclaw-ai/doc-ops @loongclaw-ai/ui @loongclaw-ai/ux
+
+# Keep ownership rules reviewed by the designated maintainers
+/.github/CODEOWNERS @chumyin @gh-xj @primaryphd
