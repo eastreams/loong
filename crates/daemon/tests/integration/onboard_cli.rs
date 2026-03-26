@@ -7386,7 +7386,10 @@ fn build_channel_onboarding_follow_up_lines_reports_manual_and_planned_channels(
         line.contains("Webhook [webhook]")
             && line.contains("selection_order=110")
             && line.contains("selection_label=\"generic http integration\"")
-            && line.contains("strategy=planned")
+            && line.contains("strategy=manual_config")
+            && line.contains("repair_command=\"loongclaw doctor --fix\"")
+            && line.contains("status_command=\"loongclaw doctor\"")
+            && line.contains("blurb=\"Shipped generic webhook outbound surface")
     }));
     assert!(lines.iter().any(|line| {
         line.contains("Mattermost [mattermost]")

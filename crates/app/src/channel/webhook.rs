@@ -1,0 +1,250 @@
+use reqwest::header::{CONTENT_TYPE, HeaderName, HeaderValue};
+use serde_json::{Map, Value};
+
+use crate::{
+    CliResult,
+    config::{ResolvedWebhookChannelConfig, WebhookPayloadFormat},
+};
+
+use super::ChannelOutboundTargetKind;
+
+const WEBHOOK_JSON_CONTENT_TYPE: &str = "application/json";
+const WEBHOOK_TEXT_CONTENT_TYPE: &str = "text/plain; charset=utf-8";
+
+struct WebhookRequestBody {
+    content_type: &'static str,
+    body: Vec<u8>,
+}
+
+pub(super) async fn run_webhook_send(
+    resolved: &ResolvedWebhookChannelConfig,
+    target_kind: ChannelOutboundTargetKind,
+    endpoint_url: &str,
+    text: &str,
+) -> CliResult<()> {
+    ensure_webhook_target_kind(target_kind)?;
+
+    let request_url = parse_webhook_endpoint_url(endpoint_url)?;
+    let request_body = build_webhook_request_body(resolved, text)?;
+    let auth_header = build_webhook_auth_header(resolved)?;
+
+    let client = reqwest::Client::new();
+    let mut request = client
+        .post(request_url)
+        .header(CONTENT_TYPE, request_body.content_type)
+        .body(request_body.body);
+
+    if let Some((header_name, header_value)) = auth_header {
+        request = request.header(header_name, header_value);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("webhook send failed: {error}"))?;
+
+    ensure_webhook_success(response).await
+}
+
+fn ensure_webhook_target_kind(target_kind: ChannelOutboundTargetKind) -> CliResult<()> {
+    if target_kind == ChannelOutboundTargetKind::Endpoint {
+        return Ok(());
+    }
+
+    Err(format!(
+        "webhook send requires endpoint target kind, got {}",
+        target_kind.as_str()
+    ))
+}
+
+fn parse_webhook_endpoint_url(endpoint_url: &str) -> CliResult<reqwest::Url> {
+    let trimmed_endpoint_url = endpoint_url.trim();
+    if trimmed_endpoint_url.is_empty() {
+        return Err("webhook outbound target endpoint is empty".to_owned());
+    }
+
+    let request_url = reqwest::Url::parse(trimmed_endpoint_url)
+        .map_err(|error| format!("webhook outbound target endpoint is invalid: {error}"))?;
+    let scheme = request_url.scheme();
+    let is_http = scheme == "http";
+    let is_https = scheme == "https";
+    if is_http || is_https {
+        return Ok(request_url);
+    }
+
+    Err(format!(
+        "webhook outbound target endpoint must use http or https, got {scheme}"
+    ))
+}
+
+fn build_webhook_request_body(
+    resolved: &ResolvedWebhookChannelConfig,
+    text: &str,
+) -> CliResult<WebhookRequestBody> {
+    match resolved.payload_format {
+        WebhookPayloadFormat::JsonText => build_webhook_json_request_body(resolved, text),
+        WebhookPayloadFormat::PlainText => build_webhook_plain_text_request_body(text),
+    }
+}
+
+fn build_webhook_json_request_body(
+    resolved: &ResolvedWebhookChannelConfig,
+    text: &str,
+) -> CliResult<WebhookRequestBody> {
+    let request_json = build_webhook_json_payload(resolved, text)?;
+    let request_bytes = serde_json::to_vec(&request_json)
+        .map_err(|error| format!("serialize webhook json payload failed: {error}"))?;
+
+    Ok(WebhookRequestBody {
+        content_type: WEBHOOK_JSON_CONTENT_TYPE,
+        body: request_bytes,
+    })
+}
+
+fn build_webhook_plain_text_request_body(text: &str) -> CliResult<WebhookRequestBody> {
+    let request_text = text.to_owned();
+    let request_bytes = request_text.into_bytes();
+
+    Ok(WebhookRequestBody {
+        content_type: WEBHOOK_TEXT_CONTENT_TYPE,
+        body: request_bytes,
+    })
+}
+
+fn build_webhook_json_payload(
+    resolved: &ResolvedWebhookChannelConfig,
+    text: &str,
+) -> CliResult<Value> {
+    let field_name = resolved.payload_text_field.trim();
+    if field_name.is_empty() {
+        return Err("webhook payload_text_field is empty for json_text payload format".to_owned());
+    }
+
+    let mut payload = Map::new();
+    let text_value = Value::String(text.to_owned());
+    payload.insert(field_name.to_owned(), text_value);
+
+    Ok(Value::Object(payload))
+}
+
+fn build_webhook_auth_header(
+    resolved: &ResolvedWebhookChannelConfig,
+) -> CliResult<Option<(HeaderName, HeaderValue)>> {
+    let Some(auth_token) = resolved.auth_token() else {
+        return Ok(None);
+    };
+
+    let trimmed_token = auth_token.trim();
+    if trimmed_token.is_empty() {
+        return Err("webhook auth_token is empty".to_owned());
+    }
+
+    let header_name_raw = resolved.auth_header_name.trim();
+    if header_name_raw.is_empty() {
+        return Err("webhook auth_header_name is empty".to_owned());
+    }
+
+    let header_name = HeaderName::from_bytes(header_name_raw.as_bytes())
+        .map_err(|error| format!("webhook auth_header_name is invalid: {error}"))?;
+    let header_value_raw = format!("{}{}", resolved.auth_token_prefix, trimmed_token);
+    let header_value = HeaderValue::from_str(header_value_raw.as_str())
+        .map_err(|error| format!("webhook auth header value is invalid: {error}"))?;
+
+    Ok(Some((header_name, header_value)))
+}
+
+async fn ensure_webhook_success(response: reqwest::Response) -> CliResult<()> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("read webhook error response failed: {error}"))?;
+    let trimmed_body = body.trim();
+    let detail = if trimmed_body.is_empty() {
+        "empty response body".to_owned()
+    } else {
+        trimmed_body.to_owned()
+    };
+
+    Err(format!(
+        "webhook send failed with status {}: {detail}",
+        status.as_u16()
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::WebhookChannelConfig;
+
+    fn test_resolved_webhook_config(
+        payload_format: WebhookPayloadFormat,
+    ) -> ResolvedWebhookChannelConfig {
+        let payload_format_raw = payload_format.as_str();
+        let config: WebhookChannelConfig = serde_json::from_value(serde_json::json!({
+            "enabled": true,
+            "account_id": "Webhook Ops",
+            "payload_format": payload_format_raw,
+            "payload_text_field": "message"
+        }))
+        .expect("deserialize webhook config");
+
+        config
+            .resolve_account(None)
+            .expect("resolve webhook config for tests")
+    }
+
+    #[test]
+    fn build_webhook_json_payload_uses_custom_text_field() {
+        let resolved = test_resolved_webhook_config(WebhookPayloadFormat::JsonText);
+
+        let payload = build_webhook_json_payload(&resolved, "hello webhook")
+            .expect("build webhook json payload");
+
+        assert_eq!(payload["message"].as_str(), Some("hello webhook"));
+    }
+
+    #[test]
+    fn build_webhook_plain_text_request_body_returns_raw_text() {
+        let request_body = build_webhook_plain_text_request_body("hello webhook")
+            .expect("build webhook plain text request body");
+
+        assert_eq!(request_body.content_type, WEBHOOK_TEXT_CONTENT_TYPE);
+        assert_eq!(request_body.body, b"hello webhook".to_vec());
+    }
+
+    #[test]
+    fn build_webhook_auth_header_rejects_invalid_header_name() {
+        let mut resolved = test_resolved_webhook_config(WebhookPayloadFormat::JsonText);
+        let auth_token =
+            serde_json::from_value(serde_json::json!("token-123")).expect("deserialize auth token");
+        resolved.auth_token = Some(auth_token);
+        resolved.auth_header_name = "bad header".to_owned();
+
+        let error =
+            build_webhook_auth_header(&resolved).expect_err("invalid header name should fail");
+
+        assert!(
+            error.contains("webhook auth_header_name is invalid"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn build_webhook_json_payload_rejects_empty_text_field() {
+        let mut resolved = test_resolved_webhook_config(WebhookPayloadFormat::JsonText);
+        resolved.payload_text_field = "   ".to_owned();
+
+        let error =
+            build_webhook_json_payload(&resolved, "hello").expect_err("empty field should fail");
+
+        assert!(
+            error.contains("webhook payload_text_field is empty"),
+            "unexpected error: {error}"
+        );
+    }
+}

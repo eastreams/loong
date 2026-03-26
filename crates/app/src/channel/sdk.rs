@@ -129,6 +129,14 @@ const WHATSAPP_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     serve_subcommand: None,
 };
 
+const WEBHOOK_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
+    id: "webhook",
+    label: "webhook",
+    surface_label: "webhook channel",
+    runtime_kind: ChannelRuntimeKind::Service,
+    serve_subcommand: None,
+};
+
 const GOOGLE_CHAT_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     id: "google-chat",
     label: "google-chat",
@@ -293,6 +301,14 @@ const WHATSAPP_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegr
     background_surface_is_enabled: None,
 };
 
+const WEBHOOK_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
+    descriptor: &WEBHOOK_CHANNEL_DESCRIPTOR,
+    background_runtime: None,
+    is_enabled: webhook_channel_is_enabled,
+    collect_validation_issues: collect_webhook_channel_validation_issues,
+    background_surface_is_enabled: None,
+};
+
 const GOOGLE_CHAT_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor =
     ChannelIntegrationDescriptor {
         descriptor: &GOOGLE_CHAT_CHANNEL_DESCRIPTOR,
@@ -363,6 +379,7 @@ const CHANNEL_INTEGRATIONS: &[ChannelIntegrationDescriptor] = &[
     LINE_CHANNEL_INTEGRATION,
     DINGTALK_CHANNEL_INTEGRATION,
     WHATSAPP_CHANNEL_INTEGRATION,
+    WEBHOOK_CHANNEL_INTEGRATION,
     GOOGLE_CHAT_CHANNEL_INTEGRATION,
     SIGNAL_CHANNEL_INTEGRATION,
     TEAMS_CHANNEL_INTEGRATION,
@@ -486,6 +503,10 @@ fn whatsapp_channel_is_enabled(config: &LoongClawConfig) -> bool {
     config.whatsapp.enabled
 }
 
+fn webhook_channel_is_enabled(config: &LoongClawConfig) -> bool {
+    config.webhook.enabled
+}
+
 fn google_chat_channel_is_enabled(config: &LoongClawConfig) -> bool {
     config.google_chat.enabled
 }
@@ -564,6 +585,12 @@ fn collect_whatsapp_channel_validation_issues(
     config: &LoongClawConfig,
 ) -> Vec<ConfigValidationIssue> {
     config.whatsapp.validate()
+}
+
+fn collect_webhook_channel_validation_issues(
+    config: &LoongClawConfig,
+) -> Vec<ConfigValidationIssue> {
+    config.webhook.validate()
 }
 
 fn collect_google_chat_channel_validation_issues(
@@ -697,6 +724,7 @@ mod tests {
                 "line",
                 "dingtalk",
                 "whatsapp",
+                "webhook",
                 "google-chat",
                 "signal",
                 "teams",

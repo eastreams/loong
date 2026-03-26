@@ -653,6 +653,26 @@ async fn main() {
             )
             .await
         }
+        Commands::WebhookSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                WEBHOOK_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: target.as_deref(),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
         Commands::GoogleChatSend {
             config,
             account,

@@ -14,12 +14,13 @@ use crate::config::{
     ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
     ResolvedNextcloudTalkChannelConfig, ResolvedSignalChannelConfig, ResolvedSlackChannelConfig,
     ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig, ResolvedTelegramChannelConfig,
-    ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig, SIGNAL_ACCOUNT_ENV,
-    SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV, SYNOLOGY_CHAT_INCOMING_URL_ENV,
-    SYNOLOGY_CHAT_TOKEN_ENV, TEAMS_APP_ID_ENV, TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV,
-    TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV, WECOM_BOT_ID_ENV, WECOM_SECRET_ENV,
+    ResolvedWebhookChannelConfig, ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig,
+    SIGNAL_ACCOUNT_ENV, SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV,
+    SYNOLOGY_CHAT_INCOMING_URL_ENV, SYNOLOGY_CHAT_TOKEN_ENV, TEAMS_APP_ID_ENV,
+    TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV, TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV,
+    WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV, WECOM_BOT_ID_ENV, WECOM_SECRET_ENV,
     WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV, WHATSAPP_PHONE_NUMBER_ID_ENV,
-    WHATSAPP_VERIFY_TOKEN_ENV,
+    WHATSAPP_VERIFY_TOKEN_ENV, WebhookPayloadFormat,
 };
 
 use super::{ChannelCatalogTargetKind, ChannelOperationRuntime, ChannelPlatform, runtime_state};
@@ -34,8 +35,6 @@ const EMAIL_SMTP_USERNAME_ENV: &str = "EMAIL_SMTP_USERNAME";
 const EMAIL_SMTP_PASSWORD_ENV: &str = "EMAIL_SMTP_PASSWORD";
 const EMAIL_IMAP_USERNAME_ENV: &str = "EMAIL_IMAP_USERNAME";
 const EMAIL_IMAP_PASSWORD_ENV: &str = "EMAIL_IMAP_PASSWORD";
-const WEBHOOK_AUTH_TOKEN_ENV: &str = "WEBHOOK_AUTH_TOKEN";
-const WEBHOOK_SIGNING_SECRET_ENV: &str = "WEBHOOK_SIGNING_SECRET";
 const IRC_SERVER_ENV: &str = "IRC_SERVER";
 const IRC_NICKNAME_ENV: &str = "IRC_NICKNAME";
 const NOSTR_RELAY_URLS_ENV: &str = "NOSTR_RELAY_URLS";
@@ -1590,22 +1589,11 @@ const WEBHOOK_ENDPOINT_URL_REQUIREMENT: ChannelCatalogOperationRequirement =
             "webhook.endpoint_url",
             "webhook.accounts.<account>.endpoint_url",
         ],
-        env_pointer_paths: &[],
-        default_env_var: None,
-    };
-const WEBHOOK_AUTH_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
-    ChannelCatalogOperationRequirement {
-        id: "auth_token",
-        label: "auth token",
-        config_paths: &[
-            "webhook.auth_token",
-            "webhook.accounts.<account>.auth_token",
-        ],
         env_pointer_paths: &[
-            "webhook.auth_token_env",
-            "webhook.accounts.<account>.auth_token_env",
+            "webhook.endpoint_url_env",
+            "webhook.accounts.<account>.endpoint_url_env",
         ],
-        default_env_var: Some(WEBHOOK_AUTH_TOKEN_ENV),
+        default_env_var: Some(WEBHOOK_ENDPOINT_URL_ENV),
     };
 const WEBHOOK_PUBLIC_BASE_URL_REQUIREMENT: ChannelCatalogOperationRequirement =
     ChannelCatalogOperationRequirement {
@@ -1635,7 +1623,6 @@ const WEBHOOK_SIGNING_SECRET_REQUIREMENT: ChannelCatalogOperationRequirement =
 const WEBHOOK_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
     WEBHOOK_ENABLED_REQUIREMENT,
     WEBHOOK_ENDPOINT_URL_REQUIREMENT,
-    WEBHOOK_AUTH_TOKEN_REQUIREMENT,
 ];
 const WEBHOOK_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
     WEBHOOK_ENABLED_REQUIREMENT,
@@ -1646,7 +1633,7 @@ const WEBHOOK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
     id: CHANNEL_OPERATION_SEND_ID,
     label: "http post send",
     command: "webhook-send",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: WEBHOOK_SEND_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Endpoint],
@@ -1660,21 +1647,30 @@ const WEBHOOK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
     requirements: WEBHOOK_SERVE_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Endpoint],
 };
+
+pub const WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
+    ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "webhook",
+        default_send_target_kind: ChannelCatalogTargetKind::Endpoint,
+        send: WEBHOOK_SEND_OPERATION,
+        serve: WEBHOOK_SERVE_OPERATION,
+    };
+
 const WEBHOOK_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
-        operation: WEBHOOK_SEND_OPERATION,
+        operation: WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR.send,
         doctor_checks: &[],
     },
     ChannelRegistryOperationDescriptor {
-        operation: WEBHOOK_SERVE_OPERATION,
+        operation: WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
         doctor_checks: &[],
     },
 ];
 const WEBHOOK_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::Planned,
-    setup_hint: "planned generic webhook surface; catalog metadata reflects the intended outbound endpoint and inbound signing-secret contract, but no runtime adapter is implemented yet",
-    status_command: "loongclaw channels --json",
-    repair_command: None,
+    strategy: ChannelOnboardingStrategy::ManualConfig,
+    setup_hint: "configure generic webhook delivery in loongclaw.toml under webhook or webhook.accounts.<account>; outbound endpoint send is shipped, while inbound webhook serve support remains planned",
+    status_command: "loongclaw doctor",
+    repair_command: Some("loongclaw doctor --fix"),
 };
 
 const GOOGLE_CHAT_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -3177,12 +3173,12 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "webhook",
         runtime: None,
-        snapshot_builder: None,
+        snapshot_builder: Some(build_webhook_snapshots),
         selection_order: 110,
         selection_label: "generic http integration",
-        blurb: "Planned generic webhook surface for outbound POST delivery and signed inbound callback handling.",
-        implementation_status: ChannelCatalogImplementationStatus::Stub,
-        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        blurb: "Shipped generic webhook outbound surface with config-backed POST delivery; inbound callback serving remains planned.",
+        implementation_status: ChannelCatalogImplementationStatus::ConfigBacked,
+        capabilities: CONFIG_BACKED_SEND_CHANNEL_CAPABILITIES,
         label: "Webhook",
         aliases: &["http-webhook"],
         transport: "generic_webhook",
@@ -4129,6 +4125,46 @@ fn build_whatsapp_snapshots(
         .collect()
 }
 
+fn build_webhook_snapshots(
+    descriptor: &ChannelRegistryDescriptor,
+    config: &LoongClawConfig,
+    _runtime_dir: &Path,
+    _now_ms: u64,
+) -> Vec<ChannelStatusSnapshot> {
+    let compiled = cfg!(feature = "channel-webhook");
+    let default_selection = config.webhook.default_configured_account_selection();
+    let default_configured_account_id = default_selection.id.clone();
+    let default_account_source = default_selection.source;
+    config
+        .webhook
+        .configured_account_ids()
+        .into_iter()
+        .map(|configured_account_id| {
+            let is_default_account = configured_account_id == default_configured_account_id;
+            match config
+                .webhook
+                .resolve_account(Some(configured_account_id.as_str()))
+            {
+                Ok(resolved) => build_webhook_snapshot_for_account(
+                    descriptor,
+                    compiled,
+                    resolved,
+                    is_default_account,
+                    default_account_source,
+                ),
+                Err(error) => build_invalid_webhook_snapshot(
+                    descriptor,
+                    compiled,
+                    configured_account_id.as_str(),
+                    is_default_account,
+                    default_account_source,
+                    error,
+                ),
+            }
+        })
+        .collect()
+}
+
 fn build_google_chat_snapshots(
     descriptor: &ChannelRegistryDescriptor,
     config: &LoongClawConfig,
@@ -4798,6 +4834,119 @@ fn build_whatsapp_snapshot_for_account(
         compiled,
         enabled: resolved.enabled,
         api_base_url: Some(api_base_url),
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
+fn build_webhook_snapshot_for_account(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    resolved: ResolvedWebhookChannelConfig,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+) -> ChannelStatusSnapshot {
+    let mut send_issues = Vec::new();
+
+    let endpoint_url = resolved.endpoint_url();
+    if endpoint_url.is_none() {
+        send_issues.push("endpoint_url is missing".to_owned());
+    }
+    if let Some(endpoint_url) = endpoint_url.as_deref() {
+        validate_http_url("endpoint_url", endpoint_url, &mut send_issues);
+    }
+
+    let auth_token = resolved.auth_token();
+    if auth_token.is_some() {
+        let auth_header_name = resolved.auth_header_name.trim();
+        if auth_header_name.is_empty() {
+            send_issues.push("auth_header_name is empty".to_owned());
+        } else {
+            let header_name_parse =
+                reqwest::header::HeaderName::from_bytes(auth_header_name.as_bytes());
+            if let Err(error) = header_name_parse {
+                send_issues.push(format!("auth_header_name is invalid: {error}"));
+            }
+        }
+    }
+
+    let payload_text_field = resolved.payload_text_field.trim();
+    if resolved.payload_format == WebhookPayloadFormat::JsonText && payload_text_field.is_empty() {
+        send_issues.push("payload_text_field is empty for json_text payload_format".to_owned());
+    }
+
+    let send_operation = if !compiled {
+        unsupported_operation(
+            WEBHOOK_SEND_OPERATION,
+            "binary built without feature `channel-webhook`".to_owned(),
+        )
+    } else if !resolved.enabled {
+        disabled_operation(
+            WEBHOOK_SEND_OPERATION,
+            "disabled by webhook account configuration".to_owned(),
+        )
+    } else if !send_issues.is_empty() {
+        misconfigured_operation(WEBHOOK_SEND_OPERATION, send_issues)
+    } else {
+        ready_operation(WEBHOOK_SEND_OPERATION)
+    };
+
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            WEBHOOK_SERVE_OPERATION,
+            "binary built without feature `channel-webhook`".to_owned(),
+        )
+    } else {
+        unsupported_operation(
+            WEBHOOK_SERVE_OPERATION,
+            "generic webhook serve runtime is not implemented yet".to_owned(),
+        )
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={}", resolved.configured_account_id),
+        format!("configured_account={}", resolved.configured_account_label),
+        format!("account_id={}", resolved.account.id),
+        format!("account={}", resolved.account.label),
+        format!("payload_format={}", resolved.payload_format.as_str()),
+    ];
+    if resolved.payload_format == WebhookPayloadFormat::JsonText {
+        notes.push(format!("payload_text_field={payload_text_field}"));
+    }
+    if auth_token.is_some() {
+        notes.push("auth_token_configured=true".to_owned());
+    }
+    let public_base_url = resolved
+        .public_base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if public_base_url.is_some() {
+        notes.push("future_serve_public_base_url_configured=true".to_owned());
+    }
+    if resolved.signing_secret().is_some() {
+        notes.push("future_serve_signing_secret_configured=true".to_owned());
+    }
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: resolved.configured_account_id.clone(),
+        configured_account_label: resolved.configured_account_label.clone(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: resolved.enabled,
+        api_base_url: redact_endpoint_status_url(endpoint_url),
         notes,
         operations: vec![send_operation, serve_operation],
     }
@@ -6250,6 +6399,63 @@ fn build_invalid_whatsapp_snapshot(
         unsupported_operation(
             WHATSAPP_SERVE_OPERATION,
             "whatsapp serve runtime is not implemented yet".to_owned(),
+        )
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={configured_account_id}"),
+        format!("selection_error={error}"),
+    ];
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: configured_account_id.to_owned(),
+        configured_account_label: configured_account_id.to_owned(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: false,
+        api_base_url: None,
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
+fn build_invalid_webhook_snapshot(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    configured_account_id: &str,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+    error: String,
+) -> ChannelStatusSnapshot {
+    let send_operation = if !compiled {
+        unsupported_operation(
+            WEBHOOK_SEND_OPERATION,
+            "binary built without feature `channel-webhook`".to_owned(),
+        )
+    } else {
+        misconfigured_operation(WEBHOOK_SEND_OPERATION, vec![error.clone()])
+    };
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            WEBHOOK_SERVE_OPERATION,
+            "binary built without feature `channel-webhook`".to_owned(),
+        )
+    } else {
+        unsupported_operation(
+            WEBHOOK_SERVE_OPERATION,
+            "generic webhook serve runtime is not implemented yet".to_owned(),
         )
     };
 
@@ -8074,10 +8280,6 @@ mod tests {
         let config = LoongClawConfig::default();
         let snapshots = channel_status_snapshots(&config);
         let catalog_only = catalog_only_channel_entries(&snapshots);
-        let webhook = catalog_only
-            .iter()
-            .find(|entry| entry.id == "webhook")
-            .expect("webhook catalog entry");
         let tlon = catalog_only
             .iter()
             .find(|entry| entry.id == "tlon")
@@ -8094,7 +8296,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "email",
-                "webhook",
                 "irc",
                 "nostr",
                 "twitch",
@@ -8109,6 +8310,7 @@ mod tests {
         assert!(!catalog_only.iter().any(|entry| entry.id == "line"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "dingtalk"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "whatsapp"));
+        assert!(!catalog_only.iter().any(|entry| entry.id == "webhook"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "google-chat"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "signal"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "teams"));
@@ -8120,7 +8322,6 @@ mod tests {
         );
         assert!(!catalog_only.iter().any(|entry| entry.id == "synology-chat"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "imessage"));
-        assert_eq!(webhook.operations[1].command, "webhook-serve");
         assert_eq!(tlon.operations[0].command, "tlon-send");
         assert_eq!(webchat.operations[1].command, "webchat-serve");
     }
@@ -8146,6 +8347,7 @@ mod tests {
                 "line",
                 "dingtalk",
                 "whatsapp",
+                "webhook",
                 "google-chat",
                 "signal",
                 "teams",
@@ -8163,7 +8365,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "email",
-                "webhook",
                 "irc",
                 "nostr",
                 "twitch",

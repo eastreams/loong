@@ -874,6 +874,23 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    /// Send one generic webhook POST message
+    WebhookSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: Option<String>,
+        #[arg(
+            long,
+            default_value_t = default_webhook_send_target_kind(),
+            value_parser = parse_webhook_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
     /// Send one Google Chat incoming webhook message
     GoogleChatSend {
         #[arg(long)]
@@ -4056,6 +4073,11 @@ pub const WHATSAPP_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
     run: run_whatsapp_send_cli_impl,
 };
 
+pub const WEBHOOK_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_webhook_send_cli_impl,
+};
+
 pub const GOOGLE_CHAT_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
     family: mvp::channel::GOOGLE_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_google_chat_send_cli_impl,
@@ -4272,6 +4294,20 @@ pub fn run_whatsapp_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCom
             args.config_path,
             args.account,
             target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_webhook_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        mvp::channel::run_webhook_send(
+            args.config_path,
+            args.account,
+            args.target,
             args.target_kind,
             args.text,
         )
@@ -4514,6 +4550,16 @@ pub fn parse_whatsapp_send_target_kind(
     raw: &str,
 ) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
     parse_channel_send_target_kind(WHATSAPP_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_webhook_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(WEBHOOK_SEND_CLI_SPEC)
+}
+
+pub fn parse_webhook_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(WEBHOOK_SEND_CLI_SPEC, raw)
 }
 
 pub fn default_google_chat_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {

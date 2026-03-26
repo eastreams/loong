@@ -16,7 +16,7 @@ use super::{
         GoogleChatChannelConfig, ImessageChannelConfig, LineChannelConfig, MatrixChannelConfig,
         MattermostChannelConfig, NextcloudTalkChannelConfig, SignalChannelConfig,
         SlackChannelConfig, SynologyChatChannelConfig, TeamsChannelConfig, TelegramChannelConfig,
-        WecomChannelConfig, WhatsappChannelConfig,
+        WebhookChannelConfig, WecomChannelConfig, WhatsappChannelConfig,
     },
     conversation::ConversationConfig,
     feishu_integration::FeishuIntegrationConfig,
@@ -100,6 +100,8 @@ pub struct LoongClawConfig {
     pub line: LineChannelConfig,
     #[serde(default)]
     pub dingtalk: DingtalkChannelConfig,
+    #[serde(default)]
+    pub webhook: WebhookChannelConfig,
     #[serde(default)]
     pub slack: SlackChannelConfig,
     #[serde(default)]
@@ -1023,6 +1025,7 @@ fn canonicalize_channel_configs_for_encoding(config: &mut LoongClawConfig) {
     canonicalize_discord_channel_for_encoding(&mut config.discord);
     canonicalize_line_channel_for_encoding(&mut config.line);
     canonicalize_dingtalk_channel_for_encoding(&mut config.dingtalk);
+    canonicalize_webhook_channel_for_encoding(&mut config.webhook);
     canonicalize_slack_channel_for_encoding(&mut config.slack);
     canonicalize_google_chat_channel_for_encoding(&mut config.google_chat);
     canonicalize_teams_channel_for_encoding(&mut config.teams);
@@ -1111,6 +1114,21 @@ fn canonicalize_dingtalk_channel_for_encoding(config: &mut DingtalkChannelConfig
     for account in config.accounts.values_mut() {
         canonicalize_env_secret_reference(&mut account.webhook_url, &mut account.webhook_url_env);
         canonicalize_env_secret_reference(&mut account.secret, &mut account.secret_env);
+    }
+}
+
+fn canonicalize_webhook_channel_for_encoding(config: &mut WebhookChannelConfig) {
+    canonicalize_env_secret_reference(&mut config.endpoint_url, &mut config.endpoint_url_env);
+    canonicalize_env_secret_reference(&mut config.auth_token, &mut config.auth_token_env);
+    canonicalize_env_secret_reference(&mut config.signing_secret, &mut config.signing_secret_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(&mut account.endpoint_url, &mut account.endpoint_url_env);
+        canonicalize_env_secret_reference(&mut account.auth_token, &mut account.auth_token_env);
+        canonicalize_env_secret_reference(
+            &mut account.signing_secret,
+            &mut account.signing_secret_env,
+        );
     }
 }
 

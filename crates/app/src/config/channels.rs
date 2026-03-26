@@ -51,6 +51,9 @@ pub(crate) const WHATSAPP_VERIFY_TOKEN_ENV: &str = "WHATSAPP_VERIFY_TOKEN";
 pub(crate) const WHATSAPP_APP_SECRET_ENV: &str = "WHATSAPP_APP_SECRET";
 pub(crate) const WECOM_BOT_ID_ENV: &str = "WECOM_BOT_ID";
 pub(crate) const WECOM_SECRET_ENV: &str = "WECOM_SECRET";
+pub(crate) const WEBHOOK_ENDPOINT_URL_ENV: &str = "WEBHOOK_ENDPOINT_URL";
+pub(crate) const WEBHOOK_AUTH_TOKEN_ENV: &str = "WEBHOOK_AUTH_TOKEN";
+pub(crate) const WEBHOOK_SIGNING_SECRET_ENV: &str = "WEBHOOK_SIGNING_SECRET";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -58,6 +61,23 @@ pub enum TelegramStreamingMode {
     #[default]
     Off,
     Draft,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WebhookPayloadFormat {
+    #[default]
+    JsonText,
+    PlainText,
+}
+
+impl WebhookPayloadFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::JsonText => "json_text",
+            Self::PlainText => "plain_text",
+        }
+    }
 }
 
 pub fn channel_descriptor(id: &str) -> Option<&'static ChannelDescriptor> {
@@ -711,6 +731,72 @@ impl ResolvedDingtalkChannelConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WebhookAccountConfig {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub endpoint_url: Option<SecretRef>,
+    #[serde(default = "default_webhook_endpoint_url_env")]
+    pub endpoint_url_env: Option<String>,
+    #[serde(default)]
+    pub auth_token: Option<SecretRef>,
+    #[serde(default = "default_webhook_auth_token_env")]
+    pub auth_token_env: Option<String>,
+    #[serde(default)]
+    pub auth_header_name: Option<String>,
+    #[serde(default)]
+    pub auth_token_prefix: Option<String>,
+    #[serde(default)]
+    pub payload_format: Option<WebhookPayloadFormat>,
+    #[serde(default)]
+    pub payload_text_field: Option<String>,
+    #[serde(default)]
+    pub public_base_url: Option<String>,
+    #[serde(default)]
+    pub signing_secret: Option<SecretRef>,
+    #[serde(default = "default_webhook_signing_secret_env")]
+    pub signing_secret_env: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedWebhookChannelConfig {
+    pub configured_account_id: String,
+    pub configured_account_label: String,
+    pub account: ChannelAccountIdentity,
+    pub enabled: bool,
+    pub endpoint_url: Option<SecretRef>,
+    pub endpoint_url_env: Option<String>,
+    pub auth_token: Option<SecretRef>,
+    pub auth_token_env: Option<String>,
+    pub auth_header_name: String,
+    pub auth_token_prefix: String,
+    pub payload_format: WebhookPayloadFormat,
+    pub payload_text_field: String,
+    pub public_base_url: Option<String>,
+    pub signing_secret: Option<SecretRef>,
+    pub signing_secret_env: Option<String>,
+}
+
+impl ResolvedWebhookChannelConfig {
+    pub fn endpoint_url(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.endpoint_url.as_ref(), self.endpoint_url_env.as_deref())
+    }
+
+    pub fn auth_token(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.auth_token.as_ref(), self.auth_token_env.as_deref())
+    }
+
+    pub fn signing_secret(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(
+            self.signing_secret.as_ref(),
+            self.signing_secret_env.as_deref(),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiscordAccountConfig {
     #[serde(default)]
     pub enabled: Option<bool>,
@@ -1220,6 +1306,41 @@ pub struct DingtalkChannelConfig {
     pub secret_env: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, DingtalkAccountConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WebhookChannelConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub default_account: Option<String>,
+    #[serde(default)]
+    pub endpoint_url: Option<SecretRef>,
+    #[serde(default = "default_webhook_endpoint_url_env")]
+    pub endpoint_url_env: Option<String>,
+    #[serde(default)]
+    pub auth_token: Option<SecretRef>,
+    #[serde(default = "default_webhook_auth_token_env")]
+    pub auth_token_env: Option<String>,
+    #[serde(default = "default_webhook_auth_header_name")]
+    pub auth_header_name: String,
+    #[serde(default = "default_webhook_auth_token_prefix")]
+    pub auth_token_prefix: String,
+    #[serde(default)]
+    pub payload_format: WebhookPayloadFormat,
+    #[serde(default = "default_webhook_payload_text_field")]
+    pub payload_text_field: String,
+    #[serde(default)]
+    pub public_base_url: Option<String>,
+    #[serde(default)]
+    pub signing_secret: Option<SecretRef>,
+    #[serde(default = "default_webhook_signing_secret_env")]
+    pub signing_secret_env: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub accounts: BTreeMap<String, WebhookAccountConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1802,6 +1923,28 @@ impl Default for DingtalkChannelConfig {
             webhook_url_env: Some(DINGTALK_WEBHOOK_URL_ENV.to_owned()),
             secret: None,
             secret_env: Some(DINGTALK_SECRET_ENV.to_owned()),
+            accounts: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for WebhookChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_id: None,
+            default_account: None,
+            endpoint_url: None,
+            endpoint_url_env: Some(WEBHOOK_ENDPOINT_URL_ENV.to_owned()),
+            auth_token: None,
+            auth_token_env: Some(WEBHOOK_AUTH_TOKEN_ENV.to_owned()),
+            auth_header_name: default_webhook_auth_header_name(),
+            auth_token_prefix: default_webhook_auth_token_prefix(),
+            payload_format: WebhookPayloadFormat::default(),
+            payload_text_field: default_webhook_payload_text_field(),
+            public_base_url: None,
+            signing_secret: None,
+            signing_secret_env: Some(WEBHOOK_SIGNING_SECRET_ENV.to_owned()),
             accounts: BTreeMap::new(),
         }
     }
@@ -3039,6 +3182,258 @@ impl DingtalkChannelConfig {
         &self,
         session_account_id: Option<&str>,
     ) -> CliResult<ResolvedDingtalkChannelConfig> {
+        resolve_account_for_session_account_id(
+            session_account_id,
+            || self.resolve_account(session_account_id),
+            || self.configured_account_ids(),
+            |configured_id| self.resolve_account(Some(configured_id)),
+            |resolved| resolved.account.id.as_str(),
+        )
+    }
+
+    pub fn resolved_account_identity(&self) -> ChannelAccountIdentity {
+        if let Some((id, label)) = resolve_configured_account_identity(self.account_id.as_deref()) {
+            return ChannelAccountIdentity {
+                id,
+                label,
+                source: ChannelAccountIdentitySource::Configured,
+            };
+        }
+
+        default_channel_account_identity()
+    }
+
+    fn resolve_configured_account_selection(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedConfiguredAccount> {
+        resolve_configured_account_selection(
+            self.accounts.keys(),
+            requested_account_id,
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+}
+
+impl WebhookChannelConfig {
+    pub(crate) fn validate(&self) -> Vec<ConfigValidationIssue> {
+        let mut issues = Vec::new();
+        validate_channel_account_integrity(
+            &mut issues,
+            "webhook",
+            self.default_account.as_deref(),
+            self.accounts.keys(),
+        );
+        validate_webhook_env_pointer(
+            &mut issues,
+            "webhook.endpoint_url_env",
+            self.endpoint_url_env.as_deref(),
+            "webhook.endpoint_url",
+        );
+        validate_webhook_secret_ref_env_pointer(
+            &mut issues,
+            "webhook.endpoint_url",
+            self.endpoint_url.as_ref(),
+        );
+        validate_webhook_env_pointer(
+            &mut issues,
+            "webhook.auth_token_env",
+            self.auth_token_env.as_deref(),
+            "webhook.auth_token",
+        );
+        validate_webhook_secret_ref_env_pointer(
+            &mut issues,
+            "webhook.auth_token",
+            self.auth_token.as_ref(),
+        );
+        validate_webhook_env_pointer(
+            &mut issues,
+            "webhook.signing_secret_env",
+            self.signing_secret_env.as_deref(),
+            "webhook.signing_secret",
+        );
+        validate_webhook_secret_ref_env_pointer(
+            &mut issues,
+            "webhook.signing_secret",
+            self.signing_secret.as_ref(),
+        );
+        for (raw_account_id, account) in &self.accounts {
+            let account_id = normalize_channel_account_id(raw_account_id);
+
+            let endpoint_url_field_path = format!("webhook.accounts.{account_id}.endpoint_url");
+            let endpoint_url_env_field_path = format!("{endpoint_url_field_path}_env");
+            validate_webhook_env_pointer(
+                &mut issues,
+                endpoint_url_env_field_path.as_str(),
+                account.endpoint_url_env.as_deref(),
+                endpoint_url_field_path.as_str(),
+            );
+            validate_webhook_secret_ref_env_pointer(
+                &mut issues,
+                endpoint_url_field_path.as_str(),
+                account.endpoint_url.as_ref(),
+            );
+
+            let auth_token_field_path = format!("webhook.accounts.{account_id}.auth_token");
+            let auth_token_env_field_path = format!("{auth_token_field_path}_env");
+            validate_webhook_env_pointer(
+                &mut issues,
+                auth_token_env_field_path.as_str(),
+                account.auth_token_env.as_deref(),
+                auth_token_field_path.as_str(),
+            );
+            validate_webhook_secret_ref_env_pointer(
+                &mut issues,
+                auth_token_field_path.as_str(),
+                account.auth_token.as_ref(),
+            );
+
+            let signing_secret_field_path = format!("webhook.accounts.{account_id}.signing_secret");
+            let signing_secret_env_field_path = format!("{signing_secret_field_path}_env");
+            validate_webhook_env_pointer(
+                &mut issues,
+                signing_secret_env_field_path.as_str(),
+                account.signing_secret_env.as_deref(),
+                signing_secret_field_path.as_str(),
+            );
+            validate_webhook_secret_ref_env_pointer(
+                &mut issues,
+                signing_secret_field_path.as_str(),
+                account.signing_secret.as_ref(),
+            );
+        }
+        issues
+    }
+
+    pub fn endpoint_url(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.endpoint_url.as_ref(), self.endpoint_url_env.as_deref())
+    }
+
+    pub fn auth_token(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.auth_token.as_ref(), self.auth_token_env.as_deref())
+    }
+
+    pub fn signing_secret(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(
+            self.signing_secret.as_ref(),
+            self.signing_secret_env.as_deref(),
+        )
+    }
+
+    pub fn configured_account_ids(&self) -> Vec<String> {
+        let ids = configured_account_ids(self.accounts.keys());
+        if ids.is_empty() {
+            return vec![self.default_configured_account_id()];
+        }
+        ids
+    }
+
+    pub fn default_configured_account_selection(&self) -> ChannelDefaultAccountSelection {
+        resolve_default_configured_account_selection(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+
+    pub fn default_configured_account_id(&self) -> String {
+        self.default_configured_account_selection().id
+    }
+
+    pub fn resolved_account_route(
+        &self,
+        requested_account_id: Option<&str>,
+        selected_configured_account_id: &str,
+    ) -> ChannelResolvedAccountRoute {
+        resolve_channel_account_route(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+            requested_account_id,
+            selected_configured_account_id,
+        )
+    }
+
+    pub fn resolve_account(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedWebhookChannelConfig> {
+        let configured = self.resolve_configured_account_selection(requested_account_id)?;
+        let account_override = configured
+            .account_key
+            .as_deref()
+            .and_then(|key| self.accounts.get(key));
+
+        let merged = WebhookChannelConfig {
+            enabled: self.enabled
+                && account_override
+                    .and_then(|account| account.enabled)
+                    .unwrap_or(true),
+            account_id: account_override
+                .and_then(|account| account.account_id.clone())
+                .or_else(|| self.account_id.clone()),
+            default_account: None,
+            endpoint_url: account_override
+                .and_then(|account| account.endpoint_url.clone())
+                .or_else(|| self.endpoint_url.clone()),
+            endpoint_url_env: account_override
+                .and_then(|account| account.endpoint_url_env.clone())
+                .or_else(|| self.endpoint_url_env.clone()),
+            auth_token: account_override
+                .and_then(|account| account.auth_token.clone())
+                .or_else(|| self.auth_token.clone()),
+            auth_token_env: account_override
+                .and_then(|account| account.auth_token_env.clone())
+                .or_else(|| self.auth_token_env.clone()),
+            auth_header_name: account_override
+                .and_then(|account| account.auth_header_name.clone())
+                .unwrap_or_else(|| self.auth_header_name.clone()),
+            auth_token_prefix: account_override
+                .and_then(|account| account.auth_token_prefix.clone())
+                .unwrap_or_else(|| self.auth_token_prefix.clone()),
+            payload_format: account_override
+                .and_then(|account| account.payload_format)
+                .unwrap_or(self.payload_format),
+            payload_text_field: account_override
+                .and_then(|account| account.payload_text_field.clone())
+                .unwrap_or_else(|| self.payload_text_field.clone()),
+            public_base_url: account_override
+                .and_then(|account| account.public_base_url.clone())
+                .or_else(|| self.public_base_url.clone()),
+            signing_secret: account_override
+                .and_then(|account| account.signing_secret.clone())
+                .or_else(|| self.signing_secret.clone()),
+            signing_secret_env: account_override
+                .and_then(|account| account.signing_secret_env.clone())
+                .or_else(|| self.signing_secret_env.clone()),
+            accounts: BTreeMap::new(),
+        };
+        let account = merged.resolved_account_identity();
+
+        Ok(ResolvedWebhookChannelConfig {
+            configured_account_id: configured.id,
+            configured_account_label: configured.label,
+            account,
+            enabled: merged.enabled,
+            endpoint_url: merged.endpoint_url,
+            endpoint_url_env: merged.endpoint_url_env,
+            auth_token: merged.auth_token,
+            auth_token_env: merged.auth_token_env,
+            auth_header_name: merged.auth_header_name,
+            auth_token_prefix: merged.auth_token_prefix,
+            payload_format: merged.payload_format,
+            payload_text_field: merged.payload_text_field,
+            public_base_url: merged.public_base_url,
+            signing_secret: merged.signing_secret,
+            signing_secret_env: merged.signing_secret_env,
+        })
+    }
+
+    pub fn resolve_account_for_session_account_id(
+        &self,
+        session_account_id: Option<&str>,
+    ) -> CliResult<ResolvedWebhookChannelConfig> {
         resolve_account_for_session_account_id(
             session_account_id,
             || self.resolve_account(session_account_id),
@@ -5069,6 +5464,30 @@ fn default_line_api_base_url() -> String {
     "https://api.line.me/v2/bot".to_owned()
 }
 
+fn default_webhook_endpoint_url_env() -> Option<String> {
+    Some(WEBHOOK_ENDPOINT_URL_ENV.to_owned())
+}
+
+fn default_webhook_auth_token_env() -> Option<String> {
+    Some(WEBHOOK_AUTH_TOKEN_ENV.to_owned())
+}
+
+fn default_webhook_signing_secret_env() -> Option<String> {
+    Some(WEBHOOK_SIGNING_SECRET_ENV.to_owned())
+}
+
+fn default_webhook_auth_header_name() -> String {
+    "Authorization".to_owned()
+}
+
+fn default_webhook_auth_token_prefix() -> String {
+    "Bearer ".to_owned()
+}
+
+fn default_webhook_payload_text_field() -> String {
+    "text".to_owned()
+}
+
 fn default_teams_webhook_url_env() -> Option<String> {
     Some(TEAMS_WEBHOOK_URL_ENV.to_owned())
 }
@@ -5511,6 +5930,57 @@ fn validate_dingtalk_secret_ref_env_pointer(
         DINGTALK_SECRET_ENV
     } else {
         DINGTALK_WEBHOOK_URL_ENV
+    };
+    if let Err(issue) = validate_secret_ref_env_pointer_field(
+        field_path,
+        secret_ref,
+        EnvPointerValidationHint {
+            inline_field_path: field_path,
+            example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_webhook_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    env_key: Option<&str>,
+    inline_field_path: &str,
+) {
+    let example_env_name = if field_path.ends_with("endpoint_url_env") {
+        WEBHOOK_ENDPOINT_URL_ENV
+    } else if field_path.ends_with("signing_secret_env") {
+        WEBHOOK_SIGNING_SECRET_ENV
+    } else {
+        WEBHOOK_AUTH_TOKEN_ENV
+    };
+    if let Err(issue) = validate_env_pointer_field(
+        field_path,
+        env_key,
+        EnvPointerValidationHint {
+            inline_field_path,
+            example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_webhook_secret_ref_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    secret_ref: Option<&SecretRef>,
+) {
+    let example_env_name = if field_path.ends_with("endpoint_url") {
+        WEBHOOK_ENDPOINT_URL_ENV
+    } else if field_path.ends_with("signing_secret") {
+        WEBHOOK_SIGNING_SECRET_ENV
+    } else {
+        WEBHOOK_AUTH_TOKEN_ENV
     };
     if let Err(issue) = validate_secret_ref_env_pointer_field(
         field_path,
@@ -7032,6 +7502,133 @@ mod tests {
     }
 
     #[test]
+    fn webhook_resolves_endpoint_and_secrets_from_env_pointers() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set(
+            "TEST_WEBHOOK_ENDPOINT_URL",
+            "https://hooks.example.test/ingest?token=secret",
+        );
+        env.set("TEST_WEBHOOK_AUTH_TOKEN", "token-123");
+        env.set("TEST_WEBHOOK_SIGNING_SECRET", "signing-secret-123");
+
+        let config_value = json!({
+            "enabled": true,
+            "account_id": "Webhook-Ops",
+            "endpoint_url_env": "TEST_WEBHOOK_ENDPOINT_URL",
+            "auth_token_env": "TEST_WEBHOOK_AUTH_TOKEN",
+            "signing_secret_env": "TEST_WEBHOOK_SIGNING_SECRET"
+        });
+        let config: WebhookChannelConfig =
+            serde_json::from_value(config_value).expect("deserialize webhook config");
+
+        let resolved = config
+            .resolve_account(None)
+            .expect("resolve default webhook account");
+        let endpoint_url = resolved.endpoint_url();
+        let auth_token = resolved.auth_token();
+        let signing_secret = resolved.signing_secret();
+
+        assert_eq!(resolved.configured_account_id, "webhook-ops");
+        assert_eq!(resolved.account.id, "webhook-ops");
+        assert_eq!(resolved.account.label, "Webhook-Ops");
+        assert_eq!(
+            endpoint_url.as_deref(),
+            Some("https://hooks.example.test/ingest?token=secret")
+        );
+        assert_eq!(auth_token.as_deref(), Some("token-123"));
+        assert_eq!(signing_secret.as_deref(), Some("signing-secret-123"));
+        assert_eq!(resolved.auth_header_name, "Authorization");
+        assert_eq!(resolved.auth_token_prefix, "Bearer ");
+        assert_eq!(resolved.payload_format, WebhookPayloadFormat::JsonText);
+        assert_eq!(resolved.payload_text_field, "text");
+    }
+
+    #[test]
+    fn webhook_multi_account_resolution_merges_base_and_account_overrides() {
+        let config_value = json!({
+            "enabled": true,
+            "account_id": "Webhook-Shared",
+            "endpoint_url": "https://hooks.example.test/base",
+            "auth_token": "base-token",
+            "auth_header_name": "X-LoongClaw-Token",
+            "auth_token_prefix": "Token ",
+            "payload_format": "json_text",
+            "payload_text_field": "message",
+            "public_base_url": "https://public.example.test/webhook",
+            "signing_secret": "base-signing-secret",
+            "default_account": "Ops",
+            "accounts": {
+                "Ops": {
+                    "account_id": "Webhook-Ops",
+                    "endpoint_url": "https://hooks.example.test/ops",
+                    "payload_format": "plain_text"
+                },
+                "Backup": {
+                    "enabled": false,
+                    "auth_token": "backup-token",
+                    "auth_header_name": "X-Backup-Token",
+                    "payload_text_field": "backup_message"
+                }
+            }
+        });
+        let config: WebhookChannelConfig =
+            serde_json::from_value(config_value).expect("deserialize webhook multi-account config");
+
+        assert_eq!(config.configured_account_ids(), vec!["backup", "ops"]);
+        assert_eq!(config.default_configured_account_id(), "ops");
+
+        let ops = config
+            .resolve_account(None)
+            .expect("resolve default webhook account");
+        let ops_endpoint_url = ops.endpoint_url();
+        let ops_auth_token = ops.auth_token();
+        let ops_signing_secret = ops.signing_secret();
+
+        assert_eq!(ops.configured_account_id, "ops");
+        assert_eq!(ops.account.id, "webhook-ops");
+        assert_eq!(ops.account.label, "Webhook-Ops");
+        assert_eq!(
+            ops_endpoint_url.as_deref(),
+            Some("https://hooks.example.test/ops")
+        );
+        assert_eq!(ops_auth_token.as_deref(), Some("base-token"));
+        assert_eq!(ops_signing_secret.as_deref(), Some("base-signing-secret"));
+        assert_eq!(ops.auth_header_name, "X-LoongClaw-Token");
+        assert_eq!(ops.auth_token_prefix, "Token ");
+        assert_eq!(ops.payload_format, WebhookPayloadFormat::PlainText);
+        assert_eq!(ops.payload_text_field, "message");
+        assert_eq!(
+            ops.public_base_url.as_deref(),
+            Some("https://public.example.test/webhook")
+        );
+
+        let backup = config
+            .resolve_account(Some("Backup"))
+            .expect("resolve explicit webhook account");
+        let backup_endpoint_url = backup.endpoint_url();
+        let backup_auth_token = backup.auth_token();
+        let backup_signing_secret = backup.signing_secret();
+
+        assert_eq!(backup.configured_account_id, "backup");
+        assert!(!backup.enabled);
+        assert_eq!(backup.account.id, "webhook-shared");
+        assert_eq!(backup.account.label, "Webhook-Shared");
+        assert_eq!(
+            backup_endpoint_url.as_deref(),
+            Some("https://hooks.example.test/base")
+        );
+        assert_eq!(backup_auth_token.as_deref(), Some("backup-token"));
+        assert_eq!(
+            backup_signing_secret.as_deref(),
+            Some("base-signing-secret")
+        );
+        assert_eq!(backup.auth_header_name, "X-Backup-Token");
+        assert_eq!(backup.auth_token_prefix, "Token ");
+        assert_eq!(backup.payload_format, WebhookPayloadFormat::JsonText);
+        assert_eq!(backup.payload_text_field, "backup_message");
+    }
+
+    #[test]
     fn google_chat_resolves_webhook_url_from_env_pointers() {
         let mut env = crate::test_support::ScopedEnv::new();
         env.set(
@@ -7678,6 +8275,31 @@ mod tests {
         .expect("deserialize slack config");
 
         assert_eq!(config.bot_token_env.as_deref(), Some(SLACK_BOT_TOKEN_ENV));
+    }
+
+    #[test]
+    fn webhook_partial_deserialization_keeps_default_env_pointers() {
+        let config: WebhookChannelConfig = serde_json::from_value(json!({
+            "enabled": true
+        }))
+        .expect("deserialize webhook config");
+
+        assert_eq!(
+            config.endpoint_url_env.as_deref(),
+            Some(WEBHOOK_ENDPOINT_URL_ENV)
+        );
+        assert_eq!(
+            config.auth_token_env.as_deref(),
+            Some(WEBHOOK_AUTH_TOKEN_ENV)
+        );
+        assert_eq!(
+            config.signing_secret_env.as_deref(),
+            Some(WEBHOOK_SIGNING_SECRET_ENV)
+        );
+        assert_eq!(config.auth_header_name, "Authorization");
+        assert_eq!(config.auth_token_prefix, "Bearer ");
+        assert_eq!(config.payload_format, WebhookPayloadFormat::JsonText);
+        assert_eq!(config.payload_text_field, "text");
     }
 
     #[test]

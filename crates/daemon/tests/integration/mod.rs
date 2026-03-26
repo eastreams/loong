@@ -609,13 +609,16 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         "op serve (imessage-serve) unsupported: imessage bridge sync runtime is not implemented yet target_kinds=conversation requirements=enabled,bridge_url,bridge_token,allowed_chat_ids"
     ));
     assert!(rendered.contains(
-        "Webhook [webhook] implementation_status=stub selection_order=110 selection_label=\"generic http integration\""
+        "Webhook [webhook] implementation_status=config_backed selection_order=110 selection_label=\"generic http integration\" capabilities=multi_account,send aliases=http-webhook transport=generic_webhook target_kinds=endpoint configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(
         "WebChat [webchat] implementation_status=stub selection_order=230 selection_label=\"embedded web inbox\""
     ));
     assert!(rendered.contains(
-        "catalog op send (webhook-send) availability=stub tracks_runtime=false target_kinds=endpoint requirements=enabled,endpoint_url,auth_token"
+        "op send (webhook-send) disabled: disabled by webhook account configuration target_kinds=endpoint requirements=enabled,endpoint_url"
+    ));
+    assert!(rendered.contains(
+        "op serve (webhook-serve) unsupported: generic webhook serve runtime is not implemented yet target_kinds=endpoint requirements=enabled,public_base_url,signing_secret"
     ));
     assert!(rendered.contains(
         "onboarding strategy=manual_config status_command=\"loongclaw doctor\" repair_command=\"loongclaw doctor --fix\""
@@ -1570,7 +1573,7 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
                 .get("configured_accounts")
                 .and_then(serde_json::Value::as_array)
                 .map(Vec::len)
-                == Some(0)
+                == Some(1)
     }));
 
     assert!(surfaces.iter().any(|surface| {

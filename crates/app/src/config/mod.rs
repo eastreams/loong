@@ -24,10 +24,11 @@ pub use channels::{
     ResolvedLineChannelConfig, ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
     ResolvedNextcloudTalkChannelConfig, ResolvedSignalChannelConfig, ResolvedSlackChannelConfig,
     ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig, ResolvedTelegramChannelConfig,
-    ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig, SignalAccountConfig,
-    SignalChannelConfig, SlackAccountConfig, SlackChannelConfig, SynologyChatAccountConfig,
-    SynologyChatChannelConfig, TeamsAccountConfig, TeamsChannelConfig, TelegramAccountConfig,
-    TelegramChannelConfig, TelegramStreamingMode, WecomAccountConfig, WecomChannelConfig,
+    ResolvedWebhookChannelConfig, ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig,
+    SignalAccountConfig, SignalChannelConfig, SlackAccountConfig, SlackChannelConfig,
+    SynologyChatAccountConfig, SynologyChatChannelConfig, TeamsAccountConfig, TeamsChannelConfig,
+    TelegramAccountConfig, TelegramChannelConfig, TelegramStreamingMode, WebhookAccountConfig,
+    WebhookChannelConfig, WebhookPayloadFormat, WecomAccountConfig, WecomChannelConfig,
     WhatsappAccountConfig, WhatsappChannelConfig, channel_descriptor, service_channel_descriptors,
 };
 #[allow(unused_imports)]
@@ -40,7 +41,8 @@ pub(crate) use channels::{
     NEXTCLOUD_TALK_SHARED_SECRET_ENV, SIGNAL_ACCOUNT_ENV, SIGNAL_SERVICE_URL_ENV,
     SLACK_BOT_TOKEN_ENV, SYNOLOGY_CHAT_INCOMING_URL_ENV, SYNOLOGY_CHAT_TOKEN_ENV, TEAMS_APP_ID_ENV,
     TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV, TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV,
-    WECOM_BOT_ID_ENV, WECOM_SECRET_ENV, WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV,
+    WEBHOOK_AUTH_TOKEN_ENV, WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV, WECOM_BOT_ID_ENV,
+    WECOM_SECRET_ENV, WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV,
     WHATSAPP_PHONE_NUMBER_ID_ENV, WHATSAPP_VERIFY_TOKEN_ENV, normalize_channel_account_id,
 };
 #[allow(unused_imports)]
@@ -122,6 +124,7 @@ mod tests {
             "line",
             "dingtalk",
             "whatsapp",
+            "webhook",
             "google-chat",
             "signal",
             "teams",
@@ -201,6 +204,12 @@ mod tests {
         assert_eq!(whatsapp.runtime_kind, ChannelRuntimeKind::Service);
         assert_eq!(whatsapp.serve_subcommand, None);
 
+        let webhook = channel_descriptor("webhook").expect("webhook descriptor");
+        assert_eq!(webhook.id, "webhook");
+        assert_eq!(webhook.surface_label, "webhook channel");
+        assert_eq!(webhook.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(webhook.serve_subcommand, None);
+
         let google_chat = channel_descriptor("google-chat").expect("google chat descriptor");
         assert_eq!(google_chat.id, "google-chat");
         assert_eq!(google_chat.surface_label, "google chat channel");
@@ -262,6 +271,7 @@ mod tests {
         config.line.enabled = true;
         config.dingtalk.enabled = true;
         config.whatsapp.enabled = true;
+        config.webhook.enabled = true;
         config.google_chat.enabled = true;
         config.signal.enabled = true;
         config.teams.enabled = true;
@@ -283,6 +293,7 @@ mod tests {
                 "line",
                 "dingtalk",
                 "whatsapp",
+                "webhook",
                 "google-chat",
                 "signal",
                 "teams",
