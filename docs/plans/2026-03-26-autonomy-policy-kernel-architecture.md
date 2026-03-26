@@ -429,13 +429,17 @@ The live runtime should expose one deterministic decision contract.
 
 Suggested input shape:
 
-- resolved product mode
 - autonomy-policy snapshot
 - capability action class
 - governance profile
 - runtime binding
 - channel support facts
 - turn budget facts
+
+`AutonomyPolicySnapshot` should be the sole runtime decision authority.
+If product-mode context is still useful for telemetry or operator explanation,
+store the resolved product mode as snapshot metadata rather than as an
+independent decision input.
 
 Suggested output shape:
 
