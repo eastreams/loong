@@ -43,6 +43,7 @@ test-support = []
 [dependencies]
 loongclaw-contracts = { path = "../contracts" }
 loongclaw-kernel = { path = "../kernel" }
+bytes = "1"
 async-trait.workspace = true
 console.workspace = true
 dunce = "1"
