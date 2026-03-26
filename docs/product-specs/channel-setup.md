@@ -12,11 +12,11 @@ needs.
       CLI as the default surface, plus runtime-backed Telegram, Feishu / Lark,
       Matrix, and WeCom, and config-backed outbound Discord, Slack, LINE,
       DingTalk, WhatsApp, Email, generic Webhook, Google Chat, Signal,
-      Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat, and
+      Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat, IRC, and
       iMessage / BlueBubbles.
 - [ ] Product docs clearly distinguish runtime-backed shipped surfaces,
       config-backed outbound shipped surfaces, and catalog-only planned
-      surfaces such as IRC, Nostr, Twitch, Tlon, Zalo, Zalo Personal, and
+      surfaces such as Nostr, Twitch, Tlon, Zalo, Zalo Personal, and
       WebChat.
 - [ ] Channel setup guidance describes required credentials, config toggles, and
       the command used to run each shipped channel.
@@ -34,7 +34,7 @@ needs.
 
 - Shipping additional runtime-backed channels beyond CLI, Telegram, Feishu /
   Lark, Matrix, and WeCom
-- Promoting the remaining catalog-only planned surfaces such as IRC, Nostr,
+- Promoting the remaining catalog-only planned surfaces such as Nostr,
   Twitch, Tlon, Zalo, Zalo Personal, or WebChat to
   shipped support in this slice
 - Broad cross-channel inbox or routing UX
@@ -62,6 +62,7 @@ needs.
 | Mattermost | Config-backed outbound | Mattermost REST API | `mattermost.enabled`, `mattermost.server_url`, `mattermost.bot_token` | `loongclaw mattermost-send` |
 | Nextcloud Talk | Config-backed outbound | Nextcloud Talk bot API | `nextcloud_talk.enabled`, `nextcloud_talk.server_url`, `nextcloud_talk.shared_secret` | `loongclaw nextcloud-talk-send` |
 | Synology Chat | Config-backed outbound | Synology Chat incoming webhook | `synology_chat.enabled`, `synology_chat.incoming_url` | `loongclaw synology-chat-send` |
+| IRC | Config-backed outbound | IRC socket client | `irc.enabled`, `irc.server`, `irc.nickname`; `password` is optional, and `username`, `realname`, `channel_names` are optional operator hints | `loongclaw irc-send` |
 | iMessage / BlueBubbles | Config-backed outbound | BlueBubbles bridge REST API | `imessage.enabled`, `imessage.bridge_url`, `imessage.bridge_token` | `loongclaw imessage-send` |
 
 ## Expansion Model
@@ -144,7 +145,8 @@ runtime contract is explicitly the official AIBot websocket subscription flow.
 
 Discord, Slack, LINE, DingTalk, WhatsApp, Email, generic Webhook, Google
 Chat, Signal, Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat,
-and iMessage / BlueBubbles are shipped as account-aware outbound surfaces:
+IRC, and iMessage / BlueBubbles are shipped as account-aware outbound
+surfaces:
 
 - they publish send commands, config validation, inventory snapshots, and
   onboarding metadata through the shared channel SDK
@@ -223,6 +225,21 @@ Synology Chat is shipped through the incoming webhook send surface:
 - `synology-chat-serve` remains planned until LoongClaw owns the outbound
   webhook callback contract
 
+### IRC
+
+IRC is shipped through a config-backed socket send surface:
+
+- configure `irc.server` with either a bare host, an `irc://host[:port]`
+  endpoint, or an `ircs://host[:port]` endpoint
+- configure `irc.nickname` for the bot identity used during registration
+- optionally configure `irc.username`, `irc.realname`, and `irc.password`
+- optionally configure `irc.channel_names` when the operator wants status
+  snapshots to advertise the preferred channel set for that account
+- use `irc-send` with a conversation target such as `#ops` for a channel or a
+  nick for a direct message
+- `irc-serve` remains planned until LoongClaw owns a long-lived relay-loop
+  contract for IRC traffic
+
 ### iMessage / BlueBubbles
 
 iMessage is shipped through a BlueBubbles bridge send surface:
@@ -246,7 +263,8 @@ subset:
   or `wecom=robot-prod`
 - it never promotes config-backed outbound surfaces such as WhatsApp, Signal,
   Email, generic Webhook, Microsoft Teams, DingTalk, Google Chat,
-  Mattermost, Nextcloud Talk, Synology Chat, or iMessage / BlueBubbles into
-  runtime supervision until those adapters grow real serve ownership
-- it never promotes catalog-only planned surfaces such as Tlon into runtime
-  supervision until those adapters are implemented
+  Mattermost, Nextcloud Talk, Synology Chat, IRC, or iMessage / BlueBubbles
+  into runtime supervision until those adapters grow real serve ownership
+- it never promotes catalog-only planned surfaces such as Nostr, Tlon, Zalo,
+  Zalo Personal, or WebChat into runtime supervision until those adapters are
+  implemented

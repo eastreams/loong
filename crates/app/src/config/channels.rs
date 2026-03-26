@@ -49,6 +49,9 @@ pub(crate) const TEAMS_TENANT_ID_ENV: &str = "TEAMS_TENANT_ID";
 pub(crate) const TEAMS_WEBHOOK_URL_ENV: &str = "TEAMS_WEBHOOK_URL";
 pub(crate) const IMESSAGE_BRIDGE_URL_ENV: &str = "IMESSAGE_BRIDGE_URL";
 pub(crate) const IMESSAGE_BRIDGE_TOKEN_ENV: &str = "IMESSAGE_BRIDGE_TOKEN";
+pub(crate) const IRC_SERVER_ENV: &str = "IRC_SERVER";
+pub(crate) const IRC_NICKNAME_ENV: &str = "IRC_NICKNAME";
+pub(crate) const IRC_PASSWORD_ENV: &str = "IRC_PASSWORD";
 pub(crate) const WHATSAPP_ACCESS_TOKEN_ENV: &str = "WHATSAPP_ACCESS_TOKEN";
 pub(crate) const WHATSAPP_PHONE_NUMBER_ID_ENV: &str = "WHATSAPP_PHONE_NUMBER_ID";
 pub(crate) const WHATSAPP_VERIFY_TOKEN_ENV: &str = "WHATSAPP_VERIFY_TOKEN";
@@ -1199,6 +1202,77 @@ impl ResolvedTeamsChannelConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IrcAccountConfig {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub server: Option<String>,
+    #[serde(default)]
+    pub server_env: Option<String>,
+    #[serde(default)]
+    pub nickname: Option<String>,
+    #[serde(default)]
+    pub nickname_env: Option<String>,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub realname: Option<String>,
+    #[serde(default)]
+    pub password: Option<SecretRef>,
+    #[serde(default)]
+    pub password_env: Option<String>,
+    #[serde(default)]
+    pub channel_names: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedIrcChannelConfig {
+    pub configured_account_id: String,
+    pub configured_account_label: String,
+    pub account: ChannelAccountIdentity,
+    pub enabled: bool,
+    pub server: Option<String>,
+    pub server_env: Option<String>,
+    pub nickname: Option<String>,
+    pub nickname_env: Option<String>,
+    pub username: Option<String>,
+    pub realname: Option<String>,
+    pub password: Option<SecretRef>,
+    pub password_env: Option<String>,
+    pub channel_names: Vec<String>,
+}
+
+impl ResolvedIrcChannelConfig {
+    pub fn server(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.server.as_deref(), self.server_env.as_deref())
+    }
+
+    pub fn nickname(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.nickname.as_deref(), self.nickname_env.as_deref())
+    }
+
+    pub fn username(&self) -> Option<&str> {
+        self.username
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn realname(&self) -> Option<&str> {
+        self.realname
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn password(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.password.as_ref(), self.password_env.as_deref())
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ImessageAccountConfig {
     #[serde(default)]
     pub enabled: Option<bool>,
@@ -1590,6 +1664,37 @@ pub struct SynologyChatChannelConfig {
     pub allowed_user_ids: Vec<u64>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, SynologyChatAccountConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct IrcChannelConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub default_account: Option<String>,
+    #[serde(default)]
+    pub server: Option<String>,
+    #[serde(default = "default_irc_server_env")]
+    pub server_env: Option<String>,
+    #[serde(default)]
+    pub nickname: Option<String>,
+    #[serde(default = "default_irc_nickname_env")]
+    pub nickname_env: Option<String>,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub realname: Option<String>,
+    #[serde(default)]
+    pub password: Option<SecretRef>,
+    #[serde(default = "default_irc_password_env")]
+    pub password_env: Option<String>,
+    #[serde(default)]
+    pub channel_names: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub accounts: BTreeMap<String, IrcAccountConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -2188,6 +2293,26 @@ impl Default for SynologyChatChannelConfig {
             incoming_url: None,
             incoming_url_env: Some(SYNOLOGY_CHAT_INCOMING_URL_ENV.to_owned()),
             allowed_user_ids: Vec::new(),
+            accounts: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for IrcChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_id: None,
+            default_account: None,
+            server: None,
+            server_env: Some(IRC_SERVER_ENV.to_owned()),
+            nickname: None,
+            nickname_env: Some(IRC_NICKNAME_ENV.to_owned()),
+            username: None,
+            realname: None,
+            password: None,
+            password_env: Some(IRC_PASSWORD_ENV.to_owned()),
+            channel_names: Vec::new(),
             accounts: BTreeMap::new(),
         }
     }
@@ -5048,6 +5173,247 @@ impl SynologyChatChannelConfig {
     }
 }
 
+impl IrcChannelConfig {
+    pub(crate) fn validate(&self) -> Vec<ConfigValidationIssue> {
+        let mut issues = Vec::new();
+        validate_channel_account_integrity(
+            &mut issues,
+            "irc",
+            self.default_account.as_deref(),
+            self.accounts.keys(),
+        );
+        validate_irc_env_pointer(
+            &mut issues,
+            "irc.server_env",
+            self.server_env.as_deref(),
+            "irc.server",
+        );
+        validate_irc_env_pointer(
+            &mut issues,
+            "irc.nickname_env",
+            self.nickname_env.as_deref(),
+            "irc.nickname",
+        );
+        validate_irc_env_pointer(
+            &mut issues,
+            "irc.password_env",
+            self.password_env.as_deref(),
+            "irc.password",
+        );
+        validate_irc_secret_ref_env_pointer(&mut issues, "irc.password", self.password.as_ref());
+        validate_irc_server_field(&mut issues, "irc.server", self.server());
+
+        for (raw_account_id, account) in &self.accounts {
+            let account_id = normalize_channel_account_id(raw_account_id);
+
+            let server_field_path = format!("irc.accounts.{account_id}.server");
+            let server_env_field_path = format!("{server_field_path}_env");
+            validate_irc_env_pointer(
+                &mut issues,
+                server_env_field_path.as_str(),
+                account.server_env.as_deref(),
+                server_field_path.as_str(),
+            );
+            let server = resolve_string_with_legacy_env(
+                account.server.as_deref(),
+                account.server_env.as_deref(),
+            );
+            validate_irc_server_field(&mut issues, server_field_path.as_str(), server);
+
+            let nickname_field_path = format!("irc.accounts.{account_id}.nickname");
+            let nickname_env_field_path = format!("{nickname_field_path}_env");
+            validate_irc_env_pointer(
+                &mut issues,
+                nickname_env_field_path.as_str(),
+                account.nickname_env.as_deref(),
+                nickname_field_path.as_str(),
+            );
+
+            let password_field_path = format!("irc.accounts.{account_id}.password");
+            let password_env_field_path = format!("{password_field_path}_env");
+            validate_irc_env_pointer(
+                &mut issues,
+                password_env_field_path.as_str(),
+                account.password_env.as_deref(),
+                password_field_path.as_str(),
+            );
+            validate_irc_secret_ref_env_pointer(
+                &mut issues,
+                password_field_path.as_str(),
+                account.password.as_ref(),
+            );
+        }
+
+        issues
+    }
+
+    pub fn server(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.server.as_deref(), self.server_env.as_deref())
+    }
+
+    pub fn nickname(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.nickname.as_deref(), self.nickname_env.as_deref())
+    }
+
+    pub fn password(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.password.as_ref(), self.password_env.as_deref())
+    }
+
+    pub fn configured_account_ids(&self) -> Vec<String> {
+        let ids = configured_account_ids(self.accounts.keys());
+        if ids.is_empty() {
+            return vec![self.default_configured_account_id()];
+        }
+        ids
+    }
+
+    pub fn default_configured_account_selection(&self) -> ChannelDefaultAccountSelection {
+        resolve_default_configured_account_selection(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+
+    pub fn default_configured_account_id(&self) -> String {
+        self.default_configured_account_selection().id
+    }
+
+    pub fn resolved_account_route(
+        &self,
+        requested_account_id: Option<&str>,
+        selected_configured_account_id: &str,
+    ) -> ChannelResolvedAccountRoute {
+        resolve_channel_account_route(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+            requested_account_id,
+            selected_configured_account_id,
+        )
+    }
+
+    pub fn resolve_account(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedIrcChannelConfig> {
+        let configured = self.resolve_configured_account_selection(requested_account_id)?;
+        let account_override = configured
+            .account_key
+            .as_deref()
+            .and_then(|key| self.accounts.get(key));
+
+        let merged = IrcChannelConfig {
+            enabled: self.enabled
+                && account_override
+                    .and_then(|account| account.enabled)
+                    .unwrap_or(true),
+            account_id: account_override
+                .and_then(|account| account.account_id.clone())
+                .or_else(|| self.account_id.clone()),
+            default_account: None,
+            server: account_override
+                .and_then(|account| account.server.clone())
+                .or_else(|| self.server.clone()),
+            server_env: account_override
+                .and_then(|account| account.server_env.clone())
+                .or_else(|| self.server_env.clone()),
+            nickname: account_override
+                .and_then(|account| account.nickname.clone())
+                .or_else(|| self.nickname.clone()),
+            nickname_env: account_override
+                .and_then(|account| account.nickname_env.clone())
+                .or_else(|| self.nickname_env.clone()),
+            username: account_override
+                .and_then(|account| account.username.clone())
+                .or_else(|| self.username.clone()),
+            realname: account_override
+                .and_then(|account| account.realname.clone())
+                .or_else(|| self.realname.clone()),
+            password: account_override
+                .and_then(|account| account.password.clone())
+                .or_else(|| self.password.clone()),
+            password_env: account_override
+                .and_then(|account| account.password_env.clone())
+                .or_else(|| self.password_env.clone()),
+            channel_names: account_override
+                .and_then(|account| account.channel_names.clone())
+                .unwrap_or_else(|| self.channel_names.clone()),
+            accounts: BTreeMap::new(),
+        };
+        let account = merged.resolved_account_identity();
+
+        Ok(ResolvedIrcChannelConfig {
+            configured_account_id: configured.id,
+            configured_account_label: configured.label,
+            account,
+            enabled: merged.enabled,
+            server: merged.server,
+            server_env: merged.server_env,
+            nickname: merged.nickname,
+            nickname_env: merged.nickname_env,
+            username: merged.username,
+            realname: merged.realname,
+            password: merged.password,
+            password_env: merged.password_env,
+            channel_names: merged.channel_names,
+        })
+    }
+
+    pub fn resolve_account_for_session_account_id(
+        &self,
+        session_account_id: Option<&str>,
+    ) -> CliResult<ResolvedIrcChannelConfig> {
+        resolve_account_for_session_account_id(
+            session_account_id,
+            || self.resolve_account(session_account_id),
+            || self.configured_account_ids(),
+            |configured_id| self.resolve_account(Some(configured_id)),
+            |resolved| resolved.account.id.as_str(),
+        )
+    }
+
+    pub fn resolved_account_identity(&self) -> ChannelAccountIdentity {
+        if let Some((id, label)) = resolve_configured_account_identity(self.account_id.as_deref()) {
+            return ChannelAccountIdentity {
+                id,
+                label,
+                source: ChannelAccountIdentitySource::Configured,
+            };
+        }
+
+        let nickname = self.nickname();
+        let nickname = nickname
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(nickname) = nickname {
+            let normalized_nickname = normalize_channel_account_id(nickname);
+            let account_id = format!("irc_{normalized_nickname}");
+            let account_label = format!("irc:{nickname}");
+            return ChannelAccountIdentity {
+                id: account_id,
+                label: account_label,
+                source: ChannelAccountIdentitySource::DerivedCredential,
+            };
+        }
+
+        default_channel_account_identity()
+    }
+
+    fn resolve_configured_account_selection(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedConfiguredAccount> {
+        resolve_configured_account_selection(
+            self.accounts.keys(),
+            requested_account_id,
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+}
+
 impl TeamsChannelConfig {
     pub(crate) fn validate(&self) -> Vec<ConfigValidationIssue> {
         let mut issues = Vec::new();
@@ -6068,6 +6434,18 @@ fn default_teams_tenant_id_env() -> Option<String> {
     Some(TEAMS_TENANT_ID_ENV.to_owned())
 }
 
+fn default_irc_server_env() -> Option<String> {
+    Some(IRC_SERVER_ENV.to_owned())
+}
+
+fn default_irc_nickname_env() -> Option<String> {
+    Some(IRC_NICKNAME_ENV.to_owned())
+}
+
+fn default_irc_password_env() -> Option<String> {
+    Some(IRC_PASSWORD_ENV.to_owned())
+}
+
 fn default_imessage_bridge_url_env() -> Option<String> {
     Some(IMESSAGE_BRIDGE_URL_ENV.to_owned())
 }
@@ -6337,6 +6715,124 @@ fn build_email_invalid_value_issue(
         suggested_env_name: None,
         extra_message_variables,
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IrcServerTransport {
+    Plain,
+    Tls,
+}
+
+impl IrcServerTransport {
+    pub(crate) const fn default_port(self) -> u16 {
+        match self {
+            Self::Plain => 6667,
+            Self::Tls => 6697,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IrcServerEndpoint {
+    pub(crate) transport: IrcServerTransport,
+    pub(crate) host: String,
+    pub(crate) port: u16,
+}
+
+pub(crate) fn parse_irc_server_endpoint(raw: &str) -> CliResult<IrcServerEndpoint> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("irc server is empty".to_owned());
+    }
+
+    if trimmed.contains("://") {
+        let url = reqwest::Url::parse(trimmed)
+            .map_err(|error| format!("irc server url is invalid: {error}"))?;
+        let transport = match url.scheme() {
+            "irc" => IrcServerTransport::Plain,
+            "ircs" => IrcServerTransport::Tls,
+            scheme => {
+                return Err(format!(
+                    "unsupported irc server scheme `{scheme}`; expected `irc` or `ircs`"
+                ));
+            }
+        };
+
+        if !url.username().is_empty() || url.password().is_some() {
+            return Err("irc server url must not include credentials".to_owned());
+        }
+        if url.query().is_some() {
+            return Err("irc server url must not include a query".to_owned());
+        }
+        if url.fragment().is_some() {
+            return Err("irc server url must not include a fragment".to_owned());
+        }
+
+        let path = url.path();
+        if !(path.is_empty() || path == "/") {
+            return Err("irc server url must not include a path".to_owned());
+        }
+
+        let host = url
+            .host_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "irc server url is missing a host".to_owned())?;
+        let port = url.port().unwrap_or_else(|| transport.default_port());
+        return Ok(IrcServerEndpoint {
+            transport,
+            host: host.to_owned(),
+            port,
+        });
+    }
+
+    if trimmed.contains(':') {
+        return Err(
+            "bare `host:port` is not supported for irc server; use `irc://host:port` or `ircs://host:port`"
+                .to_owned(),
+        );
+    }
+    if trimmed.contains('/') || trimmed.contains('?') || trimmed.contains('#') {
+        return Err(
+            "bare irc server must be a hostname only; use `irc://` or `ircs://` for url-style values"
+                .to_owned(),
+        );
+    }
+
+    Ok(IrcServerEndpoint {
+        transport: IrcServerTransport::Plain,
+        host: trimmed.to_owned(),
+        port: IrcServerTransport::Plain.default_port(),
+    })
+}
+
+fn validate_irc_server_field(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    server: Option<String>,
+) {
+    let Some(server) = server else {
+        return;
+    };
+    let parse_result = parse_irc_server_endpoint(server.as_str());
+    let Err(invalid_reason) = parse_result else {
+        return;
+    };
+
+    let suggested_fix =
+        "use a bare host or an explicit `irc://host[:port]` / `ircs://host[:port]` endpoint";
+    let mut extra_message_variables = BTreeMap::new();
+    extra_message_variables.insert("invalid_reason".to_owned(), invalid_reason);
+    extra_message_variables.insert("suggested_fix".to_owned(), suggested_fix.to_owned());
+    issues.push(ConfigValidationIssue {
+        severity: super::shared::ConfigValidationSeverity::Error,
+        code: ConfigValidationCode::InvalidValue,
+        field_path: field_path.to_owned(),
+        inline_field_path: field_path.to_owned(),
+        example_env_name: IRC_SERVER_ENV.to_owned(),
+        suggested_env_name: None,
+        extra_message_variables,
+    });
 }
 
 fn validate_telegram_env_pointer(
@@ -6911,6 +7407,50 @@ fn validate_imessage_secret_ref_env_pointer(
         EnvPointerValidationHint {
             inline_field_path: field_path,
             example_env_name: IMESSAGE_BRIDGE_TOKEN_ENV,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_irc_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    env_key: Option<&str>,
+    inline_field_path: &str,
+) {
+    let example_env_name = if field_path.ends_with("server_env") {
+        IRC_SERVER_ENV
+    } else if field_path.ends_with("nickname_env") {
+        IRC_NICKNAME_ENV
+    } else {
+        IRC_PASSWORD_ENV
+    };
+    if let Err(issue) = validate_env_pointer_field(
+        field_path,
+        env_key,
+        EnvPointerValidationHint {
+            inline_field_path,
+            example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_irc_secret_ref_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    secret_ref: Option<&SecretRef>,
+) {
+    if let Err(issue) = validate_secret_ref_env_pointer_field(
+        field_path,
+        secret_ref,
+        EnvPointerValidationHint {
+            inline_field_path: field_path,
+            example_env_name: IRC_PASSWORD_ENV,
             detect_telegram_token_shape: false,
         },
     ) {

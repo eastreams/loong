@@ -1010,6 +1010,23 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    /// Send one IRC message to a channel or nick
+    IrcSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_irc_send_target_kind(),
+            value_parser = parse_irc_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
     /// Send one iMessage chat through BlueBubbles
     ImessageSend {
         #[arg(long)]
@@ -4130,6 +4147,11 @@ pub const SYNOLOGY_CHAT_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
     run: run_synology_chat_send_cli_impl,
 };
 
+pub const IRC_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::IRC_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_irc_send_cli_impl,
+};
+
 pub const IMESSAGE_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
     family: mvp::channel::IMESSAGE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_imessage_send_cli_impl,
@@ -4428,6 +4450,21 @@ pub fn run_synology_chat_send_cli_impl(
     })
 }
 
+pub fn run_irc_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        let target = require_channel_send_target("irc-send", args.target)?;
+        mvp::channel::run_irc_send(
+            args.config_path,
+            args.account,
+            target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
 pub fn run_imessage_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = args.as_card;
@@ -4669,6 +4706,16 @@ pub fn parse_synology_chat_send_target_kind(
     parse_channel_send_target_kind(SYNOLOGY_CHAT_SEND_CLI_SPEC, raw)
 }
 
+pub fn default_irc_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(IRC_SEND_CLI_SPEC)
+}
+
+pub fn parse_irc_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(IRC_SEND_CLI_SPEC, raw)
+}
+
 pub fn default_imessage_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
     default_channel_send_target_kind(IMESSAGE_SEND_CLI_SPEC)
 }
@@ -4725,6 +4772,48 @@ mod channel_send_cli_tests {
             .expect_err("missing target should fail");
 
         assert_eq!(error, "email-send requires --target");
+    }
+
+    #[test]
+    fn irc_send_cli_accepts_conversation_target_kind() {
+        let target_kind = parse_irc_send_target_kind("conversation")
+            .expect("irc-send should accept conversation targets");
+
+        assert_eq!(
+            default_irc_send_target_kind(),
+            mvp::channel::ChannelOutboundTargetKind::Conversation
+        );
+        assert_eq!(
+            target_kind,
+            mvp::channel::ChannelOutboundTargetKind::Conversation
+        );
+    }
+
+    #[test]
+    fn irc_send_cli_rejects_non_conversation_target_kind() {
+        let rendered =
+            parse_irc_send_target_kind("endpoint").expect_err("endpoint targets must be rejected");
+
+        assert!(
+            rendered.contains("irc --target-kind does not support `endpoint`; use `conversation`"),
+            "unexpected target-kind error: {rendered}"
+        );
+    }
+
+    #[test]
+    fn irc_send_cli_requires_target() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let result = runtime.block_on(run_irc_send_cli_impl(ChannelSendCliArgs {
+            config_path: None,
+            account: None,
+            target: None,
+            target_kind: mvp::channel::ChannelOutboundTargetKind::Conversation,
+            text: "hello",
+            as_card: false,
+        }));
+
+        let error = result.expect_err("missing target should fail before runtime execution");
+        assert_eq!(error, "irc-send requires --target");
     }
 }
 

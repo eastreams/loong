@@ -15,6 +15,7 @@ use std::time::Duration;
     feature = "channel-signal",
     feature = "channel-slack",
     feature = "channel-synology-chat",
+    feature = "channel-irc",
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
@@ -83,6 +84,7 @@ use crate::CliResult;
     feature = "channel-signal",
     feature = "channel-slack",
     feature = "channel-synology-chat",
+    feature = "channel-irc",
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
@@ -104,6 +106,7 @@ use crate::KernelContext;
     feature = "channel-signal",
     feature = "channel-slack",
     feature = "channel-synology-chat",
+    feature = "channel-irc",
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
@@ -125,6 +128,7 @@ use crate::acp::{AcpConversationTurnOptions, AcpTurnProvenance};
     feature = "channel-signal",
     feature = "channel-slack",
     feature = "channel-synology-chat",
+    feature = "channel-irc",
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
@@ -144,6 +148,8 @@ use super::config::ResolvedFeishuChannelConfig;
 use super::config::ResolvedGoogleChatChannelConfig;
 #[cfg(feature = "channel-imessage")]
 use super::config::ResolvedImessageChannelConfig;
+#[cfg(feature = "channel-irc")]
+use super::config::ResolvedIrcChannelConfig;
 #[cfg(feature = "channel-line")]
 use super::config::ResolvedLineChannelConfig;
 #[cfg(feature = "channel-matrix")]
@@ -183,6 +189,7 @@ use super::config::ResolvedWhatsappChannelConfig;
     feature = "channel-signal",
     feature = "channel-slack",
     feature = "channel-synology-chat",
+    feature = "channel-irc",
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
@@ -223,6 +230,8 @@ mod google_chat;
 mod http;
 #[cfg(feature = "channel-imessage")]
 mod imessage;
+#[cfg(feature = "channel-irc")]
+mod irc;
 #[cfg(feature = "channel-line")]
 mod line;
 #[cfg(feature = "channel-matrix")]
@@ -271,6 +280,7 @@ pub use registry::{
     DISCORD_CATALOG_COMMAND_FAMILY_DESCRIPTOR, EMAIL_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR, FEISHU_COMMAND_FAMILY_DESCRIPTOR,
     FEISHU_RUNTIME_COMMAND_DESCRIPTOR, GOOGLE_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    IRC_CATALOG_COMMAND_FAMILY_DESCRIPTOR, LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     IMESSAGE_CATALOG_COMMAND_FAMILY_DESCRIPTOR, LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR, MATRIX_COMMAND_FAMILY_DESCRIPTOR,
     MATRIX_RUNTIME_COMMAND_DESCRIPTOR, MATTERMOST_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
@@ -352,6 +362,7 @@ pub enum ChannelPlatform {
     Feishu,
     Matrix,
     Wecom,
+    Irc,
 }
 
 impl ChannelPlatform {
@@ -361,6 +372,7 @@ impl ChannelPlatform {
             Self::Feishu => "feishu",
             Self::Matrix => "matrix",
             Self::Wecom => "wecom",
+            Self::Irc => "irc",
         }
     }
 }
@@ -369,7 +381,8 @@ impl ChannelPlatform {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-irc"
 ))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelSession {
@@ -385,7 +398,8 @@ pub struct ChannelSession {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-irc"
 ))]
 impl ChannelSession {
     pub fn new(platform: ChannelPlatform, conversation_id: impl Into<String>) -> Self {
@@ -519,7 +533,8 @@ impl ChannelSession {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-irc"
 ))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -535,7 +550,8 @@ pub enum ChannelOutboundTargetKind {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-irc"
 ))]
 impl ChannelOutboundTargetKind {
     pub fn as_str(self) -> &'static str {
@@ -579,7 +595,8 @@ pub use self::ChannelOutboundTargetKind as ChannelCatalogTargetKind;
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-irc"
 ))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChannelOutboundDeliveryOptions {
@@ -592,7 +609,8 @@ pub struct ChannelOutboundDeliveryOptions {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-irc"
 ))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelOutboundTarget {
@@ -606,7 +624,8 @@ pub struct ChannelOutboundTarget {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-irc"
 ))]
 impl ChannelOutboundTarget {
     pub fn new(
@@ -826,6 +845,7 @@ type ChannelProcessFuture = Pin<Box<dyn Future<Output = CliResult<String>> + Sen
     feature = "channel-signal",
     feature = "channel-slack",
     feature = "channel-synology-chat",
+    feature = "channel-irc",
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
@@ -1195,6 +1215,7 @@ where
     feature = "channel-signal",
     feature = "channel-slack",
     feature = "channel-synology-chat",
+    feature = "channel-irc",
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
@@ -1221,6 +1242,7 @@ struct ChannelCommandContext<R> {
     feature = "channel-signal",
     feature = "channel-slack",
     feature = "channel-synology-chat",
+    feature = "channel-irc",
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
@@ -1952,6 +1974,39 @@ fn build_synology_chat_command_context(
     if !resolved.enabled {
         return Err(format!(
             "synology_chat account `{}` is disabled by configuration",
+            resolved.configured_account_id
+        ));
+    }
+    Ok(ChannelCommandContext {
+        resolved_path,
+        config,
+        resolved,
+        route,
+    })
+}
+
+#[cfg(feature = "channel-irc")]
+fn load_irc_command_context(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedIrcChannelConfig>> {
+    let (resolved_path, config) = super::config::load(config_path)?;
+    build_irc_command_context(resolved_path, config, account_id)
+}
+
+#[cfg(feature = "channel-irc")]
+fn build_irc_command_context(
+    resolved_path: PathBuf,
+    config: LoongClawConfig,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedIrcChannelConfig>> {
+    let resolved = config.irc.resolve_account(account_id)?;
+    let route = config
+        .irc
+        .resolved_account_route(account_id, resolved.configured_account_id.as_str());
+    if !resolved.enabled {
+        return Err(format!(
+            "irc account `{}` is disabled by configuration",
             resolved.configured_account_id
         ));
     }
@@ -3208,6 +3263,59 @@ pub async fn run_synology_chat_send(
 }
 
 #[allow(clippy::print_stdout)] // CLI output
+pub async fn run_irc_send(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+    target: &str,
+    target_kind: ChannelOutboundTargetKind,
+    text: &str,
+) -> CliResult<()> {
+    if !cfg!(feature = "channel-irc") {
+        return Err("irc channel is disabled (enable feature `channel-irc`)".to_owned());
+    }
+
+    #[cfg(not(feature = "channel-irc"))]
+    {
+        let _ = (config_path, account_id, target, target_kind, text);
+        return Err("irc channel is disabled (enable feature `channel-irc`)".to_owned());
+    }
+
+    #[cfg(feature = "channel-irc")]
+    {
+        let context = load_irc_command_context(config_path, account_id)?;
+        let target = target.to_owned();
+        let text = text.to_owned();
+        run_channel_send_command(
+            context,
+            ChannelSendCommandSpec { channel_id: "irc" },
+            |context| {
+                Box::pin(async move {
+                    irc::run_irc_send(
+                        &context.resolved,
+                        target_kind,
+                        target.as_str(),
+                        text.as_str(),
+                    )
+                    .await
+                })
+            },
+            |context| {
+                format!(
+                    "irc message sent (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, target_kind={})",
+                    context.resolved_path.display(),
+                    context.resolved.configured_account_id,
+                    context.resolved.account.label,
+                    context.route.selected_by_default(),
+                    context.route.default_account_source.as_str(),
+                    target_kind
+                )
+            },
+        )
+        .await
+    }
+}
+
+#[allow(clippy::print_stdout)] // CLI output
 pub async fn run_imessage_send(
     config_path: Option<&str>,
     account_id: Option<&str>,
@@ -4325,6 +4433,7 @@ fn resolve_channel_acp_turn_hints(
                 working_directory,
             })
         }
+        ChannelPlatform::Irc => Ok(ChannelResolvedAcpTurnHints::default()),
     }
 }
 
