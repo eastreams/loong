@@ -6,11 +6,12 @@ use crate::config::{
     ChannelDefaultAccountSelectionSource, DINGTALK_SECRET_ENV, DINGTALK_WEBHOOK_URL_ENV,
     DISCORD_BOT_TOKEN_ENV, FEISHU_APP_ID_ENV, FEISHU_APP_SECRET_ENV, FEISHU_ENCRYPT_KEY_ENV,
     FEISHU_VERIFICATION_TOKEN_ENV, FeishuChannelServeMode, GOOGLE_CHAT_WEBHOOK_URL_ENV,
-    IMESSAGE_BRIDGE_TOKEN_ENV, IMESSAGE_BRIDGE_URL_ENV, LINE_CHANNEL_ACCESS_TOKEN_ENV,
-    LINE_CHANNEL_SECRET_ENV, LoongClawConfig, MATRIX_ACCESS_TOKEN_ENV, MATTERMOST_BOT_TOKEN_ENV,
-    MATTERMOST_SERVER_URL_ENV, NEXTCLOUD_TALK_SERVER_URL_ENV, NEXTCLOUD_TALK_SHARED_SECRET_ENV,
-    ResolvedDingtalkChannelConfig, ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig,
-    ResolvedFeishuChannelConfig, ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig,
+    IMESSAGE_BRIDGE_TOKEN_ENV, IMESSAGE_BRIDGE_URL_ENV, IRC_NICKNAME_ENV, IRC_SERVER_ENV,
+    LINE_CHANNEL_ACCESS_TOKEN_ENV, LINE_CHANNEL_SECRET_ENV, LoongClawConfig,
+    MATRIX_ACCESS_TOKEN_ENV, MATTERMOST_BOT_TOKEN_ENV, MATTERMOST_SERVER_URL_ENV,
+    NEXTCLOUD_TALK_SERVER_URL_ENV, NEXTCLOUD_TALK_SHARED_SECRET_ENV, ResolvedDingtalkChannelConfig,
+    ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig, ResolvedFeishuChannelConfig,
+    ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig, ResolvedIrcChannelConfig,
     ResolvedLineChannelConfig, ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
     ResolvedNextcloudTalkChannelConfig, ResolvedSignalChannelConfig, ResolvedSlackChannelConfig,
     ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig, ResolvedTelegramChannelConfig,
@@ -21,6 +22,7 @@ use crate::config::{
     WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV, WECOM_BOT_ID_ENV, WECOM_SECRET_ENV,
     WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV, WHATSAPP_PHONE_NUMBER_ID_ENV,
     WHATSAPP_VERIFY_TOKEN_ENV, WebhookPayloadFormat, parse_email_smtp_endpoint,
+    parse_irc_server_endpoint,
 };
 
 use super::{
@@ -38,8 +40,6 @@ const EMAIL_SMTP_USERNAME_ENV: &str = "EMAIL_SMTP_USERNAME";
 const EMAIL_SMTP_PASSWORD_ENV: &str = "EMAIL_SMTP_PASSWORD";
 const EMAIL_IMAP_USERNAME_ENV: &str = "EMAIL_IMAP_USERNAME";
 const EMAIL_IMAP_PASSWORD_ENV: &str = "EMAIL_IMAP_PASSWORD";
-const IRC_SERVER_ENV: &str = "IRC_SERVER";
-const IRC_NICKNAME_ENV: &str = "IRC_NICKNAME";
 const NOSTR_RELAY_URLS_ENV: &str = "NOSTR_RELAY_URLS";
 const NOSTR_PRIVATE_KEY_ENV: &str = "NOSTR_PRIVATE_KEY";
 const TWITCH_BOT_OAUTH_TOKEN_ENV: &str = "TWITCH_BOT_OAUTH_TOKEN";
@@ -2315,7 +2315,7 @@ const IRC_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "message send",
     command: "irc-send",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: IRC_SEND_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
@@ -2329,21 +2329,28 @@ const IRC_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     requirements: IRC_SERVE_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
+pub const IRC_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
+    ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "irc",
+        default_send_target_kind: ChannelCatalogTargetKind::Conversation,
+        send: IRC_SEND_OPERATION,
+        serve: IRC_SERVE_OPERATION,
+    };
 const IRC_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
-        operation: IRC_SEND_OPERATION,
+        operation: IRC_CATALOG_COMMAND_FAMILY_DESCRIPTOR.send,
         doctor_checks: &[],
     },
     ChannelRegistryOperationDescriptor {
-        operation: IRC_SERVE_OPERATION,
+        operation: IRC_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
         doctor_checks: &[],
     },
 ];
 const IRC_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::Planned,
-    setup_hint: "planned IRC surface; catalog metadata reflects the intended server, nick, and channel subscription contract, but no runtime adapter is implemented yet",
-    status_command: "loongclaw channels --json",
-    repair_command: None,
+    strategy: ChannelOnboardingStrategy::ManualConfig,
+    setup_hint: "configure IRC connection details in loongclaw.toml under irc or irc.accounts.<account>; outbound send is shipped, while long-lived relay-loop serve support remains planned",
+    status_command: "loongclaw doctor",
+    repair_command: Some("loongclaw doctor --fix"),
 };
 
 const IMESSAGE_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -3260,12 +3267,12 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "irc",
         runtime: None,
-        snapshot_builder: None,
+        snapshot_builder: Some(build_irc_snapshots),
         selection_order: 170,
         selection_label: "relay and channel bot",
-        blurb: "Planned IRC surface for classic channel relays and direct nick interactions.",
-        implementation_status: ChannelCatalogImplementationStatus::Stub,
-        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        blurb: "Shipped IRC outbound surface with config-backed sends for channels or direct nick targets; relay-loop serve support remains planned.",
+        implementation_status: ChannelCatalogImplementationStatus::ConfigBacked,
+        capabilities: CONFIG_BACKED_SEND_CHANNEL_CAPABILITIES,
         label: "IRC",
         aliases: &[],
         transport: "irc_socket",
@@ -4443,6 +4450,46 @@ fn build_synology_chat_snapshots(
                     default_account_source,
                 ),
                 Err(error) => build_invalid_synology_chat_snapshot(
+                    descriptor,
+                    compiled,
+                    configured_account_id.as_str(),
+                    is_default_account,
+                    default_account_source,
+                    error,
+                ),
+            }
+        })
+        .collect()
+}
+
+fn build_irc_snapshots(
+    descriptor: &ChannelRegistryDescriptor,
+    config: &LoongClawConfig,
+    _runtime_dir: &Path,
+    _now_ms: u64,
+) -> Vec<ChannelStatusSnapshot> {
+    let compiled = cfg!(feature = "channel-irc");
+    let default_selection = config.irc.default_configured_account_selection();
+    let default_configured_account_id = default_selection.id.clone();
+    let default_account_source = default_selection.source;
+    config
+        .irc
+        .configured_account_ids()
+        .into_iter()
+        .map(|configured_account_id| {
+            let is_default_account = configured_account_id == default_configured_account_id;
+            match config
+                .irc
+                .resolve_account(Some(configured_account_id.as_str()))
+            {
+                Ok(resolved) => build_irc_snapshot_for_account(
+                    descriptor,
+                    compiled,
+                    resolved,
+                    is_default_account,
+                    default_account_source,
+                ),
+                Err(error) => build_invalid_irc_snapshot(
                     descriptor,
                     compiled,
                     configured_account_id.as_str(),
@@ -5725,6 +5772,124 @@ fn build_imessage_snapshot_for_account(
     }
 }
 
+fn build_irc_snapshot_for_account(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    resolved: ResolvedIrcChannelConfig,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+) -> ChannelStatusSnapshot {
+    let mut send_issues = Vec::new();
+
+    let server = resolved.server();
+    if server.is_none() {
+        send_issues.push("server is missing".to_owned());
+    }
+    if let Some(server) = server.as_deref() {
+        let parse_result = parse_irc_server_endpoint(server);
+        if let Err(error) = parse_result {
+            send_issues.push(format!("server is invalid: {error}"));
+        }
+    }
+
+    if resolved.nickname().is_none() {
+        send_issues.push("nickname is missing".to_owned());
+    }
+
+    let send_operation = if !compiled {
+        unsupported_operation(
+            IRC_SEND_OPERATION,
+            "binary built without feature `channel-irc`".to_owned(),
+        )
+    } else if !resolved.enabled {
+        disabled_operation(
+            IRC_SEND_OPERATION,
+            "disabled by irc account configuration".to_owned(),
+        )
+    } else if !send_issues.is_empty() {
+        misconfigured_operation(IRC_SEND_OPERATION, send_issues)
+    } else {
+        ready_operation(IRC_SEND_OPERATION)
+    };
+
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            IRC_SERVE_OPERATION,
+            "binary built without feature `channel-irc`".to_owned(),
+        )
+    } else {
+        unsupported_operation(
+            IRC_SERVE_OPERATION,
+            "irc relay-loop serve is not implemented yet".to_owned(),
+        )
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={}", resolved.configured_account_id),
+        format!("configured_account={}", resolved.configured_account_label),
+        format!("account_id={}", resolved.account.id),
+        format!("account={}", resolved.account.label),
+    ];
+    if let Some(nickname) = resolved.nickname() {
+        notes.push(format!("nickname={nickname}"));
+    }
+    if let Some(username) = resolved.username() {
+        notes.push(format!("username={username}"));
+    }
+    if !resolved.channel_names.is_empty() {
+        let channel_names = resolved.channel_names.join(",");
+        notes.push(format!("channel_names={channel_names}"));
+    }
+    if resolved.password().is_some() {
+        notes.push("password_configured=true".to_owned());
+    }
+    if let Some(server) = server.as_deref() {
+        let endpoint = parse_irc_server_endpoint(server);
+        if let Ok(endpoint) = endpoint {
+            let transport = match endpoint.transport {
+                crate::config::IrcServerTransport::Plain => "irc",
+                crate::config::IrcServerTransport::Tls => "ircs",
+            };
+            notes.push(format!("server_host={}", endpoint.host));
+            notes.push(format!("server_port={}", endpoint.port));
+            notes.push(format!("server_transport={transport}"));
+        }
+    }
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: resolved.configured_account_id.clone(),
+        configured_account_label: resolved.configured_account_label.clone(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: resolved.enabled,
+        api_base_url: summarize_irc_status_endpoint(server.as_deref()),
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
+fn summarize_irc_status_endpoint(server: Option<&str>) -> Option<String> {
+    let server = server?;
+    let endpoint = parse_irc_server_endpoint(server).ok()?;
+    let scheme = match endpoint.transport {
+        crate::config::IrcServerTransport::Plain => "irc",
+        crate::config::IrcServerTransport::Tls => "ircs",
+    };
+    Some(format!("{scheme}://{}:{}", endpoint.host, endpoint.port))
+}
+
 fn build_feishu_snapshot_for_account(
     descriptor: &ChannelRegistryDescriptor,
     compiled: bool,
@@ -6853,6 +7018,63 @@ fn build_invalid_signal_snapshot(
     }
 }
 
+fn build_invalid_irc_snapshot(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    configured_account_id: &str,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+    error: String,
+) -> ChannelStatusSnapshot {
+    let send_operation = if !compiled {
+        unsupported_operation(
+            IRC_SEND_OPERATION,
+            "binary built without feature `channel-irc`".to_owned(),
+        )
+    } else {
+        misconfigured_operation(IRC_SEND_OPERATION, vec![error.clone()])
+    };
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            IRC_SERVE_OPERATION,
+            "binary built without feature `channel-irc`".to_owned(),
+        )
+    } else {
+        unsupported_operation(
+            IRC_SERVE_OPERATION,
+            "irc relay-loop serve is not implemented yet".to_owned(),
+        )
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={configured_account_id}"),
+        format!("selection_error={error}"),
+    ];
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: configured_account_id.to_owned(),
+        configured_account_label: configured_account_id.to_owned(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: false,
+        api_base_url: None,
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
 fn build_invalid_teams_snapshot(
     descriptor: &ChannelRegistryDescriptor,
     compiled: bool,
@@ -7344,6 +7566,8 @@ mod tests {
             .expect("google chat alias catalog command family");
         let synology_chat = resolve_channel_catalog_command_family_descriptor("synochat")
             .expect("synology chat alias catalog command family");
+        let irc =
+            resolve_channel_catalog_command_family_descriptor("irc").expect("irc catalog family");
         let imessage = resolve_channel_catalog_command_family_descriptor("bluebubbles")
             .expect("imessage alias catalog command family");
         let tlon = resolve_channel_catalog_command_family_descriptor("urbit")
@@ -7389,6 +7613,14 @@ mod tests {
         assert_eq!(
             synology_chat.default_send_target_kind,
             ChannelCatalogTargetKind::Address
+        );
+
+        assert_eq!(irc.channel_id, "irc");
+        assert_eq!(irc.send.command, "irc-send");
+        assert_eq!(irc.serve.command, "irc-serve");
+        assert_eq!(
+            irc.default_send_target_kind,
+            ChannelCatalogTargetKind::Conversation
         );
 
         assert_eq!(imessage.channel_id, "imessage");
@@ -8316,6 +8548,10 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "synology-chat")
             .expect("synology chat catalog entry");
+        let irc = catalog
+            .iter()
+            .find(|entry| entry.id == "irc")
+            .expect("irc catalog entry");
         let imessage = catalog
             .iter()
             .find(|entry| entry.id == "imessage")
@@ -8387,6 +8623,14 @@ mod tests {
         assert_eq!(
             synology_chat.operations[1].supported_target_kinds,
             &[ChannelCatalogTargetKind::Address]
+        );
+        assert_eq!(
+            irc.operations[0].supported_target_kinds,
+            &[ChannelCatalogTargetKind::Conversation]
+        );
+        assert_eq!(
+            irc.operations[1].supported_target_kinds,
+            &[ChannelCatalogTargetKind::Conversation]
         );
         assert_eq!(
             imessage.operations[0].supported_target_kinds,
@@ -8504,6 +8748,10 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "synology-chat")
             .expect("synology chat catalog entry");
+        let irc = catalog
+            .iter()
+            .find(|entry| entry.id == "irc")
+            .expect("irc catalog entry");
         let imessage = catalog
             .iter()
             .find(|entry| entry.id == "imessage")
@@ -8548,8 +8796,39 @@ mod tests {
             vec![ChannelCatalogTargetKind::Address]
         );
         assert_eq!(
+            irc.supported_target_kinds,
+            vec![ChannelCatalogTargetKind::Conversation]
+        );
+        assert_eq!(
             imessage.supported_target_kinds,
             vec![ChannelCatalogTargetKind::Conversation]
+        );
+    }
+
+    #[test]
+    fn channel_catalog_includes_irc_config_backed_surface() {
+        let catalog = list_channel_catalog();
+        let irc = catalog
+            .iter()
+            .find(|entry| entry.id == "irc")
+            .expect("irc catalog entry");
+
+        assert_eq!(
+            irc.implementation_status,
+            ChannelCatalogImplementationStatus::ConfigBacked
+        );
+        assert_eq!(irc.selection_order, 170);
+        assert_eq!(irc.transport, "irc_socket");
+        assert_eq!(irc.aliases, Vec::<&str>::new());
+        assert_eq!(irc.operations[0].command, "irc-send");
+        assert_eq!(irc.operations[1].command, "irc-serve");
+        assert_eq!(
+            irc.operations[0]
+                .requirements
+                .iter()
+                .map(|requirement| requirement.id)
+                .collect::<Vec<_>>(),
+            vec!["enabled", "server", "nickname"]
         );
     }
 
@@ -8573,7 +8852,6 @@ mod tests {
                 .map(|entry| entry.id)
                 .collect::<Vec<_>>(),
             vec![
-                "irc",
                 "nostr",
                 "twitch",
                 "tlon",
@@ -8633,6 +8911,7 @@ mod tests {
                 "mattermost",
                 "nextcloud-talk",
                 "synology-chat",
+                "irc",
                 "imessage",
             ]
         );
@@ -8643,7 +8922,6 @@ mod tests {
                 .map(|entry| entry.id)
                 .collect::<Vec<_>>(),
             vec![
-                "irc",
                 "nostr",
                 "twitch",
                 "tlon",
@@ -9593,6 +9871,45 @@ mod tests {
                 .any(|issue| issue.contains("service_url must use http or https")),
             "send issues should reject non-http signal service urls"
         );
+    }
+
+    #[test]
+    fn irc_status_reports_ready_send_and_planned_serve() {
+        let mut config = LoongClawConfig::default();
+        config.irc.enabled = true;
+        config.irc.server = Some("ircs://irc.example.test:6697".to_owned());
+        config.irc.nickname = Some("loongclaw".to_owned());
+        config.irc.username = Some("loongclaw".to_owned());
+        config.irc.channel_names = vec!["#ops".to_owned()];
+
+        let snapshots = channel_status_snapshots(&config);
+        let irc = snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == "irc")
+            .expect("irc snapshot");
+        let send = irc.operation("send").expect("irc send operation");
+        let serve = irc.operation("serve").expect("irc serve operation");
+
+        assert_eq!(send.health, ChannelOperationHealth::Ready);
+        assert_eq!(serve.health, ChannelOperationHealth::Unsupported);
+        assert_eq!(
+            irc.api_base_url.as_deref(),
+            Some("ircs://irc.example.test:6697")
+        );
+        assert!(
+            irc.notes.iter().any(|note| note == "nickname=loongclaw"),
+            "irc notes should include the resolved nickname"
+        );
+        assert!(
+            irc.notes.iter().any(|note| note == "server_transport=ircs"),
+            "irc notes should include the parsed transport"
+        );
+        assert!(
+            irc.notes.iter().any(|note| note == "channel_names=#ops"),
+            "irc notes should include configured channel names"
+        );
+        assert!(send.runtime.is_none());
+        assert!(serve.runtime.is_none());
     }
 
     #[test]

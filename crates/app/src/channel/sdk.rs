@@ -193,6 +193,14 @@ const SYNOLOGY_CHAT_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     serve_subcommand: None,
 };
 
+const IRC_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
+    id: "irc",
+    label: "irc",
+    surface_label: "irc channel",
+    runtime_kind: ChannelRuntimeKind::Service,
+    serve_subcommand: None,
+};
+
 const IMESSAGE_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     id: "imessage",
     label: "imessage",
@@ -376,6 +384,14 @@ const SYNOLOGY_CHAT_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor =
         background_surface_is_enabled: None,
     };
 
+const IRC_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
+    descriptor: &IRC_CHANNEL_DESCRIPTOR,
+    background_runtime: None,
+    is_enabled: irc_channel_is_enabled,
+    collect_validation_issues: collect_irc_channel_validation_issues,
+    background_surface_is_enabled: None,
+};
+
 const IMESSAGE_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     descriptor: &IMESSAGE_CHANNEL_DESCRIPTOR,
     background_runtime: None,
@@ -403,6 +419,7 @@ const CHANNEL_INTEGRATIONS: &[ChannelIntegrationDescriptor] = &[
     MATTERMOST_CHANNEL_INTEGRATION,
     NEXTCLOUD_TALK_CHANNEL_INTEGRATION,
     SYNOLOGY_CHAT_CHANNEL_INTEGRATION,
+    IRC_CHANNEL_INTEGRATION,
     IMESSAGE_CHANNEL_INTEGRATION,
 ];
 
@@ -552,6 +569,10 @@ fn synology_chat_channel_is_enabled(config: &LoongClawConfig) -> bool {
     config.synology_chat.enabled
 }
 
+fn irc_channel_is_enabled(config: &LoongClawConfig) -> bool {
+    config.irc.enabled
+}
+
 fn imessage_channel_is_enabled(config: &LoongClawConfig) -> bool {
     config.imessage.enabled
 }
@@ -650,6 +671,10 @@ fn collect_synology_chat_channel_validation_issues(
     config: &LoongClawConfig,
 ) -> Vec<ConfigValidationIssue> {
     config.synology_chat.validate()
+}
+
+fn collect_irc_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+    config.irc.validate()
 }
 
 fn collect_imessage_channel_validation_issues(
@@ -757,6 +782,7 @@ mod tests {
                 "mattermost",
                 "nextcloud-talk",
                 "synology-chat",
+                "irc",
                 "imessage",
             ]
         );

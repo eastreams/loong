@@ -13,7 +13,10 @@ use super::{
     audit::AuditConfig,
     channels::{
         CliChannelConfig, DingtalkChannelConfig, DiscordChannelConfig, EmailChannelConfig,
-        FeishuChannelConfig, GoogleChatChannelConfig, ImessageChannelConfig, LineChannelConfig,
+        CliChannelConfig, DingtalkChannelConfig, DiscordChannelConfig, FeishuChannelConfig,
+        GoogleChatChannelConfig, ImessageChannelConfig, IrcChannelConfig, LineChannelConfig,
+        EmailChannelConfig, FeishuChannelConfig, GoogleChatChannelConfig, ImessageChannelConfig,
+        IrcChannelConfig, LineChannelConfig,
         MatrixChannelConfig, MattermostChannelConfig, NextcloudTalkChannelConfig,
         SignalChannelConfig, SlackChannelConfig, SynologyChatChannelConfig, TeamsChannelConfig,
         TelegramChannelConfig, WebhookChannelConfig, WecomChannelConfig, WhatsappChannelConfig,
@@ -112,6 +115,8 @@ pub struct LoongClawConfig {
     pub nextcloud_talk: NextcloudTalkChannelConfig,
     #[serde(default)]
     pub synology_chat: SynologyChatChannelConfig,
+    #[serde(default)]
+    pub irc: IrcChannelConfig,
     #[serde(default)]
     pub signal: SignalChannelConfig,
     #[serde(default)]
@@ -1037,6 +1042,7 @@ fn canonicalize_channel_configs_for_encoding(config: &mut LoongClawConfig) {
     canonicalize_mattermost_channel_for_encoding(&mut config.mattermost);
     canonicalize_nextcloud_talk_channel_for_encoding(&mut config.nextcloud_talk);
     canonicalize_synology_chat_channel_for_encoding(&mut config.synology_chat);
+    canonicalize_irc_channel_for_encoding(&mut config.irc);
 }
 
 fn canonicalize_telegram_channel_for_encoding(config: &mut TelegramChannelConfig) {
@@ -1235,6 +1241,14 @@ fn canonicalize_synology_chat_channel_for_encoding(config: &mut SynologyChatChan
     for account in config.accounts.values_mut() {
         canonicalize_env_secret_reference(&mut account.token, &mut account.token_env);
         canonicalize_env_secret_reference(&mut account.incoming_url, &mut account.incoming_url_env);
+    }
+}
+
+fn canonicalize_irc_channel_for_encoding(config: &mut IrcChannelConfig) {
+    canonicalize_env_secret_reference(&mut config.password, &mut config.password_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(&mut account.password, &mut account.password_env);
     }
 }
 
