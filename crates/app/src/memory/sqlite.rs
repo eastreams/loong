@@ -828,8 +828,7 @@ fn normalize_runtime_db_path(path: &Path) -> Result<PathBuf, String> {
     test_support::record_runtime_path_normalization_full();
 
     let normalized = if absolute.exists() {
-        absolute
-            .canonicalize()
+        dunce::canonicalize(&absolute)
             .map_err(|error| format!("canonicalize sqlite db path failed: {error}"))?
     } else {
         let Some(file_name) = absolute.file_name() else {
@@ -839,7 +838,7 @@ fn normalize_runtime_db_path(path: &Path) -> Result<PathBuf, String> {
             return Ok(absolute);
         };
 
-        match parent.canonicalize() {
+        match dunce::canonicalize(parent) {
             Ok(canonical_parent) => canonical_parent.join(file_name),
             Err(_) => absolute.clone(),
         }
@@ -3305,7 +3304,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3393,7 +3392,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3473,7 +3472,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3513,7 +3512,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3567,7 +3566,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3609,7 +3608,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3671,7 +3670,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3724,7 +3723,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3778,7 +3777,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3820,7 +3819,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3878,7 +3877,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3926,7 +3925,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3973,7 +3972,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -4018,7 +4017,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_cached_prepare_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -4061,7 +4060,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_cached_prepare_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -4122,7 +4121,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_cached_prepare_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -4226,7 +4225,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_cached_prepare_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -4299,7 +4298,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_cached_prepare_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -4355,7 +4354,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_cached_prepare_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -4416,7 +4415,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -4519,7 +4518,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
 
@@ -4619,7 +4618,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -4701,7 +4700,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -4776,7 +4775,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -4876,7 +4875,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -4969,7 +4968,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -5063,7 +5062,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -5166,7 +5165,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -5246,7 +5245,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -5501,7 +5500,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_cached_prepare_metrics_for_tests();
 
@@ -5607,7 +5606,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -5680,7 +5679,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -5785,7 +5784,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -5903,7 +5902,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -5956,7 +5955,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -6062,7 +6061,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
 
@@ -6165,7 +6164,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -6265,7 +6264,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -6354,7 +6353,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -6418,7 +6417,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -6492,7 +6491,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -6634,7 +6633,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -6846,7 +6845,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_cached_prepare_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -6932,7 +6931,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_cached_prepare_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -7033,7 +7032,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_cached_prepare_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
