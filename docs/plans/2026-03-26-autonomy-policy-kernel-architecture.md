@@ -105,14 +105,7 @@ profile enum. It must respect whether the current channel surface can support:
 The goal is not to copy external systems directly. The goal is to identify
 which design shapes are compatible with LoongClaw's current governed runtime.
 
-### Hermes Agent
-
-Primary sources:
-
-- https://github.com/NousResearch/hermes-agent
-- https://hermes-agent.nousresearch.com/docs/developer-guide/architecture/
-- https://hermes-agent.nousresearch.com/docs/user-guide/features/skills/
-- https://hermes-agent.nousresearch.com/docs/user-guide/features/memory/
+### External multi-surface agent reference
 
 Useful ideas to learn from:
 
@@ -138,12 +131,7 @@ What LoongClaw should not copy directly:
 - making hard runtime permissions depend on soft procedural learning
 - treating cross-surface consistency as a UI concern instead of a kernel concern
 
-### HyperAgents
-
-Primary sources:
-
-- https://arxiv.org/abs/2603.19461
-- https://github.com/facebookresearch/Hyperagents
+### External self-improving agent reference
 
 Useful ideas to learn from:
 
@@ -170,9 +158,10 @@ What LoongClaw should not copy directly into the live runtime path:
 
 The key lesson is structural:
 
-- Hermes suggests a strong artifact and runtime boundary discipline
-- HyperAgents suggests that the improvement process itself deserves explicit
-  modeling
+- the multi-surface agent reference suggests strong artifact and runtime
+  boundary discipline
+- the self-improving agent reference suggests that the improvement process
+  itself deserves explicit modeling
 
 Combined, those imply that LoongClaw should separate:
 
@@ -397,8 +386,8 @@ Suggested workflow:
 5. promote or reject
 6. preserve rollback path
 
-This is where HyperAgents-style meta-improvement ideas belong in LoongClaw.
-They do not belong in the live turn-time permission path.
+This is where explicit meta-improvement ideas belong in LoongClaw. They do not
+belong in the live turn-time permission path.
 
 ## Hard Constraints vs Learnable Behavior
 
@@ -509,7 +498,7 @@ Rejected because the abstraction becomes overloaded and hard to evolve.
 
 Rejected because governance and binding rules must stay deterministic.
 
-### Risk: copying HyperAgents-style self-modification into the live turn loop
+### Risk: copying external self-modification patterns into the live turn loop
 
 Rejected because LoongClaw needs explicit promotion, rollback, and operator
 trust.

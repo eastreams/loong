@@ -38,8 +38,8 @@ one slice with a single positional filter.
 - define the internal autonomy-policy kernel
 - define the decision contract and hard-vs-learnable boundary
 - define the governed evolution plane and its relationship to issue `#455`
-- document what Hermes Agent and HyperAgents suggest, and what should remain
-  outside LoongClaw's live turn path
+- document what recent multi-surface agent systems and self-improving agent
+  research suggest, and what should remain outside LoongClaw's live turn path
 
 **Step 2: Verify the artifacts exist**
 
