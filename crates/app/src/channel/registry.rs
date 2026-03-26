@@ -9,9 +9,9 @@ use crate::config::{
     IMESSAGE_BRIDGE_TOKEN_ENV, IMESSAGE_BRIDGE_URL_ENV, LINE_CHANNEL_ACCESS_TOKEN_ENV,
     LINE_CHANNEL_SECRET_ENV, LoongClawConfig, MATRIX_ACCESS_TOKEN_ENV, MATTERMOST_BOT_TOKEN_ENV,
     MATTERMOST_SERVER_URL_ENV, NEXTCLOUD_TALK_SERVER_URL_ENV, NEXTCLOUD_TALK_SHARED_SECRET_ENV,
-    ResolvedDingtalkChannelConfig, ResolvedDiscordChannelConfig, ResolvedFeishuChannelConfig,
-    ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig, ResolvedLineChannelConfig,
-    ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
+    ResolvedDingtalkChannelConfig, ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig,
+    ResolvedFeishuChannelConfig, ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig,
+    ResolvedLineChannelConfig, ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
     ResolvedNextcloudTalkChannelConfig, ResolvedSignalChannelConfig, ResolvedSlackChannelConfig,
     ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig, ResolvedTelegramChannelConfig,
     ResolvedWebhookChannelConfig, ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig,
@@ -20,7 +20,7 @@ use crate::config::{
     TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV, TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV,
     WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV, WECOM_BOT_ID_ENV, WECOM_SECRET_ENV,
     WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV, WHATSAPP_PHONE_NUMBER_ID_ENV,
-    WHATSAPP_VERIFY_TOKEN_ENV, WebhookPayloadFormat,
+    WHATSAPP_VERIFY_TOKEN_ENV, WebhookPayloadFormat, parse_email_smtp_endpoint,
 };
 
 use super::{
@@ -1545,7 +1545,7 @@ const EMAIL_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "smtp send",
     command: "email-send",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: EMAIL_SEND_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
@@ -1561,19 +1561,26 @@ const EMAIL_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
 };
 const EMAIL_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
-        operation: EMAIL_SEND_OPERATION,
+        operation: EMAIL_CATALOG_COMMAND_FAMILY_DESCRIPTOR.send,
         doctor_checks: &[],
     },
     ChannelRegistryOperationDescriptor {
-        operation: EMAIL_SERVE_OPERATION,
+        operation: EMAIL_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
         doctor_checks: &[],
     },
 ];
+pub const EMAIL_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
+    ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "email",
+        default_send_target_kind: ChannelCatalogTargetKind::Address,
+        send: EMAIL_SEND_OPERATION,
+        serve: EMAIL_SERVE_OPERATION,
+    };
 const EMAIL_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::Planned,
-    setup_hint: "planned email surface; catalog metadata reflects the intended SMTP send and IMAP reply-loop contract, but no runtime adapter is implemented yet",
-    status_command: "loongclaw channels --json",
-    repair_command: None,
+    strategy: ChannelOnboardingStrategy::ManualConfig,
+    setup_hint: "configure smtp relay settings under email or email.accounts.<account>; outbound smtp send is shipped, while imap-backed reply-loop serve support remains planned",
+    status_command: "loongclaw doctor",
+    repair_command: Some("loongclaw doctor --fix"),
 };
 
 const WEBHOOK_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -3161,12 +3168,12 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "email",
         runtime: None,
-        snapshot_builder: None,
+        snapshot_builder: Some(build_email_snapshots),
         selection_order: 100,
         selection_label: "mailbox agent",
-        blurb: "Planned email surface for SMTP outbound delivery and IMAP-backed reply loops.",
-        implementation_status: ChannelCatalogImplementationStatus::Stub,
-        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        blurb: "Shipped email SMTP outbound surface with config-backed plain-text sends; IMAP-backed reply-loop serve support remains planned.",
+        implementation_status: ChannelCatalogImplementationStatus::ConfigBacked,
+        capabilities: CONFIG_BACKED_SEND_CHANNEL_CAPABILITIES,
         label: "Email",
         aliases: &["smtp", "imap"],
         transport: "smtp_imap",
@@ -4128,6 +4135,46 @@ fn build_whatsapp_snapshots(
         .collect()
 }
 
+fn build_email_snapshots(
+    descriptor: &ChannelRegistryDescriptor,
+    config: &LoongClawConfig,
+    _runtime_dir: &Path,
+    _now_ms: u64,
+) -> Vec<ChannelStatusSnapshot> {
+    let compiled = cfg!(feature = "channel-email");
+    let default_selection = config.email.default_configured_account_selection();
+    let default_configured_account_id = default_selection.id.clone();
+    let default_account_source = default_selection.source;
+    config
+        .email
+        .configured_account_ids()
+        .into_iter()
+        .map(|configured_account_id| {
+            let is_default_account = configured_account_id == default_configured_account_id;
+            match config
+                .email
+                .resolve_account(Some(configured_account_id.as_str()))
+            {
+                Ok(resolved) => build_email_snapshot_for_account(
+                    descriptor,
+                    compiled,
+                    resolved,
+                    is_default_account,
+                    default_account_source,
+                ),
+                Err(error) => build_invalid_email_snapshot(
+                    descriptor,
+                    compiled,
+                    configured_account_id.as_str(),
+                    is_default_account,
+                    default_account_source,
+                    error,
+                ),
+            }
+        })
+        .collect()
+}
+
 fn build_webhook_snapshots(
     descriptor: &ChannelRegistryDescriptor,
     config: &LoongClawConfig,
@@ -4851,6 +4898,140 @@ fn build_whatsapp_snapshot_for_account(
         compiled,
         enabled: resolved.enabled,
         api_base_url: Some(api_base_url),
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
+fn summarize_email_status_endpoint(raw: Option<&str>) -> Option<String> {
+    let raw = raw?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if !trimmed.contains("://") {
+        return Some(trimmed.to_owned());
+    }
+
+    let parsed_url = reqwest::Url::parse(trimmed).ok()?;
+    let scheme = parsed_url.scheme();
+    let host = parsed_url.host_str()?.trim();
+    let port = parsed_url.port();
+
+    let mut summary = format!("{scheme}://{host}");
+    if let Some(port) = port {
+        let port_text = port.to_string();
+        summary.push(':');
+        summary.push_str(port_text.as_str());
+    }
+
+    Some(summary)
+}
+
+fn build_email_snapshot_for_account(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    resolved: ResolvedEmailChannelConfig,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+) -> ChannelStatusSnapshot {
+    let mut send_issues = Vec::new();
+
+    let smtp_host = resolved.smtp_host();
+    if smtp_host.is_none() {
+        send_issues.push("smtp_host is missing".to_owned());
+    }
+
+    let smtp_endpoint = smtp_host
+        .as_deref()
+        .map(parse_email_smtp_endpoint)
+        .transpose();
+    if let Err(error) = &smtp_endpoint {
+        send_issues.push(format!("smtp_host is invalid: {error}"));
+    }
+
+    let smtp_username = resolved.smtp_username();
+    if smtp_username.is_none() {
+        send_issues.push("smtp_username is missing".to_owned());
+    }
+
+    let smtp_password = resolved.smtp_password();
+    if smtp_password.is_none() {
+        send_issues.push("smtp_password is missing".to_owned());
+    }
+
+    let from_address = resolved.from_address();
+    if from_address.is_none() {
+        send_issues.push("from_address is missing".to_owned());
+    }
+
+    let parsed_from_address = from_address
+        .as_deref()
+        .map(str::parse::<lettre::message::Mailbox>)
+        .transpose();
+    if let Err(error) = parsed_from_address {
+        send_issues.push(format!("from_address is invalid: {error}"));
+    }
+
+    let send_operation = if !compiled {
+        unsupported_operation(
+            EMAIL_SEND_OPERATION,
+            "binary built without feature `channel-email`".to_owned(),
+        )
+    } else if !resolved.enabled {
+        disabled_operation(
+            EMAIL_SEND_OPERATION,
+            "disabled by email account configuration".to_owned(),
+        )
+    } else if !send_issues.is_empty() {
+        misconfigured_operation(EMAIL_SEND_OPERATION, send_issues)
+    } else {
+        ready_operation(EMAIL_SEND_OPERATION)
+    };
+
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            EMAIL_SERVE_OPERATION,
+            "binary built without feature `channel-email`".to_owned(),
+        )
+    } else {
+        unsupported_operation(
+            EMAIL_SERVE_OPERATION,
+            "email IMAP reply-loop serve runtime is not implemented yet".to_owned(),
+        )
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={}", resolved.configured_account_id),
+        format!("configured_account={}", resolved.configured_account_label),
+        format!("account_id={}", resolved.account.id),
+        format!("account={}", resolved.account.label),
+    ];
+    if let Some(from_address) = &from_address {
+        notes.push(format!("from_address={from_address}"));
+    }
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    let api_base_url = summarize_email_status_endpoint(smtp_host.as_deref());
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: resolved.configured_account_id.clone(),
+        configured_account_label: resolved.configured_account_label.clone(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: resolved.enabled,
+        api_base_url,
         notes,
         operations: vec![send_operation, serve_operation],
     }
@@ -6412,6 +6593,63 @@ fn build_invalid_whatsapp_snapshot(
         unsupported_operation(
             WHATSAPP_SERVE_OPERATION,
             "whatsapp serve runtime is not implemented yet".to_owned(),
+        )
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={configured_account_id}"),
+        format!("selection_error={error}"),
+    ];
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: configured_account_id.to_owned(),
+        configured_account_label: configured_account_id.to_owned(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: false,
+        api_base_url: None,
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
+fn build_invalid_email_snapshot(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    configured_account_id: &str,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+    error: String,
+) -> ChannelStatusSnapshot {
+    let send_operation = if !compiled {
+        unsupported_operation(
+            EMAIL_SEND_OPERATION,
+            "binary built without feature `channel-email`".to_owned(),
+        )
+    } else {
+        misconfigured_operation(EMAIL_SEND_OPERATION, vec![error.clone()])
+    };
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            EMAIL_SERVE_OPERATION,
+            "binary built without feature `channel-email`".to_owned(),
+        )
+    } else {
+        unsupported_operation(
+            EMAIL_SERVE_OPERATION,
+            "email IMAP reply-loop serve runtime is not implemented yet".to_owned(),
         )
     };
 
@@ -8062,6 +8300,10 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "teams")
             .expect("teams catalog entry");
+        let email = catalog
+            .iter()
+            .find(|entry| entry.id == "email")
+            .expect("email catalog entry");
         let nextcloud_talk = catalog
             .iter()
             .find(|entry| entry.id == "nextcloud-talk")
@@ -8115,6 +8357,14 @@ mod tests {
             &[ChannelCatalogTargetKind::Conversation]
         );
         assert_eq!(
+            email.operations[0].supported_target_kinds,
+            &[ChannelCatalogTargetKind::Address]
+        );
+        assert_eq!(
+            email.operations[1].supported_target_kinds,
+            &[ChannelCatalogTargetKind::Address]
+        );
+        assert_eq!(
             nextcloud_talk.operations[0].supported_target_kinds,
             &[ChannelCatalogTargetKind::Conversation]
         );
@@ -8160,6 +8410,8 @@ mod tests {
             resolve_channel_catalog_operation("webhook", "send").expect("webhook send operation");
         let signal =
             resolve_channel_catalog_operation("signal", "send").expect("signal send operation");
+        let email =
+            resolve_channel_catalog_operation("email", "send").expect("email send operation");
         let teams =
             resolve_channel_catalog_operation("teams", "send").expect("teams send operation");
         let synology_chat = resolve_channel_catalog_operation("synology-chat", "send")
@@ -8196,6 +8448,11 @@ mod tests {
         );
         assert!(signal.supports_target_kind(ChannelCatalogTargetKind::Address));
         assert_eq!(
+            email.default_target_kind(),
+            Some(ChannelCatalogTargetKind::Address)
+        );
+        assert!(email.supports_target_kind(ChannelCatalogTargetKind::Address));
+        assert_eq!(
             teams.default_target_kind(),
             Some(ChannelCatalogTargetKind::Endpoint)
         );
@@ -8231,6 +8488,10 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "teams")
             .expect("teams catalog entry");
+        let email = catalog
+            .iter()
+            .find(|entry| entry.id == "email")
+            .expect("email catalog entry");
         let nextcloud_talk = catalog
             .iter()
             .find(|entry| entry.id == "nextcloud-talk")
@@ -8271,6 +8532,10 @@ mod tests {
             ]
         );
         assert_eq!(
+            email.supported_target_kinds,
+            vec![ChannelCatalogTargetKind::Address]
+        );
+        assert_eq!(
             nextcloud_talk.supported_target_kinds,
             vec![ChannelCatalogTargetKind::Conversation]
         );
@@ -8308,7 +8573,6 @@ mod tests {
                 .map(|entry| entry.id)
                 .collect::<Vec<_>>(),
             vec![
-                "email",
                 "irc",
                 "nostr",
                 "twitch",
@@ -8323,6 +8587,7 @@ mod tests {
         assert!(!catalog_only.iter().any(|entry| entry.id == "line"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "dingtalk"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "whatsapp"));
+        assert!(!catalog_only.iter().any(|entry| entry.id == "email"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "webhook"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "google-chat"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "signal"));
@@ -8360,6 +8625,7 @@ mod tests {
                 "line",
                 "dingtalk",
                 "whatsapp",
+                "email",
                 "webhook",
                 "google-chat",
                 "signal",
@@ -8377,7 +8643,6 @@ mod tests {
                 .map(|entry| entry.id)
                 .collect::<Vec<_>>(),
             vec![
-                "email",
                 "irc",
                 "nostr",
                 "twitch",
@@ -8476,6 +8741,37 @@ mod tests {
         );
         assert_eq!(
             google_chat.operations[1].availability,
+            ChannelCatalogOperationAvailability::Stub
+        );
+    }
+
+    #[test]
+    fn channel_catalog_includes_email_config_backed_smtp_surface() {
+        let catalog = list_channel_catalog();
+        let email = catalog
+            .iter()
+            .find(|entry| entry.id == "email")
+            .expect("email catalog entry");
+
+        assert_eq!(
+            email.implementation_status,
+            ChannelCatalogImplementationStatus::ConfigBacked
+        );
+        assert_eq!(email.selection_order, 100);
+        assert_eq!(email.aliases, vec!["smtp", "imap"]);
+        assert_eq!(email.transport, "smtp_imap");
+        assert_eq!(
+            email.supported_target_kinds,
+            vec![ChannelCatalogTargetKind::Address]
+        );
+        assert_eq!(email.operations[0].command, "email-send");
+        assert_eq!(email.operations[1].command, "email-serve");
+        assert_eq!(
+            email.operations[0].availability,
+            ChannelCatalogOperationAvailability::Implemented
+        );
+        assert_eq!(
+            email.operations[1].availability,
             ChannelCatalogOperationAvailability::Stub
         );
     }
@@ -8617,6 +8913,45 @@ mod tests {
             webhook.api_base_url.as_deref(),
             Some("https://hooks.example.test/")
         );
+    }
+
+    #[test]
+    fn email_channel_status_snapshot_reports_smtp_readiness() {
+        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "email": {
+                "enabled": true,
+                "smtp_host": "smtps://smtp.example.test:465?auth=plain",
+                "smtp_username": "mailer@example.test",
+                "smtp_password": "top-secret",
+                "from_address": "LoongClaw <ops@example.test>"
+            }
+        }))
+        .expect("deserialize email channel config");
+
+        let snapshots = channel_status_snapshots(&config);
+        let email = snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == "email")
+            .expect("email snapshot");
+        let send_operation = email
+            .operation(CHANNEL_OPERATION_SEND_ID)
+            .expect("email send operation");
+        let serve_operation = email
+            .operation(CHANNEL_OPERATION_SERVE_ID)
+            .expect("email serve operation");
+
+        assert_eq!(
+            email.api_base_url.as_deref(),
+            Some("smtps://smtp.example.test:465")
+        );
+        assert!(
+            email
+                .notes
+                .iter()
+                .any(|note| note == "from_address=LoongClaw <ops@example.test>")
+        );
+        assert_eq!(send_operation.health, ChannelOperationHealth::Ready);
+        assert_eq!(serve_operation.health, ChannelOperationHealth::Unsupported);
     }
 
     #[test]

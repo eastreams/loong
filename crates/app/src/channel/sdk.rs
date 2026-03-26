@@ -129,6 +129,14 @@ const WHATSAPP_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     serve_subcommand: None,
 };
 
+const EMAIL_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
+    id: "email",
+    label: "email",
+    surface_label: "email channel",
+    runtime_kind: ChannelRuntimeKind::Service,
+    serve_subcommand: None,
+};
+
 const WEBHOOK_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     id: "webhook",
     label: "webhook",
@@ -301,6 +309,14 @@ const WHATSAPP_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegr
     background_surface_is_enabled: None,
 };
 
+const EMAIL_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
+    descriptor: &EMAIL_CHANNEL_DESCRIPTOR,
+    background_runtime: None,
+    is_enabled: email_channel_is_enabled,
+    collect_validation_issues: collect_email_channel_validation_issues,
+    background_surface_is_enabled: None,
+};
+
 const WEBHOOK_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     descriptor: &WEBHOOK_CHANNEL_DESCRIPTOR,
     background_runtime: None,
@@ -379,6 +395,7 @@ const CHANNEL_INTEGRATIONS: &[ChannelIntegrationDescriptor] = &[
     LINE_CHANNEL_INTEGRATION,
     DINGTALK_CHANNEL_INTEGRATION,
     WHATSAPP_CHANNEL_INTEGRATION,
+    EMAIL_CHANNEL_INTEGRATION,
     WEBHOOK_CHANNEL_INTEGRATION,
     GOOGLE_CHAT_CHANNEL_INTEGRATION,
     SIGNAL_CHANNEL_INTEGRATION,
@@ -503,6 +520,10 @@ fn whatsapp_channel_is_enabled(config: &LoongClawConfig) -> bool {
     config.whatsapp.enabled
 }
 
+fn email_channel_is_enabled(config: &LoongClawConfig) -> bool {
+    config.email.enabled
+}
+
 fn webhook_channel_is_enabled(config: &LoongClawConfig) -> bool {
     config.webhook.enabled
 }
@@ -585,6 +606,10 @@ fn collect_whatsapp_channel_validation_issues(
     config: &LoongClawConfig,
 ) -> Vec<ConfigValidationIssue> {
     config.whatsapp.validate()
+}
+
+fn collect_email_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+    config.email.validate()
 }
 
 fn collect_webhook_channel_validation_issues(
@@ -724,6 +749,7 @@ mod tests {
                 "line",
                 "dingtalk",
                 "whatsapp",
+                "email",
                 "webhook",
                 "google-chat",
                 "signal",

@@ -4,6 +4,7 @@ use std::time::Duration;
     feature = "channel-telegram",
     feature = "channel-discord",
     feature = "channel-dingtalk",
+    feature = "channel-email",
     feature = "channel-feishu",
     feature = "channel-google-chat",
     feature = "channel-webhook",
@@ -71,6 +72,7 @@ use crate::CliResult;
     feature = "channel-telegram",
     feature = "channel-discord",
     feature = "channel-dingtalk",
+    feature = "channel-email",
     feature = "channel-feishu",
     feature = "channel-google-chat",
     feature = "channel-webhook",
@@ -91,6 +93,7 @@ use crate::KernelContext;
     feature = "channel-telegram",
     feature = "channel-discord",
     feature = "channel-dingtalk",
+    feature = "channel-email",
     feature = "channel-feishu",
     feature = "channel-google-chat",
     feature = "channel-webhook",
@@ -111,6 +114,7 @@ use crate::acp::{AcpConversationTurnOptions, AcpTurnProvenance};
     feature = "channel-telegram",
     feature = "channel-discord",
     feature = "channel-dingtalk",
+    feature = "channel-email",
     feature = "channel-feishu",
     feature = "channel-google-chat",
     feature = "channel-webhook",
@@ -132,6 +136,8 @@ use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 use super::config::ResolvedDingtalkChannelConfig;
 #[cfg(feature = "channel-discord")]
 use super::config::ResolvedDiscordChannelConfig;
+#[cfg(feature = "channel-email")]
+use super::config::ResolvedEmailChannelConfig;
 #[cfg(feature = "channel-feishu")]
 use super::config::ResolvedFeishuChannelConfig;
 #[cfg(feature = "channel-google-chat")]
@@ -166,6 +172,7 @@ use super::config::ResolvedWhatsappChannelConfig;
     feature = "channel-telegram",
     feature = "channel-discord",
     feature = "channel-dingtalk",
+    feature = "channel-email",
     feature = "channel-feishu",
     feature = "channel-google-chat",
     feature = "channel-webhook",
@@ -207,6 +214,8 @@ use super::conversation::{ConversationTurnCoordinator, ProviderErrorMode};
 mod dingtalk;
 #[cfg(feature = "channel-discord")]
 mod discord;
+#[cfg(feature = "channel-email")]
+mod email;
 #[cfg(feature = "channel-feishu")]
 mod feishu;
 #[cfg(feature = "channel-google-chat")]
@@ -259,24 +268,25 @@ pub use registry::{
     ChannelOnboardingDescriptor, ChannelOnboardingStrategy, ChannelOperationDescriptor,
     ChannelOperationHealth, ChannelOperationStatus, ChannelRuntimeCommandDescriptor,
     ChannelStatusSnapshot, ChannelSurface, DINGTALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    DISCORD_CATALOG_COMMAND_FAMILY_DESCRIPTOR, FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    FEISHU_COMMAND_FAMILY_DESCRIPTOR, FEISHU_RUNTIME_COMMAND_DESCRIPTOR,
-    GOOGLE_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, IMESSAGE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR, MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    MATRIX_COMMAND_FAMILY_DESCRIPTOR, MATRIX_RUNTIME_COMMAND_DESCRIPTOR,
-    MATTERMOST_CATALOG_COMMAND_FAMILY_DESCRIPTOR, NEXTCLOUD_TALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR, SLACK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    SYNOLOGY_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
-    TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR, WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WECOM_COMMAND_FAMILY_DESCRIPTOR,
-    WECOM_RUNTIME_COMMAND_DESCRIPTOR, WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    catalog_only_channel_entries, channel_inventory, channel_status_snapshots,
-    list_channel_catalog, normalize_channel_catalog_id, normalize_channel_platform,
-    resolve_channel_catalog_command_family_descriptor, resolve_channel_catalog_entry,
-    resolve_channel_catalog_operation, resolve_channel_command_family_descriptor,
-    resolve_channel_doctor_operation_spec, resolve_channel_onboarding_descriptor,
-    resolve_channel_operation_descriptor, resolve_channel_runtime_command_descriptor,
+    DISCORD_CATALOG_COMMAND_FAMILY_DESCRIPTOR, EMAIL_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR, FEISHU_COMMAND_FAMILY_DESCRIPTOR,
+    FEISHU_RUNTIME_COMMAND_DESCRIPTOR, GOOGLE_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    IMESSAGE_CATALOG_COMMAND_FAMILY_DESCRIPTOR, LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR, MATRIX_COMMAND_FAMILY_DESCRIPTOR,
+    MATRIX_RUNTIME_COMMAND_DESCRIPTOR, MATTERMOST_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    NEXTCLOUD_TALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR, SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    SLACK_CATALOG_COMMAND_FAMILY_DESCRIPTOR, SYNOLOGY_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    TELEGRAM_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR,
+    WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    WECOM_COMMAND_FAMILY_DESCRIPTOR, WECOM_RUNTIME_COMMAND_DESCRIPTOR,
+    WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR, catalog_only_channel_entries, channel_inventory,
+    channel_status_snapshots, list_channel_catalog, normalize_channel_catalog_id,
+    normalize_channel_platform, resolve_channel_catalog_command_family_descriptor,
+    resolve_channel_catalog_entry, resolve_channel_catalog_operation,
+    resolve_channel_command_family_descriptor, resolve_channel_doctor_operation_spec,
+    resolve_channel_onboarding_descriptor, resolve_channel_operation_descriptor,
+    resolve_channel_runtime_command_descriptor,
 };
 pub use runtime_state::ChannelOperationRuntime;
 use runtime_state::ChannelOperationRuntimeTracker;
@@ -1722,6 +1732,39 @@ fn build_whatsapp_command_context(
     })
 }
 
+#[cfg(feature = "channel-email")]
+fn load_email_command_context(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedEmailChannelConfig>> {
+    let (resolved_path, config) = super::config::load(config_path)?;
+    build_email_command_context(resolved_path, config, account_id)
+}
+
+#[cfg(feature = "channel-email")]
+fn build_email_command_context(
+    resolved_path: PathBuf,
+    config: LoongClawConfig,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedEmailChannelConfig>> {
+    let resolved = config.email.resolve_account(account_id)?;
+    let route = config
+        .email
+        .resolved_account_route(account_id, resolved.configured_account_id.as_str());
+    if !resolved.enabled {
+        return Err(format!(
+            "email account `{}` is disabled by configuration",
+            resolved.configured_account_id
+        ));
+    }
+    Ok(ChannelCommandContext {
+        resolved_path,
+        config,
+        resolved,
+        route,
+    })
+}
+
 #[cfg(feature = "channel-webhook")]
 fn load_webhook_command_context(
     config_path: Option<&str>,
@@ -2712,6 +2755,59 @@ pub async fn run_whatsapp_send(
             |context| {
                 format!(
                     "whatsapp message sent (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, target_kind={})",
+                    context.resolved_path.display(),
+                    context.resolved.configured_account_id,
+                    context.resolved.account.label,
+                    context.route.selected_by_default(),
+                    context.route.default_account_source.as_str(),
+                    target_kind
+                )
+            },
+        )
+        .await
+    }
+}
+
+#[allow(clippy::print_stdout)] // CLI output
+pub async fn run_email_send(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+    target: &str,
+    target_kind: ChannelOutboundTargetKind,
+    text: &str,
+) -> CliResult<()> {
+    if !cfg!(feature = "channel-email") {
+        return Err("email channel is disabled (enable feature `channel-email`)".to_owned());
+    }
+
+    #[cfg(not(feature = "channel-email"))]
+    {
+        let _ = (config_path, account_id, target, target_kind, text);
+        return Err("email channel is disabled (enable feature `channel-email`)".to_owned());
+    }
+
+    #[cfg(feature = "channel-email")]
+    {
+        let context = load_email_command_context(config_path, account_id)?;
+        let target = target.to_owned();
+        let text = text.to_owned();
+        run_channel_send_command(
+            context,
+            ChannelSendCommandSpec { channel_id: "email" },
+            |context| {
+                Box::pin(async move {
+                    email::run_email_send(
+                        &context.resolved,
+                        target_kind,
+                        target.as_str(),
+                        text.as_str(),
+                    )
+                    .await
+                })
+            },
+            |context| {
+                format!(
+                    "email message sent (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, target_kind={})",
                     context.resolved_path.display(),
                     context.resolved.configured_account_id,
                     context.resolved.account.label,

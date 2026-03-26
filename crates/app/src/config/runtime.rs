@@ -12,11 +12,11 @@ use crate::CliResult;
 use super::{
     audit::AuditConfig,
     channels::{
-        CliChannelConfig, DingtalkChannelConfig, DiscordChannelConfig, FeishuChannelConfig,
-        GoogleChatChannelConfig, ImessageChannelConfig, LineChannelConfig, MatrixChannelConfig,
-        MattermostChannelConfig, NextcloudTalkChannelConfig, SignalChannelConfig,
-        SlackChannelConfig, SynologyChatChannelConfig, TeamsChannelConfig, TelegramChannelConfig,
-        WebhookChannelConfig, WecomChannelConfig, WhatsappChannelConfig,
+        CliChannelConfig, DingtalkChannelConfig, DiscordChannelConfig, EmailChannelConfig,
+        FeishuChannelConfig, GoogleChatChannelConfig, ImessageChannelConfig, LineChannelConfig,
+        MatrixChannelConfig, MattermostChannelConfig, NextcloudTalkChannelConfig,
+        SignalChannelConfig, SlackChannelConfig, SynologyChatChannelConfig, TeamsChannelConfig,
+        TelegramChannelConfig, WebhookChannelConfig, WecomChannelConfig, WhatsappChannelConfig,
     },
     conversation::ConversationConfig,
     feishu_integration::FeishuIntegrationConfig,
@@ -120,6 +120,8 @@ pub struct LoongClawConfig {
     pub imessage: ImessageChannelConfig,
     #[serde(default)]
     pub whatsapp: WhatsappChannelConfig,
+    #[serde(default)]
+    pub email: EmailChannelConfig,
     #[serde(default)]
     pub feishu_integration: FeishuIntegrationConfig,
     #[serde(default)]
@@ -1026,6 +1028,7 @@ fn canonicalize_channel_configs_for_encoding(config: &mut LoongClawConfig) {
     canonicalize_line_channel_for_encoding(&mut config.line);
     canonicalize_dingtalk_channel_for_encoding(&mut config.dingtalk);
     canonicalize_webhook_channel_for_encoding(&mut config.webhook);
+    canonicalize_email_channel_for_encoding(&mut config.email);
     canonicalize_slack_channel_for_encoding(&mut config.slack);
     canonicalize_google_chat_channel_for_encoding(&mut config.google_chat);
     canonicalize_teams_channel_for_encoding(&mut config.teams);
@@ -1128,6 +1131,32 @@ fn canonicalize_webhook_channel_for_encoding(config: &mut WebhookChannelConfig) 
         canonicalize_env_secret_reference(
             &mut account.signing_secret,
             &mut account.signing_secret_env,
+        );
+    }
+}
+
+fn canonicalize_email_channel_for_encoding(config: &mut EmailChannelConfig) {
+    canonicalize_env_secret_reference(&mut config.smtp_username, &mut config.smtp_username_env);
+    canonicalize_env_secret_reference(&mut config.smtp_password, &mut config.smtp_password_env);
+    canonicalize_env_secret_reference(&mut config.imap_username, &mut config.imap_username_env);
+    canonicalize_env_secret_reference(&mut config.imap_password, &mut config.imap_password_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(
+            &mut account.smtp_username,
+            &mut account.smtp_username_env,
+        );
+        canonicalize_env_secret_reference(
+            &mut account.smtp_password,
+            &mut account.smtp_password_env,
+        );
+        canonicalize_env_secret_reference(
+            &mut account.imap_username,
+            &mut account.imap_username_env,
+        );
+        canonicalize_env_secret_reference(
+            &mut account.imap_password,
+            &mut account.imap_password_env,
         );
     }
 }

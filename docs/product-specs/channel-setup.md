@@ -11,13 +11,13 @@ needs.
 - [ ] Product docs clearly distinguish the shipped MVP surfaces:
       CLI as the default surface, plus runtime-backed Telegram, Feishu / Lark,
       Matrix, and WeCom, and config-backed outbound Discord, Slack, LINE,
-      DingTalk, WhatsApp, generic Webhook, Google Chat, Signal, Microsoft
-      Teams, Mattermost, Nextcloud Talk, Synology Chat, and iMessage /
-      BlueBubbles.
+      DingTalk, WhatsApp, Email, generic Webhook, Google Chat, Signal,
+      Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat, and
+      iMessage / BlueBubbles.
 - [ ] Product docs clearly distinguish runtime-backed shipped surfaces,
       config-backed outbound shipped surfaces, and catalog-only planned
-      surfaces such as Email, IRC, Nostr, Twitch, Tlon, Zalo, Zalo Personal,
-      and WebChat.
+      surfaces such as IRC, Nostr, Twitch, Tlon, Zalo, Zalo Personal, and
+      WebChat.
 - [ ] Channel setup guidance describes required credentials, config toggles, and
       the command used to run each shipped channel.
 - [ ] WeCom setup guidance documents the official AIBot long-connection flow and
@@ -34,8 +34,8 @@ needs.
 
 - Shipping additional runtime-backed channels beyond CLI, Telegram, Feishu /
   Lark, Matrix, and WeCom
-- Promoting the remaining catalog-only planned surfaces such as Email, IRC,
-  Nostr, Twitch, Tlon, Zalo, Zalo Personal, or WebChat to
+- Promoting the remaining catalog-only planned surfaces such as IRC, Nostr,
+  Twitch, Tlon, Zalo, Zalo Personal, or WebChat to
   shipped support in this slice
 - Broad cross-channel inbox or routing UX
 - Full remote pairing flows for unshipped surfaces
@@ -54,6 +54,7 @@ needs.
 | LINE | Config-backed outbound | LINE Messaging API | `line.enabled`, `line.channel_access_token` | `loongclaw line-send` |
 | DingTalk | Config-backed outbound | DingTalk custom robot webhook | `dingtalk.enabled`, `dingtalk.webhook_url`; `secret` is optional when the webhook uses signed requests | `loongclaw dingtalk-send` |
 | WhatsApp | Config-backed outbound | WhatsApp Cloud API | `whatsapp.enabled`, `whatsapp.access_token`, `whatsapp.phone_number_id` | `loongclaw whatsapp-send` |
+| Email | Config-backed outbound | SMTP relay or SMTP URL | `email.enabled`, `email.smtp_host`, `email.smtp_username`, `email.smtp_password`, `email.from_address` | `loongclaw email-send` |
 | Webhook | Config-backed outbound | generic HTTP webhook POST | `webhook.enabled`, `webhook.endpoint_url`; `auth_token` is optional and can pair with custom header and prefix overrides | `loongclaw webhook-send` |
 | Google Chat | Config-backed outbound | Google Chat incoming webhook | `google_chat.enabled`, `google_chat.webhook_url` | `loongclaw google-chat-send` |
 | Signal | Config-backed outbound | signal-cli REST bridge | `signal.enabled`, `signal.service_url`, `signal.account` | `loongclaw signal-send` |
@@ -141,9 +142,9 @@ runtime contract is explicitly the official AIBot websocket subscription flow.
 
 ### Config-Backed Outbound Surfaces
 
-Discord, Slack, LINE, DingTalk, WhatsApp, generic Webhook, Google Chat,
-Signal, Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat, and
-iMessage / BlueBubbles are shipped as account-aware outbound surfaces:
+Discord, Slack, LINE, DingTalk, WhatsApp, Email, generic Webhook, Google
+Chat, Signal, Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat,
+and iMessage / BlueBubbles are shipped as account-aware outbound surfaces:
 
 - they publish send commands, config validation, inventory snapshots, and
   onboarding metadata through the shared channel SDK
@@ -169,6 +170,21 @@ Generic Webhook is shipped as a minimal config-backed outbound POST surface:
   override the endpoint with `--target` for one-off delivery
 - `webhook.public_base_url` and `webhook.signing_secret` remain reserved for
   the planned inbound serve contract and are not required for send readiness
+
+### Email
+
+Email is shipped through an SMTP outbound surface:
+
+- configure `email.smtp_host`, `email.smtp_username`, `email.smtp_password`,
+  and `email.from_address`
+- `email.smtp_host` may be either a bare relay host such as
+  `smtp.example.com` or a full `smtp://` or `smtps://` URL when the operator
+  needs an explicit port
+- use `email-send` with an email address target
+- the outbound surface sends plain-text mail and derives the subject from the
+  first non-empty line of the message body
+- `email-serve` remains planned until LoongClaw owns an IMAP-backed reply-loop
+  runtime
 
 ### Microsoft Teams
 
@@ -229,8 +245,8 @@ subset:
   specific accounts such as `telegram=bot_123456`, `lark=alerts`, `matrix=bridge-sync`,
   or `wecom=robot-prod`
 - it never promotes config-backed outbound surfaces such as WhatsApp, Signal,
-  generic Webhook, Microsoft Teams, DingTalk, Google Chat, Mattermost,
-  Nextcloud Talk, Synology Chat, or iMessage / BlueBubbles into runtime
-  supervision until those adapters grow real serve ownership
-- it never promotes catalog-only planned surfaces such as Email or Tlon into runtime supervision until those adapters are
-  implemented
+  Email, generic Webhook, Microsoft Teams, DingTalk, Google Chat,
+  Mattermost, Nextcloud Talk, Synology Chat, or iMessage / BlueBubbles into
+  runtime supervision until those adapters grow real serve ownership
+- it never promotes catalog-only planned surfaces such as Tlon into runtime
+  supervision until those adapters are implemented
