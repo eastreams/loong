@@ -11,7 +11,6 @@ use std::sync::{
 
 #[cfg(feature = "memory-sqlite")]
 use loongclaw_contracts::Capability;
-use tokio::io::{self as tokio_io, AsyncBufReadExt, BufReader};
 use tokio::sync::Notify;
 
 use crate::CliResult;
@@ -20,6 +19,10 @@ use crate::acp::{
     resolve_acp_backend_selection,
 };
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
+
+mod cli_input;
+
+use self::cli_input::ConcurrentCliInputReader;
 
 use super::config::{self, ConversationConfig, LoongClawConfig};
 #[cfg(test)]
@@ -577,9 +580,18 @@ async fn run_concurrent_cli_host_loop(
     options: &CliChatOptions,
     shutdown: &ConcurrentCliShutdown,
 ) -> CliResult<()> {
-    let mut stdin_lines = BufReader::new(tokio_io::stdin()).lines();
+    if shutdown.is_requested() {
+        println!("bye.");
+        return Ok(());
+    }
+
+    let mut stdin_reader = ConcurrentCliInputReader::new()?;
 
     loop {
+        if shutdown.is_requested() {
+            break;
+        }
+
         print!("you> ");
         io::stdout()
             .flush()
@@ -587,9 +599,7 @@ async fn run_concurrent_cli_host_loop(
 
         let next_line = tokio::select! {
             _ = shutdown.wait() => None,
-            line = stdin_lines.next_line() => Some(
-                line.map_err(|error| format!("read stdin failed: {error}"))?
-            ),
+            line = stdin_reader.next_line() => Some(line?),
         };
 
         let Some(line) = next_line else {
