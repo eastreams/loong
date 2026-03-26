@@ -16,8 +16,8 @@ use super::{
         FeishuChannelConfig, GoogleChatChannelConfig, ImessageChannelConfig, IrcChannelConfig,
         LineChannelConfig, MatrixChannelConfig, MattermostChannelConfig,
         NextcloudTalkChannelConfig, SignalChannelConfig, SlackChannelConfig,
-        SynologyChatChannelConfig, TeamsChannelConfig, TelegramChannelConfig, WebhookChannelConfig,
-        WecomChannelConfig, WhatsappChannelConfig,
+        SynologyChatChannelConfig, TeamsChannelConfig, TelegramChannelConfig, TwitchChannelConfig,
+        WebhookChannelConfig, WecomChannelConfig, WhatsappChannelConfig,
     },
     conversation::ConversationConfig,
     feishu_integration::FeishuIntegrationConfig,
@@ -117,6 +117,8 @@ pub struct LoongClawConfig {
     pub irc: IrcChannelConfig,
     #[serde(default)]
     pub signal: SignalChannelConfig,
+    #[serde(default)]
+    pub twitch: TwitchChannelConfig,
     #[serde(default)]
     pub teams: TeamsChannelConfig,
     #[serde(default)]

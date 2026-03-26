@@ -12,26 +12,28 @@ mod tools;
 pub use audit::{AuditConfig, AuditMode};
 #[allow(unused_imports)]
 pub use channels::{
-    ChannelAcpConfig, ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource,
-    ChannelDescriptor, ChannelResolvedAccountRoute, ChannelRuntimeKind, CliChannelConfig,
-    DingtalkAccountConfig, DingtalkChannelConfig, DiscordAccountConfig, DiscordChannelConfig,
-    EmailAccountConfig, EmailChannelConfig, FeishuAccountConfig, FeishuChannelConfig,
-    FeishuChannelServeMode, FeishuDomain, GoogleChatAccountConfig, GoogleChatChannelConfig,
-    ImessageAccountConfig, ImessageChannelConfig, IrcAccountConfig, IrcChannelConfig,
-    LineAccountConfig, LineChannelConfig, MatrixAccountConfig, MatrixChannelConfig,
-    MattermostAccountConfig, MattermostChannelConfig, NextcloudTalkAccountConfig,
-    NextcloudTalkChannelConfig, ResolvedDingtalkChannelConfig, ResolvedDiscordChannelConfig,
-    ResolvedEmailChannelConfig, ResolvedFeishuChannelConfig, ResolvedGoogleChatChannelConfig,
-    ResolvedImessageChannelConfig, ResolvedIrcChannelConfig, ResolvedLineChannelConfig,
-    ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
-    ResolvedNextcloudTalkChannelConfig, ResolvedSignalChannelConfig, ResolvedSlackChannelConfig,
-    ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig, ResolvedTelegramChannelConfig,
+    ChannelAccountIdentity, ChannelAccountIdentitySource, ChannelAcpConfig,
+    ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource, ChannelDescriptor,
+    ChannelResolvedAccountRoute, ChannelRuntimeKind, CliChannelConfig, DingtalkAccountConfig,
+    DingtalkChannelConfig, DiscordAccountConfig, DiscordChannelConfig, EmailAccountConfig,
+    EmailChannelConfig, FeishuAccountConfig, FeishuChannelConfig, FeishuChannelServeMode,
+    FeishuDomain, GoogleChatAccountConfig, GoogleChatChannelConfig, ImessageAccountConfig,
+    ImessageChannelConfig, IrcAccountConfig, IrcChannelConfig, LineAccountConfig,
+    LineChannelConfig, MatrixAccountConfig, MatrixChannelConfig, MattermostAccountConfig,
+    MattermostChannelConfig, NextcloudTalkAccountConfig, NextcloudTalkChannelConfig,
+    ResolvedDingtalkChannelConfig, ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig,
+    ResolvedFeishuChannelConfig, ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig,
+    ResolvedIrcChannelConfig, ResolvedLineChannelConfig, ResolvedMatrixChannelConfig,
+    ResolvedMattermostChannelConfig, ResolvedNextcloudTalkChannelConfig,
+    ResolvedSignalChannelConfig, ResolvedSlackChannelConfig, ResolvedSynologyChatChannelConfig,
+    ResolvedTeamsChannelConfig, ResolvedTelegramChannelConfig, ResolvedTwitchChannelConfig,
     ResolvedWebhookChannelConfig, ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig,
     SignalAccountConfig, SignalChannelConfig, SlackAccountConfig, SlackChannelConfig,
     SynologyChatAccountConfig, SynologyChatChannelConfig, TeamsAccountConfig, TeamsChannelConfig,
-    TelegramAccountConfig, TelegramChannelConfig, TelegramStreamingMode, WebhookAccountConfig,
-    WebhookChannelConfig, WebhookPayloadFormat, WecomAccountConfig, WecomChannelConfig,
-    WhatsappAccountConfig, WhatsappChannelConfig, channel_descriptor, service_channel_descriptors,
+    TelegramAccountConfig, TelegramChannelConfig, TelegramStreamingMode, TwitchAccountConfig,
+    TwitchChannelConfig, WebhookAccountConfig, WebhookChannelConfig, WebhookPayloadFormat,
+    WecomAccountConfig, WecomChannelConfig, WhatsappAccountConfig, WhatsappChannelConfig,
+    channel_descriptor, service_channel_descriptors,
 };
 #[allow(unused_imports)]
 pub(crate) use channels::{
@@ -45,7 +47,7 @@ pub(crate) use channels::{
     NEXTCLOUD_TALK_SERVER_URL_ENV, NEXTCLOUD_TALK_SHARED_SECRET_ENV, SIGNAL_ACCOUNT_ENV,
     SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV, SYNOLOGY_CHAT_INCOMING_URL_ENV,
     SYNOLOGY_CHAT_TOKEN_ENV, TEAMS_APP_ID_ENV, TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV,
-    TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV, WEBHOOK_AUTH_TOKEN_ENV,
+    TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV, TWITCH_ACCESS_TOKEN_ENV, WEBHOOK_AUTH_TOKEN_ENV,
     WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV, WECOM_BOT_ID_ENV, WECOM_SECRET_ENV,
     WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV, WHATSAPP_PHONE_NUMBER_ID_ENV,
     WHATSAPP_VERIFY_TOKEN_ENV, normalize_channel_account_id, parse_email_smtp_endpoint,
@@ -134,6 +136,7 @@ mod tests {
             "webhook",
             "google-chat",
             "signal",
+            "twitch",
             "teams",
             "mattermost",
             "nextcloud-talk",
@@ -236,6 +239,12 @@ mod tests {
         assert_eq!(signal.runtime_kind, ChannelRuntimeKind::Service);
         assert_eq!(signal.serve_subcommand, None);
 
+        let twitch = channel_descriptor("twitch").expect("twitch descriptor");
+        assert_eq!(twitch.id, "twitch");
+        assert_eq!(twitch.surface_label, "twitch channel");
+        assert_eq!(twitch.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(twitch.serve_subcommand, None);
+
         let irc = channel_descriptor("irc").expect("irc descriptor");
         assert_eq!(irc.id, "irc");
         assert_eq!(irc.surface_label, "irc channel");
@@ -295,6 +304,7 @@ mod tests {
         config.webhook.enabled = true;
         config.google_chat.enabled = true;
         config.signal.enabled = true;
+        config.twitch.enabled = true;
         config.teams.enabled = true;
         config.mattermost.enabled = true;
         config.nextcloud_talk.enabled = true;
@@ -319,6 +329,7 @@ mod tests {
                 "webhook",
                 "google-chat",
                 "signal",
+                "twitch",
                 "teams",
                 "mattermost",
                 "nextcloud-talk",

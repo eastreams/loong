@@ -13,6 +13,7 @@ use std::time::Duration;
     feature = "channel-mattermost",
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
+    feature = "channel-twitch",
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
@@ -168,6 +169,8 @@ use super::config::ResolvedSynologyChatChannelConfig;
 use super::config::ResolvedTeamsChannelConfig;
 #[cfg(feature = "channel-telegram")]
 use super::config::ResolvedTelegramChannelConfig;
+#[cfg(feature = "channel-twitch")]
+use super::config::ResolvedTwitchChannelConfig;
 #[cfg(feature = "channel-webhook")]
 use super::config::ResolvedWebhookChannelConfig;
 #[cfg(feature = "channel-wecom")]
@@ -187,6 +190,7 @@ use super::config::ResolvedWhatsappChannelConfig;
     feature = "channel-mattermost",
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
+    feature = "channel-twitch",
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
@@ -260,6 +264,8 @@ mod telegram;
     feature = "channel-wecom"
 ))]
 mod turn_feedback;
+#[cfg(feature = "channel-twitch")]
+mod twitch;
 #[cfg(feature = "channel-webhook")]
 mod webhook;
 mod webhook_auth;
@@ -287,15 +293,16 @@ pub use registry::{
     SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR, SLACK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     SYNOLOGY_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
-    TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR, WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WECOM_COMMAND_FAMILY_DESCRIPTOR,
-    WECOM_RUNTIME_COMMAND_DESCRIPTOR, WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    catalog_only_channel_entries, channel_inventory, channel_status_snapshots,
-    list_channel_catalog, normalize_channel_catalog_id, normalize_channel_platform,
-    resolve_channel_catalog_command_family_descriptor, resolve_channel_catalog_entry,
-    resolve_channel_catalog_operation, resolve_channel_command_family_descriptor,
-    resolve_channel_doctor_operation_spec, resolve_channel_onboarding_descriptor,
-    resolve_channel_operation_descriptor, resolve_channel_runtime_command_descriptor,
+    TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR, TWITCH_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    WECOM_COMMAND_FAMILY_DESCRIPTOR, WECOM_RUNTIME_COMMAND_DESCRIPTOR,
+    WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR, catalog_only_channel_entries, channel_inventory,
+    channel_status_snapshots, list_channel_catalog, normalize_channel_catalog_id,
+    normalize_channel_platform, resolve_channel_catalog_command_family_descriptor,
+    resolve_channel_catalog_entry, resolve_channel_catalog_operation,
+    resolve_channel_command_family_descriptor, resolve_channel_doctor_operation_spec,
+    resolve_channel_onboarding_descriptor, resolve_channel_operation_descriptor,
+    resolve_channel_runtime_command_descriptor,
 };
 pub use runtime_state::ChannelOperationRuntime;
 use runtime_state::ChannelOperationRuntimeTracker;
@@ -842,6 +849,7 @@ type ChannelProcessFuture = Pin<Box<dyn Future<Output = CliResult<String>> + Sen
     feature = "channel-mattermost",
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
+    feature = "channel-twitch",
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
@@ -1212,6 +1220,7 @@ where
     feature = "channel-mattermost",
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
+    feature = "channel-twitch",
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
@@ -1239,6 +1248,7 @@ struct ChannelCommandContext<R> {
     feature = "channel-mattermost",
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
+    feature = "channel-twitch",
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
@@ -1324,6 +1334,7 @@ impl ChannelResolvedRuntimeAccount for ResolvedWecomChannelConfig {
     feature = "channel-mattermost",
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
+    feature = "channel-twitch",
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-teams",
@@ -1643,6 +1654,39 @@ fn build_signal_command_context(
     if !resolved.enabled {
         return Err(format!(
             "signal account `{}` is disabled by configuration",
+            resolved.configured_account_id
+        ));
+    }
+    Ok(ChannelCommandContext {
+        resolved_path,
+        config,
+        resolved,
+        route,
+    })
+}
+
+#[cfg(feature = "channel-twitch")]
+fn load_twitch_command_context(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedTwitchChannelConfig>> {
+    let (resolved_path, config) = super::config::load(config_path)?;
+    build_twitch_command_context(resolved_path, config, account_id)
+}
+
+#[cfg(feature = "channel-twitch")]
+fn build_twitch_command_context(
+    resolved_path: PathBuf,
+    config: LoongClawConfig,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedTwitchChannelConfig>> {
+    let resolved = config.twitch.resolve_account(account_id)?;
+    let route = config
+        .twitch
+        .resolved_account_route(account_id, resolved.configured_account_id.as_str());
+    if !resolved.enabled {
+        return Err(format!(
+            "twitch account `{}` is disabled by configuration",
             resolved.configured_account_id
         ));
     }
@@ -2061,6 +2105,7 @@ fn build_imessage_command_context(
     feature = "channel-mattermost",
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
+    feature = "channel-twitch",
     feature = "channel-slack",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
@@ -2580,6 +2625,61 @@ pub async fn run_signal_send(
             |context| {
                 format!(
                     "signal message sent (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, target_kind={})",
+                    context.resolved_path.display(),
+                    context.resolved.configured_account_id,
+                    context.resolved.account.label,
+                    context.route.selected_by_default(),
+                    context.route.default_account_source.as_str(),
+                    target_kind
+                )
+            },
+        )
+        .await
+    }
+}
+
+#[allow(clippy::print_stdout)] // CLI output
+pub async fn run_twitch_send(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+    target: &str,
+    target_kind: ChannelOutboundTargetKind,
+    text: &str,
+) -> CliResult<()> {
+    if !cfg!(feature = "channel-twitch") {
+        return Err("twitch channel is disabled (enable feature `channel-twitch`)".to_owned());
+    }
+
+    #[cfg(not(feature = "channel-twitch"))]
+    {
+        let _ = (config_path, account_id, target, target_kind, text);
+        return Err("twitch channel is disabled (enable feature `channel-twitch`)".to_owned());
+    }
+
+    #[cfg(feature = "channel-twitch")]
+    {
+        let context = load_twitch_command_context(config_path, account_id)?;
+        let target = target.to_owned();
+        let text = text.to_owned();
+        run_channel_send_command(
+            context,
+            ChannelSendCommandSpec {
+                channel_id: "twitch",
+            },
+            |context| {
+                Box::pin(async move {
+                    twitch::run_twitch_send(
+                        &context.resolved,
+                        target_kind,
+                        target.as_str(),
+                        text.as_str(),
+                    )
+                    .await
+                })
+            },
+            |context| {
+                format!(
+                    "twitch message sent (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, target_kind={})",
                     context.resolved_path.display(),
                     context.resolved.configured_account_id,
                     context.resolved.account.label,

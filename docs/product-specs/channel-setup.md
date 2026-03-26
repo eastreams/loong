@@ -11,13 +11,12 @@ needs.
 - [ ] Product docs clearly distinguish the shipped MVP surfaces:
       CLI as the default surface, plus runtime-backed Telegram, Feishu / Lark,
       Matrix, and WeCom, and config-backed outbound Discord, Slack, LINE,
-      DingTalk, WhatsApp, Email, generic Webhook, Google Chat, Signal,
+      DingTalk, WhatsApp, Email, generic Webhook, Google Chat, Signal, Twitch,
       Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat, IRC, and
       iMessage / BlueBubbles.
 - [ ] Product docs clearly distinguish runtime-backed shipped surfaces,
       config-backed outbound shipped surfaces, and catalog-only planned
-      surfaces such as Nostr, Twitch, Tlon, Zalo, Zalo Personal, and
-      WebChat.
+      surfaces such as Nostr, Tlon, Zalo, Zalo Personal, and WebChat.
 - [ ] Channel setup guidance describes required credentials, config toggles, and
       the command used to run each shipped channel.
 - [ ] WeCom setup guidance documents the official AIBot long-connection flow and
@@ -35,8 +34,7 @@ needs.
 - Shipping additional runtime-backed channels beyond CLI, Telegram, Feishu /
   Lark, Matrix, and WeCom
 - Promoting the remaining catalog-only planned surfaces such as Nostr,
-  Twitch, Tlon, Zalo, Zalo Personal, or WebChat to
-  shipped support in this slice
+  Tlon, Zalo, Zalo Personal, or WebChat to shipped support in this slice
 - Broad cross-channel inbox or routing UX
 - Full remote pairing flows for unshipped surfaces
 
@@ -58,6 +56,7 @@ needs.
 | Webhook | Config-backed outbound | generic HTTP webhook POST | `webhook.enabled`, `webhook.endpoint_url`; `auth_token` is optional and can pair with custom header and prefix overrides | `loongclaw webhook-send` |
 | Google Chat | Config-backed outbound | Google Chat incoming webhook | `google_chat.enabled`, `google_chat.webhook_url` | `loongclaw google-chat-send` |
 | Signal | Config-backed outbound | signal-cli REST bridge | `signal.enabled`, `signal.service_url`, `signal.account` | `loongclaw signal-send` |
+| Twitch | Config-backed outbound | Twitch Chat API | `twitch.enabled`, `twitch.access_token`; `api_base_url`, `oauth_base_url`, and `channel_names` are optional advanced overrides or future-facing serve hints | `loongclaw twitch-send` |
 | Microsoft Teams | Config-backed outbound | Teams incoming webhook | `teams.enabled`, `teams.webhook_url` for sends; future bot runtime fields keep `teams.app_id`, `teams.app_password`, `teams.tenant_id`, `teams.allowed_conversation_ids` reserved for the planned serve path | `loongclaw teams-send` |
 | Mattermost | Config-backed outbound | Mattermost REST API | `mattermost.enabled`, `mattermost.server_url`, `mattermost.bot_token` | `loongclaw mattermost-send` |
 | Nextcloud Talk | Config-backed outbound | Nextcloud Talk bot API | `nextcloud_talk.enabled`, `nextcloud_talk.server_url`, `nextcloud_talk.shared_secret` | `loongclaw nextcloud-talk-send` |
@@ -144,8 +143,8 @@ runtime contract is explicitly the official AIBot websocket subscription flow.
 ### Config-Backed Outbound Surfaces
 
 Discord, Slack, LINE, DingTalk, WhatsApp, Email, generic Webhook, Google
-Chat, Signal, Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat,
-IRC, and iMessage / BlueBubbles are shipped as account-aware outbound
+Chat, Signal, Twitch, Microsoft Teams, Mattermost, Nextcloud Talk, Synology
+Chat, IRC, and iMessage / BlueBubbles are shipped as account-aware outbound
 surfaces:
 
 - they publish send commands, config validation, inventory snapshots, and
@@ -187,6 +186,23 @@ Email is shipped through an SMTP outbound surface:
   first non-empty line of the message body
 - `email-serve` remains planned until LoongClaw owns an IMAP-backed reply-loop
   runtime
+
+### Twitch
+
+Twitch is shipped through the Chat API send surface:
+
+- configure `twitch.access_token` with a Twitch user access token that grants
+  `user:write:chat`
+- use `twitch-send` with a broadcaster login or broadcaster id target
+- LoongClaw validates the token first, derives `client_id` and `sender_id`
+  from Twitch's token validation endpoint, then resolves the broadcaster from
+  the send target before posting the chat message
+- `twitch.api_base_url` and `twitch.oauth_base_url` remain optional advanced
+  overrides for testing or self-hosted compatibility layers
+- `twitch.channel_names` remains a future-facing operator hint for the planned
+  inbound serve path and is not required for send readiness today
+- `twitch-serve` remains planned until LoongClaw owns an EventSub or
+  chat-listener style inbound runtime
 
 ### Microsoft Teams
 

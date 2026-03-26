@@ -277,12 +277,12 @@ When the runtime implementation does not exist yet:
 4. Do not add placeholder runtime builders or fake health logic.
 5. Verify the channel appears correctly in catalog and grouped surfaces.
 
-This is the preferred path for channels such as Nostr, Twitch, Tlon, Zalo,
-Zalo Personal, or WebChat surfaces before real config or runtime support
-lands. Channels such as Email, generic Webhook, LINE, DingTalk, Google Chat,
-Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat, IRC, and iMessage
-/ BlueBubbles have already moved beyond this stage and should be modeled
-through the config-backed integration path instead.
+This is the preferred path for channels such as Nostr, Tlon, Zalo, Zalo
+Personal, or WebChat surfaces before real config or runtime support lands.
+Channels such as Email, generic Webhook, LINE, DingTalk, Google Chat, Signal,
+Twitch, Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat, IRC, and
+iMessage / BlueBubbles have already moved beyond this stage and should be
+modeled through the config-backed integration path instead.
 
 ## Anti-Patterns
 

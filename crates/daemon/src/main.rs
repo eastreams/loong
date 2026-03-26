@@ -753,6 +753,26 @@ async fn main() {
             )
             .await
         }
+        Commands::TwitchSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                TWITCH_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: Some(target.as_str()),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
         Commands::MattermostSend {
             config,
             account,

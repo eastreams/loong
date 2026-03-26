@@ -43,6 +43,7 @@ pub(crate) const SYNOLOGY_CHAT_INCOMING_URL_ENV: &str = "SYNOLOGY_CHAT_INCOMING_
 pub(crate) const SIGNAL_SERVICE_URL_ENV: &str = "SIGNAL_SERVICE_URL";
 pub(crate) const SIGNAL_ACCOUNT_ENV: &str = "SIGNAL_ACCOUNT";
 pub(crate) const SLACK_BOT_TOKEN_ENV: &str = "SLACK_BOT_TOKEN";
+pub(crate) const TWITCH_ACCESS_TOKEN_ENV: &str = "TWITCH_ACCESS_TOKEN";
 pub(crate) const TEAMS_APP_ID_ENV: &str = "TEAMS_APP_ID";
 pub(crate) const TEAMS_APP_PASSWORD_ENV: &str = "TEAMS_APP_PASSWORD";
 pub(crate) const TEAMS_TENANT_ID_ENV: &str = "TEAMS_TENANT_ID";
@@ -1360,6 +1361,61 @@ impl ResolvedSignalChannelConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TwitchAccountConfig {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub access_token: Option<SecretRef>,
+    #[serde(default = "default_twitch_access_token_env")]
+    pub access_token_env: Option<String>,
+    #[serde(default)]
+    pub api_base_url: Option<String>,
+    #[serde(default)]
+    pub oauth_base_url: Option<String>,
+    #[serde(default)]
+    pub channel_names: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedTwitchChannelConfig {
+    pub configured_account_id: String,
+    pub configured_account_label: String,
+    pub account: ChannelAccountIdentity,
+    pub enabled: bool,
+    pub access_token: Option<SecretRef>,
+    pub access_token_env: Option<String>,
+    pub api_base_url: Option<String>,
+    pub oauth_base_url: Option<String>,
+    pub channel_names: Vec<String>,
+}
+
+impl ResolvedTwitchChannelConfig {
+    pub fn access_token(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.access_token.as_ref(), self.access_token_env.as_deref())
+    }
+
+    pub fn resolved_api_base_url(&self) -> String {
+        self.api_base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(default_twitch_api_base_url)
+    }
+
+    pub fn resolved_oauth_base_url(&self) -> String {
+        self.oauth_base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(default_twitch_oauth_base_url)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WhatsappAccountConfig {
     #[serde(default)]
     pub enabled: Option<bool>,
@@ -1770,6 +1826,29 @@ pub struct SignalChannelConfig {
     pub service_url_env: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, SignalAccountConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct TwitchChannelConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub default_account: Option<String>,
+    #[serde(default)]
+    pub access_token: Option<SecretRef>,
+    #[serde(default = "default_twitch_access_token_env")]
+    pub access_token_env: Option<String>,
+    #[serde(default)]
+    pub api_base_url: Option<String>,
+    #[serde(default)]
+    pub oauth_base_url: Option<String>,
+    #[serde(default)]
+    pub channel_names: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub accounts: BTreeMap<String, TwitchAccountConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -2364,6 +2443,22 @@ impl Default for SignalChannelConfig {
             signal_account_env: Some(SIGNAL_ACCOUNT_ENV.to_owned()),
             service_url: None,
             service_url_env: Some(SIGNAL_SERVICE_URL_ENV.to_owned()),
+            accounts: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for TwitchChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_id: None,
+            default_account: None,
+            access_token: None,
+            access_token_env: Some(TWITCH_ACCESS_TOKEN_ENV.to_owned()),
+            api_base_url: Some(default_twitch_api_base_url()),
+            oauth_base_url: Some(default_twitch_oauth_base_url()),
+            channel_names: Vec::new(),
             accounts: BTreeMap::new(),
         }
     }
@@ -6050,6 +6145,190 @@ impl SignalChannelConfig {
     }
 }
 
+impl TwitchChannelConfig {
+    pub(crate) fn validate(&self) -> Vec<ConfigValidationIssue> {
+        let mut issues = Vec::new();
+        validate_channel_account_integrity(
+            &mut issues,
+            "twitch",
+            self.default_account.as_deref(),
+            self.accounts.keys(),
+        );
+        validate_twitch_env_pointer(
+            &mut issues,
+            "twitch.access_token_env",
+            self.access_token_env.as_deref(),
+            "twitch.access_token",
+        );
+        validate_twitch_secret_ref_env_pointer(
+            &mut issues,
+            "twitch.access_token",
+            self.access_token.as_ref(),
+        );
+        for (raw_account_id, account) in &self.accounts {
+            let account_id = normalize_channel_account_id(raw_account_id);
+            let access_token_field_path = format!("twitch.accounts.{account_id}.access_token");
+            let access_token_env_field_path = format!("{access_token_field_path}_env");
+            validate_twitch_env_pointer(
+                &mut issues,
+                access_token_env_field_path.as_str(),
+                account.access_token_env.as_deref(),
+                access_token_field_path.as_str(),
+            );
+            validate_twitch_secret_ref_env_pointer(
+                &mut issues,
+                access_token_field_path.as_str(),
+                account.access_token.as_ref(),
+            );
+        }
+        issues
+    }
+
+    pub fn access_token(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.access_token.as_ref(), self.access_token_env.as_deref())
+    }
+
+    pub fn resolved_api_base_url(&self) -> String {
+        self.api_base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(default_twitch_api_base_url)
+    }
+
+    pub fn resolved_oauth_base_url(&self) -> String {
+        self.oauth_base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(default_twitch_oauth_base_url)
+    }
+
+    pub fn configured_account_ids(&self) -> Vec<String> {
+        let configured_ids = configured_account_ids(self.accounts.keys());
+        if configured_ids.is_empty() {
+            return vec![self.default_configured_account_id()];
+        }
+        configured_ids
+    }
+
+    pub fn default_configured_account_selection(&self) -> ChannelDefaultAccountSelection {
+        resolve_default_configured_account_selection(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+
+    pub fn default_configured_account_id(&self) -> String {
+        self.default_configured_account_selection().id
+    }
+
+    pub fn resolved_account_route(
+        &self,
+        requested_account_id: Option<&str>,
+        selected_configured_account_id: &str,
+    ) -> ChannelResolvedAccountRoute {
+        resolve_channel_account_route(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+            requested_account_id,
+            selected_configured_account_id,
+        )
+    }
+
+    pub fn resolve_account(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedTwitchChannelConfig> {
+        let configured = self.resolve_configured_account_selection(requested_account_id)?;
+        let account_override = configured
+            .account_key
+            .as_deref()
+            .and_then(|key| self.accounts.get(key));
+
+        let merged = TwitchChannelConfig {
+            enabled: self.enabled
+                && account_override
+                    .and_then(|account| account.enabled)
+                    .unwrap_or(true),
+            account_id: account_override
+                .and_then(|account| account.account_id.clone())
+                .or_else(|| self.account_id.clone()),
+            default_account: None,
+            access_token: account_override
+                .and_then(|account| account.access_token.clone())
+                .or_else(|| self.access_token.clone()),
+            access_token_env: account_override
+                .and_then(|account| account.access_token_env.clone())
+                .or_else(|| self.access_token_env.clone()),
+            api_base_url: account_override
+                .and_then(|account| account.api_base_url.clone())
+                .or_else(|| self.api_base_url.clone()),
+            oauth_base_url: account_override
+                .and_then(|account| account.oauth_base_url.clone())
+                .or_else(|| self.oauth_base_url.clone()),
+            channel_names: account_override
+                .and_then(|account| account.channel_names.clone())
+                .unwrap_or_else(|| self.channel_names.clone()),
+            accounts: BTreeMap::new(),
+        };
+        let account = merged.resolved_account_identity();
+
+        Ok(ResolvedTwitchChannelConfig {
+            configured_account_id: configured.id,
+            configured_account_label: configured.label,
+            account,
+            enabled: merged.enabled,
+            access_token: merged.access_token,
+            access_token_env: merged.access_token_env,
+            api_base_url: merged.api_base_url,
+            oauth_base_url: merged.oauth_base_url,
+            channel_names: merged.channel_names,
+        })
+    }
+
+    pub fn resolve_account_for_session_account_id(
+        &self,
+        session_account_id: Option<&str>,
+    ) -> CliResult<ResolvedTwitchChannelConfig> {
+        resolve_account_for_session_account_id(
+            session_account_id,
+            || self.resolve_account(session_account_id),
+            || self.configured_account_ids(),
+            |configured_id| self.resolve_account(Some(configured_id)),
+            |resolved| resolved.account.id.as_str(),
+        )
+    }
+
+    pub fn resolved_account_identity(&self) -> ChannelAccountIdentity {
+        if let Some((id, label)) = resolve_configured_account_identity(self.account_id.as_deref()) {
+            return ChannelAccountIdentity {
+                id,
+                label,
+                source: ChannelAccountIdentitySource::Configured,
+            };
+        }
+
+        default_channel_account_identity()
+    }
+
+    fn resolve_configured_account_selection(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedConfiguredAccount> {
+        resolve_configured_account_selection(
+            self.accounts.keys(),
+            requested_account_id,
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+}
+
 impl WhatsappChannelConfig {
     pub(crate) fn validate(&self) -> Vec<ConfigValidationIssue> {
         let mut issues = Vec::new();
@@ -6464,6 +6743,18 @@ fn default_signal_account_env() -> Option<String> {
 
 fn default_signal_service_url_env() -> Option<String> {
     Some(SIGNAL_SERVICE_URL_ENV.to_owned())
+}
+
+fn default_twitch_api_base_url() -> String {
+    "https://api.twitch.tv/helix".to_owned()
+}
+
+fn default_twitch_oauth_base_url() -> String {
+    "https://id.twitch.tv/oauth2".to_owned()
+}
+
+fn default_twitch_access_token_env() -> Option<String> {
+    Some(TWITCH_ACCESS_TOKEN_ENV.to_owned())
 }
 
 fn default_slack_api_base_url() -> String {
@@ -7475,6 +7766,43 @@ fn validate_signal_env_pointer(
         EnvPointerValidationHint {
             inline_field_path,
             example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_twitch_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    env_key: Option<&str>,
+    inline_field_path: &str,
+) {
+    if let Err(issue) = validate_env_pointer_field(
+        field_path,
+        env_key,
+        EnvPointerValidationHint {
+            inline_field_path,
+            example_env_name: TWITCH_ACCESS_TOKEN_ENV,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_twitch_secret_ref_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    secret_ref: Option<&SecretRef>,
+) {
+    if let Err(issue) = validate_secret_ref_env_pointer_field(
+        field_path,
+        secret_ref,
+        EnvPointerValidationHint {
+            inline_field_path: field_path,
+            example_env_name: TWITCH_ACCESS_TOKEN_ENV,
             detect_telegram_token_shape: false,
         },
     ) {
