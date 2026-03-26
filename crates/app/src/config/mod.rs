@@ -16,30 +16,32 @@ pub use channels::{
     ChannelDescriptor, ChannelResolvedAccountRoute, ChannelRuntimeKind, CliChannelConfig,
     DingtalkAccountConfig, DingtalkChannelConfig, DiscordAccountConfig, DiscordChannelConfig,
     FeishuAccountConfig, FeishuChannelConfig, FeishuChannelServeMode, FeishuDomain,
-    GoogleChatAccountConfig, GoogleChatChannelConfig, LineAccountConfig, LineChannelConfig,
-    MatrixAccountConfig, MatrixChannelConfig, MattermostAccountConfig, MattermostChannelConfig,
-    NextcloudTalkAccountConfig, NextcloudTalkChannelConfig, ResolvedDingtalkChannelConfig,
-    ResolvedDiscordChannelConfig, ResolvedFeishuChannelConfig, ResolvedGoogleChatChannelConfig,
+    GoogleChatAccountConfig, GoogleChatChannelConfig, ImessageAccountConfig, ImessageChannelConfig,
+    LineAccountConfig, LineChannelConfig, MatrixAccountConfig, MatrixChannelConfig,
+    MattermostAccountConfig, MattermostChannelConfig, NextcloudTalkAccountConfig,
+    NextcloudTalkChannelConfig, ResolvedDingtalkChannelConfig, ResolvedDiscordChannelConfig,
+    ResolvedFeishuChannelConfig, ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig,
     ResolvedLineChannelConfig, ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
     ResolvedNextcloudTalkChannelConfig, ResolvedSignalChannelConfig, ResolvedSlackChannelConfig,
-    ResolvedSynologyChatChannelConfig, ResolvedTelegramChannelConfig, ResolvedWecomChannelConfig,
-    ResolvedWhatsappChannelConfig, SignalAccountConfig, SignalChannelConfig, SlackAccountConfig,
-    SlackChannelConfig, SynologyChatAccountConfig, SynologyChatChannelConfig,
-    TelegramAccountConfig, TelegramChannelConfig, TelegramStreamingMode, WecomAccountConfig,
-    WecomChannelConfig, WhatsappAccountConfig, WhatsappChannelConfig, channel_descriptor,
-    service_channel_descriptors,
+    ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig, ResolvedTelegramChannelConfig,
+    ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig, SignalAccountConfig,
+    SignalChannelConfig, SlackAccountConfig, SlackChannelConfig, SynologyChatAccountConfig,
+    SynologyChatChannelConfig, TeamsAccountConfig, TeamsChannelConfig, TelegramAccountConfig,
+    TelegramChannelConfig, TelegramStreamingMode, WecomAccountConfig, WecomChannelConfig,
+    WhatsappAccountConfig, WhatsappChannelConfig, channel_descriptor, service_channel_descriptors,
 };
 #[allow(unused_imports)]
 pub(crate) use channels::{
     DINGTALK_SECRET_ENV, DINGTALK_WEBHOOK_URL_ENV, DISCORD_BOT_TOKEN_ENV, FEISHU_APP_ID_ENV,
     FEISHU_APP_SECRET_ENV, FEISHU_ENCRYPT_KEY_ENV, FEISHU_VERIFICATION_TOKEN_ENV,
-    GOOGLE_CHAT_WEBHOOK_URL_ENV, LINE_CHANNEL_ACCESS_TOKEN_ENV, LINE_CHANNEL_SECRET_ENV,
-    MATRIX_ACCESS_TOKEN_ENV, MATTERMOST_BOT_TOKEN_ENV, MATTERMOST_SERVER_URL_ENV,
-    NEXTCLOUD_TALK_SERVER_URL_ENV, NEXTCLOUD_TALK_SHARED_SECRET_ENV, SIGNAL_ACCOUNT_ENV,
-    SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV, SYNOLOGY_CHAT_INCOMING_URL_ENV,
-    SYNOLOGY_CHAT_TOKEN_ENV, TELEGRAM_BOT_TOKEN_ENV, WECOM_BOT_ID_ENV, WECOM_SECRET_ENV,
-    WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV, WHATSAPP_PHONE_NUMBER_ID_ENV,
-    WHATSAPP_VERIFY_TOKEN_ENV, normalize_channel_account_id,
+    GOOGLE_CHAT_WEBHOOK_URL_ENV, IMESSAGE_BRIDGE_TOKEN_ENV, IMESSAGE_BRIDGE_URL_ENV,
+    LINE_CHANNEL_ACCESS_TOKEN_ENV, LINE_CHANNEL_SECRET_ENV, MATRIX_ACCESS_TOKEN_ENV,
+    MATTERMOST_BOT_TOKEN_ENV, MATTERMOST_SERVER_URL_ENV, NEXTCLOUD_TALK_SERVER_URL_ENV,
+    NEXTCLOUD_TALK_SHARED_SECRET_ENV, SIGNAL_ACCOUNT_ENV, SIGNAL_SERVICE_URL_ENV,
+    SLACK_BOT_TOKEN_ENV, SYNOLOGY_CHAT_INCOMING_URL_ENV, SYNOLOGY_CHAT_TOKEN_ENV, TEAMS_APP_ID_ENV,
+    TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV, TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV,
+    WECOM_BOT_ID_ENV, WECOM_SECRET_ENV, WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV,
+    WHATSAPP_PHONE_NUMBER_ID_ENV, WHATSAPP_VERIFY_TOKEN_ENV, normalize_channel_account_id,
 };
 #[allow(unused_imports)]
 pub use conversation::{ConversationConfig, ConversationTurnLoopConfig};
@@ -190,6 +192,12 @@ mod tests {
         assert_eq!(signal.runtime_kind, ChannelRuntimeKind::Service);
         assert_eq!(signal.serve_subcommand, None);
 
+        let teams = channel_descriptor("teams").expect("teams descriptor");
+        assert_eq!(teams.id, "teams");
+        assert_eq!(teams.surface_label, "teams channel");
+        assert_eq!(teams.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(teams.serve_subcommand, Some("teams-serve"));
+
         let mattermost = channel_descriptor("mattermost").expect("mattermost descriptor");
         assert_eq!(mattermost.id, "mattermost");
         assert_eq!(mattermost.surface_label, "mattermost channel");
@@ -208,6 +216,12 @@ mod tests {
         assert_eq!(synology_chat.surface_label, "synology chat channel");
         assert_eq!(synology_chat.runtime_kind, ChannelRuntimeKind::Service);
         assert_eq!(synology_chat.serve_subcommand, None);
+
+        let imessage = channel_descriptor("imessage").expect("imessage descriptor");
+        assert_eq!(imessage.id, "imessage");
+        assert_eq!(imessage.surface_label, "imessage channel");
+        assert_eq!(imessage.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(imessage.serve_subcommand, Some("imessage-serve"));
 
         assert!(channel_descriptor("unknown").is_none());
     }
@@ -229,9 +243,11 @@ mod tests {
         config.whatsapp.enabled = true;
         config.google_chat.enabled = true;
         config.signal.enabled = true;
+        config.teams.enabled = true;
         config.mattermost.enabled = true;
         config.nextcloud_talk.enabled = true;
         config.synology_chat.enabled = true;
+        config.imessage.enabled = true;
 
         assert_eq!(
             config.enabled_channel_ids(),
@@ -248,9 +264,11 @@ mod tests {
                 "whatsapp",
                 "google-chat",
                 "signal",
+                "teams",
                 "mattermost",
                 "nextcloud-talk",
                 "synology-chat",
+                "imessage",
             ]
         );
         assert_eq!(
@@ -267,9 +285,11 @@ mod tests {
                 "whatsapp",
                 "google-chat",
                 "signal",
+                "teams",
                 "mattermost",
                 "nextcloud-talk",
                 "synology-chat",
+                "imessage",
             ]
         );
 
@@ -291,9 +311,11 @@ mod tests {
                 "whatsapp",
                 "google-chat",
                 "signal",
+                "teams",
                 "mattermost",
                 "nextcloud-talk",
                 "synology-chat",
+                "imessage",
             ]
         );
     }
@@ -327,9 +349,11 @@ mod tests {
                 "whatsapp",
                 "google-chat",
                 "signal",
+                "teams",
                 "mattermost",
                 "nextcloud-talk",
                 "synology-chat",
+                "imessage",
             ]
         );
     }

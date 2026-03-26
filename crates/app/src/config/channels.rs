@@ -39,6 +39,12 @@ pub(crate) const SYNOLOGY_CHAT_INCOMING_URL_ENV: &str = "SYNOLOGY_CHAT_INCOMING_
 pub(crate) const SIGNAL_SERVICE_URL_ENV: &str = "SIGNAL_SERVICE_URL";
 pub(crate) const SIGNAL_ACCOUNT_ENV: &str = "SIGNAL_ACCOUNT";
 pub(crate) const SLACK_BOT_TOKEN_ENV: &str = "SLACK_BOT_TOKEN";
+pub(crate) const TEAMS_APP_ID_ENV: &str = "TEAMS_APP_ID";
+pub(crate) const TEAMS_APP_PASSWORD_ENV: &str = "TEAMS_APP_PASSWORD";
+pub(crate) const TEAMS_TENANT_ID_ENV: &str = "TEAMS_TENANT_ID";
+pub(crate) const TEAMS_WEBHOOK_URL_ENV: &str = "TEAMS_WEBHOOK_URL";
+pub(crate) const IMESSAGE_BRIDGE_URL_ENV: &str = "IMESSAGE_BRIDGE_URL";
+pub(crate) const IMESSAGE_BRIDGE_TOKEN_ENV: &str = "IMESSAGE_BRIDGE_TOKEN";
 pub(crate) const WHATSAPP_ACCESS_TOKEN_ENV: &str = "WHATSAPP_ACCESS_TOKEN";
 pub(crate) const WHATSAPP_PHONE_NUMBER_ID_ENV: &str = "WHATSAPP_PHONE_NUMBER_ID";
 pub(crate) const WHATSAPP_VERIFY_TOKEN_ENV: &str = "WHATSAPP_VERIFY_TOKEN";
@@ -933,6 +939,108 @@ impl ResolvedSynologyChatChannelConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TeamsAccountConfig {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub webhook_url: Option<SecretRef>,
+    #[serde(default)]
+    pub webhook_url_env: Option<String>,
+    #[serde(default)]
+    pub app_id: Option<SecretRef>,
+    #[serde(default)]
+    pub app_id_env: Option<String>,
+    #[serde(default)]
+    pub app_password: Option<SecretRef>,
+    #[serde(default)]
+    pub app_password_env: Option<String>,
+    #[serde(default)]
+    pub tenant_id: Option<String>,
+    #[serde(default)]
+    pub tenant_id_env: Option<String>,
+    #[serde(default)]
+    pub allowed_conversation_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedTeamsChannelConfig {
+    pub configured_account_id: String,
+    pub configured_account_label: String,
+    pub account: ChannelAccountIdentity,
+    pub enabled: bool,
+    pub webhook_url: Option<SecretRef>,
+    pub webhook_url_env: Option<String>,
+    pub app_id: Option<SecretRef>,
+    pub app_id_env: Option<String>,
+    pub app_password: Option<SecretRef>,
+    pub app_password_env: Option<String>,
+    pub tenant_id: Option<String>,
+    pub tenant_id_env: Option<String>,
+    pub allowed_conversation_ids: Vec<String>,
+}
+
+impl ResolvedTeamsChannelConfig {
+    pub fn webhook_url(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.webhook_url.as_ref(), self.webhook_url_env.as_deref())
+    }
+
+    pub fn app_id(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.app_id.as_ref(), self.app_id_env.as_deref())
+    }
+
+    pub fn app_password(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.app_password.as_ref(), self.app_password_env.as_deref())
+    }
+
+    pub fn tenant_id(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.tenant_id.as_deref(), self.tenant_id_env.as_deref())
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImessageAccountConfig {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub bridge_url: Option<String>,
+    #[serde(default)]
+    pub bridge_url_env: Option<String>,
+    #[serde(default)]
+    pub bridge_token: Option<SecretRef>,
+    #[serde(default)]
+    pub bridge_token_env: Option<String>,
+    #[serde(default)]
+    pub allowed_chat_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedImessageChannelConfig {
+    pub configured_account_id: String,
+    pub configured_account_label: String,
+    pub account: ChannelAccountIdentity,
+    pub enabled: bool,
+    pub bridge_url: Option<String>,
+    pub bridge_url_env: Option<String>,
+    pub bridge_token: Option<SecretRef>,
+    pub bridge_token_env: Option<String>,
+    pub allowed_chat_ids: Vec<String>,
+}
+
+impl ResolvedImessageChannelConfig {
+    pub fn bridge_url(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.bridge_url.as_deref(), self.bridge_url_env.as_deref())
+    }
+
+    pub fn bridge_token(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.bridge_token.as_ref(), self.bridge_token_env.as_deref())
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SignalAccountConfig {
     #[serde(default)]
     pub enabled: Option<bool>,
@@ -1213,6 +1321,60 @@ pub struct SynologyChatChannelConfig {
     pub allowed_user_ids: Vec<u64>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, SynologyChatAccountConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct TeamsChannelConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub default_account: Option<String>,
+    #[serde(default)]
+    pub webhook_url: Option<SecretRef>,
+    #[serde(default = "default_teams_webhook_url_env")]
+    pub webhook_url_env: Option<String>,
+    #[serde(default)]
+    pub app_id: Option<SecretRef>,
+    #[serde(default = "default_teams_app_id_env")]
+    pub app_id_env: Option<String>,
+    #[serde(default)]
+    pub app_password: Option<SecretRef>,
+    #[serde(default = "default_teams_app_password_env")]
+    pub app_password_env: Option<String>,
+    #[serde(default)]
+    pub tenant_id: Option<String>,
+    #[serde(default = "default_teams_tenant_id_env")]
+    pub tenant_id_env: Option<String>,
+    #[serde(default)]
+    pub allowed_conversation_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub accounts: BTreeMap<String, TeamsAccountConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ImessageChannelConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub default_account: Option<String>,
+    #[serde(default)]
+    pub bridge_url: Option<String>,
+    #[serde(default = "default_imessage_bridge_url_env")]
+    pub bridge_url_env: Option<String>,
+    #[serde(default)]
+    pub bridge_token: Option<SecretRef>,
+    #[serde(default = "default_imessage_bridge_token_env")]
+    pub bridge_token_env: Option<String>,
+    #[serde(default)]
+    pub allowed_chat_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub accounts: BTreeMap<String, ImessageAccountConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1713,6 +1875,42 @@ impl Default for SynologyChatChannelConfig {
             incoming_url: None,
             incoming_url_env: Some(SYNOLOGY_CHAT_INCOMING_URL_ENV.to_owned()),
             allowed_user_ids: Vec::new(),
+            accounts: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for TeamsChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_id: None,
+            default_account: None,
+            webhook_url: None,
+            webhook_url_env: Some(TEAMS_WEBHOOK_URL_ENV.to_owned()),
+            app_id: None,
+            app_id_env: Some(TEAMS_APP_ID_ENV.to_owned()),
+            app_password: None,
+            app_password_env: Some(TEAMS_APP_PASSWORD_ENV.to_owned()),
+            tenant_id: None,
+            tenant_id_env: Some(TEAMS_TENANT_ID_ENV.to_owned()),
+            allowed_conversation_ids: Vec::new(),
+            accounts: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for ImessageChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_id: None,
+            default_account: None,
+            bridge_url: None,
+            bridge_url_env: Some(IMESSAGE_BRIDGE_URL_ENV.to_owned()),
+            bridge_token: None,
+            bridge_token_env: Some(IMESSAGE_BRIDGE_TOKEN_ENV.to_owned()),
+            allowed_chat_ids: Vec::new(),
             accounts: BTreeMap::new(),
         }
     }
@@ -3907,6 +4105,448 @@ impl SynologyChatChannelConfig {
     }
 }
 
+impl TeamsChannelConfig {
+    pub(crate) fn validate(&self) -> Vec<ConfigValidationIssue> {
+        let mut issues = Vec::new();
+        validate_channel_account_integrity(
+            &mut issues,
+            "teams",
+            self.default_account.as_deref(),
+            self.accounts.keys(),
+        );
+        validate_teams_env_pointer(
+            &mut issues,
+            "teams.webhook_url_env",
+            self.webhook_url_env.as_deref(),
+            "teams.webhook_url",
+        );
+        validate_teams_secret_ref_env_pointer(
+            &mut issues,
+            "teams.webhook_url",
+            self.webhook_url.as_ref(),
+        );
+        validate_teams_env_pointer(
+            &mut issues,
+            "teams.app_id_env",
+            self.app_id_env.as_deref(),
+            "teams.app_id",
+        );
+        validate_teams_secret_ref_env_pointer(&mut issues, "teams.app_id", self.app_id.as_ref());
+        validate_teams_env_pointer(
+            &mut issues,
+            "teams.app_password_env",
+            self.app_password_env.as_deref(),
+            "teams.app_password",
+        );
+        validate_teams_secret_ref_env_pointer(
+            &mut issues,
+            "teams.app_password",
+            self.app_password.as_ref(),
+        );
+        validate_teams_env_pointer(
+            &mut issues,
+            "teams.tenant_id_env",
+            self.tenant_id_env.as_deref(),
+            "teams.tenant_id",
+        );
+        for (raw_account_id, account) in &self.accounts {
+            let account_id = normalize_channel_account_id(raw_account_id);
+
+            let webhook_url_field_path = format!("teams.accounts.{account_id}.webhook_url");
+            let webhook_url_env_field_path = format!("{webhook_url_field_path}_env");
+            validate_teams_env_pointer(
+                &mut issues,
+                webhook_url_env_field_path.as_str(),
+                account.webhook_url_env.as_deref(),
+                webhook_url_field_path.as_str(),
+            );
+            validate_teams_secret_ref_env_pointer(
+                &mut issues,
+                webhook_url_field_path.as_str(),
+                account.webhook_url.as_ref(),
+            );
+
+            let app_id_field_path = format!("teams.accounts.{account_id}.app_id");
+            let app_id_env_field_path = format!("{app_id_field_path}_env");
+            validate_teams_env_pointer(
+                &mut issues,
+                app_id_env_field_path.as_str(),
+                account.app_id_env.as_deref(),
+                app_id_field_path.as_str(),
+            );
+            validate_teams_secret_ref_env_pointer(
+                &mut issues,
+                app_id_field_path.as_str(),
+                account.app_id.as_ref(),
+            );
+
+            let app_password_field_path = format!("teams.accounts.{account_id}.app_password");
+            let app_password_env_field_path = format!("{app_password_field_path}_env");
+            validate_teams_env_pointer(
+                &mut issues,
+                app_password_env_field_path.as_str(),
+                account.app_password_env.as_deref(),
+                app_password_field_path.as_str(),
+            );
+            validate_teams_secret_ref_env_pointer(
+                &mut issues,
+                app_password_field_path.as_str(),
+                account.app_password.as_ref(),
+            );
+
+            let tenant_id_field_path = format!("teams.accounts.{account_id}.tenant_id");
+            let tenant_id_env_field_path = format!("{tenant_id_field_path}_env");
+            validate_teams_env_pointer(
+                &mut issues,
+                tenant_id_env_field_path.as_str(),
+                account.tenant_id_env.as_deref(),
+                tenant_id_field_path.as_str(),
+            );
+        }
+        issues
+    }
+
+    pub fn webhook_url(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.webhook_url.as_ref(), self.webhook_url_env.as_deref())
+    }
+
+    pub fn app_id(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.app_id.as_ref(), self.app_id_env.as_deref())
+    }
+
+    pub fn app_password(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.app_password.as_ref(), self.app_password_env.as_deref())
+    }
+
+    pub fn tenant_id(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.tenant_id.as_deref(), self.tenant_id_env.as_deref())
+    }
+
+    pub fn configured_account_ids(&self) -> Vec<String> {
+        let ids = configured_account_ids(self.accounts.keys());
+        if ids.is_empty() {
+            return vec![self.default_configured_account_id()];
+        }
+        ids
+    }
+
+    pub fn default_configured_account_selection(&self) -> ChannelDefaultAccountSelection {
+        resolve_default_configured_account_selection(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+
+    pub fn default_configured_account_id(&self) -> String {
+        self.default_configured_account_selection().id
+    }
+
+    pub fn resolved_account_route(
+        &self,
+        requested_account_id: Option<&str>,
+        selected_configured_account_id: &str,
+    ) -> ChannelResolvedAccountRoute {
+        resolve_channel_account_route(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+            requested_account_id,
+            selected_configured_account_id,
+        )
+    }
+
+    pub fn resolve_account(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedTeamsChannelConfig> {
+        let configured = self.resolve_configured_account_selection(requested_account_id)?;
+        let account_override = configured
+            .account_key
+            .as_deref()
+            .and_then(|key| self.accounts.get(key));
+
+        let merged = TeamsChannelConfig {
+            enabled: self.enabled
+                && account_override
+                    .and_then(|account| account.enabled)
+                    .unwrap_or(true),
+            account_id: account_override
+                .and_then(|account| account.account_id.clone())
+                .or_else(|| self.account_id.clone()),
+            default_account: None,
+            webhook_url: account_override
+                .and_then(|account| account.webhook_url.clone())
+                .or_else(|| self.webhook_url.clone()),
+            webhook_url_env: account_override
+                .and_then(|account| account.webhook_url_env.clone())
+                .or_else(|| self.webhook_url_env.clone()),
+            app_id: account_override
+                .and_then(|account| account.app_id.clone())
+                .or_else(|| self.app_id.clone()),
+            app_id_env: account_override
+                .and_then(|account| account.app_id_env.clone())
+                .or_else(|| self.app_id_env.clone()),
+            app_password: account_override
+                .and_then(|account| account.app_password.clone())
+                .or_else(|| self.app_password.clone()),
+            app_password_env: account_override
+                .and_then(|account| account.app_password_env.clone())
+                .or_else(|| self.app_password_env.clone()),
+            tenant_id: account_override
+                .and_then(|account| account.tenant_id.clone())
+                .or_else(|| self.tenant_id.clone()),
+            tenant_id_env: account_override
+                .and_then(|account| account.tenant_id_env.clone())
+                .or_else(|| self.tenant_id_env.clone()),
+            allowed_conversation_ids: account_override
+                .and_then(|account| account.allowed_conversation_ids.clone())
+                .unwrap_or_else(|| self.allowed_conversation_ids.clone()),
+            accounts: BTreeMap::new(),
+        };
+        let account = merged.resolved_account_identity();
+
+        Ok(ResolvedTeamsChannelConfig {
+            configured_account_id: configured.id,
+            configured_account_label: configured.label,
+            account,
+            enabled: merged.enabled,
+            webhook_url: merged.webhook_url,
+            webhook_url_env: merged.webhook_url_env,
+            app_id: merged.app_id,
+            app_id_env: merged.app_id_env,
+            app_password: merged.app_password,
+            app_password_env: merged.app_password_env,
+            tenant_id: merged.tenant_id,
+            tenant_id_env: merged.tenant_id_env,
+            allowed_conversation_ids: merged.allowed_conversation_ids,
+        })
+    }
+
+    pub fn resolve_account_for_session_account_id(
+        &self,
+        session_account_id: Option<&str>,
+    ) -> CliResult<ResolvedTeamsChannelConfig> {
+        resolve_account_for_session_account_id(
+            session_account_id,
+            || self.resolve_account(session_account_id),
+            || self.configured_account_ids(),
+            |configured_id| self.resolve_account(Some(configured_id)),
+            |resolved| resolved.account.id.as_str(),
+        )
+    }
+
+    pub fn resolved_account_identity(&self) -> ChannelAccountIdentity {
+        if let Some((id, label)) = resolve_configured_account_identity(self.account_id.as_deref()) {
+            return ChannelAccountIdentity {
+                id,
+                label,
+                source: ChannelAccountIdentitySource::Configured,
+            };
+        }
+
+        default_channel_account_identity()
+    }
+
+    fn resolve_configured_account_selection(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedConfiguredAccount> {
+        resolve_configured_account_selection(
+            self.accounts.keys(),
+            requested_account_id,
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+}
+
+impl ImessageChannelConfig {
+    pub(crate) fn validate(&self) -> Vec<ConfigValidationIssue> {
+        let mut issues = Vec::new();
+        validate_channel_account_integrity(
+            &mut issues,
+            "imessage",
+            self.default_account.as_deref(),
+            self.accounts.keys(),
+        );
+        validate_imessage_env_pointer(
+            &mut issues,
+            "imessage.bridge_url_env",
+            self.bridge_url_env.as_deref(),
+            "imessage.bridge_url",
+        );
+        validate_imessage_env_pointer(
+            &mut issues,
+            "imessage.bridge_token_env",
+            self.bridge_token_env.as_deref(),
+            "imessage.bridge_token",
+        );
+        validate_imessage_secret_ref_env_pointer(
+            &mut issues,
+            "imessage.bridge_token",
+            self.bridge_token.as_ref(),
+        );
+        for (raw_account_id, account) in &self.accounts {
+            let account_id = normalize_channel_account_id(raw_account_id);
+
+            let bridge_url_field_path = format!("imessage.accounts.{account_id}.bridge_url");
+            let bridge_url_env_field_path = format!("{bridge_url_field_path}_env");
+            validate_imessage_env_pointer(
+                &mut issues,
+                bridge_url_env_field_path.as_str(),
+                account.bridge_url_env.as_deref(),
+                bridge_url_field_path.as_str(),
+            );
+
+            let bridge_token_field_path = format!("imessage.accounts.{account_id}.bridge_token");
+            let bridge_token_env_field_path = format!("{bridge_token_field_path}_env");
+            validate_imessage_env_pointer(
+                &mut issues,
+                bridge_token_env_field_path.as_str(),
+                account.bridge_token_env.as_deref(),
+                bridge_token_field_path.as_str(),
+            );
+            validate_imessage_secret_ref_env_pointer(
+                &mut issues,
+                bridge_token_field_path.as_str(),
+                account.bridge_token.as_ref(),
+            );
+        }
+        issues
+    }
+
+    pub fn bridge_url(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.bridge_url.as_deref(), self.bridge_url_env.as_deref())
+    }
+
+    pub fn bridge_token(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.bridge_token.as_ref(), self.bridge_token_env.as_deref())
+    }
+
+    pub fn configured_account_ids(&self) -> Vec<String> {
+        let ids = configured_account_ids(self.accounts.keys());
+        if ids.is_empty() {
+            return vec![self.default_configured_account_id()];
+        }
+        ids
+    }
+
+    pub fn default_configured_account_selection(&self) -> ChannelDefaultAccountSelection {
+        resolve_default_configured_account_selection(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+
+    pub fn default_configured_account_id(&self) -> String {
+        self.default_configured_account_selection().id
+    }
+
+    pub fn resolved_account_route(
+        &self,
+        requested_account_id: Option<&str>,
+        selected_configured_account_id: &str,
+    ) -> ChannelResolvedAccountRoute {
+        resolve_channel_account_route(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+            requested_account_id,
+            selected_configured_account_id,
+        )
+    }
+
+    pub fn resolve_account(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedImessageChannelConfig> {
+        let configured = self.resolve_configured_account_selection(requested_account_id)?;
+        let account_override = configured
+            .account_key
+            .as_deref()
+            .and_then(|key| self.accounts.get(key));
+
+        let merged = ImessageChannelConfig {
+            enabled: self.enabled
+                && account_override
+                    .and_then(|account| account.enabled)
+                    .unwrap_or(true),
+            account_id: account_override
+                .and_then(|account| account.account_id.clone())
+                .or_else(|| self.account_id.clone()),
+            default_account: None,
+            bridge_url: account_override
+                .and_then(|account| account.bridge_url.clone())
+                .or_else(|| self.bridge_url.clone()),
+            bridge_url_env: account_override
+                .and_then(|account| account.bridge_url_env.clone())
+                .or_else(|| self.bridge_url_env.clone()),
+            bridge_token: account_override
+                .and_then(|account| account.bridge_token.clone())
+                .or_else(|| self.bridge_token.clone()),
+            bridge_token_env: account_override
+                .and_then(|account| account.bridge_token_env.clone())
+                .or_else(|| self.bridge_token_env.clone()),
+            allowed_chat_ids: account_override
+                .and_then(|account| account.allowed_chat_ids.clone())
+                .unwrap_or_else(|| self.allowed_chat_ids.clone()),
+            accounts: BTreeMap::new(),
+        };
+        let account = merged.resolved_account_identity();
+
+        Ok(ResolvedImessageChannelConfig {
+            configured_account_id: configured.id,
+            configured_account_label: configured.label,
+            account,
+            enabled: merged.enabled,
+            bridge_url: merged.bridge_url,
+            bridge_url_env: merged.bridge_url_env,
+            bridge_token: merged.bridge_token,
+            bridge_token_env: merged.bridge_token_env,
+            allowed_chat_ids: merged.allowed_chat_ids,
+        })
+    }
+
+    pub fn resolve_account_for_session_account_id(
+        &self,
+        session_account_id: Option<&str>,
+    ) -> CliResult<ResolvedImessageChannelConfig> {
+        resolve_account_for_session_account_id(
+            session_account_id,
+            || self.resolve_account(session_account_id),
+            || self.configured_account_ids(),
+            |configured_id| self.resolve_account(Some(configured_id)),
+            |resolved| resolved.account.id.as_str(),
+        )
+    }
+
+    pub fn resolved_account_identity(&self) -> ChannelAccountIdentity {
+        if let Some((id, label)) = resolve_configured_account_identity(self.account_id.as_deref()) {
+            return ChannelAccountIdentity {
+                id,
+                label,
+                source: ChannelAccountIdentitySource::Configured,
+            };
+        }
+
+        default_channel_account_identity()
+    }
+
+    fn resolve_configured_account_selection(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedConfiguredAccount> {
+        resolve_configured_account_selection(
+            self.accounts.keys(),
+            requested_account_id,
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+}
+
 impl SignalChannelConfig {
     pub(crate) fn validate(&self) -> Vec<ConfigValidationIssue> {
         let mut issues = Vec::new();
@@ -4427,6 +5067,30 @@ fn default_discord_bot_token_env() -> Option<String> {
 
 fn default_line_api_base_url() -> String {
     "https://api.line.me/v2/bot".to_owned()
+}
+
+fn default_teams_webhook_url_env() -> Option<String> {
+    Some(TEAMS_WEBHOOK_URL_ENV.to_owned())
+}
+
+fn default_teams_app_id_env() -> Option<String> {
+    Some(TEAMS_APP_ID_ENV.to_owned())
+}
+
+fn default_teams_app_password_env() -> Option<String> {
+    Some(TEAMS_APP_PASSWORD_ENV.to_owned())
+}
+
+fn default_teams_tenant_id_env() -> Option<String> {
+    Some(TEAMS_TENANT_ID_ENV.to_owned())
+}
+
+fn default_imessage_bridge_url_env() -> Option<String> {
+    Some(IMESSAGE_BRIDGE_URL_ENV.to_owned())
+}
+
+fn default_imessage_bridge_token_env() -> Option<String> {
+    Some(IMESSAGE_BRIDGE_TOKEN_ENV.to_owned())
 }
 
 fn default_signal_service_url() -> String {
@@ -4998,6 +5662,101 @@ fn validate_synology_chat_secret_ref_env_pointer(
         EnvPointerValidationHint {
             inline_field_path: field_path,
             example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_teams_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    env_key: Option<&str>,
+    inline_field_path: &str,
+) {
+    let example_env_name = if field_path.ends_with("webhook_url_env") {
+        TEAMS_WEBHOOK_URL_ENV
+    } else if field_path.ends_with("app_password_env") {
+        TEAMS_APP_PASSWORD_ENV
+    } else if field_path.ends_with("tenant_id_env") {
+        TEAMS_TENANT_ID_ENV
+    } else {
+        TEAMS_APP_ID_ENV
+    };
+    if let Err(issue) = validate_env_pointer_field(
+        field_path,
+        env_key,
+        EnvPointerValidationHint {
+            inline_field_path,
+            example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_teams_secret_ref_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    secret_ref: Option<&SecretRef>,
+) {
+    let example_env_name = if field_path.ends_with("webhook_url") {
+        TEAMS_WEBHOOK_URL_ENV
+    } else if field_path.ends_with("app_password") {
+        TEAMS_APP_PASSWORD_ENV
+    } else {
+        TEAMS_APP_ID_ENV
+    };
+    if let Err(issue) = validate_secret_ref_env_pointer_field(
+        field_path,
+        secret_ref,
+        EnvPointerValidationHint {
+            inline_field_path: field_path,
+            example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_imessage_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    env_key: Option<&str>,
+    inline_field_path: &str,
+) {
+    let example_env_name = if field_path.ends_with("bridge_url_env") {
+        IMESSAGE_BRIDGE_URL_ENV
+    } else {
+        IMESSAGE_BRIDGE_TOKEN_ENV
+    };
+    if let Err(issue) = validate_env_pointer_field(
+        field_path,
+        env_key,
+        EnvPointerValidationHint {
+            inline_field_path,
+            example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_imessage_secret_ref_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    secret_ref: Option<&SecretRef>,
+) {
+    if let Err(issue) = validate_secret_ref_env_pointer_field(
+        field_path,
+        secret_ref,
+        EnvPointerValidationHint {
+            inline_field_path: field_path,
+            example_env_name: IMESSAGE_BRIDGE_TOKEN_ENV,
             detect_telegram_token_shape: false,
         },
     ) {
@@ -6551,6 +7310,236 @@ mod tests {
     }
 
     #[test]
+    fn teams_resolves_webhook_and_future_serve_credentials_from_env_pointers() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set(
+            "TEST_TEAMS_WEBHOOK_URL",
+            "https://teams.example.test/webhook/connector",
+        );
+        env.set("TEST_TEAMS_APP_ID", "teams-app-id");
+        env.set("TEST_TEAMS_APP_PASSWORD", "teams-app-password");
+        env.set("TEST_TEAMS_TENANT_ID", "teams-tenant-id");
+
+        let config_value = json!({
+            "enabled": true,
+            "account_id": "Teams-Ops",
+            "webhook_url_env": "TEST_TEAMS_WEBHOOK_URL",
+            "app_id_env": "TEST_TEAMS_APP_ID",
+            "app_password_env": "TEST_TEAMS_APP_PASSWORD",
+            "tenant_id_env": "TEST_TEAMS_TENANT_ID",
+            "allowed_conversation_ids": ["19:ops-thread"]
+        });
+        let config: TeamsChannelConfig =
+            serde_json::from_value(config_value).expect("deserialize teams config");
+
+        let resolved = config
+            .resolve_account(None)
+            .expect("resolve default teams account");
+        let webhook_url = resolved.webhook_url();
+        let app_id = resolved.app_id();
+        let app_password = resolved.app_password();
+        let tenant_id = resolved.tenant_id();
+
+        assert_eq!(resolved.configured_account_id, "teams-ops");
+        assert_eq!(resolved.account.id, "teams-ops");
+        assert_eq!(resolved.account.label, "Teams-Ops");
+        assert_eq!(
+            webhook_url.as_deref(),
+            Some("https://teams.example.test/webhook/connector")
+        );
+        assert_eq!(app_id.as_deref(), Some("teams-app-id"));
+        assert_eq!(app_password.as_deref(), Some("teams-app-password"));
+        assert_eq!(tenant_id.as_deref(), Some("teams-tenant-id"));
+        assert_eq!(
+            resolved.allowed_conversation_ids,
+            vec!["19:ops-thread".to_owned()]
+        );
+    }
+
+    #[test]
+    fn teams_multi_account_resolution_merges_send_and_future_serve_overrides() {
+        let config_value = json!({
+            "enabled": true,
+            "account_id": "Teams-Shared",
+            "webhook_url": "https://teams.example.test/webhook/base",
+            "app_id": "base-app-id",
+            "app_password": "base-app-password",
+            "tenant_id": "base-tenant-id",
+            "allowed_conversation_ids": ["19:base-thread"],
+            "default_account": "Ops",
+            "accounts": {
+                "Ops": {
+                    "account_id": "Teams-Ops",
+                    "webhook_url": "https://teams.example.test/webhook/ops"
+                },
+                "Backup": {
+                    "enabled": false,
+                    "app_password": "backup-app-password",
+                    "allowed_conversation_ids": ["19:backup-thread"]
+                }
+            }
+        });
+        let config: TeamsChannelConfig =
+            serde_json::from_value(config_value).expect("deserialize teams multi-account config");
+
+        assert_eq!(config.configured_account_ids(), vec!["backup", "ops"]);
+        assert_eq!(config.default_configured_account_id(), "ops");
+
+        let ops = config
+            .resolve_account(None)
+            .expect("resolve default teams account");
+        let ops_webhook_url = ops.webhook_url();
+        let ops_app_id = ops.app_id();
+        let ops_app_password = ops.app_password();
+        let ops_tenant_id = ops.tenant_id();
+
+        assert_eq!(ops.configured_account_id, "ops");
+        assert_eq!(ops.account.id, "teams-ops");
+        assert_eq!(ops.account.label, "Teams-Ops");
+        assert_eq!(
+            ops_webhook_url.as_deref(),
+            Some("https://teams.example.test/webhook/ops")
+        );
+        assert_eq!(ops_app_id.as_deref(), Some("base-app-id"));
+        assert_eq!(ops_app_password.as_deref(), Some("base-app-password"));
+        assert_eq!(ops_tenant_id.as_deref(), Some("base-tenant-id"));
+        assert_eq!(
+            ops.allowed_conversation_ids,
+            vec!["19:base-thread".to_owned()]
+        );
+
+        let backup = config
+            .resolve_account(Some("Backup"))
+            .expect("resolve explicit teams account");
+        let backup_webhook_url = backup.webhook_url();
+        let backup_app_id = backup.app_id();
+        let backup_app_password = backup.app_password();
+        let backup_tenant_id = backup.tenant_id();
+
+        assert_eq!(backup.configured_account_id, "backup");
+        assert!(!backup.enabled);
+        assert_eq!(backup.account.id, "teams-shared");
+        assert_eq!(backup.account.label, "Teams-Shared");
+        assert_eq!(
+            backup_webhook_url.as_deref(),
+            Some("https://teams.example.test/webhook/base")
+        );
+        assert_eq!(backup_app_id.as_deref(), Some("base-app-id"));
+        assert_eq!(backup_app_password.as_deref(), Some("backup-app-password"));
+        assert_eq!(backup_tenant_id.as_deref(), Some("base-tenant-id"));
+        assert_eq!(
+            backup.allowed_conversation_ids,
+            vec!["19:backup-thread".to_owned()]
+        );
+    }
+
+    #[test]
+    fn imessage_resolves_bridge_url_and_token_from_env_pointers() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set(
+            "TEST_IMESSAGE_BRIDGE_URL",
+            "https://bluebubbles.example.test/base",
+        );
+        env.set("TEST_IMESSAGE_BRIDGE_TOKEN", "bluebubbles-password");
+
+        let config_value = json!({
+            "enabled": true,
+            "account_id": "BlueBubbles-Ops",
+            "bridge_url_env": "TEST_IMESSAGE_BRIDGE_URL",
+            "bridge_token_env": "TEST_IMESSAGE_BRIDGE_TOKEN",
+            "allowed_chat_ids": ["iMessage;-;+15550001111"]
+        });
+        let config: ImessageChannelConfig =
+            serde_json::from_value(config_value).expect("deserialize imessage config");
+
+        let resolved = config
+            .resolve_account(None)
+            .expect("resolve default imessage account");
+        let bridge_url = resolved.bridge_url();
+        let bridge_token = resolved.bridge_token();
+
+        assert_eq!(resolved.configured_account_id, "bluebubbles-ops");
+        assert_eq!(resolved.account.id, "bluebubbles-ops");
+        assert_eq!(resolved.account.label, "BlueBubbles-Ops");
+        assert_eq!(
+            bridge_url.as_deref(),
+            Some("https://bluebubbles.example.test/base")
+        );
+        assert_eq!(bridge_token.as_deref(), Some("bluebubbles-password"));
+        assert_eq!(
+            resolved.allowed_chat_ids,
+            vec!["iMessage;-;+15550001111".to_owned()]
+        );
+    }
+
+    #[test]
+    fn imessage_multi_account_resolution_merges_base_and_account_overrides() {
+        let config_value = json!({
+            "enabled": true,
+            "account_id": "BlueBubbles-Shared",
+            "bridge_url": "https://bluebubbles.example.test/base",
+            "bridge_token": "base-bridge-token",
+            "allowed_chat_ids": ["iMessage;-;+15550001111"],
+            "default_account": "Ops",
+            "accounts": {
+                "Ops": {
+                    "account_id": "BlueBubbles-Ops",
+                    "bridge_url": "https://bluebubbles.example.test/ops"
+                },
+                "Backup": {
+                    "enabled": false,
+                    "bridge_token": "backup-bridge-token",
+                    "allowed_chat_ids": ["iMessage;-;+15550002222"]
+                }
+            }
+        });
+        let config: ImessageChannelConfig = serde_json::from_value(config_value)
+            .expect("deserialize imessage multi-account config");
+
+        assert_eq!(config.configured_account_ids(), vec!["backup", "ops"]);
+        assert_eq!(config.default_configured_account_id(), "ops");
+
+        let ops = config
+            .resolve_account(None)
+            .expect("resolve default imessage account");
+        let ops_bridge_url = ops.bridge_url();
+        let ops_bridge_token = ops.bridge_token();
+
+        assert_eq!(ops.configured_account_id, "ops");
+        assert_eq!(ops.account.id, "bluebubbles-ops");
+        assert_eq!(ops.account.label, "BlueBubbles-Ops");
+        assert_eq!(
+            ops_bridge_url.as_deref(),
+            Some("https://bluebubbles.example.test/ops")
+        );
+        assert_eq!(ops_bridge_token.as_deref(), Some("base-bridge-token"));
+        assert_eq!(
+            ops.allowed_chat_ids,
+            vec!["iMessage;-;+15550001111".to_owned()]
+        );
+
+        let backup = config
+            .resolve_account(Some("Backup"))
+            .expect("resolve explicit imessage account");
+        let backup_bridge_url = backup.bridge_url();
+        let backup_bridge_token = backup.bridge_token();
+
+        assert_eq!(backup.configured_account_id, "backup");
+        assert!(!backup.enabled);
+        assert_eq!(backup.account.id, "bluebubbles-shared");
+        assert_eq!(backup.account.label, "BlueBubbles-Shared");
+        assert_eq!(
+            backup_bridge_url.as_deref(),
+            Some("https://bluebubbles.example.test/base")
+        );
+        assert_eq!(backup_bridge_token.as_deref(), Some("backup-bridge-token"));
+        assert_eq!(
+            backup.allowed_chat_ids,
+            vec!["iMessage;-;+15550002222".to_owned()]
+        );
+    }
+
+    #[test]
     fn mattermost_resolves_server_url_and_bot_token_from_env_pointers() {
         let mut env = crate::test_support::ScopedEnv::new();
         env.set(
@@ -6689,6 +7678,42 @@ mod tests {
         .expect("deserialize slack config");
 
         assert_eq!(config.bot_token_env.as_deref(), Some(SLACK_BOT_TOKEN_ENV));
+    }
+
+    #[test]
+    fn teams_partial_deserialization_keeps_default_env_pointers() {
+        let config: TeamsChannelConfig = serde_json::from_value(json!({
+            "enabled": true
+        }))
+        .expect("deserialize teams config");
+
+        assert_eq!(
+            config.webhook_url_env.as_deref(),
+            Some(TEAMS_WEBHOOK_URL_ENV)
+        );
+        assert_eq!(config.app_id_env.as_deref(), Some(TEAMS_APP_ID_ENV));
+        assert_eq!(
+            config.app_password_env.as_deref(),
+            Some(TEAMS_APP_PASSWORD_ENV)
+        );
+        assert_eq!(config.tenant_id_env.as_deref(), Some(TEAMS_TENANT_ID_ENV));
+    }
+
+    #[test]
+    fn imessage_partial_deserialization_keeps_default_env_pointers() {
+        let config: ImessageChannelConfig = serde_json::from_value(json!({
+            "enabled": true
+        }))
+        .expect("deserialize imessage config");
+
+        assert_eq!(
+            config.bridge_url_env.as_deref(),
+            Some(IMESSAGE_BRIDGE_URL_ENV)
+        );
+        assert_eq!(
+            config.bridge_token_env.as_deref(),
+            Some(IMESSAGE_BRIDGE_TOKEN_ENV)
+        );
     }
 
     #[test]

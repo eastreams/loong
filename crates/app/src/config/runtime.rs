@@ -13,10 +13,10 @@ use super::{
     audit::AuditConfig,
     channels::{
         CliChannelConfig, DingtalkChannelConfig, DiscordChannelConfig, FeishuChannelConfig,
-        GoogleChatChannelConfig, LineChannelConfig, MatrixChannelConfig, MattermostChannelConfig,
-        NextcloudTalkChannelConfig, SignalChannelConfig, SlackChannelConfig,
-        SynologyChatChannelConfig, TelegramChannelConfig, WecomChannelConfig,
-        WhatsappChannelConfig,
+        GoogleChatChannelConfig, ImessageChannelConfig, LineChannelConfig, MatrixChannelConfig,
+        MattermostChannelConfig, NextcloudTalkChannelConfig, SignalChannelConfig,
+        SlackChannelConfig, SynologyChatChannelConfig, TeamsChannelConfig, TelegramChannelConfig,
+        WecomChannelConfig, WhatsappChannelConfig,
     },
     conversation::ConversationConfig,
     feishu_integration::FeishuIntegrationConfig,
@@ -112,6 +112,10 @@ pub struct LoongClawConfig {
     pub synology_chat: SynologyChatChannelConfig,
     #[serde(default)]
     pub signal: SignalChannelConfig,
+    #[serde(default)]
+    pub teams: TeamsChannelConfig,
+    #[serde(default)]
+    pub imessage: ImessageChannelConfig,
     #[serde(default)]
     pub whatsapp: WhatsappChannelConfig,
     #[serde(default)]
@@ -1017,8 +1021,16 @@ fn canonicalize_channel_configs_for_encoding(config: &mut LoongClawConfig) {
     canonicalize_matrix_channel_for_encoding(&mut config.matrix);
     canonicalize_wecom_channel_for_encoding(&mut config.wecom);
     canonicalize_discord_channel_for_encoding(&mut config.discord);
+    canonicalize_line_channel_for_encoding(&mut config.line);
+    canonicalize_dingtalk_channel_for_encoding(&mut config.dingtalk);
     canonicalize_slack_channel_for_encoding(&mut config.slack);
+    canonicalize_google_chat_channel_for_encoding(&mut config.google_chat);
+    canonicalize_teams_channel_for_encoding(&mut config.teams);
+    canonicalize_imessage_channel_for_encoding(&mut config.imessage);
     canonicalize_whatsapp_channel_for_encoding(&mut config.whatsapp);
+    canonicalize_mattermost_channel_for_encoding(&mut config.mattermost);
+    canonicalize_nextcloud_talk_channel_for_encoding(&mut config.nextcloud_talk);
+    canonicalize_synology_chat_channel_for_encoding(&mut config.synology_chat);
 }
 
 fn canonicalize_telegram_channel_for_encoding(config: &mut TelegramChannelConfig) {
@@ -1073,11 +1085,68 @@ fn canonicalize_discord_channel_for_encoding(config: &mut DiscordChannelConfig) 
     }
 }
 
+fn canonicalize_line_channel_for_encoding(config: &mut LineChannelConfig) {
+    canonicalize_env_secret_reference(
+        &mut config.channel_access_token,
+        &mut config.channel_access_token_env,
+    );
+    canonicalize_env_secret_reference(&mut config.channel_secret, &mut config.channel_secret_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(
+            &mut account.channel_access_token,
+            &mut account.channel_access_token_env,
+        );
+        canonicalize_env_secret_reference(
+            &mut account.channel_secret,
+            &mut account.channel_secret_env,
+        );
+    }
+}
+
+fn canonicalize_dingtalk_channel_for_encoding(config: &mut DingtalkChannelConfig) {
+    canonicalize_env_secret_reference(&mut config.webhook_url, &mut config.webhook_url_env);
+    canonicalize_env_secret_reference(&mut config.secret, &mut config.secret_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(&mut account.webhook_url, &mut account.webhook_url_env);
+        canonicalize_env_secret_reference(&mut account.secret, &mut account.secret_env);
+    }
+}
+
 fn canonicalize_slack_channel_for_encoding(config: &mut SlackChannelConfig) {
     canonicalize_env_secret_reference(&mut config.bot_token, &mut config.bot_token_env);
 
     for account in config.accounts.values_mut() {
         canonicalize_env_secret_reference(&mut account.bot_token, &mut account.bot_token_env);
+    }
+}
+
+fn canonicalize_google_chat_channel_for_encoding(config: &mut GoogleChatChannelConfig) {
+    canonicalize_env_secret_reference(&mut config.webhook_url, &mut config.webhook_url_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(&mut account.webhook_url, &mut account.webhook_url_env);
+    }
+}
+
+fn canonicalize_teams_channel_for_encoding(config: &mut TeamsChannelConfig) {
+    canonicalize_env_secret_reference(&mut config.webhook_url, &mut config.webhook_url_env);
+    canonicalize_env_secret_reference(&mut config.app_id, &mut config.app_id_env);
+    canonicalize_env_secret_reference(&mut config.app_password, &mut config.app_password_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(&mut account.webhook_url, &mut account.webhook_url_env);
+        canonicalize_env_secret_reference(&mut account.app_id, &mut account.app_id_env);
+        canonicalize_env_secret_reference(&mut account.app_password, &mut account.app_password_env);
+    }
+}
+
+fn canonicalize_imessage_channel_for_encoding(config: &mut ImessageChannelConfig) {
+    canonicalize_env_secret_reference(&mut config.bridge_token, &mut config.bridge_token_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(&mut account.bridge_token, &mut account.bridge_token_env);
     }
 }
 
@@ -1090,6 +1159,35 @@ fn canonicalize_whatsapp_channel_for_encoding(config: &mut WhatsappChannelConfig
         canonicalize_env_secret_reference(&mut account.access_token, &mut account.access_token_env);
         canonicalize_env_secret_reference(&mut account.verify_token, &mut account.verify_token_env);
         canonicalize_env_secret_reference(&mut account.app_secret, &mut account.app_secret_env);
+    }
+}
+
+fn canonicalize_mattermost_channel_for_encoding(config: &mut MattermostChannelConfig) {
+    canonicalize_env_secret_reference(&mut config.bot_token, &mut config.bot_token_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(&mut account.bot_token, &mut account.bot_token_env);
+    }
+}
+
+fn canonicalize_nextcloud_talk_channel_for_encoding(config: &mut NextcloudTalkChannelConfig) {
+    canonicalize_env_secret_reference(&mut config.shared_secret, &mut config.shared_secret_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(
+            &mut account.shared_secret,
+            &mut account.shared_secret_env,
+        );
+    }
+}
+
+fn canonicalize_synology_chat_channel_for_encoding(config: &mut SynologyChatChannelConfig) {
+    canonicalize_env_secret_reference(&mut config.token, &mut config.token_env);
+    canonicalize_env_secret_reference(&mut config.incoming_url, &mut config.incoming_url_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(&mut account.token, &mut account.token_env);
+        canonicalize_env_secret_reference(&mut account.incoming_url, &mut account.incoming_url_env);
     }
 }
 

@@ -1475,6 +1475,50 @@ fn google_chat_send_cli_rejects_non_endpoint_target_kind() {
 }
 
 #[test]
+fn teams_send_cli_accepts_config_backed_endpoint_without_target() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        channel_send_command("teams"),
+        "--text",
+        "hello teams",
+    ])
+    .expect("teams send CLI should parse without explicit target");
+
+    match cli.command {
+        Some(Commands::TeamsSend {
+            target,
+            target_kind,
+            text,
+            ..
+        }) => {
+            assert_eq!(target, None);
+            assert_eq!(target_kind, channel_default_send_target_kind("teams"));
+            assert_eq!(text, "hello teams");
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn teams_send_cli_rejects_non_endpoint_target_kind() {
+    let error = try_parse_cli([
+        "loongclaw",
+        channel_send_command("teams"),
+        "--target-kind",
+        "conversation",
+        "--text",
+        "hello teams",
+    ])
+    .expect_err("teams send should reject non-endpoint kinds");
+
+    assert!(
+        error
+            .to_string()
+            .contains("teams --target-kind does not support `conversation`; use `endpoint`")
+    );
+}
+
+#[test]
 fn mattermost_send_cli_accepts_generic_target_and_defaults_to_conversation() {
     let cli = try_parse_cli([
         "loongclaw",
@@ -1617,6 +1661,54 @@ fn synology_chat_send_cli_rejects_non_address_target_kind() {
         error
             .to_string()
             .contains("synology-chat --target-kind does not support `conversation`; use `address`")
+    );
+}
+
+#[test]
+fn imessage_send_cli_accepts_conversation_target_kind() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        channel_send_command("imessage"),
+        "--target",
+        "iMessage;+;chat123",
+        "--text",
+        "hello imessage",
+    ])
+    .expect("imessage send CLI should parse");
+
+    match cli.command {
+        Some(Commands::ImessageSend {
+            target,
+            target_kind,
+            text,
+            ..
+        }) => {
+            assert_eq!(target, "iMessage;+;chat123");
+            assert_eq!(target_kind, channel_default_send_target_kind("imessage"));
+            assert_eq!(text, "hello imessage");
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn imessage_send_cli_rejects_non_conversation_target_kind() {
+    let error = try_parse_cli([
+        "loongclaw",
+        channel_send_command("imessage"),
+        "--target",
+        "iMessage;+;chat123",
+        "--target-kind",
+        "address",
+        "--text",
+        "hello imessage",
+    ])
+    .expect_err("imessage send should reject non-conversation kinds");
+
+    assert!(
+        error
+            .to_string()
+            .contains("imessage --target-kind does not support `address`; use `conversation`")
     );
 }
 

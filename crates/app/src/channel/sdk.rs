@@ -5,7 +5,8 @@ use crate::{
 
 use super::registry::{
     ChannelRuntimeCommandDescriptor, FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    IMESSAGE_CATALOG_COMMAND_FAMILY_DESCRIPTOR, MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
 };
 
@@ -145,6 +146,14 @@ const SIGNAL_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     serve_subcommand: None,
 };
 
+const TEAMS_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
+    id: "teams",
+    label: "teams",
+    surface_label: "teams channel",
+    runtime_kind: ChannelRuntimeKind::Service,
+    serve_subcommand: Some(TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve.command),
+};
+
 const MATTERMOST_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     id: "mattermost",
     label: "mattermost",
@@ -167,6 +176,14 @@ const SYNOLOGY_CHAT_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     surface_label: "synology chat channel",
     runtime_kind: ChannelRuntimeKind::Service,
     serve_subcommand: None,
+};
+
+const IMESSAGE_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
+    id: "imessage",
+    label: "imessage",
+    surface_label: "imessage channel",
+    runtime_kind: ChannelRuntimeKind::Service,
+    serve_subcommand: Some(IMESSAGE_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve.command),
 };
 
 const CLI_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
@@ -294,6 +311,14 @@ const SIGNAL_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrat
     background_surface_is_enabled: None,
 };
 
+const TEAMS_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
+    descriptor: &TEAMS_CHANNEL_DESCRIPTOR,
+    background_runtime: None,
+    is_enabled: teams_channel_is_enabled,
+    collect_validation_issues: collect_teams_channel_validation_issues,
+    background_surface_is_enabled: None,
+};
+
 const MATTERMOST_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     descriptor: &MATTERMOST_CHANNEL_DESCRIPTOR,
     background_runtime: None,
@@ -320,6 +345,14 @@ const SYNOLOGY_CHAT_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor =
         background_surface_is_enabled: None,
     };
 
+const IMESSAGE_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
+    descriptor: &IMESSAGE_CHANNEL_DESCRIPTOR,
+    background_runtime: None,
+    is_enabled: imessage_channel_is_enabled,
+    collect_validation_issues: collect_imessage_channel_validation_issues,
+    background_surface_is_enabled: None,
+};
+
 const CHANNEL_INTEGRATIONS: &[ChannelIntegrationDescriptor] = &[
     CLI_CHANNEL_INTEGRATION,
     TELEGRAM_CHANNEL_INTEGRATION,
@@ -333,9 +366,11 @@ const CHANNEL_INTEGRATIONS: &[ChannelIntegrationDescriptor] = &[
     WHATSAPP_CHANNEL_INTEGRATION,
     GOOGLE_CHAT_CHANNEL_INTEGRATION,
     SIGNAL_CHANNEL_INTEGRATION,
+    TEAMS_CHANNEL_INTEGRATION,
     MATTERMOST_CHANNEL_INTEGRATION,
     NEXTCLOUD_TALK_CHANNEL_INTEGRATION,
     SYNOLOGY_CHAT_CHANNEL_INTEGRATION,
+    IMESSAGE_CHANNEL_INTEGRATION,
 ];
 
 pub(crate) fn channel_descriptor(id: &str) -> Option<&'static ChannelDescriptor> {
@@ -460,6 +495,10 @@ fn signal_channel_is_enabled(config: &LoongClawConfig) -> bool {
     config.signal.enabled
 }
 
+fn teams_channel_is_enabled(config: &LoongClawConfig) -> bool {
+    config.teams.enabled
+}
+
 fn mattermost_channel_is_enabled(config: &LoongClawConfig) -> bool {
     config.mattermost.enabled
 }
@@ -470,6 +509,10 @@ fn nextcloud_talk_channel_is_enabled(config: &LoongClawConfig) -> bool {
 
 fn synology_chat_channel_is_enabled(config: &LoongClawConfig) -> bool {
     config.synology_chat.enabled
+}
+
+fn imessage_channel_is_enabled(config: &LoongClawConfig) -> bool {
+    config.imessage.enabled
 }
 
 fn collect_cli_channel_validation_issues(_config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
@@ -536,6 +579,10 @@ fn collect_signal_channel_validation_issues(
     config.signal.validate()
 }
 
+fn collect_teams_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+    config.teams.validate()
+}
+
 fn collect_mattermost_channel_validation_issues(
     config: &LoongClawConfig,
 ) -> Vec<ConfigValidationIssue> {
@@ -552,6 +599,12 @@ fn collect_synology_chat_channel_validation_issues(
     config: &LoongClawConfig,
 ) -> Vec<ConfigValidationIssue> {
     config.synology_chat.validate()
+}
+
+fn collect_imessage_channel_validation_issues(
+    config: &LoongClawConfig,
+) -> Vec<ConfigValidationIssue> {
+    config.imessage.validate()
 }
 
 fn telegram_background_surface_is_enabled(
@@ -647,9 +700,11 @@ mod tests {
                 "whatsapp",
                 "google-chat",
                 "signal",
+                "teams",
                 "mattermost",
                 "nextcloud-talk",
                 "synology-chat",
+                "imessage",
             ]
         );
     }

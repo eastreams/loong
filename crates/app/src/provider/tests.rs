@@ -914,9 +914,9 @@ fn provider_profile_state_persistence_metrics_track_outcomes() {
     record_provider_profile_state_persist_outcome(ProviderProfileStatePersistOutcome::StaleSkipped);
     record_provider_profile_state_persist_outcome(ProviderProfileStatePersistOutcome::Failed);
     let after = provider_profile_state_persistence_metrics_snapshot();
-    assert!(after.persisted >= before.persisted + 1);
-    assert!(after.stale_skipped >= before.stale_skipped + 1);
-    assert!(after.failed >= before.failed + 1);
+    assert!(after.persisted > before.persisted);
+    assert!(after.stale_skipped > before.stale_skipped);
+    assert!(after.failed > before.failed);
 }
 
 #[test]

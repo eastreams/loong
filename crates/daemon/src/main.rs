@@ -673,6 +673,26 @@ async fn main() {
             )
             .await
         }
+        Commands::TeamsSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                TEAMS_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: target.as_deref(),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
         Commands::SignalSend {
             config,
             account,
@@ -746,6 +766,26 @@ async fn main() {
                     config_path: config.as_deref(),
                     account: account.as_deref(),
                     target: target.as_deref(),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::ImessageSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                IMESSAGE_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: Some(target.as_str()),
                     target_kind,
                     text: &text,
                     as_card: false,

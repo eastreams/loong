@@ -137,10 +137,10 @@ runtime ownership, while still exposing future channels early without
 pretending they already have concrete config or runtime support.
 
 Current examples of shipped config-backed outbound surfaces include Discord,
-Slack, LINE, DingTalk, WhatsApp, Google Chat, Signal, Mattermost, Nextcloud
-Talk, and Synology Chat. They all publish snapshot builders, readiness checks,
-and send command metadata without pretending they already own a long-running
-serve runtime.
+Slack, LINE, DingTalk, WhatsApp, Google Chat, Signal, Microsoft Teams,
+Mattermost, Nextcloud Talk, Synology Chat, and iMessage / BlueBubbles. They
+all publish snapshot builders, readiness checks, and send command metadata
+without pretending they already own a long-running serve runtime.
 
 ### 6. Runtime Owners Must Bind Through Runtime Registries
 
@@ -276,10 +276,12 @@ When the runtime implementation does not exist yet:
 4. Do not add placeholder runtime builders or fake health logic.
 5. Verify the channel appears correctly in catalog and grouped surfaces.
 
-This is the preferred path for channels such as LINE, DingTalk, Email, generic
-Webhook, Google Chat, Microsoft Teams, Mattermost, Nextcloud Talk, Synology
-Chat, IRC, iMessage / BlueBubbles, Nostr, Twitch, Tlon, Zalo, Zalo Personal,
-or WebChat surfaces before real config or runtime support lands.
+This is the preferred path for channels such as Email, generic Webhook, IRC,
+Nostr, Twitch, Tlon, Zalo, Zalo Personal, or WebChat surfaces before real
+config or runtime support lands. Channels such as LINE, DingTalk, Google Chat,
+Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat, and iMessage /
+BlueBubbles have already moved beyond this stage and should be modeled through
+the config-backed integration path instead.
 
 ## Anti-Patterns
 

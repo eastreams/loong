@@ -6,17 +6,20 @@ use crate::config::{
     ChannelDefaultAccountSelectionSource, DINGTALK_SECRET_ENV, DINGTALK_WEBHOOK_URL_ENV,
     DISCORD_BOT_TOKEN_ENV, FEISHU_APP_ID_ENV, FEISHU_APP_SECRET_ENV, FEISHU_ENCRYPT_KEY_ENV,
     FEISHU_VERIFICATION_TOKEN_ENV, FeishuChannelServeMode, GOOGLE_CHAT_WEBHOOK_URL_ENV,
-    LINE_CHANNEL_ACCESS_TOKEN_ENV, LINE_CHANNEL_SECRET_ENV, LoongClawConfig,
-    MATRIX_ACCESS_TOKEN_ENV, MATTERMOST_BOT_TOKEN_ENV, MATTERMOST_SERVER_URL_ENV,
-    NEXTCLOUD_TALK_SERVER_URL_ENV, NEXTCLOUD_TALK_SHARED_SECRET_ENV, ResolvedDingtalkChannelConfig,
-    ResolvedDiscordChannelConfig, ResolvedFeishuChannelConfig, ResolvedGoogleChatChannelConfig,
-    ResolvedLineChannelConfig, ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
+    IMESSAGE_BRIDGE_TOKEN_ENV, IMESSAGE_BRIDGE_URL_ENV, LINE_CHANNEL_ACCESS_TOKEN_ENV,
+    LINE_CHANNEL_SECRET_ENV, LoongClawConfig, MATRIX_ACCESS_TOKEN_ENV, MATTERMOST_BOT_TOKEN_ENV,
+    MATTERMOST_SERVER_URL_ENV, NEXTCLOUD_TALK_SERVER_URL_ENV, NEXTCLOUD_TALK_SHARED_SECRET_ENV,
+    ResolvedDingtalkChannelConfig, ResolvedDiscordChannelConfig, ResolvedFeishuChannelConfig,
+    ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig, ResolvedLineChannelConfig,
+    ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
     ResolvedNextcloudTalkChannelConfig, ResolvedSignalChannelConfig, ResolvedSlackChannelConfig,
-    ResolvedSynologyChatChannelConfig, ResolvedTelegramChannelConfig, ResolvedWecomChannelConfig,
-    ResolvedWhatsappChannelConfig, SIGNAL_ACCOUNT_ENV, SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV,
-    SYNOLOGY_CHAT_INCOMING_URL_ENV, SYNOLOGY_CHAT_TOKEN_ENV, TELEGRAM_BOT_TOKEN_ENV,
-    WECOM_BOT_ID_ENV, WECOM_SECRET_ENV, WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV,
-    WHATSAPP_PHONE_NUMBER_ID_ENV, WHATSAPP_VERIFY_TOKEN_ENV,
+    ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig, ResolvedTelegramChannelConfig,
+    ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig, SIGNAL_ACCOUNT_ENV,
+    SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV, SYNOLOGY_CHAT_INCOMING_URL_ENV,
+    SYNOLOGY_CHAT_TOKEN_ENV, TEAMS_APP_ID_ENV, TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV,
+    TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV, WECOM_BOT_ID_ENV, WECOM_SECRET_ENV,
+    WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV, WHATSAPP_PHONE_NUMBER_ID_ENV,
+    WHATSAPP_VERIFY_TOKEN_ENV,
 };
 
 use super::{ChannelCatalogTargetKind, ChannelOperationRuntime, ChannelPlatform, runtime_state};
@@ -33,13 +36,8 @@ const EMAIL_IMAP_USERNAME_ENV: &str = "EMAIL_IMAP_USERNAME";
 const EMAIL_IMAP_PASSWORD_ENV: &str = "EMAIL_IMAP_PASSWORD";
 const WEBHOOK_AUTH_TOKEN_ENV: &str = "WEBHOOK_AUTH_TOKEN";
 const WEBHOOK_SIGNING_SECRET_ENV: &str = "WEBHOOK_SIGNING_SECRET";
-const TEAMS_APP_ID_ENV: &str = "TEAMS_APP_ID";
-const TEAMS_APP_PASSWORD_ENV: &str = "TEAMS_APP_PASSWORD";
-const TEAMS_TENANT_ID_ENV: &str = "TEAMS_TENANT_ID";
 const IRC_SERVER_ENV: &str = "IRC_SERVER";
 const IRC_NICKNAME_ENV: &str = "IRC_NICKNAME";
-const IMESSAGE_BRIDGE_URL_ENV: &str = "IMESSAGE_BRIDGE_URL";
-const IMESSAGE_BRIDGE_TOKEN_ENV: &str = "IMESSAGE_BRIDGE_TOKEN";
 const NOSTR_RELAY_URLS_ENV: &str = "NOSTR_RELAY_URLS";
 const NOSTR_PRIVATE_KEY_ENV: &str = "NOSTR_PRIVATE_KEY";
 const TWITCH_BOT_OAUTH_TOKEN_ENV: &str = "TWITCH_BOT_OAUTH_TOKEN";
@@ -1860,6 +1858,17 @@ const TEAMS_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
         env_pointer_paths: &[],
         default_env_var: None,
     };
+const TEAMS_WEBHOOK_URL_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "webhook_url",
+        label: "incoming webhook url",
+        config_paths: &["teams.webhook_url", "teams.accounts.<account>.webhook_url"],
+        env_pointer_paths: &[
+            "teams.webhook_url_env",
+            "teams.accounts.<account>.webhook_url_env",
+        ],
+        default_env_var: Some(TEAMS_WEBHOOK_URL_ENV),
+    };
 const TEAMS_APP_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
     ChannelCatalogOperationRequirement {
         id: "app_id",
@@ -1904,12 +1913,8 @@ const TEAMS_ALLOWED_CONVERSATION_IDS_REQUIREMENT: ChannelCatalogOperationRequire
         env_pointer_paths: &[],
         default_env_var: None,
     };
-const TEAMS_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
-    TEAMS_ENABLED_REQUIREMENT,
-    TEAMS_APP_ID_REQUIREMENT,
-    TEAMS_APP_PASSWORD_REQUIREMENT,
-    TEAMS_TENANT_ID_REQUIREMENT,
-];
+const TEAMS_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] =
+    &[TEAMS_ENABLED_REQUIREMENT, TEAMS_WEBHOOK_URL_REQUIREMENT];
 const TEAMS_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
     TEAMS_ENABLED_REQUIREMENT,
     TEAMS_APP_ID_REQUIREMENT,
@@ -1919,12 +1924,12 @@ const TEAMS_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 ];
 const TEAMS_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
-    label: "conversation send",
+    label: "incoming webhook send",
     command: "teams-send",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: TEAMS_SEND_REQUIREMENTS,
-    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+    supported_target_kinds: &[ChannelCatalogTargetKind::Endpoint],
 };
 const TEAMS_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
@@ -1935,21 +1940,28 @@ const TEAMS_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     requirements: TEAMS_SERVE_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
+pub const TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
+    ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "teams",
+        default_send_target_kind: ChannelCatalogTargetKind::Endpoint,
+        send: TEAMS_SEND_OPERATION,
+        serve: TEAMS_SERVE_OPERATION,
+    };
 const TEAMS_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
-        operation: TEAMS_SEND_OPERATION,
+        operation: TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR.send,
         doctor_checks: &[],
     },
     ChannelRegistryOperationDescriptor {
-        operation: TEAMS_SERVE_OPERATION,
+        operation: TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
         doctor_checks: &[],
     },
 ];
 const TEAMS_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::Planned,
-    setup_hint: "planned Microsoft Teams surface; catalog metadata reflects the intended app id, app password, tenant binding, and conversation allowlist contract, but no runtime adapter is implemented yet",
-    status_command: "loongclaw channels --json",
-    repair_command: None,
+    strategy: ChannelOnboardingStrategy::ManualConfig,
+    setup_hint: "configure Microsoft Teams webhook delivery in loongclaw.toml under teams or teams.accounts.<account>; outbound incoming-webhook send is shipped, while bot-framework serve support remains planned",
+    status_command: "loongclaw doctor",
+    repair_command: Some("loongclaw doctor --fix"),
 };
 
 const MATTERMOST_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -2390,7 +2402,7 @@ const IMESSAGE_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
     id: CHANNEL_OPERATION_SEND_ID,
     label: "chat send",
     command: "imessage-send",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: IMESSAGE_SEND_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
@@ -2404,21 +2416,28 @@ const IMESSAGE_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperatio
     requirements: IMESSAGE_SERVE_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
+pub const IMESSAGE_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
+    ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "imessage",
+        default_send_target_kind: ChannelCatalogTargetKind::Conversation,
+        send: IMESSAGE_SEND_OPERATION,
+        serve: IMESSAGE_SERVE_OPERATION,
+    };
 const IMESSAGE_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
-        operation: IMESSAGE_SEND_OPERATION,
+        operation: IMESSAGE_CATALOG_COMMAND_FAMILY_DESCRIPTOR.send,
         doctor_checks: &[],
     },
     ChannelRegistryOperationDescriptor {
-        operation: IMESSAGE_SERVE_OPERATION,
+        operation: IMESSAGE_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
         doctor_checks: &[],
     },
 ];
 const IMESSAGE_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::Planned,
-    setup_hint: "planned BlueBubbles-backed iMessage bridge surface; catalog metadata reflects the intended bridge url, bridge token, and chat allowlist contract, but no runtime adapter is implemented yet",
-    status_command: "loongclaw channels --json",
-    repair_command: None,
+    strategy: ChannelOnboardingStrategy::ManualConfig,
+    setup_hint: "configure BlueBubbles bridge credentials in loongclaw.toml under imessage or imessage.accounts.<account>; outbound chat send is shipped, while inbound bridge sync serve support remains planned",
+    status_command: "loongclaw doctor",
+    repair_command: Some("loongclaw doctor --fix"),
 };
 
 const NOSTR_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -3189,15 +3208,15 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "teams",
         runtime: None,
-        snapshot_builder: None,
+        snapshot_builder: Some(build_teams_snapshots),
         selection_order: 140,
-        selection_label: "enterprise meeting bot",
-        blurb: "Planned Microsoft Teams surface for bot-framework conversations and tenant-scoped routing.",
-        implementation_status: ChannelCatalogImplementationStatus::Stub,
-        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        selection_label: "workspace webhook bot",
+        blurb: "Shipped Microsoft Teams outbound surface with config-backed incoming-webhook sends; bot-framework serve support remains planned.",
+        implementation_status: ChannelCatalogImplementationStatus::ConfigBacked,
+        capabilities: CONFIG_BACKED_SEND_CHANNEL_CAPABILITIES,
         label: "Microsoft Teams",
         aliases: &["msteams", "ms-teams"],
-        transport: "microsoft_teams_bot_framework",
+        transport: "microsoft_teams_incoming_webhook",
         onboarding: TEAMS_ONBOARDING_DESCRIPTOR,
         operations: TEAMS_OPERATIONS,
     },
@@ -3250,12 +3269,12 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     ChannelRegistryDescriptor {
         id: "imessage",
         runtime: None,
-        snapshot_builder: None,
+        snapshot_builder: Some(build_imessage_snapshots),
         selection_order: 180,
         selection_label: "apple message bridge",
-        blurb: "Planned BlueBubbles-backed iMessage surface for Apple message delivery and sync.",
-        implementation_status: ChannelCatalogImplementationStatus::Stub,
-        capabilities: PLANNED_CHANNEL_CAPABILITIES,
+        blurb: "Shipped BlueBubbles-backed iMessage outbound surface with config-backed chat sends; inbound bridge sync support remains planned.",
+        implementation_status: ChannelCatalogImplementationStatus::ConfigBacked,
+        capabilities: CONFIG_BACKED_SEND_CHANNEL_CAPABILITIES,
         label: "iMessage",
         aliases: &["bluebubbles", "blue-bubbles"],
         transport: "imessage_bridge_api",
@@ -4190,6 +4209,46 @@ fn build_signal_snapshots(
         .collect()
 }
 
+fn build_teams_snapshots(
+    descriptor: &ChannelRegistryDescriptor,
+    config: &LoongClawConfig,
+    _runtime_dir: &Path,
+    _now_ms: u64,
+) -> Vec<ChannelStatusSnapshot> {
+    let compiled = cfg!(feature = "channel-teams");
+    let default_selection = config.teams.default_configured_account_selection();
+    let default_configured_account_id = default_selection.id.clone();
+    let default_account_source = default_selection.source;
+    config
+        .teams
+        .configured_account_ids()
+        .into_iter()
+        .map(|configured_account_id| {
+            let is_default_account = configured_account_id == default_configured_account_id;
+            match config
+                .teams
+                .resolve_account(Some(configured_account_id.as_str()))
+            {
+                Ok(resolved) => build_teams_snapshot_for_account(
+                    descriptor,
+                    compiled,
+                    resolved,
+                    is_default_account,
+                    default_account_source,
+                ),
+                Err(error) => build_invalid_teams_snapshot(
+                    descriptor,
+                    compiled,
+                    configured_account_id.as_str(),
+                    is_default_account,
+                    default_account_source,
+                    error,
+                ),
+            }
+        })
+        .collect()
+}
+
 fn build_mattermost_snapshots(
     descriptor: &ChannelRegistryDescriptor,
     config: &LoongClawConfig,
@@ -4298,6 +4357,46 @@ fn build_synology_chat_snapshots(
                     default_account_source,
                 ),
                 Err(error) => build_invalid_synology_chat_snapshot(
+                    descriptor,
+                    compiled,
+                    configured_account_id.as_str(),
+                    is_default_account,
+                    default_account_source,
+                    error,
+                ),
+            }
+        })
+        .collect()
+}
+
+fn build_imessage_snapshots(
+    descriptor: &ChannelRegistryDescriptor,
+    config: &LoongClawConfig,
+    _runtime_dir: &Path,
+    _now_ms: u64,
+) -> Vec<ChannelStatusSnapshot> {
+    let compiled = cfg!(feature = "channel-imessage");
+    let default_selection = config.imessage.default_configured_account_selection();
+    let default_configured_account_id = default_selection.id.clone();
+    let default_account_source = default_selection.source;
+    config
+        .imessage
+        .configured_account_ids()
+        .into_iter()
+        .map(|configured_account_id| {
+            let is_default_account = configured_account_id == default_configured_account_id;
+            match config
+                .imessage
+                .resolve_account(Some(configured_account_id.as_str()))
+            {
+                Ok(resolved) => build_imessage_snapshot_for_account(
+                    descriptor,
+                    compiled,
+                    resolved,
+                    is_default_account,
+                    default_account_source,
+                ),
+                Err(error) => build_invalid_imessage_snapshot(
                     descriptor,
                     compiled,
                     configured_account_id.as_str(),
@@ -5106,6 +5205,178 @@ fn build_signal_snapshot_for_account(
         compiled,
         enabled: resolved.enabled,
         api_base_url: service_url,
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
+fn build_teams_snapshot_for_account(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    resolved: ResolvedTeamsChannelConfig,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+) -> ChannelStatusSnapshot {
+    let mut send_issues = Vec::new();
+
+    let webhook_url = resolved.webhook_url();
+    if webhook_url.is_none() {
+        send_issues.push("webhook_url is missing".to_owned());
+    }
+    let parsed_webhook_url = webhook_url.as_deref().map(reqwest::Url::parse).transpose();
+    if let Err(error) = parsed_webhook_url {
+        send_issues.push(format!("webhook_url is invalid: {error}"));
+    }
+
+    let send_operation = if !compiled {
+        unsupported_operation(
+            TEAMS_SEND_OPERATION,
+            "binary built without feature `channel-teams`".to_owned(),
+        )
+    } else if !resolved.enabled {
+        disabled_operation(
+            TEAMS_SEND_OPERATION,
+            "disabled by teams account configuration".to_owned(),
+        )
+    } else if !send_issues.is_empty() {
+        misconfigured_operation(TEAMS_SEND_OPERATION, send_issues)
+    } else {
+        ready_operation(TEAMS_SEND_OPERATION)
+    };
+
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            TEAMS_SERVE_OPERATION,
+            "binary built without feature `channel-teams`".to_owned(),
+        )
+    } else {
+        unsupported_operation(
+            TEAMS_SERVE_OPERATION,
+            "microsoft teams incoming webhook surface is outbound-only today".to_owned(),
+        )
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={}", resolved.configured_account_id),
+        format!("configured_account={}", resolved.configured_account_label),
+        format!("account_id={}", resolved.account.id),
+        format!("account={}", resolved.account.label),
+    ];
+    let serve_credentials_ready = resolved.app_id().is_some()
+        && resolved.app_password().is_some()
+        && resolved.tenant_id().is_some();
+    if serve_credentials_ready {
+        notes.push("future_serve_credentials_configured=true".to_owned());
+    }
+    if !resolved.allowed_conversation_ids.is_empty() {
+        let allowed_conversation_ids = resolved.allowed_conversation_ids.join(",");
+        notes.push(format!(
+            "allowed_conversation_ids={allowed_conversation_ids}"
+        ));
+    }
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: resolved.configured_account_id.clone(),
+        configured_account_label: resolved.configured_account_label.clone(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: resolved.enabled,
+        api_base_url: redact_endpoint_status_url(webhook_url),
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
+fn build_imessage_snapshot_for_account(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    resolved: ResolvedImessageChannelConfig,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+) -> ChannelStatusSnapshot {
+    let mut send_issues = Vec::new();
+
+    let bridge_url = resolved.bridge_url();
+    if bridge_url.is_none() {
+        send_issues.push("bridge_url is missing".to_owned());
+    }
+    if let Some(bridge_url) = bridge_url.as_deref() {
+        validate_http_url("bridge_url", bridge_url, &mut send_issues);
+    }
+    if resolved.bridge_token().is_none() {
+        send_issues.push("bridge_token is missing".to_owned());
+    }
+
+    let send_operation = if !compiled {
+        unsupported_operation(
+            IMESSAGE_SEND_OPERATION,
+            "binary built without feature `channel-imessage`".to_owned(),
+        )
+    } else if !resolved.enabled {
+        disabled_operation(
+            IMESSAGE_SEND_OPERATION,
+            "disabled by imessage account configuration".to_owned(),
+        )
+    } else if !send_issues.is_empty() {
+        misconfigured_operation(IMESSAGE_SEND_OPERATION, send_issues)
+    } else {
+        ready_operation(IMESSAGE_SEND_OPERATION)
+    };
+
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            IMESSAGE_SERVE_OPERATION,
+            "binary built without feature `channel-imessage`".to_owned(),
+        )
+    } else {
+        unsupported_operation(
+            IMESSAGE_SERVE_OPERATION,
+            "imessage bridge sync runtime is not implemented yet".to_owned(),
+        )
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={}", resolved.configured_account_id),
+        format!("configured_account={}", resolved.configured_account_label),
+        format!("account_id={}", resolved.account.id),
+        format!("account={}", resolved.account.label),
+    ];
+    if !resolved.allowed_chat_ids.is_empty() {
+        let allowed_chat_ids = resolved.allowed_chat_ids.join(",");
+        notes.push(format!("allowed_chat_ids={allowed_chat_ids}"));
+    }
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: resolved.configured_account_id.clone(),
+        configured_account_label: resolved.configured_account_label.clone(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: resolved.enabled,
+        api_base_url: bridge_url,
         notes,
         operations: vec![send_operation, serve_operation],
     }
@@ -6125,6 +6396,120 @@ fn build_invalid_signal_snapshot(
     }
 }
 
+fn build_invalid_teams_snapshot(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    configured_account_id: &str,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+    error: String,
+) -> ChannelStatusSnapshot {
+    let send_operation = if !compiled {
+        unsupported_operation(
+            TEAMS_SEND_OPERATION,
+            "binary built without feature `channel-teams`".to_owned(),
+        )
+    } else {
+        misconfigured_operation(TEAMS_SEND_OPERATION, vec![error.clone()])
+    };
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            TEAMS_SERVE_OPERATION,
+            "binary built without feature `channel-teams`".to_owned(),
+        )
+    } else {
+        unsupported_operation(
+            TEAMS_SERVE_OPERATION,
+            "microsoft teams incoming webhook surface is outbound-only today".to_owned(),
+        )
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={configured_account_id}"),
+        format!("selection_error={error}"),
+    ];
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: configured_account_id.to_owned(),
+        configured_account_label: configured_account_id.to_owned(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: false,
+        api_base_url: None,
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
+fn build_invalid_imessage_snapshot(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    configured_account_id: &str,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+    error: String,
+) -> ChannelStatusSnapshot {
+    let send_operation = if !compiled {
+        unsupported_operation(
+            IMESSAGE_SEND_OPERATION,
+            "binary built without feature `channel-imessage`".to_owned(),
+        )
+    } else {
+        misconfigured_operation(IMESSAGE_SEND_OPERATION, vec![error.clone()])
+    };
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            IMESSAGE_SERVE_OPERATION,
+            "binary built without feature `channel-imessage`".to_owned(),
+        )
+    } else {
+        unsupported_operation(
+            IMESSAGE_SERVE_OPERATION,
+            "imessage bridge sync runtime is not implemented yet".to_owned(),
+        )
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={configured_account_id}"),
+        format!("selection_error={error}"),
+    ];
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: configured_account_id.to_owned(),
+        configured_account_label: configured_account_id.to_owned(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: false,
+        api_base_url: None,
+        notes,
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
 fn build_invalid_mattermost_snapshot(
     descriptor: &ChannelRegistryDescriptor,
     compiled: bool,
@@ -6972,6 +7357,10 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "signal")
             .expect("signal catalog entry");
+        let teams = catalog
+            .iter()
+            .find(|entry| entry.id == "teams")
+            .expect("teams catalog entry");
         let synology_chat = catalog
             .iter()
             .find(|entry| entry.id == "synology-chat")
@@ -6995,6 +7384,31 @@ mod tests {
         );
         assert_eq!(signal.operations[0].command, "signal-send");
         assert_eq!(signal.operations[1].command, "signal-serve");
+
+        assert_eq!(
+            teams.implementation_status,
+            ChannelCatalogImplementationStatus::ConfigBacked
+        );
+        assert_eq!(teams.selection_order, 140);
+        assert_eq!(teams.aliases, vec!["msteams", "ms-teams"]);
+        assert_eq!(teams.transport, "microsoft_teams_incoming_webhook");
+        assert_eq!(
+            teams.supported_target_kinds,
+            vec![
+                ChannelCatalogTargetKind::Endpoint,
+                ChannelCatalogTargetKind::Conversation,
+            ]
+        );
+        assert_eq!(teams.operations[0].command, "teams-send");
+        assert_eq!(teams.operations[1].command, "teams-serve");
+        assert_eq!(
+            teams.operations[0].availability,
+            ChannelCatalogOperationAvailability::Implemented
+        );
+        assert_eq!(
+            teams.operations[1].availability,
+            ChannelCatalogOperationAvailability::Stub
+        );
 
         assert_eq!(
             synology_chat.implementation_status,
@@ -7021,9 +7435,28 @@ mod tests {
             ChannelCatalogOperationAvailability::Stub
         );
 
+        assert_eq!(
+            imessage.implementation_status,
+            ChannelCatalogImplementationStatus::ConfigBacked
+        );
         assert_eq!(imessage.aliases, vec!["bluebubbles", "blue-bubbles"]);
         assert_eq!(imessage.selection_order, 180);
+        assert_eq!(imessage.transport, "imessage_bridge_api");
         assert!(imessage.blurb.contains("BlueBubbles"));
+        assert_eq!(
+            imessage.supported_target_kinds,
+            vec![ChannelCatalogTargetKind::Conversation]
+        );
+        assert_eq!(imessage.operations[0].command, "imessage-send");
+        assert_eq!(imessage.operations[1].command, "imessage-serve");
+        assert_eq!(
+            imessage.operations[0].availability,
+            ChannelCatalogOperationAvailability::Implemented
+        );
+        assert_eq!(
+            imessage.operations[1].availability,
+            ChannelCatalogOperationAvailability::Stub
+        );
 
         assert_eq!(tlon.selection_order, 205);
         assert_eq!(tlon.aliases, vec!["urbit"]);
@@ -7067,6 +7500,10 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "google-chat")
             .expect("google chat catalog entry");
+        let teams = catalog
+            .iter()
+            .find(|entry| entry.id == "teams")
+            .expect("teams catalog entry");
         let mattermost = catalog
             .iter()
             .find(|entry| entry.id == "mattermost")
@@ -7079,6 +7516,10 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "synology-chat")
             .expect("synology chat catalog entry");
+        let imessage = catalog
+            .iter()
+            .find(|entry| entry.id == "imessage")
+            .expect("imessage catalog entry");
 
         assert_eq!(
             telegram.operations[0]
@@ -7244,6 +7685,45 @@ mod tests {
         );
 
         assert_eq!(
+            teams.operations[0]
+                .requirements
+                .iter()
+                .map(|requirement| requirement.id)
+                .collect::<Vec<_>>(),
+            vec!["enabled", "webhook_url"]
+        );
+        assert_eq!(
+            teams.operations[1]
+                .requirements
+                .iter()
+                .map(|requirement| requirement.id)
+                .collect::<Vec<_>>(),
+            vec![
+                "enabled",
+                "app_id",
+                "app_password",
+                "tenant_id",
+                "allowed_conversation_ids",
+            ]
+        );
+        assert_eq!(
+            teams.operations[0].requirements[1].default_env_var,
+            Some("TEAMS_WEBHOOK_URL")
+        );
+        assert_eq!(
+            teams.operations[1].requirements[1].default_env_var,
+            Some("TEAMS_APP_ID")
+        );
+        assert_eq!(
+            teams.operations[1].requirements[2].default_env_var,
+            Some("TEAMS_APP_PASSWORD")
+        );
+        assert_eq!(
+            teams.operations[1].requirements[3].default_env_var,
+            Some("TEAMS_TENANT_ID")
+        );
+
+        assert_eq!(
             mattermost.operations[0]
                 .requirements
                 .iter()
@@ -7317,6 +7797,31 @@ mod tests {
             synology_chat.operations[1].requirements[1].default_env_var,
             Some("SYNOLOGY_CHAT_TOKEN")
         );
+
+        assert_eq!(
+            imessage.operations[0]
+                .requirements
+                .iter()
+                .map(|requirement| requirement.id)
+                .collect::<Vec<_>>(),
+            vec!["enabled", "bridge_url", "bridge_token"]
+        );
+        assert_eq!(
+            imessage.operations[1]
+                .requirements
+                .iter()
+                .map(|requirement| requirement.id)
+                .collect::<Vec<_>>(),
+            vec!["enabled", "bridge_url", "bridge_token", "allowed_chat_ids"]
+        );
+        assert_eq!(
+            imessage.operations[0].requirements[1].default_env_var,
+            Some("IMESSAGE_BRIDGE_URL")
+        );
+        assert_eq!(
+            imessage.operations[0].requirements[2].default_env_var,
+            Some("IMESSAGE_BRIDGE_TOKEN")
+        );
     }
 
     #[test]
@@ -7334,6 +7839,10 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "discord")
             .expect("discord catalog entry");
+        let teams = catalog
+            .iter()
+            .find(|entry| entry.id == "teams")
+            .expect("teams catalog entry");
         let nextcloud_talk = catalog
             .iter()
             .find(|entry| entry.id == "nextcloud-talk")
@@ -7346,6 +7855,10 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "synology-chat")
             .expect("synology chat catalog entry");
+        let imessage = catalog
+            .iter()
+            .find(|entry| entry.id == "imessage")
+            .expect("imessage catalog entry");
 
         assert_eq!(
             telegram.operations[0].supported_target_kinds,
@@ -7375,6 +7888,14 @@ mod tests {
             &[ChannelCatalogTargetKind::Conversation]
         );
         assert_eq!(
+            teams.operations[0].supported_target_kinds,
+            &[ChannelCatalogTargetKind::Endpoint]
+        );
+        assert_eq!(
+            teams.operations[1].supported_target_kinds,
+            &[ChannelCatalogTargetKind::Conversation]
+        );
+        assert_eq!(
             nextcloud_talk.operations[0].supported_target_kinds,
             &[ChannelCatalogTargetKind::Conversation]
         );
@@ -7398,6 +7919,14 @@ mod tests {
             synology_chat.operations[1].supported_target_kinds,
             &[ChannelCatalogTargetKind::Address]
         );
+        assert_eq!(
+            imessage.operations[0].supported_target_kinds,
+            &[ChannelCatalogTargetKind::Conversation]
+        );
+        assert_eq!(
+            imessage.operations[1].supported_target_kinds,
+            &[ChannelCatalogTargetKind::Conversation]
+        );
     }
 
     #[test]
@@ -7412,8 +7941,12 @@ mod tests {
             resolve_channel_catalog_operation("webhook", "send").expect("webhook send operation");
         let signal =
             resolve_channel_catalog_operation("signal", "send").expect("signal send operation");
+        let teams =
+            resolve_channel_catalog_operation("teams", "send").expect("teams send operation");
         let synology_chat = resolve_channel_catalog_operation("synology-chat", "send")
             .expect("synology chat send operation");
+        let imessage =
+            resolve_channel_catalog_operation("imessage", "send").expect("imessage send operation");
 
         assert_eq!(
             telegram.default_target_kind(),
@@ -7444,10 +7977,20 @@ mod tests {
         );
         assert!(signal.supports_target_kind(ChannelCatalogTargetKind::Address));
         assert_eq!(
+            teams.default_target_kind(),
+            Some(ChannelCatalogTargetKind::Endpoint)
+        );
+        assert!(teams.supports_target_kind(ChannelCatalogTargetKind::Endpoint));
+        assert_eq!(
             synology_chat.default_target_kind(),
             Some(ChannelCatalogTargetKind::Address)
         );
         assert!(synology_chat.supports_target_kind(ChannelCatalogTargetKind::Address));
+        assert_eq!(
+            imessage.default_target_kind(),
+            Some(ChannelCatalogTargetKind::Conversation)
+        );
+        assert!(imessage.supports_target_kind(ChannelCatalogTargetKind::Conversation));
     }
 
     #[test]
@@ -7465,6 +8008,10 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "discord")
             .expect("discord catalog entry");
+        let teams = catalog
+            .iter()
+            .find(|entry| entry.id == "teams")
+            .expect("teams catalog entry");
         let nextcloud_talk = catalog
             .iter()
             .find(|entry| entry.id == "nextcloud-talk")
@@ -7477,6 +8024,10 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "synology-chat")
             .expect("synology chat catalog entry");
+        let imessage = catalog
+            .iter()
+            .find(|entry| entry.id == "imessage")
+            .expect("imessage catalog entry");
 
         assert_eq!(
             telegram.supported_target_kinds,
@@ -7494,6 +8045,13 @@ mod tests {
             vec![ChannelCatalogTargetKind::Conversation]
         );
         assert_eq!(
+            teams.supported_target_kinds,
+            vec![
+                ChannelCatalogTargetKind::Endpoint,
+                ChannelCatalogTargetKind::Conversation,
+            ]
+        );
+        assert_eq!(
             nextcloud_talk.supported_target_kinds,
             vec![ChannelCatalogTargetKind::Conversation]
         );
@@ -7504,6 +8062,10 @@ mod tests {
         assert_eq!(
             synology_chat.supported_target_kinds,
             vec![ChannelCatalogTargetKind::Address]
+        );
+        assert_eq!(
+            imessage.supported_target_kinds,
+            vec![ChannelCatalogTargetKind::Conversation]
         );
     }
 
@@ -7533,9 +8095,7 @@ mod tests {
             vec![
                 "email",
                 "webhook",
-                "teams",
                 "irc",
-                "imessage",
                 "nostr",
                 "twitch",
                 "tlon",
@@ -7551,6 +8111,7 @@ mod tests {
         assert!(!catalog_only.iter().any(|entry| entry.id == "whatsapp"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "google-chat"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "signal"));
+        assert!(!catalog_only.iter().any(|entry| entry.id == "teams"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "mattermost"));
         assert!(
             !catalog_only
@@ -7558,6 +8119,7 @@ mod tests {
                 .any(|entry| entry.id == "nextcloud-talk")
         );
         assert!(!catalog_only.iter().any(|entry| entry.id == "synology-chat"));
+        assert!(!catalog_only.iter().any(|entry| entry.id == "imessage"));
         assert_eq!(webhook.operations[1].command, "webhook-serve");
         assert_eq!(tlon.operations[0].command, "tlon-send");
         assert_eq!(webchat.operations[1].command, "webchat-serve");
@@ -7586,9 +8148,11 @@ mod tests {
                 "whatsapp",
                 "google-chat",
                 "signal",
+                "teams",
                 "mattermost",
                 "nextcloud-talk",
                 "synology-chat",
+                "imessage",
             ]
         );
         assert_eq!(
@@ -7600,9 +8164,7 @@ mod tests {
             vec![
                 "email",
                 "webhook",
-                "teams",
                 "irc",
-                "imessage",
                 "nostr",
                 "twitch",
                 "tlon",
@@ -7775,6 +8337,10 @@ mod tests {
                 "enabled": true,
                 "webhook_url": "https://chat.googleapis.com/v1/spaces/AAAA/messages?key=secret-key&token=secret-token"
             },
+            "teams": {
+                "enabled": true,
+                "webhook_url": "https://outlook.office.com/webhook/abc123/IncomingWebhook/demo?tenant=secret-tenant&auth=secret-auth"
+            },
             "synology_chat": {
                 "enabled": true,
                 "incoming_url": "https://chat.example.test/webapi/entry.cgi?api=SYNO.Chat.External&method=incoming&version=2&token=secret-token"
@@ -7791,6 +8357,10 @@ mod tests {
             .iter()
             .find(|snapshot| snapshot.id == "google-chat")
             .expect("google chat snapshot");
+        let teams = snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == "teams")
+            .expect("teams snapshot");
         let synology_chat = snapshots
             .iter()
             .find(|snapshot| snapshot.id == "synology-chat")
@@ -7803,6 +8373,10 @@ mod tests {
         assert_eq!(
             google_chat.api_base_url.as_deref(),
             Some("https://chat.googleapis.com/v1/spaces/AAAA/messages")
+        );
+        assert_eq!(
+            teams.api_base_url.as_deref(),
+            Some("https://outlook.office.com/webhook/abc123/IncomingWebhook/demo")
         );
         assert_eq!(
             synology_chat.api_base_url.as_deref(),
@@ -7929,6 +8503,22 @@ mod tests {
         );
         assert_eq!(mattermost.configured_accounts[0].id, "mattermost");
 
+        let teams = inventory
+            .channel_surfaces
+            .iter()
+            .find(|surface| surface.catalog.id == "teams")
+            .expect("teams surface");
+        assert_eq!(
+            teams.catalog.implementation_status,
+            ChannelCatalogImplementationStatus::ConfigBacked
+        );
+        assert_eq!(teams.configured_accounts.len(), 1);
+        assert_eq!(
+            teams.default_configured_account_id.as_deref(),
+            Some("default")
+        );
+        assert_eq!(teams.configured_accounts[0].id, "teams");
+
         let synology_chat = inventory
             .channel_surfaces
             .iter()
@@ -7944,6 +8534,22 @@ mod tests {
             Some("default")
         );
         assert_eq!(synology_chat.configured_accounts[0].id, "synology-chat");
+
+        let imessage = inventory
+            .channel_surfaces
+            .iter()
+            .find(|surface| surface.catalog.id == "imessage")
+            .expect("imessage surface");
+        assert_eq!(
+            imessage.catalog.implementation_status,
+            ChannelCatalogImplementationStatus::ConfigBacked
+        );
+        assert_eq!(imessage.configured_accounts.len(), 1);
+        assert_eq!(
+            imessage.default_configured_account_id.as_deref(),
+            Some("default")
+        );
+        assert_eq!(imessage.configured_accounts[0].id, "imessage");
 
         let webchat = inventory
             .channel_surfaces

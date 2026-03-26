@@ -891,6 +891,23 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    /// Send one Microsoft Teams incoming webhook message
+    TeamsSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: Option<String>,
+        #[arg(
+            long,
+            default_value_t = default_teams_send_target_kind(),
+            value_parser = parse_teams_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
     /// Send one Signal direct message
     SignalSend {
         #[arg(long)]
@@ -954,6 +971,23 @@ pub enum Commands {
             long,
             default_value_t = default_synology_chat_send_target_kind(),
             value_parser = parse_synology_chat_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Send one iMessage chat through BlueBubbles
+    ImessageSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_imessage_send_target_kind(),
+            value_parser = parse_imessage_send_target_kind
         )]
         target_kind: mvp::channel::ChannelOutboundTargetKind,
         #[arg(long)]
@@ -4027,6 +4061,11 @@ pub const GOOGLE_CHAT_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
     run: run_google_chat_send_cli_impl,
 };
 
+pub const TEAMS_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_teams_send_cli_impl,
+};
+
 pub const SIGNAL_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
     family: mvp::channel::SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_signal_send_cli_impl,
@@ -4045,6 +4084,11 @@ pub const NEXTCLOUD_TALK_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec 
 pub const SYNOLOGY_CHAT_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
     family: mvp::channel::SYNOLOGY_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_synology_chat_send_cli_impl,
+};
+
+pub const IMESSAGE_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::IMESSAGE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_imessage_send_cli_impl,
 };
 
 pub const TELEGRAM_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
@@ -4240,6 +4284,20 @@ pub fn run_google_chat_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCli
     })
 }
 
+pub fn run_teams_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        mvp::channel::run_teams_send(
+            args.config_path,
+            args.account,
+            args.target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
 pub fn run_mattermost_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = args.as_card;
@@ -4281,6 +4339,21 @@ pub fn run_synology_chat_send_cli_impl(
             args.config_path,
             args.account,
             args.target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_imessage_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        let target = args.target.unwrap_or_default();
+        mvp::channel::run_imessage_send(
+            args.config_path,
+            args.account,
+            target,
             args.target_kind,
             args.text,
         )
@@ -4444,6 +4517,16 @@ pub fn parse_google_chat_send_target_kind(
     parse_channel_send_target_kind(GOOGLE_CHAT_SEND_CLI_SPEC, raw)
 }
 
+pub fn default_teams_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(TEAMS_SEND_CLI_SPEC)
+}
+
+pub fn parse_teams_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(TEAMS_SEND_CLI_SPEC, raw)
+}
+
 pub fn default_signal_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
     default_channel_send_target_kind(SIGNAL_SEND_CLI_SPEC)
 }
@@ -4482,6 +4565,16 @@ pub fn parse_synology_chat_send_target_kind(
     raw: &str,
 ) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
     parse_channel_send_target_kind(SYNOLOGY_CHAT_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_imessage_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(IMESSAGE_SEND_CLI_SPEC)
+}
+
+pub fn parse_imessage_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(IMESSAGE_SEND_CLI_SPEC, raw)
 }
 
 pub fn run_feishu_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {

@@ -11,12 +11,12 @@ needs.
 - [ ] Product docs clearly distinguish the shipped MVP surfaces:
       CLI as the default surface, plus runtime-backed Telegram, Feishu / Lark,
       Matrix, and WeCom, and config-backed outbound Discord, Slack, LINE,
-      DingTalk, WhatsApp, Google Chat, Signal, Mattermost, Nextcloud Talk, and
-      Synology Chat.
+      DingTalk, WhatsApp, Google Chat, Signal, Microsoft Teams, Mattermost,
+      Nextcloud Talk, Synology Chat, and iMessage / BlueBubbles.
 - [ ] Product docs clearly distinguish runtime-backed shipped surfaces,
       config-backed outbound shipped surfaces, and catalog-only planned
-      surfaces such as Email, generic Webhook, Microsoft Teams, IRC, iMessage
-      / BlueBubbles, Nostr, Twitch, Tlon, Zalo, Zalo Personal, and WebChat.
+      surfaces such as Email, generic Webhook, IRC, Nostr, Twitch, Tlon, Zalo,
+      Zalo Personal, and WebChat.
 - [ ] Channel setup guidance describes required credentials, config toggles, and
       the command used to run each shipped channel.
 - [ ] WeCom setup guidance documents the official AIBot long-connection flow and
@@ -34,7 +34,8 @@ needs.
 - Shipping additional runtime-backed channels beyond CLI, Telegram, Feishu /
   Lark, Matrix, and WeCom
 - Promoting the remaining catalog-only planned surfaces such as Email, generic
-  Webhook, Tlon, or iMessage / BlueBubbles to shipped support in this slice
+  Webhook, IRC, Nostr, Twitch, Tlon, Zalo, Zalo Personal, or WebChat to
+  shipped support in this slice
 - Broad cross-channel inbox or routing UX
 - Full remote pairing flows for unshipped surfaces
 
@@ -54,9 +55,11 @@ needs.
 | WhatsApp | Config-backed outbound | WhatsApp Cloud API | `whatsapp.enabled`, `whatsapp.access_token`, `whatsapp.phone_number_id` | `loongclaw whatsapp-send` |
 | Google Chat | Config-backed outbound | Google Chat incoming webhook | `google_chat.enabled`, `google_chat.webhook_url` | `loongclaw google-chat-send` |
 | Signal | Config-backed outbound | signal-cli REST bridge | `signal.enabled`, `signal.service_url`, `signal.account` | `loongclaw signal-send` |
+| Microsoft Teams | Config-backed outbound | Teams incoming webhook | `teams.enabled`, `teams.webhook_url` for sends; future bot runtime fields keep `teams.app_id`, `teams.app_password`, `teams.tenant_id`, `teams.allowed_conversation_ids` reserved for the planned serve path | `loongclaw teams-send` |
 | Mattermost | Config-backed outbound | Mattermost REST API | `mattermost.enabled`, `mattermost.server_url`, `mattermost.bot_token` | `loongclaw mattermost-send` |
 | Nextcloud Talk | Config-backed outbound | Nextcloud Talk bot API | `nextcloud_talk.enabled`, `nextcloud_talk.server_url`, `nextcloud_talk.shared_secret` | `loongclaw nextcloud-talk-send` |
 | Synology Chat | Config-backed outbound | Synology Chat incoming webhook | `synology_chat.enabled`, `synology_chat.incoming_url` | `loongclaw synology-chat-send` |
+| iMessage / BlueBubbles | Config-backed outbound | BlueBubbles bridge REST API | `imessage.enabled`, `imessage.bridge_url`, `imessage.bridge_token` | `loongclaw imessage-send` |
 
 ## Expansion Model
 
@@ -136,9 +139,9 @@ runtime contract is explicitly the official AIBot websocket subscription flow.
 
 ### Config-Backed Outbound Surfaces
 
-Discord, Slack, LINE, DingTalk, WhatsApp, Google Chat, Signal, Mattermost,
-Nextcloud Talk, and Synology Chat are shipped as account-aware outbound
-surfaces:
+Discord, Slack, LINE, DingTalk, WhatsApp, Google Chat, Signal, Microsoft
+Teams, Mattermost, Nextcloud Talk, Synology Chat, and iMessage / BlueBubbles
+are shipped as account-aware outbound surfaces:
 
 - they publish send commands, config validation, inventory snapshots, and
   onboarding metadata through the shared channel SDK
@@ -146,6 +149,20 @@ surfaces:
   reply-loop runtime
 - their `serve` metadata remains planned or unsupported until the underlying
   inbound transport contract is implemented
+
+### Microsoft Teams
+
+Microsoft Teams is shipped through the incoming webhook send surface:
+
+- configure `teams.webhook_url` for outbound delivery
+- use `teams-send` without an explicit target to post into the configured
+  webhook, or override the webhook with `--target` when the operator needs a
+  one-off endpoint
+- `teams.app_id`, `teams.app_password`, `teams.tenant_id`, and
+  `teams.allowed_conversation_ids` remain reserved for the planned bot event
+  runtime and are not required for send readiness today
+- `teams-serve` remains planned until LoongClaw owns the bot-framework style
+  inbound contract
 
 ### Nextcloud Talk
 
@@ -170,6 +187,17 @@ Synology Chat is shipped through the incoming webhook send surface:
 - `synology-chat-serve` remains planned until LoongClaw owns the outbound
   webhook callback contract
 
+### iMessage / BlueBubbles
+
+iMessage is shipped through a BlueBubbles bridge send surface:
+
+- configure `imessage.bridge_url` and `imessage.bridge_token`
+- use `imessage-send` with a BlueBubbles `chatGuid` target
+- `imessage.allowed_chat_ids` remains reserved for a future inbound bridge-sync
+  runtime and is not required for send readiness today
+- `imessage-serve` remains planned until LoongClaw owns the inbound bridge
+  synchronization contract
+
 ### Multi-Channel Serve
 
 `multi-channel-serve` is the runtime owner for the shipped service-channel
@@ -181,8 +209,9 @@ subset:
   specific accounts such as `telegram=bot_123456`, `lark=alerts`, `matrix=bridge-sync`,
   or `wecom=robot-prod`
 - it never promotes config-backed outbound surfaces such as WhatsApp, Signal,
-  DingTalk, Google Chat, Mattermost, Nextcloud Talk, or Synology Chat into
-  runtime supervision until those adapters grow real serve ownership
+  Microsoft Teams, DingTalk, Google Chat, Mattermost, Nextcloud Talk,
+  Synology Chat, or iMessage / BlueBubbles into runtime supervision until
+  those adapters grow real serve ownership
 - it never promotes catalog-only planned surfaces such as Email, generic
   Webhook, or Tlon into runtime supervision until those adapters are
   implemented

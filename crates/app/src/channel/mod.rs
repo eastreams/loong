@@ -13,8 +13,10 @@ use std::time::Duration;
     feature = "channel-signal",
     feature = "channel-slack",
     feature = "channel-synology-chat",
+    feature = "channel-teams",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-imessage"
 ))]
 use std::{
     collections::BTreeSet,
@@ -77,8 +79,10 @@ use crate::CliResult;
     feature = "channel-signal",
     feature = "channel-slack",
     feature = "channel-synology-chat",
+    feature = "channel-teams",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-imessage"
 ))]
 use crate::KernelContext;
 #[cfg(any(
@@ -94,8 +98,10 @@ use crate::KernelContext;
     feature = "channel-signal",
     feature = "channel-slack",
     feature = "channel-synology-chat",
+    feature = "channel-teams",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-imessage"
 ))]
 use crate::acp::{AcpConversationTurnOptions, AcpTurnProvenance};
 #[cfg(any(
@@ -111,8 +117,10 @@ use crate::acp::{AcpConversationTurnOptions, AcpTurnProvenance};
     feature = "channel-signal",
     feature = "channel-slack",
     feature = "channel-synology-chat",
+    feature = "channel-teams",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-imessage"
 ))]
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 
@@ -124,6 +132,8 @@ use super::config::ResolvedDiscordChannelConfig;
 use super::config::ResolvedFeishuChannelConfig;
 #[cfg(feature = "channel-google-chat")]
 use super::config::ResolvedGoogleChatChannelConfig;
+#[cfg(feature = "channel-imessage")]
+use super::config::ResolvedImessageChannelConfig;
 #[cfg(feature = "channel-line")]
 use super::config::ResolvedLineChannelConfig;
 #[cfg(feature = "channel-matrix")]
@@ -138,6 +148,8 @@ use super::config::ResolvedSignalChannelConfig;
 use super::config::ResolvedSlackChannelConfig;
 #[cfg(feature = "channel-synology-chat")]
 use super::config::ResolvedSynologyChatChannelConfig;
+#[cfg(feature = "channel-teams")]
+use super::config::ResolvedTeamsChannelConfig;
 #[cfg(feature = "channel-telegram")]
 use super::config::ResolvedTelegramChannelConfig;
 #[cfg(feature = "channel-wecom")]
@@ -157,8 +169,10 @@ use super::config::ResolvedWhatsappChannelConfig;
     feature = "channel-signal",
     feature = "channel-slack",
     feature = "channel-synology-chat",
+    feature = "channel-teams",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-imessage"
 ))]
 use super::config::{ChannelResolvedAccountRoute, LoongClawConfig, normalize_channel_account_id};
 #[cfg(any(
@@ -190,6 +204,8 @@ mod discord;
 mod feishu;
 #[cfg(feature = "channel-google-chat")]
 mod google_chat;
+#[cfg(feature = "channel-imessage")]
+mod imessage;
 #[cfg(feature = "channel-line")]
 mod line;
 #[cfg(feature = "channel-matrix")]
@@ -207,6 +223,8 @@ mod signal;
 mod slack;
 #[cfg(feature = "channel-synology-chat")]
 mod synology_chat;
+#[cfg(feature = "channel-teams")]
+mod teams;
 #[cfg(feature = "channel-telegram")]
 mod telegram;
 #[cfg(any(
@@ -232,11 +250,12 @@ pub use registry::{
     ChannelStatusSnapshot, ChannelSurface, DINGTALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     DISCORD_CATALOG_COMMAND_FAMILY_DESCRIPTOR, FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     FEISHU_COMMAND_FAMILY_DESCRIPTOR, FEISHU_RUNTIME_COMMAND_DESCRIPTOR,
-    GOOGLE_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR, MATRIX_COMMAND_FAMILY_DESCRIPTOR,
-    MATRIX_RUNTIME_COMMAND_DESCRIPTOR, MATTERMOST_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    NEXTCLOUD_TALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR, SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    SLACK_CATALOG_COMMAND_FAMILY_DESCRIPTOR, SYNOLOGY_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    GOOGLE_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, IMESSAGE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR, MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    MATRIX_COMMAND_FAMILY_DESCRIPTOR, MATRIX_RUNTIME_COMMAND_DESCRIPTOR,
+    MATTERMOST_CATALOG_COMMAND_FAMILY_DESCRIPTOR, NEXTCLOUD_TALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR, SLACK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    SYNOLOGY_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
     TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR, WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     WECOM_COMMAND_FAMILY_DESCRIPTOR, WECOM_RUNTIME_COMMAND_DESCRIPTOR,
@@ -786,8 +805,10 @@ type ChannelProcessFuture = Pin<Box<dyn Future<Output = CliResult<String>> + Sen
     feature = "channel-signal",
     feature = "channel-slack",
     feature = "channel-synology-chat",
+    feature = "channel-teams",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-imessage"
 ))]
 type ChannelCommandFuture<'a> = Pin<Box<dyn Future<Output = CliResult<()>> + Send + 'a>>;
 
@@ -1153,8 +1174,10 @@ where
     feature = "channel-signal",
     feature = "channel-slack",
     feature = "channel-synology-chat",
+    feature = "channel-teams",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-imessage"
 ))]
 #[derive(Debug, Clone)]
 struct ChannelCommandContext<R> {
@@ -1176,8 +1199,11 @@ struct ChannelCommandContext<R> {
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
     feature = "channel-slack",
+    feature = "channel-synology-chat",
+    feature = "channel-teams",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-imessage"
 ))]
 impl<R> ChannelCommandContext<R> {
     fn emit_route_notice(&self, channel_id: &str) {
@@ -1258,8 +1284,10 @@ impl ChannelResolvedRuntimeAccount for ResolvedWecomChannelConfig {
     feature = "channel-signal",
     feature = "channel-slack",
     feature = "channel-synology-chat",
+    feature = "channel-teams",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-imessage"
 ))]
 async fn run_channel_send_command<R, F, G>(
     context: ChannelCommandContext<R>,
@@ -1285,21 +1313,33 @@ where
     Ok(())
 }
 
-#[cfg(any(feature = "channel-dingtalk", feature = "channel-google-chat"))]
+#[cfg(any(
+    feature = "channel-dingtalk",
+    feature = "channel-google-chat",
+    feature = "channel-teams"
+))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EndpointBackedSendTargetSource {
     CliTarget,
     ConfiguredEndpoint,
 }
 
-#[cfg(any(feature = "channel-dingtalk", feature = "channel-google-chat"))]
+#[cfg(any(
+    feature = "channel-dingtalk",
+    feature = "channel-google-chat",
+    feature = "channel-teams"
+))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EndpointBackedSendTarget {
     endpoint_url: String,
     source: EndpointBackedSendTargetSource,
 }
 
-#[cfg(any(feature = "channel-dingtalk", feature = "channel-google-chat"))]
+#[cfg(any(
+    feature = "channel-dingtalk",
+    feature = "channel-google-chat",
+    feature = "channel-teams"
+))]
 fn resolve_endpoint_backed_send_target(
     channel_id: &str,
     cli_target: Option<&str>,
@@ -1701,6 +1741,39 @@ fn build_google_chat_command_context(
     })
 }
 
+#[cfg(feature = "channel-teams")]
+fn load_teams_command_context(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedTeamsChannelConfig>> {
+    let (resolved_path, config) = super::config::load(config_path)?;
+    build_teams_command_context(resolved_path, config, account_id)
+}
+
+#[cfg(feature = "channel-teams")]
+fn build_teams_command_context(
+    resolved_path: PathBuf,
+    config: LoongClawConfig,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedTeamsChannelConfig>> {
+    let resolved = config.teams.resolve_account(account_id)?;
+    let route = config
+        .teams
+        .resolved_account_route(account_id, resolved.configured_account_id.as_str());
+    if !resolved.enabled {
+        return Err(format!(
+            "teams account `{}` is disabled by configuration",
+            resolved.configured_account_id
+        ));
+    }
+    Ok(ChannelCommandContext {
+        resolved_path,
+        config,
+        resolved,
+        route,
+    })
+}
+
 #[cfg(feature = "channel-mattermost")]
 fn load_mattermost_command_context(
     config_path: Option<&str>,
@@ -1800,6 +1873,39 @@ fn build_synology_chat_command_context(
     })
 }
 
+#[cfg(feature = "channel-imessage")]
+fn load_imessage_command_context(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedImessageChannelConfig>> {
+    let (resolved_path, config) = super::config::load(config_path)?;
+    build_imessage_command_context(resolved_path, config, account_id)
+}
+
+#[cfg(feature = "channel-imessage")]
+fn build_imessage_command_context(
+    resolved_path: PathBuf,
+    config: LoongClawConfig,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedImessageChannelConfig>> {
+    let resolved = config.imessage.resolve_account(account_id)?;
+    let route = config
+        .imessage
+        .resolved_account_route(account_id, resolved.configured_account_id.as_str());
+    if !resolved.enabled {
+        return Err(format!(
+            "imessage account `{}` is disabled by configuration",
+            resolved.configured_account_id
+        ));
+    }
+    Ok(ChannelCommandContext {
+        resolved_path,
+        config,
+        resolved,
+        route,
+    })
+}
+
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-discord",
@@ -1813,7 +1919,9 @@ fn build_synology_chat_command_context(
     feature = "channel-signal",
     feature = "channel-slack",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-teams",
+    feature = "channel-imessage"
 ))]
 #[derive(Debug, Clone, Copy)]
 struct ChannelSendCommandSpec {
@@ -2641,6 +2749,72 @@ pub async fn run_google_chat_send(
 }
 
 #[allow(clippy::print_stdout)] // CLI output
+pub async fn run_teams_send(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+    target: Option<&str>,
+    target_kind: ChannelOutboundTargetKind,
+    text: &str,
+) -> CliResult<()> {
+    if !cfg!(feature = "channel-teams") {
+        return Err("teams channel is disabled (enable feature `channel-teams`)".to_owned());
+    }
+
+    #[cfg(not(feature = "channel-teams"))]
+    {
+        let _ = (config_path, account_id, target, target_kind, text);
+        return Err("teams channel is disabled (enable feature `channel-teams`)".to_owned());
+    }
+
+    #[cfg(feature = "channel-teams")]
+    {
+        let context = load_teams_command_context(config_path, account_id)?;
+        let send_target = resolve_endpoint_backed_send_target(
+            "teams",
+            target,
+            context.resolved.webhook_url(),
+            "teams.webhook_url",
+        )?;
+        let endpoint_url = send_target.endpoint_url;
+        let target_source = match send_target.source {
+            EndpointBackedSendTargetSource::CliTarget => "cli_target",
+            EndpointBackedSendTargetSource::ConfiguredEndpoint => "configured_endpoint",
+        };
+        let text = text.to_owned();
+        run_channel_send_command(
+            context,
+            ChannelSendCommandSpec {
+                channel_id: "teams",
+            },
+            |context| {
+                Box::pin(async move {
+                    teams::run_teams_send(
+                        &context.resolved,
+                        target_kind,
+                        endpoint_url.as_str(),
+                        text.as_str(),
+                    )
+                    .await
+                })
+            },
+            |context| {
+                format!(
+                    "teams message sent (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, target_kind={}, target_source={})",
+                    context.resolved_path.display(),
+                    context.resolved.configured_account_id,
+                    context.resolved.account.label,
+                    context.route.selected_by_default(),
+                    context.route.default_account_source.as_str(),
+                    target_kind,
+                    target_source
+                )
+            },
+        )
+        .await
+    }
+}
+
+#[allow(clippy::print_stdout)] // CLI output
 pub async fn run_mattermost_send(
     config_path: Option<&str>,
     account_id: Option<&str>,
@@ -2817,6 +2991,61 @@ pub async fn run_synology_chat_send(
                     context.route.default_account_source.as_str(),
                     target_kind,
                     target_selected
+                )
+            },
+        )
+        .await
+    }
+}
+
+#[allow(clippy::print_stdout)] // CLI output
+pub async fn run_imessage_send(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+    target: &str,
+    target_kind: ChannelOutboundTargetKind,
+    text: &str,
+) -> CliResult<()> {
+    if !cfg!(feature = "channel-imessage") {
+        return Err("imessage channel is disabled (enable feature `channel-imessage`)".to_owned());
+    }
+
+    #[cfg(not(feature = "channel-imessage"))]
+    {
+        let _ = (config_path, account_id, target, target_kind, text);
+        return Err("imessage channel is disabled (enable feature `channel-imessage`)".to_owned());
+    }
+
+    #[cfg(feature = "channel-imessage")]
+    {
+        let context = load_imessage_command_context(config_path, account_id)?;
+        let target = target.to_owned();
+        let text = text.to_owned();
+        run_channel_send_command(
+            context,
+            ChannelSendCommandSpec {
+                channel_id: "imessage",
+            },
+            |context| {
+                Box::pin(async move {
+                    imessage::run_imessage_send(
+                        &context.resolved,
+                        target_kind,
+                        target.as_str(),
+                        text.as_str(),
+                    )
+                    .await
+                })
+            },
+            |context| {
+                format!(
+                    "imessage message sent (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, target_kind={})",
+                    context.resolved_path.display(),
+                    context.resolved.configured_account_id,
+                    context.resolved.account.label,
+                    context.route.selected_by_default(),
+                    context.route.default_account_source.as_str(),
+                    target_kind
                 )
             },
         )
