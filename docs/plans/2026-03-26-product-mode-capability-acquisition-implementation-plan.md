@@ -21,6 +21,10 @@ clippy, GitHub issue-first workflow
 
 ## Execution Tasks
 
+Verification note: give each new slice-specific test a shared prefix so every
+`cargo test` command can target the slice with one positional filter instead of
+an invalid multi-filter invocation.
+
 ### Task 1: Land the design and roadmap contract
 
 **Files:**
@@ -56,7 +60,7 @@ Expected: success
 
 **Step 1: Write the failing tests**
 
-Add tests that prove:
+Add tests with a `product_mode_runtime_config_` prefix that prove:
 
 - product mode has a stable enum surface
 - runtime config can resolve a default product mode
@@ -68,7 +72,7 @@ Add tests that prove:
 Run:
 
 ```bash
-cargo test -p loongclaw-app product_mode runtime_config -- --test-threads=1
+cargo test -p loongclaw-app product_mode_runtime_config_ -- --test-threads=1
 ```
 
 Expected: FAIL because no product-mode config surface exists yet.
@@ -109,7 +113,7 @@ Run the same command and expect PASS.
 
 **Step 1: Write the failing tests**
 
-Add tests that prove:
+Add tests with a `capability_action_class_` prefix that prove:
 
 - `external_skills.fetch` is classified as `capability_fetch`
 - `external_skills.install` is classified as `capability_install`
@@ -122,7 +126,7 @@ Add tests that prove:
 Run:
 
 ```bash
-cargo test -p loongclaw-app capability_action_class -- --test-threads=1
+cargo test -p loongclaw-app capability_action_class_ -- --test-threads=1
 ```
 
 Expected: FAIL because the catalog does not yet expose this classification.
@@ -149,7 +153,7 @@ Run the same command and expect PASS.
 
 **Step 1: Write the failing tests**
 
-Add tests that prove:
+Add tests with a `product_mode_policy_` prefix that prove:
 
 - `discovery_only` rejects capability-acquisition actions
 - `guided_acquisition` emits approval-required outcomes for acquisition actions
@@ -161,7 +165,7 @@ Add tests that prove:
 Run:
 
 ```bash
-cargo test -p loongclaw-app product_mode_policy -- --test-threads=1
+cargo test -p loongclaw-app product_mode_policy_ -- --test-threads=1
 ```
 
 Expected: FAIL because the policy evaluator does not exist.
@@ -201,7 +205,7 @@ Run the same command and expect PASS.
 
 **Step 1: Write the failing tests**
 
-Add tests that prove:
+Add tests with a `product_mode_binding_` prefix that prove:
 
 - `discovery_only` remains valid on `ConversationRuntimeBinding::Direct`
 - `guided_acquisition` fails closed when the runtime cannot support approval or
@@ -213,7 +217,7 @@ Add tests that prove:
 Run:
 
 ```bash
-cargo test -p loongclaw-app product_mode binding fail_closed -- --test-threads=1
+cargo test -p loongclaw-app product_mode_binding_ -- --test-threads=1
 ```
 
 Expected: FAIL because binding is currently mode-agnostic.
@@ -223,7 +227,9 @@ Expected: FAIL because binding is currently mode-agnostic.
 Do not remove direct fallback globally. Instead:
 
 - keep `Direct` valid for `discovery_only`
-- require kernel-bound execution for autonomous acquisition
+- require kernel-bound execution for approval-pending and acquisition paths
+- allow weak-binding execution only for deterministic explanation-only blocked
+  outcomes that emit no approval request and perform no mutation
 - surface explicit blocked reason codes when the binding is too weak
 
 **Step 4: Run test to verify it passes**
@@ -241,7 +247,7 @@ Run the same command and expect PASS.
 
 **Step 1: Write the failing tests**
 
-Add tests that prove:
+Add tests with a `product_mode_outcome_` prefix that prove:
 
 - capability-acquisition approvals carry mode-specific reason codes
 - blocked actions produce operator-visible reason codes
@@ -253,7 +259,7 @@ Add tests that prove:
 Run:
 
 ```bash
-cargo test -p loongclaw-app product_mode approval blocked_explanation -- --test-threads=1
+cargo test -p loongclaw-app product_mode_outcome_ -- --test-threads=1
 ```
 
 Expected: FAIL because approval and follow-up flows are not yet mode-aware.
@@ -285,7 +291,7 @@ Run the same command and expect PASS.
 
 **Step 1: Write the failing tests**
 
-Add tests that prove:
+Add tests with a `channel_product_mode_` prefix that prove:
 
 - channel integrations expose allowed product modes
 - channels can declare whether kernel-bound execution is guaranteed
@@ -298,7 +304,7 @@ Add tests that prove:
 Run:
 
 ```bash
-cargo test -p loongclaw-app channel descriptor product_mode -- --test-threads=1
+cargo test -p loongclaw-app channel_product_mode_ -- --test-threads=1
 ```
 
 Expected: FAIL because channel descriptors are not yet mode-aware.
@@ -328,7 +334,7 @@ Run the same command and expect PASS.
 
 **Step 1: Write the failing tests**
 
-Add tests that prove:
+Add tests with a `plan_ir_capability_` prefix that prove:
 
 - plan graphs can represent `AcquireCapability`
 - plan graphs can represent `AwaitApproval`
@@ -339,7 +345,7 @@ Add tests that prove:
 Run:
 
 ```bash
-cargo test -p loongclaw-app plan_ir capability -- --test-threads=1
+cargo test -p loongclaw-app plan_ir_capability_ -- --test-threads=1
 ```
 
 Expected: FAIL because plan IR currently models only tool/transform/verify/respond.
@@ -360,12 +366,21 @@ Run the same command and expect PASS.
 Run:
 
 ```bash
-cargo test -p loongclaw-app product_mode -- --test-threads=1
-cargo test -p loongclaw-app capability_action_class -- --test-threads=1
-cargo test -p loongclaw-app channel descriptor product_mode -- --test-threads=1
+cargo test -p loongclaw-app product_mode_runtime_config_ -- --test-threads=1
+cargo test -p loongclaw-app capability_action_class_ -- --test-threads=1
+cargo test -p loongclaw-app product_mode_policy_ -- --test-threads=1
+cargo test -p loongclaw-app product_mode_binding_ -- --test-threads=1
+cargo test -p loongclaw-app product_mode_outcome_ -- --test-threads=1
+cargo test -p loongclaw-app channel_product_mode_ -- --test-threads=1
 ```
 
 Expected: PASS
+
+If Task 8 landed, also run:
+
+```bash
+cargo test -p loongclaw-app plan_ir_capability_ -- --test-threads=1
+```
 
 **Step 2: Run full verification**
 

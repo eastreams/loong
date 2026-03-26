@@ -410,27 +410,39 @@ than an emergent prompt pattern.
 - `surface_refresh -> task_execution`
 - any state -> `blocked_explanation` on hard policy denial or budget exhaustion
 
-## Approval Model
+## Approval and Blocked Outcome Model
 
 Product mode should reuse existing approval infrastructure, but it should stop
 overloading every high-risk path into the same generic "governed tool requires
 approval" story.
 
-Add a mode-aware approval reason layer:
+Add a mode-aware outcome reason model with two deterministic families:
+
+Approval-required reasons:
 
 - `product_mode_capability_fetch_requires_approval`
 - `product_mode_capability_install_requires_approval`
 - `product_mode_provider_switch_requires_approval`
+
+Blocked reasons:
+
+- `product_mode_disallows_capability_acquisition`
+- `product_mode_kernel_binding_missing`
+- `product_mode_approval_roundtrip_unavailable`
 - `product_mode_autonomy_budget_exceeded`
-- `product_mode_kernel_binding_required`
+- `product_mode_unsupported_by_channel_surface`
 
-This keeps approval requests truthful. The user should see whether approval is
-required because:
+Approval-required reasons should be carried by approval requests. Blocked
+reasons should be carried by `blocked_explanation` outcomes.
 
-- the tool is intrinsically governed
-- the selected product mode forbids autonomous expansion
-- the runtime binding is too weak for this action
-- the action exceeded the configured autonomy envelope
+This keeps approval requests and blocked explanations truthful. The operator
+should be able to distinguish whether an action:
+
+- requires approval before it may proceed
+- is blocked because the selected mode or current surface forbids acquisition
+- is blocked because the current binding is too weak
+- is blocked because the current surface cannot complete the approval round-trip
+- is blocked because the action exceeded the configured autonomy envelope
 
 ## Kernel Binding Contract
 
@@ -440,9 +452,12 @@ conversation binding.
 Proposed rule:
 
 - `discovery_only` may run with `ConversationRuntimeBinding::Direct`
-- `guided_acquisition` requires a kernel-bound conversation unless the only
-  permitted acquisition outcome is "emit explanation and wait"
-- `bounded_autonomous` requires kernel binding and should fail closed otherwise
+- define `is_explanation_only_blocked_outcome(outcome)` as true only when the
+  evaluator returns `blocked(reason_code)` and emits no approval request or
+  mutation step
+- `guided_acquisition` requires a kernel-bound conversation unless
+  `is_explanation_only_blocked_outcome(outcome)` returns true
+- `bounded_autonomous` requires kernel binding and must fail closed otherwise
 
 This is the main reason product mode belongs above discovery-first. Discovery
 itself can degrade to direct mode; autonomous capability acquisition should not.
@@ -483,11 +498,12 @@ behavior:
 Suggested failure reasons:
 
 - `product_mode_disallows_capability_acquisition`
-- `product_mode_requires_operator_approval`
 - `product_mode_kernel_binding_missing`
+- `product_mode_approval_roundtrip_unavailable`
 - `product_mode_autonomy_budget_exceeded`
 - `product_mode_source_policy_denied`
 - `product_mode_provider_switch_disallowed`
+- `product_mode_unsupported_by_channel_surface`
 
 These are better than a raw "tool not found" or an empty search result when the
 real problem is that the current mode forbids expansion.
