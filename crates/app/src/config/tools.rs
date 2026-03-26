@@ -66,6 +66,8 @@ pub struct ToolConfig {
     pub web_search: WebSearchToolConfig,
     #[serde(default)]
     pub tool_execution: ToolExecutionToolConfig,
+    #[serde(default)]
+    pub autonomy_profile: AutonomyProfile,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -74,6 +76,28 @@ pub struct ToolExecutionToolConfig {
     pub default_timeout_seconds: Option<u64>,
     #[serde(default)]
     pub per_tool_timeout: BTreeMap<String, u64>,
+}
+
+pub const AUTONOMY_PROFILE_VALID_VALUES: &str =
+    "discovery_only, guided_acquisition, bounded_autonomous";
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomyProfile {
+    #[default]
+    DiscoveryOnly,
+    GuidedAcquisition,
+    BoundedAutonomous,
+}
+
+impl AutonomyProfile {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DiscoveryOnly => "discovery_only",
+            Self::GuidedAcquisition => "guided_acquisition",
+            Self::BoundedAutonomous => "bounded_autonomous",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -420,6 +444,7 @@ impl Default for ToolConfig {
             web: WebToolConfig::default(),
             web_search: WebSearchToolConfig::default(),
             tool_execution: ToolExecutionToolConfig::default(),
+            autonomy_profile: AutonomyProfile::default(),
         }
     }
 }
@@ -787,6 +812,17 @@ pub fn web_search_provider_api_key_env_names(raw: &str) -> &'static [&'static st
         .unwrap_or(WEB_SEARCH_EMPTY_API_KEY_ENV_NAMES)
 }
 
+pub fn parse_autonomy_profile(raw: &str) -> Option<AutonomyProfile> {
+    let normalized = raw.trim().to_ascii_lowercase();
+
+    match normalized.as_str() {
+        "discovery_only" => Some(AutonomyProfile::DiscoveryOnly),
+        "guided_acquisition" => Some(AutonomyProfile::GuidedAcquisition),
+        "bounded_autonomous" => Some(AutonomyProfile::BoundedAutonomous),
+        _ => None,
+    }
+}
+
 #[cfg(feature = "tool-websearch")]
 pub(crate) fn web_search_provider_parameter_description() -> String {
     format!(
@@ -945,6 +981,7 @@ mod tests {
         assert!(config.shell_allow.is_empty());
         assert!(config.shell_deny.is_empty());
         assert_eq!(config.shell_default_mode, "deny");
+        assert_eq!(config.autonomy_profile, AutonomyProfile::DiscoveryOnly);
         assert_eq!(config.approval.mode, GovernedToolApprovalMode::Disabled);
         assert!(config.approval.approved_calls.is_empty());
         assert!(config.approval.denied_calls.is_empty());
@@ -1012,6 +1049,23 @@ mod tests {
         assert!(config.web_search.perplexity_api_key.is_none());
         assert!(config.web_search.exa_api_key.is_none());
         assert!(config.web_search.jina_api_key.is_none());
+    }
+
+    #[test]
+    fn parse_autonomy_profile_accepts_known_values() {
+        assert_eq!(
+            parse_autonomy_profile("discovery_only"),
+            Some(AutonomyProfile::DiscoveryOnly)
+        );
+        assert_eq!(
+            parse_autonomy_profile(" guided_acquisition "),
+            Some(AutonomyProfile::GuidedAcquisition)
+        );
+        assert_eq!(
+            parse_autonomy_profile("BOUNDED_AUTONOMOUS"),
+            Some(AutonomyProfile::BoundedAutonomous)
+        );
+        assert_eq!(parse_autonomy_profile("unknown"), None);
     }
 
     #[test]
@@ -1215,6 +1269,22 @@ per_tool_timeout = { "file.read" = 3, "web.search" = 9 }
                 .per_tool_timeout
                 .get("web.search"),
             Some(&9)
+        );
+    }
+
+    #[cfg(feature = "config-toml")]
+    #[test]
+    fn tool_config_parses_autonomy_profile_from_toml() {
+        let raw = r#"
+[tools]
+autonomy_profile = "guided_acquisition"
+"#;
+        let parsed =
+            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+
+        assert_eq!(
+            parsed.tools.autonomy_profile,
+            AutonomyProfile::GuidedAcquisition
         );
     }
 

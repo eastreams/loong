@@ -7,7 +7,7 @@ use loongclaw_contracts::{ExecutionSecurityTier, SecretRef};
 use serde::{Deserialize, Serialize};
 
 use super::shell_policy_ext::ShellPolicyDefault;
-use crate::config::LoongClawConfig;
+use crate::config::{AutonomyProfile, LoongClawConfig};
 #[cfg(feature = "feishu-integration")]
 use crate::config::{FeishuChannelConfig, FeishuIntegrationConfig};
 #[cfg(feature = "feishu-integration")]
@@ -195,6 +195,93 @@ impl Default for RuntimeSelfRuntimePolicy {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomyOperationMode {
+    #[default]
+    Deny,
+    ApprovalRequired,
+    Allow,
+}
+
+impl AutonomyOperationMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Deny => "deny",
+            Self::ApprovalRequired => "approval_required",
+            Self::Allow => "allow",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutonomyBudgetPolicy {
+    pub max_capability_acquisitions_per_turn: usize,
+    pub max_provider_switches_per_turn: usize,
+    pub max_topology_mutations_per_turn: usize,
+}
+
+impl Default for AutonomyBudgetPolicy {
+    fn default() -> Self {
+        Self {
+            max_capability_acquisitions_per_turn: 0,
+            max_provider_switches_per_turn: 0,
+            max_topology_mutations_per_turn: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutonomyPolicySnapshot {
+    pub profile: AutonomyProfile,
+    pub capability_acquisition_mode: AutonomyOperationMode,
+    pub provider_switch_mode: AutonomyOperationMode,
+    pub topology_mutation_mode: AutonomyOperationMode,
+    pub requires_kernel_binding: bool,
+    pub budget: AutonomyBudgetPolicy,
+}
+
+impl AutonomyPolicySnapshot {
+    #[must_use]
+    pub fn from_profile(profile: AutonomyProfile) -> Self {
+        match profile {
+            AutonomyProfile::DiscoveryOnly => Self {
+                profile,
+                capability_acquisition_mode: AutonomyOperationMode::Deny,
+                provider_switch_mode: AutonomyOperationMode::Deny,
+                topology_mutation_mode: AutonomyOperationMode::Deny,
+                requires_kernel_binding: false,
+                budget: AutonomyBudgetPolicy::default(),
+            },
+            AutonomyProfile::GuidedAcquisition => Self {
+                profile,
+                capability_acquisition_mode: AutonomyOperationMode::ApprovalRequired,
+                provider_switch_mode: AutonomyOperationMode::ApprovalRequired,
+                topology_mutation_mode: AutonomyOperationMode::Deny,
+                requires_kernel_binding: true,
+                budget: AutonomyBudgetPolicy {
+                    max_capability_acquisitions_per_turn: 1,
+                    max_provider_switches_per_turn: 1,
+                    max_topology_mutations_per_turn: 0,
+                },
+            },
+            AutonomyProfile::BoundedAutonomous => Self {
+                profile,
+                capability_acquisition_mode: AutonomyOperationMode::Allow,
+                provider_switch_mode: AutonomyOperationMode::ApprovalRequired,
+                topology_mutation_mode: AutonomyOperationMode::Deny,
+                requires_kernel_binding: true,
+                budget: AutonomyBudgetPolicy {
+                    max_capability_acquisitions_per_turn: 2,
+                    max_provider_switches_per_turn: 1,
+                    max_topology_mutations_per_turn: 0,
+                },
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebFetchRuntimePolicy {
     pub enabled: bool,
@@ -314,6 +401,7 @@ pub struct ToolRuntimeConfig {
     pub browser_companion: BrowserCompanionRuntimePolicy,
     pub web_fetch: WebFetchRuntimePolicy,
     pub web_search: WebSearchRuntimePolicy,
+    pub autonomy_profile: AutonomyProfile,
     pub external_skills: ExternalSkillsRuntimePolicy,
     pub tool_execution: ToolExecutionConfig,
     #[cfg(feature = "feishu-integration")]
@@ -340,6 +428,7 @@ impl Default for ToolRuntimeConfig {
             browser_companion: BrowserCompanionRuntimePolicy::default(),
             web_fetch: WebFetchRuntimePolicy::default(),
             web_search: WebSearchRuntimePolicy::default(),
+            autonomy_profile: AutonomyProfile::default(),
             external_skills: ExternalSkillsRuntimePolicy::default(),
             tool_execution: ToolExecutionConfig::default(),
             #[cfg(feature = "feishu-integration")]
@@ -444,6 +533,7 @@ impl ToolRuntimeConfig {
                 timeout_seconds: config.tools.web_search.timeout_seconds,
                 max_results: config.tools.web_search.max_results,
             },
+            autonomy_profile: config.tools.autonomy_profile,
             external_skills: ExternalSkillsRuntimePolicy {
                 enabled: config.external_skills.enabled,
                 require_download_approval: config.external_skills.require_download_approval,
@@ -571,6 +661,10 @@ impl ToolRuntimeConfig {
         let web_search_max_results = parse_env_usize("LOONGCLAW_WEB_SEARCH_MAX_RESULTS")
             .map(|count| count.clamp(1, 10))
             .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS);
+        let autonomy_profile = parse_env_string("LOONGCLAW_AUTONOMY_PROFILE")
+            .as_deref()
+            .and_then(crate::config::parse_autonomy_profile)
+            .unwrap_or_default();
         let enabled = parse_env_bool("LOONGCLAW_EXTERNAL_SKILLS_ENABLED").unwrap_or(false);
         let require_download_approval =
             parse_env_bool("LOONGCLAW_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL").unwrap_or(true);
@@ -642,6 +736,7 @@ impl ToolRuntimeConfig {
                 timeout_seconds: web_search_timeout_seconds,
                 max_results: web_search_max_results,
             },
+            autonomy_profile,
             tool_execution,
             ..Self::default()
         }
@@ -854,6 +949,11 @@ impl ToolRuntimeConfig {
     #[must_use]
     pub fn browser_companion_execution_security_tier(&self) -> ExecutionSecurityTier {
         self.browser_companion.execution_security_tier()
+    }
+
+    #[must_use]
+    pub fn autonomy_policy_snapshot(&self) -> AutonomyPolicySnapshot {
+        AutonomyPolicySnapshot::from_profile(self.autonomy_profile)
     }
 }
 
@@ -1100,6 +1200,7 @@ mod tests {
             "LOONGCLAW_WEB_SEARCH_PROVIDER",
             "LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS",
             "LOONGCLAW_WEB_SEARCH_MAX_RESULTS",
+            "LOONGCLAW_AUTONOMY_PROFILE",
             "BRAVE_API_KEY",
             "TAVILY_API_KEY",
             "PERPLEXITY_API_KEY",
@@ -1179,6 +1280,94 @@ mod tests {
         assert!(config.external_skills.blocked_domains.is_empty());
         assert!(config.external_skills.install_root.is_none());
         assert!(!config.external_skills.auto_expose_installed);
+    }
+
+    #[test]
+    fn autonomy_profile_runtime_config_defaults_to_discovery_only() {
+        let config = ToolRuntimeConfig::default();
+        let snapshot = config.autonomy_policy_snapshot();
+
+        assert_eq!(config.autonomy_profile, AutonomyProfile::DiscoveryOnly);
+        assert_eq!(snapshot.profile, AutonomyProfile::DiscoveryOnly);
+        assert_eq!(
+            snapshot.capability_acquisition_mode,
+            AutonomyOperationMode::Deny
+        );
+        assert_eq!(snapshot.provider_switch_mode, AutonomyOperationMode::Deny);
+        assert_eq!(snapshot.topology_mutation_mode, AutonomyOperationMode::Deny);
+        assert!(!snapshot.requires_kernel_binding);
+        assert_eq!(snapshot.budget.max_capability_acquisitions_per_turn, 0);
+        assert_eq!(snapshot.budget.max_provider_switches_per_turn, 0);
+        assert_eq!(snapshot.budget.max_topology_mutations_per_turn, 0);
+        assert_eq!(AutonomyProfile::DiscoveryOnly.as_str(), "discovery_only");
+        assert_eq!(
+            AutonomyProfile::GuidedAcquisition.as_str(),
+            "guided_acquisition"
+        );
+        assert_eq!(
+            AutonomyProfile::BoundedAutonomous.as_str(),
+            "bounded_autonomous"
+        );
+    }
+
+    #[test]
+    fn autonomy_profile_runtime_config_from_loongclaw_config_uses_explicit_profile() {
+        let mut config = crate::config::LoongClawConfig::default();
+        config.tools.autonomy_profile = AutonomyProfile::GuidedAcquisition;
+
+        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+        let snapshot = runtime.autonomy_policy_snapshot();
+
+        assert_eq!(runtime.autonomy_profile, AutonomyProfile::GuidedAcquisition);
+        assert_eq!(
+            snapshot.capability_acquisition_mode,
+            AutonomyOperationMode::ApprovalRequired
+        );
+        assert_eq!(
+            snapshot.provider_switch_mode,
+            AutonomyOperationMode::ApprovalRequired
+        );
+        assert_eq!(snapshot.topology_mutation_mode, AutonomyOperationMode::Deny);
+        assert!(snapshot.requires_kernel_binding);
+        assert_eq!(snapshot.budget.max_capability_acquisitions_per_turn, 1);
+        assert_eq!(snapshot.budget.max_provider_switches_per_turn, 1);
+        assert_eq!(snapshot.budget.max_topology_mutations_per_turn, 0);
+    }
+
+    #[test]
+    fn autonomy_profile_runtime_config_compiles_bounded_autonomous_snapshot() {
+        let mut config = ToolRuntimeConfig::default();
+        config.autonomy_profile = AutonomyProfile::BoundedAutonomous;
+
+        let snapshot = config.autonomy_policy_snapshot();
+
+        assert_eq!(snapshot.profile, AutonomyProfile::BoundedAutonomous);
+        assert_eq!(
+            snapshot.capability_acquisition_mode,
+            AutonomyOperationMode::Allow
+        );
+        assert_eq!(
+            snapshot.provider_switch_mode,
+            AutonomyOperationMode::ApprovalRequired
+        );
+        assert_eq!(snapshot.topology_mutation_mode, AutonomyOperationMode::Deny);
+        assert!(snapshot.requires_kernel_binding);
+        assert_eq!(snapshot.budget.max_capability_acquisitions_per_turn, 2);
+        assert_eq!(snapshot.budget.max_provider_switches_per_turn, 1);
+        assert_eq!(snapshot.budget.max_topology_mutations_per_turn, 0);
+    }
+
+    #[test]
+    fn autonomy_profile_runtime_config_from_env_invalid_value_fails_closed() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set("LOONGCLAW_AUTONOMY_PROFILE", "chaos");
+
+        let runtime = ToolRuntimeConfig::from_env();
+        let snapshot = runtime.autonomy_policy_snapshot();
+
+        assert_eq!(runtime.autonomy_profile, AutonomyProfile::DiscoveryOnly);
+        assert_eq!(snapshot.profile, AutonomyProfile::DiscoveryOnly);
     }
 
     /// Deny starts empty so users are not forced to carry

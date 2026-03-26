@@ -78,8 +78,9 @@ pub(crate) use shared::ConfigValidationIssue;
 pub use shared::{CLI_COMMAND_NAME, expand_path};
 #[allow(unused_imports)]
 pub use tools::{
-    BrowserCompanionToolConfig, BrowserToolConfig, DEFAULT_BROWSER_COMPANION_TIMEOUT_SECONDS,
-    DEFAULT_BROWSER_MAX_LINKS, DEFAULT_BROWSER_MAX_SESSIONS, DEFAULT_BROWSER_MAX_TEXT_CHARS,
+    AUTONOMY_PROFILE_VALID_VALUES, AutonomyProfile, BrowserCompanionToolConfig, BrowserToolConfig,
+    DEFAULT_BROWSER_COMPANION_TIMEOUT_SECONDS, DEFAULT_BROWSER_MAX_LINKS,
+    DEFAULT_BROWSER_MAX_SESSIONS, DEFAULT_BROWSER_MAX_TEXT_CHARS,
     DEFAULT_RUNTIME_SELF_MAX_SOURCE_CHARS, DEFAULT_RUNTIME_SELF_MAX_TOTAL_CHARS,
     DEFAULT_SHELL_ALLOW, DEFAULT_WEB_FETCH_MAX_BYTES, DEFAULT_WEB_FETCH_MAX_REDIRECTS,
     DEFAULT_WEB_FETCH_TIMEOUT_SECONDS, DEFAULT_WEB_SEARCH_MAX_RESULTS, DEFAULT_WEB_SEARCH_PROVIDER,
@@ -92,7 +93,7 @@ pub use tools::{
     WEB_SEARCH_PROVIDER_BRAVE, WEB_SEARCH_PROVIDER_DUCKDUCKGO, WEB_SEARCH_PROVIDER_EXA,
     WEB_SEARCH_PROVIDER_JINA, WEB_SEARCH_PROVIDER_PERPLEXITY, WEB_SEARCH_PROVIDER_TAVILY,
     WEB_SEARCH_PROVIDER_VALID_VALUES, WEB_SEARCH_TAVILY_API_KEY_ENV, WebSearchProviderDescriptor,
-    WebSearchToolConfig, WebToolConfig, normalize_web_search_provider,
+    WebSearchToolConfig, WebToolConfig, normalize_web_search_provider, parse_autonomy_profile,
     web_search_provider_api_key_env_names, web_search_provider_default_api_key_env,
     web_search_provider_descriptor, web_search_provider_descriptors,
 };
