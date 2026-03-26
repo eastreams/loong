@@ -111,6 +111,27 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
+    fn expected_service_channel_ids() -> Vec<&'static str> {
+        vec![
+            "telegram",
+            "feishu",
+            "matrix",
+            "wecom",
+            "discord",
+            "slack",
+            "line",
+            "dingtalk",
+            "whatsapp",
+            "google-chat",
+            "signal",
+            "teams",
+            "mattermost",
+            "nextcloud-talk",
+            "synology-chat",
+            "imessage",
+        ]
+    }
+
     #[test]
     fn endpoint_resolution_for_openai_compatible_is_stable() {
         let config = ProviderConfig {
@@ -196,7 +217,7 @@ mod tests {
         assert_eq!(teams.id, "teams");
         assert_eq!(teams.surface_label, "teams channel");
         assert_eq!(teams.runtime_kind, ChannelRuntimeKind::Service);
-        assert_eq!(teams.serve_subcommand, Some("teams-serve"));
+        assert_eq!(teams.serve_subcommand, None);
 
         let mattermost = channel_descriptor("mattermost").expect("mattermost descriptor");
         assert_eq!(mattermost.id, "mattermost");
@@ -221,7 +242,7 @@ mod tests {
         assert_eq!(imessage.id, "imessage");
         assert_eq!(imessage.surface_label, "imessage channel");
         assert_eq!(imessage.runtime_kind, ChannelRuntimeKind::Service);
-        assert_eq!(imessage.serve_subcommand, Some("imessage-serve"));
+        assert_eq!(imessage.serve_subcommand, None);
 
         assert!(channel_descriptor("unknown").is_none());
     }
@@ -273,51 +294,14 @@ mod tests {
         );
         assert_eq!(
             config.enabled_service_channel_ids(),
-            vec![
-                "telegram",
-                "feishu",
-                "matrix",
-                "wecom",
-                "discord",
-                "slack",
-                "line",
-                "dingtalk",
-                "whatsapp",
-                "google-chat",
-                "signal",
-                "teams",
-                "mattermost",
-                "nextcloud-talk",
-                "synology-chat",
-                "imessage",
-            ]
+            expected_service_channel_ids()
         );
 
         let service_ids = service_channel_descriptors()
             .into_iter()
             .map(|descriptor| descriptor.id)
             .collect::<Vec<_>>();
-        assert_eq!(
-            service_ids,
-            vec![
-                "telegram",
-                "feishu",
-                "matrix",
-                "wecom",
-                "discord",
-                "slack",
-                "line",
-                "dingtalk",
-                "whatsapp",
-                "google-chat",
-                "signal",
-                "teams",
-                "mattermost",
-                "nextcloud-talk",
-                "synology-chat",
-                "imessage",
-            ]
-        );
+        assert_eq!(service_ids, expected_service_channel_ids());
     }
 
     #[test]
@@ -335,27 +319,7 @@ mod tests {
             .into_iter()
             .map(|descriptor| descriptor.id)
             .collect::<Vec<_>>();
-        assert_eq!(
-            service_ids,
-            vec![
-                "telegram",
-                "feishu",
-                "matrix",
-                "wecom",
-                "discord",
-                "slack",
-                "line",
-                "dingtalk",
-                "whatsapp",
-                "google-chat",
-                "signal",
-                "teams",
-                "mattermost",
-                "nextcloud-talk",
-                "synology-chat",
-                "imessage",
-            ]
-        );
+        assert_eq!(service_ids, expected_service_channel_ids());
     }
 
     #[test]

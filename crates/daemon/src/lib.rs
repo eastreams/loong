@@ -4127,6 +4127,15 @@ pub async fn run_channel_serve_cli(
     (spec.run)(args).await
 }
 
+fn require_channel_send_target<'a>(command: &str, target: Option<&'a str>) -> CliResult<&'a str> {
+    let target = target.map(str::trim).filter(|value| !value.is_empty());
+    let Some(target) = target else {
+        return Err(format!("{command} requires --target"));
+    };
+
+    Ok(target)
+}
+
 pub fn run_telegram_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = args.as_card;
@@ -4301,7 +4310,7 @@ pub fn run_teams_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliComman
 pub fn run_mattermost_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = args.as_card;
-        let target = args.target.unwrap_or_default();
+        let target = require_channel_send_target("mattermost-send", args.target)?;
         mvp::channel::run_mattermost_send(
             args.config_path,
             args.account,
@@ -4318,7 +4327,7 @@ pub fn run_nextcloud_talk_send_cli_impl(
 ) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = args.as_card;
-        let target = args.target.unwrap_or_default();
+        let target = require_channel_send_target("nextcloud-talk-send", args.target)?;
         mvp::channel::run_nextcloud_talk_send(
             args.config_path,
             args.account,
@@ -4349,7 +4358,7 @@ pub fn run_synology_chat_send_cli_impl(
 pub fn run_imessage_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = args.as_card;
-        let target = args.target.unwrap_or_default();
+        let target = require_channel_send_target("imessage-send", args.target)?;
         mvp::channel::run_imessage_send(
             args.config_path,
             args.account,

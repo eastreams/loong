@@ -3,7 +3,7 @@ use serde::Serialize;
 
 use crate::{CliResult, config::ResolvedNextcloudTalkChannelConfig};
 
-use super::ChannelOutboundTargetKind;
+use super::{ChannelOutboundTargetKind, http::build_outbound_http_client};
 
 type NextcloudTalkHmacSha256 = hmac::Hmac<sha2::Sha256>;
 
@@ -56,7 +56,7 @@ pub(super) async fn run_nextcloud_talk_send(
     )?;
     let request_url = build_nextcloud_talk_request_url(server_url.as_str(), conversation_token)?;
 
-    let client = reqwest::Client::new();
+    let client = build_outbound_http_client("nextcloud talk send")?;
     let request = client
         .post(request_url)
         .header(reqwest::header::ACCEPT, "application/json")

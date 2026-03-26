@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::{CliResult, config::ResolvedImessageChannelConfig};
 
-use super::ChannelOutboundTargetKind;
+use super::{ChannelOutboundTargetKind, http::build_outbound_http_client};
 
 #[derive(Debug, Serialize)]
 struct ImessageSendRequestBody {
@@ -37,7 +37,7 @@ pub(super) async fn run_imessage_send(
         message: text.to_owned(),
     };
 
-    let client = reqwest::Client::new();
+    let client = build_outbound_http_client("imessage send")?;
     let request = client.post(request_url).json(&request_body);
     let response = request
         .send()

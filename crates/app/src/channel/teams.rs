@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::{CliResult, config::ResolvedTeamsChannelConfig};
 
-use super::ChannelOutboundTargetKind;
+use super::{ChannelOutboundTargetKind, http::build_outbound_http_client};
 
 const TEAMS_ADAPTIVE_CARD_SCHEMA: &str = "http://adaptivecards.io/schemas/adaptive-card.json";
 const TEAMS_ADAPTIVE_CARD_CONTENT_TYPE: &str = "application/vnd.microsoft.card.adaptive";
@@ -49,7 +49,7 @@ pub(super) async fn run_teams_send(
     let request_url = parse_teams_endpoint_url(endpoint_url)?;
     let request_body = build_teams_webhook_payload(text);
 
-    let client = reqwest::Client::new();
+    let client = build_outbound_http_client("teams send")?;
     let request = client.post(request_url).json(&request_body);
     let response = request
         .send()
@@ -106,15 +106,23 @@ fn build_teams_webhook_payload(text: &str) -> TeamsWebhookPayload {
 
 async fn ensure_teams_success(response: reqwest::Response) -> CliResult<()> {
     let status = response.status();
-    if status.is_success() {
-        return Ok(());
-    }
-
     let body = response
         .text()
         .await
-        .map_err(|error| format!("read teams error response failed: {error}"))?;
+        .map_err(|error| format!("read teams response failed: {error}"))?;
     let trimmed_body = body.trim();
+    if status.is_success() {
+        if teams_response_body_indicates_failure(trimmed_body) {
+            return Err(format!(
+                "teams send returned an error payload with status {}: {}",
+                status.as_u16(),
+                trimmed_body
+            ));
+        }
+
+        return Ok(());
+    }
+
     let detail = if trimmed_body.is_empty() {
         "empty response body".to_owned()
     } else {
@@ -125,6 +133,23 @@ async fn ensure_teams_success(response: reqwest::Response) -> CliResult<()> {
         "teams send failed with status {}: {detail}",
         status.as_u16()
     ))
+}
+
+fn teams_response_body_indicates_failure(body: &str) -> bool {
+    let normalized_body = body.trim().to_ascii_lowercase();
+    if normalized_body.is_empty() {
+        return false;
+    }
+
+    [
+        "http error 429",
+        "too many requests",
+        "throttl",
+        "webhook message delivery failed",
+        "microsoft teams endpoint returned http error",
+    ]
+    .iter()
+    .any(|indicator| normalized_body.contains(indicator))
 }
 
 #[cfg(test)]
@@ -165,5 +190,14 @@ mod tests {
             error.contains("teams send requires endpoint target kind"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn teams_response_body_failure_detection_matches_known_throttling_markers() {
+        let throttled_body = "Webhook message delivery failed with error: Microsoft Teams endpoint returned HTTP error 429";
+        let success_body = "1";
+
+        assert!(teams_response_body_indicates_failure(throttled_body));
+        assert!(!teams_response_body_indicates_failure(success_body));
     }
 }
