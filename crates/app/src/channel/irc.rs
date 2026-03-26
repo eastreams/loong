@@ -247,7 +247,7 @@ where
     loop {
         let line = read_irc_line(reader, writer, "join").await?;
         let command = parse_irc_command(line.as_str());
-        if command == Some("JOIN") || command == Some("366") {
+        if command == Some("366") {
             return Ok(());
         }
         if is_irc_join_error(command) {
