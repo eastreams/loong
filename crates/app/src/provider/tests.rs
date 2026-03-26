@@ -914,9 +914,13 @@ fn provider_profile_state_persistence_metrics_track_outcomes() {
     record_provider_profile_state_persist_outcome(ProviderProfileStatePersistOutcome::StaleSkipped);
     record_provider_profile_state_persist_outcome(ProviderProfileStatePersistOutcome::Failed);
     let after = provider_profile_state_persistence_metrics_snapshot();
-    assert!(after.persisted > before.persisted);
-    assert!(after.stale_skipped > before.stale_skipped);
-    assert!(after.failed > before.failed);
+    let expected_persisted = before.persisted.saturating_add(1);
+    let expected_stale_skipped = before.stale_skipped.saturating_add(1);
+    let expected_failed = before.failed.saturating_add(1);
+
+    assert_eq!(after.persisted, expected_persisted);
+    assert_eq!(after.stale_skipped, expected_stale_skipped);
+    assert_eq!(after.failed, expected_failed);
 }
 
 #[test]

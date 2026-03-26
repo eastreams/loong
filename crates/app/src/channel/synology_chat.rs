@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::{CliResult, config::ResolvedSynologyChatChannelConfig};
 
-use super::ChannelOutboundTargetKind;
+use super::{ChannelOutboundTargetKind, http::build_outbound_http_client};
 
 #[derive(Debug, Serialize)]
 struct SynologyChatWebhookPayload {
@@ -32,7 +32,7 @@ pub(super) async fn run_synology_chat_send(
     let target_user_id = parse_synology_chat_target_user_id(target_id)?;
     let request_payload_json = build_synology_chat_payload_json(text, target_user_id)?;
 
-    let client = reqwest::Client::new();
+    let client = build_outbound_http_client("synology chat send")?;
     let request = client
         .post(request_url)
         .form(&[("payload", request_payload_json)]);

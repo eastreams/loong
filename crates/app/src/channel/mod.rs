@@ -204,6 +204,7 @@ mod discord;
 mod feishu;
 #[cfg(feature = "channel-google-chat")]
 mod google_chat;
+mod http;
 #[cfg(feature = "channel-imessage")]
 mod imessage;
 #[cfg(feature = "channel-line")]

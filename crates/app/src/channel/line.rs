@@ -2,7 +2,7 @@ use serde_json::json;
 
 use crate::{CliResult, config::ResolvedLineChannelConfig};
 
-use super::ChannelOutboundTargetKind;
+use super::{ChannelOutboundTargetKind, http::build_outbound_http_client};
 
 pub(super) async fn run_line_send(
     resolved: &ResolvedLineChannelConfig,
@@ -38,7 +38,7 @@ pub(super) async fn run_line_send(
         ],
     });
 
-    let client = reqwest::Client::new();
+    let client = build_outbound_http_client("line send")?;
     let request = client
         .post(request_url.as_str())
         .bearer_auth(channel_access_token)

@@ -4,7 +4,10 @@ use serde_json::{Value, json};
 
 use crate::{CliResult, config::ResolvedDingtalkChannelConfig};
 
-use super::ChannelOutboundTargetKind;
+use super::{
+    ChannelOutboundTargetKind,
+    http::{build_outbound_http_client, read_json_or_text_response, response_body_detail},
+};
 
 type DingtalkHmacSha256 = hmac::Hmac<sha2::Sha256>;
 
@@ -35,7 +38,7 @@ pub(super) async fn run_dingtalk_send(
         },
     });
 
-    let client = reqwest::Client::new();
+    let client = build_outbound_http_client("dingtalk send")?;
     let request = client.post(request_url).json(&request_body);
     let response = request
         .send()
@@ -92,14 +95,17 @@ fn build_dingtalk_sign(timestamp_ms: &str, secret: &str) -> CliResult<String> {
 }
 
 async fn read_dingtalk_json_response(response: reqwest::Response) -> CliResult<Value> {
-    let status = response.status();
-    let payload = response
-        .json::<Value>()
-        .await
-        .map_err(|error| format!("decode dingtalk send response failed: {error}"))?;
+    let (status, body, payload) = read_json_or_text_response(response, "dingtalk send").await?;
 
     if status.is_success() {
-        return Ok(payload);
+        if payload.is_object() {
+            return Ok(payload);
+        }
+
+        let detail = response_body_detail(body.as_str());
+        return Err(format!(
+            "dingtalk send returned a non-json success payload: {detail}"
+        ));
     }
 
     let detail = payload
@@ -108,7 +114,7 @@ async fn read_dingtalk_json_response(response: reqwest::Response) -> CliResult<V
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
-        .unwrap_or_else(|| payload.to_string());
+        .unwrap_or_else(|| response_body_detail(body.as_str()));
     Err(format!(
         "dingtalk send failed with status {}: {detail}",
         status.as_u16()

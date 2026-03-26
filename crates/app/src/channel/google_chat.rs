@@ -2,7 +2,10 @@ use serde_json::{Value, json};
 
 use crate::{CliResult, config::ResolvedGoogleChatChannelConfig};
 
-use super::ChannelOutboundTargetKind;
+use super::{
+    ChannelOutboundTargetKind,
+    http::{build_outbound_http_client, read_json_or_text_response, response_body_detail},
+};
 
 pub(super) async fn run_google_chat_send(
     _resolved: &ResolvedGoogleChatChannelConfig,
@@ -26,7 +29,7 @@ pub(super) async fn run_google_chat_send(
         "text": text,
     });
 
-    let client = reqwest::Client::new();
+    let client = build_outbound_http_client("google chat send")?;
     let request = client.post(trimmed_endpoint_url).json(&request_body);
     let response = request
         .send()
@@ -49,14 +52,17 @@ pub(super) async fn run_google_chat_send(
 }
 
 async fn read_google_chat_json_response(response: reqwest::Response) -> CliResult<Value> {
-    let status = response.status();
-    let payload = response
-        .json::<Value>()
-        .await
-        .map_err(|error| format!("decode google chat send response failed: {error}"))?;
+    let (status, body, payload) = read_json_or_text_response(response, "google chat send").await?;
 
     if status.is_success() {
-        return Ok(payload);
+        if payload.is_object() {
+            return Ok(payload);
+        }
+
+        let detail = response_body_detail(body.as_str());
+        return Err(format!(
+            "google chat send returned a non-json success payload: {detail}"
+        ));
     }
 
     let detail = payload
@@ -65,7 +71,7 @@ async fn read_google_chat_json_response(response: reqwest::Response) -> CliResul
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
-        .unwrap_or_else(|| payload.to_string());
+        .unwrap_or_else(|| response_body_detail(body.as_str()));
     Err(format!(
         "google chat send failed with status {}: {detail}",
         status.as_u16()

@@ -15,7 +15,10 @@ where
     let join_handle = thread_builder
         .spawn(operation)
         .expect("spawn CLI stack thread");
-    join_handle.join().expect("join CLI stack thread")
+    match join_handle.join() {
+        Ok(value) => value,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
 }
 
 fn try_parse_cli<const N: usize>(args: [&str; N]) -> Result<Cli, clap::Error> {
@@ -1121,6 +1124,33 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
             .expect("channel catalog array")
             .iter()
             .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("teams")
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["endpoint", "conversation"])
+                    && entry
+                        .get("selection_order")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(140)
+                    && entry
+                        .get("implementation_status")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("config_backed")
+            })
+    );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
                 entry.get("id").and_then(serde_json::Value::as_str) == Some("nextcloud-talk")
                     && entry
                         .get("supported_target_kinds")
@@ -1136,6 +1166,33 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                         .get("selection_order")
                         .and_then(serde_json::Value::as_u64)
                         == Some(160)
+                    && entry
+                        .get("implementation_status")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("config_backed")
+            })
+    );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("imessage")
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["conversation"])
+                    && entry
+                        .get("selection_order")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(180)
                     && entry
                         .get("implementation_status")
                         .and_then(serde_json::Value::as_str)

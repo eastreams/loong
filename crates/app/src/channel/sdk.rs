@@ -5,8 +5,7 @@ use crate::{
 
 use super::registry::{
     ChannelRuntimeCommandDescriptor, FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    IMESSAGE_CATALOG_COMMAND_FAMILY_DESCRIPTOR, MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
 };
 
@@ -151,7 +150,7 @@ const TEAMS_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     label: "teams",
     surface_label: "teams channel",
     runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: Some(TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve.command),
+    serve_subcommand: None,
 };
 
 const MATTERMOST_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
@@ -183,7 +182,7 @@ const IMESSAGE_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     label: "imessage",
     surface_label: "imessage channel",
     runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: Some(IMESSAGE_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve.command),
+    serve_subcommand: None,
 };
 
 const CLI_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {

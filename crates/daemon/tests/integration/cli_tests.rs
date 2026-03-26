@@ -1412,6 +1412,33 @@ fn dingtalk_send_cli_accepts_config_backed_endpoint_without_target() {
 }
 
 #[test]
+fn dingtalk_send_cli_accepts_explicit_endpoint_target_override() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        channel_send_command("dingtalk"),
+        "--target",
+        "https://example.test/dingtalk",
+        "--text",
+        "hello dingtalk",
+    ])
+    .expect("dingtalk send CLI should parse with an explicit endpoint override");
+
+    match cli.command {
+        Some(Commands::DingtalkSend {
+            target,
+            target_kind,
+            text,
+            ..
+        }) => {
+            assert_eq!(target.as_deref(), Some("https://example.test/dingtalk"));
+            assert_eq!(target_kind, channel_default_send_target_kind("dingtalk"));
+            assert_eq!(text, "hello dingtalk");
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
 fn dingtalk_send_cli_rejects_non_endpoint_target_kind() {
     let error = try_parse_cli([
         "loongclaw",
@@ -1456,6 +1483,33 @@ fn google_chat_send_cli_accepts_config_backed_endpoint_without_target() {
 }
 
 #[test]
+fn google_chat_send_cli_accepts_explicit_endpoint_target_override() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        channel_send_command("google-chat"),
+        "--target",
+        "https://example.test/google-chat",
+        "--text",
+        "hello gchat",
+    ])
+    .expect("google chat send CLI should parse with an explicit endpoint override");
+
+    match cli.command {
+        Some(Commands::GoogleChatSend {
+            target,
+            target_kind,
+            text,
+            ..
+        }) => {
+            assert_eq!(target.as_deref(), Some("https://example.test/google-chat"));
+            assert_eq!(target_kind, channel_default_send_target_kind("google-chat"));
+            assert_eq!(text, "hello gchat");
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
 fn google_chat_send_cli_rejects_non_endpoint_target_kind() {
     let error = try_parse_cli([
         "loongclaw",
@@ -1492,6 +1546,33 @@ fn teams_send_cli_accepts_config_backed_endpoint_without_target() {
             ..
         }) => {
             assert_eq!(target, None);
+            assert_eq!(target_kind, channel_default_send_target_kind("teams"));
+            assert_eq!(text, "hello teams");
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn teams_send_cli_accepts_explicit_endpoint_target_override() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        channel_send_command("teams"),
+        "--target",
+        "https://example.test/teams",
+        "--text",
+        "hello teams",
+    ])
+    .expect("teams send CLI should parse with an explicit endpoint override");
+
+    match cli.command {
+        Some(Commands::TeamsSend {
+            target,
+            target_kind,
+            text,
+            ..
+        }) => {
+            assert_eq!(target.as_deref(), Some("https://example.test/teams"));
             assert_eq!(target_kind, channel_default_send_target_kind("teams"));
             assert_eq!(text, "hello teams");
         }
