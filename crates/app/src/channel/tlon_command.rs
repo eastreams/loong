@@ -100,6 +100,7 @@ pub async fn run_tlon_send(
     #[cfg(feature = "channel-tlon")]
     {
         let context = load_tlon_command_context(config_path, account_id)?;
+        let outbound_http_policy = super::http::outbound_http_policy_from_config(&context.config);
         let target_text = target.to_owned();
         let message_text = text.to_owned();
         initialize_tlon_runtime(&context.config, context.resolved_path.as_path());
@@ -109,6 +110,7 @@ pub async fn run_tlon_send(
             target_kind,
             target_text.as_str(),
             message_text.as_str(),
+            outbound_http_policy,
         )
         .await?;
 

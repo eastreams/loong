@@ -1252,6 +1252,10 @@ impl<R> ChannelCommandContext<R> {
             }
         }
     }
+
+    fn outbound_http_policy(&self) -> http::ChannelOutboundHttpPolicy {
+        http::outbound_http_policy_from_config(&self.config)
+    }
 }
 
 #[cfg(any(
@@ -2504,7 +2508,6 @@ pub async fn run_discord_send(
     #[cfg(feature = "channel-discord")]
     {
         let context = load_discord_command_context(config_path, account_id)?;
-        let outbound_http_policy = http::outbound_http_policy_from_config(&context.config);
         let target = target.to_owned();
         let text = text.to_owned();
         run_channel_send_command(
@@ -2519,7 +2522,7 @@ pub async fn run_discord_send(
                         target_kind,
                         target.as_str(),
                         text.as_str(),
-                        outbound_http_policy,
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -2560,7 +2563,6 @@ pub async fn run_signal_send(
     #[cfg(feature = "channel-signal")]
     {
         let context = signal_command::load_signal_command_context(config_path, account_id)?;
-        let outbound_http_policy = http::outbound_http_policy_from_config(&context.config);
         let target = target.to_owned();
         let text = text.to_owned();
         run_channel_send_command(
@@ -2575,7 +2577,7 @@ pub async fn run_signal_send(
                         target_kind,
                         target.as_str(),
                         text.as_str(),
-                        outbound_http_policy,
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -2671,7 +2673,6 @@ pub async fn run_slack_send(
     #[cfg(feature = "channel-slack")]
     {
         let context = load_slack_command_context(config_path, account_id)?;
-        let outbound_http_policy = http::outbound_http_policy_from_config(&context.config);
         let target = target.to_owned();
         let text = text.to_owned();
         run_channel_send_command(
@@ -2686,7 +2687,7 @@ pub async fn run_slack_send(
                         target_kind,
                         target.as_str(),
                         text.as_str(),
-                        outbound_http_policy,
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -2727,7 +2728,6 @@ pub async fn run_line_send(
     #[cfg(feature = "channel-line")]
     {
         let context = load_line_command_context(config_path, account_id)?;
-        let outbound_http_policy = http::outbound_http_policy_from_config(&context.config);
         let target = target.to_owned();
         let text = text.to_owned();
         run_channel_send_command(
@@ -2740,7 +2740,7 @@ pub async fn run_line_send(
                         target_kind,
                         target.as_str(),
                         text.as_str(),
-                        outbound_http_policy,
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -2781,7 +2781,6 @@ pub async fn run_dingtalk_send(
     #[cfg(feature = "channel-dingtalk")]
     {
         let context = load_dingtalk_command_context(config_path, account_id)?;
-        let outbound_http_policy = http::outbound_http_policy_from_config(&context.config);
         let send_target = resolve_endpoint_backed_send_target(
             "dingtalk",
             target,
@@ -2806,7 +2805,7 @@ pub async fn run_dingtalk_send(
                         target_kind,
                         endpoint_url.as_str(),
                         text.as_str(),
-                        outbound_http_policy,
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -2849,7 +2848,6 @@ pub async fn run_whatsapp_send(
     #[cfg(feature = "channel-whatsapp")]
     {
         let context = load_whatsapp_command_context(config_path, account_id)?;
-        let outbound_http_policy = http::outbound_http_policy_from_config(&context.config);
         let target = target.to_owned();
         let text = text.to_owned();
         run_channel_send_command(
@@ -2864,7 +2862,7 @@ pub async fn run_whatsapp_send(
                         target_kind,
                         target.as_str(),
                         text.as_str(),
-                        outbound_http_policy,
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -2959,7 +2957,6 @@ pub async fn run_webhook_send(
     #[cfg(feature = "channel-webhook")]
     {
         let context = load_webhook_command_context(config_path, account_id)?;
-        let outbound_http_policy = http::outbound_http_policy_from_config(&context.config);
         let send_target = resolve_endpoint_backed_send_target(
             "webhook",
             target,
@@ -2984,7 +2981,7 @@ pub async fn run_webhook_send(
                         target_kind,
                         endpoint_url.as_str(),
                         text.as_str(),
-                        outbound_http_policy,
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -3031,7 +3028,6 @@ pub async fn run_google_chat_send(
     #[cfg(feature = "channel-google-chat")]
     {
         let context = load_google_chat_command_context(config_path, account_id)?;
-        let outbound_http_policy = http::outbound_http_policy_from_config(&context.config);
         let send_target = resolve_endpoint_backed_send_target(
             "google-chat",
             target,
@@ -3056,7 +3052,7 @@ pub async fn run_google_chat_send(
                         target_kind,
                         endpoint_url.as_str(),
                         text.as_str(),
-                        outbound_http_policy,
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -3099,7 +3095,6 @@ pub async fn run_teams_send(
     #[cfg(feature = "channel-teams")]
     {
         let context = load_teams_command_context(config_path, account_id)?;
-        let outbound_http_policy = http::outbound_http_policy_from_config(&context.config);
         let send_target = resolve_endpoint_backed_send_target(
             "teams",
             target,
@@ -3124,7 +3119,7 @@ pub async fn run_teams_send(
                         target_kind,
                         endpoint_url.as_str(),
                         text.as_str(),
-                        outbound_http_policy,
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -3171,7 +3166,6 @@ pub async fn run_mattermost_send(
     #[cfg(feature = "channel-mattermost")]
     {
         let context = load_mattermost_command_context(config_path, account_id)?;
-        let outbound_http_policy = http::outbound_http_policy_from_config(&context.config);
         let target = target.to_owned();
         let text = text.to_owned();
         run_channel_send_command(
@@ -3186,7 +3180,7 @@ pub async fn run_mattermost_send(
                         target_kind,
                         target.as_str(),
                         text.as_str(),
-                        outbound_http_policy,
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -3234,7 +3228,6 @@ pub async fn run_nextcloud_talk_send(
     #[cfg(feature = "channel-nextcloud-talk")]
     {
         let context = load_nextcloud_talk_command_context(config_path, account_id)?;
-        let outbound_http_policy = http::outbound_http_policy_from_config(&context.config);
         let target = target.to_owned();
         let text = text.to_owned();
         run_channel_send_command(
@@ -3249,7 +3242,7 @@ pub async fn run_nextcloud_talk_send(
                         target_kind,
                         target.as_str(),
                         text.as_str(),
-                        outbound_http_policy,
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -3295,7 +3288,6 @@ pub async fn run_synology_chat_send(
     #[cfg(feature = "channel-synology-chat")]
     {
         let context = load_synology_chat_command_context(config_path, account_id)?;
-        let outbound_http_policy = http::outbound_http_policy_from_config(&context.config);
         let target = target
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -3314,7 +3306,7 @@ pub async fn run_synology_chat_send(
                         target_kind,
                         target.as_deref(),
                         text.as_str(),
-                        outbound_http_policy,
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -3410,7 +3402,6 @@ pub async fn run_imessage_send(
     #[cfg(feature = "channel-imessage")]
     {
         let context = load_imessage_command_context(config_path, account_id)?;
-        let outbound_http_policy = http::outbound_http_policy_from_config(&context.config);
         let target = target.to_owned();
         let text = text.to_owned();
         run_channel_send_command(
@@ -3425,7 +3416,7 @@ pub async fn run_imessage_send(
                         target_kind,
                         target.as_str(),
                         text.as_str(),
-                        outbound_http_policy,
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
